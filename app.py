@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 
 # --- ENV ---
-TG_TOKEN = os.getenv("TG_TOKEN")
+TG_TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher(bot)
@@ -22,4 +22,4 @@ async def echo(message: types.Message):
 
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates
