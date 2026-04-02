@@ -162,6 +162,12 @@ async def opportunity_handler(message: types.Message):
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
+@dp.message_handler(lambda m: not m.text.startswith("/") if m.text else True)
+async def fallback_handler(message: types.Message):
+    await message.answer(
+        t(message.from_user.id, "fallback"),
+        reply_markup=get_main_keyboard(message.from_user.id),
+    )
 
 @dp.message_handler(lambda m: m.text in ["📊 История", "📊 History"])
 async def history_handler(message: types.Message):
