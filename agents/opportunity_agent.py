@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List, Optional
 
 from agents.news_agent import NewsAgent
@@ -17,6 +18,7 @@ class OpportunityAgent:
         category_filter: str = "All",
         strong_only: bool = False,
         min_score: int = 45,
+        lang: str = "en",
     ) -> Dict[str, Any]:
         raw_markets = self._get_candidate_markets(
             limit=limit,
@@ -36,8 +38,8 @@ class OpportunityAgent:
             if category_filter != "All" and market_data.get("category") != category_filter:
                 continue
 
-            news_data = self.news_agent.run(market_data)
-            decision_data = self.decision_agent.run(market_data, news_data)
+            news_data = self.news_agent.run(market_data, lang=lang)
+            decision_data = self.decision_agent.run(market_data, news_data, lang=lang)
 
             score = self._score_opportunity(market_data, decision_data)
 
@@ -131,7 +133,7 @@ class OpportunityAgent:
     def _score_opportunity(
         self,
         market_data: Dict[str, Any],
-        decision_data: Dict[str, Any]
+        decision_data: Dict[str, Any],
     ) -> int:
         score = 0
 
