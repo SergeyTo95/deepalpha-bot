@@ -2,7 +2,7 @@ import os
 import time
 import requests
 
-
+ 
 def _safe_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
     if value is None:
