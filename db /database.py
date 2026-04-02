@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Union
 
 from db.models import AnalysisRecord
-
+ 
 
 DB_PATH = "data.db"
 
