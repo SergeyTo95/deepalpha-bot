@@ -1,3 +1,4 @@
+```python
 from typing import Any, Dict, List
 
 from services.llm_service import generate_news_text
@@ -12,7 +13,7 @@ class NewsAgent:
     def __init__(self) -> None:
         pass
 
-    def run(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         question = market_data.get("question", "Unknown market")
         category = market_data.get("category", "Unknown")
         date_context = market_data.get("date_context", "Unknown")
@@ -33,6 +34,7 @@ class NewsAgent:
             date_context=date_context,
             related_markets=related_markets,
             live_news_summary=live_news_summary,
+            lang=lang,
         )
 
         llm_result = generate_news_text(prompt)
@@ -63,6 +65,7 @@ class NewsAgent:
         date_context: str,
         related_markets: List[Dict[str, Any]],
         live_news_summary: str,
+        lang: str = "en",
     ) -> str:
         related_lines = []
         for item in related_markets[:6]:
@@ -75,8 +78,12 @@ class NewsAgent:
 
         related_block = "\n".join(related_lines) if related_lines else "- No related markets"
 
+        lang_instruction = "Respond in Russian. Use Russian language for all text in your response." if lang == "ru" else "Respond in English."
+
         return f"""
 You are a News Intelligence Agent inside a prediction market AI system.
+
+{lang_instruction}
 
 Your goal:
 - analyze real-world context behind an event
@@ -224,3 +231,6 @@ Confidence: Low / Medium / High
         if "medium" in t:
             return "Medium"
         return "Low"
+```
+
+Следующий — пришли `decision_agent.py`.
