@@ -1,4 +1,4 @@
-```python
+
 from typing import Any, Dict, List
 
 from services.llm_service import generate_news_text
@@ -231,6 +231,3 @@ Confidence: Low / Medium / High
         if "medium" in t:
             return "Medium"
         return "Low"
-```
-
-Следующий — пришли `decision_agent.py`.
