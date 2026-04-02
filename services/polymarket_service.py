@@ -19,8 +19,18 @@ def extract_slug_from_url(url: str) -> str:
             return ""
 
         parts = path.split("/")
-        if len(parts) >= 2 and parts[0] in {"event", "market"}:
-            return parts[-1]
+
+        # Убираем языковой префикс /ru/ /en/ и т.д.
+        if parts and len(parts[0]) == 2:
+            parts = parts[1:]
+
+        # /event/EVENT_SLUG/OUTCOME_SLUG — берём EVENT_SLUG
+        if len(parts) >= 2 and parts[0] == "event":
+            return parts[1]
+
+        # /market/SLUG
+        if len(parts) >= 2 and parts[0] == "market":
+            return parts[1]
 
         return parts[-1]
     except Exception:
@@ -79,12 +89,6 @@ def get_primary_market_from_url(url: str) -> Dict[str, Any]:
 
 
 def find_related_markets(question: str, category_hint: str = "", limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    Better related-market search for MVP:
-    - extracts semantic keywords
-    - scores overlap with the main question
-    - keeps more relevant linked markets
-    """
     keywords = _extract_keywords(question)
     if category_hint:
         keywords.insert(0, category_hint.lower())
@@ -238,11 +242,6 @@ def get_price_history(
     interval: str = "1h",
     fidelity: int = 60,
 ) -> List[Dict[str, Any]]:
-    """
-    Public CLOB endpoint:
-    GET /prices-history
-    market is the asset/token id.
-    """
     if not market:
         return []
 
