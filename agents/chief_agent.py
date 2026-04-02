@@ -2,15 +2,15 @@ from typing import Any, Dict
 
 from db.database import save_analysis
 
- 
+
 class ChiefAgent:
     def __init__(self) -> None:
         pass
 
-    def run(self, url: str) -> Dict[str, Any]:
+    def run(self, url: str, lang: str = "en") -> Dict[str, Any]:
         market_data = self._run_market_agent(url)
-        news_data = self._run_news_agent(market_data)
-        decision_data = self._run_decision_agent(market_data, news_data)
+        news_data = self._run_news_agent(market_data, lang=lang)
+        decision_data = self._run_decision_agent(market_data, news_data, lang=lang)
 
         enriched_decision_data = self._enrich_decision_data(
             url=url,
@@ -95,11 +95,11 @@ class ChiefAgent:
         except Exception:
             return self._market_fallback(url)
 
-    def _run_news_agent(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _run_news_agent(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         try:
             from agents.news_agent import NewsAgent  # type: ignore
             agent = NewsAgent()
-            result = agent.run(market_data)
+            result = agent.run(market_data, lang=lang)
 
             if isinstance(result, dict):
                 return result
@@ -111,12 +111,13 @@ class ChiefAgent:
     def _run_decision_agent(
         self,
         market_data: Dict[str, Any],
-        news_data: Dict[str, Any]
+        news_data: Dict[str, Any],
+        lang: str = "en",
     ) -> Dict[str, Any]:
         try:
             from agents.decision_agent import DecisionAgent  # type: ignore
             agent = DecisionAgent()
-            result = agent.run(market_data, news_data)
+            result = agent.run(market_data, news_data, lang=lang)
 
             if isinstance(result, dict):
                 return result
@@ -173,7 +174,7 @@ class ChiefAgent:
     def _decision_fallback(
         self,
         market_data: Dict[str, Any],
-        news_data: Dict[str, Any]
+        news_data: Dict[str, Any],
     ) -> Dict[str, Any]:
         question = market_data.get("question", "Unknown market")
         category = market_data.get("category", "Unknown")
