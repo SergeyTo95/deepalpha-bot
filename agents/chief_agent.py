@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 from db.database import save_analysis
 
-
+ 
 class ChiefAgent:
     def __init__(self) -> None:
         pass
