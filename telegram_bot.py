@@ -1,3 +1,4 @@
+
 import os
 import logging
 from typing import Dict
@@ -100,7 +101,6 @@ def get_language_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _escape(text: str) -> str:
-    """Убирает спецсимволы Markdown чтобы Telegram не падал."""
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
@@ -150,10 +150,11 @@ async def analyze_prompt_handler(message: types.Message):
 @dp.message_handler(lambda m: m.text in ["💡 Возможность", "💡 Opportunity"])
 async def opportunity_handler(message: types.Message):
     uid = message.from_user.id
+    lang = get_user_lang(uid)
     await message.answer(t(uid, "searching_opportunity"))
     try:
         agent = OpportunityAgent()
-        result = agent.run()
+        result = agent.run(lang=lang)
         if not result or result.get("opportunity_score", 0) == 0:
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
@@ -198,10 +199,11 @@ async def top_handler(message: types.Message):
 @dp.message_handler(lambda m: m.text and "polymarket.com" in m.text)
 async def analyze_url_handler(message: types.Message):
     uid = message.from_user.id
+    lang = get_user_lang(uid)
     await message.answer(t(uid, "analyzing"))
     try:
         agent = ChiefAgent()
-        result = agent.run(message.text.strip())
+        result = agent.run(message.text.strip(), lang=lang)
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
@@ -239,6 +241,6 @@ def _format_opportunity(result: dict, uid: int) -> str:
         f"{t(uid, 'market_probability')}: {_escape(result.get('market_probability', ''))}\n"
         f"{t(uid, 'system_probability')}: {_escape(result.get('probability', ''))}\n"
         f"{t(uid, 'confidence')}: {_escape(result.get('confidence', ''))}\n"
-        f"{t(uid, 'score')}: {result.get('opportunity_score', '')}\n\n"
+        f"{t(uid, 'score')): {result.get('opportunity_score', '')}\n\n"
         f"{_escape(result.get('conclusion', ''))}"
     )
