@@ -1,4 +1,4 @@
-Сам посмотри, такого нет
+
 
 await message.answer(  
     t(message.from_user.id, "send_link"),  
