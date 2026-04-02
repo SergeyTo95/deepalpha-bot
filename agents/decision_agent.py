@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
@@ -10,7 +11,8 @@ class DecisionAgent:
     def run(
         self,
         market_data: Dict[str, Any],
-        news_data: Dict[str, Any]
+        news_data: Dict[str, Any],
+        lang: str = "en",
     ) -> Dict[str, Any]:
 
         question = market_data.get("question", "Unknown market")
@@ -36,6 +38,7 @@ class DecisionAgent:
             news_summary=news_summary,
             sentiment=sentiment,
             news_confidence=news_confidence,
+            lang=lang,
         )
 
         raw_response = generate_decision_text(prompt)
@@ -87,6 +90,7 @@ class DecisionAgent:
         news_summary: str,
         sentiment: str,
         news_confidence: str,
+        lang: str = "en",
     ) -> str:
 
         options_text = ", ".join(options) if options else "Unknown"
@@ -102,8 +106,12 @@ class DecisionAgent:
             )
         related_text = "\n".join(related_lines) if related_lines else "- No related markets"
 
+        lang_instruction = "Respond in Russian. Use Russian language for all text in your response." if lang == "ru" else "Respond in English."
+
         return f"""
 You are DeepAlpha Decision Engine.
+
+{lang_instruction}
 
 Your job:
 - infer an independent market view
