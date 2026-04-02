@@ -79,11 +79,28 @@ def list_markets(search: str = "", limit: int = 10) -> List[Dict[str, Any]]:
 
 def get_primary_market_from_url(url: str) -> Dict[str, Any]:
     slug = extract_slug_from_url(url)
-    candidates = search_markets_by_slug(slug, limit=10)
+    
+    # Сначала пробуем найти по slug напрямую через events endpoint
+    try:
+        response = requests.get(
+            f"{GAMMA_BASE_URL}/events",
+            params={"slug": slug, "limit": 5},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            events = data if isinstance(data, list) else data.get("data", [])
+            for event in events:
+                markets = event.get("markets", [])
+                if markets:
+                    return markets[0]
+    except Exception:
+        pass
 
+    # Fallback на старый поиск
+    candidates = search_markets_by_slug(slug, limit=10)
     if not candidates:
         return {}
-
     best = _pick_best_market(candidates, slug)
     return best or {}
 
