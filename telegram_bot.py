@@ -241,6 +241,6 @@ def _format_opportunity(result: dict, uid: int) -> str:
         f"{t(uid, 'market_probability')}: {_escape(result.get('market_probability', ''))}\n"
         f"{t(uid, 'system_probability')}: {_escape(result.get('probability', ''))}\n"
         f"{t(uid, 'confidence')}: {_escape(result.get('confidence', ''))}\n"
-        f"{t(uid, 'score')): {result.get('opportunity_score', '')}\n\n"
+        f"{t(uid, 'score')}: {result.get('opportunity_score', '')}\n\n"
         f"{_escape(result.get('conclusion', ''))}"
     )
