@@ -1,4 +1,6 @@
+
 import os
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Union, Optional
 import psycopg2
@@ -93,7 +95,14 @@ def init_db():
     )
     """)
 
-    # Миграции
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pending_payments (
+        user_id BIGINT PRIMARY KEY,
+        amount REAL,
+        created_at INTEGER
+    )
+    """)
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -138,6 +147,37 @@ def set_setting(key: str, value: str) -> None:
     conn.close()
 
 
+# ===== PENDING PAYMENTS =====
+
+def save_pending(user_id: int, amount: float) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO pending_payments (user_id, amount, created_at)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (user_id) DO UPDATE SET amount = EXCLUDED.amount, created_at = EXCLUDED.created_at
+    """, (user_id, amount, int(time.time())))
+    conn.commit()
+    conn.close()
+
+
+def get_all_pending() -> Dict[int, Dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, amount, created_at FROM pending_payments")
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0]: {"amount": r[1], "timestamp": r[2]} for r in rows}
+
+
+def delete_pending(user_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM pending_payments WHERE user_id = %s", (user_id,))
+    conn.commit()
+    conn.close()
+
+
 # ===== USERS =====
 
 def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: int = None) -> None:
@@ -157,7 +197,6 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
         VALUES (%s, %s, %s, %s, %s, %s)
         """, (user_id, username, first_name, referred_by, datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
 
-        # Увеличиваем счётчик рефералов у пригласившего
         if referred_by:
             cursor.execute("""
             UPDATE users SET total_referrals = total_referrals + 1, updated_at = %s
@@ -182,18 +221,11 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     if not row:
         return None
     return {
-        "user_id": row[0],
-        "username": row[1],
-        "first_name": row[2],
-        "token_balance": row[3],
-        "is_banned": bool(row[4]),
-        "is_vip": bool(row[5]),
-        "total_analyses": row[6],
-        "total_opportunities": row[7],
-        "referred_by": row[8],
-        "referral_earnings_ton": row[9] or 0,
-        "total_referrals": row[10] or 0,
-        "created_at": row[11],
+        "user_id": row[0], "username": row[1], "first_name": row[2],
+        "token_balance": row[3], "is_banned": bool(row[4]), "is_vip": bool(row[5]),
+        "total_analyses": row[6], "total_opportunities": row[7],
+        "referred_by": row[8], "referral_earnings_ton": row[9] or 0,
+        "total_referrals": row[10] or 0, "created_at": row[11],
     }
 
 
@@ -396,7 +428,6 @@ def save_analysis(url: str, result: Union[Dict[str, Any], AnalysisRecord], user_
         record.system_probability, record.confidence, record.reasoning,
         record.main_scenario, record.alt_scenario, record.conclusion, created_at, user_id
     ))
-
     conn.commit()
     conn.close()
 
@@ -404,9 +435,7 @@ def save_analysis(url: str, result: Union[Dict[str, Any], AnalysisRecord], user_
 def save_opportunity(result: Dict[str, Any], user_id: int = 0):
     conn = get_connection()
     cursor = conn.cursor()
-
     created_at = result.get("created_at") or datetime.utcnow().isoformat()
-
     cursor.execute("""
     INSERT INTO opportunities (
         url, question, category, market_probability, system_probability,
@@ -421,7 +450,6 @@ def save_opportunity(result: Dict[str, Any], user_id: int = 0):
         result.get("conclusion", ""), int(result.get("opportunity_score", 0) or 0),
         created_at, user_id
     ))
-
     conn.commit()
     conn.close()
 
@@ -468,4 +496,3 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     return [{"url": r[0], "question": r[1], "category": r[2],
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
- 
