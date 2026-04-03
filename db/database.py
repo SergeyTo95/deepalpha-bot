@@ -1,6 +1,3 @@
-Вот полный `db/database.py` с таблицей transactions:
-
-
 import sqlite3
 from datetime import datetime
 from typing import List, Dict, Any, Union, Optional
