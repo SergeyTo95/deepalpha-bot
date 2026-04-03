@@ -11,6 +11,7 @@ from services.ton_service import get_transactions, parse_payment, calculate_toke
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting,
+    get_all_pending, delete_pending,
 )
 
 register_admin(telegram_bot.dp)
@@ -21,12 +22,7 @@ async def check_ton_payments():
     while True:
         try:
             transactions = get_transactions(limit=20)
-
-            try:
-                from web import get_pending_payments, clear_pending
-                pending = dict(get_pending_payments())
-            except Exception:
-                pending = {}
+            pending = get_all_pending()
 
             for tx in transactions:
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
@@ -49,17 +45,21 @@ async def check_ton_payments():
 
                 if payment and payment.get("user_id"):
                     user_id = payment["user_id"]
+                    print(f"TON: found by comment, user_id={user_id}, amount={ton_amount}")
                 else:
-                    # Ищем по pending платежам
+                    # Ищем по pending в БД
                     tx_time = tx.get("utime", 0)
                     for uid, p in list(pending.items()):
                         time_diff = abs(tx_time - p["timestamp"])
                         amount_diff = abs(ton_amount - p["amount"])
+                        print(f"TON: checking pending uid={uid}, time_diff={time_diff}, amount_diff={amount_diff}")
                         if time_diff < 300 and amount_diff < 0.01:
                             user_id = uid
+                            print(f"TON: found by pending, user_id={user_id}")
                             break
 
                 if not user_id:
+                    print(f"TON: no user found for tx {tx_hash[:8]}, amount={ton_amount}")
                     continue
 
                 tokens = calculate_tokens(ton_amount)
@@ -102,11 +102,7 @@ async def check_ton_payments():
                     referrer_id=referrer_id,
                 )
 
-                try:
-                    from web import clear_pending
-                    clear_pending(user_id)
-                except Exception:
-                    pass
+                delete_pending(user_id)
 
                 try:
                     await telegram_bot.bot.send_message(
