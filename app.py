@@ -23,8 +23,6 @@ WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBAPP_URL}{WEBHOOK_PATH}"
 
 
-# ===== WEB HANDLERS =====
-
 async def handle_index(request):
     try:
         with open("webapp/index.html", "r", encoding="utf-8") as f:
@@ -116,8 +114,6 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 
-# ===== TON PAYMENT WORKER =====
-
 async def check_ton_payments():
     while True:
         try:
@@ -191,22 +187,11 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
-# ===== STARTUP / SHUTDOWN =====
-
 async def on_startup(dp):
     await telegram_bot.bot.set_webhook(WEBHOOK_URL)
     print(f"✅ Webhook set: {WEBHOOK_URL}")
-
-    # Добавляем роуты Mini App к существующему aiohttp приложению
-    app = dp["aiohttp_app"]
-    app.router.add_get("/", handle_index)
-    app.router.add_get("/tonconnect-manifest.json", handle_manifest)
-    app.router.add_get("/webapp/{filename}", handle_static)
-    app.router.add_get("/api/user/{user_id}", handle_user_api)
-    app.router.add_get("/health", handle_health)
-
     asyncio.create_task(check_ton_payments())
-    print("✅ All routes registered")
+    print("✅ TON worker started")
 
 
 async def on_shutdown(dp):
@@ -218,12 +203,29 @@ async def on_shutdown(dp):
 # ===== MAIN =====
 
 if __name__ == "__main__":
-    start_webhook(
-        dispatcher=telegram_bot.dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host="0.0.0.0",
-        port=PORT,
+    # Создаём приложение с роутами
+    app = web.Application()
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/tonconnect-manifest.json", handle_manifest)
+    app.router.add_get("/webapp/{filename}", handle_static)
+    app.router.add_get("/api/user/{user_id}", handle_user_api)
+    app.router.add_get("/health", handle_health)
+
+    # Добавляем webhook роут для Telegram
+    from aiogram.dispatcher.webhook import WebhookRequestHandler
+    app.router.add_route(
+        "*", WEBHOOK_PATH,
+        WebhookRequestHandler,
+        name="webhook_handler"
     )
+    app["dp"] = telegram_bot.dp
+    app["bot"] = telegram_bot.bot
+
+    # Запускаем startup
+    async def init_app():
+        await on_startup(telegram_bot.dp)
+
+    app.on_startup.append(lambda app: on_startup(telegram_bot.dp))
+    app.on_shutdown.append(lambda app: on_shutdown(telegram_bot.dp))
+
+    web.run_app(app, host="0.0.0.0", port=PORT)
