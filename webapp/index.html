@@ -22,17 +22,28 @@
         .balance-label { font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
         .balance-amount { font-size: 42px; font-weight: 800; background: linear-gradient(135deg, #ffffff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1; margin-bottom: 4px; }
         .balance-sub { font-size: 13px; color: rgba(255,255,255,0.4); }
+        .sub-badge { display: inline-block; background: linear-gradient(135deg, #6236ff, #c850c0); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 600; margin-top: 8px; }
         .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
         .stat-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; text-align: center; }
         .stat-icon { font-size: 24px; margin-bottom: 6px; }
         .stat-value { font-size: 22px; font-weight: 700; color: #fff; }
         .stat-label { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab { flex: 1; padding: 12px; text-align: center; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.04); }
+        .tab.active { background: rgba(98,54,255,0.3); border-color: #6236ff; color: #fff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
         .pricing-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
         .pricing-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 14px; }
         .pricing-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
         .pricing-row:last-child { border-bottom: none; padding-bottom: 0; }
         .pricing-name { font-size: 14px; color: rgba(255,255,255,0.8); }
         .pricing-value { font-size: 14px; font-weight: 600; color: #c850c0; }
+        .sub-card { background: linear-gradient(135deg, rgba(98,54,255,0.15), rgba(200,80,192,0.1)); border: 1px solid rgba(98,54,255,0.4); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
+        .sub-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+        .sub-price { font-size: 32px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 16px; }
+        .sub-feature { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 14px; color: rgba(255,255,255,0.8); border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .sub-feature:last-child { border-bottom: none; }
         .amount-selector { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
         .amount-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 14px; }
         .amount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
@@ -46,6 +57,9 @@
         .pay-btn { width: 100%; background: linear-gradient(135deg, #6236ff, #c850c0); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(98,54,255,0.4); margin-bottom: 12px; }
         .pay-btn:active { transform: scale(0.98); }
         .pay-btn:disabled { opacity: 0.6; }
+        .sub-pay-btn { width: 100%; background: linear-gradient(135deg, #ff6b35, #f7c59f); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(255,107,53,0.4); margin-bottom: 12px; }
+        .sub-pay-btn:active { transform: scale(0.98); }
+        .sub-pay-btn:disabled { opacity: 0.6; }
         .manual-pay { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
         .manual-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; text-align: center; }
         .address-box { background: rgba(0,0,0,0.3); border-radius: 10px; padding: 10px 14px; font-size: 11px; color: rgba(255,255,255,0.6); word-break: break-all; margin-bottom: 8px; font-family: monospace; }
@@ -78,6 +92,7 @@
             <div class="balance-label">💰 Ваш баланс</div>
             <div class="balance-amount" id="balance">—</div>
             <div class="balance-sub">токенов</div>
+            <div id="sub-badge" style="display:none" class="sub-badge">✅ Подписка активна</div>
         </div>
 
         <div class="stats-row">
@@ -93,80 +108,124 @@
             </div>
         </div>
 
-        <div class="pricing-card">
-            <div class="pricing-title">💎 Тарифы</div>
-            <div class="pricing-row">
-                <div class="pricing-name">🔍 Анализ рынка</div>
-                <div class="pricing-value" id="price-analysis">10 токенов</div>
+        <!-- Табы -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('tokens')">💎 Токены</div>
+            <div class="tab" onclick="switchTab('subscription')">🔔 Подписка</div>
+        </div>
+
+        <!-- Токены -->
+        <div class="tab-content active" id="tab-tokens">
+            <div class="pricing-card">
+                <div class="pricing-title">💎 Тарифы</div>
+                <div class="pricing-row">
+                    <div class="pricing-name">🔍 Анализ рынка</div>
+                    <div class="pricing-value" id="price-analysis">10 токенов</div>
+                </div>
+                <div class="pricing-row">
+                    <div class="pricing-name">💡 Opportunity</div>
+                    <div class="pricing-value" id="price-opp">20 токенов</div>
+                </div>
+                <div class="pricing-row">
+                    <div class="pricing-name">💰 Цена токена</div>
+                    <div class="pricing-value" id="price-token">0.1 TON</div>
+                </div>
             </div>
-            <div class="pricing-row">
-                <div class="pricing-name">💡 Opportunity</div>
-                <div class="pricing-value" id="price-opp">20 токенов</div>
+
+            <div class="amount-selector">
+                <div class="amount-title">Выбери сумму пополнения</div>
+                <div class="amount-grid">
+                    <div class="amount-btn" onclick="selectAmount(0.5, this)">
+                        <div class="amount-btn-ton">0.5 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-05">5 токенов</div>
+                    </div>
+                    <div class="amount-btn active" onclick="selectAmount(1, this)">
+                        <div class="amount-btn-ton">1 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-1">10 токенов</div>
+                    </div>
+                    <div class="amount-btn" onclick="selectAmount(5, this)">
+                        <div class="amount-btn-ton">5 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-5">50 токенов</div>
+                    </div>
+                    <div class="amount-btn" onclick="selectAmount(10, this)">
+                        <div class="amount-btn-ton">10 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-10">100 токенов</div>
+                    </div>
+                    <div class="amount-btn" onclick="selectAmount(25, this)">
+                        <div class="amount-btn-ton">25 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-25">250 токенов</div>
+                    </div>
+                    <div class="amount-btn" onclick="selectAmount(50, this)">
+                        <div class="amount-btn-ton">50 TON</div>
+                        <div class="amount-btn-tokens" id="tokens-50">500 токенов</div>
+                    </div>
+                </div>
+                <input type="number" class="custom-input" id="custom-amount"
+                       placeholder="Или введи свою сумму в TON"
+                       oninput="handleCustomAmount(this.value)">
             </div>
-            <div class="pricing-row">
-                <div class="pricing-name">💰 Цена токена</div>
-                <div class="pricing-value" id="price-token">0.1 TON</div>
+
+            <div class="ton-connect-wrapper">
+                <div id="ton-connect-button"></div>
+            </div>
+
+            <button class="pay-btn" id="pay-btn" onclick="handlePay('tokens')">
+                💎 Оплатить через TON Connect
+            </button>
+
+            <div class="divider">или вручную</div>
+
+            <div class="manual-pay">
+                <div class="manual-title">Отправь TON напрямую</div>
+                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
+                <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
+                    В комментарии укажи свой ID:
+                </div>
+                <div class="user-id-box" id="user-id-display">загрузка...</div>
+                <button class="copy-btn" onclick="copyUserId()">📋 Скопировать ID</button>
             </div>
         </div>
 
-        <div class="amount-selector">
-            <div class="amount-title">Выбери сумму пополнения</div>
-            <div class="amount-grid">
-                <div class="amount-btn" onclick="selectAmount(0.5, this)">
-                    <div class="amount-btn-ton">0.5 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-05">5 токенов</div>
-                </div>
-                <div class="amount-btn active" onclick="selectAmount(1, this)">
-                    <div class="amount-btn-ton">1 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-1">10 токенов</div>
-                </div>
-                <div class="amount-btn" onclick="selectAmount(5, this)">
-                    <div class="amount-btn-ton">5 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-5">50 токенов</div>
-                </div>
-                <div class="amount-btn" onclick="selectAmount(10, this)">
-                    <div class="amount-btn-ton">10 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-10">100 токенов</div>
-                </div>
-                <div class="amount-btn" onclick="selectAmount(25, this)">
-                    <div class="amount-btn-ton">25 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-25">250 токенов</div>
-                </div>
-                <div class="amount-btn" onclick="selectAmount(50, this)">
-                    <div class="amount-btn-ton">50 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-50">500 токенов</div>
-                </div>
+        <!-- Подписка -->
+        <div class="tab-content" id="tab-subscription">
+            <div class="sub-card">
+                <div class="sub-title">🔔 DeepAlpha Premium</div>
+                <div class="sub-price" id="sub-price-display">1 TON / 30 дней</div>
+                <div class="sub-feature">🔔 Ежедневные сигналы opportunity</div>
+                <div class="sub-feature">♾️ Безлимитные анализы и запросы</div>
+                <div class="sub-feature">🚀 Приоритетный AI анализ</div>
+                <div class="sub-feature">📊 Полные сценарии и прогнозы</div>
             </div>
-            <input type="number" class="custom-input" id="custom-amount"
-                   placeholder="Или введи свою сумму в TON"
-                   oninput="handleCustomAmount(this.value)">
-        </div>
 
-        <div class="ton-connect-wrapper">
-            <div id="ton-connect-button"></div>
-        </div>
+            <div id="sub-status-card" style="display:none; background:rgba(74,222,128,0.1); border:1px solid rgba(74,222,128,0.3); border-radius:16px; padding:16px; margin-bottom:16px; text-align:center;">
+                <div style="font-size:24px; margin-bottom:8px;">✅</div>
+                <div style="font-weight:700; color:#4ade80;">Подписка активна</div>
+                <div id="sub-until" style="font-size:13px; color:rgba(255,255,255,0.5); margin-top:4px;"></div>
+            </div>
 
-        <button class="pay-btn" id="pay-btn" onclick="handlePay()">
-            💎 Оплатить через TON Connect
-        </button>
+            <button class="sub-pay-btn" id="sub-pay-btn" onclick="handlePay('subscription')">
+                🔔 Подписаться
+            </button>
+
+            <div class="divider">или вручную</div>
+
+            <div class="manual-pay">
+                <div class="manual-title">Отправь TON напрямую (укажи "sub" в комментарии)</div>
+                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
+                <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
+                    В комментарии укажи свой ID:
+                </div>
+                <div class="user-id-box" id="user-id-display-2">загрузка...</div>
+                <button class="copy-btn" onclick="copyUserId()">📋 Скопировать ID</button>
+            </div>
+        </div>
 
         <div id="status-msg" class="status-msg"></div>
         <div class="loading" id="loading">
             <div class="spinner"></div>
             <div style="color:rgba(255,255,255,0.5);font-size:13px;">Ожидаем подтверждения...</div>
-        </div>
-
-        <div class="divider">или вручную</div>
-
-        <div class="manual-pay">
-            <div class="manual-title">Отправь TON напрямую</div>
-            <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
-            <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
-            <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
-                В комментарии укажи свой ID:
-            </div>
-            <div class="user-id-box" id="user-id-display">загрузка...</div>
-            <button class="copy-btn" onclick="copyUserId()">📋 Скопировать ID</button>
         </div>
     </div>
 
@@ -179,6 +238,8 @@
         let selectedAmount = 1;
         let userId = null;
         let tokenPrice = 0.1;
+        let subPrice = 1;
+        let subDays = 30;
 
         tg.ready();
         tg.expand();
@@ -188,8 +249,17 @@
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             userId = tg.initDataUnsafe.user.id;
             document.getElementById('user-id-display').textContent = userId;
+            document.getElementById('user-id-display-2').textContent = userId;
         } else {
             document.getElementById('user-id-display').textContent = 'Открой через Telegram';
+            document.getElementById('user-id-display-2').textContent = 'Открой через Telegram';
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            event.currentTarget.classList.add('active');
         }
 
         async function initTonConnect() {
@@ -212,12 +282,31 @@
                     document.getElementById('balance').textContent = data.token_balance ?? 0;
                     document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
                     document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
+
                     if (data.token_price) {
                         tokenPrice = parseFloat(data.token_price);
                         document.getElementById('price-token').textContent = `${tokenPrice} TON`;
                     }
                     if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
                     if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                    if (data.subscription_price) {
+                        subPrice = parseFloat(data.subscription_price);
+                    }
+                    if (data.subscription_days) {
+                        subDays = parseInt(data.subscription_days);
+                    }
+                    document.getElementById('sub-price-display').textContent = `${subPrice} TON / ${subDays} дней`;
+                    document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} TON`;
+
+                    if (data.is_subscribed) {
+                        document.getElementById('sub-badge').style.display = 'inline-block';
+                        document.getElementById('sub-status-card').style.display = 'block';
+                        if (data.subscription_until) {
+                            document.getElementById('sub-until').textContent = `До ${data.subscription_until.slice(0,10)}`;
+                        }
+                        document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} TON`;
+                    }
+
                     updateTokenCounts();
                 }
             } catch(e) {
@@ -254,23 +343,23 @@
             document.getElementById('pay-btn').textContent = `💎 Оплатить ${selectedAmount} TON (${tokens} токенов)`;
         }
 
-        async function registerPending() {
+        async function registerPending(amount, paymentType) {
             try {
                 await fetch(`${API_BASE}/api/pending`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         user_id: userId,
-                        amount: selectedAmount,
+                        amount: amount,
+                        payment_type: paymentType,
                     })
                 });
-                console.log('Pending registered');
             } catch(e) {
                 console.log('Pending error:', e);
             }
         }
 
-        async function handlePay() {
+        async function handlePay(paymentType) {
             if (!userId) {
                 showStatus('❌ Открой через Telegram', 'error');
                 return;
@@ -284,13 +373,18 @@
                 return;
             }
 
-            const amountNano = Math.floor(selectedAmount * 1e9).toString();
+            const amount = paymentType === 'subscription' ? subPrice : selectedAmount;
+            const amountNano = Math.floor(amount * 1e9).toString();
 
             try {
                 document.getElementById('loading').style.display = 'block';
-                document.getElementById('pay-btn').disabled = true;
+                if (paymentType === 'tokens') {
+                    document.getElementById('pay-btn').disabled = true;
+                } else {
+                    document.getElementById('sub-pay-btn').disabled = true;
+                }
 
-                await registerPending();
+                await registerPending(amount, paymentType);
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
@@ -302,7 +396,14 @@
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('pay-btn').disabled = false;
-                showStatus('✅ Отправлено! Токены начислятся через 1-2 минуты.', 'success');
+                document.getElementById('sub-pay-btn').disabled = false;
+
+                if (paymentType === 'subscription') {
+                    showStatus('✅ Подписка оформляется! Активируется через 1-2 минуты.', 'success');
+                } else {
+                    showStatus('✅ Отправлено! Токены начислятся через 1-2 минуты.', 'success');
+                }
+
                 try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
 
                 setTimeout(() => loadUserData(), 10000);
@@ -312,6 +413,7 @@
             } catch(e) {
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('pay-btn').disabled = false;
+                document.getElementById('sub-pay-btn').disabled = false;
                 const msg = e.message || '';
                 if (!msg.includes('User rejected') && !msg.includes('cancel')) {
                     showStatus('❌ ' + msg, 'error');
