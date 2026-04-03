@@ -50,6 +50,11 @@ class UserStates(StatesGroup):
     waiting_set_tokens = State()
 
 
+class SystemStates(StatesGroup):
+    waiting_system_prompt = State()
+    waiting_broadcast = State()
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -163,7 +168,7 @@ def get_analytics_data() -> dict:
     cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at >= ?", (week_ago,))
     opp_week = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM users", )
+    cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE ?", (f"{today}%",))
@@ -231,6 +236,62 @@ def format_analytics(data: dict) -> str:
         f"Анализы: {analysis_pct}% | Opportunity: {opp_pct}%\n\n"
         f"🏆 Топ рынков:\n{top}"
     )
+
+
+def get_db_stats() -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM analyses")
+    analyses = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM opportunities")
+    opportunities = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM settings")
+    settings = cursor.fetchone()[0]
+    conn.close()
+
+    import os as _os
+    from db.database import DB_PATH
+    try:
+        db_size = round(_os.path.getsize(DB_PATH) / 1024, 1)
+    except Exception:
+        db_size = 0
+
+    return {
+        "analyses": analyses,
+        "opportunities": opportunities,
+        "users": users,
+        "settings": settings,
+        "db_size_kb": db_size,
+    }
+
+
+def system_kb() -> InlineKeyboardMarkup:
+    news_agent = get_setting("agent_news_enabled", "on")
+    decision_agent = get_setting("agent_decision_enabled", "on")
+    market_agent = get_setting("agent_market_enabled", "on")
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("📝 Edit System Prompt", callback_data="system_edit_prompt"),
+        InlineKeyboardButton("📢 Broadcast", callback_data="system_broadcast"),
+        InlineKeyboardButton("🗄️ DB Stats", callback_data="system_db_stats"),
+        InlineKeyboardButton(
+            f"{'✅' if news_agent == 'on' else '❌'} News Agent",
+            callback_data="system_toggle_news"
+        ),
+        InlineKeyboardButton(
+            f"{'✅' if decision_agent == 'on' else '❌'} Decision Agent",
+            callback_data="system_toggle_decision"
+        ),
+        InlineKeyboardButton(
+            f"{'✅' if market_agent == 'on' else '❌'} Market Agent",
+            callback_data="system_toggle_market"
+        ),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
+    return kb
 
 
 def register_admin(dp: Dispatcher):
@@ -523,10 +584,91 @@ def register_admin(dp: Dispatcher):
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
     async def system_menu(callback: types.CallbackQuery):
-        kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(
-            InlineKeyboardButton("Edit system prompt", callback_data="edit_prompt"),
-            InlineKeyboardButton("Toggle agents", callback_data="toggle_agents"),
-            InlineKeyboardButton("⬅️ Back", callback_data="admin_back")
+        current_prompt = get_setting("system_prompt", "Не задан")[:50]
+        text = f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}..."
+        await callback.message.edit_text(text, reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_edit_prompt")
+    async def edit_prompt_start(callback: types.CallbackQuery, state: FSMContext):
+        await SystemStates.waiting_system_prompt.set()
+        current = get_setting("system_prompt", "")
+        await callback.message.answer(
+            f"Текущий промпт:\n{current}\n\nВведи новый системный промпт:"
         )
-        await callback.message.edit_text("⚙️ System Settings", reply_markup=kb)
+
+    @dp.message_handler(state=SystemStates.waiting_system_prompt)
+    async def save_system_prompt(message: types.Message, state: FSMContext):
+        set_setting("system_prompt", message.text.strip())
+        await state.finish()
+        await message.answer("✅ Системный промпт сохранён")
+
+    @dp.callback_query_handler(lambda c: c.data == "system_broadcast")
+    async def broadcast_start(callback: types.CallbackQuery, state: FSMContext):
+        await SystemStates.waiting_broadcast.set()
+        await callback.message.answer("Введи сообщение для рассылки всем пользователям:")
+
+    @dp.message_handler(state=SystemStates.waiting_broadcast)
+    async def broadcast_send(message: types.Message, state: FSMContext):
+        await state.finish()
+        users = get_all_users(limit=1000)
+        sent = 0
+        failed = 0
+        for user in users:
+            try:
+                await message.bot.send_message(user["user_id"], f"📢 {message.text}")
+                sent += 1
+            except Exception:
+                failed += 1
+        await message.answer(f"✅ Рассылка завершена\nОтправлено: {sent}\nОшибок: {failed}")
+
+    @dp.callback_query_handler(lambda c: c.data == "system_db_stats")
+    async def db_stats(callback: types.CallbackQuery):
+        stats = get_db_stats()
+        text = (
+            f"🗄️ DB Stats\n\n"
+            f"Размер БД: {stats['db_size_kb']} KB\n"
+            f"Анализов: {stats['analyses']}\n"
+            f"Opportunity: {stats['opportunities']}\n"
+            f"Пользователей: {stats['users']}\n"
+            f"Настроек: {stats['settings']}"
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="system_db_stats"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_system"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_news")
+    async def toggle_news_agent(callback: types.CallbackQuery):
+        current = get_setting("agent_news_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("agent_news_enabled", new_val)
+        await callback.answer(f"News Agent: {new_val.upper()}")
+        current_prompt = get_setting("system_prompt", "Не задан")[:50]
+        await callback.message.edit_text(
+            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
+            reply_markup=system_kb()
+        )
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_decision")
+    async def toggle_decision_agent(callback: types.CallbackQuery):
+        current = get_setting("agent_decision_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("agent_decision_enabled", new_val)
+        await callback.answer(f"Decision Agent: {new_val.upper()}")
+        current_prompt = get_setting("system_prompt", "Не задан")[:50]
+        await callback.message.edit_text(
+            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
+            reply_markup=system_kb()
+        )
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_market")
+    async def toggle_market_agent(callback: types.CallbackQuery):
+        current = get_setting("agent_market_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("agent_market_enabled", new_val)
+        await callback.answer(f"Market Agent: {new_val.upper()}")
+        current_prompt = get_setting("system_prompt", "Не задан")[:50]
+        await callback.message.edit_text(
+            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
+            reply_markup=system_kb()
+        )
