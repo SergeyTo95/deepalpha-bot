@@ -4,11 +4,15 @@ from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
-from db.database import init_db, get_recent_analyses, get_top_opportunities, ensure_user, is_user_banned, get_user
+from db.database import (
+    init_db, get_recent_analyses, get_top_opportunities,
+    ensure_user, is_user_banned, get_user, get_setting,
+    add_tokens, increment_user_stat,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -51,6 +55,7 @@ TEXTS = {
         "banned": "🚫 Ваш аккаунт заблокирован.",
         "balance": "💰 Баланс",
         "buy_tokens": "💎 Купить токены",
+        "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
@@ -76,6 +81,7 @@ TEXTS = {
         "banned": "🚫 Your account is banned.",
         "balance": "💰 Balance",
         "buy_tokens": "💎 Buy tokens",
+        "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
     }
 }
 
@@ -127,8 +133,33 @@ def _check_banned(message: types.Message) -> bool:
     return is_user_banned(message.from_user.id)
 
 
+def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
+    """Возвращает True если у пользователя достаточно токенов или платный режим выключен."""
+    paid_mode = get_setting("paid_mode", "off")
+    if paid_mode != "on":
+        return True
+    user = get_user(user_id)
+    if not user:
+        return False
+    if user["is_vip"]:
+        return True
+    price = int(get_setting(price_key, default))
+    return user["token_balance"] >= price
+
+
+def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
+    """Списывает токены если платный режим включён."""
+    paid_mode = get_setting("paid_mode", "off")
+    if paid_mode != "on":
+        return
+    user = get_user(user_id)
+    if not user or user["is_vip"]:
+        return
+    price = int(get_setting(price_key, default))
+    add_tokens(user_id, -price)
+
+
 def _buy_tokens_text(user_id: int, lang: str) -> str:
-    from db.database import get_setting
     token_price = get_setting("token_price_ton", "0.1")
     analysis_price = get_setting("analysis_price_tokens", "10")
     opportunity_price = get_setting("opportunity_price_tokens", "20")
@@ -141,9 +172,9 @@ def _buy_tokens_text(user_id: int, lang: str) -> str:
             f"Opportunity: {opportunity_price} токенов\n\n"
             f"Для пополнения отправь TON на адрес:\n"
             f"`{OWNER_TON_ADDRESS}`\n\n"
-            f"В комментарии к переводу укажи свой ID:\n"
+            f"В комментарии укажи свой ID:\n"
             f"`{user_id}`\n\n"
-            f"Токены будут начислены автоматически в течение 1-2 минут."
+            f"Токены начислятся автоматически в течение 1-2 минут."
         )
     else:
         return (
@@ -251,6 +282,9 @@ async def opportunity_handler(message: types.Message):
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
+    if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+        await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+        return
     lang = get_user_lang(uid)
     await message.answer(t(uid, "searching_opportunity"))
     try:
@@ -259,6 +293,8 @@ async def opportunity_handler(message: types.Message):
         if not result or result.get("opportunity_score", 0) == 0:
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
+        _deduct_tokens(uid, "opportunity_price_tokens", "20")
+        increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid))
     except Exception as e:
@@ -306,6 +342,9 @@ async def analyze_url_handler(message: types.Message):
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
+    if not _check_tokens(uid, "analysis_price_tokens", "10"):
+        await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+        return
     lang = get_user_lang(uid)
     await message.answer(t(uid, "analyzing"))
     try:
@@ -314,6 +353,8 @@ async def analyze_url_handler(message: types.Message):
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
+        _deduct_tokens(uid, "analysis_price_tokens", "10")
+        increment_user_stat(uid, "total_analyses")
         text = _format_analysis(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid))
     except Exception as e:
