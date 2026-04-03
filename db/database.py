@@ -1,9 +1,9 @@
 import sqlite3
 from datetime import datetime
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 
 from db.models import AnalysisRecord
- 
+
 
 DB_PATH = "data.db"
 
@@ -51,6 +51,39 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def get_setting(key: str, default: str = "") -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
 
@@ -68,30 +101,13 @@ def save_analysis(url: str, result: Union[Dict[str, Any], AnalysisRecord]):
 
     cursor.execute("""
     INSERT INTO analyses (
-        url,
-        question,
-        category,
-        market_probability,
-        system_probability,
-        confidence,
-        reasoning,
-        main_scenario,
-        alt_scenario,
-        conclusion,
-        created_at
+        url, question, category, market_probability, system_probability,
+        confidence, reasoning, main_scenario, alt_scenario, conclusion, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        record.url,
-        record.question,
-        record.category,
-        record.market_probability,
-        record.system_probability,
-        record.confidence,
-        record.reasoning,
-        record.main_scenario,
-        record.alt_scenario,
-        record.conclusion,
-        created_at
+        record.url, record.question, record.category, record.market_probability,
+        record.system_probability, record.confidence, record.reasoning,
+        record.main_scenario, record.alt_scenario, record.conclusion, created_at
     ))
 
     conn.commit()
@@ -106,31 +122,16 @@ def save_opportunity(result: Dict[str, Any]):
 
     cursor.execute("""
     INSERT INTO opportunities (
-        url,
-        question,
-        category,
-        market_probability,
-        system_probability,
-        confidence,
-        reasoning,
-        main_scenario,
-        alt_scenario,
-        conclusion,
-        opportunity_score,
-        created_at
+        url, question, category, market_probability, system_probability,
+        confidence, reasoning, main_scenario, alt_scenario, conclusion,
+        opportunity_score, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        result.get("url", ""),
-        result.get("question", ""),
-        result.get("category", ""),
-        result.get("market_probability", ""),
-        result.get("probability", ""),
-        result.get("confidence", ""),
-        result.get("reasoning", ""),
-        result.get("main_scenario", ""),
-        result.get("alt_scenario", ""),
-        result.get("conclusion", ""),
-        int(result.get("opportunity_score", 0) or 0),
+        result.get("url", ""), result.get("question", ""), result.get("category", ""),
+        result.get("market_probability", ""), result.get("probability", ""),
+        result.get("confidence", ""), result.get("reasoning", ""),
+        result.get("main_scenario", ""), result.get("alt_scenario", ""),
+        result.get("conclusion", ""), int(result.get("opportunity_score", 0) or 0),
         created_at
     ))
 
@@ -143,13 +144,7 @@ def get_recent_analyses(limit: int = 10) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
 
     cursor.execute("""
-    SELECT
-        url,
-        question,
-        category,
-        system_probability,
-        confidence,
-        created_at
+    SELECT url, question, category, system_probability, confidence, created_at
     FROM analyses
     ORDER BY id DESC
     LIMIT ?
@@ -158,18 +153,9 @@ def get_recent_analyses(limit: int = 10) -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
 
-    result = []
-    for row in rows:
-        result.append({
-            "url": row[0],
-            "question": row[1],
-            "category": row[2],
-            "system_probability": row[3],
-            "confidence": row[4],
-            "created_at": row[5],
-        })
-
-    return result
+    return [{"url": r[0], "question": r[1], "category": r[2],
+             "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
+            for r in rows]
 
 
 def get_top_opportunities(limit: int = 10) -> List[Dict[str, Any]]:
@@ -177,15 +163,8 @@ def get_top_opportunities(limit: int = 10) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
 
     cursor.execute("""
-    SELECT
-        url,
-        question,
-        category,
-        market_probability,
-        system_probability,
-        confidence,
-        opportunity_score,
-        created_at
+    SELECT url, question, category, market_probability, system_probability,
+           confidence, opportunity_score, created_at
     FROM opportunities
     ORDER BY opportunity_score DESC, id DESC
     LIMIT ?
@@ -194,17 +173,7 @@ def get_top_opportunities(limit: int = 10) -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
 
-    result = []
-    for row in rows:
-        result.append({
-            "url": row[0],
-            "question": row[1],
-            "category": row[2],
-            "market_probability": row[3],
-            "system_probability": row[4],
-            "confidence": row[5],
-            "opportunity_score": row[6],
-            "created_at": row[7],
-        })
-
-    return result
+    return [{"url": r[0], "question": r[1], "category": r[2], "market_probability": r[3],
+             "system_probability": r[4], "confidence": r[5], "opportunity_score": r[6],
+             "created_at": r[7]}
+            for r in rows]
