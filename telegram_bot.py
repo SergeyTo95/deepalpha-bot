@@ -3,6 +3,7 @@ import logging
 from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 from agents.chief_agent import ChiefAgent
@@ -16,7 +17,8 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
 init_db()
 
@@ -243,3 +245,4 @@ def _format_opportunity(result: dict, uid: int) -> str:
         f"{t(uid, 'score')}: {result.get('opportunity_score', '')}\n\n"
         f"{_escape(result.get('conclusion', ''))}"
     )
+ 
