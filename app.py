@@ -1,3 +1,4 @@
+
 import sys
 import os
 import asyncio
@@ -127,7 +128,7 @@ async def start_web_server():
 
 
 async def check_ton_payments():
-    await asyncio.sleep(10)
+    await asyncio.sleep(15)
     while True:
         try:
             transactions = get_transactions(limit=20)
@@ -200,6 +201,26 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
+async def run_polling():
+    while True:
+        try:
+            print("✅ Starting polling...")
+            await telegram_bot.dp.start_polling(
+                reset_webhook=True,
+                timeout=20,
+                relax=0.5,
+                fast=True,
+            )
+        except Exception as e:
+            err = str(e)
+            if "TerminatedByOtherGetUpdates" in err or "Conflict" in err:
+                print("⚠️ Conflict detected, waiting 15 seconds...")
+                await asyncio.sleep(15)
+            else:
+                print(f"Polling error: {e}")
+                await asyncio.sleep(5)
+
+
 async def main():
     # Удаляем старый webhook
     try:
@@ -208,25 +229,14 @@ async def main():
     except Exception as e:
         print(f"Webhook delete error: {e}")
 
-    # Сначала стартует веб-сервер
+    # Сначала веб-сервер
     await start_web_server()
 
     # TON воркер в фоне
     asyncio.create_task(check_ton_payments())
 
-    # Polling в фоне
-    asyncio.create_task(
-        telegram_bot.dp.start_polling(
-            reset_webhook=True,
-            timeout=20,
-            relax=0.5,
-            fast=True,
-        )
-    )
-    print("✅ Bot polling started")
-
-    # Держим процесс живым
-    await asyncio.Event().wait()
+    # Polling с автоповтором
+    await run_polling()
 
 
 if __name__ == "__main__":
