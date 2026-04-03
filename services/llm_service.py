@@ -23,7 +23,6 @@ except Exception:
 
 
 def _get_active_model() -> str:
-    """Читает активную модель из БД, fallback на env."""
     try:
         model = get_setting("active_model", "")
         return model if model else GEMINI_MODEL_DEFAULT
@@ -33,21 +32,25 @@ def _get_active_model() -> str:
 
 def _get_providers(model: str) -> list:
     providers = []
-    keys_and_models = [
-        (_safe_env("GEMINI_API_KEY"), model),
-        (_safe_env("GEMINI_API_KEY_2"), model),
-        (_safe_env("GEMINI_API_KEY_3"), model),
-        (_safe_env("GEMINI_API_KEY_4"), model),
-        (_safe_env("GEMINI_API_KEY_5"), model),
-        (_safe_env("GEMINI_API_KEY"), "gemini-2.0-flash-lite"),
-        (_safe_env("GEMINI_API_KEY_2"), "gemini-2.0-flash-lite"),
-        (_safe_env("GEMINI_API_KEY_3"), "gemini-2.0-flash-lite"),
-        (_safe_env("GEMINI_API_KEY_4"), "gemini-2.0-flash-lite"),
-        (_safe_env("GEMINI_API_KEY_5"), "gemini-2.0-flash-lite"),
-    ]
-    for key, mdl in keys_and_models:
+
+    # Все 55 ключей
+    for i in range(1, 56):
+        if i == 1:
+            key = _safe_env("GEMINI_API_KEY")
+        else:
+            key = _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
-            providers.append({"key": key, "model": mdl})
+            providers.append({"key": key, "model": model})
+
+    # Fallback на lite модель для всех ключей
+    for i in range(1, 56):
+        if i == 1:
+            key = _safe_env("GEMINI_API_KEY")
+        else:
+            key = _safe_env(f"GEMINI_API_KEY_{i}")
+        if key:
+            providers.append({"key": key, "model": "gemini-2.0-flash-lite"})
+
     return providers
 
 
@@ -95,12 +98,12 @@ def generate_text(
 
             if response.status_code == 429:
                 print(f"LLM: quota exceeded for key ...{key[-6:]}, trying next")
-                time.sleep(1)
+                time.sleep(0.3)
                 continue
 
             if response.status_code != 200:
                 print("LLM RESPONSE TEXT:", response.text[:500])
-                time.sleep(1)
+                time.sleep(0.3)
                 continue
 
             data = response.json()
@@ -119,7 +122,7 @@ def generate_text(
 
         except Exception as e:
             print(f"LLM EXCEPTION: {str(e)} | model: {mdl}")
-            time.sleep(1)
+            time.sleep(0.3)
             continue
 
     print("LLM ERROR: All providers exhausted")
@@ -134,4 +137,3 @@ def generate_news_text(prompt: str) -> str:
 def generate_decision_text(prompt: str) -> str:
     model = get_setting("active_model_decision", "") or GEMINI_MODEL_DECISION_DEFAULT
     return generate_text(prompt=prompt, model=model)
- 
