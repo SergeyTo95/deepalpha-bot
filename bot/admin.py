@@ -44,6 +44,8 @@ class PricingStates(StatesGroup):
     waiting_analysis_price = State()
     waiting_opportunity_price = State()
     waiting_referral_percent = State()
+    waiting_subscription_price = State()
+    waiting_subscription_days = State()
 
 
 class UserStates(StatesGroup):
@@ -88,6 +90,8 @@ def pricing_kb():
     paid_mode = get_setting("paid_mode", "off")
     paid_label = "✅ Paid Mode: ON" if paid_mode == "on" else "❌ Paid Mode: OFF"
     ref_percent = get_setting("referral_percent", "10")
+    sub_price = get_setting("subscription_price_ton", "1")
+    sub_days = get_setting("subscription_days", "30")
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton(paid_label, callback_data="pricing_toggle_paid"),
@@ -95,6 +99,8 @@ def pricing_kb():
         InlineKeyboardButton("🔍 Analysis price (tokens)", callback_data="pricing_set_analysis"),
         InlineKeyboardButton("💡 Opportunity price (tokens)", callback_data="pricing_set_opportunity"),
         InlineKeyboardButton(f"👥 Referral %: {ref_percent}%", callback_data="pricing_set_referral"),
+        InlineKeyboardButton(f"🔔 Подписка: {sub_price} TON", callback_data="pricing_set_sub_price"),
+        InlineKeyboardButton(f"📅 Дней подписки: {sub_days}", callback_data="pricing_set_sub_days"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -106,13 +112,16 @@ def pricing_text():
     analysis_price = get_setting("analysis_price_tokens", "10")
     opportunity_price = get_setting("opportunity_price_tokens", "20")
     ref_percent = get_setting("referral_percent", "10")
+    sub_price = get_setting("subscription_price_ton", "1")
+    sub_days = get_setting("subscription_days", "30")
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
         f"Цена токена: {token_price} TON\n"
         f"Анализ: {analysis_price} токенов\n"
         f"Opportunity: {opportunity_price} токенов\n"
-        f"Реферальный %: {ref_percent}%"
+        f"Реферальный %: {ref_percent}%\n"
+        f"Подписка: {sub_price} TON / {sub_days} дней"
     )
 
 
@@ -139,6 +148,10 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
 
 
 def format_user_info(user: dict) -> str:
+    from db.database import is_subscribed, get_subscription_until
+    subscribed = is_subscribed(user["user_id"])
+    sub_until = get_subscription_until(user["user_id"])
+    sub_text = f"✅ до {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
     return (
         f"👤 Пользователь\n\n"
         f"ID: {user['user_id']}\n"
@@ -147,6 +160,7 @@ def format_user_info(user: dict) -> str:
         f"Баланс: {user['token_balance']} токенов\n"
         f"Статус: {'🚫 Забанен' if user['is_banned'] else '✅ Активен'}\n"
         f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
+        f"Подписка: {sub_text}\n"
         f"Анализов: {user['total_analyses']}\n"
         f"Opportunity: {user['total_opportunities']}\n"
         f"Рефералов: {user.get('total_referrals', 0)}\n"
@@ -162,6 +176,7 @@ def get_analytics_data() -> dict:
     today = datetime.utcnow().strftime("%Y-%m-%d")
     yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
     week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+    now = datetime.utcnow().isoformat()
 
     cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE %s", (f"{today}%",))
     analyses_today = cursor.fetchone()[0]
@@ -208,6 +223,9 @@ def get_analytics_data() -> dict:
     cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
     total_referred = cursor.fetchone()[0]
 
+    cursor.execute("SELECT COUNT(*) FROM users WHERE subscription_until > %s", (now,))
+    total_subscribed = cursor.fetchone()[0]
+
     cursor.execute("""
     SELECT question, COUNT(*) as cnt FROM analyses
     GROUP BY question ORDER BY cnt DESC LIMIT 3
@@ -232,6 +250,7 @@ def get_analytics_data() -> dict:
         "total_ton": total_ton or 0,
         "total_referral_ton": total_referral_ton or 0,
         "total_referred": total_referred,
+        "total_subscribed": total_subscribed,
         "top_markets": top_markets,
     }
 
@@ -249,6 +268,7 @@ def format_analytics(data: dict) -> str:
         f"📊 Analytics\n\n"
         f"👥 Пользователи\n"
         f"Всего: {data['total_users']} | VIP: {data['vip_users']} | Бан: {data['banned_users']}\n"
+        f"Подписчиков: {data['total_subscribed']}\n"
         f"Новых сегодня: {data['new_users_today']} | за неделю: {data['new_users_week']}\n\n"
         f"🔍 Анализы\n"
         f"Сегодня: {data['analyses_today']} | Вчера: {data['analyses_yesterday']} | Неделя: {data['analyses_week']}\n\n"
@@ -336,7 +356,8 @@ def system_text() -> str:
     notifications = get_setting("notifications_enabled", "off")
     hour = get_setting("notification_hour", "9")
     interval = get_setting("notification_interval", "daily")
-    last_sent = get_setting("last_notification_sent", "никогда")[:19] if get_setting("last_notification_sent") else "никогда"
+    last_sent = get_setting("last_notification_sent", "")
+    last_sent = last_sent[:19] if last_sent else "никогда"
     prompt = get_setting("system_prompt", "Не задан")[:50]
     return (
         f"⚙️ System Settings\n\n"
@@ -461,6 +482,41 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Реферальный %: {val}%")
         except ValueError:
             await message.answer("❌ Введи число, например: 10")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_price")
+    async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_subscription_price.set()
+        current = get_setting("subscription_price_ton", "1")
+        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 1):")
+
+    @dp.message_handler(state=PricingStates.waiting_subscription_price)
+    async def save_sub_price(message: types.Message, state: FSMContext):
+        try:
+            float(message.text.strip())
+            set_setting("subscription_price_ton", message.text.strip())
+            await state.finish()
+            await message.answer(f"✅ Цена подписки: {message.text.strip()} TON")
+        except ValueError:
+            await message.answer("❌ Введи число, например: 1")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_days")
+    async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_subscription_days.set()
+        current = get_setting("subscription_days", "30")
+        await callback.message.answer(f"Текущий срок подписки: {current} дней\n\nВведи новый срок (например: 30):")
+
+    @dp.message_handler(state=PricingStates.waiting_subscription_days)
+    async def save_sub_days(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 365:
+                await message.answer("❌ Введи число от 1 до 365")
+                return
+            set_setting("subscription_days", str(val))
+            await state.finish()
+            await message.answer(f"✅ Срок подписки: {val} дней")
+        except ValueError:
+            await message.answer("❌ Введи целое число, например: 30")
 
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
@@ -665,6 +721,7 @@ def register_admin(dp: Dispatcher):
             f"👥 User Stats\n\n"
             f"Всего пользователей: {data['total_users']}\n"
             f"VIP: {data['vip_users']}\n"
+            f"Подписчиков: {data['total_subscribed']}\n"
             f"Забанено: {data['banned_users']}\n"
             f"Новых сегодня: {data['new_users_today']}\n"
             f"Новых за неделю: {data['new_users_week']}\n\n"
