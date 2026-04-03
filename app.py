@@ -1,4 +1,3 @@
-
 import sys
 import os
 import asyncio
@@ -8,7 +7,6 @@ from aiohttp import web
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
-from aiogram.utils import executor
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment, calculate_tokens
 from db.database import (
@@ -21,8 +19,6 @@ register_admin(telegram_bot.dp)
 PORT = int(os.getenv("PORT", 3000))
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
 
-
-# ===== WEB HANDLERS =====
 
 async def handle_index(request):
     try:
@@ -130,8 +126,6 @@ async def start_web_server():
     print(f"✅ Web server started on port {PORT}")
 
 
-# ===== TON PAYMENT WORKER =====
-
 async def check_ton_payments():
     await asyncio.sleep(10)
     while True:
@@ -206,30 +200,33 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
-# ===== MAIN =====
-
 async def main():
-    # Сначала удаляем старый webhook если был
+    # Удаляем старый webhook
     try:
         await telegram_bot.bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Old webhook deleted")
+        print("✅ Webhook deleted")
     except Exception as e:
         print(f"Webhook delete error: {e}")
 
-    # Запускаем веб-сервер
+    # Сначала стартует веб-сервер
     await start_web_server()
 
-    # Запускаем TON воркер
+    # TON воркер в фоне
     asyncio.create_task(check_ton_payments())
 
-    # Запускаем polling
-    print("✅ Starting polling...")
-    await telegram_bot.dp.start_polling(
-        reset_webhook=True,
-        timeout=20,
-        relax=0.5,
-        fast=True,
+    # Polling в фоне
+    asyncio.create_task(
+        telegram_bot.dp.start_polling(
+            reset_webhook=True,
+            timeout=20,
+            relax=0.5,
+            fast=True,
+        )
     )
+    print("✅ Bot polling started")
+
+    # Держим процесс живым
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
