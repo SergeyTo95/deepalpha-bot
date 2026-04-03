@@ -55,6 +55,7 @@ class UserStates(StatesGroup):
 class SystemStates(StatesGroup):
     waiting_system_prompt = State()
     waiting_broadcast = State()
+    waiting_notify_hour = State()
 
 
 def is_admin(user_id):
@@ -278,7 +279,6 @@ def get_db_stats() -> dict:
     cursor.execute("SELECT COUNT(*) FROM transactions")
     transactions = cursor.fetchone()[0]
     conn.close()
-
     return {
         "analyses": analyses,
         "opportunities": opportunities,
@@ -293,6 +293,9 @@ def system_kb() -> InlineKeyboardMarkup:
     news_agent = get_setting("agent_news_enabled", "on")
     decision_agent = get_setting("agent_decision_enabled", "on")
     market_agent = get_setting("agent_market_enabled", "on")
+    notifications = get_setting("notifications_enabled", "off")
+    interval = get_setting("notification_interval", "daily")
+    hour = get_setting("notification_hour", "9")
 
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
@@ -311,9 +314,38 @@ def system_kb() -> InlineKeyboardMarkup:
             f"{'✅' if market_agent == 'on' else '❌'} Market Agent",
             callback_data="system_toggle_market"
         ),
+        InlineKeyboardButton(
+            f"🔔 Уведомления: {'ON' if notifications == 'on' else 'OFF'}",
+            callback_data="system_toggle_notifications"
+        ),
+        InlineKeyboardButton(
+            f"🕐 Время: {hour}:00 UTC",
+            callback_data="system_set_notify_hour"
+        ),
+        InlineKeyboardButton(
+            f"📅 Интервал: {'Ежедневно' if interval == 'daily' else 'Еженедельно'}",
+            callback_data="system_toggle_interval"
+        ),
+        InlineKeyboardButton("📤 Отправить сейчас", callback_data="system_send_now"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
+
+
+def system_text() -> str:
+    notifications = get_setting("notifications_enabled", "off")
+    hour = get_setting("notification_hour", "9")
+    interval = get_setting("notification_interval", "daily")
+    last_sent = get_setting("last_notification_sent", "никогда")[:19] if get_setting("last_notification_sent") else "никогда"
+    prompt = get_setting("system_prompt", "Не задан")[:50]
+    return (
+        f"⚙️ System Settings\n\n"
+        f"Промпт: {prompt}...\n\n"
+        f"🔔 Уведомления: {'🟢 ON' if notifications == 'on' else '🔴 OFF'}\n"
+        f"🕐 Время: {hour}:00 UTC\n"
+        f"📅 Интервал: {'Ежедневно' if interval == 'daily' else 'Еженедельно'}\n"
+        f"📤 Последняя рассылка: {last_sent}"
+    )
 
 
 def register_admin(dp: Dispatcher):
@@ -672,9 +704,7 @@ def register_admin(dp: Dispatcher):
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
     async def system_menu(callback: types.CallbackQuery):
-        current_prompt = get_setting("system_prompt", "Не задан")[:50]
-        text = f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}..."
-        await callback.message.edit_text(text, reply_markup=system_kb())
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_edit_prompt")
     async def edit_prompt_start(callback: types.CallbackQuery, state: FSMContext):
@@ -698,7 +728,7 @@ def register_admin(dp: Dispatcher):
     @dp.message_handler(state=SystemStates.waiting_broadcast)
     async def broadcast_send(message: types.Message, state: FSMContext):
         await state.finish()
-        users = get_all_users(limit=1000)
+        users = get_all_users(limit=10000)
         sent = 0
         failed = 0
         for user in users:
@@ -732,11 +762,7 @@ def register_admin(dp: Dispatcher):
         new_val = "off" if current == "on" else "on"
         set_setting("agent_news_enabled", new_val)
         await callback.answer(f"News Agent: {new_val.upper()}")
-        current_prompt = get_setting("system_prompt", "Не задан")[:50]
-        await callback.message.edit_text(
-            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
-            reply_markup=system_kb()
-        )
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_decision")
     async def toggle_decision_agent(callback: types.CallbackQuery):
@@ -744,11 +770,7 @@ def register_admin(dp: Dispatcher):
         new_val = "off" if current == "on" else "on"
         set_setting("agent_decision_enabled", new_val)
         await callback.answer(f"Decision Agent: {new_val.upper()}")
-        current_prompt = get_setting("system_prompt", "Не задан")[:50]
-        await callback.message.edit_text(
-            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
-            reply_markup=system_kb()
-        )
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_market")
     async def toggle_market_agent(callback: types.CallbackQuery):
@@ -756,8 +778,68 @@ def register_admin(dp: Dispatcher):
         new_val = "off" if current == "on" else "on"
         set_setting("agent_market_enabled", new_val)
         await callback.answer(f"Market Agent: {new_val.upper()}")
-        current_prompt = get_setting("system_prompt", "Не задан")[:50]
-        await callback.message.edit_text(
-            f"⚙️ System Settings\n\nТекущий промпт: {current_prompt}...",
-            reply_markup=system_kb()
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_notifications")
+    async def toggle_notifications(callback: types.CallbackQuery):
+        current = get_setting("notifications_enabled", "off")
+        new_val = "on" if current == "off" else "off"
+        set_setting("notifications_enabled", new_val)
+        await callback.answer(f"Уведомления: {new_val.upper()}")
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_set_notify_hour")
+    async def set_notify_hour_start(callback: types.CallbackQuery, state: FSMContext):
+        await SystemStates.waiting_notify_hour.set()
+        current = get_setting("notification_hour", "9")
+        await callback.message.answer(
+            f"Текущее время рассылки: {current}:00 UTC\n\nВведи час (0-23):"
         )
+
+    @dp.message_handler(state=SystemStates.waiting_notify_hour)
+    async def save_notify_hour(message: types.Message, state: FSMContext):
+        try:
+            hour = int(message.text.strip())
+            if hour < 0 or hour > 23:
+                await message.answer("❌ Введи число от 0 до 23")
+                return
+            set_setting("notification_hour", str(hour))
+            await state.finish()
+            await message.answer(f"✅ Время рассылки: {hour}:00 UTC")
+        except ValueError:
+            await message.answer("❌ Введи целое число от 0 до 23")
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_interval")
+    async def toggle_interval(callback: types.CallbackQuery):
+        current = get_setting("notification_interval", "daily")
+        new_val = "weekly" if current == "daily" else "daily"
+        set_setting("notification_interval", new_val)
+        label = "Еженедельно" if new_val == "weekly" else "Ежедневно"
+        await callback.answer(f"Интервал: {label}")
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_send_now")
+    async def send_notifications_now(callback: types.CallbackQuery):
+        await callback.answer("⏳ Отправляю...")
+        await callback.message.edit_text(
+            "⏳ Запускаю рассылку...",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+            )
+        )
+        try:
+            from app import send_daily_notifications
+            await send_daily_notifications()
+            await callback.message.edit_text(
+                "✅ Рассылка завершена!",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                )
+            )
+        except Exception as e:
+            await callback.message.edit_text(
+                f"❌ Ошибка: {e}",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                )
+            )
