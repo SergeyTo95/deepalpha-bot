@@ -155,9 +155,3 @@ app.router.add_get("/health", handle_health)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=PORT)
-```
-
-Также добавь в Railway Variables:
-```
-subscription_price_ton = 1
-subscription_days = 30
