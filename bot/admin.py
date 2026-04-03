@@ -3,10 +3,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 import os
 
-from db.database import get_setting, set_setting
+from db.database import (
+    get_setting, set_setting,
+    get_user, get_all_users, set_user_ban, set_user_vip,
+    add_tokens, set_tokens, is_user_banned, is_user_vip,
+    get_user_analyses,
+)
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
@@ -36,6 +40,12 @@ class PricingStates(StatesGroup):
     waiting_token_price = State()
     waiting_analysis_price = State()
     waiting_opportunity_price = State()
+
+
+class UserStates(StatesGroup):
+    waiting_find_user = State()
+    waiting_gift_tokens = State()
+    waiting_set_tokens = State()
 
 
 def is_admin(user_id):
@@ -89,6 +99,42 @@ def pricing_text():
         f"Цена токена: {token_price} TON\n"
         f"Анализ: {analysis_price} токенов\n"
         f"Opportunity: {opportunity_price} токенов"
+    )
+
+
+def user_kb(user_id: int) -> InlineKeyboardMarkup:
+    banned = is_user_banned(user_id)
+    vip = is_user_vip(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton(
+            "✅ Разбанить" if banned else "🚫 Забанить",
+            callback_data=f"user_ban_{user_id}"
+        ),
+        InlineKeyboardButton(
+            "👑 Убрать VIP" if vip else "👑 Дать VIP",
+            callback_data=f"user_vip_{user_id}"
+        ),
+        InlineKeyboardButton("🎁 Подарить токены", callback_data=f"user_gift_{user_id}"),
+        InlineKeyboardButton("✏️ Установить баланс", callback_data=f"user_setbal_{user_id}"),
+        InlineKeyboardButton("📊 История запросов", callback_data=f"user_history_{user_id}"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_users"),
+    )
+    return kb
+
+
+def format_user_info(user: dict) -> str:
+    return (
+        f"👤 Пользователь\n\n"
+        f"ID: {user['user_id']}\n"
+        f"Username: @{user['username'] or 'нет'}\n"
+        f"Имя: {user['first_name'] or 'нет'}\n"
+        f"Баланс: {user['token_balance']} токенов\n"
+        f"Статус: {'🚫 Забанен' if user['is_banned'] else '✅ Активен'}\n"
+        f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
+        f"Анализов: {user['total_analyses']}\n"
+        f"Opportunity: {user['total_opportunities']}\n"
+        f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
     )
 
 
@@ -190,13 +236,124 @@ def register_admin(dp: Dispatcher):
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
+        users = get_all_users(limit=50)
         kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(
-            InlineKeyboardButton("Find user", callback_data="find_user"),
-            InlineKeyboardButton("Top users", callback_data="top_users"),
-            InlineKeyboardButton("⬅️ Back", callback_data="admin_back")
+        kb.add(InlineKeyboardButton("🔍 Найти пользователя", callback_data="user_find"))
+        for u in users[:10]:
+            name = u.get("username") or u.get("first_name") or str(u["user_id"])
+            status = "🚫" if u["is_banned"] else ("👑" if u["is_vip"] else "👤")
+            kb.add(InlineKeyboardButton(
+                f"{status} {name} | {u['token_balance']} токенов",
+                callback_data=f"user_view_{u['user_id']}"
+            ))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+        await callback.message.edit_text(
+            f"👤 Users\n\nВсего: {len(users)} пользователей",
+            reply_markup=kb
         )
-        await callback.message.edit_text("👤 Users", reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "user_find")
+    async def find_user_start(callback: types.CallbackQuery, state: FSMContext):
+        await UserStates.waiting_find_user.set()
+        await callback.message.answer("Введи Telegram ID пользователя:")
+
+    @dp.message_handler(state=UserStates.waiting_find_user)
+    async def find_user_result(message: types.Message, state: FSMContext):
+        try:
+            uid = int(message.text.strip())
+            user = get_user(uid)
+            await state.finish()
+            if not user:
+                await message.answer("❌ Пользователь не найден")
+                return
+            await message.answer(format_user_info(user), reply_markup=user_kb(uid))
+        except ValueError:
+            await message.answer("❌ Введи числовой ID")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_view_"))
+    async def view_user(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_view_", ""))
+        user = get_user(uid)
+        if not user:
+            await callback.answer("Пользователь не найден")
+            return
+        await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_ban_"))
+    async def toggle_ban(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_ban_", ""))
+        banned = is_user_banned(uid)
+        set_user_ban(uid, not banned)
+        action = "разбанен" if banned else "забанен"
+        await callback.answer(f"✅ Пользователь {action}")
+        user = get_user(uid)
+        if user:
+            await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_vip_"))
+    async def toggle_vip(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_vip_", ""))
+        vip = is_user_vip(uid)
+        set_user_vip(uid, not vip)
+        action = "убран VIP" if vip else "получил VIP"
+        await callback.answer(f"✅ Пользователь {action}")
+        user = get_user(uid)
+        if user:
+            await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_gift_"))
+    async def gift_tokens_start(callback: types.CallbackQuery, state: FSMContext):
+        uid = int(callback.data.replace("user_gift_", ""))
+        await state.update_data(target_user_id=uid)
+        await UserStates.waiting_gift_tokens.set()
+        await callback.message.answer(f"Сколько токенов подарить пользователю {uid}?")
+
+    @dp.message_handler(state=UserStates.waiting_gift_tokens)
+    async def gift_tokens_save(message: types.Message, state: FSMContext):
+        try:
+            amount = int(message.text.strip())
+            data = await state.get_data()
+            uid = data.get("target_user_id")
+            new_balance = add_tokens(uid, amount)
+            await state.finish()
+            await message.answer(f"✅ Подарено {amount} токенов. Новый баланс: {new_balance}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_setbal_"))
+    async def set_balance_start(callback: types.CallbackQuery, state: FSMContext):
+        uid = int(callback.data.replace("user_setbal_", ""))
+        await state.update_data(target_user_id=uid)
+        await UserStates.waiting_set_tokens.set()
+        await callback.message.answer(f"Введи новый баланс токенов для пользователя {uid}:")
+
+    @dp.message_handler(state=UserStates.waiting_set_tokens)
+    async def set_balance_save(message: types.Message, state: FSMContext):
+        try:
+            amount = int(message.text.strip())
+            data = await state.get_data()
+            uid = data.get("target_user_id")
+            set_tokens(uid, amount)
+            await state.finish()
+            await message.answer(f"✅ Баланс установлен: {amount} токенов")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_history_"))
+    async def user_history(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_history_", ""))
+        analyses = get_user_analyses(uid, limit=5)
+        if not analyses:
+            await callback.answer("История пустая")
+            return
+        lines = [f"📊 История запросов пользователя {uid}\n"]
+        for r in analyses:
+            lines.append(f"• {r['question'][:50]}")
+            lines.append(f"  {r['created_at'][:10]}")
+            lines.append("")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
+        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
 
     # === ANALYTICS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_analytics")
