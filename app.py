@@ -1,3 +1,4 @@
+
 import sys
 import os
 import asyncio
@@ -24,7 +25,6 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railwa
 # ===== WEB SERVER =====
 
 async def handle_index(request):
-    """Главная страница Mini App."""
     try:
         with open("webapp/index.html", "r", encoding="utf-8") as f:
             content = f.read()
@@ -33,8 +33,20 @@ async def handle_index(request):
         return web.Response(text="Mini App not found", status=404)
 
 
+async def handle_manifest(request):
+    try:
+        with open("webapp/tonconnect-manifest.json", "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(
+            text=content,
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    except FileNotFoundError:
+        return web.Response(text="Not found", status=404)
+
+
 async def handle_static(request):
-    """Отдаёт статические файлы из папки webapp."""
     filename = request.match_info.get("filename", "")
     filepath = f"webapp/{filename}"
     try:
@@ -54,13 +66,16 @@ async def handle_static(request):
                 content_type = "text/css"
             else:
                 content_type = "text/plain"
-            return web.Response(text=content, content_type=content_type)
+            return web.Response(
+                text=content,
+                content_type=content_type,
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
 
 
 async def handle_user_api(request):
-    """API для получения данных пользователя."""
     user_id = request.match_info.get("user_id", "")
     try:
         uid = int(user_id)
@@ -69,6 +84,7 @@ async def handle_user_api(request):
             return web.Response(
                 text=json.dumps({"error": "User not found"}),
                 content_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"},
                 status=404
             )
         data = {
@@ -90,6 +106,7 @@ async def handle_user_api(request):
         return web.Response(
             text=json.dumps({"error": str(e)}),
             content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
             status=500
         )
 
@@ -101,6 +118,7 @@ async def handle_health(request):
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_index)
+    app.router.add_get("/tonconnect-manifest.json", handle_manifest)
     app.router.add_get("/webapp/{filename}", handle_static)
     app.router.add_get("/api/user/{user_id}", handle_user_api)
     app.router.add_get("/health", handle_health)
@@ -109,7 +127,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"Web server started on port {PORT}")
+    print(f"✅ Web server started on port {PORT}")
 
 
 # ===== TON PAYMENT WORKER =====
@@ -137,7 +155,6 @@ async def check_ton_payments():
                 ensure_user(user_id)
                 new_balance = add_tokens(user_id, tokens)
 
-                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -189,7 +206,7 @@ async def check_ton_payments():
 
 
 async def on_startup(dp):
-    asyncio.create_task(start_web_server())
+    await start_web_server()
     asyncio.create_task(check_ton_payments())
 
 
@@ -198,4 +215,6 @@ if __name__ == "__main__":
         telegram_bot.dp,
         skip_updates=True,
         on_startup=on_startup,
+        timeout=20,
+        relax=0.1,
     )
