@@ -77,4 +77,4 @@ app.router.add_get("/api/user/{user_id}", handle_user_api)
 app.router.add_get("/health", handle_health)
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0",
+    web.run_app(app, host="0.0.0.0", port=PORT)
