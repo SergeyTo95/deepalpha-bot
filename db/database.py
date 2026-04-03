@@ -1,7 +1,7 @@
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Union, Optional
 import psycopg2
 import psycopg2.extras
@@ -77,6 +77,7 @@ def init_db():
         referred_by BIGINT DEFAULT NULL,
         referral_earnings_ton REAL DEFAULT 0,
         total_referrals INTEGER DEFAULT 0,
+        subscription_until TEXT DEFAULT NULL,
         created_at TEXT,
         updated_at TEXT
     )
@@ -99,6 +100,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS pending_payments (
         user_id BIGINT PRIMARY KEY,
         amount REAL,
+        payment_type TEXT DEFAULT 'tokens',
         created_at INTEGER
     )
     """)
@@ -107,8 +109,10 @@ def init_db():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TEXT DEFAULT NULL",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referral_bonus_ton REAL DEFAULT 0",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referrer_id BIGINT DEFAULT NULL",
+        "ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'tokens'",
     ]
     for migration in migrations:
         try:
@@ -149,14 +153,17 @@ def set_setting(key: str, value: str) -> None:
 
 # ===== PENDING PAYMENTS =====
 
-def save_pending(user_id: int, amount: float) -> None:
+def save_pending(user_id: int, amount: float, payment_type: str = "tokens") -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO pending_payments (user_id, amount, created_at)
-    VALUES (%s, %s, %s)
-    ON CONFLICT (user_id) DO UPDATE SET amount = EXCLUDED.amount, created_at = EXCLUDED.created_at
-    """, (user_id, amount, int(time.time())))
+    INSERT INTO pending_payments (user_id, amount, payment_type, created_at)
+    VALUES (%s, %s, %s, %s)
+    ON CONFLICT (user_id) DO UPDATE SET
+        amount = EXCLUDED.amount,
+        payment_type = EXCLUDED.payment_type,
+        created_at = EXCLUDED.created_at
+    """, (user_id, amount, payment_type, int(time.time())))
     conn.commit()
     conn.close()
 
@@ -164,10 +171,10 @@ def save_pending(user_id: int, amount: float) -> None:
 def get_all_pending() -> Dict[int, Dict]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, amount, created_at FROM pending_payments")
+    cursor.execute("SELECT user_id, amount, payment_type, created_at FROM pending_payments")
     rows = cursor.fetchall()
     conn.close()
-    return {r[0]: {"amount": r[1], "timestamp": r[2]} for r in rows}
+    return {r[0]: {"amount": r[1], "payment_type": r[2], "timestamp": r[3]} for r in rows}
 
 
 def delete_pending(user_id: int) -> None:
@@ -176,6 +183,82 @@ def delete_pending(user_id: int) -> None:
     cursor.execute("DELETE FROM pending_payments WHERE user_id = %s", (user_id,))
     conn.commit()
     conn.close()
+
+
+# ===== SUBSCRIPTION =====
+
+def set_subscription(user_id: int, days: int = 30) -> str:
+    """Активирует подписку на N дней. Если уже есть — продлевает."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT subscription_until FROM users WHERE user_id = %s", (user_id,))
+    row = cursor.fetchone()
+
+    now = datetime.utcnow()
+    if row and row[0]:
+        try:
+            current_until = datetime.fromisoformat(row[0])
+            if current_until > now:
+                new_until = current_until + timedelta(days=days)
+            else:
+                new_until = now + timedelta(days=days)
+        except Exception:
+            new_until = now + timedelta(days=days)
+    else:
+        new_until = now + timedelta(days=days)
+
+    until_str = new_until.isoformat()
+    cursor.execute("""
+    UPDATE users SET subscription_until = %s, updated_at = %s WHERE user_id = %s
+    """, (until_str, now.isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    return until_str
+
+
+def is_subscribed(user_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT subscription_until FROM users WHERE user_id = %s", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return False
+    try:
+        until = datetime.fromisoformat(row[0])
+        return until > datetime.utcnow()
+    except Exception:
+        return False
+
+
+def get_subscription_until(user_id: int) -> Optional[str]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT subscription_until FROM users WHERE user_id = %s", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return None
+    return row[0]
+
+
+def get_subscribed_users() -> List[Dict[str, Any]]:
+    """Возвращает всех активных подписчиков."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    cursor.execute("""
+    SELECT user_id, username, first_name, subscription_until
+    FROM users WHERE subscription_until > %s AND is_banned = 0
+    ORDER BY user_id
+    """, (now,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{
+        "user_id": r[0], "username": r[1],
+        "first_name": r[2], "subscription_until": r[3],
+    } for r in rows]
 
 
 # ===== USERS =====
@@ -195,7 +278,8 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
         cursor.execute("""
         INSERT INTO users (user_id, username, first_name, referred_by, created_at, updated_at)
         VALUES (%s, %s, %s, %s, %s, %s)
-        """, (user_id, username, first_name, referred_by, datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
+        """, (user_id, username, first_name, referred_by,
+              datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
 
         if referred_by:
             cursor.execute("""
@@ -213,7 +297,7 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute("""
     SELECT user_id, username, first_name, token_balance, is_banned, is_vip,
            total_analyses, total_opportunities, referred_by,
-           referral_earnings_ton, total_referrals, created_at
+           referral_earnings_ton, total_referrals, subscription_until, created_at
     FROM users WHERE user_id = %s
     """, (user_id,))
     row = cursor.fetchone()
@@ -225,7 +309,8 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
         "token_balance": row[3], "is_banned": bool(row[4]), "is_vip": bool(row[5]),
         "total_analyses": row[6], "total_opportunities": row[7],
         "referred_by": row[8], "referral_earnings_ton": row[9] or 0,
-        "total_referrals": row[10] or 0, "created_at": row[11],
+        "total_referrals": row[10] or 0,
+        "subscription_until": row[11], "created_at": row[12],
     }
 
 
@@ -275,7 +360,8 @@ def get_all_users(limit: int = 50) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute("""
     SELECT user_id, username, first_name, token_balance, is_banned, is_vip,
-           total_analyses, total_opportunities, total_referrals, referral_earnings_ton, created_at
+           total_analyses, total_opportunities, total_referrals,
+           referral_earnings_ton, subscription_until, created_at
     FROM users ORDER BY total_analyses + total_opportunities DESC LIMIT %s
     """, (limit,))
     rows = cursor.fetchall()
@@ -285,7 +371,7 @@ def get_all_users(limit: int = 50) -> List[Dict[str, Any]]:
         "token_balance": r[3], "is_banned": bool(r[4]), "is_vip": bool(r[5]),
         "total_analyses": r[6], "total_opportunities": r[7],
         "total_referrals": r[8] or 0, "referral_earnings_ton": r[9] or 0,
-        "created_at": r[10],
+        "subscription_until": r[10], "created_at": r[11],
     } for r in rows]
 
 
