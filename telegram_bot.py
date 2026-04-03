@@ -8,7 +8,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
-from db.database import init_db, get_recent_analyses, get_top_opportunities
+from db.database import init_db, get_recent_analyses, get_top_opportunities, ensure_user, is_user_banned
 
 logging.basicConfig(level=logging.INFO)
 
@@ -46,6 +46,7 @@ TEXTS = {
         "score": "Скор",
         "send_link": "Отправь ссылку Polymarket.",
         "no_answer": "Не удалось получить ответ от системы.",
+        "banned": "🚫 Ваш аккаунт заблокирован.",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
@@ -68,6 +69,7 @@ TEXTS = {
         "score": "Score",
         "send_link": "Send a Polymarket link.",
         "no_answer": "Could not get a response from the system.",
+        "banned": "🚫 Your account is banned.",
     }
 }
 
@@ -105,8 +107,23 @@ def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
+def _register_user(message: types.Message):
+    ensure_user(
+        user_id=message.from_user.id,
+        username=message.from_user.username or "",
+        first_name=message.from_user.first_name or "",
+    )
+
+
+def _check_banned(message: types.Message) -> bool:
+    if is_user_banned(message.from_user.id):
+        return True
+    return False
+
+
 @dp.message_handler(commands=["start"])
 async def start_handler(message: types.Message):
+    _register_user(message)
     user_languages[message.from_user.id] = "ru"
     await message.answer(
         t(message.from_user.id, "start"),
@@ -116,6 +133,7 @@ async def start_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["🌐 Язык", "🌐 Language"])
 async def language_handler(message: types.Message):
+    _register_user(message)
     await message.answer(
         t(message.from_user.id, "choose_language"),
         reply_markup=get_language_keyboard(),
@@ -124,6 +142,7 @@ async def language_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text == "🇷🇺 Русский")
 async def set_russian_handler(message: types.Message):
+    _register_user(message)
     user_languages[message.from_user.id] = "ru"
     await message.answer(
         t(message.from_user.id, "language_changed_ru"),
@@ -133,6 +152,7 @@ async def set_russian_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text == "🇬🇧 English")
 async def set_english_handler(message: types.Message):
+    _register_user(message)
     user_languages[message.from_user.id] = "en"
     await message.answer(
         t(message.from_user.id, "language_changed_en"),
@@ -142,6 +162,7 @@ async def set_english_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"])
 async def analyze_prompt_handler(message: types.Message):
+    _register_user(message)
     await message.answer(
         t(message.from_user.id, "send_link"),
         reply_markup=get_main_keyboard(message.from_user.id),
@@ -150,7 +171,11 @@ async def analyze_prompt_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["💡 Возможность", "💡 Opportunity"])
 async def opportunity_handler(message: types.Message):
+    _register_user(message)
     uid = message.from_user.id
+    if _check_banned(message):
+        await message.answer(t(uid, "banned"))
+        return
     lang = get_user_lang(uid)
     await message.answer(t(uid, "searching_opportunity"))
     try:
@@ -167,6 +192,7 @@ async def opportunity_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["📊 История", "📊 History"])
 async def history_handler(message: types.Message):
+    _register_user(message)
     uid = message.from_user.id
     records = get_recent_analyses(limit=5)
     if not records:
@@ -183,6 +209,7 @@ async def history_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["🏆 Топ", "🏆 Top"])
 async def top_handler(message: types.Message):
+    _register_user(message)
     uid = message.from_user.id
     records = get_top_opportunities(limit=5)
     if not records:
@@ -199,7 +226,11 @@ async def top_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text and "polymarket.com" in m.text)
 async def analyze_url_handler(message: types.Message):
+    _register_user(message)
     uid = message.from_user.id
+    if _check_banned(message):
+        await message.answer(t(uid, "banned"))
+        return
     lang = get_user_lang(uid)
     await message.answer(t(uid, "analyzing"))
     try:
@@ -216,6 +247,7 @@ async def analyze_url_handler(message: types.Message):
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/"))
 async def fallback_handler(message: types.Message):
+    _register_user(message)
     await message.answer(
         t(message.from_user.id, "fallback"),
         reply_markup=get_main_keyboard(message.from_user.id),
@@ -245,4 +277,3 @@ def _format_opportunity(result: dict, uid: int) -> str:
         f"{t(uid, 'score')}: {result.get('opportunity_score', '')}\n\n"
         f"{_escape(result.get('conclusion', ''))}"
     )
- 
