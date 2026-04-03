@@ -1,3 +1,4 @@
+
 import sys
 import os
 import asyncio
@@ -20,16 +21,45 @@ async def check_ton_payments():
     while True:
         try:
             transactions = get_transactions(limit=20)
+
+            try:
+                from web import get_pending_payments, clear_pending
+                pending = dict(get_pending_payments())
+            except Exception:
+                pending = {}
+
             for tx in transactions:
-                payment = parse_payment(tx)
-                if not payment:
+                tx_hash = tx.get("transaction_id", {}).get("hash", "")
+                if not tx_hash:
                     continue
 
-                tx_hash = payment["tx_hash"]
-                user_id = payment["user_id"]
-                ton_amount = payment["ton_amount"]
-
                 if is_tx_processed(tx_hash):
+                    continue
+
+                in_msg = tx.get("in_msg", {})
+                value = int(in_msg.get("value", 0))
+                ton_amount = value / 1_000_000_000
+
+                if ton_amount <= 0:
+                    continue
+
+                # Сначала пробуем по комментарию
+                payment = parse_payment(tx)
+                user_id = None
+
+                if payment and payment.get("user_id"):
+                    user_id = payment["user_id"]
+                else:
+                    # Ищем по pending платежам
+                    tx_time = tx.get("utime", 0)
+                    for uid, p in list(pending.items()):
+                        time_diff = abs(tx_time - p["timestamp"])
+                        amount_diff = abs(ton_amount - p["amount"])
+                        if time_diff < 300 and amount_diff < 0.01:
+                            user_id = uid
+                            break
+
+                if not user_id:
                     continue
 
                 tokens = calculate_tokens(ton_amount)
@@ -39,6 +69,7 @@ async def check_ton_payments():
                 ensure_user(user_id)
                 new_balance = add_tokens(user_id, tokens)
 
+                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -49,7 +80,6 @@ async def check_ton_payments():
                     except Exception:
                         ref_percent = 10
                     referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
-
                     referral_tokens = calculate_tokens(referral_bonus_ton)
                     if referral_tokens > 0:
                         add_tokens(referrer_id, referral_tokens)
@@ -71,6 +101,12 @@ async def check_ton_payments():
                     referral_bonus_ton=referral_bonus_ton,
                     referrer_id=referrer_id,
                 )
+
+                try:
+                    from web import clear_pending
+                    clear_pending(user_id)
+                except Exception:
+                    pass
 
                 try:
                     await telegram_bot.bot.send_message(
