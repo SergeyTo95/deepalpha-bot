@@ -1,4 +1,3 @@
-
 import os
 import logging
 from typing import Dict
@@ -131,8 +130,11 @@ def get_pay_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 def get_subscribe_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
-    kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
+    label = "🔔 Открыть подписку" if lang == "ru" else "🔔 Open subscription"
+    kb.add(InlineKeyboardButton(
+        label,
+        web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=subscription")
+    ))
     return kb
 
 
