@@ -1,3 +1,4 @@
+
 import os
 import logging
 from typing import Dict
@@ -11,7 +12,7 @@ from agents.opportunity_agent import OpportunityAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
-    add_tokens, increment_user_stat,
+    add_tokens, increment_user_stat, get_referrals,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +20,8 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
+
+BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -98,12 +101,12 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Возможность"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
-        kb.add(KeyboardButton("🌐 Язык"))
+        kb.add(KeyboardButton("👥 Рефералы"), KeyboardButton("🌐 Язык"))
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Opportunity"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("🏆 Top"))
         kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
-        kb.add(KeyboardButton("🌐 Language"))
+        kb.add(KeyboardButton("👥 Referrals"), KeyboardButton("🌐 Language"))
     return kb
 
 
@@ -117,11 +120,12 @@ def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
-def _register_user(message: types.Message):
+def _register_user(message: types.Message, referred_by: int = None):
     ensure_user(
         user_id=message.from_user.id,
         username=message.from_user.username or "",
         first_name=message.from_user.first_name or "",
+        referred_by=referred_by,
     )
 
 
@@ -249,7 +253,6 @@ def _format_opportunity(result: dict, uid: int) -> str:
     score = result.get("opportunity_score", 0)
     url = result.get("url", "")
     conf_emoji = _confidence_emoji(confidence)
-
     score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
 
     if lang == "ru":
@@ -281,18 +284,30 @@ def _format_opportunity(result: dict, uid: int) -> str:
 
     if url:
         text += f"\n\n🔗 {url}"
-
     return text
 
 
 @dp.message_handler(commands=["start"])
 async def start_handler(message: types.Message):
-    _register_user(message)
+    args = message.get_args()
+    referred_by = None
+
+    if args and args.startswith("ref_"):
+        try:
+            referred_by = int(args.replace("ref_", ""))
+            if referred_by == message.from_user.id:
+                referred_by = None
+        except ValueError:
+            referred_by = None
+
+    _register_user(message, referred_by=referred_by)
     user_languages[message.from_user.id] = "ru"
-    await message.answer(
-        t(message.from_user.id, "start"),
-        reply_markup=get_main_keyboard(message.from_user.id),
-    )
+
+    text = t(message.from_user.id, "start")
+    if referred_by:
+        text += "\n\n🎁 Вы зарегистрированы по реферальной ссылке!"
+
+    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
 @dp.message_handler(lambda m: m.text in ["🌐 Язык", "🌐 Language"])
@@ -377,6 +392,46 @@ async def buy_tokens_handler(message: types.Message):
     uid = message.from_user.id
     lang = get_user_lang(uid)
     text = _buy_tokens_text(uid, lang)
+    await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
+
+
+@dp.message_handler(lambda m: m.text in ["👥 Рефералы", "👥 Referrals"])
+async def referrals_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    user = get_user(uid)
+    referrals = get_referrals(uid)
+    ref_percent = get_setting("referral_percent", "10")
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
+
+    if lang == "ru":
+        text = (
+            f"👥 Реферальная программа\n\n"
+            f"Ваша ссылка:\n`{ref_link}`\n\n"
+            f"Приглашено друзей: {user['total_referrals'] if user else 0}\n"
+            f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
+            f"За каждую покупку реферала вы получаете {ref_percent}% от суммы в токенах.\n\n"
+        )
+        if referrals:
+            text += "Ваши рефералы:\n"
+            for r in referrals[:5]:
+                name = r.get("username") or r.get("first_name") or str(r["user_id"])
+                text += f"• @{name} — {r['total_analyses']} анализов\n"
+    else:
+        text = (
+            f"👥 Referral Program\n\n"
+            f"Your link:\n`{ref_link}`\n\n"
+            f"Friends invited: {user['total_referrals'] if user else 0}\n"
+            f"Earned: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
+            f"You get {ref_percent}% of each referral purchase in tokens.\n\n"
+        )
+        if referrals:
+            text += "Your referrals:\n"
+            for r in referrals[:5]:
+                name = r.get("username") or r.get("first_name") or str(r["user_id"])
+                text += f"• @{name} — {r['total_analyses']} analyses\n"
+
     await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
 
 
