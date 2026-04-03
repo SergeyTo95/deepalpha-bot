@@ -13,6 +13,7 @@ from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
     add_tokens, increment_user_stat, get_referrals,
+    is_subscribed, get_subscription_until, set_subscription,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,7 @@ if not BOT_TOKEN:
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
+OWNER_TON_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -31,8 +33,6 @@ dp = Dispatcher(bot, storage=storage)
 init_db()
 
 user_languages: Dict[int, str] = {}
-
-OWNER_TON_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 TEXTS = {
     "ru": {
@@ -97,17 +97,22 @@ def t(user_id: int, key: str) -> str:
 
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
+    subscribed = is_subscribed(user_id)
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Возможность"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
-        kb.add(KeyboardButton("👥 Рефералы"), KeyboardButton("🌐 Язык"))
+        kb.add(KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
+               KeyboardButton("👥 Рефералы"))
+        kb.add(KeyboardButton("🌐 Язык"))
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Opportunity"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("🏆 Top"))
         kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
-        kb.add(KeyboardButton("👥 Referrals"), KeyboardButton("🌐 Language"))
+        kb.add(KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
+               KeyboardButton("👥 Referrals"))
+        kb.add(KeyboardButton("🌐 Language"))
     return kb
 
 
@@ -118,6 +123,13 @@ def get_language_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_pay_keyboard(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
+    kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
+    return kb
+
+
+def get_subscribe_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
     kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
@@ -150,6 +162,8 @@ def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
         return False
     if user["is_vip"]:
         return True
+    if is_subscribed(user_id):
+        return True
     price = int(get_setting(price_key, default))
     return user["token_balance"] >= price
 
@@ -160,6 +174,8 @@ def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
         return
     user = get_user(user_id)
     if not user or user["is_vip"]:
+        return
+    if is_subscribed(user_id):
         return
     price = int(get_setting(price_key, default))
     add_tokens(user_id, -price)
@@ -337,25 +353,31 @@ async def balance_handler(message: types.Message):
     paid_mode = get_setting("paid_mode", "off")
     analysis_price = get_setting("analysis_price_tokens", "10")
     opp_price = get_setting("opportunity_price_tokens", "20")
+    subscribed = is_subscribed(uid)
+    sub_until = get_subscription_until(uid)
 
     if lang == "ru":
+        sub_text = f"✅ До {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
         text = (
             f"💰 Ваш баланс\n\n"
             f"Токены: {user['token_balance']}\n"
             f"Анализов: {user['total_analyses']}\n"
             f"Opportunity: {user['total_opportunities']}\n"
-            f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n\n"
+            f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
+            f"Подписка: {sub_text}\n\n"
             f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
             f"Анализ: {analysis_price} токенов\n"
             f"Opportunity: {opp_price} токенов"
         )
     else:
+        sub_text = f"✅ Until {sub_until[:10]}" if subscribed and sub_until else "❌ No"
         text = (
             f"💰 Your Balance\n\n"
             f"Tokens: {user['token_balance']}\n"
             f"Analyses: {user['total_analyses']}\n"
             f"Opportunities: {user['total_opportunities']}\n"
-            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}\n\n"
+            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}\n"
+            f"Subscription: {sub_text}\n\n"
             f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
             f"Analysis: {analysis_price} tokens\n"
             f"Opportunity: {opp_price} tokens"
@@ -388,8 +410,64 @@ async def buy_tokens_handler(message: types.Message):
             f"Opportunity: {opp_price} tokens\n\n"
             f"Tap the button below to open payment 👇"
         )
-
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
+
+
+@dp.message_handler(lambda m: m.text in ["🔔 Подписка", "✅ Подписка активна",
+                                          "🔔 Subscribe", "✅ Subscription active"])
+async def subscription_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    subscribed = is_subscribed(uid)
+    sub_until = get_subscription_until(uid)
+    sub_price = get_setting("subscription_price_ton", "1")
+    sub_days = get_setting("subscription_days", "30")
+
+    if subscribed and sub_until:
+        if lang == "ru":
+            text = (
+                f"✅ Подписка активна\n\n"
+                f"Действует до: {sub_until[:10]}\n\n"
+                f"С подпиской ты получаешь:\n"
+                f"• 🔔 Ежедневные сигналы opportunity\n"
+                f"• ♾️ Безлимитные запросы\n"
+                f"• 🚀 Приоритетный анализ\n\n"
+                f"Продлить подписку — {sub_price} TON / {sub_days} дней 👇"
+            )
+        else:
+            text = (
+                f"✅ Subscription active\n\n"
+                f"Valid until: {sub_until[:10]}\n\n"
+                f"With subscription you get:\n"
+                f"• 🔔 Daily opportunity signals\n"
+                f"• ♾️ Unlimited requests\n"
+                f"• 🚀 Priority analysis\n\n"
+                f"Renew — {sub_price} TON / {sub_days} days 👇"
+            )
+    else:
+        if lang == "ru":
+            text = (
+                f"🔔 Подписка DeepAlpha\n\n"
+                f"Цена: {sub_price} TON / {sub_days} дней\n\n"
+                f"Что включено:\n"
+                f"• 🔔 Ежедневные сигналы opportunity\n"
+                f"• ♾️ Безлимитные анализы и opportunity\n"
+                f"• 🚀 Приоритетный AI анализ\n\n"
+                f"Оплати через кассу 👇"
+            )
+        else:
+            text = (
+                f"🔔 DeepAlpha Subscription\n\n"
+                f"Price: {sub_price} TON / {sub_days} days\n\n"
+                f"Includes:\n"
+                f"• 🔔 Daily opportunity signals\n"
+                f"• ♾️ Unlimited analyses\n"
+                f"• 🚀 Priority AI analysis\n\n"
+                f"Pay via checkout 👇"
+            )
+
+    await message.answer(text, reply_markup=get_subscribe_keyboard(lang))
 
 
 @dp.message_handler(lambda m: m.text in ["👥 Рефералы", "👥 Referrals"])
