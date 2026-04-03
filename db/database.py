@@ -1,3 +1,4 @@
+
 import sqlite3
 from datetime import datetime
 from typing import List, Dict, Any, Union, Optional
@@ -30,7 +31,7 @@ def init_db():
         alt_scenario TEXT,
         conclusion TEXT,
         created_at TEXT,
-        user_id INTEGER
+        user_id INTEGER DEFAULT 0
     )
     """)
 
@@ -49,7 +50,7 @@ def init_db():
         conclusion TEXT,
         opportunity_score INTEGER,
         created_at TEXT,
-        user_id INTEGER
+        user_id INTEGER DEFAULT 0
     )
     """)
 
@@ -75,6 +76,17 @@ def init_db():
         updated_at TEXT
     )
     """)
+
+    # Миграции — безопасно добавляем колонки если их нет
+    try:
+        cursor.execute("ALTER TABLE analyses ADD COLUMN user_id INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE opportunities ADD COLUMN user_id INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
