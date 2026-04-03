@@ -43,17 +43,8 @@ class DecisionAgent:
 
         raw_response = generate_decision_text(prompt)
 
-        print("========== RAW LLM RESPONSE ==========")
-        print(raw_response)
-        print("======================================")
-
         if raw_response and not raw_response.lower().startswith("llm service is not configured"):
             parsed = self._parse_llm_output(raw_response)
-
-            print("========== PARSED LLM RESULT ==========")
-            print(parsed)
-            print("=======================================")
-
             wrapped = self._wrap_llm_result(
                 question=question,
                 category=category,
@@ -61,7 +52,6 @@ class DecisionAgent:
                 parsed=parsed,
                 raw_text=raw_response,
             )
-
             if self._is_valid_result(wrapped):
                 return wrapped
 
@@ -106,68 +96,55 @@ class DecisionAgent:
             )
         related_text = "\n".join(related_lines) if related_lines else "- No related markets"
 
-        lang_instruction = "Respond in Russian. Use Russian language for all text in your response." if lang == "ru" else "Respond in English."
+        lang_instruction = (
+            "Respond ONLY in Russian. Every single word must be in Russian language."
+            if lang == "ru"
+            else "Respond in English."
+        )
 
         return f"""
-You are DeepAlpha Decision Engine.
+You are DeepAlpha — an expert prediction market analyst with deep knowledge of geopolitics, economics, crypto and sports.
 
 {lang_instruction}
 
-Your job:
-- infer an independent market view
-- do NOT simply repeat market odds
-- combine market structure, related markets, trend behavior, crowd behavior and news context
-- provide a clear main scenario and an alternative scenario
-- be concise but concrete
+TASK: Analyze this prediction market and give an independent, well-reasoned forecast.
 
-Question:
-{question}
+MARKET QUESTION: {question}
+CATEGORY: {category}
+CURRENT MARKET ODDS: {market_probability}
+OPTIONS: {options_text}
 
-Category:
-{category}
-
-Market probability:
-{market_probability}
-
-Options:
-{options_text}
-
-Trend summary:
+PRICE TREND DATA:
 {trend_summary}
 
-Crowd behavior:
+CROWD BEHAVIOR:
 {crowd_behavior}
 
-News summary:
+NEWS & CONTEXT:
 {news_summary}
 
-News sentiment:
-{sentiment}
+NEWS SENTIMENT: {sentiment}
+NEWS SIGNAL STRENGTH: {news_confidence}
 
-News confidence:
-{news_confidence}
-
-Related markets:
+RELATED MARKETS:
 {related_text}
 
-IMPORTANT:
-- Return ALL fields
-- Do not leave fields blank
-- If evidence is weak, say so
-- If probability is uncertain, still provide a best estimate
-- Probability must be in a human-readable form, for example:
-  Yes — 62%
-  No — 71%
-  Most likely outcome — 58%
+ANALYSIS RULES:
+1. DO NOT simply repeat the market odds — give your INDEPENDENT view
+2. If market odds are very one-sided (>80%), explain WHY or challenge it
+3. Use trend data and crowd behavior to detect momentum
+4. Use news context to identify catalysts or risks
+5. Be specific and concrete — avoid vague statements
+6. If data is limited, say so clearly but still provide your best estimate
 
-Return EXACTLY in this format:
+REQUIRED OUTPUT FORMAT (use exactly these labels):
 
-System Probability: ...
-Confidence: ...
-Reasoning: ...
-Main Scenario: ...
-Alternative Scenario: ...
-Conclusion: ...
+System Probability: [Your probability estimate, e.g. "Yes — 73%" or "No — 65%"]
+Confidence: [High / Medium / Low]
+Reasoning: [2-3 sentences explaining your core logic]
+Main Scenario: [Most likely outcome and why]
+Alternative Scenario: [What could change the outcome]
+Conclusion: [1 sentence summary with your final recommendation]
 """.strip()
 
     def _parse_llm_output(self, text: str) -> Dict[str, str]:
@@ -180,6 +157,16 @@ Conclusion: ...
             "Conclusion": "",
         }
 
+        # Также парсим русские варианты
+        russian_map = {
+            "Вероятность системы": "System Probability",
+            "Уверенность": "Confidence",
+            "Логика": "Reasoning",
+            "Основной сценарий": "Main Scenario",
+            "Альтернативный сценарий": "Alternative Scenario",
+            "Вывод": "Conclusion",
+        }
+
         current_key = None
         lines = text.splitlines()
 
@@ -187,12 +174,14 @@ Conclusion: ...
             stripped = line.strip()
             matched = False
 
-            for key in fields.keys():
+            all_keys = list(fields.keys()) + list(russian_map.keys())
+            for key in all_keys:
                 prefix = f"{key}:"
                 if stripped.startswith(prefix):
+                    actual_key = russian_map.get(key, key)
                     value = stripped[len(prefix):].strip()
-                    fields[key] = value
-                    current_key = key
+                    fields[actual_key] = value
+                    current_key = actual_key
                     matched = True
                     break
 
