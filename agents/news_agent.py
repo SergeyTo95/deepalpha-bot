@@ -25,7 +25,7 @@ class NewsAgent:
             date_context=date_context,
         )
 
-        news_items = search_google_news(news_query, limit=5)
+        news_items = search_google_news(news_query, limit=7)
         live_news_summary = summarize_news_items(news_items)
 
         prompt = self._build_prompt(
@@ -78,58 +78,56 @@ class NewsAgent:
 
         related_block = "\n".join(related_lines) if related_lines else "- No related markets"
 
-        lang_instruction = "Respond in Russian. Use Russian language for all text in your response." if lang == "ru" else "Respond in English."
+        lang_instruction = (
+            "Respond ONLY in Russian. Every single word must be in Russian language."
+            if lang == "ru"
+            else "Respond in English."
+        )
+
+        has_news = live_news_summary and "No relevant" not in live_news_summary
 
         return f"""
-You are a News Intelligence Agent inside a prediction market AI system.
+You are DeepAlpha News Intelligence — an expert analyst for prediction markets.
 
 {lang_instruction}
 
-Your goal:
-- analyze real-world context behind an event
-- identify signals that affect probability
-- distinguish strong vs weak signals
-- use the live news feed below as your primary external context layer
+TASK: Analyze real-world news context for this prediction market event and identify signals that affect probability.
 
-Event:
-{question}
+MARKET QUESTION: {question}
+CATEGORY: {category}
+DEADLINE: {date_context}
 
-Category:
-{category}
-
-Time context:
-{date_context}
-
-Related markets:
+RELATED MARKETS:
 {related_block}
 
-Live News Feed:
-{live_news_summary}
+LIVE NEWS FEED ({len(live_news_summary.split(chr(10)))} items found):
+{live_news_summary if has_news else "No recent news found for this topic."}
 
-Instructions:
-- do not hallucinate fake news sources
-- use the live news feed above
-- separate supporting vs opposing signals
-- if evidence is weak, say it clearly
-- focus on what changes probability
+ANALYSIS RULES:
+1. If news feed is empty — use your knowledge of this topic up to your training cutoff
+2. Clearly separate SUPPORTING signals (increase probability) from OPPOSING signals (decrease probability)
+3. Rate signal strength: Strong / Moderate / Weak
+4. Be specific — mention dates, names, numbers when available
+5. Do NOT hallucinate news sources
+6. Focus on what CHANGES the probability, not just what confirms current odds
 
-Return format:
+REQUIRED OUTPUT FORMAT:
 
 News Summary:
-...
+[2-3 sentence overview of the current situation]
 
 Key Signals:
-- ...
-- ...
-- ...
+- [Signal 1 with strength rating]
+- [Signal 2 with strength rating]
+- [Signal 3 with strength rating]
 
 Supporting Factors:
-- ...
-- ...
+- [Factor that increases YES probability]
+- [Factor that increases YES probability]
 
 Opposing Factors:
-- ...
-- ...
+- [Factor that decreases YES probability]
+- [Factor that decreases YES probability]
 
 Sentiment: Positive / Negative / Mixed / Unclear
 Confidence: Low / Medium / High
@@ -165,14 +163,12 @@ Confidence: Low / Medium / High
         news_items: List[Dict[str, str]],
     ) -> Dict[str, Any]:
         summary_parts = [
-            "News Agent fallback mode.",
-            f"Question: {question}.",
+            f"News analysis for: {question}.",
             f"Category: {category}.",
-            f"Search query: {news_query}.",
         ]
 
         if date_context and date_context != "Unknown":
-            summary_parts.append(f"Detected time context: {date_context}.")
+            summary_parts.append(f"Time context: {date_context}.")
 
         if related_markets:
             summary_parts.append(
@@ -181,11 +177,11 @@ Confidence: Low / Medium / High
 
         if news_items:
             summary_parts.append(
-                f"Live news feed found {len(news_items)} relevant recent items."
+                f"Found {len(news_items)} relevant recent news items."
             )
             summary_parts.append(f"News digest: {live_news_summary}")
         else:
-            summary_parts.append("No live news items were found.")
+            summary_parts.append("No live news items were found for this topic.")
 
         return {
             "question": question,
@@ -200,34 +196,30 @@ Confidence: Low / Medium / High
 
     def _extract_sentiment(self, text: str) -> str:
         t = text.lower()
-        if "sentiment: positive" in t:
-            return "Positive"
-        if "sentiment: negative" in t:
-            return "Negative"
-        if "sentiment: mixed" in t:
-            return "Mixed"
-        if "sentiment: unclear" in t:
-            return "Unclear"
-
-        if "positive" in t:
-            return "Positive"
-        if "negative" in t:
-            return "Negative"
-        if "mixed" in t:
-            return "Mixed"
+        for phrase, result in [
+            ("sentiment: positive", "Positive"),
+            ("настроение: позитивное", "Positive"),
+            ("sentiment: negative", "Negative"),
+            ("настроение: негативное", "Negative"),
+            ("sentiment: mixed", "Mixed"),
+            ("настроение: смешанное", "Mixed"),
+            ("sentiment: unclear", "Unclear"),
+            ("настроение: неясное", "Unclear"),
+        ]:
+            if phrase in t:
+                return result
         return "Unclear"
 
     def _extract_confidence(self, text: str) -> str:
         t = text.lower()
-        if "confidence: high" in t:
-            return "High"
-        if "confidence: medium" in t:
-            return "Medium"
-        if "confidence: low" in t:
-            return "Low"
-
-        if "high" in t:
-            return "High"
-        if "medium" in t:
-            return "Medium"
+        for phrase, result in [
+            ("confidence: high", "High"),
+            ("уверенность: высокая", "High"),
+            ("confidence: medium", "Medium"),
+            ("уверенность: средняя", "Medium"),
+            ("confidence: low", "Low"),
+            ("уверенность: низкая", "Low"),
+        ]:
+            if phrase in t:
+                return result
         return "Low"
