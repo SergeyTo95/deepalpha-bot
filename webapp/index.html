@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,431 +8,64 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }
-
-        body {
-            background: #0d0b1e;
-            color: #ffffff;
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        .bg-glow {
-            position: fixed;
-            top: -200px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, rgba(98, 54, 255, 0.15) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .container {
-            position: relative;
-            z-index: 1;
-            max-width: 480px;
-            margin: 0 auto;
-            padding: 24px 16px;
-        }
-
-        .header {
-            text-align: center;
-            margin-bottom: 32px;
-        }
-
-        .logo {
-            width: 90px;
-            height: 90px;
-            border-radius: 22px;
-            margin: 0 auto 12px;
-            display: block;
-            box-shadow: 0 0 30px rgba(98, 54, 255, 0.5);
-        }
-
-        .logo-placeholder {
-            width: 90px;
-            height: 90px;
-            border-radius: 22px;
-            margin: 0 auto 12px;
-            background: linear-gradient(135deg, #6236ff, #c850c0);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 36px;
-            box-shadow: 0 0 30px rgba(98, 54, 255, 0.5);
-        }
-
-        .app-name {
-            font-size: 28px;
-            font-weight: 800;
-            background: linear-gradient(135deg, #6236ff, #c850c0, #00d4ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            letter-spacing: -0.5px;
-        }
-
-        .app-subtitle {
-            font-size: 13px;
-            color: rgba(255,255,255,0.5);
-            margin-top: 4px;
-        }
-
-        .balance-card {
-            background: linear-gradient(135deg, rgba(98, 54, 255, 0.2), rgba(200, 80, 192, 0.1));
-            border: 1px solid rgba(98, 54, 255, 0.3);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 16px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .balance-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(98, 54, 255, 0.8), transparent);
-        }
-
-        .balance-label {
-            font-size: 12px;
-            color: rgba(255,255,255,0.5);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-        }
-
-        .balance-amount {
-            font-size: 42px;
-            font-weight: 800;
-            background: linear-gradient(135deg, #ffffff, #c850c0);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            line-height: 1;
-            margin-bottom: 4px;
-        }
-
-        .balance-sub {
-            font-size: 13px;
-            color: rgba(255,255,255,0.4);
-        }
-
-        .stats-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .stat-card {
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 16px;
-            text-align: center;
-        }
-
-        .stat-icon {
-            font-size: 24px;
-            margin-bottom: 6px;
-        }
-
-        .stat-value {
-            font-size: 22px;
-            font-weight: 700;
-            color: #fff;
-        }
-
-        .stat-label {
-            font-size: 11px;
-            color: rgba(255,255,255,0.4);
-            margin-top: 2px;
-        }
-
-        .pricing-card {
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 16px;
-        }
-
-        .pricing-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: rgba(255,255,255,0.7);
-            margin-bottom: 14px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .pricing-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-        }
-
-        .pricing-row:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-        }
-
-        .pricing-name {
-            font-size: 14px;
-            color: rgba(255,255,255,0.8);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .pricing-value {
-            font-size: 14px;
-            font-weight: 600;
-            color: #c850c0;
-        }
-
-        .amount-selector {
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 16px;
-        }
-
-        .amount-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: rgba(255,255,255,0.7);
-            margin-bottom: 14px;
-        }
-
-        .amount-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-bottom: 14px;
-        }
-
-        .amount-btn {
-            background: rgba(98, 54, 255, 0.1);
-            border: 1px solid rgba(98, 54, 255, 0.3);
-            border-radius: 12px;
-            padding: 12px 8px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .amount-btn.active {
-            background: rgba(98, 54, 255, 0.3);
-            border-color: #6236ff;
-            box-shadow: 0 0 15px rgba(98, 54, 255, 0.3);
-        }
-
-        .amount-btn-ton {
-            font-size: 16px;
-            font-weight: 700;
-            color: #fff;
-        }
-
-        .amount-btn-tokens {
-            font-size: 11px;
-            color: rgba(255,255,255,0.5);
-            margin-top: 2px;
-        }
-
-        .custom-input {
-            width: 100%;
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 12px;
-            padding: 12px 16px;
-            color: #fff;
-            font-size: 16px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .custom-input:focus {
-            border-color: rgba(98, 54, 255, 0.6);
-        }
-
-        .custom-input::placeholder {
-            color: rgba(255,255,255,0.3);
-        }
-
-        .pay-btn {
-            width: 100%;
-            background: linear-gradient(135deg, #6236ff, #c850c0);
-            border: none;
-            border-radius: 16px;
-            padding: 18px;
-            font-size: 17px;
-            font-weight: 700;
-            color: #fff;
-            cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: 0 8px 30px rgba(98, 54, 255, 0.4);
-            margin-bottom: 12px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .pay-btn:active {
-            transform: scale(0.98);
-        }
-
-        .pay-btn::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
-            transition: left 0.5s;
-        }
-
-        .pay-btn:hover::after {
-            left: 100%;
-        }
-
-        .manual-pay {
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 16px;
-            padding: 16px;
-            margin-bottom: 16px;
-        }
-
-        .manual-title {
-            font-size: 13px;
-            color: rgba(255,255,255,0.5);
-            margin-bottom: 10px;
-            text-align: center;
-        }
-
-        .address-box {
-            background: rgba(0,0,0,0.3);
-            border-radius: 10px;
-            padding: 10px 14px;
-            font-size: 11px;
-            color: rgba(255,255,255,0.6);
-            word-break: break-all;
-            margin-bottom: 8px;
-            font-family: monospace;
-        }
-
-        .user-id-box {
-            background: rgba(98, 54, 255, 0.15);
-            border: 1px solid rgba(98, 54, 255, 0.3);
-            border-radius: 10px;
-            padding: 10px 14px;
-            font-size: 13px;
-            color: #c850c0;
-            text-align: center;
-            font-weight: 600;
-        }
-
-        .copy-btn {
-            background: rgba(98, 54, 255, 0.2);
-            border: 1px solid rgba(98, 54, 255, 0.4);
-            border-radius: 8px;
-            padding: 6px 12px;
-            color: #fff;
-            font-size: 12px;
-            cursor: pointer;
-            margin-top: 8px;
-            width: 100%;
-            transition: all 0.2s;
-        }
-
-        .copy-btn:active {
-            background: rgba(98, 54, 255, 0.4);
-        }
-
-        .status-msg {
-            text-align: center;
-            font-size: 13px;
-            color: rgba(255,255,255,0.5);
-            padding: 12px;
-            display: none;
-        }
-
-        .status-msg.success {
-            color: #4ade80;
-            display: block;
-        }
-
-        .status-msg.error {
-            color: #f87171;
-            display: block;
-        }
-
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-
-        .spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid rgba(98, 54, 255, 0.3);
-            border-top-color: #6236ff;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin: 0 auto 10px;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .ton-connect-wrapper {
-            margin-bottom: 16px;
-        }
-
-        #ton-connect-button {
-            width: 100%;
-        }
-
-        .divider {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin: 16px 0;
-            color: rgba(255,255,255,0.3);
-            font-size: 12px;
-        }
-
-        .divider::before,
-        .divider::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: rgba(255,255,255,0.1);
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        body { background: #0d0b1e; color: #ffffff; min-height: 100vh; overflow-x: hidden; }
+        .bg-glow { position: fixed; top: -200px; left: 50%; transform: translateX(-50%); width: 600px; height: 600px; background: radial-gradient(circle, rgba(98,54,255,0.15) 0%, transparent 70%); pointer-events: none; z-index: 0; }
+        .container { position: relative; z-index: 1; max-width: 480px; margin: 0 auto; padding: 24px 16px; }
+        .header { text-align: center; margin-bottom: 32px; }
+        .logo { width: 90px; height: 90px; border-radius: 22px; margin: 0 auto 12px; display: block; box-shadow: 0 0 30px rgba(98,54,255,0.5); }
+        .logo-placeholder { width: 90px; height: 90px; border-radius: 22px; margin: 0 auto 12px; background: linear-gradient(135deg, #6236ff, #c850c0); display: flex; align-items: center; justify-content: center; font-size: 36px; box-shadow: 0 0 30px rgba(98,54,255,0.5); }
+        .app-name { font-size: 28px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0, #00d4ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: -0.5px; }
+        .app-subtitle { font-size: 13px; color: rgba(255,255,255,0.5); margin-top: 4px; }
+        .balance-card { background: linear-gradient(135deg, rgba(98,54,255,0.2), rgba(200,80,192,0.1)); border: 1px solid rgba(98,54,255,0.3); border-radius: 20px; padding: 20px; margin-bottom: 16px; position: relative; overflow: hidden; }
+        .balance-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(98,54,255,0.8), transparent); }
+        .balance-label { font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .balance-amount { font-size: 42px; font-weight: 800; background: linear-gradient(135deg, #ffffff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1; margin-bottom: 4px; }
+        .balance-sub { font-size: 13px; color: rgba(255,255,255,0.4); }
+        .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .stat-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; text-align: center; }
+        .stat-icon { font-size: 24px; margin-bottom: 6px; }
+        .stat-value { font-size: 22px; font-weight: 700; color: #fff; }
+        .stat-label { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+        .pricing-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
+        .pricing-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 14px; }
+        .pricing-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .pricing-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .pricing-name { font-size: 14px; color: rgba(255,255,255,0.8); }
+        .pricing-value { font-size: 14px; font-weight: 600; color: #c850c0; }
+        .amount-selector { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
+        .amount-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 14px; }
+        .amount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+        .amount-btn { background: rgba(98,54,255,0.1); border: 1px solid rgba(98,54,255,0.3); border-radius: 12px; padding: 12px 8px; text-align: center; cursor: pointer; transition: all 0.2s; }
+        .amount-btn.active { background: rgba(98,54,255,0.3); border-color: #6236ff; box-shadow: 0 0 15px rgba(98,54,255,0.3); }
+        .amount-btn-ton { font-size: 16px; font-weight: 700; color: #fff; }
+        .amount-btn-tokens { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+        .custom-input { width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 12px 16px; color: #fff; font-size: 16px; outline: none; transition: border-color 0.2s; }
+        .custom-input:focus { border-color: rgba(98,54,255,0.6); }
+        .custom-input::placeholder { color: rgba(255,255,255,0.3); }
+        .pay-btn { width: 100%; background: linear-gradient(135deg, #6236ff, #c850c0); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(98,54,255,0.4); margin-bottom: 12px; }
+        .pay-btn:active { transform: scale(0.98); }
+        .pay-btn:disabled { opacity: 0.6; }
+        .manual-pay { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+        .manual-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; text-align: center; }
+        .address-box { background: rgba(0,0,0,0.3); border-radius: 10px; padding: 10px 14px; font-size: 11px; color: rgba(255,255,255,0.6); word-break: break-all; margin-bottom: 8px; font-family: monospace; }
+        .user-id-box { background: rgba(98,54,255,0.15); border: 1px solid rgba(98,54,255,0.3); border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #c850c0; text-align: center; font-weight: 600; }
+        .copy-btn { background: rgba(98,54,255,0.2); border: 1px solid rgba(98,54,255,0.4); border-radius: 8px; padding: 6px 12px; color: #fff; font-size: 12px; cursor: pointer; margin-top: 8px; width: 100%; transition: all 0.2s; }
+        .copy-btn:active { background: rgba(98,54,255,0.4); }
+        .status-msg { text-align: center; font-size: 13px; padding: 12px; display: none; border-radius: 10px; margin-bottom: 8px; }
+        .status-msg.success { color: #4ade80; display: block; background: rgba(74,222,128,0.1); }
+        .status-msg.error { color: #f87171; display: block; background: rgba(248,113,113,0.1); }
+        .loading { display: none; text-align: center; padding: 20px; }
+        .spinner { width: 32px; height: 32px; border: 3px solid rgba(98,54,255,0.3); border-top-color: #6236ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .ton-connect-wrapper { margin-bottom: 16px; }
+        #ton-connect-button { width: 100%; }
+        .divider { display: flex; align-items: center; gap: 12px; margin: 16px 0; color: rgba(255,255,255,0.3); font-size: 12px; }
+        .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.1); }
     </style>
 </head>
 <body>
     <div class="bg-glow"></div>
-
     <div class="container">
         <div class="header">
             <img src="/webapp/logo.png" class="logo" onerror="this.style.display='none'; document.getElementById('logo-placeholder').style.display='flex'">
@@ -443,7 +77,7 @@
         <div class="balance-card">
             <div class="balance-label">💰 Ваш баланс</div>
             <div class="balance-amount" id="balance">—</div>
-            <div class="balance-sub" id="balance-sub">токенов</div>
+            <div class="balance-sub">токенов</div>
         </div>
 
         <div class="stats-row">
@@ -478,27 +112,27 @@
         <div class="amount-selector">
             <div class="amount-title">Выбери сумму пополнения</div>
             <div class="amount-grid">
-                <div class="amount-btn" onclick="selectAmount(0.5)">
+                <div class="amount-btn" onclick="selectAmount(0.5, this)">
                     <div class="amount-btn-ton">0.5 TON</div>
-                    <div class="amount-btn-tokens" id="tokens-0">5 токенов</div>
+                    <div class="amount-btn-tokens" id="tokens-05">5 токенов</div>
                 </div>
-                <div class="amount-btn active" onclick="selectAmount(1)">
+                <div class="amount-btn active" onclick="selectAmount(1, this)">
                     <div class="amount-btn-ton">1 TON</div>
                     <div class="amount-btn-tokens" id="tokens-1">10 токенов</div>
                 </div>
-                <div class="amount-btn" onclick="selectAmount(5)">
+                <div class="amount-btn" onclick="selectAmount(5, this)">
                     <div class="amount-btn-ton">5 TON</div>
                     <div class="amount-btn-tokens" id="tokens-5">50 токенов</div>
                 </div>
-                <div class="amount-btn" onclick="selectAmount(10)">
+                <div class="amount-btn" onclick="selectAmount(10, this)">
                     <div class="amount-btn-ton">10 TON</div>
                     <div class="amount-btn-tokens" id="tokens-10">100 токенов</div>
                 </div>
-                <div class="amount-btn" onclick="selectAmount(25)">
+                <div class="amount-btn" onclick="selectAmount(25, this)">
                     <div class="amount-btn-ton">25 TON</div>
                     <div class="amount-btn-tokens" id="tokens-25">250 токенов</div>
                 </div>
-                <div class="amount-btn" onclick="selectAmount(50)">
+                <div class="amount-btn" onclick="selectAmount(50, this)">
                     <div class="amount-btn-ton">50 TON</div>
                     <div class="amount-btn-tokens" id="tokens-50">500 токенов</div>
                 </div>
@@ -519,16 +153,16 @@
         <div id="status-msg" class="status-msg"></div>
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <div style="color: rgba(255,255,255,0.5); font-size: 13px;">Ожидаем подтверждения...</div>
+            <div style="color:rgba(255,255,255,0.5);font-size:13px;">Ожидаем подтверждения...</div>
         </div>
 
         <div class="divider">или вручную</div>
 
         <div class="manual-pay">
             <div class="manual-title">Отправь TON напрямую</div>
-            <div class="address-box" id="ton-address">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+            <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
             <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
-            <div style="margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.4); text-align: center;">
+            <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                 В комментарии укажи свой ID:
             </div>
             <div class="user-id-box" id="user-id-display">загрузка...</div>
@@ -537,195 +171,172 @@
     </div>
 
     <script>
-    const OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
-    const API_BASE = window.location.origin;
+        const OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
+        const API_BASE = window.location.origin;
 
-    let tg = window.Telegram.WebApp;
-    let tonConnectUI = null;
-    let selectedAmount = 1;
-    let userId = null;
-    let tokenPrice = 0.1;
+        let tg = window.Telegram.WebApp;
+        let tonConnectUI = null;
+        let selectedAmount = 1;
+        let userId = null;
+        let tokenPrice = 0.1;
 
-    tg.ready();
-    tg.expand();
-    tg.setHeaderColor('#0d0b1e');
-    tg.setBackgroundColor('#0d0b1e');
+        tg.ready();
+        tg.expand();
 
-    if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-        userId = tg.initDataUnsafe.user.id;
-        document.getElementById('user-id-display').textContent = userId;
-    }
+        try { tg.setHeaderColor('#0d0b1e'); } catch(e) {}
+        try { tg.setBackgroundColor('#0d0b1e'); } catch(e) {}
 
-    async function initTonConnect() {
-        try {
-            tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
-                manifestUrl: `${API_BASE}/tonconnect-manifest.json`,
-                buttonRootId: 'ton-connect-button',
+        // Получаем userId
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            userId = tg.initDataUnsafe.user.id;
+            document.getElementById('user-id-display').textContent = userId;
+        } else {
+            document.getElementById('user-id-display').textContent = 'Открой через Telegram';
+        }
+
+        async function initTonConnect() {
+            try {
+                tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+                    manifestUrl: `${API_BASE}/tonconnect-manifest.json`,
+                    buttonRootId: 'ton-connect-button',
+                });
+            } catch(e) {
+                console.log('TON Connect error:', e);
+            }
+        }
+
+        async function loadUserData() {
+            if (!userId) return;
+            try {
+                const resp = await fetch(`${API_BASE}/api/user/${userId}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('balance').textContent = data.token_balance ?? 0;
+                    document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
+                    document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
+                    if (data.token_price) {
+                        tokenPrice = parseFloat(data.token_price);
+                        document.getElementById('price-token').textContent = `${tokenPrice} TON`;
+                    }
+                    if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
+                    if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                    updateTokenCounts();
+                }
+            } catch(e) {
+                console.log('Load user error:', e);
+            }
+        }
+
+        function updateTokenCounts() {
+            const map = {'05': 0.5, '1': 1, '5': 5, '10': 10, '25': 25, '50': 50};
+            Object.entries(map).forEach(([id, amount]) => {
+                const el = document.getElementById(`tokens-${id}`);
+                if (el) el.textContent = `${Math.floor(amount / tokenPrice)} токенов`;
             });
-        } catch (e) {
-            console.log('TON Connect init error:', e);
         }
-    }
 
-    async function loadUserData() {
-        if (!userId) return;
-        try {
-            const resp = await fetch(`${API_BASE}/api/user/${userId}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                document.getElementById('balance').textContent = data.token_balance || 0;
-                document.getElementById('stat-analyses').textContent = data.total_analyses || 0;
-                document.getElementById('stat-opp').textContent = data.total_opportunities || 0;
+        function selectAmount(amount, btn) {
+            selectedAmount = amount;
+            document.getElementById('custom-amount').value = '';
+            document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            updatePayButton();
+        }
 
-                if (data.token_price) {
-                    tokenPrice = parseFloat(data.token_price);
-                    document.getElementById('price-token').textContent = `${tokenPrice} TON`;
-                }
-                if (data.analysis_price) {
-                    document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
-                }
-                if (data.opp_price) {
-                    document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
-                }
-                updateTokenCounts();
+        function handleCustomAmount(val) {
+            if (val && parseFloat(val) > 0) {
+                selectedAmount = parseFloat(val);
+                document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('active'));
             }
-        } catch (e) {
-            console.log('Load user error:', e);
+            updatePayButton();
         }
-    }
 
-    function updateTokenCounts() {
-        const amounts = [0.5, 1, 5, 10, 25, 50];
-        amounts.forEach(a => {
-            const tokens = Math.floor(a / tokenPrice);
-            const el = document.getElementById(`tokens-${a}`);
-            if (el) el.textContent = `${tokens} токенов`;
-        });
-    }
-
-    function selectAmount(amount) {
-        selectedAmount = amount;
-        document.getElementById('custom-amount').value = '';
-        document.querySelectorAll('.amount-btn').forEach(btn => btn.classList.remove('active'));
-        event.currentTarget.classList.add('active');
-        updatePayButton();
-    }
-
-    function handleCustomAmount(val) {
-        if (val && parseFloat(val) > 0) {
-            selectedAmount = parseFloat(val);
-            document.querySelectorAll('.amount-btn').forEach(btn => btn.classList.remove('active'));
+        function updatePayButton() {
+            const tokens = Math.floor(selectedAmount / tokenPrice);
+            document.getElementById('pay-btn').textContent = `💎 Оплатить ${selectedAmount} TON (${tokens} токенов)`;
         }
-        updatePayButton();
-    }
 
-    function updatePayButton() {
-        const tokens = Math.floor(selectedAmount / tokenPrice);
-        document.getElementById('pay-btn').textContent =
-            `💎 Оплатить ${selectedAmount} TON (${tokens} токенов)`;
-    }
+        async function handlePay() {
+            if (!userId) {
+                showStatus('❌ Открой через Telegram', 'error');
+                return;
+            }
+            if (!tonConnectUI) {
+                showStatus('❌ TON Connect не инициализирован', 'error');
+                return;
+            }
+            if (!tonConnectUI.wallet) {
+                showStatus('⚠️ Сначала подключи кошелёк', 'error');
+                return;
+            }
 
-    async function handlePay() {
-    if (!userId) {
-        showStatus('❌ Не удалось определить пользователя', 'error');
-        return;
-    }
+            const amountNano = Math.floor(selectedAmount * 1e9).toString();
+            const comment = userId.toString();
 
-    if (!tonConnectUI) {
-        showStatus('❌ TON Connect не инициализирован', 'error');
-        return;
-    }
+            // Правильный TON comment cell
+            const encoder = new TextEncoder();
+            const textBytes = encoder.encode(comment);
+            const buffer = new Uint8Array(4 + textBytes.length);
+            buffer[0] = 0; buffer[1] = 0; buffer[2] = 0; buffer[3] = 0;
+            buffer.set(textBytes, 4);
+            let binary = '';
+            buffer.forEach(b => binary += String.fromCharCode(b));
+            const payload = btoa(binary);
 
-    const wallet = tonConnectUI.wallet;
-    if (!wallet) {
-        showStatus('⚠️ Сначала подключи кошелёк TON Connect', 'error');
-        return;
-    }
+            try {
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('pay-btn').disabled = true;
 
-    const amountNano = Math.floor(selectedAmount * 1e9).toString();
+                await tonConnectUI.sendTransaction({
+                    validUntil: Math.floor(Date.now() / 1000) + 600,
+                    messages: [{
+                        address: OWNER_ADDRESS,
+                        amount: amountNano,
+                        payload: payload,
+                    }]
+                });
 
-    try {
-        document.getElementById('loading').style.display = 'block';
-        document.getElementById('pay-btn').disabled = true;
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('pay-btn').disabled = false;
+                showStatus('✅ Отправлено! Токены начислятся через 1-2 минуты.', 'success');
+                try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+                setTimeout(() => loadUserData(), 5000);
 
-        // Формируем comment payload в формате TON
-        const comment = userId.toString();
-        const bytes = new TextEncoder().encode(comment);
-        const cell = new Uint8Array(4 + bytes.length);
-        // opcode 0 = text comment
-        cell[0] = 0; cell[1] = 0; cell[2] = 0; cell[3] = 0;
-        cell.set(bytes, 4);
-        
-        // Конвертируем в base64
-        const binaryStr = Array.from(cell).map(b => String.fromCharCode(b)).join('');
-        const payloadBase64 = btoa(binaryStr);
-
-        const result = await tonConnectUI.sendTransaction({
-            validUntil: Math.floor(Date.now() / 1000) + 600,
-            messages: [
-                {
-                    address: OWNER_ADDRESS,
-                    amount: amountNano,
-                    payload: payloadBase64,
+            } catch(e) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('pay-btn').disabled = false;
+                const msg = e.message || '';
+                if (!msg.includes('User rejected') && !msg.includes('cancel')) {
+                    showStatus('❌ ' + msg, 'error');
                 }
-            ]
-        });
-
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('pay-btn').disabled = false;
-        showStatus('✅ Транзакция отправлена! Токены начислятся через 1-2 минуты.', 'success');
-        tg.HapticFeedback.notificationOccurred('success');
-
-    } catch (e) {
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('pay-btn').disabled = false;
-        const msg = e.message || '';
-        if (!msg.includes('User rejected')) {
-            showStatus('❌ Ошибка: ' + msg, 'error');
-        }
-    }
-    };
-
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('pay-btn').disabled = false;
-            showStatus('✅ Транзакция отправлена! Токены начислятся через 1-2 минуты.', 'success');
-            tg.HapticFeedback.notificationOccurred('success');
-
-        } catch (e) {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('pay-btn').disabled = false;
-            if (e.message !== 'User rejected the transaction') {
-                showStatus('❌ Ошибка: ' + e.message, 'error');
             }
         }
-    }
 
-    function showStatus(msg, type) {
-        const el = document.getElementById('status-msg');
-        el.textContent = msg;
-        el.className = `status-msg ${type}`;
-        setTimeout(() => { el.className = 'status-msg'; }, 5000);
-    }
+        function showStatus(msg, type) {
+            const el = document.getElementById('status-msg');
+            el.textContent = msg;
+            el.className = `status-msg ${type}`;
+            setTimeout(() => { el.className = 'status-msg'; el.style.display = 'none'; }, 6000);
+        }
 
-    function copyAddress() {
-        navigator.clipboard.writeText(OWNER_ADDRESS).then(() => {
-            tg.HapticFeedback.impactOccurred('light');
-            showStatus('✅ Адрес скопирован!', 'success');
-        });
-    }
+        function copyAddress() {
+            navigator.clipboard.writeText(OWNER_ADDRESS).then(() => {
+                try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+                showStatus('✅ Адрес скопирован!', 'success');
+            }).catch(() => showStatus('❌ Не удалось скопировать', 'error'));
+        }
 
-    function copyUserId() {
-        if (userId) {
+        function copyUserId() {
+            if (!userId) return;
             navigator.clipboard.writeText(userId.toString()).then(() => {
-                tg.HapticFeedback.impactOccurred('light');
+                try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
                 showStatus('✅ ID скопирован!', 'success');
-            });
+            }).catch(() => showStatus('❌ Не удалось скопировать', 'error'));
         }
-    }
 
-    initTonConnect();
-    loadUserData();
-    updatePayButton();
+        initTonConnect();
+        loadUserData();
+        updatePayButton();
     </script>
 </body>
 </html>
