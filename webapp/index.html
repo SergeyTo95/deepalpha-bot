@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>DeepAlpha</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <script src="https://unpkg.com/@tonconnect/ui@2.0.6/dist/tonconnect-ui.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         body { background: #0d0b1e; color: #ffffff; min-height: 100vh; overflow-x: hidden; }
@@ -182,11 +182,9 @@
 
         tg.ready();
         tg.expand();
-
         try { tg.setHeaderColor('#0d0b1e'); } catch(e) {}
         try { tg.setBackgroundColor('#0d0b1e'); } catch(e) {}
 
-        // Получаем userId
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             userId = tg.initDataUnsafe.user.id;
             document.getElementById('user-id-display').textContent = userId;
@@ -256,6 +254,22 @@
             document.getElementById('pay-btn').textContent = `💎 Оплатить ${selectedAmount} TON (${tokens} токенов)`;
         }
 
+        async function registerPending() {
+            try {
+                await fetch(`${API_BASE}/api/pending`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: userId,
+                        amount: selectedAmount,
+                    })
+                });
+                console.log('Pending registered');
+            } catch(e) {
+                console.log('Pending error:', e);
+            }
+        }
+
         async function handlePay() {
             if (!userId) {
                 showStatus('❌ Открой через Telegram', 'error');
@@ -271,28 +285,18 @@
             }
 
             const amountNano = Math.floor(selectedAmount * 1e9).toString();
-            const comment = userId.toString();
-
-            // Правильный TON comment cell
-            const encoder = new TextEncoder();
-            const textBytes = encoder.encode(comment);
-            const buffer = new Uint8Array(4 + textBytes.length);
-            buffer[0] = 0; buffer[1] = 0; buffer[2] = 0; buffer[3] = 0;
-            buffer.set(textBytes, 4);
-            let binary = '';
-            buffer.forEach(b => binary += String.fromCharCode(b));
-            const payload = btoa(binary);
 
             try {
                 document.getElementById('loading').style.display = 'block';
                 document.getElementById('pay-btn').disabled = true;
+
+                await registerPending();
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
                     messages: [{
                         address: OWNER_ADDRESS,
                         amount: amountNano,
-                        payload: payload,
                     }]
                 });
 
@@ -300,7 +304,10 @@
                 document.getElementById('pay-btn').disabled = false;
                 showStatus('✅ Отправлено! Токены начислятся через 1-2 минуты.', 'success');
                 try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
-                setTimeout(() => loadUserData(), 5000);
+
+                setTimeout(() => loadUserData(), 10000);
+                setTimeout(() => loadUserData(), 30000);
+                setTimeout(() => loadUserData(), 90000);
 
             } catch(e) {
                 document.getElementById('loading').style.display = 'none';
@@ -316,14 +323,17 @@
             const el = document.getElementById('status-msg');
             el.textContent = msg;
             el.className = `status-msg ${type}`;
-            setTimeout(() => { el.className = 'status-msg'; el.style.display = 'none'; }, 6000);
+            setTimeout(() => {
+                el.className = 'status-msg';
+                el.style.display = 'none';
+            }, 6000);
         }
 
         function copyAddress() {
             navigator.clipboard.writeText(OWNER_ADDRESS).then(() => {
                 try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
                 showStatus('✅ Адрес скопирован!', 'success');
-            }).catch(() => showStatus('❌ Не удалось скопировать', 'error'));
+            });
         }
 
         function copyUserId() {
@@ -331,7 +341,7 @@
             navigator.clipboard.writeText(userId.toString()).then(() => {
                 try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
                 showStatus('✅ ID скопирован!', 'success');
-            }).catch(() => showStatus('❌ Не удалось скопировать', 'error'));
+            });
         }
 
         initTonConnect();
