@@ -222,20 +222,19 @@ async def run_polling():
 
 
 async def main():
-    # Удаляем старый webhook
     try:
         await telegram_bot.bot.delete_webhook(drop_pending_updates=True)
         print("✅ Webhook deleted")
     except Exception as e:
         print(f"Webhook delete error: {e}")
 
-    # Сначала веб-сервер
     await start_web_server()
 
-    # TON воркер в фоне
     asyncio.create_task(check_ton_payments())
 
-    # Polling с автоповтором
+    print("⏳ Waiting 30 seconds before polling...")
+    await asyncio.sleep(30)
+
     await run_polling()
 
 
