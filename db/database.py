@@ -1,3 +1,5 @@
+Вот полный `db/database.py` с таблицей transactions:
+
 
 import sqlite3
 from datetime import datetime
@@ -77,7 +79,18 @@ def init_db():
     )
     """)
 
-    # Миграции — безопасно добавляем колонки если их нет
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tx_hash TEXT UNIQUE,
+        user_id INTEGER,
+        ton_amount REAL,
+        tokens_granted INTEGER,
+        created_at TEXT
+    )
+    """)
+
+    # Миграции
     try:
         cursor.execute("ALTER TABLE analyses ADD COLUMN user_id INTEGER DEFAULT 0")
     except Exception:
@@ -248,6 +261,47 @@ def increment_user_stat(user_id: int, stat: str) -> None:
     conn.close()
 
 
+# ===== TRANSACTIONS =====
+
+def is_tx_processed(tx_hash: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM transactions WHERE tx_hash = ?", (tx_hash,))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
+
+def save_transaction(tx_hash: str, user_id: int, ton_amount: float, tokens_granted: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO transactions (tx_hash, user_id, ton_amount, tokens_granted, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """, (tx_hash, user_id, ton_amount, tokens_granted, datetime.utcnow().isoformat()))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT tx_hash, ton_amount, tokens_granted, created_at
+    FROM transactions WHERE user_id = ?
+    ORDER BY id DESC LIMIT ?
+    """, (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"tx_hash": r[0], "ton_amount": r[1],
+             "tokens_granted": r[2], "created_at": r[3]}
+            for r in rows]
+
+
 # ===== ANALYSES =====
 
 def save_analysis(url: str, result: Union[Dict[str, Any], AnalysisRecord], user_id: int = 0):
@@ -285,7 +339,7 @@ def save_opportunity(result: Dict[str, Any], user_id: int = 0):
     cursor.execute("""
     INSERT INTO opportunities (
         url, question, category, market_probability, system_probability,
-        confidence, reasoning, main_scenario, alt_scenario, conclusion,
+        confidence, reasoning, main_scenario, alt_esco, conclusion,
         opportunity_score, created_at, user_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
