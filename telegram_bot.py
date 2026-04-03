@@ -47,14 +47,12 @@ TEXTS = {
         "question": "Вопрос",
         "category": "Категория",
         "market_probability": "Рыночная вероятность",
-        "system_probability": "Вероятность системы",
+        "system_probability": "Прогноз системы",
         "confidence": "Уверенность",
         "score": "Скор",
         "send_link": "Отправь ссылку Polymarket.",
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
-        "balance": "💰 Баланс",
-        "buy_tokens": "💎 Купить токены",
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
     },
     "en": {
@@ -73,14 +71,12 @@ TEXTS = {
         "question": "Question",
         "category": "Category",
         "market_probability": "Market Probability",
-        "system_probability": "System Probability",
+        "system_probability": "System Forecast",
         "confidence": "Confidence",
         "score": "Score",
         "send_link": "Send a Polymarket link.",
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
-        "balance": "💰 Balance",
-        "buy_tokens": "💎 Buy tokens",
         "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
     }
 }
@@ -134,7 +130,6 @@ def _check_banned(message: types.Message) -> bool:
 
 
 def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
-    """Возвращает True если у пользователя достаточно токенов или платный режим выключен."""
     paid_mode = get_setting("paid_mode", "off")
     if paid_mode != "on":
         return True
@@ -148,7 +143,6 @@ def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
 
 
 def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
-    """Списывает токены если платный режим включён."""
     paid_mode = get_setting("paid_mode", "off")
     if paid_mode != "on":
         return
@@ -188,6 +182,107 @@ def _buy_tokens_text(user_id: int, lang: str) -> str:
             f"`{user_id}`\n\n"
             f"Tokens will be credited automatically within 1-2 minutes."
         )
+
+
+def _confidence_emoji(confidence: str) -> str:
+    c = confidence.lower()
+    if "high" in c or "высок" in c:
+        return "🟢"
+    if "medium" in c or "средн" in c:
+        return "🟡"
+    return "🔴"
+
+
+def _format_analysis(result: dict, uid: int) -> str:
+    lang = get_user_lang(uid)
+    q = _escape(result.get("question", ""))
+    cat = _escape(result.get("category", ""))
+    market_prob = _escape(result.get("market_probability", ""))
+    sys_prob = _escape(result.get("probability", ""))
+    confidence = _escape(result.get("confidence", ""))
+    reasoning = _escape(result.get("reasoning", ""))
+    main_scenario = _escape(result.get("main_scenario", ""))
+    alt_scenario = _escape(result.get("alt_scenario", ""))
+    conclusion = _escape(result.get("conclusion", ""))
+    conf_emoji = _confidence_emoji(confidence)
+
+    if lang == "ru":
+        return (
+            f"🔍 DeepAlpha Analysis\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Категория: {cat}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"🎯 Прогноз: {sys_prob}\n"
+            f"{conf_emoji} Уверенность: {confidence}\n\n"
+            f"💭 Логика:\n{reasoning}\n\n"
+            f"✅ Основной сценарий:\n{main_scenario}\n\n"
+            f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
+            f"{'─' * 30}\n"
+            f"📝 Вывод: {conclusion}"
+        )
+    else:
+        return (
+            f"🔍 DeepAlpha Analysis\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Category: {cat}\n"
+            f"📊 Market: {market_prob}\n"
+            f"🎯 Forecast: {sys_prob}\n"
+            f"{conf_emoji} Confidence: {confidence}\n\n"
+            f"💭 Reasoning:\n{reasoning}\n\n"
+            f"✅ Main Scenario:\n{main_scenario}\n\n"
+            f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
+            f"{'─' * 30}\n"
+            f"📝 Conclusion: {conclusion}"
+        )
+
+
+def _format_opportunity(result: dict, uid: int) -> str:
+    lang = get_user_lang(uid)
+    q = _escape(result.get("question", ""))
+    cat = _escape(result.get("category", ""))
+    market_prob = _escape(result.get("market_probability", ""))
+    sys_prob = _escape(result.get("probability", ""))
+    confidence = _escape(result.get("confidence", ""))
+    conclusion = _escape(result.get("conclusion", ""))
+    score = result.get("opportunity_score", 0)
+    url = result.get("url", "")
+    conf_emoji = _confidence_emoji(confidence)
+
+    score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
+
+    if lang == "ru":
+        text = (
+            f"💡 DeepAlpha Opportunity\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Категория: {cat}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"🎯 Прогноз: {sys_prob}\n"
+            f"{conf_emoji} Уверенность: {confidence}\n"
+            f"⚡ Скор: {score} {score_bar}\n\n"
+            f"{'─' * 30}\n"
+            f"📝 Вывод: {conclusion}"
+        )
+    else:
+        text = (
+            f"💡 DeepAlpha Opportunity\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Category: {cat}\n"
+            f"📊 Market: {market_prob}\n"
+            f"🎯 Forecast: {sys_prob}\n"
+            f"{conf_emoji} Confidence: {confidence}\n"
+            f"⚡ Score: {score} {score_bar}\n\n"
+            f"{'─' * 30}\n"
+            f"📝 Conclusion: {conclusion}"
+        )
+
+    if url:
+        text += f"\n\n🔗 {url}"
+
+    return text
 
 
 @dp.message_handler(commands=["start"])
@@ -247,13 +342,20 @@ async def balance_handler(message: types.Message):
         await message.answer("❌ Пользователь не найден")
         return
     lang = get_user_lang(uid)
+    paid_mode = get_setting("paid_mode", "off")
+    analysis_price = get_setting("analysis_price_tokens", "10")
+    opp_price = get_setting("opportunity_price_tokens", "20")
+
     if lang == "ru":
         text = (
             f"💰 Ваш баланс\n\n"
             f"Токены: {user['token_balance']}\n"
             f"Анализов: {user['total_analyses']}\n"
             f"Opportunity: {user['total_opportunities']}\n"
-            f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}"
+            f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n\n"
+            f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
+            f"Анализ: {analysis_price} токенов\n"
+            f"Opportunity: {opp_price} токенов"
         )
     else:
         text = (
@@ -261,7 +363,10 @@ async def balance_handler(message: types.Message):
             f"Tokens: {user['token_balance']}\n"
             f"Analyses: {user['total_analyses']}\n"
             f"Opportunities: {user['total_opportunities']}\n"
-            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}"
+            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}\n\n"
+            f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
+            f"Analysis: {analysis_price} tokens\n"
+            f"Opportunity: {opp_price} tokens"
         )
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
@@ -309,11 +414,16 @@ async def history_handler(message: types.Message):
     if not records:
         await message.answer(t(uid, "no_history"), reply_markup=get_main_keyboard(uid))
         return
+    lang = get_user_lang(uid)
     lines = [t(uid, "recent")]
     for r in records:
-        lines.append(f"• {_escape(r['question'][:60])}")
-        lines.append(f"  {t(uid, 'category')}: {r['category']} | {t(uid, 'confidence')}: {r['confidence']}")
-        lines.append(f"  {t(uid, 'system_probability')}: {r['system_probability']}")
+        lines.append(f"📌 {_escape(r['question'][:55])}")
+        label_cat = "Категория" if lang == "ru" else "Category"
+        label_conf = "Уверенность" if lang == "ru" else "Confidence"
+        label_prob = "Прогноз" if lang == "ru" else "Forecast"
+        lines.append(f"  {label_cat}: {r['category']} | {label_conf}: {r['confidence']}")
+        lines.append(f"  {label_prob}: {r['system_probability']}")
+        lines.append(f"  📅 {r['created_at'][:10] if r['created_at'] else 'н/д'}")
         lines.append("")
     await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
 
@@ -326,11 +436,16 @@ async def top_handler(message: types.Message):
     if not records:
         await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
         return
+    lang = get_user_lang(uid)
     lines = [t(uid, "top")]
-    for r in records:
-        lines.append(f"• {_escape(r['question'][:60])}")
-        lines.append(f"  {t(uid, 'score')}: {r['opportunity_score']} | {t(uid, 'confidence')}: {r['confidence']}")
-        lines.append(f"  {t(uid, 'system_probability')}: {r['system_probability']}")
+    for i, r in enumerate(records, 1):
+        score = r["opportunity_score"]
+        score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
+        lines.append(f"{i}. 📌 {_escape(r['question'][:50])}")
+        label_score = "Скор" if lang == "ru" else "Score"
+        label_conf = "Уверенность" if lang == "ru" else "Confidence"
+        lines.append(f"   {label_score}: {score} {score_bar}")
+        lines.append(f"   {label_conf}: {r['confidence']}")
         lines.append("")
     await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
 
@@ -367,29 +482,4 @@ async def fallback_handler(message: types.Message):
     await message.answer(
         t(message.from_user.id, "fallback"),
         reply_markup=get_main_keyboard(message.from_user.id),
-    )
-
-
-def _format_analysis(result: dict, uid: int) -> str:
-    return (
-        f"🔍 DeepAlpha Analysis\n\n"
-        f"{t(uid, 'question')}: {_escape(result.get('question', ''))}\n"
-        f"{t(uid, 'category')}: {_escape(result.get('category', ''))}\n"
-        f"{t(uid, 'market_probability')}: {_escape(result.get('market_probability', ''))}\n"
-        f"{t(uid, 'system_probability')}: {_escape(result.get('probability', ''))}\n"
-        f"{t(uid, 'confidence')}: {_escape(result.get('confidence', ''))}\n\n"
-        f"{_escape(result.get('conclusion', ''))}"
-    )
-
-
-def _format_opportunity(result: dict, uid: int) -> str:
-    return (
-        f"💡 DeepAlpha Opportunity\n\n"
-        f"{t(uid, 'question')}: {_escape(result.get('question', ''))}\n"
-        f"{t(uid, 'category')}: {_escape(result.get('category', ''))}\n"
-        f"{t(uid, 'market_probability')}: {_escape(result.get('market_probability', ''))}\n"
-        f"{t(uid, 'system_probability')}: {_escape(result.get('probability', ''))}\n"
-        f"{t(uid, 'confidence')}: {_escape(result.get('confidence', ''))}\n"
-        f"{t(uid, 'score')}: {result.get('opportunity_score', '')}\n\n"
-        f"{_escape(result.get('conclusion', ''))}"
     )
