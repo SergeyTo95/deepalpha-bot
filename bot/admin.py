@@ -11,7 +11,8 @@ from db.database import (
     get_setting, set_setting,
     get_user, get_all_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
-    get_user_analyses, get_connection,
+    get_user_analyses, get_connection, get_referrals,
+    get_top_referrers,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -42,6 +43,7 @@ class PricingStates(StatesGroup):
     waiting_token_price = State()
     waiting_analysis_price = State()
     waiting_opportunity_price = State()
+    waiting_referral_percent = State()
 
 
 class UserStates(StatesGroup):
@@ -84,12 +86,14 @@ def ai_menu_kb():
 def pricing_kb():
     paid_mode = get_setting("paid_mode", "off")
     paid_label = "✅ Paid Mode: ON" if paid_mode == "on" else "❌ Paid Mode: OFF"
+    ref_percent = get_setting("referral_percent", "10")
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton(paid_label, callback_data="pricing_toggle_paid"),
         InlineKeyboardButton("💎 Token price (TON)", callback_data="pricing_set_token"),
         InlineKeyboardButton("🔍 Analysis price (tokens)", callback_data="pricing_set_analysis"),
         InlineKeyboardButton("💡 Opportunity price (tokens)", callback_data="pricing_set_opportunity"),
+        InlineKeyboardButton(f"👥 Referral %: {ref_percent}%", callback_data="pricing_set_referral"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -100,12 +104,14 @@ def pricing_text():
     token_price = get_setting("token_price_ton", "0.1")
     analysis_price = get_setting("analysis_price_tokens", "10")
     opportunity_price = get_setting("opportunity_price_tokens", "20")
+    ref_percent = get_setting("referral_percent", "10")
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
         f"Цена токена: {token_price} TON\n"
         f"Анализ: {analysis_price} токенов\n"
-        f"Opportunity: {opportunity_price} токенов"
+        f"Opportunity: {opportunity_price} токенов\n"
+        f"Реферальный %: {ref_percent}%"
     )
 
 
@@ -125,6 +131,7 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🎁 Подарить токены", callback_data=f"user_gift_{user_id}"),
         InlineKeyboardButton("✏️ Установить баланс", callback_data=f"user_setbal_{user_id}"),
         InlineKeyboardButton("📊 История запросов", callback_data=f"user_history_{user_id}"),
+        InlineKeyboardButton("👥 Рефералы юзера", callback_data=f"user_refs_{user_id}"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_users"),
     )
     return kb
@@ -141,6 +148,8 @@ def format_user_info(user: dict) -> str:
         f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
         f"Анализов: {user['total_analyses']}\n"
         f"Opportunity: {user['total_opportunities']}\n"
+        f"Рефералов: {user.get('total_referrals', 0)}\n"
+        f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} TON\n"
         f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
     )
 
@@ -153,28 +162,28 @@ def get_analytics_data() -> dict:
     yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
     week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE ?", (f"{today}%",))
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE %s", (f"{today}%",))
     analyses_today = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE ?", (f"{yesterday}%",))
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE %s", (f"{yesterday}%",))
     analyses_yesterday = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at >= ?", (week_ago,))
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at >= %s", (week_ago,))
     analyses_week = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at LIKE ?", (f"{today}%",))
+    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at LIKE %s", (f"{today}%",))
     opp_today = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at >= ?", (week_ago,))
+    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at >= %s", (week_ago,))
     opp_week = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE ?", (f"{today}%",))
+    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE %s", (f"{today}%",))
     new_users_today = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (week_ago,))
+    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= %s", (week_ago,))
     new_users_week = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
@@ -188,6 +197,15 @@ def get_analytics_data() -> dict:
 
     cursor.execute("SELECT COUNT(*) FROM opportunities")
     total_opp = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COALESCE(SUM(ton_amount), 0) FROM transactions")
+    total_ton = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COALESCE(SUM(referral_bonus_ton), 0) FROM transactions")
+    total_referral_ton = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
+    total_referred = cursor.fetchone()[0]
 
     cursor.execute("""
     SELECT question, COUNT(*) as cnt FROM analyses
@@ -210,6 +228,9 @@ def get_analytics_data() -> dict:
         "vip_users": vip_users,
         "total_analyses": total_analyses,
         "total_opp": total_opp,
+        "total_ton": total_ton or 0,
+        "total_referral_ton": total_referral_ton or 0,
+        "total_referred": total_referred,
         "top_markets": top_markets,
     }
 
@@ -234,6 +255,11 @@ def format_analytics(data: dict) -> str:
         f"Сегодня: {data['opp_today']} | Неделя: {data['opp_week']}\n\n"
         f"📈 Всего запросов: {total_requests}\n"
         f"Анализы: {analysis_pct}% | Opportunity: {opp_pct}%\n\n"
+        f"💰 Финансы\n"
+        f"Всего TON: {data['total_ton']:.4f}\n"
+        f"Реф. выплаты: {data['total_referral_ton']:.4f} TON\n\n"
+        f"👥 Рефералы\n"
+        f"Всего приглашено: {data['total_referred']}\n\n"
         f"🏆 Топ рынков:\n{top}"
     )
 
@@ -249,21 +275,17 @@ def get_db_stats() -> dict:
     users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM settings")
     settings = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM transactions")
+    transactions = cursor.fetchone()[0]
     conn.close()
-
-    import os as _os
-    from db.database import DB_PATH
-    try:
-        db_size = round(_os.path.getsize(DB_PATH) / 1024, 1)
-    except Exception:
-        db_size = 0
 
     return {
         "analyses": analyses,
         "opportunities": opportunities,
         "users": users,
         "settings": settings,
-        "db_size_kb": db_size,
+        "transactions": transactions,
+        "db_size_kb": "PostgreSQL",
     }
 
 
@@ -389,12 +411,32 @@ def register_admin(dp: Dispatcher):
         except ValueError:
             await message.answer("❌ Введи целое число, например: 20")
 
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_referral")
+    async def set_referral_percent(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_referral_percent.set()
+        current = get_setting("referral_percent", "10")
+        await callback.message.answer(f"Текущий реферальный %: {current}%\n\nВведи новый % (например: 10):")
+
+    @dp.message_handler(state=PricingStates.waiting_referral_percent)
+    async def save_referral_percent(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip())
+            if val < 0 or val > 50:
+                await message.answer("❌ Введи число от 0 до 50")
+                return
+            set_setting("referral_percent", str(val))
+            await state.finish()
+            await message.answer(f"✅ Реферальный %: {val}%")
+        except ValueError:
+            await message.answer("❌ Введи число, например: 10")
+
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
         users = get_all_users(limit=50)
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(InlineKeyboardButton("🔍 Найти пользователя", callback_data="user_find"))
+        kb.add(InlineKeyboardButton("🏆 Топ рефереров", callback_data="user_top_refs"))
         for u in users[:10]:
             name = u.get("username") or u.get("first_name") or str(u["user_id"])
             status = "🚫" if u["is_banned"] else ("👑" if u["is_vip"] else "👤")
@@ -407,6 +449,20 @@ def register_admin(dp: Dispatcher):
             f"👤 Users\n\nВсего: {len(users)} пользователей",
             reply_markup=kb
         )
+
+    @dp.callback_query_handler(lambda c: c.data == "user_top_refs")
+    async def top_referrers(callback: types.CallbackQuery):
+        referrers = get_top_referrers(limit=10)
+        if not referrers:
+            await callback.answer("Нет данных")
+            return
+        lines = ["🏆 Топ рефереров\n"]
+        for i, r in enumerate(referrers, 1):
+            name = r.get("username") or r.get("first_name") or str(r["user_id"])
+            lines.append(f"{i}. @{name} — {r['total_referrals']} реф. | {r['referral_earnings_ton']:.4f} TON")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
+        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "user_find")
     async def find_user_start(callback: types.CallbackQuery, state: FSMContext):
@@ -511,6 +567,21 @@ def register_admin(dp: Dispatcher):
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
 
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_refs_"))
+    async def user_referrals(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_refs_", ""))
+        refs = get_referrals(uid)
+        if not refs:
+            await callback.answer("Рефералов нет")
+            return
+        lines = [f"👥 Рефералы пользователя {uid}\n"]
+        for r in refs[:10]:
+            name = r.get("username") or r.get("first_name") or str(r["user_id"])
+            lines.append(f"• @{name} — {r['total_analyses']} анализов")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
+        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+
     # === ANALYTICS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_analytics")
     async def analytics_menu(callback: types.CallbackQuery):
@@ -518,6 +589,7 @@ def register_admin(dp: Dispatcher):
         kb.add(
             InlineKeyboardButton("📈 Daily Stats", callback_data="stats_daily"),
             InlineKeyboardButton("👥 User Stats", callback_data="stats_users"),
+            InlineKeyboardButton("💰 Revenue", callback_data="stats_revenue"),
             InlineKeyboardButton("🏆 Top Markets", callback_data="stats_top_markets"),
             InlineKeyboardButton("📊 Full Report", callback_data="stats_full"),
             InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
@@ -563,10 +635,26 @@ def register_admin(dp: Dispatcher):
             f"VIP: {data['vip_users']}\n"
             f"Забанено: {data['banned_users']}\n"
             f"Новых сегодня: {data['new_users_today']}\n"
-            f"Новых за неделю: {data['new_users_week']}"
+            f"Новых за неделю: {data['new_users_week']}\n\n"
+            f"👥 Рефералы\n"
+            f"Всего приглашено: {data['total_referred']}"
         )
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_users"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "stats_revenue")
+    async def stats_revenue(callback: types.CallbackQuery):
+        data = get_analytics_data()
+        text = (
+            f"💰 Revenue\n\n"
+            f"Всего получено: {data['total_ton']:.4f} TON\n"
+            f"Реф. выплаты: {data['total_referral_ton']:.4f} TON\n"
+            f"Чистый доход: {(data['total_ton'] - data['total_referral_ton']):.4f} TON"
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_revenue"))
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
         await callback.message.edit_text(text, reply_markup=kb)
 
@@ -626,10 +714,11 @@ def register_admin(dp: Dispatcher):
         stats = get_db_stats()
         text = (
             f"🗄️ DB Stats\n\n"
-            f"Размер БД: {stats['db_size_kb']} KB\n"
+            f"БД: {stats['db_size_kb']}\n"
             f"Анализов: {stats['analyses']}\n"
             f"Opportunity: {stats['opportunities']}\n"
             f"Пользователей: {stats['users']}\n"
+            f"Транзакций: {stats['transactions']}\n"
             f"Настроек: {stats['settings']}"
         )
         kb = InlineKeyboardMarkup()
