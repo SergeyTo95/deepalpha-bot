@@ -1,13 +1,10 @@
+
 import os
 import json
-import time
 from aiohttp import web
-from db.database import get_user, get_setting
+from db.database import get_user, get_setting, save_pending
 
 PORT = int(os.getenv("PORT", 3000))
-
-# Хранилище pending платежей
-pending_payments = {}
 
 
 async def handle_index(request):
@@ -109,11 +106,8 @@ async def handle_pending(request):
                 headers={"Access-Control-Allow-Origin": "*"},
                 status=400
             )
-        pending_payments[user_id] = {
-            "timestamp": int(time.time()),
-            "amount": amount,
-        }
-        print(f"PENDING: user_id={user_id}, amount={amount}")
+        save_pending(user_id, amount)
+        print(f"PENDING SAVED: user_id={user_id}, amount={amount}")
         return web.Response(
             text=json.dumps({"ok": True}),
             content_type="application/json",
@@ -140,15 +134,6 @@ async def handle_options(request):
 
 async def handle_health(request):
     return web.Response(text="OK")
-
-
-def get_pending_payments():
-    return pending_payments
-
-
-def clear_pending(user_id: int):
-    if user_id in pending_payments:
-        del pending_payments[user_id]
 
 
 app = web.Application()
