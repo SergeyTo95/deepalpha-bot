@@ -46,20 +46,31 @@ async def check_ton_payments():
 
                 if payment and payment.get("user_id"):
                     user_id = payment["user_id"]
-                    print(f"TON: found by comment, user_id={user_id}, amount={ton_amount}")
                 else:
                     tx_time = tx.get("utime", 0)
                     for uid, p in list(pending.items()):
                         time_diff = abs(tx_time - p["timestamp"])
                         amount_diff = abs(ton_amount - p["amount"])
-                        if time_diff < 300 and amount_diff < 0.01:
+                        # Увеличен допуск до 0.1 TON для учёта комиссии сети
+                        if time_diff < 300 and amount_diff < 0.1:
                             user_id = uid
                             payment_type = p.get("payment_type", "tokens")
-                            print(f"TON: found by pending, user_id={user_id}, type={payment_type}")
                             break
 
+                # Если pending не найден — проверяем совпадение с ценой подписки
                 if not user_id:
-                    print(f"TON: no user found for tx {tx_hash[:8]}, amount={ton_amount}")
+                    sub_price = float(get_setting("subscription_price_ton", "1"))
+                    if abs(ton_amount - sub_price) < 0.1:
+                        # Ищем кто недавно регистрировал pending subscription
+                        tx_time = tx.get("utime", 0)
+                        for uid, p in list(pending.items()):
+                            time_diff = abs(tx_time - p["timestamp"])
+                            if time_diff < 300 and p.get("payment_type") == "subscription":
+                                user_id = uid
+                                payment_type = "subscription"
+                                break
+
+                if not user_id:
                     continue
 
                 ensure_user(user_id)
@@ -91,11 +102,9 @@ async def check_ton_payments():
                     except Exception as e:
                         print(f"REFERRAL NOTIFY ERROR: {e}")
 
-                # Обрабатываем платёж по типу
                 if payment_type == "subscription":
                     sub_days = int(get_setting("subscription_days", "30"))
                     until = set_subscription(user_id, days=sub_days)
-                    tokens = 0
 
                     save_transaction(
                         tx_hash, user_id, ton_amount, 0,
@@ -149,7 +158,6 @@ async def check_ton_payments():
 
 
 async def send_daily_notifications():
-    """Рассылает бесплатный тизер всем + полный анализ подписчикам."""
     try:
         print("📢 Starting daily notifications...")
         from agents.opportunity_agent import OpportunityAgent
@@ -171,7 +179,6 @@ async def send_daily_notifications():
         score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
         opp_price = get_setting("opportunity_price_tokens", "20")
 
-        # Тизер для всех
         teaser = (
             f"🔔 DeepAlpha — Сигнал дня\n\n"
             f"📌 {question}\n\n"
@@ -182,7 +189,6 @@ async def send_daily_notifications():
             f"👉 Нажми 💡 Возможность — стоит {opp_price} токенов"
         )
 
-        # Полный анализ для подписчиков
         conf_emoji = "🟢" if "high" in confidence.lower() else ("🟡" if "medium" in confidence.lower() else "🔴")
         full_text = (
             f"🔔 DeepAlpha — Сигнал дня\n"
@@ -198,7 +204,6 @@ async def send_daily_notifications():
             f"✅ Подписка активна"
         )
 
-        # Получаем всех пользователей и подписчиков
         all_users = get_all_users(limit=10000)
         subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
 
