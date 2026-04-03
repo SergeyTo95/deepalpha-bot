@@ -1,6 +1,9 @@
 import sys
 import os
 import asyncio
+import json
+from aiohttp import web
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
@@ -14,6 +17,102 @@ from db.database import (
 
 register_admin(telegram_bot.dp)
 
+PORT = int(os.getenv("PORT", 3000))
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
+
+
+# ===== WEB SERVER =====
+
+async def handle_index(request):
+    """Главная страница Mini App."""
+    try:
+        with open("webapp/index.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html")
+    except FileNotFoundError:
+        return web.Response(text="Mini App not found", status=404)
+
+
+async def handle_static(request):
+    """Отдаёт статические файлы из папки webapp."""
+    filename = request.match_info.get("filename", "")
+    filepath = f"webapp/{filename}"
+    try:
+        if filename.endswith(".png") or filename.endswith(".jpg"):
+            with open(filepath, "rb") as f:
+                content = f.read()
+            content_type = "image/png" if filename.endswith(".png") else "image/jpeg"
+            return web.Response(body=content, content_type=content_type)
+        else:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            if filename.endswith(".json"):
+                content_type = "application/json"
+            elif filename.endswith(".js"):
+                content_type = "application/javascript"
+            elif filename.endswith(".css"):
+                content_type = "text/css"
+            else:
+                content_type = "text/plain"
+            return web.Response(text=content, content_type=content_type)
+    except FileNotFoundError:
+        return web.Response(text="Not found", status=404)
+
+
+async def handle_user_api(request):
+    """API для получения данных пользователя."""
+    user_id = request.match_info.get("user_id", "")
+    try:
+        uid = int(user_id)
+        user = get_user(uid)
+        if not user:
+            return web.Response(
+                text=json.dumps({"error": "User not found"}),
+                content_type="application/json",
+                status=404
+            )
+        data = {
+            "user_id": user["user_id"],
+            "token_balance": user["token_balance"],
+            "total_analyses": user["total_analyses"],
+            "total_opportunities": user["total_opportunities"],
+            "is_vip": user["is_vip"],
+            "token_price": get_setting("token_price_ton", "0.1"),
+            "analysis_price": get_setting("analysis_price_tokens", "10"),
+            "opp_price": get_setting("opportunity_price_tokens", "20"),
+        }
+        return web.Response(
+            text=json.dumps(data),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    except Exception as e:
+        return web.Response(
+            text=json.dumps({"error": str(e)}),
+            content_type="application/json",
+            status=500
+        )
+
+
+async def handle_health(request):
+    return web.Response(text="OK")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/webapp/{filename}", handle_static)
+    app.router.add_get("/api/user/{user_id}", handle_user_api)
+    app.router.add_get("/health", handle_health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"Web server started on port {PORT}")
+
+
+# ===== TON PAYMENT WORKER =====
 
 async def check_ton_payments():
     while True:
@@ -50,7 +149,6 @@ async def check_ton_payments():
                         ref_percent = 10
                     referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
 
-                    # Начисляем реферальные токены пригласившему
                     referral_tokens = calculate_tokens(referral_bonus_ton)
                     if referral_tokens > 0:
                         add_tokens(referrer_id, referral_tokens)
@@ -91,6 +189,7 @@ async def check_ton_payments():
 
 
 async def on_startup(dp):
+    asyncio.create_task(start_web_server())
     asyncio.create_task(check_ton_payments())
 
 
