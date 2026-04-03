@@ -1,7 +1,7 @@
-
 import sys
 import os
 import asyncio
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -10,8 +10,8 @@ from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment, calculate_tokens
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
-    get_user, add_referral_earnings, get_setting,
-    get_all_pending, delete_pending,
+    get_user, add_referral_earnings, get_setting, set_setting,
+    get_all_pending, delete_pending, get_all_users,
 )
 
 register_admin(telegram_bot.dp)
@@ -39,7 +39,6 @@ async def check_ton_payments():
                 if ton_amount <= 0:
                     continue
 
-                # Сначала пробуем по комментарию
                 payment = parse_payment(tx)
                 user_id = None
 
@@ -47,19 +46,16 @@ async def check_ton_payments():
                     user_id = payment["user_id"]
                     print(f"TON: found by comment, user_id={user_id}, amount={ton_amount}")
                 else:
-                    # Ищем по pending в БД
                     tx_time = tx.get("utime", 0)
                     for uid, p in list(pending.items()):
                         time_diff = abs(tx_time - p["timestamp"])
                         amount_diff = abs(ton_amount - p["amount"])
-                        print(f"TON: checking pending uid={uid}, time_diff={time_diff}, amount_diff={amount_diff}")
                         if time_diff < 300 and amount_diff < 0.01:
                             user_id = uid
                             print(f"TON: found by pending, user_id={user_id}")
                             break
 
                 if not user_id:
-                    print(f"TON: no user found for tx {tx_hash[:8]}, amount={ton_amount}")
                     continue
 
                 tokens = calculate_tokens(ton_amount)
@@ -69,7 +65,6 @@ async def check_ton_payments():
                 ensure_user(user_id)
                 new_balance = add_tokens(user_id, tokens)
 
-                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -121,6 +116,98 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
+async def send_daily_notifications():
+    """Рассылает бесплатный тизер opportunity всем пользователям."""
+    try:
+        print("📢 Starting daily notifications...")
+        from agents.opportunity_agent import OpportunityAgent
+
+        agent = OpportunityAgent()
+        result = agent.run(lang="ru")
+
+        if not result or result.get("opportunity_score", 0) == 0:
+            print("📢 No opportunity found for notification")
+            return
+
+        score = result.get("opportunity_score", 0)
+        question = result.get("question", "")[:60]
+        market_prob = result.get("market_probability", "")
+        category = result.get("category", "")
+        score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
+        opp_price = get_setting("opportunity_price_tokens", "20")
+
+        text = (
+            f"🔔 DeepAlpha — Сигнал дня\n\n"
+            f"📌 {question}\n\n"
+            f"🏷 Категория: {category}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"⚡ Скор: {score} {score_bar}\n\n"
+            f"🔒 Полный анализ с прогнозом и сценариями\n"
+            f"👉 Нажми 💡 Возможность — стоит {opp_price} токенов"
+        )
+
+        users = get_all_users(limit=10000)
+        sent = 0
+        failed = 0
+
+        for user in users:
+            if user.get("is_banned"):
+                continue
+            try:
+                await telegram_bot.bot.send_message(user["user_id"], text)
+                sent += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+
+        print(f"📢 Notifications sent: {sent}, failed: {failed}")
+        set_setting("last_notification_sent", datetime.now(timezone.utc).isoformat())
+
+    except Exception as e:
+        print(f"NOTIFICATION ERROR: {e}")
+
+
+async def notification_worker():
+    """Проверяет каждую минуту — пора ли слать уведомления."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            notifications_enabled = get_setting("notifications_enabled", "off")
+            if notifications_enabled == "on":
+                notify_hour = int(get_setting("notification_hour", "9"))
+                notify_interval = get_setting("notification_interval", "daily")
+
+                now = datetime.now(timezone.utc)
+                current_hour = now.hour
+                current_minute = now.minute
+
+                # Проверяем время — в нужный час и первые 2 минуты
+                if current_hour == notify_hour and current_minute < 2:
+                    last_sent = get_setting("last_notification_sent", "")
+
+                    should_send = False
+                    if not last_sent:
+                        should_send = True
+                    else:
+                        try:
+                            last_dt = datetime.fromisoformat(last_sent)
+                            diff_hours = (now - last_dt).total_seconds() / 3600
+                            if notify_interval == "daily" and diff_hours >= 23:
+                                should_send = True
+                            elif notify_interval == "weekly" and diff_hours >= 167:
+                                should_send = True
+                        except Exception:
+                            should_send = True
+
+                    if should_send:
+                        await send_daily_notifications()
+
+        except Exception as e:
+            print(f"NOTIFICATION WORKER ERROR: {e}")
+
+        await asyncio.sleep(60)
+
+
 async def run_polling():
     while True:
         try:
@@ -149,6 +236,7 @@ async def main():
         print(f"Webhook delete error: {e}")
 
     asyncio.create_task(check_ton_payments())
+    asyncio.create_task(notification_worker())
     await run_polling()
 
 
