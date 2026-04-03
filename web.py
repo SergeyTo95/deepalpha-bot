@@ -1,9 +1,14 @@
 import os
 import json
+import time
 from aiohttp import web
 from db.database import get_user, get_setting
 
 PORT = int(os.getenv("PORT", 3000))
+
+# Хранилище pending платежей
+pending_payments = {}
+
 
 async def handle_index(request):
     try:
@@ -13,14 +18,19 @@ async def handle_index(request):
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
 
+
 async def handle_manifest(request):
     try:
         with open("webapp/tonconnect-manifest.json", "r", encoding="utf-8") as f:
             content = f.read()
-        return web.Response(text=content, content_type="application/json",
-                           headers={"Access-Control-Allow-Origin": "*"})
+        return web.Response(
+            text=content,
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
+
 
 async def handle_static(request):
     filename = request.match_info.get("filename", "")
@@ -34,11 +44,22 @@ async def handle_static(request):
         else:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
-            content_type = "application/json" if filename.endswith(".json") else "text/plain"
-            return web.Response(text=content, content_type=content_type,
-                               headers={"Access-Control-Allow-Origin": "*"})
+            if filename.endswith(".json"):
+                content_type = "application/json"
+            elif filename.endswith(".js"):
+                content_type = "application/javascript"
+            elif filename.endswith(".css"):
+                content_type = "text/css"
+            else:
+                content_type = "text/plain"
+            return web.Response(
+                text=content,
+                content_type=content_type,
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
+
 
 async def handle_user_api(request):
     user_id = request.match_info.get("user_id", "")
@@ -46,9 +67,12 @@ async def handle_user_api(request):
         uid = int(user_id)
         user = get_user(uid)
         if not user:
-            return web.Response(text=json.dumps({"error": "Not found"}),
-                               content_type="application/json",
-                               headers={"Access-Control-Allow-Origin": "*"}, status=404)
+            return web.Response(
+                text=json.dumps({"error": "Not found"}),
+                content_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"},
+                status=404
+            )
         data = {
             "user_id": user["user_id"],
             "token_balance": user["token_balance"],
@@ -59,21 +83,81 @@ async def handle_user_api(request):
             "analysis_price": get_setting("analysis_price_tokens", "10"),
             "opp_price": get_setting("opportunity_price_tokens", "20"),
         }
-        return web.Response(text=json.dumps(data), content_type="application/json",
-                           headers={"Access-Control-Allow-Origin": "*"})
+        return web.Response(
+            text=json.dumps(data),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
     except Exception as e:
-        return web.Response(text=json.dumps({"error": str(e)}),
-                           content_type="application/json",
-                           headers={"Access-Control-Allow-Origin": "*"}, status=500)
+        return web.Response(
+            text=json.dumps({"error": str(e)}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+            status=500
+        )
+
+
+async def handle_pending(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        amount = float(data.get("amount", 0))
+        if user_id <= 0:
+            return web.Response(
+                text=json.dumps({"error": "Invalid user_id"}),
+                content_type="application/json",
+                headers={"Access-Control-Allow-Origin": "*"},
+                status=400
+            )
+        pending_payments[user_id] = {
+            "timestamp": int(time.time()),
+            "amount": amount,
+        }
+        print(f"PENDING: user_id={user_id}, amount={amount}")
+        return web.Response(
+            text=json.dumps({"ok": True}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    except Exception as e:
+        return web.Response(
+            text=json.dumps({"error": str(e)}),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+            status=500
+        )
+
+
+async def handle_options(request):
+    return web.Response(
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+    )
+
 
 async def handle_health(request):
     return web.Response(text="OK")
+
+
+def get_pending_payments():
+    return pending_payments
+
+
+def clear_pending(user_id: int):
+    if user_id in pending_payments:
+        del pending_payments[user_id]
+
 
 app = web.Application()
 app.router.add_get("/", handle_index)
 app.router.add_get("/tonconnect-manifest.json", handle_manifest)
 app.router.add_get("/webapp/{filename}", handle_static)
 app.router.add_get("/api/user/{user_id}", handle_user_api)
+app.router.add_post("/api/pending", handle_pending)
+app.router.add_route("OPTIONS", "/api/pending", handle_options)
 app.router.add_get("/health", handle_health)
 
 if __name__ == "__main__":
