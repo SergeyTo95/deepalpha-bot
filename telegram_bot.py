@@ -4,11 +4,11 @@ from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
-from db.database import init_db, get_recent_analyses, get_top_opportunities, ensure_user, is_user_banned
+from db.database import init_db, get_recent_analyses, get_top_opportunities, ensure_user, is_user_banned, get_user
 
 logging.basicConfig(level=logging.INFO)
 
@@ -23,6 +23,8 @@ dp = Dispatcher(bot, storage=storage)
 init_db()
 
 user_languages: Dict[int, str] = {}
+
+OWNER_TON_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 TEXTS = {
     "ru": {
@@ -47,6 +49,8 @@ TEXTS = {
         "send_link": "Отправь ссылку Polymarket.",
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
+        "balance": "💰 Баланс",
+        "buy_tokens": "💎 Купить токены",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
@@ -70,6 +74,8 @@ TEXTS = {
         "send_link": "Send a Polymarket link.",
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
+        "balance": "💰 Balance",
+        "buy_tokens": "💎 Buy tokens",
     }
 }
 
@@ -89,10 +95,12 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Возможность"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("🏆 Топ"))
+        kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
         kb.add(KeyboardButton("🌐 Язык"))
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Opportunity"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("🏆 Top"))
+        kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
         kb.add(KeyboardButton("🌐 Language"))
     return kb
 
@@ -116,9 +124,39 @@ def _register_user(message: types.Message):
 
 
 def _check_banned(message: types.Message) -> bool:
-    if is_user_banned(message.from_user.id):
-        return True
-    return False
+    return is_user_banned(message.from_user.id)
+
+
+def _buy_tokens_text(user_id: int, lang: str) -> str:
+    from db.database import get_setting
+    token_price = get_setting("token_price_ton", "0.1")
+    analysis_price = get_setting("analysis_price_tokens", "10")
+    opportunity_price = get_setting("opportunity_price_tokens", "20")
+
+    if lang == "ru":
+        return (
+            f"💎 Покупка токенов\n\n"
+            f"Цена: {token_price} TON = 1 токен\n"
+            f"Анализ: {analysis_price} токенов\n"
+            f"Opportunity: {opportunity_price} токенов\n\n"
+            f"Для пополнения отправь TON на адрес:\n"
+            f"`{OWNER_TON_ADDRESS}`\n\n"
+            f"В комментарии к переводу укажи свой ID:\n"
+            f"`{user_id}`\n\n"
+            f"Токены будут начислены автоматически в течение 1-2 минут."
+        )
+    else:
+        return (
+            f"💎 Buy Tokens\n\n"
+            f"Price: {token_price} TON = 1 token\n"
+            f"Analysis: {analysis_price} tokens\n"
+            f"Opportunity: {opportunity_price} tokens\n\n"
+            f"Send TON to:\n"
+            f"`{OWNER_TON_ADDRESS}`\n\n"
+            f"Comment your ID:\n"
+            f"`{user_id}`\n\n"
+            f"Tokens will be credited automatically within 1-2 minutes."
+        )
 
 
 @dp.message_handler(commands=["start"])
@@ -167,6 +205,43 @@ async def analyze_prompt_handler(message: types.Message):
         t(message.from_user.id, "send_link"),
         reply_markup=get_main_keyboard(message.from_user.id),
     )
+
+
+@dp.message_handler(lambda m: m.text in ["💰 Баланс", "💰 Balance"])
+async def balance_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    user = get_user(uid)
+    if not user:
+        await message.answer("❌ Пользователь не найден")
+        return
+    lang = get_user_lang(uid)
+    if lang == "ru":
+        text = (
+            f"💰 Ваш баланс\n\n"
+            f"Токены: {user['token_balance']}\n"
+            f"Анализов: {user['total_analyses']}\n"
+            f"Opportunity: {user['total_opportunities']}\n"
+            f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}"
+        )
+    else:
+        text = (
+            f"💰 Your Balance\n\n"
+            f"Tokens: {user['token_balance']}\n"
+            f"Analyses: {user['total_analyses']}\n"
+            f"Opportunities: {user['total_opportunities']}\n"
+            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}"
+        )
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["💎 Купить токены", "💎 Buy tokens"])
+async def buy_tokens_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    text = _buy_tokens_text(uid, lang)
+    await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
 
 
 @dp.message_handler(lambda m: m.text in ["💡 Возможность", "💡 Opportunity"])
