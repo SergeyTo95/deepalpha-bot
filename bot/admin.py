@@ -1,15 +1,17 @@
+
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
+from datetime import datetime, timedelta
 
 from db.database import (
     get_setting, set_setting,
     get_user, get_all_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
-    get_user_analyses,
+    get_user_analyses, get_connection,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -135,6 +137,99 @@ def format_user_info(user: dict) -> str:
         f"Анализов: {user['total_analyses']}\n"
         f"Opportunity: {user['total_opportunities']}\n"
         f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
+    )
+
+
+def get_analytics_data() -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+    week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE ?", (f"{today}%",))
+    analyses_today = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE ?", (f"{yesterday}%",))
+    analyses_yesterday = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at >= ?", (week_ago,))
+    analyses_week = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at LIKE ?", (f"{today}%",))
+    opp_today = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at >= ?", (week_ago,))
+    opp_week = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users", )
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE ?", (f"{today}%",))
+    new_users_today = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (week_ago,))
+    new_users_week = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
+    banned_users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE is_vip = 1")
+    vip_users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM analyses")
+    total_analyses = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM opportunities")
+    total_opp = cursor.fetchone()[0]
+
+    cursor.execute("""
+    SELECT question, COUNT(*) as cnt FROM analyses
+    GROUP BY question ORDER BY cnt DESC LIMIT 3
+    """)
+    top_markets = cursor.fetchall()
+
+    conn.close()
+
+    return {
+        "analyses_today": analyses_today,
+        "analyses_yesterday": analyses_yesterday,
+        "analyses_week": analyses_week,
+        "opp_today": opp_today,
+        "opp_week": opp_week,
+        "total_users": total_users,
+        "new_users_today": new_users_today,
+        "new_users_week": new_users_week,
+        "banned_users": banned_users,
+        "vip_users": vip_users,
+        "total_analyses": total_analyses,
+        "total_opp": total_opp,
+        "top_markets": top_markets,
+    }
+
+
+def format_analytics(data: dict) -> str:
+    top = "\n".join([f"  • {m[0][:40]} ({m[1]}x)" for m in data["top_markets"]]) or "  нет данных"
+    total_requests = data["total_analyses"] + data["total_opp"]
+    if total_requests > 0:
+        analysis_pct = round(data["total_analyses"] / total_requests * 100)
+        opp_pct = 100 - analysis_pct
+    else:
+        analysis_pct = opp_pct = 0
+
+    return (
+        f"📊 Analytics\n\n"
+        f"👥 Пользователи\n"
+        f"Всего: {data['total_users']} | VIP: {data['vip_users']} | Бан: {data['banned_users']}\n"
+        f"Новых сегодня: {data['new_users_today']} | за неделю: {data['new_users_week']}\n\n"
+        f"🔍 Анализы\n"
+        f"Сегодня: {data['analyses_today']} | Вчера: {data['analyses_yesterday']} | Неделя: {data['analyses_week']}\n\n"
+        f"💡 Opportunity\n"
+        f"Сегодня: {data['opp_today']} | Неделя: {data['opp_week']}\n\n"
+        f"📈 Всего запросов: {total_requests}\n"
+        f"Анализы: {analysis_pct}% | Opportunity: {opp_pct}%\n\n"
+        f"🏆 Топ рынков:\n{top}"
     )
 
 
@@ -360,11 +455,70 @@ def register_admin(dp: Dispatcher):
     async def analytics_menu(callback: types.CallbackQuery):
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(
-            InlineKeyboardButton("Daily stats", callback_data="stats_daily"),
-            InlineKeyboardButton("Revenue", callback_data="stats_revenue"),
-            InlineKeyboardButton("⬅️ Back", callback_data="admin_back")
+            InlineKeyboardButton("📈 Daily Stats", callback_data="stats_daily"),
+            InlineKeyboardButton("👥 User Stats", callback_data="stats_users"),
+            InlineKeyboardButton("🏆 Top Markets", callback_data="stats_top_markets"),
+            InlineKeyboardButton("📊 Full Report", callback_data="stats_full"),
+            InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
         )
         await callback.message.edit_text("📊 Analytics", reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "stats_full")
+    async def stats_full(callback: types.CallbackQuery):
+        data = get_analytics_data()
+        text = format_analytics(data)
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_full"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "stats_daily")
+    async def stats_daily(callback: types.CallbackQuery):
+        data = get_analytics_data()
+        text = (
+            f"📈 Daily Stats\n\n"
+            f"Сегодня:\n"
+            f"  Анализов: {data['analyses_today']}\n"
+            f"  Opportunity: {data['opp_today']}\n"
+            f"  Новых юзеров: {data['new_users_today']}\n\n"
+            f"Вчера:\n"
+            f"  Анализов: {data['analyses_yesterday']}\n\n"
+            f"За неделю:\n"
+            f"  Анализов: {data['analyses_week']}\n"
+            f"  Opportunity: {data['opp_week']}\n"
+            f"  Новых юзеров: {data['new_users_week']}"
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_daily"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "stats_users")
+    async def stats_users(callback: types.CallbackQuery):
+        data = get_analytics_data()
+        text = (
+            f"👥 User Stats\n\n"
+            f"Всего пользователей: {data['total_users']}\n"
+            f"VIP: {data['vip_users']}\n"
+            f"Забанено: {data['banned_users']}\n"
+            f"Новых сегодня: {data['new_users_today']}\n"
+            f"Новых за неделю: {data['new_users_week']}"
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_users"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "stats_top_markets")
+    async def stats_top_markets(callback: types.CallbackQuery):
+        data = get_analytics_data()
+        top = "\n".join([f"{i+1}. {m[0][:50]} — {m[1]}x"
+                         for i, m in enumerate(data["top_markets"])]) or "Нет данных"
+        text = f"🏆 Топ рынков\n\n{top}"
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_top_markets"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        await callback.message.edit_text(text, reply_markup=kb)
 
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
