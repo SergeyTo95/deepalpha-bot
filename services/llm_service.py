@@ -1,7 +1,8 @@
-
 import os
 import time
 import requests
+
+from db.database import get_setting
 
 
 def _safe_env(name: str, default: str = "") -> str:
@@ -11,9 +12,9 @@ def _safe_env(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
-GEMINI_MODEL = _safe_env("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_MODEL_NEWS = _safe_env("GEMINI_MODEL_NEWS", GEMINI_MODEL)
-GEMINI_MODEL_DECISION = _safe_env("GEMINI_MODEL_DECISION", GEMINI_MODEL)
+GEMINI_MODEL_DEFAULT = _safe_env("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL_NEWS_DEFAULT = _safe_env("GEMINI_MODEL_NEWS", GEMINI_MODEL_DEFAULT)
+GEMINI_MODEL_DECISION_DEFAULT = _safe_env("GEMINI_MODEL_DECISION", GEMINI_MODEL_DEFAULT)
 
 try:
     LLM_TIMEOUT = int(_safe_env("LLM_TIMEOUT", "60"))
@@ -21,8 +22,16 @@ except Exception:
     LLM_TIMEOUT = 60
 
 
+def _get_active_model() -> str:
+    """Читает активную модель из БД, fallback на env."""
+    try:
+        model = get_setting("active_model", "")
+        return model if model else GEMINI_MODEL_DEFAULT
+    except Exception:
+        return GEMINI_MODEL_DEFAULT
+
+
 def _get_providers(model: str) -> list:
-    """Собирает список провайдеров из env переменных."""
     providers = []
     keys_and_models = [
         (_safe_env("GEMINI_API_KEY"), model),
@@ -30,7 +39,6 @@ def _get_providers(model: str) -> list:
         (_safe_env("GEMINI_API_KEY_3"), model),
         (_safe_env("GEMINI_API_KEY_4"), model),
         (_safe_env("GEMINI_API_KEY_5"), model),
-        # Fallback на более лёгкую модель
         (_safe_env("GEMINI_API_KEY"), "gemini-2.0-flash-lite"),
         (_safe_env("GEMINI_API_KEY_2"), "gemini-2.0-flash-lite"),
         (_safe_env("GEMINI_API_KEY_3"), "gemini-2.0-flash-lite"),
@@ -47,7 +55,7 @@ def generate_text(
     prompt: str,
     model: str = "",
 ) -> str:
-    chosen_model = (model or GEMINI_MODEL).strip()
+    chosen_model = (model or _get_active_model()).strip()
     providers = _get_providers(chosen_model)
 
     if not providers:
@@ -119,8 +127,11 @@ def generate_text(
 
 
 def generate_news_text(prompt: str) -> str:
-    return generate_text(prompt=prompt, model=GEMINI_MODEL_NEWS)
+    model = get_setting("active_model_news", "") or GEMINI_MODEL_NEWS_DEFAULT
+    return generate_text(prompt=prompt, model=model)
 
 
 def generate_decision_text(prompt: str) -> str:
-    return generate_text(prompt=prompt, model=GEMINI_MODEL_DECISION)
+    model = get_setting("active_model_decision", "") or GEMINI_MODEL_DECISION_DEFAULT
+    return generate_text(prompt=prompt, model=model)
+ 
