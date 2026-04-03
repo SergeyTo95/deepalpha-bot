@@ -626,39 +626,65 @@
     }
 
     async function handlePay() {
-        if (!userId) {
-            showStatus('❌ Не удалось определить пользователя', 'error');
-            return;
-        }
+    if (!userId) {
+        showStatus('❌ Не удалось определить пользователя', 'error');
+        return;
+    }
 
-        if (!tonConnectUI) {
-            showStatus('❌ TON Connect не инициализирован', 'error');
-            return;
-        }
+    if (!tonConnectUI) {
+        showStatus('❌ TON Connect не инициализирован', 'error');
+        return;
+    }
 
-        const wallet = tonConnectUI.wallet;
-        if (!wallet) {
-            showStatus('⚠️ Сначала подключи кошелёк TON Connect', 'error');
-            return;
-        }
+    const wallet = tonConnectUI.wallet;
+    if (!wallet) {
+        showStatus('⚠️ Сначала подключи кошелёк TON Connect', 'error');
+        return;
+    }
 
-        const amountNano = Math.floor(selectedAmount * 1e9).toString();
+    const amountNano = Math.floor(selectedAmount * 1e9).toString();
+
+    try {
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('pay-btn').disabled = true;
+
+        // Формируем comment payload в формате TON
         const comment = userId.toString();
+        const bytes = new TextEncoder().encode(comment);
+        const cell = new Uint8Array(4 + bytes.length);
+        // opcode 0 = text comment
+        cell[0] = 0; cell[1] = 0; cell[2] = 0; cell[3] = 0;
+        cell.set(bytes, 4);
+        
+        // Конвертируем в base64
+        const binaryStr = Array.from(cell).map(b => String.fromCharCode(b)).join('');
+        const payloadBase64 = btoa(binaryStr);
 
-        try {
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('pay-btn').disabled = true;
+        const result = await tonConnectUI.sendTransaction({
+            validUntil: Math.floor(Date.now() / 1000) + 600,
+            messages: [
+                {
+                    address: OWNER_ADDRESS,
+                    amount: amountNano,
+                    payload: payloadBase64,
+                }
+            ]
+        });
 
-            const result = await tonConnectUI.sendTransaction({
-                validUntil: Math.floor(Date.now() / 1000) + 600,
-                messages: [
-                    {
-                        address: OWNER_ADDRESS,
-                        amount: amountNano,
-                        text: comment,
-                    }
-                ]
-            });
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('pay-btn').disabled = false;
+        showStatus('✅ Транзакция отправлена! Токены начислятся через 1-2 минуты.', 'success');
+        tg.HapticFeedback.notificationOccurred('success');
+
+    } catch (e) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('pay-btn').disabled = false;
+        const msg = e.message || '';
+        if (!msg.includes('User rejected')) {
+            showStatus('❌ Ошибка: ' + msg, 'error');
+        }
+    }
+    };
 
             document.getElementById('loading').style.display = 'none';
             document.getElementById('pay-btn').disabled = false;
