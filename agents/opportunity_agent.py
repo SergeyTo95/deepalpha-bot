@@ -1,4 +1,5 @@
 
+import random
 from typing import Any, Dict, List, Optional
 
 from agents.news_agent import NewsAgent
@@ -80,7 +81,10 @@ class OpportunityAgent:
         return result
 
     def _get_candidate_markets(self, limit: int = 8, category_filter: str = "All") -> List[Dict[str, Any]]:
-        markets = list_markets(limit=max(limit * 3, 15))
+        markets = list_markets(limit=max(limit * 5, 30))
+
+        # Перемешиваем чтобы каждый раз разные рынки
+        random.shuffle(markets)
 
         filtered = []
         for market in markets:
