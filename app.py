@@ -12,6 +12,7 @@ from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
     get_all_pending, delete_pending, get_all_users,
+    get_subscribed_users, set_subscription, is_subscribed,
 )
 
 register_admin(telegram_bot.dp)
@@ -41,6 +42,7 @@ async def check_ton_payments():
 
                 payment = parse_payment(tx)
                 user_id = None
+                payment_type = "tokens"
 
                 if payment and payment.get("user_id"):
                     user_id = payment["user_id"]
@@ -52,19 +54,17 @@ async def check_ton_payments():
                         amount_diff = abs(ton_amount - p["amount"])
                         if time_diff < 300 and amount_diff < 0.01:
                             user_id = uid
-                            print(f"TON: found by pending, user_id={user_id}")
+                            payment_type = p.get("payment_type", "tokens")
+                            print(f"TON: found by pending, user_id={user_id}, type={payment_type}")
                             break
 
                 if not user_id:
-                    continue
-
-                tokens = calculate_tokens(ton_amount)
-                if tokens <= 0:
+                    print(f"TON: no user found for tx {tx_hash[:8]}, amount={ton_amount}")
                     continue
 
                 ensure_user(user_id)
-                new_balance = add_tokens(user_id, tokens)
 
+                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -91,24 +91,56 @@ async def check_ton_payments():
                     except Exception as e:
                         print(f"REFERRAL NOTIFY ERROR: {e}")
 
-                save_transaction(
-                    tx_hash, user_id, ton_amount, tokens,
-                    referral_bonus_ton=referral_bonus_ton,
-                    referrer_id=referrer_id,
-                )
+                # Обрабатываем платёж по типу
+                if payment_type == "subscription":
+                    sub_days = int(get_setting("subscription_days", "30"))
+                    until = set_subscription(user_id, days=sub_days)
+                    tokens = 0
+
+                    save_transaction(
+                        tx_hash, user_id, ton_amount, 0,
+                        referral_bonus_ton=referral_bonus_ton,
+                        referrer_id=referrer_id,
+                    )
+
+                    try:
+                        await telegram_bot.bot.send_message(
+                            user_id,
+                            f"✅ Подписка активирована!\n\n"
+                            f"💎 Оплачено: {ton_amount:.2f} TON\n"
+                            f"📅 Действует до: {until[:10]}\n\n"
+                            f"Теперь у тебя:\n"
+                            f"• 🔔 Ежедневные сигналы\n"
+                            f"• ♾️ Безлимитные запросы"
+                        )
+                    except Exception as e:
+                        print(f"SUB NOTIFY ERROR: {e}")
+
+                else:
+                    tokens = calculate_tokens(ton_amount)
+                    if tokens <= 0:
+                        continue
+
+                    new_balance = add_tokens(user_id, tokens)
+
+                    save_transaction(
+                        tx_hash, user_id, ton_amount, tokens,
+                        referral_bonus_ton=referral_bonus_ton,
+                        referrer_id=referrer_id,
+                    )
+
+                    try:
+                        await telegram_bot.bot.send_message(
+                            user_id,
+                            f"✅ Оплата получена!\n\n"
+                            f"💎 TON: {ton_amount:.2f}\n"
+                            f"🪙 Начислено токенов: {tokens}\n"
+                            f"💰 Баланс: {new_balance} токенов"
+                        )
+                    except Exception as e:
+                        print(f"TON NOTIFY ERROR: {e}")
 
                 delete_pending(user_id)
-
-                try:
-                    await telegram_bot.bot.send_message(
-                        user_id,
-                        f"✅ Оплата получена!\n\n"
-                        f"💎 TON: {ton_amount:.2f}\n"
-                        f"🪙 Начислено токенов: {tokens}\n"
-                        f"💰 Баланс: {new_balance} токенов"
-                    )
-                except Exception as e:
-                    print(f"TON NOTIFY ERROR: {e}")
 
         except Exception as e:
             print(f"TON WORKER ERROR: {e}")
@@ -117,7 +149,7 @@ async def check_ton_payments():
 
 
 async def send_daily_notifications():
-    """Рассылает бесплатный тизер opportunity всем пользователям."""
+    """Рассылает бесплатный тизер всем + полный анализ подписчикам."""
     try:
         print("📢 Starting daily notifications...")
         from agents.opportunity_agent import OpportunityAgent
@@ -133,10 +165,14 @@ async def send_daily_notifications():
         question = result.get("question", "")[:60]
         market_prob = result.get("market_probability", "")
         category = result.get("category", "")
+        probability = result.get("probability", "")
+        confidence = result.get("confidence", "")
+        conclusion = result.get("conclusion", "")
         score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
         opp_price = get_setting("opportunity_price_tokens", "20")
 
-        text = (
+        # Тизер для всех
+        teaser = (
             f"🔔 DeepAlpha — Сигнал дня\n\n"
             f"📌 {question}\n\n"
             f"🏷 Категория: {category}\n"
@@ -146,21 +182,46 @@ async def send_daily_notifications():
             f"👉 Нажми 💡 Возможность — стоит {opp_price} токенов"
         )
 
-        users = get_all_users(limit=10000)
-        sent = 0
+        # Полный анализ для подписчиков
+        conf_emoji = "🟢" if "high" in confidence.lower() else ("🟡" if "medium" in confidence.lower() else "🔴")
+        full_text = (
+            f"🔔 DeepAlpha — Сигнал дня\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {question}\n\n"
+            f"🏷 Категория: {category}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"🎯 Прогноз: {probability}\n"
+            f"{conf_emoji} Уверенность: {confidence}\n"
+            f"⚡ Скор: {score} {score_bar}\n\n"
+            f"{'─' * 30}\n"
+            f"📝 Вывод: {conclusion}\n\n"
+            f"✅ Подписка активна"
+        )
+
+        # Получаем всех пользователей и подписчиков
+        all_users = get_all_users(limit=10000)
+        subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
+
+        sent_teaser = 0
+        sent_full = 0
         failed = 0
 
-        for user in users:
+        for user in all_users:
             if user.get("is_banned"):
                 continue
+            uid = user["user_id"]
             try:
-                await telegram_bot.bot.send_message(user["user_id"], text)
-                sent += 1
+                if uid in subscribed_ids:
+                    await telegram_bot.bot.send_message(uid, full_text)
+                    sent_full += 1
+                else:
+                    await telegram_bot.bot.send_message(uid, teaser)
+                    sent_teaser += 1
                 await asyncio.sleep(0.05)
             except Exception:
                 failed += 1
 
-        print(f"📢 Notifications sent: {sent}, failed: {failed}")
+        print(f"📢 Full: {sent_full}, Teaser: {sent_teaser}, Failed: {failed}")
         set_setting("last_notification_sent", datetime.now(timezone.utc).isoformat())
 
     except Exception as e:
@@ -168,7 +229,6 @@ async def send_daily_notifications():
 
 
 async def notification_worker():
-    """Проверяет каждую минуту — пора ли слать уведомления."""
     await asyncio.sleep(30)
     while True:
         try:
@@ -181,11 +241,10 @@ async def notification_worker():
                 current_hour = now.hour
                 current_minute = now.minute
 
-                # Проверяем время — в нужный час и первые 2 минуты
                 if current_hour == notify_hour and current_minute < 2:
                     last_sent = get_setting("last_notification_sent", "")
-
                     should_send = False
+
                     if not last_sent:
                         should_send = True
                     else:
