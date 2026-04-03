@@ -3,15 +3,35 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
 import os
 
+from db.database import get_setting, set_setting
+
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+MODELS = {
+    "gemini": {
+        "name": "Gemini 2.0 Flash",
+        "model": "gemini-2.0-flash",
+        "news": "gemini-2.0-flash",
+        "decision": "gemini-2.0-flash",
+    },
+    "gemini_pro": {
+        "name": "Gemini 2.5 Pro",
+        "model": "gemini-2.5-pro",
+        "news": "gemini-2.5-pro",
+        "decision": "gemini-2.5-pro",
+    },
+    "gemini_lite": {
+        "name": "Gemini 2.0 Flash Lite",
+        "model": "gemini-2.0-flash-lite",
+        "news": "gemini-2.0-flash-lite",
+        "decision": "gemini-2.0-flash-lite",
+    },
+}
+
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-def back_button():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
-    return kb
 
 def admin_main_kb():
     kb = InlineKeyboardMarkup(row_width=2)
@@ -23,6 +43,17 @@ def admin_main_kb():
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
+
+
+def ai_menu_kb():
+    current = get_setting("active_model", "gemini-2.0-flash")
+    kb = InlineKeyboardMarkup(row_width=1)
+    for key, info in MODELS.items():
+        label = f"✅ {info['name']}" if info["model"] == current else info["name"]
+        kb.add(InlineKeyboardButton(label, callback_data=f"ai_set_{key}"))
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+    return kb
+
 
 def register_admin(dp: Dispatcher):
 
@@ -38,14 +69,27 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
     async def ai_menu(callback: types.CallbackQuery):
-        kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(
-            InlineKeyboardButton("Switch to Gemini", callback_data="ai_gemini"),
-            InlineKeyboardButton("Switch to GPT", callback_data="ai_gpt"),
-            InlineKeyboardButton("Switch to Claude", callback_data="ai_claude"),
-            InlineKeyboardButton("⬅️ Back", callback_data="admin_back")
+        current = get_setting("active_model", "gemini-2.0-flash")
+        await callback.message.edit_text(
+            f"🤖 AI Settings\n\nТекущая модель: {current}",
+            reply_markup=ai_menu_kb()
         )
-        await callback.message.edit_text("🤖 AI Settings\n\nCurrent: Gemini", reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("ai_set_"))
+    async def ai_set(callback: types.CallbackQuery):
+        key = callback.data.replace("ai_set_", "")
+        info = MODELS.get(key)
+        if not info:
+            await callback.answer("Неизвестная модель")
+            return
+        set_setting("active_model", info["model"])
+        set_setting("active_model_news", info["news"])
+        set_setting("active_model_decision", info["decision"])
+        await callback.answer(f"✅ Модель переключена на {info['name']}")
+        await callback.message.edit_text(
+            f"🤖 AI Settings\n\nТекущая модель: {info['model']}",
+            reply_markup=ai_menu_kb()
+        )
 
     @dp.callback_query_handler(lambda c: c.data == "admin_pricing")
     async def pricing_menu(callback: types.CallbackQuery):
