@@ -1,4 +1,3 @@
-
 import sys
 import os
 import asyncio
@@ -9,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
 from aiogram.utils import executor
+from aiogram.utils.executor import start_webhook
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment, calculate_tokens
 from db.database import (
@@ -20,9 +20,12 @@ register_admin(telegram_bot.dp)
 
 PORT = int(os.getenv("PORT", 3000))
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
+WEBHOOK_HOST = WEBAPP_URL
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 
-# ===== WEB SERVER =====
+# ===== WEB HANDLERS =====
 
 async def handle_index(request):
     try:
@@ -115,21 +118,6 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_index)
-    app.router.add_get("/tonconnect-manifest.json", handle_manifest)
-    app.router.add_get("/webapp/{filename}", handle_static)
-    app.router.add_get("/api/user/{user_id}", handle_user_api)
-    app.router.add_get("/health", handle_health)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    print(f"✅ Web server started on port {PORT}")
-
-
 # ===== TON PAYMENT WORKER =====
 
 async def check_ton_payments():
@@ -205,16 +193,44 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
+# ===== STARTUP / SHUTDOWN =====
+
 async def on_startup(dp):
-    await start_web_server()
+    await telegram_bot.bot.set_webhook(WEBHOOK_URL)
+    print(f"✅ Webhook set: {WEBHOOK_URL}")
     asyncio.create_task(check_ton_payments())
 
 
+async def on_shutdown(dp):
+    await telegram_bot.bot.delete_webhook()
+    await telegram_bot.bot.close()
+    print("Bot stopped")
+
+
+# ===== MAIN =====
+
 if __name__ == "__main__":
-    executor.start_polling(
-        telegram_bot.dp,
-        skip_updates=True,
-        on_startup=on_startup,
-        timeout=20,
-        relax=0.1,
+    from aiogram.dispatcher import webhook
+
+    app = web.Application()
+
+    # Telegram webhook
+    from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+    telegram_bot.dp.on_startup.append(on_startup)
+    telegram_bot.dp.on_shutdown.append(on_shutdown)
+
+    # Регистрируем все роуты
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/tonconnect-manifest.json", handle_manifest)
+    app.router.add_get("/webapp/{filename}", handle_static)
+    app.router.add_get("/api/user/{user_id}", handle_user_api)
+    app.router.add_get("/health", handle_health)
+
+    # Webhook handler для Telegram
+    executor_app = webhook.configure_app(
+        dispatcher=telegram_bot.dp,
+        webhook_path=WEBHOOK_PATH,
+        app=app,
     )
+
+    web.run_app(app, host="0.0.0.0", port=PORT)
