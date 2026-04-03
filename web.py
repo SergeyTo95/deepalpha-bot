@@ -2,7 +2,7 @@
 import os
 import json
 from aiohttp import web
-from db.database import get_user, get_setting, save_pending
+from db.database import get_user, get_setting, save_pending, is_subscribed, get_subscription_until
 
 PORT = int(os.getenv("PORT", 3000))
 
@@ -70,15 +70,22 @@ async def handle_user_api(request):
                 headers={"Access-Control-Allow-Origin": "*"},
                 status=404
             )
+        subscribed = is_subscribed(uid)
+        sub_until = get_subscription_until(uid)
+
         data = {
             "user_id": user["user_id"],
             "token_balance": user["token_balance"],
             "total_analyses": user["total_analyses"],
             "total_opportunities": user["total_opportunities"],
             "is_vip": user["is_vip"],
+            "is_subscribed": subscribed,
+            "subscription_until": sub_until,
             "token_price": get_setting("token_price_ton", "0.1"),
             "analysis_price": get_setting("analysis_price_tokens", "10"),
             "opp_price": get_setting("opportunity_price_tokens", "20"),
+            "subscription_price": get_setting("subscription_price_ton", "1"),
+            "subscription_days": get_setting("subscription_days", "30"),
         }
         return web.Response(
             text=json.dumps(data),
@@ -99,6 +106,7 @@ async def handle_pending(request):
         data = await request.json()
         user_id = int(data.get("user_id", 0))
         amount = float(data.get("amount", 0))
+        payment_type = data.get("payment_type", "tokens")
         if user_id <= 0:
             return web.Response(
                 text=json.dumps({"error": "Invalid user_id"}),
@@ -106,8 +114,8 @@ async def handle_pending(request):
                 headers={"Access-Control-Allow-Origin": "*"},
                 status=400
             )
-        save_pending(user_id, amount)
-        print(f"PENDING SAVED: user_id={user_id}, amount={amount}")
+        save_pending(user_id, amount, payment_type)
+        print(f"PENDING SAVED: user_id={user_id}, amount={amount}, type={payment_type}")
         return web.Response(
             text=json.dumps({"ok": True}),
             content_type="application/json",
@@ -147,3 +155,9 @@ app.router.add_get("/health", handle_health)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=PORT)
+```
+
+Также добавь в Railway Variables:
+```
+subscription_price_ton = 1
+subscription_days = 30
