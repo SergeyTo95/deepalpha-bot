@@ -5,7 +5,7 @@ from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
@@ -22,6 +22,7 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -116,6 +117,13 @@ def get_language_keyboard() -> ReplyKeyboardMarkup:
     return kb
 
 
+def get_pay_keyboard(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
+    kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
+    return kb
+
+
 def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
@@ -155,37 +163,6 @@ def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
         return
     price = int(get_setting(price_key, default))
     add_tokens(user_id, -price)
-
-
-def _buy_tokens_text(user_id: int, lang: str) -> str:
-    token_price = get_setting("token_price_ton", "0.1")
-    analysis_price = get_setting("analysis_price_tokens", "10")
-    opportunity_price = get_setting("opportunity_price_tokens", "20")
-
-    if lang == "ru":
-        return (
-            f"💎 Покупка токенов\n\n"
-            f"Цена: {token_price} TON = 1 токен\n"
-            f"Анализ: {analysis_price} токенов\n"
-            f"Opportunity: {opportunity_price} токенов\n\n"
-            f"Для пополнения отправь TON на адрес:\n"
-            f"`{OWNER_TON_ADDRESS}`\n\n"
-            f"В комментарии укажи свой ID:\n"
-            f"`{user_id}`\n\n"
-            f"Токены начислятся автоматически в течение 1-2 минут."
-        )
-    else:
-        return (
-            f"💎 Buy Tokens\n\n"
-            f"Price: {token_price} TON = 1 token\n"
-            f"Analysis: {analysis_price} tokens\n"
-            f"Opportunity: {opportunity_price} tokens\n\n"
-            f"Send TON to:\n"
-            f"`{OWNER_TON_ADDRESS}`\n\n"
-            f"Comment your ID:\n"
-            f"`{user_id}`\n\n"
-            f"Tokens will be credited automatically within 1-2 minutes."
-        )
 
 
 def _confidence_emoji(confidence: str) -> str:
@@ -391,8 +368,28 @@ async def buy_tokens_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    text = _buy_tokens_text(uid, lang)
-    await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
+    token_price = get_setting("token_price_ton", "0.1")
+    analysis_price = get_setting("analysis_price_tokens", "10")
+    opp_price = get_setting("opportunity_price_tokens", "20")
+
+    if lang == "ru":
+        text = (
+            f"💎 Купить токены\n\n"
+            f"Цена: {token_price} TON = 1 токен\n"
+            f"Анализ: {analysis_price} токенов\n"
+            f"Opportunity: {opp_price} токенов\n\n"
+            f"Нажми кнопку ниже чтобы открыть кассу 👇"
+        )
+    else:
+        text = (
+            f"💎 Buy Tokens\n\n"
+            f"Price: {token_price} TON = 1 token\n"
+            f"Analysis: {analysis_price} tokens\n"
+            f"Opportunity: {opp_price} tokens\n\n"
+            f"Tap the button below to open payment 👇"
+        )
+
+    await message.answer(text, reply_markup=get_pay_keyboard(lang))
 
 
 @dp.message_handler(lambda m: m.text in ["👥 Рефералы", "👥 Referrals"])
@@ -411,7 +408,7 @@ async def referrals_handler(message: types.Message):
             f"Ваша ссылка:\n`{ref_link}`\n\n"
             f"Приглашено друзей: {user['total_referrals'] if user else 0}\n"
             f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
-            f"За каждую покупку реферала вы получаете {ref_percent}% от суммы в токенах.\n\n"
+            f"За каждую покупку реферала вы получаете {ref_percent}% в токенах.\n\n"
         )
         if referrals:
             text += "Ваши рефералы:\n"
