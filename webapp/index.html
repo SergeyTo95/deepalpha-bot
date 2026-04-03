@@ -76,6 +76,8 @@
         #ton-connect-button { width: 100%; }
         .divider { display: flex; align-items: center; gap: 12px; margin: 16px 0; color: rgba(255,255,255,0.3); font-size: 12px; }
         .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.1); }
+        .refresh-indicator { text-align: center; font-size: 12px; color: rgba(255,255,255,0.3); padding: 8px; display: none; }
+        .refresh-indicator.active { display: block; }
     </style>
 </head>
 <body>
@@ -108,10 +110,9 @@
             </div>
         </div>
 
-        <!-- Табы -->
         <div class="tabs">
-            <div class="tab active" onclick="switchTab('tokens')">💎 Токены</div>
-            <div class="tab" onclick="switchTab('subscription')">🔔 Подписка</div>
+            <div class="tab active" id="tab-btn-tokens" onclick="switchTab('tokens', this)">💎 Токены</div>
+            <div class="tab" id="tab-btn-subscription" onclick="switchTab('subscription', this)">🔔 Подписка</div>
         </div>
 
         <!-- Токены -->
@@ -211,7 +212,7 @@
             <div class="divider">или вручную</div>
 
             <div class="manual-pay">
-                <div class="manual-title">Отправь TON напрямую (укажи "sub" в комментарии)</div>
+                <div class="manual-title">Отправь TON напрямую</div>
                 <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
@@ -227,6 +228,9 @@
             <div class="spinner"></div>
             <div style="color:rgba(255,255,255,0.5);font-size:13px;">Ожидаем подтверждения...</div>
         </div>
+        <div class="refresh-indicator" id="refresh-indicator">
+            🔄 Обновляем данные...
+        </div>
     </div>
 
     <script>
@@ -240,6 +244,8 @@
         let tokenPrice = 0.1;
         let subPrice = 1;
         let subDays = 30;
+        let refreshInterval = null;
+        let refreshCount = 0;
 
         tg.ready();
         tg.expand();
@@ -255,11 +261,22 @@
             document.getElementById('user-id-display-2').textContent = 'Открой через Telegram';
         }
 
-        function switchTab(tab) {
+        // Открываем нужную вкладку из URL параметра
+        const urlParams = new URLSearchParams(window.location.search);
+        const tabParam = urlParams.get('tab');
+        if (tabParam === 'subscription') {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-subscription').classList.add('active');
+            document.getElementById('tab-btn-subscription').classList.add('active');
+            document.getElementById('tab-btn-tokens').classList.remove('active');
+        }
+
+        function switchTab(tab, btn) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.getElementById(`tab-${tab}`).classList.add('active');
-            event.currentTarget.classList.add('active');
+            if (btn) btn.classList.add('active');
         }
 
         async function initTonConnect() {
@@ -305,13 +322,53 @@
                             document.getElementById('sub-until').textContent = `До ${data.subscription_until.slice(0,10)}`;
                         }
                         document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} TON`;
+                    } else {
+                        document.getElementById('sub-badge').style.display = 'none';
+                        document.getElementById('sub-status-card').style.display = 'none';
                     }
 
                     updateTokenCounts();
+                    return data;
                 }
             } catch(e) {
                 console.log('Load user error:', e);
             }
+            return null;
+        }
+
+        function startAutoRefresh(paymentType) {
+            refreshCount = 0;
+            document.getElementById('refresh-indicator').classList.add('active');
+
+            refreshInterval = setInterval(async () => {
+                refreshCount++;
+                const data = await loadUserData();
+
+                // Останавливаем если данные обновились
+                if (data) {
+                    if (paymentType === 'subscription' && data.is_subscribed) {
+                        stopAutoRefresh();
+                        showStatus('✅ Подписка активирована!', 'success');
+                        return;
+                    }
+                    if (paymentType === 'tokens' && refreshCount > 1) {
+                        stopAutoRefresh();
+                        return;
+                    }
+                }
+
+                if (refreshCount >= 12) {
+                    stopAutoRefresh();
+                }
+            }, 5000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            document.getElementById('refresh-indicator').classList.remove('active');
         }
 
         function updateTokenCounts() {
@@ -378,11 +435,8 @@
 
             try {
                 document.getElementById('loading').style.display = 'block';
-                if (paymentType === 'tokens') {
-                    document.getElementById('pay-btn').disabled = true;
-                } else {
-                    document.getElementById('sub-pay-btn').disabled = true;
-                }
+                document.getElementById('pay-btn').disabled = true;
+                document.getElementById('sub-pay-btn').disabled = true;
 
                 await registerPending(amount, paymentType);
 
@@ -399,16 +453,15 @@
                 document.getElementById('sub-pay-btn').disabled = false;
 
                 if (paymentType === 'subscription') {
-                    showStatus('✅ Подписка оформляется! Активируется через 1-2 минуты.', 'success');
+                    showStatus('✅ Транзакция отправлена! Подписка активируется через 1-2 минуты.', 'success');
                 } else {
-                    showStatus('✅ Отправлено! Токены начислятся через 1-2 минуты.', 'success');
+                    showStatus('✅ Транзакция отправлена! Токены начислятся через 1-2 минуты.', 'success');
                 }
 
                 try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
 
-                setTimeout(() => loadUserData(), 10000);
-                setTimeout(() => loadUserData(), 30000);
-                setTimeout(() => loadUserData(), 90000);
+                // Запускаем автообновление
+                startAutoRefresh(paymentType);
 
             } catch(e) {
                 document.getElementById('loading').style.display = 'none';
