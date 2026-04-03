@@ -7,13 +7,15 @@ import telegram_bot
 from aiogram.utils import executor
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment, calculate_tokens
-from db.database import is_tx_processed, save_transaction, add_tokens, ensure_user
+from db.database import (
+    is_tx_processed, save_transaction, add_tokens, ensure_user,
+    get_user, add_referral_earnings, get_setting,
+)
 
 register_admin(telegram_bot.dp)
 
 
 async def check_ton_payments():
-    """Фоновый воркер — проверяет новые TON транзакции каждые 60 секунд."""
     while True:
         try:
             transactions = get_transactions(limit=20)
@@ -35,7 +37,41 @@ async def check_ton_payments():
 
                 ensure_user(user_id)
                 new_balance = add_tokens(user_id, tokens)
-                save_transaction(tx_hash, user_id, ton_amount, tokens)
+
+                # Реферальный бонус
+                referral_bonus_ton = 0
+                referrer_id = None
+                user = get_user(user_id)
+                if user and user.get("referred_by"):
+                    referrer_id = user["referred_by"]
+                    try:
+                        ref_percent = float(get_setting("referral_percent", "10"))
+                    except Exception:
+                        ref_percent = 10
+                    referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
+
+                    # Начисляем реферальные токены пригласившему
+                    referral_tokens = calculate_tokens(referral_bonus_ton)
+                    if referral_tokens > 0:
+                        add_tokens(referrer_id, referral_tokens)
+                    add_referral_earnings(referrer_id, referral_bonus_ton)
+
+                    try:
+                        await telegram_bot.bot.send_message(
+                            referrer_id,
+                            f"🎉 Ваш реферал пополнил баланс!\n\n"
+                            f"💎 Его покупка: {ton_amount:.2f} TON\n"
+                            f"🎁 Ваш бонус: {referral_bonus_ton:.4f} TON "
+                            f"({referral_tokens} токенов)"
+                        )
+                    except Exception as e:
+                        print(f"REFERRAL NOTIFY ERROR: {e}")
+
+                save_transaction(
+                    tx_hash, user_id, ton_amount, tokens,
+                    referral_bonus_ton=referral_bonus_ton,
+                    referrer_id=referrer_id,
+                )
 
                 try:
                     await telegram_bot.bot.send_message(
