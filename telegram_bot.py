@@ -1,3 +1,4 @@
+
 import os
 import logging
 from typing import Dict
@@ -135,6 +136,14 @@ def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
+def _escape_md(text: str) -> str:
+    """Экранирует для MarkdownV2."""
+    chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for c in chars:
+        text = text.replace(c, f'\\{c}')
+    return text
+
+
 def _register_user(message: types.Message, referred_by: int = None):
     ensure_user(
         user_id=message.from_user.id,
@@ -185,6 +194,24 @@ def _confidence_emoji(confidence: str) -> str:
     return "🔴"
 
 
+def _build_news_block(sources: list, lang: str) -> str:
+    if not sources:
+        return ""
+    label = "📰 Источники:" if lang == "ru" else "📰 Sources:"
+    block = f"\n\n{label}\n"
+    for i, s in enumerate(sources[:3], 1):
+        title = str(s.get("title", ""))[:70]
+        link = s.get("link", "")
+        published = s.get("published", "")
+        if not title:
+            continue
+        if link:
+            block += f"{i}. <a href='{link}'>{title}</a> — {published}\n"
+        else:
+            block += f"{i}. {title} — {published}\n"
+    return block
+
+
 def _format_analysis(result: dict, uid: int) -> str:
     lang = get_user_lang(uid)
     q = _escape(result.get("question", ""))
@@ -197,6 +224,9 @@ def _format_analysis(result: dict, uid: int) -> str:
     alt_scenario = _escape(result.get("alt_scenario", ""))
     conclusion = _escape(result.get("conclusion", ""))
     conf_emoji = _confidence_emoji(confidence)
+
+    sources = result.get("news_sources", []) or result.get("news_items", [])
+    news_block = _build_news_block(sources, lang)
 
     if lang == "ru":
         return (
@@ -212,6 +242,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
             f"{'─' * 30}\n"
             f"📝 Вывод: {conclusion}"
+            f"{news_block}"
         )
     else:
         return (
@@ -227,6 +258,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
             f"{'─' * 30}\n"
             f"📝 Conclusion: {conclusion}"
+            f"{news_block}"
         )
 
 
@@ -243,6 +275,9 @@ def _format_opportunity(result: dict, uid: int) -> str:
     conf_emoji = _confidence_emoji(confidence)
     score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
 
+    sources = result.get("news_sources", []) or result.get("news_items", [])
+    news_block = _build_news_block(sources, lang)
+
     if lang == "ru":
         text = (
             f"💡 DeepAlpha Сигнал\n"
@@ -255,6 +290,7 @@ def _format_opportunity(result: dict, uid: int) -> str:
             f"⚡ Скор: {score} {score_bar}\n\n"
             f"{'─' * 30}\n"
             f"📝 Вывод: {conclusion}"
+            f"{news_block}"
         )
     else:
         text = (
@@ -268,6 +304,7 @@ def _format_opportunity(result: dict, uid: int) -> str:
             f"⚡ Score: {score} {score_bar}\n\n"
             f"{'─' * 30}\n"
             f"📝 Conclusion: {conclusion}"
+            f"{news_block}"
         )
 
     if url:
@@ -563,9 +600,7 @@ async def opportunity_handler(message: types.Message):
         )
 
     try:
-        # Получаем персональную историю показанных сигналов
         history = get_signal_history(uid)
-
         agent = OpportunityAgent()
         result = agent.run(lang=lang, exclude_questions=history)
 
@@ -578,7 +613,6 @@ async def opportunity_handler(message: types.Message):
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
 
-        # Сохраняем в историю пользователя
         if result.get("question"):
             add_to_signal_history(uid, result["question"])
 
@@ -589,7 +623,7 @@ async def opportunity_handler(message: types.Message):
 
         increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid)
-        await message.answer(text, reply_markup=get_main_keyboard(uid))
+        await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
     except Exception as e:
         try:
             await status_msg.delete()
@@ -677,7 +711,7 @@ async def analyze_url_handler(message: types.Message):
 
         increment_user_stat(uid, "total_analyses")
         text = _format_analysis(result, uid)
-        await message.answer(text, reply_markup=get_main_keyboard(uid))
+        await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
