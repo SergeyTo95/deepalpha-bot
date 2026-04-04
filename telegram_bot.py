@@ -14,6 +14,7 @@ from db.database import (
     add_tokens, increment_user_stat, get_referrals,
     is_subscribed, get_subscription_until, set_subscription,
     check_daily_limit, increment_daily, get_daily_usage,
+    add_to_signal_history, get_signal_history,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -562,8 +563,11 @@ async def opportunity_handler(message: types.Message):
         )
 
     try:
+        # Получаем персональную историю показанных сигналов
+        history = get_signal_history(uid)
+
         agent = OpportunityAgent()
-        result = agent.run(lang=lang)
+        result = agent.run(lang=lang, exclude_questions=history)
 
         try:
             await status_msg.delete()
@@ -573,6 +577,10 @@ async def opportunity_handler(message: types.Message):
         if not result or result.get("opportunity_score", 0) == 0:
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
+
+        # Сохраняем в историю пользователя
+        if result.get("question"):
+            add_to_signal_history(uid, result["question"])
 
         if subscribed or (user and user.get("is_vip")):
             increment_daily(uid, "daily_opportunities")
@@ -645,7 +653,6 @@ async def analyze_url_handler(message: types.Message):
     subscribed = is_subscribed(uid)
     user = get_user(uid)
 
-    # Проверяем дневной лимит для подписчиков и VIP
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "analyses"):
             await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
