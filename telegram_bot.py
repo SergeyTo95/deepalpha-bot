@@ -1,4 +1,3 @@
-
 import os
 import logging
 from typing import Dict
@@ -53,8 +52,9 @@ TEXTS = {
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
-        "limit_analyses": "❌ Дневной лимит анализов исчерпан.\n\n🔄 Лимит обновится завтра.\n📊 Доступно: 15 анализов в день",
-        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан.\n\n🔄 Лимит обновится завтра.\n💡 Доступно: 3 сигнала в день",
+        "limit_analyses": "❌ Дневной лимит анализов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
+        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
+        "tokens_used": "💎 Дневной лимит исчерпан — использованы токены",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
@@ -73,8 +73,9 @@ TEXTS = {
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
         "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
-        "limit_analyses": "❌ Daily analysis limit reached.\n\n🔄 Limit resets tomorrow.\n📊 Available: 15 analyses per day",
-        "limit_opportunities": "❌ Daily signal limit reached.\n\n🔄 Limit resets tomorrow.\n💡 Available: 3 signals per day",
+        "limit_analyses": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
+        "limit_opportunities": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
+        "tokens_used": "💎 Daily limit reached — tokens used",
     }
 }
 
@@ -136,14 +137,6 @@ def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
-def _escape_md(text: str) -> str:
-    """Экранирует для MarkdownV2."""
-    chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for c in chars:
-        text = text.replace(c, f'\\{c}')
-    return text
-
-
 def _register_user(message: types.Message, referred_by: int = None):
     ensure_user(
         user_id=message.from_user.id,
@@ -166,8 +159,6 @@ def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
         return False
     if user["is_vip"]:
         return True
-    if is_subscribed(user_id):
-        return True
     price = int(get_setting(price_key, default))
     return user["token_balance"] >= price
 
@@ -178,8 +169,6 @@ def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
         return
     user = get_user(user_id)
     if not user or user["is_vip"]:
-        return
-    if is_subscribed(user_id):
         return
     price = int(get_setting(price_key, default))
     add_tokens(user_id, -price)
@@ -575,14 +564,21 @@ async def opportunity_handler(message: types.Message):
 
     subscribed = is_subscribed(uid)
     user = get_user(uid)
+    use_tokens = False
 
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "opportunities"):
-            await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+            # Лимит исчерпан — пробуем списать токены
+            if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+                return
+            else:
+                use_tokens = True
+    else:
+        if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
             return
-    elif not _check_tokens(uid, "opportunity_price_tokens", "20"):
-        await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
-        return
+        use_tokens = True
 
     lang = get_user_lang(uid)
 
@@ -602,7 +598,7 @@ async def opportunity_handler(message: types.Message):
     try:
         history = get_signal_history(uid)
         agent = OpportunityAgent()
-        result = agent.run(lang=lang, exclude_questions=history, limit=4)
+        result = agent.run(lang=lang, exclude_questions=history, limit=3)
 
         try:
             await status_msg.delete()
@@ -616,14 +612,15 @@ async def opportunity_handler(message: types.Message):
         if result.get("question"):
             add_to_signal_history(uid, result["question"])
 
-        if subscribed or (user and user.get("is_vip")):
-            increment_daily(uid, "daily_opportunities")
-        else:
+        if use_tokens:
             _deduct_tokens(uid, "opportunity_price_tokens", "20")
+        elif subscribed or (user and user.get("is_vip")):
+            increment_daily(uid, "daily_opportunities")
 
         increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
+
     except Exception as e:
         try:
             await status_msg.delete()
@@ -686,17 +683,25 @@ async def analyze_url_handler(message: types.Message):
 
     subscribed = is_subscribed(uid)
     user = get_user(uid)
+    use_tokens = False
 
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "analyses"):
-            await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
+            # Лимит исчерпан — пробуем списать токены
+            if not _check_tokens(uid, "analysis_price_tokens", "10"):
+                await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
+                return
+            else:
+                use_tokens = True
+    else:
+        if not _check_tokens(uid, "analysis_price_tokens", "10"):
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
             return
-    elif not _check_tokens(uid, "analysis_price_tokens", "10"):
-        await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
-        return
+        use_tokens = True
 
     lang = get_user_lang(uid)
     await message.answer(t(uid, "analyzing"))
+
     try:
         agent = ChiefAgent()
         result = agent.run(message.text.strip(), lang=lang)
@@ -704,14 +709,15 @@ async def analyze_url_handler(message: types.Message):
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
 
-        if subscribed or (user and user.get("is_vip")):
-            increment_daily(uid, "daily_analyses")
-        else:
+        if use_tokens:
             _deduct_tokens(uid, "analysis_price_tokens", "10")
+        elif subscribed or (user and user.get("is_vip")):
+            increment_daily(uid, "daily_analyses")
 
         increment_user_stat(uid, "total_analyses")
         text = _format_analysis(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
+
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
