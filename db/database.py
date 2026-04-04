@@ -116,6 +116,14 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_cache (
+        category TEXT PRIMARY KEY,
+        data TEXT,
+        updated_at INTEGER
+    )
+    """)
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -334,7 +342,6 @@ def add_to_signal_history(user_id: int, question: str) -> None:
         INSERT INTO signal_history (user_id, question, created_at)
         VALUES (%s, %s, %s)
         """, (user_id, question, datetime.utcnow().isoformat()))
-        # Оставляем только последние 20
         cursor.execute("""
         DELETE FROM signal_history WHERE id IN (
             SELECT id FROM signal_history
@@ -364,6 +371,76 @@ def get_signal_history(user_id: int) -> List[str]:
     except Exception as e:
         print(f"get_signal_history error: {e}")
         return []
+    finally:
+        conn.close()
+
+
+# ===== SIGNAL CACHE =====
+
+def save_signal_cache(category: str, data: dict) -> None:
+    """Сохраняет кэшированный сигнал по категории."""
+    import json
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO signal_cache (category, data, updated_at)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (category) DO UPDATE SET
+            data = EXCLUDED.data,
+            updated_at = EXCLUDED.updated_at
+        """, (category, json.dumps(data, ensure_ascii=False), int(time.time())))
+        conn.commit()
+    except Exception as e:
+        print(f"save_signal_cache error: {e}")
+    finally:
+        conn.close()
+
+
+def get_signal_cache(category: str, max_age_seconds: int = 3600) -> Optional[dict]:
+    """Возвращает кэшированный сигнал если он свежий."""
+    import json
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT data, updated_at FROM signal_cache WHERE category = %s
+        """, (category,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data_str, updated_at = row[0], row[1]
+        age = int(time.time()) - updated_at
+        if age > max_age_seconds:
+            return None
+        return json.loads(data_str)
+    except Exception as e:
+        print(f"get_signal_cache error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_all_cache_status() -> Dict[str, Any]:
+    """Возвращает статус кэша по всем категориям."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT category, updated_at FROM signal_cache")
+        rows = cursor.fetchall()
+        now = int(time.time())
+        result = {}
+        for r in rows:
+            age = now - r[1]
+            result[r[0]] = {
+                "updated_at": r[1],
+                "age_minutes": age // 60,
+                "is_fresh": age < 3600,
+            }
+        return result
+    except Exception as e:
+        print(f"get_all_cache_status error: {e}")
+        return {}
     finally:
         conn.close()
 
@@ -693,3 +770,4 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     return [{"url": r[0], "question": r[1], "category": r[2],
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
+ 
