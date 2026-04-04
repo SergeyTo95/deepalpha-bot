@@ -1,5 +1,3 @@
-import asyncio
-import concurrent.futures
 from typing import Any, Dict
 
 from db.database import save_analysis
@@ -10,62 +8,14 @@ class ChiefAgent:
         pass
 
     def run(self, url: str, lang: str = "en") -> Dict[str, Any]:
-        """Синхронная обёртка — запускает параллельный анализ."""
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    self._run_async(url, lang)
-                )
-                return future.result(timeout=90)
-        except concurrent.futures.TimeoutError:
-            print("ChiefAgent: timeout after 90 seconds")
-            return self._build_result(url, {}, {}, {})
-        except Exception as e:
-            print(f"ChiefAgent error: {e}")
-            return self._build_result(url, {}, {}, {})
+        market_data = self._run_market_agent(url)
+        news_data = self._run_news_agent(market_data, lang=lang)
+        decision_data = self._run_decision_agent(market_data, news_data, lang=lang)
+        conclusion = self._run_communication_agent(decision_data)
 
-    async def _run_async(self, url: str, lang: str = "en") -> Dict[str, Any]:
-        # Шаг 1 — получаем данные рынка (синхронно, нужен slug)
-        market_data = await asyncio.get_event_loop().run_in_executor(
-            None, self._run_market_agent, url
-        )
+        news_sources = news_data.get("sources", [])
 
-        # Шаг 2 — параллельно запускаем news и decision агентов
-        news_task = asyncio.get_event_loop().run_in_executor(
-            None, self._run_news_agent, market_data, lang
-        )
-        decision_placeholder_task = asyncio.get_event_loop().run_in_executor(
-            None, self._run_trend_summary, market_data
-        )
-
-        news_data, trend_summary = await asyncio.gather(
-            news_task, decision_placeholder_task
-        )
-
-        # Шаг 3 — decision agent с данными от news и trend
-        decision_data = await asyncio.get_event_loop().run_in_executor(
-            None, self._run_decision_agent, market_data, news_data, lang
-        )
-
-        # Шаг 4 — communication agent
-        conclusion = await asyncio.get_event_loop().run_in_executor(
-            None, self._run_communication_agent, decision_data
-        )
-
-        return self._build_result(url, market_data, news_data, decision_data, conclusion)
-
-    def _build_result(
-        self,
-        url: str,
-        market_data: Dict,
-        news_data: Dict,
-        decision_data: Dict,
-        conclusion: str = "",
-    ) -> Dict[str, Any]:
-        news_sources = news_data.get("sources", []) if news_data else []
-
-        result = {
+        final_result = {
             "question": (
                 decision_data.get("question") or
                 market_data.get("question", "Unknown market")
@@ -83,7 +33,7 @@ class ChiefAgent:
             "reasoning": decision_data.get("reasoning", "No reasoning available."),
             "main_scenario": decision_data.get("main_scenario", "No main scenario."),
             "alt_scenario": decision_data.get("alt_scenario", "No alternative scenario."),
-            "conclusion": conclusion or decision_data.get("conclusion", ""),
+            "conclusion": conclusion,
             "url": url,
             "mode": "analysis",
             "related_markets": market_data.get("related_markets", []),
@@ -97,15 +47,11 @@ class ChiefAgent:
         }
 
         try:
-            save_analysis(url, result)
+            save_analysis(url, final_result)
         except Exception as e:
             print(f"ChiefAgent save_analysis error: {e}")
 
-        return result
-
-    def _run_trend_summary(self, market_data: Dict) -> str:
-        """Быстро возвращает trend summary — уже есть в market_data."""
-        return market_data.get("trend_summary", "")
+        return final_result
 
     def _run_market_agent(self, url: str) -> Dict[str, Any]:
         try:
@@ -197,14 +143,14 @@ class ChiefAgent:
             "question": market_data.get("question", "Unknown market"),
             "category": market_data.get("category", "Unknown"),
             "market_probability": market_data.get("market_probability", "Unknown"),
-            "probability": "System probability not available yet",
+            "probability": "Система не смогла рассчитать вероятность",
             "confidence": "Low",
-            "reasoning": "Decision Agent fallback mode.",
-            "main_scenario": "Main scenario unavailable.",
-            "alt_scenario": "Alternative scenario unavailable.",
-            "conclusion": "Analysis unavailable.",
+            "reasoning": "Агент анализа работает в резервном режиме.",
+            "main_scenario": "Основной сценарий недоступен.",
+            "alt_scenario": "Альтернативный сценарий недоступен.",
+            "conclusion": "Анализ недоступен.",
             "raw_decision_text": "",
         }
 
     def _communication_fallback(self, decision_data: Dict[str, Any]) -> str:
-        return decision_data.get("conclusion") or "Communication Agent fallback mode."
+        return decision_data.get("conclusion") or "Анализ завершён."
