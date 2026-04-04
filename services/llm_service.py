@@ -1,5 +1,7 @@
 import os
 import time
+import asyncio
+import aiohttp
 import requests
 
 from db.database import get_setting
@@ -33,31 +35,21 @@ def _get_active_model() -> str:
 def _get_providers(model: str) -> list:
     providers = []
 
-    # Все 55 ключей
     for i in range(1, 56):
-        if i == 1:
-            key = _safe_env("GEMINI_API_KEY")
-        else:
-            key = _safe_env(f"GEMINI_API_KEY_{i}")
+        key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
             providers.append({"key": key, "model": model})
 
-    # Fallback на lite модель для всех ключей
     for i in range(1, 56):
-        if i == 1:
-            key = _safe_env("GEMINI_API_KEY")
-        else:
-            key = _safe_env(f"GEMINI_API_KEY_{i}")
+        key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
             providers.append({"key": key, "model": "gemini-2.0-flash-lite"})
 
     return providers
 
 
-def generate_text(
-    prompt: str,
-    model: str = "",
-) -> str:
+def generate_text(prompt: str, model: str = "") -> str:
+    """Синхронная версия — используется в chief_agent."""
     chosen_model = (model or _get_active_model()).strip()
     providers = _get_providers(chosen_model)
 
@@ -75,23 +67,14 @@ def generate_text(
         )
 
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ]
+            "contents": [{"parts": [{"text": prompt}]}]
         }
 
         headers = {"Content-Type": "application/json"}
 
         try:
             response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=LLM_TIMEOUT,
+                url, headers=headers, json=payload, timeout=LLM_TIMEOUT,
             )
 
             print(f"LLM STATUS: {response.status_code} | model: {mdl} | key: ...{key[-6:]}")
@@ -127,6 +110,80 @@ def generate_text(
 
     print("LLM ERROR: All providers exhausted")
     return ""
+
+
+async def generate_text_async(prompt: str, model: str = "") -> str:
+    """Async версия — используется в opportunity_agent для параллельных запросов."""
+    chosen_model = (model or _get_active_model()).strip()
+    providers = _get_providers(chosen_model)
+
+    if not providers:
+        return ""
+
+    timeout = aiohttp.ClientTimeout(total=LLM_TIMEOUT)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for provider in providers:
+            key = provider["key"]
+            mdl = provider["model"]
+
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{mdl}:generateContent?key={key}"
+            )
+
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}]
+            }
+
+            headers = {"Content-Type": "application/json"}
+
+            try:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    print(f"LLM ASYNC STATUS: {response.status} | model: {mdl} | key: ...{key[-6:]}")
+
+                    if response.status == 429:
+                        print(f"LLM ASYNC: quota exceeded for key ...{key[-6:]}, trying next")
+                        await asyncio.sleep(0.3)
+                        continue
+
+                    if response.status != 200:
+                        text = await response.text()
+                        print("LLM ASYNC ERROR:", text[:300])
+                        await asyncio.sleep(0.3)
+                        continue
+
+                    data = await response.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        continue
+
+                    content = candidates[0].get("content", {})
+                    parts = content.get("parts", [])
+                    if not parts:
+                        continue
+
+                    texts = [part.get("text", "") for part in parts if part.get("text")]
+                    if texts:
+                        return "\n".join(texts).strip()
+
+            except Exception as e:
+                print(f"LLM ASYNC EXCEPTION: {str(e)} | model: {mdl}")
+                await asyncio.sleep(0.3)
+                continue
+
+    print("LLM ASYNC ERROR: All providers exhausted")
+    return ""
+
+
+async def generate_news_text_async(prompt: str) -> str:
+    model = get_setting("active_model_news", "") or GEMINI_MODEL_NEWS_DEFAULT
+    return await generate_text_async(prompt=prompt, model=model)
+
+
+async def generate_decision_text_async(prompt: str) -> str:
+    model = get_setting("active_model_decision", "") or GEMINI_MODEL_DECISION_DEFAULT
+    return await generate_text_async(prompt=prompt, model=model)
 
 
 def generate_news_text(prompt: str) -> str:
