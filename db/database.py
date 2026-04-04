@@ -107,6 +107,15 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_history (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT,
+        question TEXT,
+        created_at TEXT
+    )
+    """)
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -263,7 +272,6 @@ def get_subscribed_users() -> List[Dict[str, Any]]:
 # ===== DAILY LIMITS =====
 
 def _reset_daily_if_needed(cursor, user_id: int) -> None:
-    """Сбрасывает дневные счётчики если наступил новый день."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
     cursor.execute("SELECT daily_reset_date FROM users WHERE user_id = %s", (user_id,))
     row = cursor.fetchone()
@@ -306,7 +314,6 @@ def increment_daily(user_id: int, stat: str) -> None:
 
 
 def check_daily_limit(user_id: int, stat: str) -> bool:
-    """Возвращает True если лимит НЕ превышен."""
     usage = get_daily_usage(user_id)
     if stat == "analyses":
         limit = int(get_setting("sub_daily_analyses", "15"))
@@ -315,6 +322,50 @@ def check_daily_limit(user_id: int, stat: str) -> bool:
         limit = int(get_setting("sub_daily_opportunities", "3"))
         return usage["opportunities"] < limit
     return True
+
+
+# ===== SIGNAL HISTORY =====
+
+def add_to_signal_history(user_id: int, question: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO signal_history (user_id, question, created_at)
+        VALUES (%s, %s, %s)
+        """, (user_id, question, datetime.utcnow().isoformat()))
+        # Оставляем только последние 20
+        cursor.execute("""
+        DELETE FROM signal_history WHERE id IN (
+            SELECT id FROM signal_history
+            WHERE user_id = %s
+            ORDER BY id DESC
+            OFFSET 20
+        )
+        """, (user_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"add_to_signal_history error: {e}")
+    finally:
+        conn.close()
+
+
+def get_signal_history(user_id: int) -> List[str]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT question FROM signal_history
+        WHERE user_id = %s
+        ORDER BY id DESC LIMIT 20
+        """, (user_id,))
+        rows = cursor.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"get_signal_history error: {e}")
+        return []
+    finally:
+        conn.close()
 
 
 # ===== USERS =====
