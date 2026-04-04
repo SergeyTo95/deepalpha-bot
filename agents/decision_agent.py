@@ -23,7 +23,7 @@ class DecisionAgent:
         crowd_behavior = market_data.get("crowd_behavior", "Unknown")
         market_type = market_data.get("market_type", "binary")
 
-        news_summary = news_data.get("news_summary", "Unknown")
+        news_summary = news_data.get("news_summary", "")
         sentiment = news_data.get("sentiment", "Unknown")
         news_confidence = news_data.get("confidence", "Unknown")
         sources = news_data.get("sources", [])
@@ -88,111 +88,60 @@ class DecisionAgent:
         lang: str = "en",
     ) -> str:
 
-        options_text = ", ".join(options) if options else "Unknown"
+        options_text = ", ".join(options) if options else "Yes, No"
 
-        related_lines = []
-        for item in related_markets[:8]:
-            related_lines.append(
-                f"- {item.get('title', 'Unknown')} | "
-                f"probability: {item.get('probability', 'Unknown')} | "
-                f"change_24h: {item.get('change_24h', 'Unknown')} | "
-                f"relation: {item.get('relation_type', 'Unknown')} | "
-                f"trend: {item.get('trend_summary', 'Unknown')}"
-            )
-        related_text = "\n".join(related_lines) if related_lines else "- No related markets"
-
-        # Форматируем источники
-        sources_text = ""
-        if sources:
-            lines = []
-            for i, s in enumerate(sources[:3], 1):
-                title = s.get("title", "")
-                source = s.get("source", "")
-                published = s.get("published", "")
-                link = s.get("link", "")
-                if title:
-                    line = f"{i}. {title} ({source}, {published})"
-                    if link:
-                        line += f" — {link}"
-                    lines.append(line)
-            sources_text = "\n".join(lines)
-
-        # Объяснение типа рынка
         if market_type == "binary":
-            market_type_note = (
-                "MARKET TYPE: Binary (Yes/No)\n"
-                "The probabilities show what % of traders are betting on each outcome.\n"
-                "This is NOT a public poll — it reflects trader sentiment and money flow.\n"
-                "Your job is to give an INDEPENDENT AI estimate that may differ significantly."
-            )
+            market_note = "Binary Yes/No market. Give independent % for Yes."
         else:
-            market_type_note = (
-                f"MARKET TYPE: Multiple choice ({len(options)} options)\n"
-                f"OPTIONS: {options_text}\n"
-                "Each probability shows what % of traders are betting on that specific outcome.\n"
-                "This is NOT a public poll — it reflects trader sentiment and money flow.\n"
-                "Your job is to give an INDEPENDENT AI estimate for the most likely outcome.\n"
-                "Pick the single most likely winner and explain why."
-            )
+            market_note = f"Multiple choice: {options_text}. Pick most likely winner."
 
-        lang_instruction = (
-            "Respond ONLY in Russian. Every single word must be in Russian language. "
-            "All analysis, scenarios, reasoning and conclusion must be in Russian."
-            if lang == "ru"
-            else "Respond in English."
-        )
+        # Топ 3 новости коротко
+        news_block = ""
+        if news_summary:
+            news_block = news_summary[:400]
 
-        return f"""
-You are DeepAlpha — an expert prediction market analyst with deep knowledge of geopolitics, economics, crypto and sports.
+        if lang == "ru":
+            return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
+Отвечай ТОЛЬКО на русском языке.
 
-{lang_instruction}
+Вопрос: {question}
+Категория: {category}
+Ставки трейдеров (не опрос, отражает денежный поток): {market_probability}
+Тип: {market_note}
+Тренд: {trend_summary[:200]}
+Новости: {news_block}
+Настроение: {sentiment}
 
-TASK: Analyze this prediction market and give an independent, well-reasoned forecast based STRICTLY on the provided news and data.
+Дай НЕЗАВИСИМУЮ оценку. НЕ копируй ставки трейдеров.
+Если ставки очень односторонние — объясни почему или поспорь с ними.
 
-MARKET QUESTION: {question}
-CATEGORY: {category}
+Вероятность системы: [например "Yes — 65%" или "Trump — 55%"]
+Уверенность: [Высокая/Средняя/Низкая]
+Логика: [2 предложения на русском]
+Основной сценарий: [1 предложение на русском]
+Альтернативный сценарий: [1 предложение на русском]
+Вывод: [1 предложение на русском]""".strip()
+        else:
+            return f"""You are DeepAlpha prediction market expert.
+Respond in English.
 
-{market_type_note}
+Market: {question}
+Category: {category}
+Trader odds (NOT a poll): {market_probability}
+Type: {market_note}
+Trend: {trend_summary[:200]}
+News: {news_block}
+Sentiment: {sentiment}
 
-CURRENT TRADER ODDS: {market_probability}
+Give INDEPENDENT estimate. Do NOT copy trader odds.
+If odds are very one-sided — explain why or challenge them.
 
-PRICE TREND DATA:
-{trend_summary}
-
-CROWD BEHAVIOR:
-{crowd_behavior}
-
-NEWS ANALYSIS:
-{news_summary}
-
-TOP NEWS SOURCES:
-{sources_text if sources_text else "No sources available"}
-
-NEWS SENTIMENT: {sentiment}
-NEWS SIGNAL STRENGTH: {news_confidence}
-
-RELATED MARKETS:
-{related_text}
-
-ANALYSIS RULES:
-1. Base your reasoning STRICTLY on the provided news and data above
-2. DO NOT simply repeat trader odds — give your INDEPENDENT AI view
-3. For multiple choice markets — pick the single most likely outcome
-4. If news contradicts trader odds — explain why your estimate differs
-5. Use trend data and crowd behavior to detect momentum shifts
-6. Reference specific news items when building your argument
-7. Be specific and concrete — avoid vague statements
-8. If no news available — clearly state this and base analysis on market data only
-
-REQUIRED OUTPUT FORMAT (use exactly these labels):
-
-System Probability: [Your probability estimate. For binary: "Yes — 73%". For multiple choice: "Trump — 65%"]
-Confidence: [High / Medium / Low]
-Reasoning: [2-3 sentences based on news and data]
-Main Scenario: [Most likely outcome with news-based evidence]
-Alternative Scenario: [What could change the outcome]
-Conclusion: [1 sentence summary with your final recommendation]
-""".strip()
+System Probability: [e.g. "Yes — 65%" or "Trump — 55%"]
+Confidence: [High/Medium/Low]
+Reasoning: [2 sentences]
+Main Scenario: [1 sentence]
+Alternative Scenario: [1 sentence]
+Conclusion: [1 sentence]""".strip()
 
     def _parse_llm_output(self, text: str) -> Dict[str, str]:
         fields = {
@@ -252,10 +201,10 @@ Conclusion: [1 sentence summary with your final recommendation]
     ) -> Dict[str, Any]:
         probability = parsed.get("System Probability", "").strip() or "N/A"
         confidence = parsed.get("Confidence", "").strip() or "Medium"
-        reasoning = parsed.get("Reasoning", "").strip() or "Model failed to generate reasoning."
-        main_scenario = parsed.get("Main Scenario", "").strip() or "No main scenario generated."
-        alt_scenario = parsed.get("Alternative Scenario", "").strip() or "No alternative scenario generated."
-        conclusion = parsed.get("Conclusion", "").strip() or "No conclusion generated."
+        reasoning = parsed.get("Reasoning", "").strip() or ""
+        main_scenario = parsed.get("Main Scenario", "").strip() or ""
+        alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
+        conclusion = parsed.get("Conclusion", "").strip() or ""
 
         return {
             "question": question,
@@ -271,24 +220,11 @@ Conclusion: [1 sentence summary with your final recommendation]
         }
 
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
-        required_fields = [
-            "probability",
-            "confidence",
-            "reasoning",
-            "main_scenario",
-            "alt_scenario",
-            "conclusion",
-        ]
-
-        for field in required_fields:
+        required = ["probability", "confidence", "reasoning", "conclusion"]
+        for field in required:
             value = str(result.get(field, "")).strip()
-            if not value:
+            if not value or value == "N/A":
                 return False
-            if value in {"N/A", "Unknown"} and field in {
-                "reasoning", "main_scenario", "alt_scenario", "conclusion"
-            }:
-                return False
-
         return True
 
     def _fallback_decision(
@@ -322,24 +258,14 @@ Conclusion: [1 sentence summary with your final recommendation]
         )
 
         reasoning = (
-            f"Fallback reasoning for {category} market. "
-            f"Market odds: {market_probability}. "
-            f"Trend: {trend_summary}. "
-            f"Sentiment: {sentiment}."
+            f"Резервный анализ для категории {category}. "
+            f"Ставки рынка: {market_probability}. "
+            f"Настроение: {sentiment}."
         )
 
-        main_scenario = (
-            f"Base case favors '{main_option}' based on trend and crowd behavior."
-        )
-
-        alt_scenario = (
-            "Alternative case if trend weakens or news flow changes materially."
-        )
-
-        conclusion = (
-            f"Fallback estimate favors '{main_option}' at ~{probability_value} "
-            f"with {confidence.lower()} confidence."
-        )
+        main_scenario = f"Базовый сценарий в пользу '{main_option}' на основе доступных данных."
+        alt_scenario = "Альтернативный сценарий возможен при изменении тренда или новостного фона."
+        conclusion = f"Резервная оценка: '{main_option}' ~{probability_value} ({confidence.lower()} уверенность)."
 
         return {
             "question": question,
@@ -367,7 +293,6 @@ Conclusion: [1 sentence summary with your final recommendation]
 
         if category in {"Politics", "Crypto", "Economy"}:
             score += 5
-
         if related_markets:
             score += min(len(related_markets) * 4, 16)
 
@@ -376,28 +301,16 @@ Conclusion: [1 sentence summary with your final recommendation]
         s = str(sentiment).lower()
         nc = str(news_confidence).lower()
 
-        if "accelerated" in t:
-            score += 6
-        if "24h move" in t:
-            score += 4
-        if "strengthened sharply" in c:
-            score += 7
-        elif "moderately" in c:
-            score += 4
-        elif "reversed sharply" in c:
-            score -= 7
-        elif "softened" in c:
-            score -= 4
-
-        if "positive" in s:
-            score += 6
-        elif "negative" in s:
-            score -= 6
-
-        if "high" in nc:
-            score += 5
-        elif "medium" in nc:
-            score += 2
+        if "accelerated" in t: score += 6
+        if "24h move" in t: score += 4
+        if "strengthened sharply" in c: score += 7
+        elif "moderately" in c: score += 4
+        elif "reversed sharply" in c: score -= 7
+        elif "softened" in c: score -= 4
+        if "positive" in s: score += 6
+        elif "negative" in s: score -= 6
+        if "high" in nc: score += 5
+        elif "medium" in nc: score += 2
 
         score = max(5, min(95, score))
         return f"{score}%"
@@ -409,31 +322,19 @@ Conclusion: [1 sentence summary with your final recommendation]
         news_confidence: str,
     ) -> str:
         score = 0
+        if related_markets: score += 1
+        if trend_summary and "no price history" not in str(trend_summary).lower(): score += 1
+        if str(news_confidence).lower() == "high": score += 2
+        elif str(news_confidence).lower() == "medium": score += 1
 
-        if related_markets:
-            score += 1
-        if trend_summary and "no price history" not in str(trend_summary).lower():
-            score += 1
-        if str(news_confidence).lower() == "high":
-            score += 2
-        elif str(news_confidence).lower() == "medium":
-            score += 1
-
-        if score >= 4:
-            return "High"
-        if score >= 2:
-            return "Medium"
+        if score >= 4: return "High"
+        if score >= 2: return "Medium"
         return "Low"
 
     def _choose_main_option(self, options: List[str]) -> str:
         if not options:
-            return "Most likely outcome"
-
+            return "Наиболее вероятный исход"
         cleaned = [str(x).strip() for x in options if str(x).strip()]
-
-        if "Yes" in cleaned:
-            return "Yes"
-        if "No" in cleaned:
-            return "No"
-
-        return cleaned[0] if cleaned else "Most likely outcome"
+        if "Yes" in cleaned: return "Yes"
+        if "No" in cleaned: return "No"
+        return cleaned[0] if cleaned else "Наиболее вероятный исход"
