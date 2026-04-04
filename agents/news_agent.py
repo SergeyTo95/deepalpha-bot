@@ -26,7 +26,13 @@ class NewsAgent:
         )
 
         news_items = search_google_news(news_query, limit=7)
-        live_news_summary = summarize_news_items(news_items)
+
+        # Дополнительный поиск Twitter/X упоминаний
+        twitter_query = f"{news_query} site:twitter.com OR site:x.com"
+        twitter_items = search_google_news(twitter_query, limit=3)
+
+        all_items = news_items + [i for i in twitter_items if i not in news_items]
+        live_news_summary = summarize_news_items(all_items[:7])
 
         prompt = self._build_prompt(
             question=question,
@@ -34,6 +40,7 @@ class NewsAgent:
             date_context=date_context,
             related_markets=related_markets,
             live_news_summary=live_news_summary,
+            news_items=all_items[:5],
             lang=lang,
         )
 
@@ -45,7 +52,7 @@ class NewsAgent:
                 category=category,
                 llm_result=llm_result,
                 news_query=news_query,
-                news_items=news_items,
+                news_items=all_items[:5],
             )
 
         return self._fallback_news(
@@ -55,7 +62,7 @@ class NewsAgent:
             related_markets=related_markets,
             live_news_summary=live_news_summary,
             news_query=news_query,
-            news_items=news_items,
+            news_items=all_items[:5],
         )
 
     def _build_prompt(
@@ -65,6 +72,7 @@ class NewsAgent:
         date_context: str,
         related_markets: List[Dict[str, Any]],
         live_news_summary: str,
+        news_items: List[Dict[str, str]] = None,
         lang: str = "en",
     ) -> str:
         related_lines = []
@@ -79,19 +87,36 @@ class NewsAgent:
         related_block = "\n".join(related_lines) if related_lines else "- No related markets"
 
         lang_instruction = (
-            "Respond ONLY in Russian. Every single word must be in Russian language."
+            "Respond ONLY in Russian. Every single word must be in Russian language. "
+            "Translate all terms, sources, and analysis into Russian."
             if lang == "ru"
             else "Respond in English."
         )
 
         has_news = live_news_summary and "No relevant" not in live_news_summary
 
+        # Форматируем топ новости со ссылками
+        top_news_block = ""
+        if news_items:
+            lines = []
+            for i, item in enumerate(news_items[:5], 1):
+                title = item.get("title", "")
+                source = item.get("source", "")
+                published = item.get("published", "")
+                link = item.get("link", "")
+                if title:
+                    line = f"{i}. {title} ({source}, {published})"
+                    if link:
+                        line += f" — {link}"
+                    lines.append(line)
+            top_news_block = "\n".join(lines)
+
         return f"""
 You are DeepAlpha News Intelligence — an expert analyst for prediction markets.
 
 {lang_instruction}
 
-TASK: Analyze real-world news context for this prediction market event and identify signals that affect probability.
+TASK: Analyze real-world news context for this prediction market and identify signals that affect probability. Base your analysis STRICTLY on the provided news — do not invent facts.
 
 MARKET QUESTION: {question}
 CATEGORY: {category}
@@ -100,21 +125,25 @@ DEADLINE: {date_context}
 RELATED MARKETS:
 {related_block}
 
-LIVE NEWS FEED ({len(live_news_summary.split(chr(10)))} items found):
+TOP NEWS SOURCES:
+{top_news_block if top_news_block else "No news sources found."}
+
+FULL NEWS FEED:
 {live_news_summary if has_news else "No recent news found for this topic."}
 
 ANALYSIS RULES:
-1. If news feed is empty — use your knowledge of this topic up to your training cutoff
-2. Clearly separate SUPPORTING signals (increase probability) from OPPOSING signals (decrease probability)
-3. Rate signal strength: Strong / Moderate / Weak
-4. Be specific — mention dates, names, numbers when available
-5. Do NOT hallucinate news sources
-6. Focus on what CHANGES the probability, not just what confirms current odds
+1. Base your analysis ONLY on the provided news above — do not hallucinate
+2. If news feed is empty — explicitly state "No recent news found" and use only market data
+3. Clearly separate SUPPORTING signals from OPPOSING signals
+4. Rate signal strength: Strong / Moderate / Weak
+5. Be specific — mention dates, names, numbers from the news
+6. Focus on what CHANGES the probability
+7. Include Twitter/X sentiment if social media sources are present
 
 REQUIRED OUTPUT FORMAT:
 
 News Summary:
-[2-3 sentence overview of the current situation]
+[2-3 sentence overview based strictly on provided news]
 
 Key Signals:
 - [Signal 1 with strength rating]
@@ -128,6 +157,9 @@ Supporting Factors:
 Opposing Factors:
 - [Factor that decreases YES probability]
 - [Factor that decreases YES probability]
+
+Social Sentiment:
+[Twitter/X and social media sentiment if available, otherwise "No social data"]
 
 Sentiment: Positive / Negative / Mixed / Unclear
 Confidence: Low / Medium / High
@@ -176,9 +208,7 @@ Confidence: Low / Medium / High
             )
 
         if news_items:
-            summary_parts.append(
-                f"Found {len(news_items)} relevant recent news items."
-            )
+            summary_parts.append(f"Found {len(news_items)} relevant recent news items.")
             summary_parts.append(f"News digest: {live_news_summary}")
         else:
             summary_parts.append("No live news items were found for this topic.")
