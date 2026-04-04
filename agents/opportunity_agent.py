@@ -53,7 +53,6 @@ class OpportunityAgent:
         )
 
         if not raw_markets:
-            # Если все рынки в blacklist — сбрасываем и берём любые
             raw_markets = self._get_candidate_markets(
                 limit=limit,
                 category_filter=category_filter,
@@ -75,12 +74,18 @@ class OpportunityAgent:
         if not market_contexts:
             return self._fallback("No viable markets after filtering.")
 
-        tasks = [
-            self._analyze_market(raw_market, market_data, lang)
-            for raw_market, market_data in market_contexts
-        ]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Анализируем группами по 2 чтобы не перегружать API
+        results = []
+        for i in range(0, len(market_contexts), 2):
+            batch = market_contexts[i:i+2]
+            batch_tasks = [
+                self._analyze_market(raw_market, market_data, lang)
+                for raw_market, market_data in batch
+            ]
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            results.extend(batch_results)
+            if i + 2 < len(market_contexts):
+                await asyncio.sleep(2)
 
         candidates = []
         for result in results:
@@ -115,6 +120,7 @@ class OpportunityAgent:
             "conclusion": decision_data.get("conclusion", "No conclusion."),
             "opportunity_score": best["score"],
             "url": market_data.get("url", ""),
+            "news_items": best.get("news_data", {}).get("sources", []),
         }
 
         save_opportunity(result)
@@ -255,11 +261,9 @@ class OpportunityAgent:
     ) -> List[Dict[str, Any]]:
         exclude = set(q.lower() for q in (exclude_questions or []))
 
-        # Случайный offset чтобы каждый раз разные рынки
         random_offset = random.randint(0, 100)
         markets = list_markets(limit=max(limit * 5, 30), offset=random_offset)
 
-        # Если мало рынков — добавляем без offset
         if len(markets) < limit:
             markets += list_markets(limit=max(limit * 5, 30))
 
@@ -424,4 +428,5 @@ class OpportunityAgent:
             "conclusion": "Opportunity engine could not identify a valid signal yet.",
             "opportunity_score": 0,
             "url": "",
+            "news_items": [],
         }
