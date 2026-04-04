@@ -1,4 +1,3 @@
-
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
@@ -46,6 +45,8 @@ class PricingStates(StatesGroup):
     waiting_referral_percent = State()
     waiting_subscription_price = State()
     waiting_subscription_days = State()
+    waiting_sub_daily_analyses = State()
+    waiting_sub_daily_opportunities = State()
 
 
 class UserStates(StatesGroup):
@@ -92,15 +93,19 @@ def pricing_kb():
     ref_percent = get_setting("referral_percent", "10")
     sub_price = get_setting("subscription_price_ton", "1")
     sub_days = get_setting("subscription_days", "30")
+    sub_analyses = get_setting("sub_daily_analyses", "15")
+    sub_opp = get_setting("sub_daily_opportunities", "3")
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton(paid_label, callback_data="pricing_toggle_paid"),
         InlineKeyboardButton("💎 Token price (TON)", callback_data="pricing_set_token"),
         InlineKeyboardButton("🔍 Analysis price (tokens)", callback_data="pricing_set_analysis"),
-        InlineKeyboardButton("💡 Opportunity price (tokens)", callback_data="pricing_set_opportunity"),
+        InlineKeyboardButton("💡 Signal price (tokens)", callback_data="pricing_set_opportunity"),
         InlineKeyboardButton(f"👥 Referral %: {ref_percent}%", callback_data="pricing_set_referral"),
         InlineKeyboardButton(f"🔔 Подписка: {sub_price} TON", callback_data="pricing_set_sub_price"),
         InlineKeyboardButton(f"📅 Дней подписки: {sub_days}", callback_data="pricing_set_sub_days"),
+        InlineKeyboardButton(f"📊 Анализов в день: {sub_analyses}", callback_data="pricing_set_sub_analyses"),
+        InlineKeyboardButton(f"💡 Сигналов в день: {sub_opp}", callback_data="pricing_set_sub_opp"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -114,14 +119,18 @@ def pricing_text():
     ref_percent = get_setting("referral_percent", "10")
     sub_price = get_setting("subscription_price_ton", "1")
     sub_days = get_setting("subscription_days", "30")
+    sub_analyses = get_setting("sub_daily_analyses", "15")
+    sub_opp = get_setting("sub_daily_opportunities", "3")
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
         f"Цена токена: {token_price} TON\n"
         f"Анализ: {analysis_price} токенов\n"
-        f"Opportunity: {opportunity_price} токенов\n"
-        f"Реферальный %: {ref_percent}%\n"
-        f"Подписка: {sub_price} TON / {sub_days} дней"
+        f"Сигнал: {opportunity_price} токенов\n"
+        f"Реферальный %: {ref_percent}%\n\n"
+        f"🔔 Подписка: {sub_price} TON / {sub_days} дней\n"
+        f"📊 Анализов в день: {sub_analyses}\n"
+        f"💡 Сигналов в день: {sub_opp}"
     )
 
 
@@ -162,7 +171,7 @@ def format_user_info(user: dict) -> str:
         f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
         f"Подписка: {sub_text}\n"
         f"Анализов: {user['total_analyses']}\n"
-        f"Opportunity: {user['total_opportunities']}\n"
+        f"Сигналов: {user['total_opportunities']}\n"
         f"Рефералов: {user.get('total_referrals', 0)}\n"
         f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} TON\n"
         f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
@@ -272,10 +281,10 @@ def format_analytics(data: dict) -> str:
         f"Новых сегодня: {data['new_users_today']} | за неделю: {data['new_users_week']}\n\n"
         f"🔍 Анализы\n"
         f"Сегодня: {data['analyses_today']} | Вчера: {data['analyses_yesterday']} | Неделя: {data['analyses_week']}\n\n"
-        f"💡 Opportunity\n"
+        f"💡 Сигналы\n"
         f"Сегодня: {data['opp_today']} | Неделя: {data['opp_week']}\n\n"
         f"📈 Всего запросов: {total_requests}\n"
-        f"Анализы: {analysis_pct}% | Opportunity: {opp_pct}%\n\n"
+        f"Анализы: {analysis_pct}% | Сигналы: {opp_pct}%\n\n"
         f"💰 Финансы\n"
         f"Всего TON: {data['total_ton']:.4f}\n"
         f"Реф. выплаты: {data['total_referral_ton']:.4f} TON\n\n"
@@ -452,7 +461,7 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_opportunity")
     async def set_opportunity_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_opportunity_price.set()
-        await callback.message.answer("Введи цену opportunity в токенах (например: 20):")
+        await callback.message.answer("Введи цену сигнала в токенах (например: 20):")
 
     @dp.message_handler(state=PricingStates.waiting_opportunity_price)
     async def save_opportunity_price(message: types.Message, state: FSMContext):
@@ -460,7 +469,7 @@ def register_admin(dp: Dispatcher):
             int(message.text.strip())
             set_setting("opportunity_price_tokens", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена opportunity: {message.text.strip()} токенов")
+            await message.answer(f"✅ Цена сигнала: {message.text.strip()} токенов")
         except ValueError:
             await message.answer("❌ Введи целое число, например: 20")
 
@@ -503,7 +512,7 @@ def register_admin(dp: Dispatcher):
     async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_days.set()
         current = get_setting("subscription_days", "30")
-        await callback.message.answer(f"Текущий срок подписки: {current} дней\n\nВведи новый срок (например: 30):")
+        await callback.message.answer(f"Текущий срок: {current} дней\n\nВведи новый срок (например: 30):")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_days)
     async def save_sub_days(message: types.Message, state: FSMContext):
@@ -517,6 +526,44 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Срок подписки: {val} дней")
         except ValueError:
             await message.answer("❌ Введи целое число, например: 30")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_analyses")
+    async def set_sub_analyses(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_sub_daily_analyses.set()
+        current = get_setting("sub_daily_analyses", "15")
+        await callback.message.answer(f"Текущий лимит анализов: {current}/день\n\nВведи новый лимит:")
+
+    @dp.message_handler(state=PricingStates.waiting_sub_daily_analyses)
+    async def save_sub_analyses(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 1000:
+                await message.answer("❌ Введи число от 1 до 1000")
+                return
+            set_setting("sub_daily_analyses", str(val))
+            await state.finish()
+            await message.answer(f"✅ Лимит анализов: {val}/день")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_opp")
+    async def set_sub_opp(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_sub_daily_opportunities.set()
+        current = get_setting("sub_daily_opportunities", "3")
+        await callback.message.answer(f"Текущий лимит сигналов: {current}/день\n\nВведи новый лимит:")
+
+    @dp.message_handler(state=PricingStates.waiting_sub_daily_opportunities)
+    async def save_sub_opp(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 100:
+                await message.answer("❌ Введи число от 1 до 100")
+                return
+            set_setting("sub_daily_opportunities", str(val))
+            await state.finish()
+            await message.answer(f"✅ Лимит сигналов: {val}/день")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
 
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
@@ -700,13 +747,13 @@ def register_admin(dp: Dispatcher):
             f"📈 Daily Stats\n\n"
             f"Сегодня:\n"
             f"  Анализов: {data['analyses_today']}\n"
-            f"  Opportunity: {data['opp_today']}\n"
+            f"  Сигналов: {data['opp_today']}\n"
             f"  Новых юзеров: {data['new_users_today']}\n\n"
             f"Вчера:\n"
             f"  Анализов: {data['analyses_yesterday']}\n\n"
             f"За неделю:\n"
             f"  Анализов: {data['analyses_week']}\n"
-            f"  Opportunity: {data['opp_week']}\n"
+            f"  Сигналов: {data['opp_week']}\n"
             f"  Новых юзеров: {data['new_users_week']}"
         )
         kb = InlineKeyboardMarkup()
@@ -803,7 +850,7 @@ def register_admin(dp: Dispatcher):
             f"🗄️ DB Stats\n\n"
             f"БД: {stats['db_size_kb']}\n"
             f"Анализов: {stats['analyses']}\n"
-            f"Opportunity: {stats['opportunities']}\n"
+            f"Сигналов: {stats['opportunities']}\n"
             f"Пользователей: {stats['users']}\n"
             f"Транзакций: {stats['transactions']}\n"
             f"Настроек: {stats['settings']}"
