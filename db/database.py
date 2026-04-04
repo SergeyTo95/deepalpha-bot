@@ -1,4 +1,3 @@
-
 import os
 import time
 from datetime import datetime, timedelta
@@ -78,6 +77,9 @@ def init_db():
         referral_earnings_ton REAL DEFAULT 0,
         total_referrals INTEGER DEFAULT 0,
         subscription_until TEXT DEFAULT NULL,
+        daily_analyses INTEGER DEFAULT 0,
+        daily_opportunities INTEGER DEFAULT 0,
+        daily_reset_date TEXT DEFAULT NULL,
         created_at TEXT,
         updated_at TEXT
     )
@@ -110,6 +112,9 @@ def init_db():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyses INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_opportunities INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_reset_date TEXT DEFAULT NULL",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referral_bonus_ton REAL DEFAULT 0",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referrer_id BIGINT DEFAULT NULL",
         "ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'tokens'",
@@ -188,7 +193,6 @@ def delete_pending(user_id: int) -> None:
 # ===== SUBSCRIPTION =====
 
 def set_subscription(user_id: int, days: int = 30) -> str:
-    """Активирует подписку на N дней. Если уже есть — продлевает."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -199,10 +203,7 @@ def set_subscription(user_id: int, days: int = 30) -> str:
     if row and row[0]:
         try:
             current_until = datetime.fromisoformat(row[0])
-            if current_until > now:
-                new_until = current_until + timedelta(days=days)
-            else:
-                new_until = now + timedelta(days=days)
+            new_until = current_until + timedelta(days=days) if current_until > now else now + timedelta(days=days)
         except Exception:
             new_until = now + timedelta(days=days)
     else:
@@ -226,8 +227,7 @@ def is_subscribed(user_id: int) -> bool:
     if not row or not row[0]:
         return False
     try:
-        until = datetime.fromisoformat(row[0])
-        return until > datetime.utcnow()
+        return datetime.fromisoformat(row[0]) > datetime.utcnow()
     except Exception:
         return False
 
@@ -244,7 +244,6 @@ def get_subscription_until(user_id: int) -> Optional[str]:
 
 
 def get_subscribed_users() -> List[Dict[str, Any]]:
-    """Возвращает всех активных подписчиков."""
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -261,6 +260,63 @@ def get_subscribed_users() -> List[Dict[str, Any]]:
     } for r in rows]
 
 
+# ===== DAILY LIMITS =====
+
+def _reset_daily_if_needed(cursor, user_id: int) -> None:
+    """Сбрасывает дневные счётчики если наступил новый день."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    cursor.execute("SELECT daily_reset_date FROM users WHERE user_id = %s", (user_id,))
+    row = cursor.fetchone()
+    if row and row[0] != today:
+        cursor.execute("""
+        UPDATE users SET daily_analyses = 0, daily_opportunities = 0,
+        daily_reset_date = %s WHERE user_id = %s
+        """, (today, user_id))
+
+
+def get_daily_usage(user_id: int) -> Dict[str, int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    _reset_daily_if_needed(cursor, user_id)
+    conn.commit()
+    cursor.execute("""
+    SELECT daily_analyses, daily_opportunities FROM users WHERE user_id = %s
+    """, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {"analyses": 0, "opportunities": 0}
+    return {"analyses": row[0] or 0, "opportunities": row[1] or 0}
+
+
+def increment_daily(user_id: int, stat: str) -> None:
+    if stat not in ("daily_analyses", "daily_opportunities"):
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    _reset_daily_if_needed(cursor, user_id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    cursor.execute(f"""
+    UPDATE users SET {stat} = {stat} + 1,
+    daily_reset_date = %s, updated_at = %s
+    WHERE user_id = %s
+    """, (today, datetime.utcnow().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+
+
+def check_daily_limit(user_id: int, stat: str) -> bool:
+    """Возвращает True если лимит НЕ превышен."""
+    usage = get_daily_usage(user_id)
+    if stat == "analyses":
+        limit = int(get_setting("sub_daily_analyses", "15"))
+        return usage["analyses"] < limit
+    elif stat == "opportunities":
+        limit = int(get_setting("sub_daily_opportunities", "3"))
+        return usage["opportunities"] < limit
+    return True
+
+
 # ===== USERS =====
 
 def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: int = None) -> None:
@@ -269,6 +325,7 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
     cursor.execute("SELECT user_id, referred_by FROM users WHERE user_id = %s", (user_id,))
     existing = cursor.fetchone()
 
+    today = datetime.utcnow().strftime("%Y-%m-%d")
     if existing:
         cursor.execute("""
         UPDATE users SET username = %s, first_name = %s, updated_at = %s
@@ -276,9 +333,10 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
         """, (username, first_name, datetime.utcnow().isoformat(), user_id))
     else:
         cursor.execute("""
-        INSERT INTO users (user_id, username, first_name, referred_by, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        """, (user_id, username, first_name, referred_by,
+        INSERT INTO users (user_id, username, first_name, referred_by,
+        daily_reset_date, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (user_id, username, first_name, referred_by, today,
               datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
 
         if referred_by:
@@ -297,7 +355,8 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute("""
     SELECT user_id, username, first_name, token_balance, is_banned, is_vip,
            total_analyses, total_opportunities, referred_by,
-           referral_earnings_ton, total_referrals, subscription_until, created_at
+           referral_earnings_ton, total_referrals, subscription_until,
+           daily_analyses, daily_opportunities, created_at
     FROM users WHERE user_id = %s
     """, (user_id,))
     row = cursor.fetchone()
@@ -309,8 +368,9 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
         "token_balance": row[3], "is_banned": bool(row[4]), "is_vip": bool(row[5]),
         "total_analyses": row[6], "total_opportunities": row[7],
         "referred_by": row[8], "referral_earnings_ton": row[9] or 0,
-        "total_referrals": row[10] or 0,
-        "subscription_until": row[11], "created_at": row[12],
+        "total_referrals": row[10] or 0, "subscription_until": row[11],
+        "daily_analyses": row[12] or 0, "daily_opportunities": row[13] or 0,
+        "created_at": row[14],
     }
 
 
