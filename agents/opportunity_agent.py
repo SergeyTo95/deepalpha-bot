@@ -1,3 +1,4 @@
+
 import asyncio
 import random
 import concurrent.futures
@@ -16,7 +17,7 @@ class OpportunityAgent:
 
     def run(
         self,
-        limit: int = 8,
+        limit: int = 4,
         category_filter: str = "All",
         strong_only: bool = False,
         min_score: int = 45,
@@ -29,9 +30,9 @@ class OpportunityAgent:
                     asyncio.run,
                     self._run_async(limit, category_filter, strong_only, min_score, lang, exclude_questions or [])
                 )
-                return future.result(timeout=120)
+                return future.result(timeout=90)
         except concurrent.futures.TimeoutError:
-            print("OpportunityAgent: timeout after 120 seconds")
+            print("OpportunityAgent: timeout after 90 seconds")
             return self._fallback("Analysis timed out")
         except Exception as e:
             print(f"OpportunityAgent error: {e}")
@@ -39,7 +40,7 @@ class OpportunityAgent:
 
     async def _run_async(
         self,
-        limit: int = 8,
+        limit: int = 4,
         category_filter: str = "All",
         strong_only: bool = False,
         min_score: int = 45,
@@ -74,24 +75,15 @@ class OpportunityAgent:
         if not market_contexts:
             return self._fallback("No viable markets after filtering.")
 
-        # Анализируем группами по 2 чтобы не перегружать API
+        # Анализируем последовательно с паузой между запросами
         results = []
-        for i in range(0, len(market_contexts), 2):
-            batch = market_contexts[i:i+2]
-            batch_tasks = [
-                self._analyze_market(raw_market, market_data, lang)
-                for raw_market, market_data in batch
-            ]
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            results.extend(batch_results)
-            if i + 2 < len(market_contexts):
-                await asyncio.sleep(2)
+        for raw_market, market_data in market_contexts:
+            result = await self._analyze_market(raw_market, market_data, lang)
+            results.append(result)
+            await asyncio.sleep(1)
 
         candidates = []
         for result in results:
-            if isinstance(result, Exception):
-                print(f"Market analysis error: {result}")
-                continue
             if result is None:
                 continue
             score = result.get("score", 0)
@@ -106,6 +98,7 @@ class OpportunityAgent:
 
         market_data = best["market_data"]
         decision_data = best["decision_data"]
+        news_data = best.get("news_data", {})
 
         result = {
             "mode": "opportunity",
@@ -120,7 +113,8 @@ class OpportunityAgent:
             "conclusion": decision_data.get("conclusion", "No conclusion."),
             "opportunity_score": best["score"],
             "url": market_data.get("url", ""),
-            "news_items": best.get("news_data", {}).get("sources", []),
+            "news_items": news_data.get("sources", []),
+            "news_sources": news_data.get("sources", []),
         }
 
         save_opportunity(result)
@@ -134,6 +128,7 @@ class OpportunityAgent:
     ) -> Optional[Dict[str, Any]]:
         try:
             news_data = await self._run_news_async(market_data, lang)
+            await asyncio.sleep(0.5)
             decision_data = await self._run_decision_async(market_data, news_data, lang)
             score = self._score_opportunity(market_data, decision_data)
 
@@ -166,6 +161,7 @@ class OpportunityAgent:
                 date_context=date_context,
                 related_markets=market_data.get("related_markets", []),
                 live_news_summary=live_news_summary,
+                news_items=news_items,
                 lang=lang,
             )
 
@@ -213,6 +209,7 @@ class OpportunityAgent:
                 news_summary=news_data.get("news_summary", ""),
                 sentiment=news_data.get("sentiment", ""),
                 news_confidence=news_data.get("confidence", ""),
+                sources=news_data.get("sources", []),
                 lang=lang,
             )
 
@@ -255,17 +252,17 @@ class OpportunityAgent:
 
     def _get_candidate_markets(
         self,
-        limit: int = 8,
+        limit: int = 4,
         category_filter: str = "All",
         exclude_questions: list = None,
     ) -> List[Dict[str, Any]]:
         exclude = set(q.lower() for q in (exclude_questions or []))
 
         random_offset = random.randint(0, 100)
-        markets = list_markets(limit=max(limit * 5, 30), offset=random_offset)
+        markets = list_markets(limit=max(limit * 5, 20), offset=random_offset)
 
         if len(markets) < limit:
-            markets += list_markets(limit=max(limit * 5, 30))
+            markets += list_markets(limit=max(limit * 5, 20))
 
         random.shuffle(markets)
 
@@ -429,4 +426,5 @@ class OpportunityAgent:
             "opportunity_score": 0,
             "url": "",
             "news_items": [],
+            "news_sources": [],
         }
