@@ -13,9 +13,65 @@ from db.database import (
     get_user, add_referral_earnings, get_setting, set_setting,
     get_all_pending, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
+    save_signal_cache, get_signal_cache, get_all_cache_status,
 )
 
 register_admin(telegram_bot.dp)
+
+CATEGORIES = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
+
+
+async def update_signal_cache():
+    """Обновляет кэш сигналов по всем категориям."""
+    print("🔄 Starting signal cache update...")
+    from agents.opportunity_agent import OpportunityAgent
+
+    for category in CATEGORIES:
+        try:
+            print(f"🔄 Updating cache for {category}...")
+            agent = OpportunityAgent()
+            result = agent.run(
+                lang="ru",
+                limit=2,
+                category_filter=category,
+            )
+
+            if result and result.get("question") != "No strong opportunity found":
+                # Проверяем актуальность рынка
+                market_data = result.get("market_data", {})
+                end_date = market_data.get("date_context", "") if market_data else ""
+
+                result["cached_at"] = int(__import__("time").time())
+                result["cache_category"] = category
+                result["end_date"] = end_date
+
+                save_signal_cache(category, result)
+                print(f"✅ Cache updated for {category}: {result.get('question', '')[:50]}")
+            else:
+                print(f"⚠️ No signal found for {category}")
+
+            await asyncio.sleep(5)
+
+        except Exception as e:
+            print(f"CACHE UPDATE ERROR [{category}]: {e}")
+            await asyncio.sleep(2)
+
+    print("✅ Signal cache update complete")
+
+
+async def cache_worker():
+    """Воркер обновляет кэш каждый час."""
+    # Первое обновление через 2 минуты после старта
+    await asyncio.sleep(120)
+    await update_signal_cache()
+
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Каждый час
+            await update_signal_cache()
+        except Exception as e:
+            print(f"CACHE WORKER ERROR: {e}")
+            await asyncio.sleep(60)
 
 
 async def check_ton_payments():
@@ -51,31 +107,16 @@ async def check_ton_payments():
                     for uid, p in list(pending.items()):
                         time_diff = abs(tx_time - p["timestamp"])
                         amount_diff = abs(ton_amount - p["amount"])
-                        # Увеличен допуск до 0.1 TON для учёта комиссии сети
                         if time_diff < 300 and amount_diff < 0.1:
                             user_id = uid
                             payment_type = p.get("payment_type", "tokens")
                             break
-
-                # Если pending не найден — проверяем совпадение с ценой подписки
-                if not user_id:
-                    sub_price = float(get_setting("subscription_price_ton", "1"))
-                    if abs(ton_amount - sub_price) < 0.1:
-                        # Ищем кто недавно регистрировал pending subscription
-                        tx_time = tx.get("utime", 0)
-                        for uid, p in list(pending.items()):
-                            time_diff = abs(tx_time - p["timestamp"])
-                            if time_diff < 300 and p.get("payment_type") == "subscription":
-                                user_id = uid
-                                payment_type = "subscription"
-                                break
 
                 if not user_id:
                     continue
 
                 ensure_user(user_id)
 
-                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -120,7 +161,8 @@ async def check_ton_payments():
                             f"📅 Действует до: {until[:10]}\n\n"
                             f"Теперь у тебя:\n"
                             f"• 🔔 Ежедневные сигналы\n"
-                            f"• ♾️ Безлимитные запросы"
+                            f"• 📊 До 15 анализов в день\n"
+                            f"• 💡 До 3 сигналов в день"
                         )
                     except Exception as e:
                         print(f"SUB NOTIFY ERROR: {e}")
@@ -160,24 +202,31 @@ async def check_ton_payments():
 async def send_daily_notifications():
     try:
         print("📢 Starting daily notifications...")
-        from agents.opportunity_agent import OpportunityAgent
 
-        agent = OpportunityAgent()
-        result = agent.run(lang="ru")
+        all_users = get_all_users(limit=10000)
+        subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
+        opp_price = get_setting("opportunity_price_tokens", "20")
 
-        if not result or result.get("opportunity_score", 0) == 0:
-            print("📢 No opportunity found for notification")
+        # Берём лучший кэшированный сигнал
+        best_cached = None
+        for category in CATEGORIES:
+            cached = get_signal_cache(category, max_age_seconds=7200)
+            if cached and cached.get("question") != "No strong opportunity found":
+                if not best_cached or cached.get("opportunity_score", 0) > best_cached.get("opportunity_score", 0):
+                    best_cached = cached
+
+        if not best_cached:
+            print("📢 No cached signals for notification")
             return
 
-        score = result.get("opportunity_score", 0)
-        question = result.get("question", "")[:60]
-        market_prob = result.get("market_probability", "")
-        category = result.get("category", "")
-        probability = result.get("probability", "")
-        confidence = result.get("confidence", "")
-        conclusion = result.get("conclusion", "")
+        score = best_cached.get("opportunity_score", 0)
+        question = best_cached.get("question", "")[:60]
+        market_prob = best_cached.get("market_probability", "")
+        category = best_cached.get("category", "")
+        probability = best_cached.get("probability", "")
+        confidence = best_cached.get("confidence", "")
+        conclusion = best_cached.get("conclusion", "")
         score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
-        opp_price = get_setting("opportunity_price_tokens", "20")
 
         teaser = (
             f"🔔 DeepAlpha — Сигнал дня\n\n"
@@ -185,8 +234,8 @@ async def send_daily_notifications():
             f"🏷 Категория: {category}\n"
             f"📊 Рынок: {market_prob}\n"
             f"⚡ Скор: {score} {score_bar}\n\n"
-            f"🔒 Полный анализ с прогнозом и сценариями\n"
-            f"👉 Нажми 💡 Возможность — стоит {opp_price} токенов"
+            f"🔒 Полный анализ доступен в боте\n"
+            f"👉 Нажми 💡 Сигнал часа"
         )
 
         conf_emoji = "🟢" if "high" in confidence.lower() else ("🟡" if "medium" in confidence.lower() else "🔴")
@@ -203,9 +252,6 @@ async def send_daily_notifications():
             f"📝 Вывод: {conclusion}\n\n"
             f"✅ Подписка активна"
         )
-
-        all_users = get_all_users(limit=10000)
-        subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
 
         sent_teaser = 0
         sent_full = 0
@@ -301,6 +347,7 @@ async def main():
 
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
+    asyncio.create_task(cache_worker())
     await run_polling()
 
 
