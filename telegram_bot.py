@@ -1,6 +1,3 @@
-Отлично! **💡 Случайный сигнал** — понятно и интригующе.
-
-
 import os
 import logging
 from typing import Dict
