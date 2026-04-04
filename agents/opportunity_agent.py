@@ -1,5 +1,6 @@
 import asyncio
 import random
+import concurrent.futures
 from typing import Any, Dict, List, Optional
 
 from agents.news_agent import NewsAgent
@@ -21,22 +22,17 @@ class OpportunityAgent:
         min_score: int = 45,
         lang: str = "en",
     ) -> Dict[str, Any]:
-        """Синхронная обёртка для async run."""
+        """Синхронная обёртка — запускает async в отдельном потоке."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Уже в async контексте — создаём новый loop в отдельном потоке
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run,
-                        self._run_async(limit, category_filter, strong_only, min_score, lang)
-                    )
-                    return future.result()
-            else:
-                return loop.run_until_complete(
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run,
                     self._run_async(limit, category_filter, strong_only, min_score, lang)
                 )
+                return future.result(timeout=120)
+        except concurrent.futures.TimeoutError:
+            print("OpportunityAgent: timeout after 120 seconds")
+            return self._fallback("Analysis timed out")
         except Exception as e:
             print(f"OpportunityAgent error: {e}")
             return self._fallback(str(e))
@@ -57,7 +53,6 @@ class OpportunityAgent:
         if not raw_markets:
             return self._fallback("No active candidate markets found.")
 
-        # Строим контексты для всех рынков
         market_contexts = []
         for raw_market in raw_markets:
             market_data = self._build_market_context(raw_market)
@@ -122,17 +117,9 @@ class OpportunityAgent:
         market_data: Dict[str, Any],
         lang: str,
     ) -> Optional[Dict[str, Any]]:
-        """Анализирует один рынок асинхронно."""
         try:
-            # Параллельно запускаем news и decision агенты
-            news_data, decision_data = await asyncio.gather(
-                self._run_news_async(market_data, lang),
-                asyncio.sleep(0),  # placeholder
-            )
-
-            # Decision нужен после news
+            news_data = await self._run_news_async(market_data, lang)
             decision_data = await self._run_decision_async(market_data, news_data, lang)
-
             score = self._score_opportunity(market_data, decision_data)
 
             return {
@@ -146,7 +133,6 @@ class OpportunityAgent:
             return None
 
     async def _run_news_async(self, market_data: Dict[str, Any], lang: str) -> Dict[str, Any]:
-        """Async версия NewsAgent."""
         try:
             from services.news_service import build_news_query, search_google_news, summarize_news_items
             from services.llm_service import generate_news_text_async
@@ -198,7 +184,6 @@ class OpportunityAgent:
         news_data: Dict[str, Any],
         lang: str,
     ) -> Dict[str, Any]:
-        """Async версия DecisionAgent."""
         try:
             from services.llm_service import generate_decision_text_async
 
