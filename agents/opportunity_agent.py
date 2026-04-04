@@ -1,3 +1,4 @@
+
 import random
 from typing import Any, Dict, List, Optional
 
@@ -119,15 +120,44 @@ class OpportunityAgent:
                 continue
             if question.lower() in exclude:
                 continue
+
+            # Фильтруем слишком односторонние рынки
+            if self._is_too_one_sided(market):
+                continue
+
             if category_filter != "All":
                 detected = self._detect_category(question)
                 if detected != category_filter:
                     continue
+
             filtered.append(market)
             if len(filtered) >= limit:
                 break
 
         return filtered
+
+    def _is_too_one_sided(self, market: Dict[str, Any]) -> bool:
+        """Возвращает True если рынок слишком односторонний (>90%)."""
+        try:
+            outcome_prices = market.get("outcomePrices", "")
+            if isinstance(outcome_prices, str):
+                cleaned = outcome_prices.strip("[]")
+                prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+            elif isinstance(outcome_prices, list):
+                prices = [float(p) for p in outcome_prices]
+            else:
+                return False
+
+            if not prices:
+                return False
+
+            max_price = max(prices)
+            if max_price >= 0.90:
+                return True
+
+            return False
+        except Exception:
+            return False
 
     def _build_market_context(self, raw_market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         normalized = normalize_market_data(raw_market)
