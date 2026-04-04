@@ -15,6 +15,7 @@ from db.database import (
     is_subscribed, get_subscription_until, set_subscription,
     check_daily_limit, increment_daily, get_daily_usage,
     add_to_signal_history, get_signal_history,
+    get_signal_cache, get_all_cache_status,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +35,25 @@ init_db()
 
 user_languages: Dict[int, str] = {}
 
+CATEGORY_LABELS = {
+    "ru": {
+        "Politics": "🌍 Политика",
+        "Crypto": "💰 Крипто",
+        "Sports": "⚽ Спорт",
+        "Economy": "📈 Экономика",
+        "Tech": "💻 Технологии",
+        "All": "🔀 Все",
+    },
+    "en": {
+        "Politics": "🌍 Politics",
+        "Crypto": "💰 Crypto",
+        "Sports": "⚽ Sports",
+        "Economy": "📈 Economy",
+        "Tech": "💻 Tech",
+        "All": "🔀 All",
+    }
+}
+
 TEXTS = {
     "ru": {
         "start": "🚀 DeepAlpha AI\n\nОтправь ссылку Polymarket или используй кнопки ниже.",
@@ -41,7 +61,6 @@ TEXTS = {
         "language_changed_ru": "Язык переключен на русский",
         "language_changed_en": "Language switched to English",
         "analyzing": "🔍 Анализирую рынок...",
-        "searching_opportunity": "🧠 Ищу сигнал...",
         "no_history": "История пока пустая.",
         "no_opportunities": "Пока нет сохранённых сигналов.",
         "fallback": "Отправь ссылку Polymarket или используй кнопки 👇",
@@ -54,7 +73,9 @@ TEXTS = {
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
         "limit_analyses": "❌ Дневной лимит анализов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
         "limit_opportunities": "❌ Дневной лимит сигналов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
-        "tokens_used": "💎 Дневной лимит исчерпан — использованы токены",
+        "choose_category": "Выбери категорию сигнала:",
+        "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nБот уведомит тебя как только найдёт лучший сигнал!\n\nОбычно занимает 1-2 минуты.",
+        "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки\nОбычно занимает 30-60 секунд",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
@@ -62,7 +83,6 @@ TEXTS = {
         "language_changed_ru": "Язык переключен на русский",
         "language_changed_en": "Language switched to English",
         "analyzing": "🔍 Analyzing market...",
-        "searching_opportunity": "🧠 Searching signal...",
         "no_history": "No history yet.",
         "no_opportunities": "No saved signals yet.",
         "fallback": "Send a Polymarket link or use the buttons 👇",
@@ -75,7 +95,9 @@ TEXTS = {
         "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
         "limit_analyses": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
         "limit_opportunities": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
-        "tokens_used": "💎 Daily limit reached — tokens used",
+        "choose_category": "Choose signal category:",
+        "cache_empty": "⏳ Signal for this category is being prepared...\n\nBot will notify you when ready!\n\nUsually takes 1-2 minutes.",
+        "deep_signal_searching": "🧠 Searching personal signal...\n\n⏱ Analyzing markets\nUsually takes 30-60 seconds",
     }
 }
 
@@ -94,19 +116,32 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     subscribed = is_subscribed(user_id)
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
-        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Случайный сигнал"))
-        kb.add(KeyboardButton("📊 История"), KeyboardButton("🏆 Топ"))
-        kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
-        kb.add(KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
-               KeyboardButton("👥 Рефералы"))
-        kb.add(KeyboardButton("🌐 Язык"))
+        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
+        kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
+        kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("💎 Купить токены"),
+               KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"))
+        kb.add(KeyboardButton("👥 Рефералы"), KeyboardButton("🌐 Язык"))
     else:
-        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Random signal"))
-        kb.add(KeyboardButton("📊 History"), KeyboardButton("🏆 Top"))
-        kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
-        kb.add(KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
-               KeyboardButton("👥 Referrals"))
-        kb.add(KeyboardButton("🌐 Language"))
+        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
+        kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
+        kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("💎 Buy tokens"),
+               KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"))
+        kb.add(KeyboardButton("👥 Referrals"), KeyboardButton("🌐 Language"))
+    return kb
+
+
+def get_category_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    labels = CATEGORY_LABELS.get(lang, CATEGORY_LABELS["ru"])
+    kb = InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for cat, label in labels.items():
+        if cat == "All":
+            continue
+        buttons.append(InlineKeyboardButton(label, callback_data=f"signal_cat_{cat}"))
+    kb.add(*buttons)
     return kb
 
 
@@ -251,7 +286,7 @@ def _format_analysis(result: dict, uid: int) -> str:
         )
 
 
-def _format_opportunity(result: dict, uid: int) -> str:
+def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
     lang = get_user_lang(uid)
     q = _escape(result.get("question", ""))
     cat = _escape(result.get("category", ""))
@@ -267,6 +302,17 @@ def _format_opportunity(result: dict, uid: int) -> str:
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
 
+    # Метка кэша
+    cache_label = ""
+    if cached:
+        import time
+        cached_at = result.get("cached_at", 0)
+        age_minutes = (int(time.time()) - cached_at) // 60 if cached_at else 0
+        if lang == "ru":
+            cache_label = f"\n⚡ Сигнал часа (обновлён {age_minutes} мин назад)"
+        else:
+            cache_label = f"\n⚡ Signal of the hour (updated {age_minutes} min ago)"
+
     if lang == "ru":
         text = (
             f"💡 DeepAlpha Сигнал\n"
@@ -276,7 +322,8 @@ def _format_opportunity(result: dict, uid: int) -> str:
             f"📊 Рынок: {market_prob}\n"
             f"🎯 Прогноз: {sys_prob}\n"
             f"{conf_emoji} Уверенность: {confidence}\n"
-            f"⚡ Скор: {score} {score_bar}\n\n"
+            f"⚡ Скор: {score} {score_bar}"
+            f"{cache_label}\n\n"
             f"{'─' * 30}\n"
             f"📝 Вывод: {conclusion}"
             f"{news_block}"
@@ -290,7 +337,8 @@ def _format_opportunity(result: dict, uid: int) -> str:
             f"📊 Market: {market_prob}\n"
             f"🎯 Forecast: {sys_prob}\n"
             f"{conf_emoji} Confidence: {confidence}\n"
-            f"⚡ Score: {score} {score_bar}\n\n"
+            f"⚡ Score: {score} {score_bar}"
+            f"{cache_label}\n\n"
             f"{'─' * 30}\n"
             f"📝 Conclusion: {conclusion}"
             f"{news_block}"
@@ -362,6 +410,177 @@ async def analyze_prompt_handler(message: types.Message):
     )
 
 
+@dp.message_handler(lambda m: m.text in ["💡 Сигнал часа", "💡 Signal of the hour"])
+async def signal_of_hour_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    if _check_banned(message):
+        await message.answer(t(uid, "banned"))
+        return
+
+    subscribed = is_subscribed(uid)
+    user = get_user(uid)
+    lang = get_user_lang(uid)
+
+    # Проверяем доступ
+    paid_mode = get_setting("paid_mode", "off")
+    cached_price = get_setting("cached_signal_price_tokens", "5")
+
+    if subscribed or (user and user.get("is_vip")):
+        if not check_daily_limit(uid, "opportunities"):
+            # Лимит — берём токены
+            if paid_mode == "on" and not _check_tokens(uid, "cached_signal_price_tokens", "5"):
+                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+                return
+
+    elif paid_mode == "on":
+        if not _check_tokens(uid, "cached_signal_price_tokens", "5"):
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+            return
+
+    # Показываем выбор категории
+    await message.answer(
+        t(uid, "choose_category"),
+        reply_markup=get_category_keyboard(uid)
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("signal_cat_"))
+async def signal_category_handler(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    category = callback.data.replace("signal_cat_", "")
+    lang = get_user_lang(uid)
+
+    await callback.answer()
+
+    # Берём из кэша
+    cached = get_signal_cache(category, max_age_seconds=3600)
+
+    if not cached or cached.get("question") == "No strong opportunity found":
+        # Кэш пустой — уведомим когда будет готово
+        await callback.message.edit_text(t(uid, "cache_empty"))
+
+        # Запускаем фоновое обновление и уведомление
+        async def notify_when_ready():
+            await asyncio.sleep(5)
+            from agents.opportunity_agent import OpportunityAgent
+            try:
+                agent = OpportunityAgent()
+                result = agent.run(lang=lang, limit=2, category_filter=category)
+                if result and result.get("question") != "No strong opportunity found":
+                    from db.database import save_signal_cache
+                    import time
+                    result["cached_at"] = int(time.time())
+                    result["cache_category"] = category
+                    save_signal_cache(category, result)
+
+                    text = _format_opportunity(result, uid, cached=True)
+                    await bot.send_message(uid, text, parse_mode="HTML", reply_markup=get_main_keyboard(uid))
+
+                    # Списываем
+                    subscribed = is_subscribed(uid)
+                    user = get_user(uid)
+                    paid_mode = get_setting("paid_mode", "off")
+                    if subscribed or (user and user.get("is_vip")):
+                        if check_daily_limit(uid, "opportunities"):
+                            increment_daily(uid, "daily_opportunities")
+                        elif paid_mode == "on":
+                            _deduct_tokens(uid, "cached_signal_price_tokens", "5")
+                    elif paid_mode == "on":
+                        _deduct_tokens(uid, "cached_signal_price_tokens", "5")
+
+                    increment_user_stat(uid, "total_opportunities")
+                    add_to_signal_history(uid, result["question"])
+            except Exception as e:
+                print(f"notify_when_ready error: {e}")
+
+        asyncio.create_task(notify_when_ready())
+        return
+
+    # Есть кэш — отдаём мгновенно
+    subscribed = is_subscribed(uid)
+    user = get_user(uid)
+    paid_mode = get_setting("paid_mode", "off")
+
+    if subscribed or (user and user.get("is_vip")):
+        if check_daily_limit(uid, "opportunities"):
+            increment_daily(uid, "daily_opportunities")
+        elif paid_mode == "on":
+            _deduct_tokens(uid, "cached_signal_price_tokens", "5")
+    elif paid_mode == "on":
+        _deduct_tokens(uid, "cached_signal_price_tokens", "5")
+
+    increment_user_stat(uid, "total_opportunities")
+    if cached.get("question"):
+        add_to_signal_history(uid, cached["question"])
+
+    text = _format_opportunity(cached, uid, cached=True)
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await bot.send_message(uid, t(uid, "fallback"), reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["🔮 Личный сигнал", "🔮 Personal signal"])
+async def personal_signal_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    if _check_banned(message):
+        await message.answer(t(uid, "banned"))
+        return
+
+    subscribed = is_subscribed(uid)
+    user = get_user(uid)
+    use_tokens = False
+
+    if subscribed or (user and user.get("is_vip")):
+        if not check_daily_limit(uid, "opportunities"):
+            if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+                return
+            else:
+                use_tokens = True
+    else:
+        if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+            return
+        use_tokens = True
+
+    lang = get_user_lang(uid)
+    status_msg = await message.answer(t(uid, "deep_signal_searching"))
+
+    try:
+        history = get_signal_history(uid)
+        agent = OpportunityAgent()
+        result = agent.run(lang=lang, exclude_questions=history, limit=2)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        if not result or result.get("question") == "No strong opportunity found":
+            await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
+            return
+
+        if result.get("question"):
+            add_to_signal_history(uid, result["question"])
+
+        if use_tokens:
+            _deduct_tokens(uid, "opportunity_price_tokens", "20")
+        elif subscribed or (user and user.get("is_vip")):
+            increment_daily(uid, "daily_opportunities")
+
+        increment_user_stat(uid, "total_opportunities")
+        text = _format_opportunity(result, uid, cached=False)
+        await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
+
+    except Exception as e:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
+
+
 @dp.message_handler(lambda m: m.text in ["💰 Баланс", "💰 Balance"])
 async def balance_handler(message: types.Message):
     _register_user(message)
@@ -374,6 +593,7 @@ async def balance_handler(message: types.Message):
     paid_mode = get_setting("paid_mode", "off")
     analysis_price = get_setting("analysis_price_tokens", "10")
     opp_price = get_setting("opportunity_price_tokens", "20")
+    cached_price = get_setting("cached_signal_price_tokens", "5")
     subscribed = is_subscribed(uid)
     sub_until = get_subscription_until(uid)
     daily = get_daily_usage(uid)
@@ -398,7 +618,8 @@ async def balance_handler(message: types.Message):
             f"{daily_text}\n\n"
             f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
             f"Анализ: {analysis_price} токенов\n"
-            f"Сигнал: {opp_price} токенов"
+            f"Сигнал часа: {cached_price} токенов\n"
+            f"Личный сигнал: {opp_price} токенов"
         )
     else:
         sub_text = f"✅ Until {sub_until[:10]}" if subscribed and sub_until else "❌ No"
@@ -418,7 +639,8 @@ async def balance_handler(message: types.Message):
             f"{daily_text}\n\n"
             f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
             f"Analysis: {analysis_price} tokens\n"
-            f"Signal: {opp_price} tokens"
+            f"Signal of hour: {cached_price} tokens\n"
+            f"Personal signal: {opp_price} tokens"
         )
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
@@ -431,22 +653,27 @@ async def buy_tokens_handler(message: types.Message):
     token_price = get_setting("token_price_ton", "0.1")
     analysis_price = get_setting("analysis_price_tokens", "10")
     opp_price = get_setting("opportunity_price_tokens", "20")
+    cached_price = get_setting("cached_signal_price_tokens", "5")
 
     if lang == "ru":
         text = (
             f"💎 Купить токены\n\n"
-            f"Цена: {token_price} TON = 1 токен\n"
+            f"Цена: {token_price} TON = 1 токен\n\n"
+            f"Тарифы:\n"
             f"Анализ: {analysis_price} токенов\n"
-            f"Сигнал: {opp_price} токенов\n\n"
-            f"Нажми кнопку ниже чтобы открыть кассу 👇"
+            f"Сигнал часа: {cached_price} токенов\n"
+            f"Личный сигнал: {opp_price} токенов\n\n"
+            f"Нажми кнопку ниже 👇"
         )
     else:
         text = (
             f"💎 Buy Tokens\n\n"
-            f"Price: {token_price} TON = 1 token\n"
+            f"Price: {token_price} TON = 1 token\n\n"
+            f"Rates:\n"
             f"Analysis: {analysis_price} tokens\n"
-            f"Signal: {opp_price} tokens\n\n"
-            f"Tap the button below to open payment 👇"
+            f"Signal of hour: {cached_price} tokens\n"
+            f"Personal signal: {opp_price} tokens\n\n"
+            f"Tap the button below 👇"
         )
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
 
@@ -471,8 +698,9 @@ async def subscription_handler(message: types.Message):
                 f"Действует до: {sub_until[:10]}\n\n"
                 f"С подпиской ты получаешь:\n"
                 f"• 🔔 Ежедневные сигналы\n"
+                f"• ⚡ Сигнал часа бесплатно\n"
                 f"• 📊 {sub_analyses} анализов в день\n"
-                f"• 💡 {sub_opp} случайных сигнала в день\n"
+                f"• 💡 {sub_opp} сигнала в день\n"
                 f"• 🚀 Приоритетный AI анализ\n\n"
                 f"Продлить — {sub_price} TON / {sub_days} дней 👇"
             )
@@ -482,8 +710,9 @@ async def subscription_handler(message: types.Message):
                 f"Valid until: {sub_until[:10]}\n\n"
                 f"With subscription you get:\n"
                 f"• 🔔 Daily signals\n"
+                f"• ⚡ Signal of the hour free\n"
                 f"• 📊 {sub_analyses} analyses per day\n"
-                f"• 💡 {sub_opp} random signals per day\n"
+                f"• 💡 {sub_opp} signals per day\n"
                 f"• 🚀 Priority AI analysis\n\n"
                 f"Renew — {sub_price} TON / {sub_days} days 👇"
             )
@@ -494,8 +723,9 @@ async def subscription_handler(message: types.Message):
                 f"Цена: {sub_price} TON / {sub_days} дней\n\n"
                 f"Что включено:\n"
                 f"• 🔔 Ежедневные сигналы\n"
+                f"• ⚡ Сигнал часа бесплатно\n"
                 f"• 📊 {sub_analyses} анализов в день\n"
-                f"• 💡 {sub_opp} случайных сигнала в день\n"
+                f"• 💡 {sub_opp} сигнала в день\n"
                 f"• 🚀 Приоритетный AI анализ\n\n"
                 f"Оплати через кассу 👇"
             )
@@ -505,8 +735,9 @@ async def subscription_handler(message: types.Message):
                 f"Price: {sub_price} TON / {sub_days} days\n\n"
                 f"Includes:\n"
                 f"• 🔔 Daily signals\n"
+                f"• ⚡ Signal of the hour free\n"
                 f"• 📊 {sub_analyses} analyses per day\n"
-                f"• 💡 {sub_opp} random signals per day\n"
+                f"• 💡 {sub_opp} signals per day\n"
                 f"• 🚀 Priority AI analysis\n\n"
                 f"Pay via checkout 👇"
             )
@@ -552,81 +783,6 @@ async def referrals_handler(message: types.Message):
                 text += f"• @{name} — {r['total_analyses']} analyses\n"
 
     await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
-
-
-@dp.message_handler(lambda m: m.text in ["💡 Случайный сигнал", "💡 Random signal"])
-async def opportunity_handler(message: types.Message):
-    _register_user(message)
-    uid = message.from_user.id
-    if _check_banned(message):
-        await message.answer(t(uid, "banned"))
-        return
-
-    subscribed = is_subscribed(uid)
-    user = get_user(uid)
-    use_tokens = False
-
-    if subscribed or (user and user.get("is_vip")):
-        if not check_daily_limit(uid, "opportunities"):
-            # Лимит исчерпан — пробуем списать токены
-            if not _check_tokens(uid, "opportunity_price_tokens", "20"):
-                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
-                return
-            else:
-                use_tokens = True
-    else:
-        if not _check_tokens(uid, "opportunity_price_tokens", "20"):
-            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
-            return
-        use_tokens = True
-
-    lang = get_user_lang(uid)
-
-    if lang == "ru":
-        status_msg = await message.answer(
-            "🧠 Ищу лучший сигнал...\n\n"
-            "⏱ Анализирую рынки\n"
-            "Обычно занимает 30-60 секунд"
-        )
-    else:
-        status_msg = await message.answer(
-            "🧠 Searching for best signal...\n\n"
-            "⏱ Analyzing markets\n"
-            "Usually takes 30-60 seconds"
-        )
-
-    try:
-        history = get_signal_history(uid)
-        agent = OpportunityAgent()
-        result = agent.run(lang=lang, exclude_questions=history, limit=3)
-
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-
-        if not result or result.get("question") == "No strong opportunity found":
-            await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
-            return
-
-        if result.get("question"):
-            add_to_signal_history(uid, result["question"])
-
-        if use_tokens:
-            _deduct_tokens(uid, "opportunity_price_tokens", "20")
-        elif subscribed or (user and user.get("is_vip")):
-            increment_daily(uid, "daily_opportunities")
-
-        increment_user_stat(uid, "total_opportunities")
-        text = _format_opportunity(result, uid)
-        await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
-
-    except Exception as e:
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
 
 @dp.message_handler(lambda m: m.text in ["📊 История", "📊 History"])
@@ -687,7 +843,6 @@ async def analyze_url_handler(message: types.Message):
 
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "analyses"):
-            # Лимит исчерпан — пробуем списать токены
             if not _check_tokens(uid, "analysis_price_tokens", "10"):
                 await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
                 return
