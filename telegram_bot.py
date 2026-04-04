@@ -1,3 +1,6 @@
+Отлично! **💡 Случайный сигнал** — понятно и интригующе.
+
+
 import os
 import logging
 from typing import Dict
@@ -13,6 +16,7 @@ from db.database import (
     ensure_user, is_user_banned, get_user, get_setting,
     add_tokens, increment_user_stat, get_referrals,
     is_subscribed, get_subscription_until, set_subscription,
+    check_daily_limit, increment_daily, get_daily_usage,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +27,6 @@ if not BOT_TOKEN:
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
-OWNER_TON_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -37,50 +40,42 @@ TEXTS = {
     "ru": {
         "start": "🚀 DeepAlpha AI\n\nОтправь ссылку Polymarket или используй кнопки ниже.",
         "choose_language": "Выбери язык:",
-        "language_changed_ru": "Язык переключен на русский 🇷🇺",
-        "language_changed_en": "Language switched to English 🇬🇧",
+        "language_changed_ru": "Язык переключен на русский",
+        "language_changed_en": "Language switched to English",
         "analyzing": "🔍 Анализирую рынок...",
-        "searching_opportunity": "🧠 Ищу opportunity...",
+        "searching_opportunity": "🧠 Ищу сигнал...",
         "no_history": "История пока пустая.",
-        "no_opportunities": "Пока нет сохранённых opportunities.",
+        "no_opportunities": "Пока нет сохранённых сигналов.",
         "fallback": "Отправь ссылку Polymarket или используй кнопки 👇",
         "error": "❌ Ошибка:",
         "recent": "📊 Последние анализы:\n\n",
-        "top": "🏆 Лучшие opportunities:\n\n",
-        "question": "Вопрос",
-        "category": "Категория",
-        "market_probability": "Рыночная вероятность",
-        "system_probability": "Прогноз системы",
-        "confidence": "Уверенность",
-        "score": "Скор",
+        "top": "🏆 Лучшие сигналы:\n\n",
         "send_link": "Отправь ссылку Polymarket.",
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
+        "limit_analyses": "❌ Дневной лимит анализов исчерпан.\n\n🔄 Лимит обновится завтра.\n📊 Доступно: 15 анализов в день",
+        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан.\n\n🔄 Лимит обновится завтра.\n💡 Доступно: 3 сигнала в день",
     },
     "en": {
         "start": "🚀 DeepAlpha AI\n\nSend a Polymarket link or use the buttons below.",
         "choose_language": "Choose language:",
-        "language_changed_ru": "Язык переключен на русский 🇷🇺",
-        "language_changed_en": "Language switched to English 🇬🇧",
+        "language_changed_ru": "Язык переключен на русский",
+        "language_changed_en": "Language switched to English",
         "analyzing": "🔍 Analyzing market...",
-        "searching_opportunity": "🧠 Searching opportunity...",
+        "searching_opportunity": "🧠 Searching signal...",
         "no_history": "No history yet.",
-        "no_opportunities": "No saved opportunities yet.",
+        "no_opportunities": "No saved signals yet.",
         "fallback": "Send a Polymarket link or use the buttons 👇",
         "error": "❌ Error:",
         "recent": "📊 Recent analyses:\n\n",
-        "top": "🏆 Top opportunities:\n\n",
-        "question": "Question",
-        "category": "Category",
-        "market_probability": "Market Probability",
-        "system_probability": "System Forecast",
-        "confidence": "Confidence",
-        "score": "Score",
+        "top": "🏆 Top signals:\n\n",
         "send_link": "Send a Polymarket link.",
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
         "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
+        "limit_analyses": "❌ Daily analysis limit reached.\n\n🔄 Limit resets tomorrow.\n📊 Available: 15 analyses per day",
+        "limit_opportunities": "❌ Daily signal limit reached.\n\n🔄 Limit resets tomorrow.\n💡 Available: 3 signals per day",
     }
 }
 
@@ -99,14 +94,14 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     subscribed = is_subscribed(user_id)
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
-        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Возможность"))
+        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Случайный сигнал"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
         kb.add(KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
                KeyboardButton("👥 Рефералы"))
         kb.add(KeyboardButton("🌐 Язык"))
     else:
-        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Opportunity"))
+        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Random signal"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("🏆 Top"))
         kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
         kb.add(KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
@@ -117,7 +112,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
 def get_language_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton("🇷🇺 Русский"), KeyboardButton("🇬🇧 English"))
+    kb.add(KeyboardButton("Русский"), KeyboardButton("English"))
     return kb
 
 
@@ -252,7 +247,7 @@ def _format_opportunity(result: dict, uid: int) -> str:
 
     if lang == "ru":
         text = (
-            f"💡 DeepAlpha Opportunity\n"
+            f"💡 DeepAlpha Сигнал\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
             f"🏷 Категория: {cat}\n"
@@ -265,7 +260,7 @@ def _format_opportunity(result: dict, uid: int) -> str:
         )
     else:
         text = (
-            f"💡 DeepAlpha Opportunity\n"
+            f"💡 DeepAlpha Signal\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
             f"🏷 Category: {cat}\n"
@@ -314,7 +309,7 @@ async def language_handler(message: types.Message):
     )
 
 
-@dp.message_handler(lambda m: m.text == "🇷🇺 Русский")
+@dp.message_handler(lambda m: m.text == "Русский")
 async def set_russian_handler(message: types.Message):
     _register_user(message)
     user_languages[message.from_user.id] = "ru"
@@ -324,7 +319,7 @@ async def set_russian_handler(message: types.Message):
     )
 
 
-@dp.message_handler(lambda m: m.text == "🇬🇧 English")
+@dp.message_handler(lambda m: m.text == "English")
 async def set_english_handler(message: types.Message):
     _register_user(message)
     user_languages[message.from_user.id] = "en"
@@ -357,32 +352,49 @@ async def balance_handler(message: types.Message):
     opp_price = get_setting("opportunity_price_tokens", "20")
     subscribed = is_subscribed(uid)
     sub_until = get_subscription_until(uid)
+    daily = get_daily_usage(uid)
+    sub_analyses_limit = get_setting("sub_daily_analyses", "15")
+    sub_opp_limit = get_setting("sub_daily_opportunities", "3")
 
     if lang == "ru":
         sub_text = f"✅ До {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
+        daily_text = ""
+        if subscribed or user["is_vip"]:
+            daily_text = (
+                f"\n📊 Анализов сегодня: {daily['analyses']}/{sub_analyses_limit}\n"
+                f"💡 Сигналов сегодня: {daily['opportunities']}/{sub_opp_limit}"
+            )
         text = (
             f"💰 Ваш баланс\n\n"
             f"Токены: {user['token_balance']}\n"
-            f"Анализов: {user['total_analyses']}\n"
-            f"Opportunity: {user['total_opportunities']}\n"
+            f"Анализов всего: {user['total_analyses']}\n"
+            f"Сигналов всего: {user['total_opportunities']}\n"
             f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
-            f"Подписка: {sub_text}\n\n"
+            f"Подписка: {sub_text}"
+            f"{daily_text}\n\n"
             f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
             f"Анализ: {analysis_price} токенов\n"
-            f"Opportunity: {opp_price} токенов"
+            f"Сигнал: {opp_price} токенов"
         )
     else:
         sub_text = f"✅ Until {sub_until[:10]}" if subscribed and sub_until else "❌ No"
+        daily_text = ""
+        if subscribed or user["is_vip"]:
+            daily_text = (
+                f"\n📊 Analyses today: {daily['analyses']}/{sub_analyses_limit}\n"
+                f"💡 Signals today: {daily['opportunities']}/{sub_opp_limit}"
+            )
         text = (
             f"💰 Your Balance\n\n"
             f"Tokens: {user['token_balance']}\n"
-            f"Analyses: {user['total_analyses']}\n"
-            f"Opportunities: {user['total_opportunities']}\n"
+            f"Total analyses: {user['total_analyses']}\n"
+            f"Total signals: {user['total_opportunities']}\n"
             f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}\n"
-            f"Subscription: {sub_text}\n\n"
+            f"Subscription: {sub_text}"
+            f"{daily_text}\n\n"
             f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
             f"Analysis: {analysis_price} tokens\n"
-            f"Opportunity: {opp_price} tokens"
+            f"Signal: {opp_price} tokens"
         )
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
@@ -401,7 +413,7 @@ async def buy_tokens_handler(message: types.Message):
             f"💎 Купить токены\n\n"
             f"Цена: {token_price} TON = 1 токен\n"
             f"Анализ: {analysis_price} токенов\n"
-            f"Opportunity: {opp_price} токенов\n\n"
+            f"Сигнал: {opp_price} токенов\n\n"
             f"Нажми кнопку ниже чтобы открыть кассу 👇"
         )
     else:
@@ -409,7 +421,7 @@ async def buy_tokens_handler(message: types.Message):
             f"💎 Buy Tokens\n\n"
             f"Price: {token_price} TON = 1 token\n"
             f"Analysis: {analysis_price} tokens\n"
-            f"Opportunity: {opp_price} tokens\n\n"
+            f"Signal: {opp_price} tokens\n\n"
             f"Tap the button below to open payment 👇"
         )
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
@@ -425,6 +437,8 @@ async def subscription_handler(message: types.Message):
     sub_until = get_subscription_until(uid)
     sub_price = get_setting("subscription_price_ton", "1")
     sub_days = get_setting("subscription_days", "30")
+    sub_analyses = get_setting("sub_daily_analyses", "15")
+    sub_opp = get_setting("sub_daily_opportunities", "3")
 
     if subscribed and sub_until:
         if lang == "ru":
@@ -432,19 +446,21 @@ async def subscription_handler(message: types.Message):
                 f"✅ Подписка активна\n\n"
                 f"Действует до: {sub_until[:10]}\n\n"
                 f"С подпиской ты получаешь:\n"
-                f"• 🔔 Ежедневные сигналы opportunity\n"
-                f"• ♾️ Безлимитные запросы\n"
-                f"• 🚀 Приоритетный анализ\n\n"
-                f"Продлить подписку — {sub_price} TON / {sub_days} дней 👇"
+                f"• 🔔 Ежедневные сигналы\n"
+                f"• 📊 {sub_analyses} анализов в день\n"
+                f"• 💡 {sub_opp} случайных сигнала в день\n"
+                f"• 🚀 Приоритетный AI анализ\n\n"
+                f"Продлить — {sub_price} TON / {sub_days} дней 👇"
             )
         else:
             text = (
                 f"✅ Subscription active\n\n"
                 f"Valid until: {sub_until[:10]}\n\n"
                 f"With subscription you get:\n"
-                f"• 🔔 Daily opportunity signals\n"
-                f"• ♾️ Unlimited requests\n"
-                f"• 🚀 Priority analysis\n\n"
+                f"• 🔔 Daily signals\n"
+                f"• 📊 {sub_analyses} analyses per day\n"
+                f"• 💡 {sub_opp} random signals per day\n"
+                f"• 🚀 Priority AI analysis\n\n"
                 f"Renew — {sub_price} TON / {sub_days} days 👇"
             )
     else:
@@ -453,8 +469,9 @@ async def subscription_handler(message: types.Message):
                 f"🔔 Подписка DeepAlpha\n\n"
                 f"Цена: {sub_price} TON / {sub_days} дней\n\n"
                 f"Что включено:\n"
-                f"• 🔔 Ежедневные сигналы opportunity\n"
-                f"• ♾️ Безлимитные анализы и opportunity\n"
+                f"• 🔔 Ежедневные сигналы\n"
+                f"• 📊 {sub_analyses} анализов в день\n"
+                f"• 💡 {sub_opp} случайных сигнала в день\n"
                 f"• 🚀 Приоритетный AI анализ\n\n"
                 f"Оплати через кассу 👇"
             )
@@ -463,8 +480,9 @@ async def subscription_handler(message: types.Message):
                 f"🔔 DeepAlpha Subscription\n\n"
                 f"Price: {sub_price} TON / {sub_days} days\n\n"
                 f"Includes:\n"
-                f"• 🔔 Daily opportunity signals\n"
-                f"• ♾️ Unlimited analyses\n"
+                f"• 🔔 Daily signals\n"
+                f"• 📊 {sub_analyses} analyses per day\n"
+                f"• 💡 {sub_opp} random signals per day\n"
                 f"• 🚀 Priority AI analysis\n\n"
                 f"Pay via checkout 👇"
             )
@@ -512,16 +530,26 @@ async def referrals_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
 
 
-@dp.message_handler(lambda m: m.text in ["💡 Возможность", "💡 Opportunity"])
+@dp.message_handler(lambda m: m.text in ["💡 Случайный сигнал", "💡 Random signal"])
 async def opportunity_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
-    if not _check_tokens(uid, "opportunity_price_tokens", "20"):
+
+    subscribed = is_subscribed(uid)
+    user = get_user(uid)
+
+    # Проверяем дневной лимит для подписчиков и VIP
+    if subscribed or (user and user.get("is_vip")):
+        if not check_daily_limit(uid, "opportunities"):
+            await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+            return
+    elif not _check_tokens(uid, "opportunity_price_tokens", "20"):
         await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
         return
+
     lang = get_user_lang(uid)
     await message.answer(t(uid, "searching_opportunity"))
     try:
@@ -530,7 +558,12 @@ async def opportunity_handler(message: types.Message):
         if not result or result.get("opportunity_score", 0) == 0:
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
-        _deduct_tokens(uid, "opportunity_price_tokens", "20")
+
+        if subscribed or (user and user.get("is_vip")):
+            increment_daily(uid, "daily_opportunities")
+        else:
+            _deduct_tokens(uid, "opportunity_price_tokens", "20")
+
         increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid))
@@ -589,9 +622,19 @@ async def analyze_url_handler(message: types.Message):
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
-    if not _check_tokens(uid, "analysis_price_tokens", "10"):
+
+    subscribed = is_subscribed(uid)
+    user = get_user(uid)
+
+    # Проверяем дневной лимит для подписчиков и VIP
+    if subscribed or (user and user.get("is_vip")):
+        if not check_daily_limit(uid, "analyses"):
+            await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
+            return
+    elif not _check_tokens(uid, "analysis_price_tokens", "10"):
         await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
         return
+
     lang = get_user_lang(uid)
     await message.answer(t(uid, "analyzing"))
     try:
@@ -600,7 +643,12 @@ async def analyze_url_handler(message: types.Message):
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
-        _deduct_tokens(uid, "analysis_price_tokens", "10")
+
+        if subscribed or (user and user.get("is_vip")):
+            increment_daily(uid, "daily_analyses")
+        else:
+            _deduct_tokens(uid, "analysis_price_tokens", "10")
+
         increment_user_stat(uid, "total_analyses")
         text = _format_analysis(result, uid)
         await message.answer(text, reply_markup=get_main_keyboard(uid))
