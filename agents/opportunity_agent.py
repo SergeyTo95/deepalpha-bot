@@ -1,4 +1,4 @@
-
+import asyncio
 import random
 from typing import Any, Dict, List, Optional
 
@@ -21,41 +21,77 @@ class OpportunityAgent:
         min_score: int = 45,
         lang: str = "en",
     ) -> Dict[str, Any]:
+        """Синхронная обёртка для async run."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Уже в async контексте — создаём новый loop в отдельном потоке
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run,
+                        self._run_async(limit, category_filter, strong_only, min_score, lang)
+                    )
+                    return future.result()
+            else:
+                return loop.run_until_complete(
+                    self._run_async(limit, category_filter, strong_only, min_score, lang)
+                )
+        except Exception as e:
+            print(f"OpportunityAgent error: {e}")
+            return self._fallback(str(e))
+
+    async def _run_async(
+        self,
+        limit: int = 8,
+        category_filter: str = "All",
+        strong_only: bool = False,
+        min_score: int = 45,
+        lang: str = "en",
+    ) -> Dict[str, Any]:
         raw_markets = self._get_candidate_markets(
             limit=limit,
             category_filter=category_filter,
         )
 
         if not raw_markets:
-            return self._fallback("No active candidate markets found for current filters.")
+            return self._fallback("No active candidate markets found.")
 
-        candidates = []
-
+        # Строим контексты для всех рынков
+        market_contexts = []
         for raw_market in raw_markets:
             market_data = self._build_market_context(raw_market)
             if not market_data:
                 continue
-
             if category_filter != "All" and market_data.get("category") != category_filter:
                 continue
+            market_contexts.append((raw_market, market_data))
 
-            news_data = self.news_agent.run(market_data, lang=lang)
-            decision_data = self.decision_agent.run(market_data, news_data, lang=lang)
+        if not market_contexts:
+            return self._fallback("No viable markets after filtering.")
 
-            score = self._score_opportunity(market_data, decision_data)
+        # Параллельно анализируем все рынки
+        tasks = [
+            self._analyze_market(raw_market, market_data, lang)
+            for raw_market, market_data in market_contexts
+        ]
 
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        candidates = []
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"Market analysis error: {result}")
+                continue
+            if result is None:
+                continue
+            score = result.get("score", 0)
             if strong_only and score < min_score:
                 continue
-
-            candidates.append({
-                "market_data": market_data,
-                "news_data": news_data,
-                "decision_data": decision_data,
-                "score": score,
-            })
+            candidates.append(result)
 
         if not candidates:
-            return self._fallback("No viable opportunities after analysis and current filters.")
+            return self._fallback("No viable opportunities after analysis.")
 
         best = sorted(candidates, key=lambda x: x["score"], reverse=True)[0]
 
@@ -80,10 +116,145 @@ class OpportunityAgent:
         save_opportunity(result)
         return result
 
+    async def _analyze_market(
+        self,
+        raw_market: Dict[str, Any],
+        market_data: Dict[str, Any],
+        lang: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Анализирует один рынок асинхронно."""
+        try:
+            # Параллельно запускаем news и decision агенты
+            news_data, decision_data = await asyncio.gather(
+                self._run_news_async(market_data, lang),
+                asyncio.sleep(0),  # placeholder
+            )
+
+            # Decision нужен после news
+            decision_data = await self._run_decision_async(market_data, news_data, lang)
+
+            score = self._score_opportunity(market_data, decision_data)
+
+            return {
+                "market_data": market_data,
+                "news_data": news_data,
+                "decision_data": decision_data,
+                "score": score,
+            }
+        except Exception as e:
+            print(f"_analyze_market error: {e}")
+            return None
+
+    async def _run_news_async(self, market_data: Dict[str, Any], lang: str) -> Dict[str, Any]:
+        """Async версия NewsAgent."""
+        try:
+            from services.news_service import build_news_query, search_google_news, summarize_news_items
+            from services.llm_service import generate_news_text_async
+
+            question = market_data.get("question", "")
+            category = market_data.get("category", "")
+            date_context = market_data.get("date_context", "")
+
+            news_query = build_news_query(question=question, category=category, date_context=date_context)
+            news_items = search_google_news(news_query, limit=5)
+            live_news_summary = summarize_news_items(news_items)
+
+            prompt = self.news_agent._build_prompt(
+                question=question,
+                category=category,
+                date_context=date_context,
+                related_markets=market_data.get("related_markets", []),
+                live_news_summary=live_news_summary,
+                lang=lang,
+            )
+
+            llm_result = await generate_news_text_async(prompt)
+
+            if llm_result and not llm_result.lower().startswith("llm service is not configured"):
+                return self.news_agent._wrap_llm_result(
+                    question=question,
+                    category=category,
+                    llm_result=llm_result,
+                    news_query=news_query,
+                    news_items=news_items,
+                )
+
+            return self.news_agent._fallback_news(
+                question=question,
+                category=category,
+                date_context=date_context,
+                related_markets=market_data.get("related_markets", []),
+                live_news_summary=live_news_summary,
+                news_query=news_query,
+                news_items=news_items,
+            )
+        except Exception as e:
+            print(f"_run_news_async error: {e}")
+            return {"news_summary": "", "sentiment": "Unclear", "confidence": "Low", "sources": []}
+
+    async def _run_decision_async(
+        self,
+        market_data: Dict[str, Any],
+        news_data: Dict[str, Any],
+        lang: str,
+    ) -> Dict[str, Any]:
+        """Async версия DecisionAgent."""
+        try:
+            from services.llm_service import generate_decision_text_async
+
+            prompt = self.decision_agent._build_prompt(
+                question=market_data.get("question", ""),
+                category=market_data.get("category", ""),
+                market_probability=market_data.get("market_probability", ""),
+                options=market_data.get("options", []),
+                related_markets=market_data.get("related_markets", []),
+                trend_summary=market_data.get("trend_summary", ""),
+                crowd_behavior=market_data.get("crowd_behavior", ""),
+                news_summary=news_data.get("news_summary", ""),
+                sentiment=news_data.get("sentiment", ""),
+                news_confidence=news_data.get("confidence", ""),
+                lang=lang,
+            )
+
+            raw_response = await generate_decision_text_async(prompt)
+
+            if raw_response and not raw_response.lower().startswith("llm service is not configured"):
+                parsed = self.decision_agent._parse_llm_output(raw_response)
+                wrapped = self.decision_agent._wrap_llm_result(
+                    question=market_data.get("question", ""),
+                    category=market_data.get("category", ""),
+                    market_probability=market_data.get("market_probability", ""),
+                    parsed=parsed,
+                    raw_text=raw_response,
+                )
+                if self.decision_agent._is_valid_result(wrapped):
+                    return wrapped
+
+            return self.decision_agent._fallback_decision(
+                question=market_data.get("question", ""),
+                category=market_data.get("category", ""),
+                market_probability=market_data.get("market_probability", ""),
+                options=market_data.get("options", []),
+                related_markets=market_data.get("related_markets", []),
+                trend_summary=market_data.get("trend_summary", ""),
+                crowd_behavior=market_data.get("crowd_behavior", ""),
+                news_summary=news_data.get("news_summary", ""),
+                sentiment=news_data.get("sentiment", ""),
+                news_confidence=news_data.get("confidence", ""),
+            )
+        except Exception as e:
+            print(f"_run_decision_async error: {e}")
+            return {
+                "probability": "Unknown",
+                "confidence": "Low",
+                "reasoning": "Error during analysis",
+                "main_scenario": "Unavailable",
+                "alt_scenario": "Unavailable",
+                "conclusion": "Unavailable",
+            }
+
     def _get_candidate_markets(self, limit: int = 8, category_filter: str = "All") -> List[Dict[str, Any]]:
         markets = list_markets(limit=max(limit * 5, 30))
-
-        # Перемешиваем чтобы каждый раз разные рынки
         random.shuffle(markets)
 
         filtered = []
@@ -91,17 +262,13 @@ class OpportunityAgent:
             question = str(market.get("question") or market.get("title") or "").strip()
             if not question:
                 continue
-
             if self._looks_like_noise(question):
                 continue
-
             if category_filter != "All":
                 detected = self._detect_category(question)
                 if detected != category_filter:
                     continue
-
             filtered.append(market)
-
             if len(filtered) >= limit:
                 break
 
@@ -134,11 +301,7 @@ class OpportunityAgent:
             "price_history": normalized.get("price_history", {"24h": [], "7d": []}),
         }
 
-    def _score_opportunity(
-        self,
-        market_data: Dict[str, Any],
-        decision_data: Dict[str, Any],
-    ) -> int:
+    def _score_opportunity(self, market_data: Dict[str, Any], decision_data: Dict[str, Any]) -> int:
         score = 0
 
         confidence = str(decision_data.get("confidence", "")).lower()
@@ -186,14 +349,8 @@ class OpportunityAgent:
 
     def _parse_numeric_bonus(self, value: str, max_bonus: int = 20) -> int:
         try:
-            cleaned = (
-                value.replace(",", "")
-                .replace("$", "")
-                .replace("%", "")
-                .strip()
-            )
+            cleaned = value.replace(",", "").replace("$", "").replace("%", "").strip()
             number = float(cleaned)
-
             if number <= 0:
                 return 0
             if number < 1000:
@@ -202,7 +359,6 @@ class OpportunityAgent:
                 return min(10, max_bonus)
             if number < 100000:
                 return min(15, max_bonus)
-
             return min(20, max_bonus)
         except Exception:
             return 0
@@ -217,26 +373,16 @@ class OpportunityAgent:
     def _detect_category(self, text: str) -> str:
         s = (text or "").lower()
 
-        politics_keywords = [
-            "trump", "biden", "election", "senate", "white house",
-            "president", "congress", "vote", "eu", "europe", "summit"
-        ]
-        crypto_keywords = [
-            "bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
-            "token", "sec", "etf", "ton"
-        ]
-        sports_keywords = [
-            "nba", "nfl", "mlb", "ufc", "football", "soccer",
-            "tennis", "golf", "match", "cup"
-        ]
-        economy_keywords = [
-            "inflation", "fed", "rate", "recession", "gdp",
-            "cpi", "jobs", "oil", "economy"
-        ]
-        tech_keywords = [
-            "openai", "ai", "google", "apple", "tesla", "nvidia",
-            "launch", "chip", "model"
-        ]
+        politics_keywords = ["trump", "biden", "election", "senate", "white house",
+                             "president", "congress", "vote", "eu", "europe", "summit"]
+        crypto_keywords = ["bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
+                           "token", "sec", "etf", "ton"]
+        sports_keywords = ["nba", "nfl", "mlb", "ufc", "football", "soccer",
+                           "tennis", "golf", "match", "cup"]
+        economy_keywords = ["inflation", "fed", "rate", "recession", "gdp",
+                            "cpi", "jobs", "oil", "economy"]
+        tech_keywords = ["openai", "ai", "google", "apple", "tesla", "nvidia",
+                         "launch", "chip", "model"]
 
         if any(word in s for word in politics_keywords):
             return "Politics"
@@ -248,13 +394,11 @@ class OpportunityAgent:
             return "Economy"
         if any(word in s for word in tech_keywords):
             return "Tech"
-
         return "Other"
 
     def _looks_like_noise(self, question: str) -> bool:
         q = question.lower()
-        noisy_patterns = ["test", "demo", "sample", "mock"]
-        return any(pattern in q for pattern in noisy_patterns)
+        return any(pattern in q for pattern in ["test", "demo", "sample", "mock"])
 
     def _fallback(self, reason: str) -> Dict[str, Any]:
         return {
