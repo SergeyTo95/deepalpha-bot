@@ -120,16 +120,12 @@ class OpportunityAgent:
                 continue
             if question.lower() in exclude:
                 continue
-
-            # Фильтруем слишком односторонние рынки
             if self._is_too_one_sided(market):
                 continue
-
             if category_filter != "All":
                 detected = self._detect_category(question)
                 if detected != category_filter:
                     continue
-
             filtered.append(market)
             if len(filtered) >= limit:
                 break
@@ -137,7 +133,6 @@ class OpportunityAgent:
         return filtered
 
     def _is_too_one_sided(self, market: Dict[str, Any]) -> bool:
-        """Возвращает True если рынок слишком односторонний (>90%)."""
         try:
             outcome_prices = market.get("outcomePrices", "")
             if isinstance(outcome_prices, str):
@@ -151,11 +146,7 @@ class OpportunityAgent:
             if not prices:
                 return False
 
-            max_price = max(prices)
-            if max_price >= 0.90:
-                return True
-
-            return False
+            return max(prices) >= 0.90
         except Exception:
             return False
 
@@ -167,13 +158,14 @@ class OpportunityAgent:
         question = normalized.get("question", "Unknown market")
         options = normalized.get("options", [])
         category = self._detect_category(question)
+        market_type = self._detect_market_type(options)
 
         return {
             "url": raw_market.get("url", ""),
             "slug": raw_market.get("slug", ""),
             "question": question,
             "category": category,
-            "market_type": self._detect_market_type(options),
+            "market_type": market_type,
             "market_probability": normalized.get("market_probability", "Unknown"),
             "options": options,
             "related_markets": [],
@@ -258,23 +250,53 @@ class OpportunityAgent:
     def _detect_category(self, text: str) -> str:
         s = (text or "").lower()
 
-        politics_keywords = ["trump", "biden", "election", "senate", "white house",
-                             "president", "congress", "vote", "eu", "europe", "summit"]
-        crypto_keywords = ["bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
-                           "token", "sec", "etf", "ton"]
-        sports_keywords = ["nba", "nfl", "mlb", "ufc", "football", "soccer",
-                           "tennis", "golf", "match", "cup"]
-        economy_keywords = ["inflation", "fed", "rate", "recession", "gdp",
-                            "cpi", "jobs", "oil", "economy"]
-        tech_keywords = ["openai", "ai", "google", "apple", "tesla", "nvidia",
-                         "launch", "chip", "model"]
+        politics_keywords = [
+            "trump", "biden", "harris", "election", "senate", "white house",
+            "president", "congress", "vote", "eu", "europe", "summit",
+            "government", "minister", "prime minister", "parliament",
+            "republican", "democrat", "electoral", "campaign", "putin",
+            "zelensky", "macron", "nato", "un ", "united nations",
+        ]
+        crypto_keywords = [
+            "bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
+            "token", "sec", "etf", "ton", "airdrop", "defi", "memecoin",
+            "blockchain", "coinbase", "binance", "altcoin", "nft",
+        ]
+        sports_keywords = [
+            "nba", "nfl", "mlb", "nhl", "ufc", "mma", "football", "soccer",
+            "tennis", "golf", "match", "cup", "championship", "playoffs",
+            "finals", "super bowl", "world series", "stanley cup",
+            "march madness", "olympics", "wimbledon", "grand slam",
+            "celtics", "lakers", "warriors", "heat", "bulls", "knicks",
+            "nets", "mavericks", "nuggets", "suns", "clippers", "bucks",
+            "76ers", "spurs", "rockets", "pistons", "pacers", "hawks",
+            "chiefs", "patriots", "cowboys", "eagles", "49ers", "ravens",
+            "yankees", "dodgers", "red sox", "cubs", "astros",
+            "arsenal", "chelsea", "liverpool", "manchester", "barcelona",
+            "real madrid", "psg", "juventus", "bayern",
+            "federer", "djokovic", "nadal", "serena", "williams",
+            "win the", "will win", "champion", "title", "trophy",
+        ]
+        economy_keywords = [
+            "inflation", "fed", "federal reserve", "rate", "recession", "gdp",
+            "cpi", "jobs", "oil", "economy", "yield", "unemployment",
+            "interest rate", "wall street", "stock market", "s&p", "nasdaq",
+            "dollar", "eur", "currency", "trade war", "tariff",
+        ]
+        tech_keywords = [
+            "openai", "chatgpt", "ai ", "artificial intelligence",
+            "google", "apple", "tesla", "nvidia", "microsoft", "meta",
+            "launch", "chip", "model", "xai", "anthropic", "grok",
+            "spacex", "starship", "amazon", "iphone", "android",
+        ]
 
+        # Порядок важен — Sports перед Crypto
         if any(word in s for word in politics_keywords):
             return "Politics"
-        if any(word in s for word in crypto_keywords):
-            return "Crypto"
         if any(word in s for word in sports_keywords):
             return "Sports"
+        if any(word in s for word in crypto_keywords):
+            return "Crypto"
         if any(word in s for word in economy_keywords):
             return "Economy"
         if any(word in s for word in tech_keywords):
