@@ -1,3 +1,4 @@
+
 from typing import Any, Dict
 
 from db.database import save_analysis
@@ -21,6 +22,9 @@ class ChiefAgent:
 
         final_response = self._run_communication_agent(enriched_decision_data)
 
+        # Получаем новости для отображения
+        news_sources = news_data.get("sources", [])
+
         final_result = {
             "question": enriched_decision_data.get(
                 "question",
@@ -43,7 +47,8 @@ class ChiefAgent:
             "url": url,
             "mode": "analysis",
             "related_markets": enriched_decision_data.get("related_markets", []),
-            "news_sources": enriched_decision_data.get("news_sources", []),
+            "news_sources": news_sources,
+            "news_items": news_sources,
             "trend_summary": enriched_decision_data.get("trend_summary", ""),
             "crowd_behavior": enriched_decision_data.get("crowd_behavior", ""),
             "market_data": market_data,
@@ -84,26 +89,22 @@ class ChiefAgent:
 
     def _run_market_agent(self, url: str) -> Dict[str, Any]:
         try:
-            from agents.market_agent import MarketAgent  # type: ignore
+            from agents.market_agent import MarketAgent
             agent = MarketAgent()
             result = agent.run(url)
-
             if isinstance(result, dict):
                 return result
-
             return self._market_fallback(url)
         except Exception:
             return self._market_fallback(url)
 
     def _run_news_agent(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         try:
-            from agents.news_agent import NewsAgent  # type: ignore
+            from agents.news_agent import NewsAgent
             agent = NewsAgent()
             result = agent.run(market_data, lang=lang)
-
             if isinstance(result, dict):
                 return result
-
             return self._news_fallback(market_data)
         except Exception:
             return self._news_fallback(market_data)
@@ -115,26 +116,22 @@ class ChiefAgent:
         lang: str = "en",
     ) -> Dict[str, Any]:
         try:
-            from agents.decision_agent import DecisionAgent  # type: ignore
+            from agents.decision_agent import DecisionAgent
             agent = DecisionAgent()
             result = agent.run(market_data, news_data, lang=lang)
-
             if isinstance(result, dict):
                 return result
-
             return self._decision_fallback(market_data, news_data)
         except Exception:
             return self._decision_fallback(market_data, news_data)
 
     def _run_communication_agent(self, decision_data: Dict[str, Any]) -> str:
         try:
-            from agents.communication_agent import CommunicationAgent  # type: ignore
+            from agents.communication_agent import CommunicationAgent
             agent = CommunicationAgent()
             result = agent.run(decision_data)
-
             if isinstance(result, str):
                 return result
-
             return self._communication_fallback(decision_data)
         except Exception:
             return self._communication_fallback(decision_data)
@@ -149,8 +146,8 @@ class ChiefAgent:
             "related_markets": [],
             "volume": "Unknown",
             "liquidity": "Unknown",
-            "trend_summary": "Market Agent fallback mode. Real market parsing not connected yet.",
-            "crowd_behavior": "Market Agent fallback mode. Crowd behavior not connected yet.",
+            "trend_summary": "Market Agent fallback mode.",
+            "crowd_behavior": "Market Agent fallback mode.",
             "date_context": "Unknown",
             "raw_market_data": {},
             "price_history": {"24h": [], "7d": []},
@@ -161,10 +158,7 @@ class ChiefAgent:
         return {
             "question": question,
             "news_query": "",
-            "news_summary": (
-                "News Agent fallback mode. External news, Twitter/X signals, "
-                "and official statements are not connected yet."
-            ),
+            "news_summary": "News Agent fallback mode.",
             "sources": [],
             "sentiment": "Unknown",
             "confidence": "Low",
@@ -185,22 +179,10 @@ class ChiefAgent:
             "market_probability": market_data.get("market_probability", "Unknown"),
             "probability": "System probability not available yet",
             "confidence": "Low",
-            "reasoning": (
-                "Decision Agent fallback mode. The system received market and news layers, "
-                "but the final reasoning engine is not connected yet."
-            ),
-            "main_scenario": (
-                "Main scenario cannot be calculated yet because Decision Agent "
-                "still uses fallback mode."
-            ),
-            "alt_scenario": (
-                "Alternative scenario cannot be calculated yet because Decision Agent "
-                "still uses fallback mode."
-            ),
-            "conclusion": (
-                "Chief Agent orchestration works, but final decision logic still needs "
-                "to be connected."
-            ),
+            "reasoning": "Decision Agent fallback mode.",
+            "main_scenario": "Main scenario unavailable.",
+            "alt_scenario": "Alternative scenario unavailable.",
+            "conclusion": "Chief Agent orchestration works but decision logic needs connection.",
             "raw_decision_text": "",
         }
 
