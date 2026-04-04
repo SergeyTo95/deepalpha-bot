@@ -21,6 +21,7 @@ class DecisionAgent:
         related_markets = market_data.get("related_markets", [])
         trend_summary = market_data.get("trend_summary", "Unknown")
         crowd_behavior = market_data.get("crowd_behavior", "Unknown")
+        market_type = market_data.get("market_type", "binary")
 
         news_summary = news_data.get("news_summary", "Unknown")
         sentiment = news_data.get("sentiment", "Unknown")
@@ -39,6 +40,7 @@ class DecisionAgent:
             sentiment=sentiment,
             news_confidence=news_confidence,
             sources=sources,
+            market_type=market_type,
             lang=lang,
         )
 
@@ -82,6 +84,7 @@ class DecisionAgent:
         sentiment: str,
         news_confidence: str,
         sources: List[Dict[str, str]] = None,
+        market_type: str = "binary",
         lang: str = "en",
     ) -> str:
 
@@ -98,7 +101,7 @@ class DecisionAgent:
             )
         related_text = "\n".join(related_lines) if related_lines else "- No related markets"
 
-        # Форматируем источники новостей
+        # Форматируем источники
         sources_text = ""
         if sources:
             lines = []
@@ -113,6 +116,24 @@ class DecisionAgent:
                         line += f" — {link}"
                     lines.append(line)
             sources_text = "\n".join(lines)
+
+        # Объяснение типа рынка
+        if market_type == "binary":
+            market_type_note = (
+                "MARKET TYPE: Binary (Yes/No)\n"
+                "The probabilities show what % of traders are betting on each outcome.\n"
+                "This is NOT a public poll — it reflects trader sentiment and money flow.\n"
+                "Your job is to give an INDEPENDENT AI estimate that may differ significantly."
+            )
+        else:
+            market_type_note = (
+                f"MARKET TYPE: Multiple choice ({len(options)} options)\n"
+                f"OPTIONS: {options_text}\n"
+                "Each probability shows what % of traders are betting on that specific outcome.\n"
+                "This is NOT a public poll — it reflects trader sentiment and money flow.\n"
+                "Your job is to give an INDEPENDENT AI estimate for the most likely outcome.\n"
+                "Pick the single most likely winner and explain why."
+            )
 
         lang_instruction = (
             "Respond ONLY in Russian. Every single word must be in Russian language. "
@@ -130,8 +151,10 @@ TASK: Analyze this prediction market and give an independent, well-reasoned fore
 
 MARKET QUESTION: {question}
 CATEGORY: {category}
-CURRENT MARKET ODDS: {market_probability}
-OPTIONS: {options_text}
+
+{market_type_note}
+
+CURRENT TRADER ODDS: {market_probability}
 
 PRICE TREND DATA:
 {trend_summary}
@@ -153,16 +176,17 @@ RELATED MARKETS:
 
 ANALYSIS RULES:
 1. Base your reasoning STRICTLY on the provided news and data above
-2. DO NOT simply repeat market odds — give your INDEPENDENT view
-3. If news contradicts market odds — explain why
-4. Use trend data and crowd behavior to detect momentum
-5. Reference specific news items when building your argument
-6. Be specific and concrete — avoid vague statements
-7. If no news available — clearly state this and base analysis on market data only
+2. DO NOT simply repeat trader odds — give your INDEPENDENT AI view
+3. For multiple choice markets — pick the single most likely outcome
+4. If news contradicts trader odds — explain why your estimate differs
+5. Use trend data and crowd behavior to detect momentum shifts
+6. Reference specific news items when building your argument
+7. Be specific and concrete — avoid vague statements
+8. If no news available — clearly state this and base analysis on market data only
 
 REQUIRED OUTPUT FORMAT (use exactly these labels):
 
-System Probability: [Your probability estimate, e.g. "Yes — 73%" or "No — 65%"]
+System Probability: [Your probability estimate. For binary: "Yes — 73%". For multiple choice: "Trump — 65%"]
 Confidence: [High / Medium / Low]
 Reasoning: [2-3 sentences based on news and data]
 Main Scenario: [Most likely outcome with news-based evidence]
@@ -260,7 +284,9 @@ Conclusion: [1 sentence summary with your final recommendation]
             value = str(result.get(field, "")).strip()
             if not value:
                 return False
-            if value in {"N/A", "Unknown"} and field in {"reasoning", "main_scenario", "alt_scenario", "conclusion"}:
+            if value in {"N/A", "Unknown"} and field in {
+                "reasoning", "main_scenario", "alt_scenario", "conclusion"
+            }:
                 return False
 
         return True
@@ -295,33 +321,23 @@ Conclusion: [1 sentence summary with your final recommendation]
             news_confidence=news_confidence,
         )
 
-        reasoning_parts = [
-            f"Fallback reasoning for category {category}.",
-            f"Observed market probability: {market_probability}.",
-            f"Trend layer: {trend_summary}.",
-            f"Crowd layer: {crowd_behavior}.",
-            f"External sentiment: {sentiment}.",
-        ]
-
-        if related_markets:
-            reasoning_parts.append(
-                f"Detected {len(related_markets)} related markets that may influence the main outcome."
-            )
-
-        reasoning = " ".join(reasoning_parts)
+        reasoning = (
+            f"Fallback reasoning for {category} market. "
+            f"Market odds: {market_probability}. "
+            f"Trend: {trend_summary}. "
+            f"Sentiment: {sentiment}."
+        )
 
         main_scenario = (
-            f"The current base case favors '{main_option}' because trend, crowd behavior "
-            f"and the available external context lean in that direction."
+            f"Base case favors '{main_option}' based on trend and crowd behavior."
         )
 
         alt_scenario = (
-            "The alternative case remains viable if the current trend weakens, "
-            "if crowd positioning reverses, or if news flow changes materially."
+            "Alternative case if trend weakens or news flow changes materially."
         )
 
         conclusion = (
-            f"System fallback estimate favors '{main_option}' at around {probability_value} "
+            f"Fallback estimate favors '{main_option}' at ~{probability_value} "
             f"with {confidence.lower()} confidence."
         )
 
