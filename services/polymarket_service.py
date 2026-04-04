@@ -1,3 +1,4 @@
+
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,15 +21,12 @@ def extract_slug_from_url(url: str) -> str:
 
         parts = path.split("/")
 
-        # Убираем языковой префикс /ru/ /en/ и т.д.
         if parts and len(parts[0]) == 2:
             parts = parts[1:]
 
-        # /event/EVENT_SLUG/OUTCOME_SLUG — берём EVENT_SLUG
         if len(parts) >= 2 and parts[0] == "event":
             return parts[1]
 
-        # /market/SLUG
         if len(parts) >= 2 and parts[0] == "market":
             return parts[1]
 
@@ -50,10 +48,11 @@ def search_markets_by_slug(slug: str, limit: int = 10) -> List[Dict[str, Any]]:
     return list_markets(search=slug, limit=limit)
 
 
-def list_markets(search: str = "", limit: int = 10) -> List[Dict[str, Any]]:
+def list_markets(search: str = "", limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
     url = f"{GAMMA_BASE_URL}/markets"
     params = {
         "limit": limit,
+        "offset": offset,
         "active": "true",
         "closed": "false",
     }
@@ -79,8 +78,7 @@ def list_markets(search: str = "", limit: int = 10) -> List[Dict[str, Any]]:
 
 def get_primary_market_from_url(url: str) -> Dict[str, Any]:
     slug = extract_slug_from_url(url)
-    
-    # Сначала пробуем найти по slug напрямую через events endpoint
+
     try:
         response = requests.get(
             f"{GAMMA_BASE_URL}/events",
@@ -97,7 +95,6 @@ def get_primary_market_from_url(url: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Fallback на старый поиск
     candidates = search_markets_by_slug(slug, limit=10)
     if not candidates:
         return {}
@@ -533,7 +530,7 @@ def _estimate_acceleration(history: List[Dict[str, Any]]) -> str:
         return ""
 
     first_half = prices[: len(prices) // 2]
-    second_half = prices[len(prices) // 2 :]
+    second_half = prices[len(prices) // 2:]
 
     if not first_half or not second_half:
         return ""
