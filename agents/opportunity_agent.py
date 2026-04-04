@@ -146,7 +146,7 @@ class OpportunityAgent:
             if not prices:
                 return False
 
-            return max(prices) >= 0.90
+            return max(prices) >= 0.85
         except Exception:
             return False
 
