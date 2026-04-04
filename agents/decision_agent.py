@@ -1,4 +1,3 @@
-
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
@@ -26,6 +25,7 @@ class DecisionAgent:
         news_summary = news_data.get("news_summary", "Unknown")
         sentiment = news_data.get("sentiment", "Unknown")
         news_confidence = news_data.get("confidence", "Unknown")
+        sources = news_data.get("sources", [])
 
         prompt = self._build_prompt(
             question=question,
@@ -38,6 +38,7 @@ class DecisionAgent:
             news_summary=news_summary,
             sentiment=sentiment,
             news_confidence=news_confidence,
+            sources=sources,
             lang=lang,
         )
 
@@ -80,6 +81,7 @@ class DecisionAgent:
         news_summary: str,
         sentiment: str,
         news_confidence: str,
+        sources: List[Dict[str, str]] = None,
         lang: str = "en",
     ) -> str:
 
@@ -96,8 +98,25 @@ class DecisionAgent:
             )
         related_text = "\n".join(related_lines) if related_lines else "- No related markets"
 
+        # Форматируем источники новостей
+        sources_text = ""
+        if sources:
+            lines = []
+            for i, s in enumerate(sources[:3], 1):
+                title = s.get("title", "")
+                source = s.get("source", "")
+                published = s.get("published", "")
+                link = s.get("link", "")
+                if title:
+                    line = f"{i}. {title} ({source}, {published})"
+                    if link:
+                        line += f" — {link}"
+                    lines.append(line)
+            sources_text = "\n".join(lines)
+
         lang_instruction = (
-            "Respond ONLY in Russian. Every single word must be in Russian language."
+            "Respond ONLY in Russian. Every single word must be in Russian language. "
+            "All analysis, scenarios, reasoning and conclusion must be in Russian."
             if lang == "ru"
             else "Respond in English."
         )
@@ -107,7 +126,7 @@ You are DeepAlpha — an expert prediction market analyst with deep knowledge of
 
 {lang_instruction}
 
-TASK: Analyze this prediction market and give an independent, well-reasoned forecast.
+TASK: Analyze this prediction market and give an independent, well-reasoned forecast based STRICTLY on the provided news and data.
 
 MARKET QUESTION: {question}
 CATEGORY: {category}
@@ -120,8 +139,11 @@ PRICE TREND DATA:
 CROWD BEHAVIOR:
 {crowd_behavior}
 
-NEWS & CONTEXT:
+NEWS ANALYSIS:
 {news_summary}
+
+TOP NEWS SOURCES:
+{sources_text if sources_text else "No sources available"}
 
 NEWS SENTIMENT: {sentiment}
 NEWS SIGNAL STRENGTH: {news_confidence}
@@ -130,19 +152,20 @@ RELATED MARKETS:
 {related_text}
 
 ANALYSIS RULES:
-1. DO NOT simply repeat the market odds — give your INDEPENDENT view
-2. If market odds are very one-sided (>80%), explain WHY or challenge it
-3. Use trend data and crowd behavior to detect momentum
-4. Use news context to identify catalysts or risks
-5. Be specific and concrete — avoid vague statements
-6. If data is limited, say so clearly but still provide your best estimate
+1. Base your reasoning STRICTLY on the provided news and data above
+2. DO NOT simply repeat market odds — give your INDEPENDENT view
+3. If news contradicts market odds — explain why
+4. Use trend data and crowd behavior to detect momentum
+5. Reference specific news items when building your argument
+6. Be specific and concrete — avoid vague statements
+7. If no news available — clearly state this and base analysis on market data only
 
 REQUIRED OUTPUT FORMAT (use exactly these labels):
 
 System Probability: [Your probability estimate, e.g. "Yes — 73%" or "No — 65%"]
 Confidence: [High / Medium / Low]
-Reasoning: [2-3 sentences explaining your core logic]
-Main Scenario: [Most likely outcome and why]
+Reasoning: [2-3 sentences based on news and data]
+Main Scenario: [Most likely outcome with news-based evidence]
 Alternative Scenario: [What could change the outcome]
 Conclusion: [1 sentence summary with your final recommendation]
 """.strip()
@@ -157,14 +180,16 @@ Conclusion: [1 sentence summary with your final recommendation]
             "Conclusion": "",
         }
 
-        # Также парсим русские варианты
         russian_map = {
             "Вероятность системы": "System Probability",
+            "Системная вероятность": "System Probability",
             "Уверенность": "Confidence",
             "Логика": "Reasoning",
+            "Рассуждение": "Reasoning",
             "Основной сценарий": "Main Scenario",
             "Альтернативный сценарий": "Alternative Scenario",
             "Вывод": "Conclusion",
+            "Заключение": "Conclusion",
         }
 
         current_key = None
@@ -276,7 +301,6 @@ Conclusion: [1 sentence summary with your final recommendation]
             f"Trend layer: {trend_summary}.",
             f"Crowd layer: {crowd_behavior}.",
             f"External sentiment: {sentiment}.",
-            f"News context: {news_summary}.",
         ]
 
         if related_markets:
