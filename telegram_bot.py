@@ -589,27 +589,27 @@ async def opportunity_handler(message: types.Message):
     if lang == "ru":
         status_msg = await message.answer(
             "🧠 Ищу лучший сигнал...\n\n"
-            "⏱ Анализирую 8 рынков параллельно\n"
-            "Обычно занимает 15-30 секунд"
+            "⏱ Анализирую рынки\n"
+            "Обычно занимает 30-60 секунд"
         )
     else:
         status_msg = await message.answer(
             "🧠 Searching for best signal...\n\n"
-            "⏱ Analyzing 8 markets in parallel\n"
-            "Usually takes 15-30 seconds"
+            "⏱ Analyzing markets\n"
+            "Usually takes 30-60 seconds"
         )
 
     try:
         history = get_signal_history(uid)
         agent = OpportunityAgent()
-        result = agent.run(lang=lang, exclude_questions=history)
+        result = agent.run(lang=lang, exclude_questions=history, limit=4)
 
         try:
             await status_msg.delete()
         except Exception:
             pass
 
-        if not result or result.get("opportunity_score", 0) == 0:
+        if not result or result.get("question") == "No strong opportunity found":
             await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
             return
 
