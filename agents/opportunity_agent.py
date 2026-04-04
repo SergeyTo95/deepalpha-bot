@@ -21,13 +21,13 @@ class OpportunityAgent:
         strong_only: bool = False,
         min_score: int = 45,
         lang: str = "en",
+        exclude_questions: list = None,
     ) -> Dict[str, Any]:
-        """Синхронная обёртка — запускает async в отдельном потоке."""
         try:
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 future = pool.submit(
                     asyncio.run,
-                    self._run_async(limit, category_filter, strong_only, min_score, lang)
+                    self._run_async(limit, category_filter, strong_only, min_score, lang, exclude_questions or [])
                 )
                 return future.result(timeout=120)
         except concurrent.futures.TimeoutError:
@@ -44,11 +44,21 @@ class OpportunityAgent:
         strong_only: bool = False,
         min_score: int = 45,
         lang: str = "en",
+        exclude_questions: list = None,
     ) -> Dict[str, Any]:
         raw_markets = self._get_candidate_markets(
             limit=limit,
             category_filter=category_filter,
+            exclude_questions=exclude_questions or [],
         )
+
+        if not raw_markets:
+            # Если все рынки в blacklist — сбрасываем и берём любые
+            raw_markets = self._get_candidate_markets(
+                limit=limit,
+                category_filter=category_filter,
+                exclude_questions=[],
+            )
 
         if not raw_markets:
             return self._fallback("No active candidate markets found.")
@@ -65,7 +75,6 @@ class OpportunityAgent:
         if not market_contexts:
             return self._fallback("No viable markets after filtering.")
 
-        # Параллельно анализируем все рынки
         tasks = [
             self._analyze_market(raw_market, market_data, lang)
             for raw_market, market_data in market_contexts
@@ -238,8 +247,22 @@ class OpportunityAgent:
                 "conclusion": "Unavailable",
             }
 
-    def _get_candidate_markets(self, limit: int = 8, category_filter: str = "All") -> List[Dict[str, Any]]:
-        markets = list_markets(limit=max(limit * 5, 30))
+    def _get_candidate_markets(
+        self,
+        limit: int = 8,
+        category_filter: str = "All",
+        exclude_questions: list = None,
+    ) -> List[Dict[str, Any]]:
+        exclude = set(q.lower() for q in (exclude_questions or []))
+
+        # Случайный offset чтобы каждый раз разные рынки
+        random_offset = random.randint(0, 100)
+        markets = list_markets(limit=max(limit * 5, 30), offset=random_offset)
+
+        # Если мало рынков — добавляем без offset
+        if len(markets) < limit:
+            markets += list_markets(limit=max(limit * 5, 30))
+
         random.shuffle(markets)
 
         filtered = []
@@ -248,6 +271,8 @@ class OpportunityAgent:
             if not question:
                 continue
             if self._looks_like_noise(question):
+                continue
+            if question.lower() in exclude:
                 continue
             if category_filter != "All":
                 detected = self._detect_category(question)
