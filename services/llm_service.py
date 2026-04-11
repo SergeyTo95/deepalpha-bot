@@ -1,5 +1,5 @@
+
 import os
-import time
 import requests
 
 from db.database import get_setting
@@ -33,15 +33,17 @@ def _get_active_model() -> str:
 def _get_providers(model: str) -> list:
     providers = []
 
+    # Основные ключи
     for i in range(1, 56):
         key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
             providers.append({"key": key, "model": model})
 
+    # Fallback — та же модель gemini-2.0-flash
     for i in range(1, 56):
         key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
-            providers.append({"key": key, "model": "gemini-2.0-flash-lite"})
+            providers.append({"key": key, "model": "gemini-2.0-flash"})
 
     return providers
 
@@ -54,9 +56,16 @@ def generate_text(prompt: str, model: str = "") -> str:
         print("LLM ERROR: No API keys configured")
         return ""
 
+    seen = set()
     for provider in providers:
         key = provider["key"]
         mdl = provider["model"]
+
+        # Не повторяем одну и ту же комбинацию
+        combo = f"{key}_{mdl}"
+        if combo in seen:
+            continue
+        seen.add(combo)
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -82,6 +91,10 @@ def generate_text(prompt: str, model: str = "") -> str:
 
             if response.status_code == 429:
                 print(f"LLM: quota exceeded for key ...{key[-6:]}, trying next")
+                continue
+
+            if response.status_code == 404:
+                print(f"LLM: model {mdl} not available, trying next")
                 continue
 
             if response.status_code != 200:
@@ -124,11 +137,17 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
         return ""
 
     timeout = aiohttp.ClientTimeout(total=LLM_TIMEOUT)
+    seen = set()
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for provider in providers:
             key = provider["key"]
             mdl = provider["model"]
+
+            combo = f"{key}_{mdl}"
+            if combo in seen:
+                continue
+            seen.add(combo)
 
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -149,7 +168,7 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
                 async with session.post(url, headers=headers, json=payload) as response:
                     print(f"LLM ASYNC: {response.status} | model: {mdl} | key: ...{key[-6:]}")
 
-                    if response.status == 429:
+                    if response.status in (429, 404):
                         continue
 
                     if response.status != 200:
