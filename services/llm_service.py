@@ -1,4 +1,3 @@
-
 import os
 import requests
 
@@ -12,7 +11,7 @@ def _safe_env(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
-GEMINI_MODEL_DEFAULT = _safe_env("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL_DEFAULT = _safe_env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_MODEL_NEWS_DEFAULT = _safe_env("GEMINI_MODEL_NEWS", GEMINI_MODEL_DEFAULT)
 GEMINI_MODEL_DECISION_DEFAULT = _safe_env("GEMINI_MODEL_DECISION", GEMINI_MODEL_DEFAULT)
 
@@ -33,17 +32,16 @@ def _get_active_model() -> str:
 def _get_providers(model: str) -> list:
     providers = []
 
-    # Основные ключи
     for i in range(1, 56):
         key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
             providers.append({"key": key, "model": model})
 
-    # Fallback — та же модель gemini-2.0-flash
+    # Fallback на ту же модель
     for i in range(1, 56):
         key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
-            providers.append({"key": key, "model": "gemini-2.0-flash"})
+            providers.append({"key": key, "model": "gemini-2.5-flash"})
 
     return providers
 
@@ -61,7 +59,6 @@ def generate_text(prompt: str, model: str = "") -> str:
         key = provider["key"]
         mdl = provider["model"]
 
-        # Не повторяем одну и ту же комбинацию
         combo = f"{key}_{mdl}"
         if combo in seen:
             continue
