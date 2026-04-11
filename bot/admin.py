@@ -18,10 +18,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 MODELS = {
     "gemini": {
-        "name": "Gemini 2.0 Flash",
-        "model": "gemini-2.0-flash",
-        "news": "gemini-2.0-flash",
-        "decision": "gemini-2.0-flash",
+        "name": "Gemini 2.5 Flash",
+        "model": "gemini-2.5-flash",
+        "news": "gemini-2.5-flash",
+        "decision": "gemini-2.5-flash",
     },
     "gemini_pro": {
         "name": "Gemini 2.5 Pro",
@@ -30,10 +30,10 @@ MODELS = {
         "decision": "gemini-2.5-pro",
     },
     "gemini_lite": {
-        "name": "Gemini 2.0 Flash Lite",
-        "model": "gemini-2.0-flash-lite",
-        "news": "gemini-2.0-flash-lite",
-        "decision": "gemini-2.0-flash-lite",
+        "name": "Gemini 1.5 Flash",
+        "model": "gemini-1.5-flash",
+        "news": "gemini-1.5-flash",
+        "decision": "gemini-1.5-flash",
     },
 }
 
