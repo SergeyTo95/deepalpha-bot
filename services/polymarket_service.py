@@ -1,4 +1,3 @@
-
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -91,7 +90,11 @@ def get_primary_market_from_url(url: str) -> Dict[str, Any]:
             for event in events:
                 markets = event.get("markets", [])
                 if markets:
-                    return markets[0]
+                    # Добавляем eventSlug к маркету
+                    market = markets[0]
+                    if not market.get("eventSlug"):
+                        market["eventSlug"] = event.get("slug", "")
+                    return market
     except Exception:
         pass
 
@@ -140,6 +143,32 @@ def find_related_markets(question: str, category_hint: str = "", limit: int = 5)
     return result
 
 
+def build_market_url(raw_market: Dict[str, Any]) -> str:
+    """Строит правильный URL для рынка Polymarket."""
+    # Сначала берём готовый URL из API
+    url = raw_market.get("url", "")
+    if url and url.startswith("https://"):
+        return url
+
+    slug = raw_market.get("slug", "")
+    event_slug = raw_market.get("eventSlug", "") or raw_market.get("event_slug", "")
+
+    # Пробуем получить eventSlug из вложенного event
+    if not event_slug:
+        event = raw_market.get("event", {})
+        if isinstance(event, dict):
+            event_slug = event.get("slug", "")
+
+    if event_slug and slug:
+        return f"https://polymarket.com/event/{event_slug}/{slug}"
+    elif event_slug:
+        return f"https://polymarket.com/event/{event_slug}"
+    elif slug:
+        return f"https://polymarket.com/event/{slug}"
+
+    return ""
+
+
 def normalize_market_data(raw_market: Dict[str, Any]) -> Dict[str, Any]:
     if not raw_market:
         return {}
@@ -169,9 +198,13 @@ def normalize_market_data(raw_market: Dict[str, Any]) -> Dict[str, Any]:
 
     trend_data = get_market_trend_context(primary_token_id) if primary_token_id else _empty_trend_context()
 
+    # Строим правильный URL
+    market_url = build_market_url(raw_market)
+
     return {
         "id": raw_market.get("id", ""),
         "slug": slug,
+        "url": market_url,
         "question": question,
         "market_probability": market_probability,
         "primary_token_id": primary_token_id,
