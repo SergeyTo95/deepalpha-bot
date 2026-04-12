@@ -1,3 +1,4 @@
+
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
@@ -49,6 +50,8 @@ class PricingStates(StatesGroup):
     waiting_subscription_days = State()
     waiting_sub_daily_analyses = State()
     waiting_sub_daily_opportunities = State()
+    waiting_free_trial_analyses = State()
+    waiting_free_trial_opportunities = State()
 
 
 class PackageStates(StatesGroup):
@@ -109,6 +112,11 @@ def pricing_kb():
     sub_days = get_setting("subscription_days", "30")
     sub_analyses = get_setting("sub_daily_analyses", "15")
     sub_opp = get_setting("sub_daily_opportunities", "3")
+    free_trial = get_setting("free_trial_enabled", "on")
+    free_trial_label = "✅ Пробный период: ON" if free_trial == "on" else "❌ Пробный период: OFF"
+    free_analyses = get_setting("free_trial_analyses", "1")
+    free_opp = get_setting("free_trial_opportunities", "1")
+
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton(paid_label, callback_data="pricing_toggle_paid"),
@@ -120,6 +128,10 @@ def pricing_kb():
         InlineKeyboardButton(f"📅 Дней подписки: {sub_days}", callback_data="pricing_set_sub_days"),
         InlineKeyboardButton(f"📊 Анализов в день: {sub_analyses}", callback_data="pricing_set_sub_analyses"),
         InlineKeyboardButton(f"💡 Сигналов в день: {sub_opp}", callback_data="pricing_set_sub_opp"),
+        InlineKeyboardButton("─── 🎁 Пробный период ───", callback_data="pricing_noop"),
+        InlineKeyboardButton(free_trial_label, callback_data="pricing_toggle_free_trial"),
+        InlineKeyboardButton(f"📊 Бесплатных анализов: {free_analyses}", callback_data="pricing_set_free_analyses"),
+        InlineKeyboardButton(f"💡 Бесплатных сигналов: {free_opp}", callback_data="pricing_set_free_opp"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -135,6 +147,10 @@ def pricing_text():
     sub_days = get_setting("subscription_days", "30")
     sub_analyses = get_setting("sub_daily_analyses", "15")
     sub_opp = get_setting("sub_daily_opportunities", "3")
+    free_trial = get_setting("free_trial_enabled", "on")
+    free_analyses = get_setting("free_trial_analyses", "1")
+    free_opp = get_setting("free_trial_opportunities", "1")
+
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
@@ -144,7 +160,10 @@ def pricing_text():
         f"Реферальный %: {ref_percent}%\n\n"
         f"🔔 Подписка: {sub_price} TON / {sub_days} дней\n"
         f"📊 Анализов в день: {sub_analyses}\n"
-        f"💡 Сигналов в день: {sub_opp}"
+        f"💡 Сигналов в день: {sub_opp}\n\n"
+        f"🎁 Пробный период: {'ON' if free_trial == 'on' else 'OFF'}\n"
+        f"Бесплатных анализов: {free_analyses}\n"
+        f"Бесплатных сигналов: {free_opp}"
     )
 
 
@@ -203,10 +222,11 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
 
 
 def format_user_info(user: dict) -> str:
-    from db.database import is_subscribed, get_subscription_until
+    from db.database import is_subscribed, get_subscription_until, get_free_trial_status
     subscribed = is_subscribed(user["user_id"])
     sub_until = get_subscription_until(user["user_id"])
     sub_text = f"✅ до {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
+    trial = get_free_trial_status(user["user_id"])
     return (
         f"👤 Пользователь\n\n"
         f"ID: {user['user_id']}\n"
@@ -220,6 +240,8 @@ def format_user_info(user: dict) -> str:
         f"Сигналов: {user['total_opportunities']}\n"
         f"Рефералов: {user.get('total_referrals', 0)}\n"
         f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} TON\n"
+        f"🎁 Пробных анализов: {trial['analyses_used']}/{trial['analyses_limit']}\n"
+        f"🎁 Пробных сигналов: {trial['opportunities_used']}/{trial['opportunities_limit']}\n"
         f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
     )
 
@@ -452,6 +474,10 @@ def register_admin(dp: Dispatcher):
     async def pricing_menu(callback: types.CallbackQuery):
         await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
 
+    @dp.callback_query_handler(lambda c: c.data == "pricing_noop")
+    async def pricing_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
     @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_paid")
     async def toggle_paid(callback: types.CallbackQuery):
         current = get_setting("paid_mode", "off")
@@ -460,10 +486,60 @@ def register_admin(dp: Dispatcher):
         await callback.answer(f"Paid mode: {new_val.upper()}")
         await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
 
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_free_trial")
+    async def toggle_free_trial(callback: types.CallbackQuery):
+        current = get_setting("free_trial_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("free_trial_enabled", new_val)
+        await callback.answer(f"Пробный период: {new_val.upper()}")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_free_analyses")
+    async def set_free_analyses(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_free_trial_analyses.set()
+        current = get_setting("free_trial_analyses", "1")
+        await callback.message.answer(
+            f"Текущий лимит бесплатных анализов: {current}\n\nВведи новый лимит (например: 1):"
+        )
+
+    @dp.message_handler(state=PricingStates.waiting_free_trial_analyses)
+    async def save_free_analyses(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 0 or val > 100:
+                await message.answer("❌ Введи число от 0 до 100")
+                return
+            set_setting("free_trial_analyses", str(val))
+            await state.finish()
+            await message.answer(f"✅ Бесплатных анализов: {val}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_free_opp")
+    async def set_free_opp(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_free_trial_opportunities.set()
+        current = get_setting("free_trial_opportunities", "1")
+        await callback.message.answer(
+            f"Текущий лимит бесплатных сигналов: {current}\n\nВведи новый лимит (например: 1):"
+        )
+
+    @dp.message_handler(state=PricingStates.waiting_free_trial_opportunities)
+    async def save_free_opp(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 0 or val > 100:
+                await message.answer("❌ Введи число от 0 до 100")
+                return
+            set_setting("free_trial_opportunities", str(val))
+            await state.finish()
+            await message.answer(f"✅ Бесплатных сигналов: {val}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_token")
     async def set_token_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_token_price.set()
-        await callback.message.answer("Введи цену одного токена в TON (например: 0.1):")
+        await callback.message.answer("Введи цену одного токена в TON (например: 0.05):")
 
     @dp.message_handler(state=PricingStates.waiting_token_price)
     async def save_token_price(message: types.Message, state: FSMContext):
@@ -473,7 +549,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Цена токена: {message.text.strip()} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 0.1")
+            await message.answer("❌ Введи число, например: 0.05")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_analysis")
     async def set_analysis_price(callback: types.CallbackQuery, state: FSMContext):
@@ -488,7 +564,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Цена анализа: {message.text.strip()} токенов")
         except ValueError:
-            await message.answer("❌ Введи целое число, например: 10")
+            await message.answer("❌ Введи целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_opportunity")
     async def set_opportunity_price(callback: types.CallbackQuery, state: FSMContext):
@@ -503,13 +579,13 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Цена сигнала: {message.text.strip()} токенов")
         except ValueError:
-            await message.answer("❌ Введи целое число, например: 20")
+            await message.answer("❌ Введи целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_referral")
     async def set_referral_percent(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_referral_percent.set()
         current = get_setting("referral_percent", "10")
-        await callback.message.answer(f"Текущий реферальный %: {current}%\n\nВведи новый % (например: 10):")
+        await callback.message.answer(f"Текущий реферальный %: {current}%\n\nВведи новый %:")
 
     @dp.message_handler(state=PricingStates.waiting_referral_percent)
     async def save_referral_percent(message: types.Message, state: FSMContext):
@@ -522,7 +598,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Реферальный %: {val}%")
         except ValueError:
-            await message.answer("❌ Введи число, например: 10")
+            await message.answer("❌ Введи число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_price")
     async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
@@ -544,7 +620,7 @@ def register_admin(dp: Dispatcher):
     async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_days.set()
         current = get_setting("subscription_days", "30")
-        await callback.message.answer(f"Текущий срок: {current} дней\n\nВведи новый срок (например: 30):")
+        await callback.message.answer(f"Текущий срок: {current} дней\n\nВведи новый срок:")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_days)
     async def save_sub_days(message: types.Message, state: FSMContext):
@@ -557,7 +633,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Срок подписки: {val} дней")
         except ValueError:
-            await message.answer("❌ Введи целое число, например: 30")
+            await message.answer("❌ Введи целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_analyses")
     async def set_sub_analyses(callback: types.CallbackQuery, state: FSMContext):
@@ -656,7 +732,7 @@ def register_admin(dp: Dispatcher):
                 await message.answer("❌ Введи число от 0 до 99")
                 return
             data = await state.get_data()
-            package_id = create_token_package(
+            create_token_package(
                 name=data["name"],
                 tokens=data["tokens"],
                 price_ton=data["price"],
@@ -698,12 +774,9 @@ def register_admin(dp: Dispatcher):
             await callback.answer("Пакет не найден")
             return
         new_active = not package["is_active"]
-        update_token_package(
-            pkg_id, package["name"], package["tokens"],
-            package["price_ton"], package["discount_percent"], new_active
-        )
+        update_token_package(pkg_id, package["name"], package["tokens"],
+                             package["price_ton"], package["discount_percent"], new_active)
         await callback.answer("✅ Статус изменён")
-        package["is_active"] = new_active
         discount_text = f" (скидка {package['discount_percent']}%)" if package["discount_percent"] > 0 else ""
         text = (
             f"📦 Редактирование пакета\n\n"
@@ -1069,9 +1142,7 @@ def register_admin(dp: Dispatcher):
     async def edit_prompt_start(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_system_prompt.set()
         current = get_setting("system_prompt", "")
-        await callback.message.answer(
-            f"Текущий промпт:\n{current}\n\nВведи новый системный промпт:"
-        )
+        await callback.message.answer(f"Текущий промпт:\n{current}\n\nВведи новый системный промпт:")
 
     @dp.message_handler(state=SystemStates.waiting_system_prompt)
     async def save_system_prompt(message: types.Message, state: FSMContext):
@@ -1152,9 +1223,7 @@ def register_admin(dp: Dispatcher):
     async def set_notify_hour_start(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_notify_hour.set()
         current = get_setting("notification_hour", "9")
-        await callback.message.answer(
-            f"Текущее время рассылки: {current}:00 UTC\n\nВведи час (0-23):"
-        )
+        await callback.message.answer(f"Текущее время рассылки: {current}:00 UTC\n\nВведи час (0-23):")
 
     @dp.message_handler(state=SystemStates.waiting_notify_hour)
     async def save_notify_hour(message: types.Message, state: FSMContext):
