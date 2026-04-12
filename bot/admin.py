@@ -12,6 +12,8 @@ from db.database import (
     add_tokens, set_tokens, is_user_banned, is_user_vip,
     get_user_analyses, get_connection, get_referrals,
     get_top_referrers,
+    get_token_packages, get_token_package,
+    create_token_package, update_token_package, delete_token_package,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -49,6 +51,17 @@ class PricingStates(StatesGroup):
     waiting_sub_daily_opportunities = State()
 
 
+class PackageStates(StatesGroup):
+    waiting_name = State()
+    waiting_tokens = State()
+    waiting_price = State()
+    waiting_discount = State()
+    editing_name = State()
+    editing_tokens = State()
+    editing_price = State()
+    editing_discount = State()
+
+
 class UserStates(StatesGroup):
     waiting_find_user = State()
     waiting_gift_tokens = State()
@@ -70,6 +83,7 @@ def admin_main_kb():
     kb.add(
         InlineKeyboardButton("🤖 AI Settings", callback_data="admin_ai"),
         InlineKeyboardButton("💰 Pricing", callback_data="admin_pricing"),
+        InlineKeyboardButton("📦 Пакеты токенов", callback_data="admin_packages"),
         InlineKeyboardButton("👤 Users", callback_data="admin_users"),
         InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
@@ -78,7 +92,7 @@ def admin_main_kb():
 
 
 def ai_menu_kb():
-    current = get_setting("active_model", "gemini-2.0-flash")
+    current = get_setting("active_model", "gemini-2.5-flash")
     kb = InlineKeyboardMarkup(row_width=1)
     for key, info in MODELS.items():
         label = f"✅ {info['name']}" if info["model"] == current else info["name"]
@@ -132,6 +146,38 @@ def pricing_text():
         f"📊 Анализов в день: {sub_analyses}\n"
         f"💡 Сигналов в день: {sub_opp}"
     )
+
+
+def packages_kb():
+    packages = get_token_packages(active_only=False)
+    kb = InlineKeyboardMarkup(row_width=1)
+    for p in packages:
+        status = "✅" if p["is_active"] else "❌"
+        discount = f" (-{p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
+        kb.add(InlineKeyboardButton(
+            f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}",
+            callback_data=f"pkg_edit_{p['id']}"
+        ))
+    kb.add(InlineKeyboardButton("➕ Добавить пакет", callback_data="pkg_add"))
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+    return kb
+
+
+def package_edit_kb(package_id: int, is_active: bool):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("✏️ Название", callback_data=f"pkg_name_{package_id}"),
+        InlineKeyboardButton("🔢 Кол-во токенов", callback_data=f"pkg_tokens_{package_id}"),
+        InlineKeyboardButton("💎 Цена TON", callback_data=f"pkg_price_{package_id}"),
+        InlineKeyboardButton("🏷 Скидка %", callback_data=f"pkg_discount_{package_id}"),
+        InlineKeyboardButton(
+            "❌ Деактивировать" if is_active else "✅ Активировать",
+            callback_data=f"pkg_toggle_{package_id}"
+        ),
+        InlineKeyboardButton("🗑 Удалить", callback_data=f"pkg_delete_{package_id}"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_packages"),
+    )
+    return kb
 
 
 def user_kb(user_id: int) -> InlineKeyboardMarkup:
@@ -189,58 +235,41 @@ def get_analytics_data() -> dict:
 
     cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE %s", (f"{today}%",))
     analyses_today = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at LIKE %s", (f"{yesterday}%",))
     analyses_yesterday = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM analyses WHERE created_at >= %s", (week_ago,))
     analyses_week = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at LIKE %s", (f"{today}%",))
     opp_today = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM opportunities WHERE created_at >= %s", (week_ago,))
     opp_week = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE %s", (f"{today}%",))
     new_users_today = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= %s", (week_ago,))
     new_users_week = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
     banned_users = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_vip = 1")
     vip_users = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM analyses")
     total_analyses = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM opportunities")
     total_opp = cursor.fetchone()[0]
-
     cursor.execute("SELECT COALESCE(SUM(ton_amount), 0) FROM transactions")
     total_ton = cursor.fetchone()[0]
-
     cursor.execute("SELECT COALESCE(SUM(referral_bonus_ton), 0) FROM transactions")
     total_referral_ton = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
     total_referred = cursor.fetchone()[0]
-
     cursor.execute("SELECT COUNT(*) FROM users WHERE subscription_until > %s", (now,))
     total_subscribed = cursor.fetchone()[0]
-
     cursor.execute("""
     SELECT question, COUNT(*) as cnt FROM analyses
     GROUP BY question ORDER BY cnt DESC LIMIT 3
     """)
     top_markets = cursor.fetchall()
-
     conn.close()
 
     return {
@@ -307,6 +336,8 @@ def get_db_stats() -> dict:
     settings = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM transactions")
     transactions = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM token_packages")
+    packages = cursor.fetchone()[0]
     conn.close()
     return {
         "analyses": analyses,
@@ -314,6 +345,7 @@ def get_db_stats() -> dict:
         "users": users,
         "settings": settings,
         "transactions": transactions,
+        "packages": packages,
         "db_size_kb": "PostgreSQL",
     }
 
@@ -393,7 +425,7 @@ def register_admin(dp: Dispatcher):
     # === AI ===
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
     async def ai_menu(callback: types.CallbackQuery):
-        current = get_setting("active_model", "gemini-2.0-flash")
+        current = get_setting("active_model", "gemini-2.5-flash")
         await callback.message.edit_text(
             f"🤖 AI Settings\n\nТекущая модель: {current}",
             reply_markup=ai_menu_kb()
@@ -496,7 +528,7 @@ def register_admin(dp: Dispatcher):
     async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_price.set()
         current = get_setting("subscription_price_ton", "1")
-        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 1):")
+        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 1.55):")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_price)
     async def save_sub_price(message: types.Message, state: FSMContext):
@@ -506,7 +538,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Цена подписки: {message.text.strip()} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 1")
+            await message.answer("❌ Введи число, например: 1.55")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_days")
     async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
@@ -564,6 +596,229 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Лимит сигналов: {val}/день")
         except ValueError:
             await message.answer("❌ Введи целое число")
+
+    # === PACKAGES ===
+    @dp.callback_query_handler(lambda c: c.data == "admin_packages")
+    async def packages_menu(callback: types.CallbackQuery):
+        packages = get_token_packages(active_only=False)
+        text = "📦 Пакеты токенов\n\n"
+        if packages:
+            for p in packages:
+                status = "✅" if p["is_active"] else "❌"
+                discount = f" (скидка {p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
+                text += f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}\n"
+        else:
+            text += "Пакетов нет"
+        await callback.message.edit_text(text, reply_markup=packages_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pkg_add")
+    async def pkg_add_start(callback: types.CallbackQuery, state: FSMContext):
+        await PackageStates.waiting_name.set()
+        await callback.message.answer("Введи название пакета (например: Стартовый):")
+
+    @dp.message_handler(state=PackageStates.waiting_name)
+    async def pkg_add_name(message: types.Message, state: FSMContext):
+        await state.update_data(name=message.text.strip())
+        await PackageStates.waiting_tokens.set()
+        await message.answer("Введи количество токенов в пакете (например: 50):")
+
+    @dp.message_handler(state=PackageStates.waiting_tokens)
+    async def pkg_add_tokens(message: types.Message, state: FSMContext):
+        try:
+            tokens = int(message.text.strip())
+            if tokens < 1:
+                await message.answer("❌ Минимум 1 токен")
+                return
+            await state.update_data(tokens=tokens)
+            await PackageStates.waiting_price.set()
+            await message.answer("Введи цену пакета в TON (например: 1.55):")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.message_handler(state=PackageStates.waiting_price)
+    async def pkg_add_price(message: types.Message, state: FSMContext):
+        try:
+            price = float(message.text.strip().replace(",", "."))
+            if price <= 0:
+                await message.answer("❌ Цена должна быть больше 0")
+                return
+            await state.update_data(price=price)
+            await PackageStates.waiting_discount.set()
+            await message.answer("Введи скидку в % (0 если без скидки, например: 20):")
+        except ValueError:
+            await message.answer("❌ Введи число, например: 1.55")
+
+    @dp.message_handler(state=PackageStates.waiting_discount)
+    async def pkg_add_discount(message: types.Message, state: FSMContext):
+        try:
+            discount = int(message.text.strip())
+            if discount < 0 or discount > 99:
+                await message.answer("❌ Введи число от 0 до 99")
+                return
+            data = await state.get_data()
+            package_id = create_token_package(
+                name=data["name"],
+                tokens=data["tokens"],
+                price_ton=data["price"],
+                discount_percent=discount,
+            )
+            await state.finish()
+            discount_text = f" (скидка {discount}%)" if discount > 0 else ""
+            await message.answer(
+                f"✅ Пакет создан!\n\n"
+                f"📦 {data['name']}\n"
+                f"Токены: {data['tokens']}\n"
+                f"Цена: {data['price']} TON{discount_text}"
+            )
+        except ValueError:
+            await message.answer("❌ Введи целое число от 0 до 99")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_edit_"))
+    async def pkg_edit(callback: types.CallbackQuery):
+        pkg_id = int(callback.data.replace("pkg_edit_", ""))
+        package = get_token_package(pkg_id)
+        if not package:
+            await callback.answer("Пакет не найден")
+            return
+        discount_text = f" (скидка {package['discount_percent']}%)" if package["discount_percent"] > 0 else ""
+        text = (
+            f"📦 Редактирование пакета\n\n"
+            f"Название: {package['name']}\n"
+            f"Токены: {package['tokens']}\n"
+            f"Цена: {package['price_ton']} TON{discount_text}\n"
+            f"Статус: {'✅ Активен' if package['is_active'] else '❌ Неактивен'}"
+        )
+        await callback.message.edit_text(text, reply_markup=package_edit_kb(pkg_id, package["is_active"]))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_toggle_"))
+    async def pkg_toggle(callback: types.CallbackQuery):
+        pkg_id = int(callback.data.replace("pkg_toggle_", ""))
+        package = get_token_package(pkg_id)
+        if not package:
+            await callback.answer("Пакет не найден")
+            return
+        new_active = not package["is_active"]
+        update_token_package(
+            pkg_id, package["name"], package["tokens"],
+            package["price_ton"], package["discount_percent"], new_active
+        )
+        await callback.answer("✅ Статус изменён")
+        package["is_active"] = new_active
+        discount_text = f" (скидка {package['discount_percent']}%)" if package["discount_percent"] > 0 else ""
+        text = (
+            f"📦 Редактирование пакета\n\n"
+            f"Название: {package['name']}\n"
+            f"Токены: {package['tokens']}\n"
+            f"Цена: {package['price_ton']} TON{discount_text}\n"
+            f"Статус: {'✅ Активен' if new_active else '❌ Неактивен'}"
+        )
+        await callback.message.edit_text(text, reply_markup=package_edit_kb(pkg_id, new_active))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_delete_"))
+    async def pkg_delete(callback: types.CallbackQuery):
+        pkg_id = int(callback.data.replace("pkg_delete_", ""))
+        delete_token_package(pkg_id)
+        await callback.answer("🗑 Пакет удалён")
+        packages = get_token_packages(active_only=False)
+        text = "📦 Пакеты токенов\n\n"
+        if packages:
+            for p in packages:
+                status = "✅" if p["is_active"] else "❌"
+                discount = f" (скидка {p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
+                text += f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}\n"
+        else:
+            text += "Пакетов нет"
+        await callback.message.edit_text(text, reply_markup=packages_kb())
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_name_"))
+    async def pkg_edit_name(callback: types.CallbackQuery, state: FSMContext):
+        pkg_id = int(callback.data.replace("pkg_name_", ""))
+        await state.update_data(pkg_id=pkg_id)
+        await PackageStates.editing_name.set()
+        await callback.message.answer("Введи новое название пакета:")
+
+    @dp.message_handler(state=PackageStates.editing_name)
+    async def pkg_save_name(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        pkg_id = data["pkg_id"]
+        package = get_token_package(pkg_id)
+        if package:
+            update_token_package(pkg_id, message.text.strip(), package["tokens"],
+                                 package["price_ton"], package["discount_percent"], package["is_active"])
+        await state.finish()
+        await message.answer(f"✅ Название изменено: {message.text.strip()}")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_tokens_"))
+    async def pkg_edit_tokens(callback: types.CallbackQuery, state: FSMContext):
+        pkg_id = int(callback.data.replace("pkg_tokens_", ""))
+        await state.update_data(pkg_id=pkg_id)
+        await PackageStates.editing_tokens.set()
+        await callback.message.answer("Введи новое количество токенов:")
+
+    @dp.message_handler(state=PackageStates.editing_tokens)
+    async def pkg_save_tokens(message: types.Message, state: FSMContext):
+        try:
+            tokens = int(message.text.strip())
+            data = await state.get_data()
+            pkg_id = data["pkg_id"]
+            package = get_token_package(pkg_id)
+            if package:
+                update_token_package(pkg_id, package["name"], tokens,
+                                     package["price_ton"], package["discount_percent"], package["is_active"])
+            await state.finish()
+            await message.answer(f"✅ Токенов в пакете: {tokens}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_price_"))
+    async def pkg_edit_price(callback: types.CallbackQuery, state: FSMContext):
+        pkg_id = int(callback.data.replace("pkg_price_", ""))
+        await state.update_data(pkg_id=pkg_id)
+        await PackageStates.editing_price.set()
+        await callback.message.answer("Введи новую цену в TON (например: 1.55):")
+
+    @dp.message_handler(state=PackageStates.editing_price)
+    async def pkg_save_price(message: types.Message, state: FSMContext):
+        try:
+            price = float(message.text.strip().replace(",", "."))
+            if price <= 0:
+                await message.answer("❌ Цена должна быть больше 0")
+                return
+            data = await state.get_data()
+            pkg_id = data["pkg_id"]
+            package = get_token_package(pkg_id)
+            if package:
+                update_token_package(pkg_id, package["name"], package["tokens"],
+                                     price, package["discount_percent"], package["is_active"])
+            await state.finish()
+            await message.answer(f"✅ Цена пакета: {price} TON")
+        except ValueError:
+            await message.answer("❌ Введи число, например: 1.55")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pkg_discount_"))
+    async def pkg_edit_discount(callback: types.CallbackQuery, state: FSMContext):
+        pkg_id = int(callback.data.replace("pkg_discount_", ""))
+        await state.update_data(pkg_id=pkg_id)
+        await PackageStates.editing_discount.set()
+        await callback.message.answer("Введи скидку в % (0 если без скидки):")
+
+    @dp.message_handler(state=PackageStates.editing_discount)
+    async def pkg_save_discount(message: types.Message, state: FSMContext):
+        try:
+            discount = int(message.text.strip())
+            if discount < 0 or discount > 99:
+                await message.answer("❌ Введи число от 0 до 99")
+                return
+            data = await state.get_data()
+            pkg_id = data["pkg_id"]
+            package = get_token_package(pkg_id)
+            if package:
+                update_token_package(pkg_id, package["name"], package["tokens"],
+                                     package["price_ton"], discount, package["is_active"])
+            await state.finish()
+            await message.answer(f"✅ Скидка: {discount}%")
+        except ValueError:
+            await message.answer("❌ Введи целое число от 0 до 99")
 
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
@@ -853,6 +1108,7 @@ def register_admin(dp: Dispatcher):
             f"Сигналов: {stats['opportunities']}\n"
             f"Пользователей: {stats['users']}\n"
             f"Транзакций: {stats['transactions']}\n"
+            f"Пакетов токенов: {stats['packages']}\n"
             f"Настроек: {stats['settings']}"
         )
         kb = InlineKeyboardMarkup()
