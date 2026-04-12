@@ -44,16 +44,28 @@
         .sub-price { font-size: 32px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 16px; }
         .sub-feature { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 14px; color: rgba(255,255,255,0.8); border-bottom: 1px solid rgba(255,255,255,0.06); }
         .sub-feature:last-child { border-bottom: none; }
-        .amount-selector { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
-        .amount-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 14px; }
-        .amount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-        .amount-btn { background: rgba(98,54,255,0.1); border: 1px solid rgba(98,54,255,0.3); border-radius: 12px; padding: 12px 8px; text-align: center; cursor: pointer; transition: all 0.2s; }
-        .amount-btn.active { background: rgba(98,54,255,0.3); border-color: #6236ff; box-shadow: 0 0 15px rgba(98,54,255,0.3); }
-        .amount-btn-ton { font-size: 16px; font-weight: 700; color: #fff; }
-        .amount-btn-tokens { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+
+        /* Пакеты токенов */
+        .packages-section { margin-bottom: 16px; }
+        .packages-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 12px; }
+        .package-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+        .package-card.active { background: rgba(98,54,255,0.2); border-color: #6236ff; box-shadow: 0 0 20px rgba(98,54,255,0.3); }
+        .package-card.popular { border-color: rgba(200,80,192,0.5); }
+        .popular-badge { position: absolute; top: 12px; right: 12px; background: linear-gradient(135deg, #6236ff, #c850c0); border-radius: 8px; padding: 3px 8px; font-size: 11px; font-weight: 700; }
+        .package-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .package-name { font-size: 16px; font-weight: 700; color: #fff; }
+        .package-price { font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .package-bottom { display: flex; justify-content: space-between; align-items: center; }
+        .package-tokens { font-size: 14px; color: rgba(255,255,255,0.6); }
+        .package-discount { font-size: 12px; font-weight: 700; color: #4ade80; background: rgba(74,222,128,0.15); border-radius: 6px; padding: 2px 8px; }
+        .package-per-token { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 4px; }
+
+        .custom-amount-section { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+        .custom-amount-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
         .custom-input { width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 12px 16px; color: #fff; font-size: 16px; outline: none; transition: border-color 0.2s; }
         .custom-input:focus { border-color: rgba(98,54,255,0.6); }
         .custom-input::placeholder { color: rgba(255,255,255,0.3); }
+
         .pay-btn { width: 100%; background: linear-gradient(135deg, #6236ff, #c850c0); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(98,54,255,0.4); margin-bottom: 12px; }
         .pay-btn:active { transform: scale(0.98); }
         .pay-btn:disabled { opacity: 0.6; }
@@ -78,6 +90,7 @@
         .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.1); }
         .refresh-indicator { text-align: center; font-size: 12px; color: rgba(255,255,255,0.3); padding: 8px; display: none; }
         .refresh-indicator.active { display: block; }
+        .no-packages { text-align: center; color: rgba(255,255,255,0.4); font-size: 13px; padding: 20px; }
     </style>
 </head>
 <body>
@@ -106,7 +119,7 @@
             <div class="stat-card">
                 <div class="stat-icon">💡</div>
                 <div class="stat-value" id="stat-opp">—</div>
-                <div class="stat-label">Opportunity</div>
+                <div class="stat-label">Сигналов</div>
             </div>
         </div>
 
@@ -124,45 +137,29 @@
                     <div class="pricing-value" id="price-analysis">10 токенов</div>
                 </div>
                 <div class="pricing-row">
-                    <div class="pricing-name">💡 Opportunity</div>
-                    <div class="pricing-value" id="price-opp">20 токенов</div>
+                    <div class="pricing-name">💡 Сигнал часа</div>
+                    <div class="pricing-value" id="price-cached">5 токенов</div>
                 </div>
                 <div class="pricing-row">
-                    <div class="pricing-name">💰 Цена токена</div>
-                    <div class="pricing-value" id="price-token">0.1 TON</div>
+                    <div class="pricing-name">🔮 Личный сигнал</div>
+                    <div class="pricing-value" id="price-opp">20 токенов</div>
                 </div>
             </div>
 
-            <div class="amount-selector">
-                <div class="amount-title">Выбери сумму пополнения</div>
-                <div class="amount-grid">
-                    <div class="amount-btn" onclick="selectAmount(0.5, this)">
-                        <div class="amount-btn-ton">0.5 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-05">5 токенов</div>
-                    </div>
-                    <div class="amount-btn active" onclick="selectAmount(1, this)">
-                        <div class="amount-btn-ton">1 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-1">10 токенов</div>
-                    </div>
-                    <div class="amount-btn" onclick="selectAmount(5, this)">
-                        <div class="amount-btn-ton">5 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-5">50 токенов</div>
-                    </div>
-                    <div class="amount-btn" onclick="selectAmount(10, this)">
-                        <div class="amount-btn-ton">10 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-10">100 токенов</div>
-                    </div>
-                    <div class="amount-btn" onclick="selectAmount(25, this)">
-                        <div class="amount-btn-ton">25 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-25">250 токенов</div>
-                    </div>
-                    <div class="amount-btn" onclick="selectAmount(50, this)">
-                        <div class="amount-btn-ton">50 TON</div>
-                        <div class="amount-btn-tokens" id="tokens-50">500 токенов</div>
-                    </div>
+            <!-- Пакеты токенов -->
+            <div class="packages-section">
+                <div class="packages-title">📦 Пакеты токенов</div>
+                <div id="packages-list">
+                    <div class="no-packages">⏳ Загрузка пакетов...</div>
                 </div>
+            </div>
+
+            <!-- Своя сумма -->
+            <div class="custom-amount-section">
+                <div class="custom-amount-title">Или введи свою сумму в TON:</div>
                 <input type="number" class="custom-input" id="custom-amount"
-                       placeholder="Или введи свою сумму в TON"
+                       placeholder="Например: 2.5"
+                       step="0.1" min="0.1"
                        oninput="handleCustomAmount(this.value)">
             </div>
 
@@ -193,10 +190,11 @@
             <div class="sub-card">
                 <div class="sub-title">🔔 DeepAlpha Premium</div>
                 <div class="sub-price" id="sub-price-display">1 TON / 30 дней</div>
-                <div class="sub-feature">🔔 Ежедневные сигналы opportunity</div>
-                <div class="sub-feature">♾️ Безлимитные анализы и запросы</div>
+                <div class="sub-feature">🔔 Ежедневные сигналы</div>
+                <div class="sub-feature">⚡ Сигнал часа бесплатно</div>
+                <div class="sub-feature">📊 До 15 анализов в день</div>
+                <div class="sub-feature">💡 До 3 сигналов в день</div>
                 <div class="sub-feature">🚀 Приоритетный AI анализ</div>
-                <div class="sub-feature">📊 Полные сценарии и прогнозы</div>
             </div>
 
             <div id="sub-status-card" style="display:none; background:rgba(74,222,128,0.1); border:1px solid rgba(74,222,128,0.3); border-radius:16px; padding:16px; margin-bottom:16px; text-align:center;">
@@ -240,10 +238,12 @@
         let tg = window.Telegram.WebApp;
         let tonConnectUI = null;
         let selectedAmount = 1;
+        let selectedPackageId = null;
         let userId = null;
         let tokenPrice = 0.1;
         let subPrice = 1;
         let subDays = 30;
+        let packages = [];
         let refreshInterval = null;
         let refreshCount = 0;
 
@@ -261,7 +261,6 @@
             document.getElementById('user-id-display-2').textContent = 'Открой через Telegram';
         }
 
-        // Открываем нужную вкладку из URL параметра
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
         if (tabParam === 'subscription') {
@@ -290,6 +289,90 @@
             }
         }
 
+        function renderPackages() {
+            const container = document.getElementById('packages-list');
+            if (!packages || packages.length === 0) {
+                container.innerHTML = '<div class="no-packages">Пакеты не настроены</div>';
+                return;
+            }
+
+            // Находим самый популярный (средний по цене)
+            const sortedByPrice = [...packages].sort((a, b) => a.price_ton - b.price_ton);
+            const popularIdx = Math.floor(sortedByPrice.length / 2);
+            const popularId = sortedByPrice[popularIdx]?.id;
+
+            container.innerHTML = packages.map((pkg, idx) => {
+                const isPopular = pkg.id === popularId;
+                const perToken = (pkg.price_ton / pkg.tokens).toFixed(3);
+                const discountText = pkg.discount_percent > 0
+                    ? `<span class="package-discount">-${pkg.discount_percent}%</span>`
+                    : '';
+                const popularBadge = isPopular
+                    ? '<span class="popular-badge">🔥 Популярный</span>'
+                    : '';
+                const popularClass = isPopular ? ' popular' : '';
+
+                return `
+                <div class="package-card${popularClass}" id="pkg-${pkg.id}" onclick="selectPackage(${pkg.id}, ${pkg.price_ton})">
+                    ${popularBadge}
+                    <div class="package-top">
+                        <div class="package-name">${pkg.name}</div>
+                        <div class="package-price">${pkg.price_ton} TON</div>
+                    </div>
+                    <div class="package-bottom">
+                        <div>
+                            <div class="package-tokens">💎 ${pkg.tokens} токенов ${discountText}</div>
+                            <div class="package-per-token">${perToken} TON за токен</div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            // Выбираем популярный по умолчанию
+            if (popularId) {
+                const popularPkg = packages.find(p => p.id === popularId);
+                if (popularPkg) {
+                    selectPackage(popularId, popularPkg.price_ton, false);
+                }
+            }
+        }
+
+        function selectPackage(pkgId, price, haptic = true) {
+            selectedPackageId = pkgId;
+            selectedAmount = price;
+            document.getElementById('custom-amount').value = '';
+
+            document.querySelectorAll('.package-card').forEach(c => c.classList.remove('active'));
+            const card = document.getElementById(`pkg-${pkgId}`);
+            if (card) card.classList.add('active');
+
+            updatePayButton();
+            if (haptic) {
+                try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+            }
+        }
+
+        function handleCustomAmount(val) {
+            if (val && parseFloat(val) > 0) {
+                selectedAmount = parseFloat(val);
+                selectedPackageId = null;
+                document.querySelectorAll('.package-card').forEach(c => c.classList.remove('active'));
+            }
+            updatePayButton();
+        }
+
+        function updatePayButton() {
+            const pkg = packages.find(p => p.id === selectedPackageId);
+            if (pkg) {
+                document.getElementById('pay-btn').textContent =
+                    `💎 Купить «${pkg.name}» — ${pkg.price_ton} TON (${pkg.tokens} токенов)`;
+            } else {
+                const tokens = Math.floor(selectedAmount / tokenPrice);
+                document.getElementById('pay-btn').textContent =
+                    `💎 Оплатить ${selectedAmount} TON (≈${tokens} токенов)`;
+            }
+        }
+
         async function loadUserData() {
             if (!userId) return;
             try {
@@ -302,10 +385,16 @@
 
                     if (data.token_price) {
                         tokenPrice = parseFloat(data.token_price);
-                        document.getElementById('price-token').textContent = `${tokenPrice} TON`;
                     }
-                    if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
-                    if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                    if (data.analysis_price) {
+                        document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
+                    }
+                    if (data.opp_price) {
+                        document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                    }
+                    if (data.cached_price) {
+                        document.getElementById('price-cached').textContent = `${data.cached_price} токенов`;
+                    }
                     if (data.subscription_price) {
                         subPrice = parseFloat(data.subscription_price);
                     }
@@ -327,7 +416,12 @@
                         document.getElementById('sub-status-card').style.display = 'none';
                     }
 
-                    updateTokenCounts();
+                    // Загружаем пакеты
+                    if (data.packages && data.packages.length > 0) {
+                        packages = data.packages;
+                        renderPackages();
+                    }
+
                     return data;
                 }
             } catch(e) {
@@ -344,7 +438,6 @@
                 refreshCount++;
                 const data = await loadUserData();
 
-                // Останавливаем если данные обновились
                 if (data) {
                     if (paymentType === 'subscription' && data.is_subscribed) {
                         stopAutoRefresh();
@@ -369,35 +462,6 @@
                 refreshInterval = null;
             }
             document.getElementById('refresh-indicator').classList.remove('active');
-        }
-
-        function updateTokenCounts() {
-            const map = {'05': 0.5, '1': 1, '5': 5, '10': 10, '25': 25, '50': 50};
-            Object.entries(map).forEach(([id, amount]) => {
-                const el = document.getElementById(`tokens-${id}`);
-                if (el) el.textContent = `${Math.floor(amount / tokenPrice)} токенов`;
-            });
-        }
-
-        function selectAmount(amount, btn) {
-            selectedAmount = amount;
-            document.getElementById('custom-amount').value = '';
-            document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('active'));
-            if (btn) btn.classList.add('active');
-            updatePayButton();
-        }
-
-        function handleCustomAmount(val) {
-            if (val && parseFloat(val) > 0) {
-                selectedAmount = parseFloat(val);
-                document.querySelectorAll('.amount-btn').forEach(b => b.classList.remove('active'));
-            }
-            updatePayButton();
-        }
-
-        function updatePayButton() {
-            const tokens = Math.floor(selectedAmount / tokenPrice);
-            document.getElementById('pay-btn').textContent = `💎 Оплатить ${selectedAmount} TON (${tokens} токенов)`;
         }
 
         async function registerPending(amount, paymentType) {
@@ -431,6 +495,10 @@
             }
 
             const amount = paymentType === 'subscription' ? subPrice : selectedAmount;
+            if (!amount || amount <= 0) {
+                showStatus('❌ Выбери пакет или введи сумму', 'error');
+                return;
+            }
             const amountNano = Math.floor(amount * 1e9).toString();
 
             try {
@@ -455,12 +523,12 @@
                 if (paymentType === 'subscription') {
                     showStatus('✅ Транзакция отправлена! Подписка активируется через 1-2 минуты.', 'success');
                 } else {
-                    showStatus('✅ Транзакция отправлена! Токены начислятся через 1-2 минуты.', 'success');
+                    const pkg = packages.find(p => p.id === selectedPackageId);
+                    const tokensText = pkg ? `${pkg.tokens} токенов` : `≈${Math.floor(amount / tokenPrice)} токенов`;
+                    showStatus(`✅ Транзакция отправлена! ${tokensText} начислятся через 1-2 минуты.`, 'success');
                 }
 
                 try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
-
-                // Запускаем автообновление
                 startAutoRefresh(paymentType);
 
             } catch(e) {
@@ -501,7 +569,7 @@
 
         initTonConnect();
         loadUserData();
-        updatePayButton();
     </script>
 </body>
 </html>
+ 
