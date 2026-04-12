@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
@@ -13,8 +14,10 @@ class DecisionAgent:
         news_data: Dict[str, Any],
         lang: str = "en",
     ) -> Dict[str, Any]:
-
+        print(f"DecisionAgent.run: called, lang={lang}")
         question = market_data.get("question", "Unknown market")
+        print(f"DecisionAgent.run: question={question[:50]}")
+
         category = market_data.get("category", "Unknown")
         market_probability = market_data.get("market_probability", "Unknown")
         options = market_data.get("options", [])
@@ -44,7 +47,9 @@ class DecisionAgent:
             lang=lang,
         )
 
+        print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
         raw_response = generate_decision_text(prompt)
+        print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
 
         if raw_response and not raw_response.lower().startswith("llm service is not configured"):
             parsed = self._parse_llm_output(raw_response)
@@ -56,8 +61,10 @@ class DecisionAgent:
                 raw_text=raw_response,
             )
             if self._is_valid_result(wrapped):
+                print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
 
+        print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
             question=question,
             category=category,
@@ -95,7 +102,6 @@ class DecisionAgent:
         else:
             market_note = f"Multiple choice: {options_text}. Pick most likely winner."
 
-        # Топ 3 новости коротко
         news_block = ""
         if news_summary:
             news_block = news_summary[:400]
