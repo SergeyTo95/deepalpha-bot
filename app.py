@@ -1,3 +1,4 @@
+
 import sys
 import os
 import asyncio
@@ -20,17 +21,15 @@ from db.database import (
 register_admin(telegram_bot.dp)
 
 CATEGORIES = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
 
 
 def calculate_tokens_for_amount(ton_amount: float) -> int:
-    """Рассчитывает количество токенов по сумме — сначала ищет пакет, потом базовую цену."""
-    # Ищем подходящий пакет с допуском 0.05 TON
     package = find_package_by_amount(ton_amount, tolerance=0.05)
     if package:
         print(f"TON PAYMENT: found package '{package['name']}' — {package['tokens']} tokens")
         return package["tokens"]
-
-    # Fallback — базовая цена из настроек
     try:
         token_price = float(get_setting("token_price_ton", "0.1"))
         if token_price <= 0:
@@ -42,8 +41,131 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
         return int(ton_amount / 0.1)
 
 
+# ===== CHANNEL POSTER =====
+
+async def post_to_channel():
+    """Постит интересный рынок в канал раз в несколько часов."""
+    if not CHANNEL_ID:
+        print("📢 CHANNEL_ID not set, skipping channel post")
+        return
+
+    try:
+        print("📢 Posting to channel...")
+        from services.polymarket_service import list_markets, normalize_market_data
+        import random
+
+        # Берём рынки с хорошим объёмом
+        offset = random.randint(0, 50)
+        markets = list_markets(limit=30, offset=offset)
+        if not markets:
+            markets = list_markets(limit=30)
+
+        # Фильтруем интересные рынки
+        candidates = []
+        for m in markets:
+            normalized = normalize_market_data(m)
+            if not normalized:
+                continue
+            question = normalized.get("question", "")
+            if not question or len(question) < 10:
+                continue
+            market_prob = normalized.get("market_probability", "")
+            if market_prob == "Unknown":
+                continue
+            # Только рынки с живой вероятностью (не 0% и не 100%)
+            try:
+                outcome_prices = m.get("outcomePrices", "")
+                if isinstance(outcome_prices, str):
+                    cleaned = outcome_prices.strip("[]")
+                    prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                elif isinstance(outcome_prices, list):
+                    prices = [float(p) for p in outcome_prices]
+                else:
+                    prices = []
+                if prices and (max(prices) >= 0.95 or max(prices) <= 0.05):
+                    continue
+            except Exception:
+                pass
+
+            candidates.append({
+                "question": question,
+                "market_prob": market_prob,
+                "url": m.get("url", ""),
+                "slug": m.get("slug", ""),
+            })
+
+        if not candidates:
+            print("📢 No suitable markets found for channel post")
+            return
+
+        # Выбираем случайный рынок из топ-10
+        market = random.choice(candidates[:10])
+        question = market["question"]
+        market_prob = market["market_prob"]
+        url = market["url"] or f"https://polymarket.com/event/{market['slug']}"
+
+        # Определяем категорию
+        from agents.market_agent import MarketAgent
+        agent = MarketAgent()
+        category = agent._detect_category(question)
+
+        category_emoji = {
+            "Politics": "🌍",
+            "Crypto": "💰",
+            "Sports": "⚽",
+            "Economy": "📈",
+            "Tech": "💻",
+            "Culture": "🎭",
+            "Weather": "☁️",
+            "Other": "📌",
+        }.get(category, "📌")
+
+        # Формируем пост
+        bot_link = f"https://t.me/{BOT_USERNAME}"
+        text = (
+            f"🔥 Горячий рынок Polymarket\n\n"
+            f"📌 {question}\n\n"
+            f"📊 {market_prob}\n"
+            f"{category_emoji} Категория: {category}\n\n"
+            f"🤖 Что думает AI?\n"
+            f"Отправь ссылку боту и получи полный анализ!\n\n"
+            f"👉 Анализировать → {bot_link}\n"
+            f"🔗 Рынок → {url}"
+        )
+
+        await telegram_bot.bot.send_message(
+            CHANNEL_ID,
+            text,
+            disable_web_page_preview=True,
+        )
+        print(f"📢 Posted to channel: {question[:50]}")
+        set_setting("last_channel_post", datetime.now(timezone.utc).isoformat())
+
+    except Exception as e:
+        print(f"CHANNEL POST ERROR: {e}")
+
+
+async def channel_worker():
+    """Постит в канал каждые 3 часа."""
+    # Первый пост через 5 минут после старта
+    await asyncio.sleep(300)
+    await post_to_channel()
+
+    while True:
+        try:
+            interval_hours = int(get_setting("channel_post_interval_hours", "3"))
+            await asyncio.sleep(interval_hours * 3600)
+            channel_enabled = get_setting("channel_posting_enabled", "on")
+            if channel_enabled == "on" and CHANNEL_ID:
+                await post_to_channel()
+        except Exception as e:
+            print(f"CHANNEL WORKER ERROR: {e}")
+            await asyncio.sleep(60)
+
+
+# ===== SIGNAL CACHE =====
+
 async def update_signal_cache():
-    """Обновляет кэш сигналов по всем категориям."""
     print("🔄 Starting signal cache update...")
     from agents.opportunity_agent import OpportunityAgent
 
@@ -51,11 +173,7 @@ async def update_signal_cache():
         try:
             print(f"🔄 Updating cache for {category}...")
             agent = OpportunityAgent()
-            result = agent.run(
-                lang="ru",
-                limit=2,
-                category_filter=category,
-            )
+            result = agent.run(lang="ru", limit=2, category_filter=category)
 
             if result and result.get("question") != "No strong opportunity found":
                 import time
@@ -76,8 +194,7 @@ async def update_signal_cache():
 
 
 async def cache_worker():
-    """Воркер обновляет кэш каждые 6 часов."""
-    await asyncio.sleep(21600)  # Первое обновление через 6 часов
+    await asyncio.sleep(21600)
     await update_signal_cache()
 
     while True:
@@ -88,6 +205,8 @@ async def cache_worker():
             print(f"CACHE WORKER ERROR: {e}")
             await asyncio.sleep(60)
 
+
+# ===== TON PAYMENTS =====
 
 async def check_ton_payments():
     await asyncio.sleep(15)
@@ -100,7 +219,6 @@ async def check_ton_payments():
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
                 if not tx_hash:
                     continue
-
                 if is_tx_processed(tx_hash):
                     continue
 
@@ -132,7 +250,6 @@ async def check_ton_payments():
 
                 ensure_user(user_id)
 
-                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -144,7 +261,6 @@ async def check_ton_payments():
                         ref_percent = 10
                     referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
 
-                    # Начисляем реферальные токены рефереру
                     referral_tokens = calculate_tokens_for_amount(referral_bonus_ton)
                     if referral_tokens > 0:
                         add_tokens(referrer_id, referral_tokens)
@@ -186,7 +302,6 @@ async def check_ton_payments():
                         print(f"SUB NOTIFY ERROR: {e}")
 
                 else:
-                    # Рассчитываем токены с учётом пакетов
                     tokens = calculate_tokens_for_amount(ton_amount)
                     if tokens <= 0:
                         continue
@@ -199,7 +314,6 @@ async def check_ton_payments():
                         referrer_id=referrer_id,
                     )
 
-                    # Определяем название пакета для уведомления
                     package = find_package_by_amount(ton_amount, tolerance=0.05)
                     package_name = f"«{package['name']}»" if package else ""
                     discount_text = ""
@@ -227,6 +341,8 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
+# ===== NOTIFICATIONS =====
+
 async def send_daily_notifications():
     try:
         print("📢 Starting daily notifications...")
@@ -234,7 +350,6 @@ async def send_daily_notifications():
         all_users = get_all_users(limit=10000)
         subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
 
-        # Берём лучший кэшированный сигнал
         best_cached = None
         for category in CATEGORIES:
             cached = get_signal_cache(category, max_age_seconds=7200)
@@ -347,6 +462,8 @@ async def notification_worker():
         await asyncio.sleep(60)
 
 
+# ===== POLLING =====
+
 async def run_polling():
     while True:
         try:
@@ -376,6 +493,7 @@ async def main():
 
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
+    asyncio.create_task(channel_worker())
     # asyncio.create_task(cache_worker())  # Раскомментируй когда нужен кэш
     await run_polling()
 
