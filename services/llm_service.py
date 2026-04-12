@@ -26,12 +26,10 @@ def _get_active_model() -> str:
 
 def _get_providers(model: str) -> list:
     providers = []
-
-    for i in range(1, 56):
-        key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
-        if key:
-            providers.append({"key": key, "model": model})
-
+    # Только первый ключ — платный рабочий
+    key = _safe_env("GEMINI_API_KEY")
+    if key:
+        providers.append({"key": key, "model": model})
     return providers
 
 
@@ -43,15 +41,9 @@ def generate_text(prompt: str, model: str = "") -> str:
         print("LLM ERROR: No API keys configured")
         return ""
 
-    seen = set()
     for provider in providers:
         key = provider["key"]
         mdl = provider["model"]
-
-        combo = f"{key}_{mdl}"
-        if combo in seen:
-            continue
-        seen.add(combo)
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -76,44 +68,43 @@ def generate_text(prompt: str, model: str = "") -> str:
             print(f"LLM STATUS: {response.status_code} | model: {mdl} | key: ...{key[-6:]}")
 
             if response.status_code == 429:
-                print(f"LLM: quota exceeded for key ...{key[-6:]}, trying next")
-                continue
+                print(f"LLM: quota exceeded")
+                return ""
 
             if response.status_code == 404:
-                print(f"LLM: model {mdl} not available, trying next")
-                continue
+                print(f"LLM: model {mdl} not available")
+                return ""
 
             if response.status_code != 200:
                 print("LLM ERROR:", response.text[:200])
-                continue
+                return ""
 
             data = response.json()
             candidates = data.get("candidates", [])
             if not candidates:
-                continue
+                return ""
 
             content = candidates[0].get("content", {})
             parts = content.get("parts", [])
             if not parts:
-                continue
+                return ""
 
             texts = [part.get("text", "") for part in parts if part.get("text")]
             if texts:
                 return "\n".join(texts).strip()
 
         except requests.exceptions.Timeout:
-            print(f"LLM TIMEOUT: model: {mdl} | key: ...{key[-6:]}")
-            continue
+            print(f"LLM TIMEOUT: model: {mdl}")
+            return ""
         except Exception as e:
-            print(f"LLM EXCEPTION: {str(e)} | model: {mdl}")
-            continue
+            print(f"LLM EXCEPTION: {str(e)}")
+            return ""
 
-    print("LLM ERROR: All providers exhausted")
+    print("LLM ERROR: No providers")
     return ""
 
 
 async def generate_text_async(prompt: str, model: str = "") -> str:
-    import asyncio
     import aiohttp
 
     chosen_model = (model or _get_active_model()).strip()
@@ -123,17 +114,11 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
         return ""
 
     timeout = aiohttp.ClientTimeout(total=LLM_TIMEOUT)
-    seen = set()
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for provider in providers:
             key = provider["key"]
             mdl = provider["model"]
-
-            combo = f"{key}_{mdl}"
-            if combo in seen:
-                continue
-            seen.add(combo)
 
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -155,28 +140,28 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
                     print(f"LLM ASYNC: {response.status} | model: {mdl} | key: ...{key[-6:]}")
 
                     if response.status in (429, 404):
-                        continue
+                        return ""
 
                     if response.status != 200:
-                        continue
+                        return ""
 
                     data = await response.json()
                     candidates = data.get("candidates", [])
                     if not candidates:
-                        continue
+                        return ""
 
                     content = candidates[0].get("content", {})
                     parts = content.get("parts", [])
                     if not parts:
-                        continue
+                        return ""
 
                     texts = [part.get("text", "") for part in parts if part.get("text")]
                     if texts:
                         return "\n".join(texts).strip()
 
             except Exception as e:
-                print(f"LLM ASYNC EXCEPTION: {str(e)} | model: {mdl}")
-                continue
+                print(f"LLM ASYNC EXCEPTION: {str(e)}")
+                return ""
 
     return ""
 
