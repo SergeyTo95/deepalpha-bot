@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Union, Optional
 import psycopg2
@@ -124,6 +125,20 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS token_packages (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        tokens INTEGER,
+        price_ton REAL,
+        discount_percent INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -143,6 +158,24 @@ def init_db():
             pass
 
     conn.commit()
+
+    # Создаём дефолтные пакеты если их нет
+    cursor.execute("SELECT COUNT(*) FROM token_packages")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        default_packages = [
+            ("Стартовый", 10, 1.0, 0, 1, 1),
+            ("Популярный", 50, 4.0, 20, 1, 2),
+            ("Профи", 100, 7.0, 30, 1, 3),
+        ]
+        for name, tokens, price, discount, is_active, sort_order in default_packages:
+            cursor.execute("""
+            INSERT INTO token_packages (name, tokens, price_ton, discount_percent, is_active, sort_order, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, tokens, price, discount, is_active, sort_order,
+                  datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
+        conn.commit()
+
     conn.close()
 
 
@@ -171,6 +204,120 @@ def set_setting(key: str, value: str) -> None:
     """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
+
+
+# ===== TOKEN PACKAGES =====
+
+def get_token_packages(active_only: bool = True) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if active_only:
+            cursor.execute("""
+            SELECT id, name, tokens, price_ton, discount_percent, is_active, sort_order
+            FROM token_packages WHERE is_active = 1
+            ORDER BY sort_order ASC
+            """)
+        else:
+            cursor.execute("""
+            SELECT id, name, tokens, price_ton, discount_percent, is_active, sort_order
+            FROM token_packages ORDER BY sort_order ASC
+            """)
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "name": r[1], "tokens": r[2],
+            "price_ton": r[3], "discount_percent": r[4],
+            "is_active": bool(r[5]), "sort_order": r[6],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_token_packages error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_token_package(package_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT id, name, tokens, price_ton, discount_percent, is_active, sort_order
+        FROM token_packages WHERE id = %s
+        """, (package_id,))
+        r = cursor.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0], "name": r[1], "tokens": r[2],
+            "price_ton": r[3], "discount_percent": r[4],
+            "is_active": bool(r[5]), "sort_order": r[6],
+        }
+    except Exception as e:
+        print(f"get_token_package error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def create_token_package(name: str, tokens: int, price_ton: float, discount_percent: int = 0) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM token_packages")
+        sort_order = cursor.fetchone()[0]
+        cursor.execute("""
+        INSERT INTO token_packages (name, tokens, price_ton, discount_percent, is_active, sort_order, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, 1, %s, %s, %s)
+        RETURNING id
+        """, (name, tokens, price_ton, discount_percent, sort_order,
+              datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
+        package_id = cursor.fetchone()[0]
+        conn.commit()
+        return package_id
+    except Exception as e:
+        print(f"create_token_package error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def update_token_package(package_id: int, name: str, tokens: int, price_ton: float,
+                         discount_percent: int, is_active: bool) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE token_packages SET name = %s, tokens = %s, price_ton = %s,
+        discount_percent = %s, is_active = %s, updated_at = %s
+        WHERE id = %s
+        """, (name, tokens, price_ton, discount_percent,
+              1 if is_active else 0, datetime.utcnow().isoformat(), package_id))
+        conn.commit()
+    except Exception as e:
+        print(f"update_token_package error: {e}")
+    finally:
+        conn.close()
+
+
+def delete_token_package(package_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM token_packages WHERE id = %s", (package_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"delete_token_package error: {e}")
+    finally:
+        conn.close()
+
+
+def find_package_by_amount(ton_amount: float, tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
+    """Находит пакет по сумме оплаты с допуском."""
+    packages = get_token_packages(active_only=True)
+    for package in packages:
+        if abs(package["price_ton"] - ton_amount) <= tolerance:
+            return package
+    return None
 
 
 # ===== PENDING PAYMENTS =====
@@ -378,8 +525,6 @@ def get_signal_history(user_id: int) -> List[str]:
 # ===== SIGNAL CACHE =====
 
 def save_signal_cache(category: str, data: dict) -> None:
-    """Сохраняет кэшированный сигнал по категории."""
-    import json
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -398,8 +543,6 @@ def save_signal_cache(category: str, data: dict) -> None:
 
 
 def get_signal_cache(category: str, max_age_seconds: int = 3600) -> Optional[dict]:
-    """Возвращает кэшированный сигнал если он свежий."""
-    import json
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -422,7 +565,6 @@ def get_signal_cache(category: str, max_age_seconds: int = 3600) -> Optional[dic
 
 
 def get_all_cache_status() -> Dict[str, Any]:
-    """Возвращает статус кэша по всем категориям."""
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -770,4 +912,3 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     return [{"url": r[0], "question": r[1], "category": r[2],
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
- 
