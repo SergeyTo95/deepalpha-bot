@@ -1,7 +1,10 @@
-
+import logging
 from typing import Any, Dict
 
 from db.database import save_analysis
+
+logging.basicConfig(level=logging.INFO, force=True)
+logger = logging.getLogger(__name__)
 
 
 class ChiefAgent:
@@ -9,13 +12,13 @@ class ChiefAgent:
         pass
 
     def run(self, url: str, lang: str = "en") -> Dict[str, Any]:
-        print(f"ChiefAgent: starting analysis for {url[:50]}")
+        logger.info(f"ChiefAgent: starting analysis for {url[:50]}")
         market_data = self._run_market_agent(url)
-        print(f"ChiefAgent: market_data done, question={market_data.get('question', '')[:50]}")
+        logger.info(f"ChiefAgent: market_data done, question={market_data.get('question', '')[:50]}")
         news_data = self._run_news_agent(market_data, lang=lang)
-        print(f"ChiefAgent: news_data done, sentiment={news_data.get('sentiment', 'N/A')}")
+        logger.info(f"ChiefAgent: news_data done, sentiment={news_data.get('sentiment', 'N/A')}")
         decision_data = self._run_decision_agent(market_data, news_data, lang=lang)
-        print(f"ChiefAgent: decision_data done, probability={decision_data.get('probability', 'N/A')}")
+        logger.info(f"ChiefAgent: decision_data done, probability={decision_data.get('probability', 'N/A')}")
         conclusion = self._run_communication_agent(decision_data)
 
         news_sources = news_data.get("sources", [])
@@ -54,36 +57,36 @@ class ChiefAgent:
         try:
             save_analysis(url, final_result)
         except Exception as e:
-            print(f"ChiefAgent save_analysis error: {e}")
+            logger.error(f"ChiefAgent save_analysis error: {e}")
 
         return final_result
 
     def _run_market_agent(self, url: str) -> Dict[str, Any]:
         try:
-            print(f"MarketAgent: starting")
+            logger.info(f"MarketAgent: starting")
             from agents.market_agent import MarketAgent
             agent = MarketAgent()
             result = agent.run(url)
-            print(f"MarketAgent: done")
+            logger.info(f"MarketAgent: done")
             if isinstance(result, dict):
                 return result
             return self._market_fallback(url)
         except Exception as e:
-            print(f"MarketAgent ERROR: {e}")
+            logger.error(f"MarketAgent ERROR: {e}")
             return self._market_fallback(url)
 
     def _run_news_agent(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         try:
-            print(f"NewsAgent: starting")
+            logger.info(f"NewsAgent: starting")
             from agents.news_agent import NewsAgent
             agent = NewsAgent()
             result = agent.run(market_data, lang=lang)
-            print(f"NewsAgent: done, sources={len(result.get('sources', []))}")
+            logger.info(f"NewsAgent: done, sources={len(result.get('sources', []))}")
             if isinstance(result, dict):
                 return result
             return self._news_fallback(market_data)
         except Exception as e:
-            print(f"NewsAgent ERROR: {e}")
+            logger.error(f"NewsAgent ERROR: {e}")
             return self._news_fallback(market_data)
 
     def _run_decision_agent(
@@ -93,30 +96,30 @@ class ChiefAgent:
         lang: str = "en",
     ) -> Dict[str, Any]:
         try:
-            print(f"DecisionAgent: starting")
+            logger.info(f"DecisionAgent: starting")
             from agents.decision_agent import DecisionAgent
             agent = DecisionAgent()
             result = agent.run(market_data, news_data, lang=lang)
-            print(f"DecisionAgent: done, probability={result.get('probability', 'N/A')}")
+            logger.info(f"DecisionAgent: done, probability={result.get('probability', 'N/A')}")
             if isinstance(result, dict):
                 return result
             return self._decision_fallback(market_data, news_data)
         except Exception as e:
-            print(f"DecisionAgent ERROR: {e}")
+            logger.error(f"DecisionAgent ERROR: {e}")
             return self._decision_fallback(market_data, news_data)
 
     def _run_communication_agent(self, decision_data: Dict[str, Any]) -> str:
         try:
-            print(f"CommunicationAgent: starting")
+            logger.info(f"CommunicationAgent: starting")
             from agents.communication_agent import CommunicationAgent
             agent = CommunicationAgent()
             result = agent.run(decision_data)
-            print(f"CommunicationAgent: done")
+            logger.info(f"CommunicationAgent: done")
             if isinstance(result, str):
                 return result
             return self._communication_fallback(decision_data)
         except Exception as e:
-            print(f"CommunicationAgent ERROR: {e}")
+            logger.error(f"CommunicationAgent ERROR: {e}")
             return self._communication_fallback(decision_data)
 
     def _market_fallback(self, url: str) -> Dict[str, Any]:
