@@ -1,4 +1,3 @@
-
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
@@ -50,9 +49,11 @@ class DecisionAgent:
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
         raw_response = generate_decision_text(prompt)
         print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
+        print(f"DecisionAgent.run: LLM response text={raw_response[:300]}")
 
         if raw_response and not raw_response.lower().startswith("llm service is not configured"):
             parsed = self._parse_llm_output(raw_response)
+            print(f"DecisionAgent.run: parsed={parsed}")
             wrapped = self._wrap_llm_result(
                 question=question,
                 category=category,
@@ -63,6 +64,8 @@ class DecisionAgent:
             if self._is_valid_result(wrapped):
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
+            else:
+                print(f"DecisionAgent.run: invalid result, fields={[(k, v[:30] if v else '') for k, v in wrapped.items() if isinstance(v, str)]}")
 
         print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
