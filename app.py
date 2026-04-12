@@ -1,4 +1,3 @@
-
 import sys
 import os
 import asyncio
@@ -9,12 +8,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telegram_bot
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
+from services.polymarket_service import list_markets, normalize_market_data, build_market_url
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
     get_all_pending, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
-    save_signal_cache, get_signal_cache, get_all_cache_status,
+    save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
 )
 
@@ -44,23 +44,20 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # ===== CHANNEL POSTER =====
 
 async def post_to_channel():
-    """Постит интересный рынок в канал раз в несколько часов."""
+    """Постит интересный рынок в канал."""
     if not CHANNEL_ID:
         print("📢 CHANNEL_ID not set, skipping channel post")
         return
 
     try:
         print("📢 Posting to channel...")
-        from services.polymarket_service import list_markets, normalize_market_data
         import random
 
-        # Берём рынки с хорошим объёмом
         offset = random.randint(0, 50)
         markets = list_markets(limit=30, offset=offset)
         if not markets:
             markets = list_markets(limit=30)
 
-        # Фильтруем интересные рынки
         candidates = []
         for m in markets:
             normalized = normalize_market_data(m)
@@ -72,7 +69,8 @@ async def post_to_channel():
             market_prob = normalized.get("market_probability", "")
             if market_prob == "Unknown":
                 continue
-            # Только рынки с живой вероятностью (не 0% и не 100%)
+
+            # Фильтруем слишком односторонние рынки
             try:
                 outcome_prices = m.get("outcomePrices", "")
                 if isinstance(outcome_prices, str):
@@ -87,22 +85,24 @@ async def post_to_channel():
             except Exception:
                 pass
 
+            # Строим правильный URL
+            market_url = build_market_url(m)
+
             candidates.append({
                 "question": question,
                 "market_prob": market_prob,
-                "url": m.get("url", ""),
-                "slug": m.get("slug", ""),
+                "url": market_url,
+                "raw": m,
             })
 
         if not candidates:
             print("📢 No suitable markets found for channel post")
             return
 
-        # Выбираем случайный рынок из топ-10
         market = random.choice(candidates[:10])
         question = market["question"]
         market_prob = market["market_prob"]
-        url = market["url"] or f"https://polymarket.com/event/{market['slug']}"
+        url = market["url"]
 
         # Определяем категорию
         from agents.market_agent import MarketAgent
@@ -112,7 +112,7 @@ async def post_to_channel():
         category_emoji = {
             "Politics": "🌍",
             "Crypto": "💰",
-            "Sports": "⚽",
+            "Sports": "🏆",
             "Economy": "📈",
             "Tech": "💻",
             "Culture": "🎭",
@@ -120,8 +120,8 @@ async def post_to_channel():
             "Other": "📌",
         }.get(category, "📌")
 
-        # Формируем пост
         bot_link = f"https://t.me/{BOT_USERNAME}"
+
         text = (
             f"🔥 Горячий рынок Polymarket\n\n"
             f"📌 {question}\n\n"
@@ -130,8 +130,10 @@ async def post_to_channel():
             f"🤖 Что думает AI?\n"
             f"Отправь ссылку боту и получи полный анализ!\n\n"
             f"👉 Анализировать → {bot_link}\n"
-            f"🔗 Рынок → {url}"
         )
+
+        if url:
+            text += f"🔗 Рынок → {url}"
 
         await telegram_bot.bot.send_message(
             CHANNEL_ID,
@@ -146,10 +148,13 @@ async def post_to_channel():
 
 
 async def channel_worker():
-    """Постит в канал каждые 3 часа."""
+    """Постит в канал каждые N часов."""
     # Первый пост через 5 минут после старта
     await asyncio.sleep(300)
-    await post_to_channel()
+
+    channel_enabled = get_setting("channel_posting_enabled", "on")
+    if channel_enabled == "on" and CHANNEL_ID:
+        await post_to_channel()
 
     while True:
         try:
@@ -500,3 +505,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+ 
