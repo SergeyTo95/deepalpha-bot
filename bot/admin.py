@@ -1,4 +1,3 @@
-
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
@@ -18,6 +17,7 @@ from db.database import (
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 
 MODELS = {
     "gemini": {
@@ -75,6 +75,7 @@ class SystemStates(StatesGroup):
     waiting_system_prompt = State()
     waiting_broadcast = State()
     waiting_notify_hour = State()
+    waiting_channel_interval = State()
 
 
 def is_admin(user_id):
@@ -150,7 +151,6 @@ def pricing_text():
     free_trial = get_setting("free_trial_enabled", "on")
     free_analyses = get_setting("free_trial_analyses", "1")
     free_opp = get_setting("free_trial_opportunities", "1")
-
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
@@ -323,7 +323,6 @@ def format_analytics(data: dict) -> str:
         opp_pct = 100 - analysis_pct
     else:
         analysis_pct = opp_pct = 0
-
     return (
         f"📊 Analytics\n\n"
         f"👥 Пользователи\n"
@@ -379,6 +378,10 @@ def system_kb() -> InlineKeyboardMarkup:
     notifications = get_setting("notifications_enabled", "off")
     interval = get_setting("notification_interval", "daily")
     hour = get_setting("notification_hour", "9")
+    channel_enabled = get_setting("channel_posting_enabled", "on")
+    channel_interval = get_setting("channel_post_interval_hours", "3")
+    last_post = get_setting("last_channel_post", "")
+    last_post_str = last_post[:16].replace("T", " ") if last_post else "никогда"
 
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
@@ -409,7 +412,21 @@ def system_kb() -> InlineKeyboardMarkup:
             f"📅 Интервал: {'Ежедневно' if interval == 'daily' else 'Еженедельно'}",
             callback_data="system_toggle_interval"
         ),
-        InlineKeyboardButton("📤 Отправить сейчас", callback_data="system_send_now"),
+        InlineKeyboardButton("📤 Отправить уведомление сейчас", callback_data="system_send_now"),
+        InlineKeyboardButton("─── 📢 Канал ───", callback_data="system_noop"),
+        InlineKeyboardButton(
+            f"{'✅' if channel_enabled == 'on' else '❌'} Постинг в канал",
+            callback_data="system_toggle_channel"
+        ),
+        InlineKeyboardButton(
+            f"⏱ Интервал: каждые {channel_interval} ч",
+            callback_data="system_set_channel_interval"
+        ),
+        InlineKeyboardButton(
+            f"🕐 Последний пост: {last_post_str}",
+            callback_data="system_noop"
+        ),
+        InlineKeyboardButton("📤 Опубликовать в канал сейчас", callback_data="system_post_channel_now"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -421,6 +438,11 @@ def system_text() -> str:
     interval = get_setting("notification_interval", "daily")
     last_sent = get_setting("last_notification_sent", "")
     last_sent = last_sent[:19] if last_sent else "никогда"
+    channel_enabled = get_setting("channel_posting_enabled", "on")
+    channel_interval = get_setting("channel_post_interval_hours", "3")
+    last_post = get_setting("last_channel_post", "")
+    last_post_str = last_post[:16].replace("T", " ") if last_post else "никогда"
+    channel_id_str = CHANNEL_ID if CHANNEL_ID else "не задан"
     prompt = get_setting("system_prompt", "Не задан")[:50]
     return (
         f"⚙️ System Settings\n\n"
@@ -428,7 +450,11 @@ def system_text() -> str:
         f"🔔 Уведомления: {'🟢 ON' if notifications == 'on' else '🔴 OFF'}\n"
         f"🕐 Время: {hour}:00 UTC\n"
         f"📅 Интервал: {'Ежедневно' if interval == 'daily' else 'Еженедельно'}\n"
-        f"📤 Последняя рассылка: {last_sent}"
+        f"📤 Последняя рассылка: {last_sent}\n\n"
+        f"📢 Канал: {channel_id_str}\n"
+        f"Постинг: {'🟢 ON' if channel_enabled == 'on' else '🔴 OFF'}\n"
+        f"Интервал: каждые {channel_interval} ч\n"
+        f"Последний пост: {last_post_str}"
     )
 
 
@@ -498,9 +524,7 @@ def register_admin(dp: Dispatcher):
     async def set_free_analyses(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_free_trial_analyses.set()
         current = get_setting("free_trial_analyses", "1")
-        await callback.message.answer(
-            f"Текущий лимит бесплатных анализов: {current}\n\nВведи новый лимит (например: 1):"
-        )
+        await callback.message.answer(f"Текущий лимит бесплатных анализов: {current}\n\nВведи новый лимит:")
 
     @dp.message_handler(state=PricingStates.waiting_free_trial_analyses)
     async def save_free_analyses(message: types.Message, state: FSMContext):
@@ -519,9 +543,7 @@ def register_admin(dp: Dispatcher):
     async def set_free_opp(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_free_trial_opportunities.set()
         current = get_setting("free_trial_opportunities", "1")
-        await callback.message.answer(
-            f"Текущий лимит бесплатных сигналов: {current}\n\nВведи новый лимит (например: 1):"
-        )
+        await callback.message.answer(f"Текущий лимит бесплатных сигналов: {current}\n\nВведи новый лимит:")
 
     @dp.message_handler(state=PricingStates.waiting_free_trial_opportunities)
     async def save_free_opp(message: types.Message, state: FSMContext):
@@ -604,7 +626,7 @@ def register_admin(dp: Dispatcher):
     async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_price.set()
         current = get_setting("subscription_price_ton", "1")
-        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 1.55):")
+        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 2):")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_price)
     async def save_sub_price(message: types.Message, state: FSMContext):
@@ -614,7 +636,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Цена подписки: {message.text.strip()} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 1.55")
+            await message.answer("❌ Введи число, например: 2")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_days")
     async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
@@ -1062,11 +1084,10 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "stats_full")
     async def stats_full(callback: types.CallbackQuery):
         data = get_analytics_data()
-        text = format_analytics(data)
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_full"))
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(format_analytics(data), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "stats_daily")
     async def stats_daily(callback: types.CallbackQuery):
@@ -1127,16 +1148,74 @@ def register_admin(dp: Dispatcher):
         data = get_analytics_data()
         top = "\n".join([f"{i+1}. {m[0][:50]} — {m[1]}x"
                          for i, m in enumerate(data["top_markets"])]) or "Нет данных"
-        text = f"🏆 Топ рынков\n\n{top}"
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_top_markets"))
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(f"🏆 Топ рынков\n\n{top}", reply_markup=kb)
 
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
     async def system_menu(callback: types.CallbackQuery):
         await callback.message.edit_text(system_text(), reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_noop")
+    async def system_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "system_toggle_channel")
+    async def toggle_channel(callback: types.CallbackQuery):
+        current = get_setting("channel_posting_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("channel_posting_enabled", new_val)
+        await callback.answer(f"Постинг в канал: {new_val.upper()}")
+        await callback.message.edit_text(system_text(), reply_markup=system_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "system_set_channel_interval")
+    async def set_channel_interval(callback: types.CallbackQuery, state: FSMContext):
+        await SystemStates.waiting_channel_interval.set()
+        current = get_setting("channel_post_interval_hours", "3")
+        await callback.message.answer(
+            f"Текущий интервал: каждые {current} часа\n\nВведи новый интервал в часах (1-24):"
+        )
+
+    @dp.message_handler(state=SystemStates.waiting_channel_interval)
+    async def save_channel_interval(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 24:
+                await message.answer("❌ Введи число от 1 до 24")
+                return
+            set_setting("channel_post_interval_hours", str(val))
+            await state.finish()
+            await message.answer(f"✅ Интервал постинга: каждые {val} ч")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "system_post_channel_now")
+    async def post_channel_now(callback: types.CallbackQuery):
+        await callback.answer("⏳ Публикую...")
+        await callback.message.edit_text(
+            "⏳ Публикую пост в канал...",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+            )
+        )
+        try:
+            from app import post_to_channel
+            await post_to_channel()
+            await callback.message.edit_text(
+                "✅ Пост опубликован в канал!",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                )
+            )
+        except Exception as e:
+            await callback.message.edit_text(
+                f"❌ Ошибка: {e}",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                )
+            )
 
     @dp.callback_query_handler(lambda c: c.data == "system_edit_prompt")
     async def edit_prompt_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1272,3 +1351,4 @@ def register_admin(dp: Dispatcher):
                     InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
                 )
             )
+ 
