@@ -11,9 +11,8 @@ def _safe_env(name: str, default: str = "") -> str:
 
 
 GEMINI_MODEL_DEFAULT = _safe_env("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_MODEL_NEWS_DEFAULT = _safe_env("GEMINI_MODEL_NEWS", GEMINI_MODEL_DEFAULT)
-GEMINI_MODEL_DECISION_DEFAULT = _safe_env("GEMINI_MODEL_DECISION", GEMINI_MODEL_DEFAULT)
-
+GEMINI_MODEL_NEWS_DEFAULT = "gemini-2.5-flash"
+GEMINI_MODEL_DECISION_DEFAULT = "gemini-2.5-flash"
 try:
     LLM_TIMEOUT = int(_safe_env("LLM_TIMEOUT", "30"))
 except Exception:
