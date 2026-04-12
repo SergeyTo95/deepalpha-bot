@@ -59,12 +59,13 @@ class DecisionAgent:
                 market_probability=market_probability,
                 parsed=parsed,
                 raw_text=raw_response,
+                lang=lang,
             )
             if self._is_valid_result(wrapped):
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
             else:
-                print(f"DecisionAgent.run: invalid result, probability={wrapped.get('probability')} reasoning={str(wrapped.get('reasoning',''))[:50]}")
+                print(f"DecisionAgent.run: invalid, probability={wrapped.get('probability')}")
 
         print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
@@ -110,7 +111,7 @@ class DecisionAgent:
 
         if lang == "ru":
             return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
-Отвечай ТОЛЬКО на русском языке. Будь краток — одна строка на каждый пункт.
+Отвечай ТОЛЬКО на русском языке. Одна строка на каждый пункт.
 
 Вопрос: {question}
 Категория: {category}
@@ -120,17 +121,17 @@ class DecisionAgent:
 Новости: {news_block}
 Настроение: {sentiment}
 
-Дай НЕЗАВИСИМУЮ оценку одной строкой на каждый пункт:
+Заполни ВСЕ 6 пунктов одной строкой каждый:
 
 Вероятность системы: [например "Yes — 65%"]
 Уверенность: [Высокая/Средняя/Низкая]
-Логика: [одно предложение]
+Логика: [одно предложение с обоснованием]
 Основной сценарий: [одно предложение]
 Альтернативный сценарий: [одно предложение]
-Вывод: [одно предложение]""".strip()
+Вывод: [одно предложение с итогом]""".strip()
         else:
             return f"""You are DeepAlpha prediction market expert.
-Respond in English. Be brief — one line per field.
+Respond in English. One line per field.
 
 Market: {question}
 Category: {category}
@@ -140,14 +141,14 @@ Trend: {trend_summary[:150]}
 News: {news_block}
 Sentiment: {sentiment}
 
-Give INDEPENDENT estimate, one line per field:
+Fill ALL 6 fields with one line each:
 
 System Probability: [e.g. "Yes — 65%"]
 Confidence: [High/Medium/Low]
-Reasoning: [one sentence]
+Reasoning: [one sentence with rationale]
 Main Scenario: [one sentence]
 Alternative Scenario: [one sentence]
-Conclusion: [one sentence]""".strip()
+Conclusion: [one sentence summary]""".strip()
 
     def _parse_llm_output(self, text: str) -> Dict[str, str]:
         fields = {
@@ -204,6 +205,7 @@ Conclusion: [one sentence]""".strip()
         market_probability: Any,
         parsed: Dict[str, str],
         raw_text: str,
+        lang: str = "ru",
     ) -> Dict[str, Any]:
         probability = parsed.get("System Probability", "").strip() or "N/A"
         confidence = parsed.get("Confidence", "").strip() or "Medium"
@@ -212,15 +214,15 @@ Conclusion: [one sentence]""".strip()
         alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
         conclusion = parsed.get("Conclusion", "").strip() or ""
 
-        if reasoning and not conclusion:
-            conclusion = reasoning
-        if not main_scenario and reasoning:
+        # Заполняем пустые поля
+        if not conclusion:
+            conclusion = reasoning or ("Анализ завершён на основе доступных данных." if lang == "ru" else "Analysis complete based on available data.")
+        if not reasoning:
+            reasoning = conclusion
+        if not main_scenario:
             main_scenario = reasoning
         if not alt_scenario:
-            if lang_ru := "%" in probability:
-                alt_scenario = "Альтернативный сценарий зависит от изменения новостного фона."
-            else:
-                alt_scenario = "Alternative scenario depends on news flow changes."
+            alt_scenario = ("Альтернативный сценарий возможен при изменении внешних факторов." if lang == "ru" else "Alternative scenario depends on external factor changes.")
 
         return {
             "question": question,
@@ -228,7 +230,7 @@ Conclusion: [one sentence]""".strip()
             "market_probability": market_probability,
             "probability": probability,
             "confidence": confidence,
-            "reasoning": reasoning or conclusion,
+            "reasoning": reasoning,
             "main_scenario": main_scenario,
             "alt_scenario": alt_scenario,
             "conclusion": conclusion,
