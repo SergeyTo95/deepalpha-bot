@@ -1,3 +1,4 @@
+
 from typing import Any, Dict
 
 from services.llm_service import generate_text
@@ -17,8 +18,6 @@ class SummaryAgent:
         reasoning: str,
         lang: str = "ru",
     ) -> Dict[str, Any]:
-        """Дополняет частичный анализ — генерирует сценарии и вывод."""
-
         if not reasoning:
             reasoning = f"Вероятность системы: {probability}. Уверенность: {confidence}."
 
@@ -54,36 +53,36 @@ class SummaryAgent:
     ) -> str:
         if lang == "ru":
             return f"""Ты аналитик предсказательных рынков.
-Отвечай ТОЛЬКО на русском. Одна строка на каждый пункт.
+Отвечай ТОЛЬКО на русском. СТРОГО одна строка на каждый пункт — не больше.
 
 Вопрос: {question}
 Категория: {category}
 Ставки рынка: {market_probability}
 Прогноз AI: {probability}
 Уверенность: {confidence}
-Логика: {reasoning}
+Логика: {reasoning[:200]}
 
-Напиши три пункта:
+Напиши РОВНО три строки — каждый пункт с новой строки:
 
-Основной сценарий: [одно предложение — что скорее всего произойдёт]
-Альтернативный сценарий: [одно предложение — что могло бы изменить исход]
-Вывод: [одно предложение — итог анализа]""".strip()
+Основной сценарий: [одно короткое предложение]
+Альтернативный сценарий: [одно короткое предложение]
+Вывод: [одно короткое предложение]""".strip()
         else:
             return f"""You are a prediction market analyst.
-Respond in English. One line per field.
+Respond in English. STRICTLY one line per field — no more.
 
 Market: {question}
 Category: {category}
 Trader odds: {market_probability}
 AI Forecast: {probability}
 Confidence: {confidence}
-Reasoning: {reasoning}
+Reasoning: {reasoning[:200]}
 
-Write three fields:
+Write EXACTLY three lines:
 
-Main Scenario: [one sentence — most likely outcome]
-Alternative Scenario: [one sentence — what could change the outcome]
-Conclusion: [one sentence — summary of analysis]""".strip()
+Main Scenario: [one short sentence]
+Alternative Scenario: [one short sentence]
+Conclusion: [one short sentence]""".strip()
 
     def _parse(self, text: str) -> Dict[str, Any]:
         result = {
@@ -102,23 +101,23 @@ Conclusion: [one sentence — summary of analysis]""".strip()
             "Conclusion": "conclusion",
         }
 
-        current_key = None
+        all_prefixes = [f"{k}:" for k in russian_map.keys()]
+
         for line in text.splitlines():
             stripped = line.strip()
+            if not stripped:
+                continue
+
             matched = False
             for key, field in russian_map.items():
                 prefix = f"{key}:"
                 if stripped.startswith(prefix):
                     value = stripped[len(prefix):].strip()
-                    result[field] = value
-                    current_key = field
+                    # Берём только первое вхождение
+                    if not result[field]:
+                        result[field] = value
                     matched = True
                     break
-            if not matched and current_key and stripped:
-                if result[current_key]:
-                    result[current_key] += " " + stripped
-                else:
-                    result[current_key] = stripped
 
         return result
 
@@ -135,4 +134,3 @@ Conclusion: [one sentence — summary of analysis]""".strip()
                 "alt_scenario": "Alternative scenario depends on external factor changes.",
                 "conclusion": reasoning or "Analysis complete based on available data.",
             }
-
