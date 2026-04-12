@@ -48,12 +48,11 @@ class DecisionAgent:
 
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
         raw_response = generate_decision_text(prompt)
-        print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
-        print(f"DecisionAgent.run: LLM response text={raw_response[:300]}")
+        print(f"DecisionAgent.run: LLM response FULL length={len(raw_response)}, lines={len(raw_response.splitlines())}")
 
         if raw_response:
             parsed = self._parse_llm_output(raw_response)
-            print(f"DecisionAgent.run: parsed={parsed}")
+            print(f"DecisionAgent.run: parsed probability={parsed.get('System Probability')} confidence={parsed.get('Confidence')}")
             wrapped = self._wrap_llm_result(
                 question=question,
                 category=category,
@@ -65,7 +64,7 @@ class DecisionAgent:
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
             else:
-                print(f"DecisionAgent.run: invalid result, using partial")
+                print(f"DecisionAgent.run: invalid result, probability={wrapped.get('probability')} reasoning={str(wrapped.get('reasoning',''))[:50]}")
 
         print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
@@ -213,13 +212,15 @@ Conclusion: [one sentence]""".strip()
         alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
         conclusion = parsed.get("Conclusion", "").strip() or ""
 
-        # Если reasoning есть но conclusion нет — используем reasoning как conclusion
         if reasoning and not conclusion:
             conclusion = reasoning
         if not main_scenario and reasoning:
             main_scenario = reasoning
         if not alt_scenario:
-            alt_scenario = "Альтернативный сценарий зависит от изменения новостного фона." if "%" in probability else "Alternative scenario depends on news flow changes."
+            if lang_ru := "%" in probability:
+                alt_scenario = "Альтернативный сценарий зависит от изменения новостного фона."
+            else:
+                alt_scenario = "Alternative scenario depends on news flow changes."
 
         return {
             "question": question,
@@ -235,7 +236,6 @@ Conclusion: [one sentence]""".strip()
         }
 
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
-        # Достаточно probability и confidence
         probability = str(result.get("probability", "")).strip()
         confidence = str(result.get("confidence", "")).strip()
 
@@ -244,7 +244,6 @@ Conclusion: [one sentence]""".strip()
         if not confidence:
             return False
 
-        # Должен быть хоть какой-то текст
         reasoning = str(result.get("reasoning", "")).strip()
         conclusion = str(result.get("conclusion", "")).strip()
         if not reasoning and not conclusion:
