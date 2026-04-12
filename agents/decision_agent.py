@@ -51,7 +51,7 @@ class DecisionAgent:
         print(f"DecisionAgent.run: LLM response FULL length={len(raw_response)}, lines={len(raw_response.splitlines())}")
 
         if raw_response:
-            parsed = self._parse_llm_output(raw_response)
+            parsed = self._parse_llm_output(raw_response, market_type=market_type)
             print(f"DecisionAgent.run: parsed probability={parsed.get('System Probability')} confidence={parsed.get('Confidence')}")
             wrapped = self._wrap_llm_result(
                 question=question,
@@ -60,6 +60,7 @@ class DecisionAgent:
                 parsed=parsed,
                 raw_text=raw_response,
                 lang=lang,
+                market_type=market_type,
             )
 
             # Если сценарии пустые — дополняем через SummaryAgent
@@ -117,24 +118,70 @@ class DecisionAgent:
     ) -> str:
 
         options_text = ", ".join(options) if options else "Yes, No"
+        news_block = news_summary[:400] if news_summary else ""
 
-        if market_type == "binary":
-            market_note = "Binary Yes/No market. Give independent % for Yes."
+        if market_type == "multiple_choice" and options:
+            # Специальный промпт для multiple choice
+            if lang == "ru":
+                options_block = "\n".join([f"- {opt}" for opt in options])
+                return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
+Отвечай ТОЛЬКО на русском языке. Одна строка на каждый пункт.
+
+Вопрос: {question}
+Категория: {category}
+Текущие ставки трейдеров: {market_probability}
+Варианты ответа:
+{options_block}
+
+Тренд: {trend_summary[:150]}
+Новости: {news_block}
+Настроение: {sentiment}
+
+Проанализируй КАЖДЫЙ вариант и дай независимую оценку.
+Заполни ВСЕ пункты:
+
+Вероятность системы: [победитель и его вероятность, например "Орбан — 65%"]
+Уверенность: [Высокая/Средняя/Низкая]
+Логика: [одно предложение с обоснованием выбора победителя]
+Расклад по вариантам: [перечисли все варианты с твоей оценкой вероятности через запятую]
+Основной сценарий: [одно предложение]
+Альтернативный сценарий: [одно предложение]
+Вывод: [одно предложение с итогом]""".strip()
+            else:
+                options_block = "\n".join([f"- {opt}" for opt in options])
+                return f"""You are DeepAlpha prediction market expert.
+Respond in English. One line per field.
+
+Market: {question}
+Category: {category}
+Current trader odds: {market_probability}
+Options:
+{options_block}
+
+Trend: {trend_summary[:150]}
+News: {news_block}
+Sentiment: {sentiment}
+
+Analyze EACH option and give independent estimates.
+Fill ALL fields:
+
+System Probability: [winner and probability, e.g. "Orban — 65%"]
+Confidence: [High/Medium/Low]
+Reasoning: [one sentence explaining winner choice]
+Options Breakdown: [list all options with your probability estimate, comma separated]
+Main Scenario: [one sentence]
+Alternative Scenario: [one sentence]
+Conclusion: [one sentence summary]""".strip()
         else:
-            market_note = f"Multiple choice: {options_text}. Pick most likely winner."
-
-        news_block = ""
-        if news_summary:
-            news_block = news_summary[:400]
-
-        if lang == "ru":
-            return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
+            # Стандартный промпт для binary
+            if lang == "ru":
+                return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
 Отвечай ТОЛЬКО на русском языке. Одна строка на каждый пункт.
 
 Вопрос: {question}
 Категория: {category}
 Ставки трейдеров: {market_probability}
-Тип: {market_note}
+Тип: Бинарный рынок Yes/No. Дай независимую оценку % для Yes.
 Тренд: {trend_summary[:150]}
 Новости: {news_block}
 Настроение: {sentiment}
@@ -147,14 +194,14 @@ class DecisionAgent:
 Основной сценарий: [одно предложение]
 Альтернативный сценарий: [одно предложение]
 Вывод: [одно предложение с итогом]""".strip()
-        else:
-            return f"""You are DeepAlpha prediction market expert.
+            else:
+                return f"""You are DeepAlpha prediction market expert.
 Respond in English. One line per field.
 
 Market: {question}
 Category: {category}
 Trader odds: {market_probability}
-Type: {market_note}
+Type: Binary Yes/No market. Give independent % for Yes.
 Trend: {trend_summary[:150]}
 News: {news_block}
 Sentiment: {sentiment}
@@ -168,7 +215,7 @@ Main Scenario: [one sentence]
 Alternative Scenario: [one sentence]
 Conclusion: [one sentence summary]""".strip()
 
-    def _parse_llm_output(self, text: str) -> Dict[str, str]:
+    def _parse_llm_output(self, text: str, market_type: str = "binary") -> Dict[str, str]:
         fields = {
             "System Probability": "",
             "Confidence": "",
@@ -176,6 +223,7 @@ Conclusion: [one sentence summary]""".strip()
             "Main Scenario": "",
             "Alternative Scenario": "",
             "Conclusion": "",
+            "Options Breakdown": "",
         }
 
         russian_map = {
@@ -188,6 +236,8 @@ Conclusion: [one sentence summary]""".strip()
             "Альтернативный сценарий": "Alternative Scenario",
             "Вывод": "Conclusion",
             "Заключение": "Conclusion",
+            "Расклад по вариантам": "Options Breakdown",
+            "Варианты": "Options Breakdown",
         }
 
         current_key = None
@@ -224,6 +274,7 @@ Conclusion: [one sentence summary]""".strip()
         parsed: Dict[str, str],
         raw_text: str,
         lang: str = "ru",
+        market_type: str = "binary",
     ) -> Dict[str, Any]:
         probability = parsed.get("System Probability", "").strip() or "N/A"
         confidence = parsed.get("Confidence", "").strip() or "Medium"
@@ -231,6 +282,7 @@ Conclusion: [one sentence summary]""".strip()
         main_scenario = parsed.get("Main Scenario", "").strip() or ""
         alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
         conclusion = parsed.get("Conclusion", "").strip() or ""
+        options_breakdown = parsed.get("Options Breakdown", "").strip() or ""
 
         if not conclusion:
             conclusion = reasoning
@@ -253,6 +305,8 @@ Conclusion: [one sentence summary]""".strip()
             "main_scenario": main_scenario,
             "alt_scenario": alt_scenario,
             "conclusion": conclusion,
+            "options_breakdown": options_breakdown,
+            "market_type": market_type,
             "raw_decision_text": raw_text,
         }
 
@@ -322,6 +376,8 @@ Conclusion: [one sentence summary]""".strip()
             "main_scenario": main_scenario,
             "alt_scenario": alt_scenario,
             "conclusion": conclusion,
+            "options_breakdown": "",
+            "market_type": "binary",
             "raw_decision_text": "",
         }
 
@@ -383,3 +439,4 @@ Conclusion: [one sentence summary]""".strip()
         if "Yes" in cleaned: return "Yes"
         if "No" in cleaned: return "No"
         return cleaned[0] if cleaned else "Наиболее вероятный исход"
+ 
