@@ -1,7 +1,6 @@
+
 import os
 import requests
-
-from db.database import get_setting
 
 
 def _safe_env(name: str, default: str = "") -> str:
@@ -22,11 +21,7 @@ except Exception:
 
 
 def _get_active_model() -> str:
-    try:
-        model = get_setting("active_model", "")
-        return model if model else GEMINI_MODEL_DEFAULT
-    except Exception:
-        return GEMINI_MODEL_DEFAULT
+    return _safe_env("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _get_providers(model: str) -> list:
@@ -36,12 +31,6 @@ def _get_providers(model: str) -> list:
         key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
         if key:
             providers.append({"key": key, "model": model})
-
-    # Fallback на ту же модель
-    for i in range(1, 56):
-        key = _safe_env("GEMINI_API_KEY") if i == 1 else _safe_env(f"GEMINI_API_KEY_{i}")
-        if key:
-            providers.append({"key": key, "model": "gemini-2.5-flash"})
 
     return providers
 
@@ -193,20 +182,16 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
 
 
 async def generate_news_text_async(prompt: str) -> str:
-    model = get_setting("active_model_news", "") or GEMINI_MODEL_NEWS_DEFAULT
-    return await generate_text_async(prompt=prompt, model=model)
+    return await generate_text_async(prompt=prompt, model=GEMINI_MODEL_NEWS_DEFAULT)
 
 
 async def generate_decision_text_async(prompt: str) -> str:
-    model = get_setting("active_model_decision", "") or GEMINI_MODEL_DECISION_DEFAULT
-    return await generate_text_async(prompt=prompt, model=model)
+    return await generate_text_async(prompt=prompt, model=GEMINI_MODEL_DECISION_DEFAULT)
 
 
 def generate_news_text(prompt: str) -> str:
-    model = get_setting("active_model_news", "") or GEMINI_MODEL_NEWS_DEFAULT
-    return generate_text(prompt=prompt, model=model)
+    return generate_text(prompt=prompt, model=GEMINI_MODEL_NEWS_DEFAULT)
 
 
 def generate_decision_text(prompt: str) -> str:
-    model = get_setting("active_model_decision", "") or GEMINI_MODEL_DECISION_DEFAULT
-    return generate_text(prompt=prompt, model=model)
+    return generate_text(prompt=prompt, model=GEMINI_MODEL_DECISION_DEFAULT)
