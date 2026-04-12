@@ -1,3 +1,4 @@
+
 import os
 import time
 import json
@@ -81,6 +82,8 @@ def init_db():
         daily_analyses INTEGER DEFAULT 0,
         daily_opportunities INTEGER DEFAULT 0,
         daily_reset_date TEXT DEFAULT NULL,
+        free_analyses_used INTEGER DEFAULT 0,
+        free_opportunities_used INTEGER DEFAULT 0,
         created_at TEXT,
         updated_at TEXT
     )
@@ -147,6 +150,8 @@ def init_db():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyses INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_opportunities INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_reset_date TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_analyses_used INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_opportunities_used INTEGER DEFAULT 0",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referral_bonus_ton REAL DEFAULT 0",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referrer_id BIGINT DEFAULT NULL",
         "ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'tokens'",
@@ -164,9 +169,9 @@ def init_db():
     count = cursor.fetchone()[0]
     if count == 0:
         default_packages = [
-            ("Стартовый", 10, 1.0, 0, 1, 1),
-            ("Популярный", 50, 4.0, 20, 1, 2),
-            ("Профи", 100, 7.0, 30, 1, 3),
+            ("Стартовый", 10, 0.5, 0, 1, 1),
+            ("Популярный", 50, 2.0, 20, 1, 2),
+            ("Профи", 100, 3.5, 30, 1, 3),
         ]
         for name, tokens, price, discount, is_active, sort_order in default_packages:
             cursor.execute("""
@@ -215,8 +220,7 @@ def get_token_packages(active_only: bool = True) -> List[Dict[str, Any]]:
         if active_only:
             cursor.execute("""
             SELECT id, name, tokens, price_ton, discount_percent, is_active, sort_order
-            FROM token_packages WHERE is_active = 1
-            ORDER BY sort_order ASC
+            FROM token_packages WHERE is_active = 1 ORDER BY sort_order ASC
             """)
         else:
             cursor.execute("""
@@ -267,8 +271,7 @@ def create_token_package(name: str, tokens: int, price_ton: float, discount_perc
         sort_order = cursor.fetchone()[0]
         cursor.execute("""
         INSERT INTO token_packages (name, tokens, price_ton, discount_percent, is_active, sort_order, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, 1, %s, %s, %s)
-        RETURNING id
+        VALUES (%s, %s, %s, %s, 1, %s, %s, %s) RETURNING id
         """, (name, tokens, price_ton, discount_percent, sort_order,
               datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
         package_id = cursor.fetchone()[0]
@@ -288,8 +291,7 @@ def update_token_package(package_id: int, name: str, tokens: int, price_ton: flo
     try:
         cursor.execute("""
         UPDATE token_packages SET name = %s, tokens = %s, price_ton = %s,
-        discount_percent = %s, is_active = %s, updated_at = %s
-        WHERE id = %s
+        discount_percent = %s, is_active = %s, updated_at = %s WHERE id = %s
         """, (name, tokens, price_ton, discount_percent,
               1 if is_active else 0, datetime.utcnow().isoformat(), package_id))
         conn.commit()
@@ -312,12 +314,97 @@ def delete_token_package(package_id: int) -> None:
 
 
 def find_package_by_amount(ton_amount: float, tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
-    """Находит пакет по сумме оплаты с допуском."""
     packages = get_token_packages(active_only=True)
     for package in packages:
         if abs(package["price_ton"] - ton_amount) <= tolerance:
             return package
     return None
+
+
+# ===== FREE TRIAL =====
+
+def is_free_trial_enabled() -> bool:
+    return get_setting("free_trial_enabled", "on") == "on"
+
+
+def get_free_trial_limits() -> Dict[str, int]:
+    return {
+        "analyses": int(get_setting("free_trial_analyses", "1")),
+        "opportunities": int(get_setting("free_trial_opportunities", "1")),
+    }
+
+
+def can_use_free_trial(user_id: int, stat: str) -> bool:
+    """Проверяет может ли пользователь использовать бесплатный пробный запрос."""
+    if not is_free_trial_enabled():
+        return False
+    limits = get_free_trial_limits()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if stat == "analyses":
+            cursor.execute("SELECT free_analyses_used FROM users WHERE user_id = %s", (user_id,))
+            row = cursor.fetchone()
+            used = row[0] if row else 0
+            return used < limits["analyses"]
+        elif stat == "opportunities":
+            cursor.execute("SELECT free_opportunities_used FROM users WHERE user_id = %s", (user_id,))
+            row = cursor.fetchone()
+            used = row[0] if row else 0
+            return used < limits["opportunities"]
+        return False
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def use_free_trial(user_id: int, stat: str) -> None:
+    """Отмечает использование бесплатного пробного запроса."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if stat == "analyses":
+            cursor.execute("""
+            UPDATE users SET free_analyses_used = free_analyses_used + 1, updated_at = %s
+            WHERE user_id = %s
+            """, (datetime.utcnow().isoformat(), user_id))
+        elif stat == "opportunities":
+            cursor.execute("""
+            UPDATE users SET free_opportunities_used = free_opportunities_used + 1, updated_at = %s
+            WHERE user_id = %s
+            """, (datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"use_free_trial error: {e}")
+    finally:
+        conn.close()
+
+
+def get_free_trial_status(user_id: int) -> Dict[str, Any]:
+    """Возвращает статус использования пробных запросов."""
+    limits = get_free_trial_limits()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT free_analyses_used, free_opportunities_used FROM users WHERE user_id = %s
+        """, (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {"analyses_used": 0, "opportunities_used": 0,
+                    "analyses_limit": limits["analyses"], "opportunities_limit": limits["opportunities"]}
+        return {
+            "analyses_used": row[0] or 0,
+            "opportunities_used": row[1] or 0,
+            "analyses_limit": limits["analyses"],
+            "opportunities_limit": limits["opportunities"],
+        }
+    except Exception:
+        return {"analyses_used": 0, "opportunities_used": 0,
+                "analyses_limit": limits["analyses"], "opportunities_limit": limits["opportunities"]}
+    finally:
+        conn.close()
 
 
 # ===== PENDING PAYMENTS =====
@@ -359,10 +446,8 @@ def delete_pending(user_id: int) -> None:
 def set_subscription(user_id: int, days: int = 30) -> str:
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute("SELECT subscription_until FROM users WHERE user_id = %s", (user_id,))
     row = cursor.fetchone()
-
     now = datetime.utcnow()
     if row and row[0]:
         try:
@@ -372,11 +457,9 @@ def set_subscription(user_id: int, days: int = 30) -> str:
             new_until = now + timedelta(days=days)
     else:
         new_until = now + timedelta(days=days)
-
     until_str = new_until.isoformat()
-    cursor.execute("""
-    UPDATE users SET subscription_until = %s, updated_at = %s WHERE user_id = %s
-    """, (until_str, now.isoformat(), user_id))
+    cursor.execute("UPDATE users SET subscription_until = %s, updated_at = %s WHERE user_id = %s",
+                   (until_str, now.isoformat(), user_id))
     conn.commit()
     conn.close()
     return until_str
@@ -413,15 +496,12 @@ def get_subscribed_users() -> List[Dict[str, Any]]:
     now = datetime.utcnow().isoformat()
     cursor.execute("""
     SELECT user_id, username, first_name, subscription_until
-    FROM users WHERE subscription_until > %s AND is_banned = 0
-    ORDER BY user_id
+    FROM users WHERE subscription_until > %s AND is_banned = 0 ORDER BY user_id
     """, (now,))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "user_id": r[0], "username": r[1],
-        "first_name": r[2], "subscription_until": r[3],
-    } for r in rows]
+    return [{"user_id": r[0], "username": r[1], "first_name": r[2], "subscription_until": r[3]}
+            for r in rows]
 
 
 # ===== DAILY LIMITS =====
@@ -442,9 +522,7 @@ def get_daily_usage(user_id: int) -> Dict[str, int]:
     cursor = conn.cursor()
     _reset_daily_if_needed(cursor, user_id)
     conn.commit()
-    cursor.execute("""
-    SELECT daily_analyses, daily_opportunities FROM users WHERE user_id = %s
-    """, (user_id,))
+    cursor.execute("SELECT daily_analyses, daily_opportunities FROM users WHERE user_id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -460,9 +538,7 @@ def increment_daily(user_id: int, stat: str) -> None:
     _reset_daily_if_needed(cursor, user_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
     cursor.execute(f"""
-    UPDATE users SET {stat} = {stat} + 1,
-    daily_reset_date = %s, updated_at = %s
-    WHERE user_id = %s
+    UPDATE users SET {stat} = {stat} + 1, daily_reset_date = %s, updated_at = %s WHERE user_id = %s
     """, (today, datetime.utcnow().isoformat(), user_id))
     conn.commit()
     conn.close()
@@ -486,15 +562,11 @@ def add_to_signal_history(user_id: int, question: str) -> None:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        INSERT INTO signal_history (user_id, question, created_at)
-        VALUES (%s, %s, %s)
+        INSERT INTO signal_history (user_id, question, created_at) VALUES (%s, %s, %s)
         """, (user_id, question, datetime.utcnow().isoformat()))
         cursor.execute("""
         DELETE FROM signal_history WHERE id IN (
-            SELECT id FROM signal_history
-            WHERE user_id = %s
-            ORDER BY id DESC
-            OFFSET 20
+            SELECT id FROM signal_history WHERE user_id = %s ORDER BY id DESC OFFSET 20
         )
         """, (user_id,))
         conn.commit()
@@ -509,9 +581,7 @@ def get_signal_history(user_id: int) -> List[str]:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        SELECT question FROM signal_history
-        WHERE user_id = %s
-        ORDER BY id DESC LIMIT 20
+        SELECT question FROM signal_history WHERE user_id = %s ORDER BY id DESC LIMIT 20
         """, (user_id,))
         rows = cursor.fetchall()
         return [r[0] for r in rows]
@@ -529,11 +599,8 @@ def save_signal_cache(category: str, data: dict) -> None:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-        INSERT INTO signal_cache (category, data, updated_at)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (category) DO UPDATE SET
-            data = EXCLUDED.data,
-            updated_at = EXCLUDED.updated_at
+        INSERT INTO signal_cache (category, data, updated_at) VALUES (%s, %s, %s)
+        ON CONFLICT (category) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at
         """, (category, json.dumps(data, ensure_ascii=False), int(time.time())))
         conn.commit()
     except Exception as e:
@@ -546,17 +613,14 @@ def get_signal_cache(category: str, max_age_seconds: int = 3600) -> Optional[dic
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-        SELECT data, updated_at FROM signal_cache WHERE category = %s
-        """, (category,))
+        cursor.execute("SELECT data, updated_at FROM signal_cache WHERE category = %s", (category,))
         row = cursor.fetchone()
         if not row:
             return None
-        data_str, updated_at = row[0], row[1]
-        age = int(time.time()) - updated_at
+        age = int(time.time()) - row[1]
         if age > max_age_seconds:
             return None
-        return json.loads(data_str)
+        return json.loads(row[0])
     except Exception as e:
         print(f"get_signal_cache error: {e}")
         return None
@@ -571,15 +635,8 @@ def get_all_cache_status() -> Dict[str, Any]:
         cursor.execute("SELECT category, updated_at FROM signal_cache")
         rows = cursor.fetchall()
         now = int(time.time())
-        result = {}
-        for r in rows:
-            age = now - r[1]
-            result[r[0]] = {
-                "updated_at": r[1],
-                "age_minutes": age // 60,
-                "is_fresh": age < 3600,
-            }
-        return result
+        return {r[0]: {"updated_at": r[1], "age_minutes": (now - r[1]) // 60, "is_fresh": (now - r[1]) < 3600}
+                for r in rows}
     except Exception as e:
         print(f"get_all_cache_status error: {e}")
         return {}
@@ -592,29 +649,24 @@ def get_all_cache_status() -> Dict[str, Any]:
 def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: int = None) -> None:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referred_by FROM users WHERE user_id = %s", (user_id,))
+    cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
     existing = cursor.fetchone()
-
     today = datetime.utcnow().strftime("%Y-%m-%d")
     if existing:
         cursor.execute("""
-        UPDATE users SET username = %s, first_name = %s, updated_at = %s
-        WHERE user_id = %s
+        UPDATE users SET username = %s, first_name = %s, updated_at = %s WHERE user_id = %s
         """, (username, first_name, datetime.utcnow().isoformat(), user_id))
     else:
         cursor.execute("""
         INSERT INTO users (user_id, username, first_name, referred_by,
-        daily_reset_date, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        daily_reset_date, free_analyses_used, free_opportunities_used, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, 0, 0, %s, %s)
         """, (user_id, username, first_name, referred_by, today,
               datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
-
         if referred_by:
             cursor.execute("""
-            UPDATE users SET total_referrals = total_referrals + 1, updated_at = %s
-            WHERE user_id = %s
+            UPDATE users SET total_referrals = total_referrals + 1, updated_at = %s WHERE user_id = %s
             """, (datetime.utcnow().isoformat(), referred_by))
-
     conn.commit()
     conn.close()
 
@@ -626,7 +678,8 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     SELECT user_id, username, first_name, token_balance, is_banned, is_vip,
            total_analyses, total_opportunities, referred_by,
            referral_earnings_ton, total_referrals, subscription_until,
-           daily_analyses, daily_opportunities, created_at
+           daily_analyses, daily_opportunities, free_analyses_used,
+           free_opportunities_used, created_at
     FROM users WHERE user_id = %s
     """, (user_id,))
     row = cursor.fetchone()
@@ -640,7 +693,8 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
         "referred_by": row[8], "referral_earnings_ton": row[9] or 0,
         "total_referrals": row[10] or 0, "subscription_until": row[11],
         "daily_analyses": row[12] or 0, "daily_opportunities": row[13] or 0,
-        "created_at": row[14],
+        "free_analyses_used": row[14] or 0, "free_opportunities_used": row[15] or 0,
+        "created_at": row[16],
     }
 
 
@@ -666,8 +720,7 @@ def add_tokens(user_id: int, amount: int) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-    UPDATE users SET token_balance = token_balance + %s, updated_at = %s
-    WHERE user_id = %s
+    UPDATE users SET token_balance = token_balance + %s, updated_at = %s WHERE user_id = %s
     """, (amount, datetime.utcnow().isoformat(), user_id))
     conn.commit()
     cursor.execute("SELECT token_balance FROM users WHERE user_id = %s", (user_id,))
@@ -743,18 +796,16 @@ def get_referrals(user_id: int) -> List[Dict[str, Any]]:
     """, (user_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "user_id": r[0], "username": r[1], "first_name": r[2],
-        "total_analyses": r[3], "total_opportunities": r[4], "created_at": r[5],
-    } for r in rows]
+    return [{"user_id": r[0], "username": r[1], "first_name": r[2],
+             "total_analyses": r[3], "total_opportunities": r[4], "created_at": r[5]}
+            for r in rows]
 
 
 def add_referral_earnings(referrer_id: int, ton_amount: float) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-    UPDATE users SET referral_earnings_ton = referral_earnings_ton + %s, updated_at = %s
-    WHERE user_id = %s
+    UPDATE users SET referral_earnings_ton = referral_earnings_ton + %s, updated_at = %s WHERE user_id = %s
     """, (ton_amount, datetime.utcnow().isoformat(), referrer_id))
     conn.commit()
     conn.close()
@@ -765,15 +816,12 @@ def get_top_referrers(limit: int = 10) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute("""
     SELECT user_id, username, first_name, total_referrals, referral_earnings_ton
-    FROM users WHERE total_referrals > 0
-    ORDER BY referral_earnings_ton DESC LIMIT %s
+    FROM users WHERE total_referrals > 0 ORDER BY referral_earnings_ton DESC LIMIT %s
     """, (limit,))
     rows = cursor.fetchall()
     conn.close()
-    return [{
-        "user_id": r[0], "username": r[1], "first_name": r[2],
-        "total_referrals": r[3], "referral_earnings_ton": r[4],
-    } for r in rows]
+    return [{"user_id": r[0], "username": r[1], "first_name": r[2],
+             "total_referrals": r[3], "referral_earnings_ton": r[4]} for r in rows]
 
 
 # ===== TRANSACTIONS =====
@@ -795,8 +843,7 @@ def save_transaction(tx_hash: str, user_id: int, ton_amount: float, tokens_grant
         cursor.execute("""
         INSERT INTO transactions (tx_hash, user_id, ton_amount, tokens_granted,
                                   referral_bonus_ton, referrer_id, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (tx_hash) DO NOTHING
+        VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (tx_hash) DO NOTHING
         """, (tx_hash, user_id, ton_amount, tokens_granted,
               referral_bonus_ton, referrer_id, datetime.utcnow().isoformat()))
         conn.commit()
@@ -811,14 +858,12 @@ def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]
     cursor = conn.cursor()
     cursor.execute("""
     SELECT tx_hash, ton_amount, tokens_granted, referral_bonus_ton, created_at
-    FROM transactions WHERE user_id = %s
-    ORDER BY id DESC LIMIT %s
+    FROM transactions WHERE user_id = %s ORDER BY id DESC LIMIT %s
     """, (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return [{"tx_hash": r[0], "ton_amount": r[1], "tokens_granted": r[2],
-             "referral_bonus_ton": r[3], "created_at": r[4]}
-            for r in rows]
+             "referral_bonus_ton": r[3], "created_at": r[4]} for r in rows]
 
 
 # ===== ANALYSES =====
@@ -826,24 +871,18 @@ def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]
 def save_analysis(url: str, result: Union[Dict[str, Any], AnalysisRecord], user_id: int = 0):
     conn = get_connection()
     cursor = conn.cursor()
-
     if isinstance(result, dict):
         record = AnalysisRecord.from_result(url, result)
     else:
         record = result
-
     created_at = record.created_at or datetime.utcnow().isoformat()
-
     cursor.execute("""
-    INSERT INTO analyses (
-        url, question, category, market_probability, system_probability,
-        confidence, reasoning, main_scenario, alt_scenario, conclusion, created_at, user_id
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        record.url, record.question, record.category, record.market_probability,
-        record.system_probability, record.confidence, record.reasoning,
-        record.main_scenario, record.alt_scenario, record.conclusion, created_at, user_id
-    ))
+    INSERT INTO analyses (url, question, category, market_probability, system_probability,
+        confidence, reasoning, main_scenario, alt_scenario, conclusion, created_at, user_id)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (record.url, record.question, record.category, record.market_probability,
+          record.system_probability, record.confidence, record.reasoning,
+          record.main_scenario, record.alt_scenario, record.conclusion, created_at, user_id))
     conn.commit()
     conn.close()
 
@@ -853,19 +892,16 @@ def save_opportunity(result: Dict[str, Any], user_id: int = 0):
     cursor = conn.cursor()
     created_at = result.get("created_at") or datetime.utcnow().isoformat()
     cursor.execute("""
-    INSERT INTO opportunities (
-        url, question, category, market_probability, system_probability,
+    INSERT INTO opportunities (url, question, category, market_probability, system_probability,
         confidence, reasoning, main_scenario, alt_scenario, conclusion,
-        opportunity_score, created_at, user_id
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        result.get("url", ""), result.get("question", ""), result.get("category", ""),
-        result.get("market_probability", ""), result.get("probability", ""),
-        result.get("confidence", ""), result.get("reasoning", ""),
-        result.get("main_scenario", ""), result.get("alt_scenario", ""),
-        result.get("conclusion", ""), int(result.get("opportunity_score", 0) or 0),
-        created_at, user_id
-    ))
+        opportunity_score, created_at, user_id)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (result.get("url", ""), result.get("question", ""), result.get("category", ""),
+          result.get("market_probability", ""), result.get("probability", ""),
+          result.get("confidence", ""), result.get("reasoning", ""),
+          result.get("main_scenario", ""), result.get("alt_scenario", ""),
+          result.get("conclusion", ""), int(result.get("opportunity_score", 0) or 0),
+          created_at, user_id))
     conn.commit()
     conn.close()
 
@@ -896,8 +932,7 @@ def get_top_opportunities(limit: int = 10) -> List[Dict[str, Any]]:
     conn.close()
     return [{"url": r[0], "question": r[1], "category": r[2], "market_probability": r[3],
              "system_probability": r[4], "confidence": r[5], "opportunity_score": r[6],
-             "created_at": r[7]}
-            for r in rows]
+             "created_at": r[7]} for r in rows]
 
 
 def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
@@ -912,3 +947,5 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     return [{"url": r[0], "question": r[1], "category": r[2],
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
+
+логикой .py` с настройкой пробного периода
