@@ -948,4 +948,4 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
 
-логикой .py` с настройкой пробного периода
+
