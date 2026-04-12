@@ -1,4 +1,3 @@
-
 import random
 from typing import Any, Dict, List, Optional
 
@@ -190,9 +189,9 @@ class OpportunityAgent:
         crowd_behavior = str(market_data.get("crowd_behavior", "")).lower()
         reasoning = str(decision_data.get("reasoning", "")).lower()
 
-        if "high" in confidence:
+        if "high" in confidence or "высок" in confidence:
             score += 25
-        elif "medium" in confidence:
+        elif "medium" in confidence or "средн" in confidence:
             score += 15
         else:
             score += 5
@@ -217,9 +216,9 @@ class OpportunityAgent:
         score += self._parse_numeric_bonus(liquidity, max_bonus=20)
         score += self._parse_numeric_bonus(volume, max_bonus=20)
 
-        if "independent probability" in reasoning or "market" in reasoning:
+        if "market" in reasoning:
             score += 5
-        if "related markets" in reasoning or "external signals" in reasoning:
+        if "related" in reasoning or "external" in reasoning:
             score += 5
 
         return score
@@ -251,46 +250,89 @@ class OpportunityAgent:
         s = (text or "").lower()
 
         politics_keywords = [
-            "trump", "biden", "harris", "election", "senate", "white house",
-            "president", "congress", "vote", "eu", "europe", "summit",
-            "government", "minister", "prime minister", "parliament",
-            "republican", "democrat", "electoral", "campaign", "putin",
-            "zelensky", "macron", "nato", "un ", "united nations",
+            "trump", "biden", "harris", "vance", "election", "senate", "white house",
+            "president", "congress", "vote", "republican", "democrat", "electoral",
+            "campaign", "cabinet", "administration", "governor", "mayor", "midterm",
+            "putin", "zelensky", "macron", "orban", "modi", "xi jinping",
+            "nato", "un ", "united nations", "eu ", "european union", "parliament",
+            "prime minister", "chancellor", "minister", "government", "summit",
+            "embassy", "ambassador", "diplomacy", "treaty", "sanctions",
+            "iran", "israel", "ukraine", "russia", "china", "war", "conflict",
+            "ceasefire", "military", "missile", "nuclear", "strike", "attack",
+            "invasion", "troops", "weapon", "bomb", "drone", "navy",
+            "venezuela", "taiwan", "north korea", "pakistan",
         ]
+
         crypto_keywords = [
-            "bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
+            "bitcoin", "btc", "eth", "ethereum", "solana", "sol", "crypto",
             "token", "sec", "etf", "ton", "airdrop", "defi", "memecoin",
-            "blockchain", "coinbase", "binance", "altcoin", "nft",
+            "blockchain", "coinbase", "binance", "altcoin", "nft", "usdc",
+            "xrp", "ripple", "cardano", "ada", "dogecoin", "doge",
+            "polygon", "matic", "avalanche", "avax", "chainlink",
+            "stablecoin", "halving", "mining", "wallet", "exchange", "dex",
         ]
+
         sports_keywords = [
-            "nba", "nfl", "mlb", "nhl", "ufc", "mma", "football", "soccer",
-            "tennis", "golf", "match", "cup", "championship", "playoffs",
-            "finals", "super bowl", "world series", "stanley cup",
-            "march madness", "olympics", "wimbledon", "grand slam",
+            "nba", "nfl", "mlb", "nhl", "ufc", "mma", "fifa", "nascar",
+            "premier league", "champions league", "la liga", "serie a",
+            "bundesliga", "ligue 1", "super bowl", "world cup", "stanley cup",
+            "world series", "march madness", "masters", "wimbledon", "grand slam",
+            "olympics", "formula 1", "f1", "grand prix",
+            "football", "soccer", "basketball", "baseball", "hockey", "tennis",
+            "golf", "boxing", "wrestling", "cricket", "rugby",
+            "esports", "league of legends", "valorant", "cs2", "dota",
             "celtics", "lakers", "warriors", "heat", "bulls", "knicks",
             "nets", "mavericks", "nuggets", "suns", "clippers", "bucks",
             "76ers", "spurs", "rockets", "pistons", "pacers", "hawks",
+            "thunder", "trail blazers", "jazz", "timberwolves", "grizzlies",
             "chiefs", "patriots", "cowboys", "eagles", "49ers", "ravens",
-            "yankees", "dodgers", "red sox", "cubs", "astros",
+            "bengals", "bills", "dolphins", "steelers", "browns", "broncos",
+            "yankees", "dodgers", "red sox", "cubs", "astros", "braves",
+            "mets", "cardinals", "giants", "phillies",
             "arsenal", "chelsea", "liverpool", "manchester", "barcelona",
-            "real madrid", "psg", "juventus", "bayern",
-            "federer", "djokovic", "nadal", "serena", "williams",
-            "win the", "will win", "champion", "title", "trophy",
+            "real madrid", "psg", "juventus", "bayern", "inter", "ac milan",
+            "atletico", "borussia", "ajax", "porto", "benfica",
+            "djokovic", "nadal", "federer", "alcaraz", "sinner", "swiatek",
+            "championship", "playoffs", "finals", "match", "tournament",
+            "cup", "trophy", "title", "win the", "will win", "champion",
+            "season", "transfer", "roster", "score", "goal",
         ]
+
         economy_keywords = [
             "inflation", "fed", "federal reserve", "rate", "recession", "gdp",
             "cpi", "jobs", "oil", "economy", "yield", "unemployment",
             "interest rate", "wall street", "stock market", "s&p", "nasdaq",
-            "dollar", "eur", "currency", "trade war", "tariff",
-        ]
-        tech_keywords = [
-            "openai", "chatgpt", "ai ", "artificial intelligence",
-            "google", "apple", "tesla", "nvidia", "microsoft", "meta",
-            "launch", "chip", "model", "xai", "anthropic", "grok",
-            "spacex", "starship", "amazon", "iphone", "android",
+            "dow jones", "dollar", "currency", "trade war", "tariff",
+            "debt", "deficit", "budget", "treasury", "bond", "fomc",
+            "powell", "ecb", "imf", "world bank", "brent", "wti",
+            "gold", "silver", "commodities", "bankruptcy", "merger", "ipo",
         ]
 
-        # Порядок важен — Sports перед Crypto
+        tech_keywords = [
+            "openai", "chatgpt", "gpt", "ai ", "artificial intelligence",
+            "google", "apple", "tesla", "nvidia", "microsoft", "meta",
+            "amazon", "spacex", "starship", "anthropic", "grok", "xai",
+            "gemini", "claude", "llm", "model", "launch", "chip",
+            "iphone", "android", "samsung", "intel", "amd",
+            "robot", "autonomous", "self-driving", "electric vehicle", "ev",
+            "neuralink", "starlink", "satellite",
+        ]
+
+        culture_keywords = [
+            "oscar", "grammy", "emmy", "golden globe", "academy award",
+            "box office", "album", "song", "artist", "celebrity",
+            "movie", "film", "show", "series", "netflix", "disney",
+            "taylor swift", "beyonce", "drake", "kanye", "rihanna",
+            "billboard", "spotify", "superbowl halftime",
+        ]
+
+        weather_keywords = [
+            "hurricane", "tornado", "earthquake", "flood", "wildfire",
+            "temperature", "celsius", "fahrenheit", "snowfall", "rainfall",
+            "climate", "el nino", "storm", "typhoon", "cyclone",
+        ]
+
+        # Порядок важен — Politics перед Sports
         if any(word in s for word in politics_keywords):
             return "Politics"
         if any(word in s for word in sports_keywords):
@@ -301,6 +343,10 @@ class OpportunityAgent:
             return "Economy"
         if any(word in s for word in tech_keywords):
             return "Tech"
+        if any(word in s for word in culture_keywords):
+            return "Culture"
+        if any(word in s for word in weather_keywords):
+            return "Weather"
         return "Other"
 
     def _looks_like_noise(self, question: str) -> bool:
