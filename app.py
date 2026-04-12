@@ -7,18 +7,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
 from bot.admin import register_admin
-from services.ton_service import get_transactions, parse_payment, calculate_tokens
+from services.ton_service import get_transactions, parse_payment
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
     get_all_pending, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache, get_all_cache_status,
+    get_token_packages, find_package_by_amount,
 )
 
 register_admin(telegram_bot.dp)
 
 CATEGORIES = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
+
+
+def calculate_tokens_for_amount(ton_amount: float) -> int:
+    """Рассчитывает количество токенов по сумме — сначала ищет пакет, потом базовую цену."""
+    # Ищем подходящий пакет с допуском 0.05 TON
+    package = find_package_by_amount(ton_amount, tolerance=0.05)
+    if package:
+        print(f"TON PAYMENT: found package '{package['name']}' — {package['tokens']} tokens")
+        return package["tokens"]
+
+    # Fallback — базовая цена из настроек
+    try:
+        token_price = float(get_setting("token_price_ton", "0.1"))
+        if token_price <= 0:
+            token_price = 0.1
+        tokens = int(ton_amount / token_price)
+        print(f"TON PAYMENT: no package found, calculated {tokens} tokens at {token_price} TON each")
+        return tokens
+    except Exception:
+        return int(ton_amount / 0.1)
 
 
 async def update_signal_cache():
@@ -37,14 +58,9 @@ async def update_signal_cache():
             )
 
             if result and result.get("question") != "No strong opportunity found":
-                # Проверяем актуальность рынка
-                market_data = result.get("market_data", {})
-                end_date = market_data.get("date_context", "") if market_data else ""
-
-                result["cached_at"] = int(__import__("time").time())
+                import time
+                result["cached_at"] = int(time.time())
                 result["cache_category"] = category
-                result["end_date"] = end_date
-
                 save_signal_cache(category, result)
                 print(f"✅ Cache updated for {category}: {result.get('question', '')[:50]}")
             else:
@@ -60,14 +76,13 @@ async def update_signal_cache():
 
 
 async def cache_worker():
-    """Воркер обновляет кэш каждый час."""
-    # Первое обновление через 2 минуты после старта
-    await asyncio.sleep(120)
+    """Воркер обновляет кэш каждые 6 часов."""
+    await asyncio.sleep(21600)  # Первое обновление через 6 часов
     await update_signal_cache()
 
     while True:
         try:
-            await asyncio.sleep(3600)  # Каждый час
+            await asyncio.sleep(21600)
             await update_signal_cache()
         except Exception as e:
             print(f"CACHE WORKER ERROR: {e}")
@@ -117,6 +132,7 @@ async def check_ton_payments():
 
                 ensure_user(user_id)
 
+                # Реферальный бонус
                 referral_bonus_ton = 0
                 referrer_id = None
                 user = get_user(user_id)
@@ -127,7 +143,9 @@ async def check_ton_payments():
                     except Exception:
                         ref_percent = 10
                     referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
-                    referral_tokens = calculate_tokens(referral_bonus_ton)
+
+                    # Начисляем реферальные токены рефереру
+                    referral_tokens = calculate_tokens_for_amount(referral_bonus_ton)
                     if referral_tokens > 0:
                         add_tokens(referrer_id, referral_tokens)
                     add_referral_earnings(referrer_id, referral_bonus_ton)
@@ -168,7 +186,8 @@ async def check_ton_payments():
                         print(f"SUB NOTIFY ERROR: {e}")
 
                 else:
-                    tokens = calculate_tokens(ton_amount)
+                    # Рассчитываем токены с учётом пакетов
+                    tokens = calculate_tokens_for_amount(ton_amount)
                     if tokens <= 0:
                         continue
 
@@ -180,12 +199,21 @@ async def check_ton_payments():
                         referrer_id=referrer_id,
                     )
 
+                    # Определяем название пакета для уведомления
+                    package = find_package_by_amount(ton_amount, tolerance=0.05)
+                    package_name = f"«{package['name']}»" if package else ""
+                    discount_text = ""
+                    if package and package.get("discount_percent", 0) > 0:
+                        discount_text = f"\n🏷 Скидка: {package['discount_percent']}%"
+
                     try:
                         await telegram_bot.bot.send_message(
                             user_id,
                             f"✅ Оплата получена!\n\n"
-                            f"💎 TON: {ton_amount:.2f}\n"
-                            f"🪙 Начислено токенов: {tokens}\n"
+                            f"💎 TON: {ton_amount:.4f}\n"
+                            f"📦 Пакет: {package_name}\n"
+                            f"🪙 Начислено токенов: {tokens}"
+                            f"{discount_text}\n"
                             f"💰 Баланс: {new_balance} токенов"
                         )
                     except Exception as e:
@@ -205,7 +233,6 @@ async def send_daily_notifications():
 
         all_users = get_all_users(limit=10000)
         subscribed_ids = {u["user_id"] for u in get_subscribed_users()}
-        opp_price = get_setting("opportunity_price_tokens", "20")
 
         # Берём лучший кэшированный сигнал
         best_cached = None
@@ -238,7 +265,9 @@ async def send_daily_notifications():
             f"👉 Нажми 💡 Сигнал часа"
         )
 
-        conf_emoji = "🟢" if "high" in confidence.lower() else ("🟡" if "medium" in confidence.lower() else "🔴")
+        conf_emoji = "🟢" if "high" in confidence.lower() or "высок" in confidence.lower() else (
+            "🟡" if "medium" in confidence.lower() or "средн" in confidence.lower() else "🔴"
+        )
         full_text = (
             f"🔔 DeepAlpha — Сигнал дня\n"
             f"{'─' * 30}\n\n"
@@ -347,7 +376,7 @@ async def main():
 
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
-    #asyncio.create_task(cache_worker())
+    # asyncio.create_task(cache_worker())  # Раскомментируй когда нужен кэш
     await run_polling()
 
 
