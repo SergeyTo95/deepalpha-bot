@@ -61,6 +61,24 @@ class DecisionAgent:
                 raw_text=raw_response,
                 lang=lang,
             )
+
+            # Если сценарии пустые — дополняем через SummaryAgent
+            if not wrapped.get("main_scenario") or not wrapped.get("conclusion"):
+                print(f"DecisionAgent.run: calling SummaryAgent to fill missing fields")
+                from agents.summary_agent import SummaryAgent
+                summary = SummaryAgent().run(
+                    question=question,
+                    category=category,
+                    market_probability=str(market_probability),
+                    probability=wrapped.get("probability", ""),
+                    confidence=wrapped.get("confidence", ""),
+                    reasoning=wrapped.get("reasoning", ""),
+                    lang=lang,
+                )
+                wrapped["main_scenario"] = summary.get("main_scenario") or wrapped.get("main_scenario", "")
+                wrapped["alt_scenario"] = summary.get("alt_scenario") or wrapped.get("alt_scenario", "")
+                wrapped["conclusion"] = summary.get("conclusion") or wrapped.get("conclusion", "")
+
             if self._is_valid_result(wrapped):
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
@@ -214,15 +232,16 @@ Conclusion: [one sentence summary]""".strip()
         alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
         conclusion = parsed.get("Conclusion", "").strip() or ""
 
-        # Заполняем пустые поля
         if not conclusion:
-            conclusion = reasoning or ("Анализ завершён на основе доступных данных." if lang == "ru" else "Analysis complete based on available data.")
+            conclusion = reasoning
         if not reasoning:
             reasoning = conclusion
-        if not main_scenario:
-            main_scenario = reasoning
         if not alt_scenario:
-            alt_scenario = ("Альтернативный сценарий возможен при изменении внешних факторов." if lang == "ru" else "Alternative scenario depends on external factor changes.")
+            alt_scenario = (
+                "Альтернативный сценарий возможен при изменении внешних факторов."
+                if lang == "ru"
+                else "Alternative scenario depends on external factor changes."
+            )
 
         return {
             "question": question,
