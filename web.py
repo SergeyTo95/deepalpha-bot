@@ -2,9 +2,18 @@
 import os
 import json
 from aiohttp import web
-from db.database import get_user, get_setting, save_pending, is_subscribed, get_subscription_until
+from db.database import (
+    get_user, get_setting, save_pending, is_subscribed,
+    get_subscription_until, get_token_packages,
+)
 
 PORT = int(os.getenv("PORT", 3000))
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
 
 
 async def handle_index(request):
@@ -23,7 +32,7 @@ async def handle_manifest(request):
         return web.Response(
             text=content,
             content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"}
+            headers=CORS_HEADERS,
         )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
@@ -52,7 +61,7 @@ async def handle_static(request):
             return web.Response(
                 text=content,
                 content_type=content_type,
-                headers={"Access-Control-Allow-Origin": "*"}
+                headers=CORS_HEADERS,
             )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
@@ -67,11 +76,25 @@ async def handle_user_api(request):
             return web.Response(
                 text=json.dumps({"error": "Not found"}),
                 content_type="application/json",
-                headers={"Access-Control-Allow-Origin": "*"},
-                status=404
+                headers=CORS_HEADERS,
+                status=404,
             )
+
         subscribed = is_subscribed(uid)
         sub_until = get_subscription_until(uid)
+
+        # Загружаем активные пакеты
+        packages_raw = get_token_packages(active_only=True)
+        packages = [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "tokens": p["tokens"],
+                "price_ton": p["price_ton"],
+                "discount_percent": p["discount_percent"],
+            }
+            for p in packages_raw
+        ]
 
         data = {
             "user_id": user["user_id"],
@@ -84,20 +107,23 @@ async def handle_user_api(request):
             "token_price": get_setting("token_price_ton", "0.1"),
             "analysis_price": get_setting("analysis_price_tokens", "10"),
             "opp_price": get_setting("opportunity_price_tokens", "20"),
+            "cached_price": get_setting("cached_signal_price_tokens", "5"),
             "subscription_price": get_setting("subscription_price_ton", "1"),
             "subscription_days": get_setting("subscription_days", "30"),
+            "packages": packages,
         }
+
         return web.Response(
-            text=json.dumps(data),
+            text=json.dumps(data, ensure_ascii=False),
             content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"}
+            headers=CORS_HEADERS,
         )
     except Exception as e:
         return web.Response(
             text=json.dumps({"error": str(e)}),
             content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-            status=500
+            headers=CORS_HEADERS,
+            status=500,
         )
 
 
@@ -107,37 +133,34 @@ async def handle_pending(request):
         user_id = int(data.get("user_id", 0))
         amount = float(data.get("amount", 0))
         payment_type = data.get("payment_type", "tokens")
+
         if user_id <= 0:
             return web.Response(
                 text=json.dumps({"error": "Invalid user_id"}),
                 content_type="application/json",
-                headers={"Access-Control-Allow-Origin": "*"},
-                status=400
+                headers=CORS_HEADERS,
+                status=400,
             )
+
         save_pending(user_id, amount, payment_type)
         print(f"PENDING SAVED: user_id={user_id}, amount={amount}, type={payment_type}")
+
         return web.Response(
             text=json.dumps({"ok": True}),
             content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"}
+            headers=CORS_HEADERS,
         )
     except Exception as e:
         return web.Response(
             text=json.dumps({"error": str(e)}),
             content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-            status=500
+            headers=CORS_HEADERS,
+            status=500,
         )
 
 
 async def handle_options(request):
-    return web.Response(
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        }
-    )
+    return web.Response(headers=CORS_HEADERS)
 
 
 async def handle_health(request):
