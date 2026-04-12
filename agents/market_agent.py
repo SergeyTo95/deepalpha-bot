@@ -69,38 +69,106 @@ class MarketAgent:
         s = (text or "").lower()
 
         politics_keywords = [
-            "trump", "biden", "election", "senate", "white house",
-            "president", "congress", "vote", "eu", "europe", "summit",
-            "government", "minister", "prime minister", "parliament",
-        ]
-        crypto_keywords = [
-            "bitcoin", "btc", "eth", "ethereum", "solana", "crypto",
-            "token", "sec", "etf", "ton", "airdrop", "defi", "memecoin",
-        ]
-        sports_keywords = [
-            "nba", "nfl", "mlb", "ufc", "football", "soccer",
-            "tennis", "golf", "match", "cup", "championship", "playoffs",
-        ]
-        economy_keywords = [
-            "inflation", "fed", "rate", "recession", "gdp",
-            "cpi", "jobs", "oil", "economy", "yield", "unemployment",
-        ]
-        tech_keywords = [
-            "openai", "ai", "google", "apple", "tesla", "nvidia",
-            "launch", "chip", "model", "xai", "anthropic",
+            "trump", "biden", "harris", "vance", "election", "senate", "white house",
+            "president", "congress", "vote", "republican", "democrat", "electoral",
+            "campaign", "cabinet", "administration", "governor", "mayor", "midterm",
+            "putin", "zelensky", "macron", "orban", "modi", "xi jinping",
+            "nato", "un ", "united nations", "eu ", "european union", "parliament",
+            "prime minister", "chancellor", "minister", "government", "summit",
+            "embassy", "ambassador", "diplomacy", "treaty", "sanctions",
+            "iran", "israel", "ukraine", "russia", "china", "war", "conflict",
+            "ceasefire", "military", "missile", "nuclear", "strike", "attack",
+            "invasion", "troops", "weapon", "bomb", "drone", "navy",
+            "venezuela", "taiwan", "north korea", "pakistan",
+            "peace deal", "peace talks", "negotiations",
+            "geopolitical", "coup", "protest", "revolution",
         ]
 
+        crypto_keywords = [
+            "bitcoin", "btc", "eth", "ethereum", "solana", "sol", "crypto",
+            "token", "sec", "etf", "ton", "airdrop", "defi", "memecoin",
+            "blockchain", "coinbase", "binance", "altcoin", "nft", "usdc",
+            "xrp", "ripple", "cardano", "ada", "dogecoin", "doge",
+            "polygon", "matic", "avalanche", "avax", "chainlink",
+            "stablecoin", "halving", "mining", "wallet", "exchange", "dex",
+        ]
+
+        sports_keywords = [
+            "nba", "nfl", "mlb", "nhl", "ufc", "mma", "fifa", "nascar",
+            "premier league", "champions league", "la liga", "serie a",
+            "bundesliga", "ligue 1", "super bowl", "world cup", "stanley cup",
+            "world series", "march madness", "masters", "wimbledon", "grand slam",
+            "olympics", "formula 1", "f1", "grand prix",
+            "football", "soccer", "basketball", "baseball", "hockey", "tennis",
+            "golf", "boxing", "wrestling", "cricket", "rugby",
+            "esports", "league of legends", "valorant", "cs2", "dota",
+            "celtics", "lakers", "warriors", "heat", "bulls", "knicks",
+            "nets", "mavericks", "nuggets", "suns", "clippers", "bucks",
+            "76ers", "spurs", "rockets", "pistons", "pacers", "hawks",
+            "thunder", "trail blazers", "jazz", "timberwolves", "grizzlies",
+            "chiefs", "patriots", "cowboys", "eagles", "49ers", "ravens",
+            "bengals", "bills", "dolphins", "steelers", "browns", "broncos",
+            "yankees", "dodgers", "red sox", "cubs", "astros", "braves",
+            "mets", "cardinals", "giants", "phillies",
+            "arsenal", "chelsea", "liverpool", "manchester", "barcelona",
+            "real madrid", "psg", "juventus", "bayern", "inter", "ac milan",
+            "atletico", "borussia", "ajax", "porto", "benfica",
+            "djokovic", "nadal", "federer", "alcaraz", "sinner", "swiatek",
+            "championship", "playoffs", "finals", "match", "tournament",
+            "cup", "trophy", "title", "win the", "will win", "champion",
+            "season", "transfer", "roster", "score", "goal",
+        ]
+
+        economy_keywords = [
+            "inflation", "fed", "federal reserve", "rate", "recession", "gdp",
+            "cpi", "jobs", "oil", "economy", "yield", "unemployment",
+            "interest rate", "wall street", "stock market", "s&p", "nasdaq",
+            "dow jones", "dollar", "currency", "trade war", "tariff",
+            "debt", "deficit", "budget", "treasury", "bond", "fomc",
+            "powell", "ecb", "imf", "world bank", "brent", "wti",
+            "gold", "silver", "commodities", "bankruptcy", "merger", "ipo",
+            "earnings", "revenue", "profit", "gdp growth",
+        ]
+
+        tech_keywords = [
+            "openai", "chatgpt", "gpt", "ai ", "artificial intelligence",
+            "google", "apple", "tesla", "nvidia", "microsoft", "meta",
+            "amazon", "spacex", "starship", "anthropic", "grok", "xai",
+            "gemini", "claude", "llm", "model", "launch", "chip",
+            "iphone", "android", "samsung", "intel", "amd",
+            "robot", "autonomous", "self-driving", "electric vehicle", "ev",
+            "neuralink", "starlink", "satellite", "cybertruck",
+        ]
+
+        culture_keywords = [
+            "oscar", "grammy", "emmy", "golden globe", "academy award",
+            "box office", "album", "song", "artist", "celebrity",
+            "movie", "film", "show", "series", "netflix", "disney",
+            "taylor swift", "beyonce", "drake", "kanye", "rihanna",
+            "billboard", "spotify", "superbowl halftime",
+        ]
+
+        weather_keywords = [
+            "hurricane", "tornado", "earthquake", "flood", "wildfire",
+            "temperature", "celsius", "fahrenheit", "snowfall", "rainfall",
+            "climate", "el nino", "storm", "typhoon", "cyclone",
+        ]
+
+        # Порядок важен — Politics перед Sports
         if any(word in s for word in politics_keywords):
             return "Politics"
-        if any(word in s for word in crypto_keywords):
-            return "Crypto"
         if any(word in s for word in sports_keywords):
             return "Sports"
+        if any(word in s for word in crypto_keywords):
+            return "Crypto"
         if any(word in s for word in economy_keywords):
             return "Economy"
         if any(word in s for word in tech_keywords):
             return "Tech"
-
+        if any(word in s for word in culture_keywords):
+            return "Culture"
+        if any(word in s for word in weather_keywords):
+            return "Weather"
         return "Other"
 
     def _fallback(self, url: str, slug: str) -> Dict[str, Any]:
