@@ -13,6 +13,7 @@ def _safe_env(name: str, default: str = "") -> str:
 GEMINI_MODEL_DEFAULT = _safe_env("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_MODEL_NEWS_DEFAULT = "gemini-2.5-flash"
 GEMINI_MODEL_DECISION_DEFAULT = "gemini-2.5-flash"
+
 try:
     LLM_TIMEOUT = int(_safe_env("LLM_TIMEOUT", "30"))
 except Exception:
@@ -25,7 +26,6 @@ def _get_active_model() -> str:
 
 def _get_providers(model: str) -> list:
     providers = []
-    # Только первый ключ — платный рабочий
     key = _safe_env("GEMINI_API_KEY")
     if key:
         providers.append({"key": key, "model": model})
@@ -52,8 +52,8 @@ def generate_text(prompt: str, model: str = "") -> str:
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 512,
+                "temperature": 0.3,
+                "maxOutputTokens": 1024,
             }
         }
 
@@ -127,8 +127,8 @@ async def generate_text_async(prompt: str, model: str = "") -> str:
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 512,
+                    "temperature": 0.3,
+                    "maxOutputTokens": 1024,
                 }
             }
 
