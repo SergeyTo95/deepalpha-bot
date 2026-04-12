@@ -42,7 +42,6 @@ CATEGORY_LABELS = {
         "Sports": "⚽ Спорт",
         "Economy": "📈 Экономика",
         "Tech": "💻 Технологии",
-        "All": "🔀 Все",
     },
     "en": {
         "Politics": "🌍 Politics",
@@ -50,7 +49,6 @@ CATEGORY_LABELS = {
         "Sports": "⚽ Sports",
         "Economy": "📈 Economy",
         "Tech": "💻 Tech",
-        "All": "🔀 All",
     }
 }
 
@@ -138,8 +136,6 @@ def get_category_keyboard(user_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     buttons = []
     for cat, label in labels.items():
-        if cat == "All":
-            continue
         buttons.append(InlineKeyboardButton(label, callback_data=f"signal_cat_{cat}"))
     kb.add(*buttons)
     return kb
@@ -248,9 +244,19 @@ def _format_analysis(result: dict, uid: int) -> str:
     alt_scenario = _escape(result.get("alt_scenario", ""))
     conclusion = _escape(result.get("conclusion", ""))
     conf_emoji = _confidence_emoji(confidence)
+    market_type = result.get("market_type", "binary")
+    options_breakdown = _escape(result.get("options_breakdown", ""))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
+
+    # Блок расклада по вариантам для multiple choice
+    breakdown_block = ""
+    if market_type == "multiple_choice" and options_breakdown:
+        if lang == "ru":
+            breakdown_block = f"\n\n📊 Расклад по вариантам:\n{options_breakdown}"
+        else:
+            breakdown_block = f"\n\n📊 Options Breakdown:\n{options_breakdown}"
 
     if lang == "ru":
         return (
@@ -260,7 +266,8 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"🏷 Категория: {cat}\n"
             f"📊 Рынок: {market_prob}\n"
             f"🎯 Прогноз: {sys_prob}\n"
-            f"{conf_emoji} Уверенность: {confidence}\n\n"
+            f"{conf_emoji} Уверенность: {confidence}\n"
+            f"{breakdown_block}\n\n"
             f"💭 Логика:\n{reasoning}\n\n"
             f"✅ Основной сценарий:\n{main_scenario}\n\n"
             f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
@@ -276,7 +283,8 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"🏷 Category: {cat}\n"
             f"📊 Market: {market_prob}\n"
             f"🎯 Forecast: {sys_prob}\n"
-            f"{conf_emoji} Confidence: {confidence}\n\n"
+            f"{conf_emoji} Confidence: {confidence}\n"
+            f"{breakdown_block}\n\n"
             f"💭 Reasoning:\n{reasoning}\n\n"
             f"✅ Main Scenario:\n{main_scenario}\n\n"
             f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
@@ -302,7 +310,6 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
 
-    # Метка кэша
     cache_label = ""
     if cached:
         import time
@@ -421,24 +428,18 @@ async def signal_of_hour_handler(message: types.Message):
     subscribed = is_subscribed(uid)
     user = get_user(uid)
     lang = get_user_lang(uid)
-
-    # Проверяем доступ
     paid_mode = get_setting("paid_mode", "off")
-    cached_price = get_setting("cached_signal_price_tokens", "5")
 
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "opportunities"):
-            # Лимит — берём токены
             if paid_mode == "on" and not _check_tokens(uid, "cached_signal_price_tokens", "5"):
                 await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
                 return
-
     elif paid_mode == "on":
         if not _check_tokens(uid, "cached_signal_price_tokens", "5"):
             await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
             return
 
-    # Показываем выбор категории
     await message.answer(
         t(uid, "choose_category"),
         reply_markup=get_category_keyboard(uid)
@@ -453,15 +454,13 @@ async def signal_category_handler(callback: types.CallbackQuery):
 
     await callback.answer()
 
-    # Берём из кэша
     cached = get_signal_cache(category, max_age_seconds=3600)
 
     if not cached or cached.get("question") == "No strong opportunity found":
-        # Кэш пустой — уведомим когда будет готово
         await callback.message.edit_text(t(uid, "cache_empty"))
 
-        # Запускаем фоновое обновление и уведомление
         async def notify_when_ready():
+            import asyncio
             await asyncio.sleep(5)
             from agents.opportunity_agent import OpportunityAgent
             try:
@@ -477,7 +476,6 @@ async def signal_category_handler(callback: types.CallbackQuery):
                     text = _format_opportunity(result, uid, cached=True)
                     await bot.send_message(uid, text, parse_mode="HTML", reply_markup=get_main_keyboard(uid))
 
-                    # Списываем
                     subscribed = is_subscribed(uid)
                     user = get_user(uid)
                     paid_mode = get_setting("paid_mode", "off")
@@ -494,10 +492,10 @@ async def signal_category_handler(callback: types.CallbackQuery):
             except Exception as e:
                 print(f"notify_when_ready error: {e}")
 
+        import asyncio
         asyncio.create_task(notify_when_ready())
         return
 
-    # Есть кэш — отдаём мгновенно
     subscribed = is_subscribed(uid)
     user = get_user(uid)
     paid_mode = get_setting("paid_mode", "off")
