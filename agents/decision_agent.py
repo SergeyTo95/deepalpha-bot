@@ -51,7 +51,7 @@ class DecisionAgent:
         print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
         print(f"DecisionAgent.run: LLM response text={raw_response[:300]}")
 
-        if raw_response and not raw_response.lower().startswith("llm service is not configured"):
+        if raw_response:
             parsed = self._parse_llm_output(raw_response)
             print(f"DecisionAgent.run: parsed={parsed}")
             wrapped = self._wrap_llm_result(
@@ -65,7 +65,7 @@ class DecisionAgent:
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
             else:
-                print(f"DecisionAgent.run: invalid result, fields={[(k, v[:30] if v else '') for k, v in wrapped.items() if isinstance(v, str)]}")
+                print(f"DecisionAgent.run: invalid result, using partial")
 
         print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
@@ -111,46 +111,44 @@ class DecisionAgent:
 
         if lang == "ru":
             return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
-Отвечай ТОЛЬКО на русском языке.
+Отвечай ТОЛЬКО на русском языке. Будь краток — одна строка на каждый пункт.
 
 Вопрос: {question}
 Категория: {category}
-Ставки трейдеров (не опрос, отражает денежный поток): {market_probability}
+Ставки трейдеров: {market_probability}
 Тип: {market_note}
-Тренд: {trend_summary[:200]}
+Тренд: {trend_summary[:150]}
 Новости: {news_block}
 Настроение: {sentiment}
 
-Дай НЕЗАВИСИМУЮ оценку. НЕ копируй ставки трейдеров.
-Если ставки очень односторонние — объясни почему или поспорь с ними.
+Дай НЕЗАВИСИМУЮ оценку одной строкой на каждый пункт:
 
-Вероятность системы: [например "Yes — 65%" или "Trump — 55%"]
+Вероятность системы: [например "Yes — 65%"]
 Уверенность: [Высокая/Средняя/Низкая]
-Логика: [2 предложения на русском]
-Основной сценарий: [1 предложение на русском]
-Альтернативный сценарий: [1 предложение на русском]
-Вывод: [1 предложение на русском]""".strip()
+Логика: [одно предложение]
+Основной сценарий: [одно предложение]
+Альтернативный сценарий: [одно предложение]
+Вывод: [одно предложение]""".strip()
         else:
             return f"""You are DeepAlpha prediction market expert.
-Respond in English.
+Respond in English. Be brief — one line per field.
 
 Market: {question}
 Category: {category}
-Trader odds (NOT a poll): {market_probability}
+Trader odds: {market_probability}
 Type: {market_note}
-Trend: {trend_summary[:200]}
+Trend: {trend_summary[:150]}
 News: {news_block}
 Sentiment: {sentiment}
 
-Give INDEPENDENT estimate. Do NOT copy trader odds.
-If odds are very one-sided — explain why or challenge them.
+Give INDEPENDENT estimate, one line per field:
 
-System Probability: [e.g. "Yes — 65%" or "Trump — 55%"]
+System Probability: [e.g. "Yes — 65%"]
 Confidence: [High/Medium/Low]
-Reasoning: [2 sentences]
-Main Scenario: [1 sentence]
-Alternative Scenario: [1 sentence]
-Conclusion: [1 sentence]""".strip()
+Reasoning: [one sentence]
+Main Scenario: [one sentence]
+Alternative Scenario: [one sentence]
+Conclusion: [one sentence]""".strip()
 
     def _parse_llm_output(self, text: str) -> Dict[str, str]:
         fields = {
@@ -215,13 +213,21 @@ Conclusion: [1 sentence]""".strip()
         alt_scenario = parsed.get("Alternative Scenario", "").strip() or ""
         conclusion = parsed.get("Conclusion", "").strip() or ""
 
+        # Если reasoning есть но conclusion нет — используем reasoning как conclusion
+        if reasoning and not conclusion:
+            conclusion = reasoning
+        if not main_scenario and reasoning:
+            main_scenario = reasoning
+        if not alt_scenario:
+            alt_scenario = "Альтернативный сценарий зависит от изменения новостного фона." if "%" in probability else "Alternative scenario depends on news flow changes."
+
         return {
             "question": question,
             "category": category,
             "market_probability": market_probability,
             "probability": probability,
             "confidence": confidence,
-            "reasoning": reasoning,
+            "reasoning": reasoning or conclusion,
             "main_scenario": main_scenario,
             "alt_scenario": alt_scenario,
             "conclusion": conclusion,
@@ -229,11 +235,21 @@ Conclusion: [1 sentence]""".strip()
         }
 
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
-        required = ["probability", "confidence", "reasoning", "conclusion"]
-        for field in required:
-            value = str(result.get(field, "")).strip()
-            if not value or value == "N/A":
-                return False
+        # Достаточно probability и confidence
+        probability = str(result.get("probability", "")).strip()
+        confidence = str(result.get("confidence", "")).strip()
+
+        if not probability or probability == "N/A":
+            return False
+        if not confidence:
+            return False
+
+        # Должен быть хоть какой-то текст
+        reasoning = str(result.get("reasoning", "")).strip()
+        conclusion = str(result.get("conclusion", "")).strip()
+        if not reasoning and not conclusion:
+            return False
+
         return True
 
     def _fallback_decision(
