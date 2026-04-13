@@ -1,4 +1,3 @@
-
 import os
 import logging
 from typing import Dict
@@ -246,19 +245,38 @@ def _build_news_block(sources: list, lang: str) -> str:
     return block
 
 
+def _get_communication_data(result: dict) -> dict:
+    """Получает данные от CommunicationAgent или строит их из result."""
+    from agents.communication_agent import CommunicationAgent
+    try:
+        agent = CommunicationAgent()
+        return agent.run(result)
+    except Exception as e:
+        print(f"CommunicationAgent error: {e}")
+        return {}
+
+
 def _format_analysis(result: dict, uid: int) -> str:
     lang = get_user_lang(uid)
     q = _escape(result.get("question", ""))
     cat = _escape(result.get("category", ""))
     market_prob = _escape(result.get("market_probability", ""))
-    sys_prob = _escape(result.get("probability", ""))
     confidence = _escape(result.get("confidence", ""))
     market_type = result.get("market_type", "binary")
     options_breakdown = _escape(result.get("options_breakdown", ""))
     conf_emoji = _confidence_emoji(confidence)
 
-    # Получаем интерпретацию от CommunicationAgent
-    communication_output = _escape(result.get("communication_output", ""))
+    # Получаем semantic данные от CommunicationAgent
+    comm = _get_communication_data(result)
+
+    # display_prediction — единственный источник для прогноза
+    display_prediction = _escape(comm.get("display_prediction", "") or result.get("probability", ""))
+    semantic_reasoning = _escape(comm.get("reasoning", "") or result.get("reasoning", ""))
+    semantic_scenario = _escape(comm.get("main_scenario", "") or result.get("main_scenario", ""))
+    semantic_alt = _escape(comm.get("alt_scenario", "") or result.get("alt_scenario", ""))
+    semantic_conclusion = _escape(comm.get("conclusion", "") or result.get("conclusion", ""))
+    alpha_label = comm.get("alpha_label", "")
+    alpha_message = _escape(comm.get("alpha_message", ""))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
@@ -272,7 +290,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             breakdown_block = f"\n\n📊 Options Breakdown:\n{options_breakdown}"
 
     if lang == "ru":
-        header = (
+        text = (
             f"🔍 DeepAlpha Analysis\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
@@ -280,9 +298,20 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"📊 Рынок: {market_prob}\n"
             f"{conf_emoji} Уверенность: {confidence}"
             f"{breakdown_block}\n\n"
+            f"🎯 Прогноз: {display_prediction}\n"
         )
+        if semantic_reasoning:
+            text += f"\n💭 Логика:\n{semantic_reasoning}\n"
+        if semantic_scenario:
+            text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
+        if semantic_alt:
+            text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
+        if alpha_label and alpha_message:
+            text += f"\n{alpha_label}:\n{alpha_message}\n"
+        text += f"\n{'─' * 30}\n"
+        text += f"📝 Вывод: {semantic_conclusion}"
     else:
-        header = (
+        text = (
             f"🔍 DeepAlpha Analysis\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
@@ -290,37 +319,20 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"📊 Market: {market_prob}\n"
             f"{conf_emoji} Confidence: {confidence}"
             f"{breakdown_block}\n\n"
+            f"🎯 Forecast: {display_prediction}\n"
         )
+        if semantic_reasoning:
+            text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
+        if semantic_scenario:
+            text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
+        if semantic_alt:
+            text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
+        if alpha_label and alpha_message:
+            text += f"\n{alpha_label}:\n{alpha_message}\n"
+        text += f"\n{'─' * 30}\n"
+        text += f"📝 Conclusion: {semantic_conclusion}"
 
-    # Используем communication_output если есть, иначе стандартный формат
-    if communication_output:
-        body = communication_output
-    else:
-        reasoning = _escape(result.get("reasoning", ""))
-        main_scenario = _escape(result.get("main_scenario", ""))
-        alt_scenario = _escape(result.get("alt_scenario", ""))
-        conclusion = _escape(result.get("conclusion", ""))
-
-        if lang == "ru":
-            body = (
-                f"🎯 Прогноз: {sys_prob}\n\n"
-                f"💭 Логика:\n{reasoning}\n\n"
-                f"✅ Основной сценарий:\n{main_scenario}\n\n"
-                f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
-                f"{'─' * 30}\n"
-                f"📝 Вывод: {conclusion}"
-            )
-        else:
-            body = (
-                f"🎯 Forecast: {sys_prob}\n\n"
-                f"💭 Reasoning:\n{reasoning}\n\n"
-                f"✅ Main Scenario:\n{main_scenario}\n\n"
-                f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
-                f"{'─' * 30}\n"
-                f"📝 Conclusion: {conclusion}"
-            )
-
-    return header + body + news_block
+    return text + news_block
 
 
 def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
