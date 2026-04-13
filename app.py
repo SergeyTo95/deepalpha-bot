@@ -76,18 +76,16 @@ async def post_to_channel():
         if not markets:
             markets = list_markets(limit=50, offset=0)
 
-        # Логируем первый рынок для отладки URL
+        # Логируем первый рынок для отладки
         if markets:
             m0 = markets[0]
-            print(f"DEBUG URL: {m0.get('url', 'NONE')}")
-            print(f"DEBUG SLUG: {m0.get('slug', 'NONE')}")
-            print(f"DEBUG EVENT_SLUG: {m0.get('eventSlug', 'NONE')}")
-            print(f"DEBUG KEYS: {list(m0.keys())[:15]}")
+            print(f"📢 DEBUG SLUG: {m0.get('slug', 'NONE')}")
+            print(f"📢 DEBUG KEYS: {list(m0.keys())[:15]}")
 
         agent = MarketAgent()
         candidates = []
 
-        # Сначала ищем рынки нужной категории
+        # Ищем рынки нужной категории
         for m in markets:
             normalized = normalize_market_data(m)
             if not normalized:
@@ -131,7 +129,7 @@ async def post_to_channel():
                 "raw": m,
             })
 
-        # Если нет кандидатов в нужной категории — берём любые
+        # Если нет кандидатов в нужной категории — берём любые кроме Other
         if not candidates:
             print(f"📢 No {category_filter} markets, using any category")
             for m in markets:
@@ -147,6 +145,9 @@ async def post_to_channel():
                 market_prob = normalized.get("market_probability", "Unknown")
                 if market_prob == "Unknown":
                     continue
+                detected = agent._detect_category(question)
+                if detected == "Other":
+                    continue
                 try:
                     outcome_prices = m.get("outcomePrices", "")
                     if isinstance(outcome_prices, str):
@@ -160,7 +161,6 @@ async def post_to_channel():
                         continue
                 except Exception:
                     pass
-                detected = agent._detect_category(question)
                 candidates.append({
                     "id": market_id,
                     "question": question,
@@ -179,18 +179,8 @@ async def post_to_channel():
         category = market["category"]
         raw = market["raw"]
 
-        # Получаем URL — пробуем все возможные поля
-        url = (
-            raw.get("url") or
-            raw.get("marketUrl") or
-            raw.get("market_url") or
-            ""
-        )
-
-        # Если URL нет — строим из eventSlug + slug
-        if not url:
-            url = build_market_url(raw)
-
+        # Строим правильный URL
+        url = build_market_url(raw)
         print(f"📢 FINAL URL: {url}")
 
         category_emoji = {
@@ -223,14 +213,13 @@ async def post_to_channel():
         if market["id"]:
             shown.add(market["id"])
             if len(shown) > 200:
-                shown_list = list(shown)[-200:]
-                shown = set(shown_list)
+                shown = set(list(shown)[-200:])
             set_setting("channel_shown_markets", ",".join(filter(None, shown)))
 
         set_setting("last_channel_post", datetime.now(timezone.utc).isoformat())
 
     except Exception as e:
-        print(f"CHANNEL POST ERROR: {e}")
+        print(f"📢 CHANNEL POST ERROR: {e}")
         import traceback
         traceback.print_exc()
 
