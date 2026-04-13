@@ -35,27 +35,15 @@ def extract_slug_from_url(url: str) -> str:
 
 
 def _clean_slug(slug: str) -> str:
-    """Убирает числовые суффиксы-ID из slug.
-    
-    Примеры:
-    'megaeth-market-cap-fdv-2b-one-day-after-launch-738-867-649-272-765' 
-        -> 'megaeth-market-cap-fdv-2b-one-day-after-launch'
-    'will-brazil-win-the-2026-fifa-world-cup-183' 
-        -> 'will-brazil-win-the-2026-fifa-world-cup'
-    'will-trump-win-2028' 
-        -> 'will-trump-win-2028' (год не трогаем)
-    """
+    """Убирает числовые суффиксы-ID из slug."""
     if not slug:
         return ""
-    # Убираем цепочки числовых суффиксов из 3+ цифр
     cleaned = re.sub(r'(-\d{3,})+$', '', slug)
     return cleaned if cleaned else slug
 
 
 def build_market_url(raw_market: Dict[str, Any]) -> str:
     """Строит правильный URL для рынка Polymarket."""
-
-    # Сначала берём готовый URL из API
     url = (
         raw_market.get("url", "") or
         raw_market.get("marketUrl", "") or
@@ -64,29 +52,93 @@ def build_market_url(raw_market: Dict[str, Any]) -> str:
     if url and url.startswith("https://polymarket.com"):
         return url
 
-    slug = raw_market.get("slug", "")
-    if not slug:
-        return ""
-
-    # Пробуем взять eventSlug из вложенных данных
     event_slug = (
         raw_market.get("eventSlug") or
         raw_market.get("event_slug") or
         ""
     )
-
     if not event_slug:
         event = raw_market.get("event", {})
         if isinstance(event, dict):
             event_slug = event.get("slug", "")
 
     if event_slug:
-        clean = _clean_slug(event_slug)
-        return f"https://polymarket.com/event/{clean}"
+        return f"https://polymarket.com/event/{_clean_slug(event_slug)}"
 
-    # Убираем числовой суффикс из slug рынка
-    clean = _clean_slug(slug)
-    return f"https://polymarket.com/event/{clean}"
+    slug = raw_market.get("slug", "")
+    if slug:
+        return f"https://polymarket.com/event/{_clean_slug(slug)}"
+
+    return ""
+
+
+def list_events(limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    """Получает события с правильными slug для URL."""
+    url = f"{GAMMA_BASE_URL}/events"
+    params = {
+        "limit": limit,
+        "offset": offset,
+        "active": "true",
+        "closed": "false",
+        "order": "volume24hr",
+        "ascending": "false",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        return []
+    except Exception:
+        return []
+
+
+def normalize_event_for_channel(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Нормализует событие из events API для постинга в канал."""
+    if not event:
+        return None
+
+    title = event.get("title") or event.get("slug", "")
+    if not title:
+        return None
+
+    slug = event.get("slug", "")
+    if not slug:
+        return None
+
+    markets = event.get("markets", [])
+    market_prob = "Unknown"
+
+    for m in markets:
+        if not m.get("active") or m.get("closed"):
+            continue
+        outcomes = m.get("outcomes", "")
+        outcome_prices = m.get("outcomePrices", "")
+        opts = _normalize_options(outcomes)
+        prob, _ = _extract_market_probability_and_token(
+            options=opts,
+            outcome_prices=outcome_prices,
+            tokens=[],
+        )
+        if prob != "Unknown":
+            market_prob = prob
+            break
+
+    url = f"https://polymarket.com/event/{slug}"
+
+    return {
+        "id": event.get("id", ""),
+        "slug": slug,
+        "url": url,
+        "question": title,
+        "market_probability": market_prob,
+        "volume24hr": float(event.get("volume24hr", 0) or 0),
+        "liquidity": str(event.get("liquidity", "Unknown")),
+        "volume": str(event.get("volume", "Unknown")),
+    }
 
 
 def search_markets_by_slug(slug: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -225,8 +277,6 @@ def normalize_market_data(raw_market: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     trend_data = get_market_trend_context(primary_token_id) if primary_token_id else _empty_trend_context()
-
-    # Строим правильный URL
     market_url = build_market_url(raw_market)
 
     return {
