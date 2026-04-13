@@ -44,21 +44,50 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # ===== CHANNEL POSTER =====
 
 async def post_to_channel():
-    """Постит интересный рынок в канал."""
+    """Постит интересный рынок в канал с ротацией категорий и без повторений."""
     if not CHANNEL_ID:
-        print("📢 CHANNEL_ID not set, skipping channel post")
+        print("📢 CHANNEL_ID not set, skipping")
         return
 
     try:
         print("📢 Posting to channel...")
         import random
+        from agents.market_agent import MarketAgent
 
-        offset = random.randint(0, 50)
-        markets = list_markets(limit=30, offset=offset)
+        # Ротация категорий
+        categories_cycle = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
+        last_category = get_setting("last_channel_category", "")
+        try:
+            last_idx = categories_cycle.index(last_category)
+            next_idx = (last_idx + 1) % len(categories_cycle)
+        except ValueError:
+            next_idx = 0
+        category_filter = categories_cycle[next_idx]
+        set_setting("last_channel_category", category_filter)
+        print(f"📢 Category: {category_filter}")
+
+        # История показанных рынков
+        shown_raw = get_setting("channel_shown_markets", "")
+        shown = set(shown_raw.split(",")) if shown_raw else set()
+
+        # Берём рынки с разными офсетами
+        offset = random.randint(0, 80)
+        markets = list_markets(limit=50, offset=offset)
         if not markets:
-            markets = list_markets(limit=30)
+            markets = list_markets(limit=50, offset=0)
 
+        # Логируем первый рынок для отладки URL
+        if markets:
+            m0 = markets[0]
+            print(f"DEBUG URL: {m0.get('url', 'NONE')}")
+            print(f"DEBUG SLUG: {m0.get('slug', 'NONE')}")
+            print(f"DEBUG EVENT_SLUG: {m0.get('eventSlug', 'NONE')}")
+            print(f"DEBUG KEYS: {list(m0.keys())[:15]}")
+
+        agent = MarketAgent()
         candidates = []
+
+        # Сначала ищем рынки нужной категории
         for m in markets:
             normalized = normalize_market_data(m)
             if not normalized:
@@ -66,11 +95,20 @@ async def post_to_channel():
             question = normalized.get("question", "")
             if not question or len(question) < 10:
                 continue
+
+            market_id = str(m.get("id", ""))
+            if market_id and market_id in shown:
+                continue
+
+            detected = agent._detect_category(question)
+            if detected != category_filter:
+                continue
+
             market_prob = normalized.get("market_probability", "")
             if market_prob == "Unknown":
                 continue
 
-            # Фильтруем слишком односторонние рынки
+            # Фильтруем слишком односторонние
             try:
                 outcome_prices = m.get("outcomePrices", "")
                 if isinstance(outcome_prices, str):
@@ -80,48 +118,88 @@ async def post_to_channel():
                     prices = [float(p) for p in outcome_prices]
                 else:
                     prices = []
-                if prices and (max(prices) >= 0.95 or max(prices) <= 0.05):
+                if prices and max(prices) >= 0.92:
                     continue
             except Exception:
                 pass
 
-            # Строим правильный URL
-            market_url = build_market_url(m)
-
             candidates.append({
+                "id": market_id,
                 "question": question,
                 "market_prob": market_prob,
-                "url": market_url,
+                "category": detected,
                 "raw": m,
             })
 
+        # Если нет кандидатов в нужной категории — берём любые
         if not candidates:
-            print("📢 No suitable markets found for channel post")
+            print(f"📢 No {category_filter} markets, using any category")
+            for m in markets:
+                normalized = normalize_market_data(m)
+                if not normalized:
+                    continue
+                question = normalized.get("question", "")
+                if not question or len(question) < 10:
+                    continue
+                market_id = str(m.get("id", ""))
+                if market_id and market_id in shown:
+                    continue
+                market_prob = normalized.get("market_probability", "Unknown")
+                if market_prob == "Unknown":
+                    continue
+                try:
+                    outcome_prices = m.get("outcomePrices", "")
+                    if isinstance(outcome_prices, str):
+                        cleaned = outcome_prices.strip("[]")
+                        prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                    elif isinstance(outcome_prices, list):
+                        prices = [float(p) for p in outcome_prices]
+                    else:
+                        prices = []
+                    if prices and max(prices) >= 0.92:
+                        continue
+                except Exception:
+                    pass
+                detected = agent._detect_category(question)
+                candidates.append({
+                    "id": market_id,
+                    "question": question,
+                    "market_prob": market_prob,
+                    "category": detected,
+                    "raw": m,
+                })
+
+        if not candidates:
+            print("📢 No candidates found at all")
             return
 
         market = random.choice(candidates[:10])
         question = market["question"]
         market_prob = market["market_prob"]
-        url = market["url"]
+        category = market["category"]
+        raw = market["raw"]
 
-        # Определяем категорию
-        from agents.market_agent import MarketAgent
-        agent = MarketAgent()
-        category = agent._detect_category(question)
+        # Получаем URL — пробуем все возможные поля
+        url = (
+            raw.get("url") or
+            raw.get("marketUrl") or
+            raw.get("market_url") or
+            ""
+        )
+
+        # Если URL нет — строим из eventSlug + slug
+        if not url:
+            url = build_market_url(raw)
+
+        print(f"📢 FINAL URL: {url}")
 
         category_emoji = {
-            "Politics": "🌍",
-            "Crypto": "💰",
-            "Sports": "🏆",
-            "Economy": "📈",
-            "Tech": "💻",
-            "Culture": "🎭",
-            "Weather": "☁️",
-            "Other": "📌",
+            "Politics": "🌍", "Crypto": "💰", "Sports": "🏆",
+            "Economy": "📈", "Tech": "💻", "Culture": "🎭",
+            "Weather": "☁️", "Other": "📌",
         }.get(category, "📌")
 
         bot_link = f"https://t.me/{BOT_USERNAME}"
-
         text = (
             f"🔥 Горячий рынок Polymarket\n\n"
             f"📌 {question}\n\n"
@@ -131,7 +209,6 @@ async def post_to_channel():
             f"Отправь ссылку боту и получи полный анализ!\n\n"
             f"👉 Анализировать → {bot_link}\n"
         )
-
         if url:
             text += f"🔗 Рынок → {url}"
 
@@ -140,16 +217,26 @@ async def post_to_channel():
             text,
             disable_web_page_preview=True,
         )
-        print(f"📢 Posted to channel: {question[:50]}")
+        print(f"📢 Posted [{category}]: {question[:50]}")
+
+        # Сохраняем в историю (максимум 200)
+        if market["id"]:
+            shown.add(market["id"])
+            if len(shown) > 200:
+                shown_list = list(shown)[-200:]
+                shown = set(shown_list)
+            set_setting("channel_shown_markets", ",".join(filter(None, shown)))
+
         set_setting("last_channel_post", datetime.now(timezone.utc).isoformat())
 
     except Exception as e:
         print(f"CHANNEL POST ERROR: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def channel_worker():
     """Постит в канал каждые N часов."""
-    # Первый пост через 5 минут после старта
     await asyncio.sleep(300)
 
     channel_enabled = get_setting("channel_posting_enabled", "on")
@@ -505,4 +592,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
- 
