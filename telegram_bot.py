@@ -1,3 +1,4 @@
+
 import os
 import logging
 from typing import Dict
@@ -81,7 +82,6 @@ TEXTS = {
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки\nОбычно занимает 30-60 секунд",
         "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
         "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
-        "free_trial_used": "✅ Пробный период использован!\n\nЧтобы продолжить — купи токены 💎",
     },
     "en": {
         "start": (
@@ -110,7 +110,6 @@ TEXTS = {
         "deep_signal_searching": "🧠 Searching personal signal...\n\n⏱ Analyzing markets\nUsually takes 30-60 seconds",
         "free_trial_analysis": "🎁 Using free trial analysis!",
         "free_trial_signal": "🎁 Using free trial signal!",
-        "free_trial_used": "✅ Free trial used!\n\nTo continue — buy tokens 💎",
     }
 }
 
@@ -254,17 +253,17 @@ def _format_analysis(result: dict, uid: int) -> str:
     market_prob = _escape(result.get("market_probability", ""))
     sys_prob = _escape(result.get("probability", ""))
     confidence = _escape(result.get("confidence", ""))
-    reasoning = _escape(result.get("reasoning", ""))
-    main_scenario = _escape(result.get("main_scenario", ""))
-    alt_scenario = _escape(result.get("alt_scenario", ""))
-    conclusion = _escape(result.get("conclusion", ""))
-    conf_emoji = _confidence_emoji(confidence)
     market_type = result.get("market_type", "binary")
     options_breakdown = _escape(result.get("options_breakdown", ""))
+    conf_emoji = _confidence_emoji(confidence)
+
+    # Получаем интерпретацию от CommunicationAgent
+    communication_output = _escape(result.get("communication_output", ""))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
 
+    # Блок расклада для multiple choice
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
         if lang == "ru":
@@ -273,39 +272,55 @@ def _format_analysis(result: dict, uid: int) -> str:
             breakdown_block = f"\n\n📊 Options Breakdown:\n{options_breakdown}"
 
     if lang == "ru":
-        return (
+        header = (
             f"🔍 DeepAlpha Analysis\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
             f"🏷 Категория: {cat}\n"
             f"📊 Рынок: {market_prob}\n"
-            f"🎯 Прогноз: {sys_prob}\n"
             f"{conf_emoji} Уверенность: {confidence}"
             f"{breakdown_block}\n\n"
-            f"💭 Логика:\n{reasoning}\n\n"
-            f"✅ Основной сценарий:\n{main_scenario}\n\n"
-            f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
-            f"{'─' * 30}\n"
-            f"📝 Вывод: {conclusion}"
-            f"{news_block}"
         )
     else:
-        return (
+        header = (
             f"🔍 DeepAlpha Analysis\n"
             f"{'─' * 30}\n\n"
             f"📌 {q}\n\n"
             f"🏷 Category: {cat}\n"
             f"📊 Market: {market_prob}\n"
-            f"🎯 Forecast: {sys_prob}\n"
             f"{conf_emoji} Confidence: {confidence}"
             f"{breakdown_block}\n\n"
-            f"💭 Reasoning:\n{reasoning}\n\n"
-            f"✅ Main Scenario:\n{main_scenario}\n\n"
-            f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
-            f"{'─' * 30}\n"
-            f"📝 Conclusion: {conclusion}"
-            f"{news_block}"
         )
+
+    # Используем communication_output если есть, иначе стандартный формат
+    if communication_output:
+        body = communication_output
+    else:
+        reasoning = _escape(result.get("reasoning", ""))
+        main_scenario = _escape(result.get("main_scenario", ""))
+        alt_scenario = _escape(result.get("alt_scenario", ""))
+        conclusion = _escape(result.get("conclusion", ""))
+
+        if lang == "ru":
+            body = (
+                f"🎯 Прогноз: {sys_prob}\n\n"
+                f"💭 Логика:\n{reasoning}\n\n"
+                f"✅ Основной сценарий:\n{main_scenario}\n\n"
+                f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
+                f"{'─' * 30}\n"
+                f"📝 Вывод: {conclusion}"
+            )
+        else:
+            body = (
+                f"🎯 Forecast: {sys_prob}\n\n"
+                f"💭 Reasoning:\n{reasoning}\n\n"
+                f"✅ Main Scenario:\n{main_scenario}\n\n"
+                f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
+                f"{'─' * 30}\n"
+                f"📝 Conclusion: {conclusion}"
+            )
+
+    return header + body + news_block
 
 
 def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
@@ -428,7 +443,6 @@ async def analyze_prompt_handler(message: types.Message):
     uid = message.from_user.id
     lang = get_user_lang(uid)
 
-    # Показываем статус пробного периода
     if can_use_free_trial(uid, "analyses"):
         trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 You have a free trial analysis!"
         await message.answer(
@@ -436,10 +450,7 @@ async def analyze_prompt_handler(message: types.Message):
             reply_markup=get_main_keyboard(uid),
         )
     else:
-        await message.answer(
-            t(uid, "send_link"),
-            reply_markup=get_main_keyboard(uid),
-        )
+        await message.answer(t(uid, "send_link"), reply_markup=get_main_keyboard(uid))
 
 
 @dp.message_handler(lambda m: m.text in ["💡 Сигнал часа", "💡 Signal of the hour"])
@@ -452,7 +463,6 @@ async def signal_of_hour_handler(message: types.Message):
 
     subscribed = is_subscribed(uid)
     user = get_user(uid)
-    lang = get_user_lang(uid)
     paid_mode = get_setting("paid_mode", "off")
 
     if subscribed or (user and user.get("is_vip")):
@@ -465,10 +475,7 @@ async def signal_of_hour_handler(message: types.Message):
             await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
             return
 
-    await message.answer(
-        t(uid, "choose_category"),
-        reply_markup=get_category_keyboard(uid)
-    )
+    await message.answer(t(uid, "choose_category"), reply_markup=get_category_keyboard(uid))
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("signal_cat_"))
@@ -563,7 +570,6 @@ async def personal_signal_handler(message: types.Message):
             else:
                 use_tokens = True
     else:
-        # Проверяем пробный период
         if can_use_free_trial(uid, "opportunities"):
             use_free = True
         elif not _check_tokens(uid, "opportunity_price_tokens", "20"):
@@ -573,7 +579,6 @@ async def personal_signal_handler(message: types.Message):
             use_tokens = True
 
     lang = get_user_lang(uid)
-
     if use_free:
         await message.answer(t(uid, "free_trial_signal"))
 
@@ -643,8 +648,6 @@ async def balance_handler(message: types.Message):
                 f"\n📊 Анализов сегодня: {daily['analyses']}/{sub_analyses_limit}\n"
                 f"💡 Сигналов сегодня: {daily['opportunities']}/{sub_opp_limit}"
             )
-
-        # Пробный период
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
             analyses_left = max(0, trial["analyses_limit"] - trial["analyses_used"])
@@ -655,7 +658,6 @@ async def balance_handler(message: types.Message):
                     f"Анализов осталось: {analyses_left}\n"
                     f"Сигналов осталось: {opp_left}"
                 )
-
         text = (
             f"💰 Ваш баланс\n\n"
             f"Токены: {user['token_balance']}\n"
@@ -678,7 +680,6 @@ async def balance_handler(message: types.Message):
                 f"\n📊 Analyses today: {daily['analyses']}/{sub_analyses_limit}\n"
                 f"💡 Signals today: {daily['opportunities']}/{sub_opp_limit}"
             )
-
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
             analyses_left = max(0, trial["analyses_limit"] - trial["analyses_used"])
@@ -689,7 +690,6 @@ async def balance_handler(message: types.Message):
                     f"Analyses left: {analyses_left}\n"
                     f"Signals left: {opp_left}"
                 )
-
         text = (
             f"💰 Your Balance\n\n"
             f"Tokens: {user['token_balance']}\n"
@@ -891,7 +891,6 @@ async def analyze_url_handler(message: types.Message):
             else:
                 use_tokens = True
     else:
-        # Проверяем пробный период
         if can_use_free_trial(uid, "analyses"):
             use_free = True
         elif not _check_tokens(uid, "analysis_price_tokens", "10"):
