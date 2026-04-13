@@ -74,8 +74,8 @@ TEXTS = {
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
-        "limit_analyses": "❌ Дневной лимит анализов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
-        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан и токенов недостаточно.\n\nКупи токены через 💎 Купить токены",
+        "limit_analyses": "❌ Дневной лимит анализов исчерпан.\n\nКупи токены через 💎 Купить токены",
+        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан.\n\nКупи токены через 💎 Купить токены",
         "choose_category": "Выбери категорию сигнала:",
         "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nБот уведомит тебя как только найдёт лучший сигнал!\n\nОбычно занимает 1-2 минуты.",
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки\nОбычно занимает 30-60 секунд",
@@ -102,8 +102,8 @@ TEXTS = {
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
         "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
-        "limit_analyses": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
-        "limit_opportunities": "❌ Daily limit reached and not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
+        "limit_analyses": "❌ Daily limit reached.\n\nBuy tokens via 💎 Buy tokens",
+        "limit_opportunities": "❌ Daily signal limit reached.\n\nBuy tokens via 💎 Buy tokens",
         "choose_category": "Choose signal category:",
         "cache_empty": "⏳ Signal for this category is being prepared...\n\nBot will notify you when ready!\n\nUsually takes 1-2 minutes.",
         "deep_signal_searching": "🧠 Searching personal signal...\n\n⏱ Analyzing markets\nUsually takes 30-60 seconds",
@@ -130,15 +130,19 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
         kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
-        kb.add(KeyboardButton("💎 Купить токены"),
-               KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"))
+        kb.add(
+            KeyboardButton("💎 Купить токены"),
+            KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
+        )
         kb.add(KeyboardButton("👥 Рефералы"), KeyboardButton("🌐 Язык"))
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
-        kb.add(KeyboardButton("💎 Buy tokens"),
-               KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"))
+        kb.add(
+            KeyboardButton("💎 Buy tokens"),
+            KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
+        )
         kb.add(KeyboardButton("👥 Referrals"), KeyboardButton("🌐 Language"))
     return kb
 
@@ -147,9 +151,10 @@ def get_category_keyboard(user_id: int) -> InlineKeyboardMarkup:
     lang = get_user_lang(user_id)
     labels = CATEGORY_LABELS.get(lang, CATEGORY_LABELS["ru"])
     kb = InlineKeyboardMarkup(row_width=2)
-    buttons = []
-    for cat, label in labels.items():
-        buttons.append(InlineKeyboardButton(label, callback_data=f"signal_cat_{cat}"))
+    buttons = [
+        InlineKeyboardButton(label, callback_data=f"signal_cat_{cat}")
+        for cat, label in labels.items()
+    ]
     kb.add(*buttons)
     return kb
 
@@ -172,7 +177,7 @@ def get_subscribe_keyboard(lang: str) -> InlineKeyboardMarkup:
     label = "🔔 Открыть подписку" if lang == "ru" else "🔔 Open subscription"
     kb.add(InlineKeyboardButton(
         label,
-        web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=subscription")
+        web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=subscription"),
     ))
     return kb
 
@@ -195,27 +200,23 @@ def _check_banned(message: types.Message) -> bool:
 
 
 def _check_tokens(user_id: int, price_key: str, default: str) -> bool:
-    paid_mode = get_setting("paid_mode", "off")
-    if paid_mode != "on":
+    if get_setting("paid_mode", "off") != "on":
         return True
     user = get_user(user_id)
     if not user:
         return False
     if user["is_vip"]:
         return True
-    price = int(get_setting(price_key, default))
-    return user["token_balance"] >= price
+    return user["token_balance"] >= int(get_setting(price_key, default))
 
 
 def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
-    paid_mode = get_setting("paid_mode", "off")
-    if paid_mode != "on":
+    if get_setting("paid_mode", "off") != "on":
         return
     user = get_user(user_id)
     if not user or user["is_vip"]:
         return
-    price = int(get_setting(price_key, default))
-    add_tokens(user_id, -price)
+    add_tokens(user_id, -int(get_setting(price_key, default)))
 
 
 def _confidence_emoji(confidence: str) -> str:
@@ -246,13 +247,24 @@ def _build_news_block(sources: list, lang: str) -> str:
 
 
 def _get_communication_data(result: dict) -> dict:
-    """Получает данные от CommunicationAgent или строит их из result."""
+    """
+    Получает semantic данные от CommunicationAgent.
+    display_prediction — главный результат, используется везде.
+    """
     from agents.communication_agent import CommunicationAgent
     try:
         agent = CommunicationAgent()
-        return agent.run(result)
+        comm = agent.run(result)
+
+        # Debug логи — видим что генерируется
+        print(f"SEMANTIC: {comm.get('semantic_outcome', '')}")
+        print(f"DISPLAY:  {comm.get('display_prediction', '')}")
+
+        return comm
     except Exception as e:
         print(f"CommunicationAgent error: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 
@@ -266,28 +278,36 @@ def _format_analysis(result: dict, uid: int) -> str:
     options_breakdown = _escape(result.get("options_breakdown", ""))
     conf_emoji = _confidence_emoji(confidence)
 
-    # Получаем semantic данные от CommunicationAgent
+    # Получаем semantic данные — display_prediction единственный источник
     comm = _get_communication_data(result)
 
-    # display_prediction — единственный источник для прогноза
-    display_prediction = _escape(comm.get("display_prediction", "") or result.get("probability", ""))
-    semantic_reasoning = _escape(comm.get("reasoning", "") or result.get("reasoning", ""))
-    semantic_scenario = _escape(comm.get("main_scenario", "") or result.get("main_scenario", ""))
-    semantic_alt = _escape(comm.get("alt_scenario", "") or result.get("alt_scenario", ""))
-    semantic_conclusion = _escape(comm.get("conclusion", "") or result.get("conclusion", ""))
+    # Приоритет: semantic > raw probability
+    display_prediction = _escape(
+        comm.get("display_prediction") or result.get("probability", "")
+    )
+    semantic_reasoning = _escape(
+        comm.get("reasoning") or result.get("reasoning", "")
+    )
+    semantic_scenario = _escape(
+        comm.get("main_scenario") or result.get("main_scenario", "")
+    )
+    semantic_alt = _escape(
+        comm.get("alt_scenario") or result.get("alt_scenario", "")
+    )
+    semantic_conclusion = _escape(
+        comm.get("conclusion") or result.get("conclusion", "")
+    )
     alpha_label = comm.get("alpha_label", "")
     alpha_message = _escape(comm.get("alpha_message", ""))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
 
-    # Блок расклада для multiple choice
+    # Расклад для multiple choice
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
-        if lang == "ru":
-            breakdown_block = f"\n\n📊 Расклад по вариантам:\n{options_breakdown}"
-        else:
-            breakdown_block = f"\n\n📊 Options Breakdown:\n{options_breakdown}"
+        label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
+        breakdown_block = f"\n\n{label}\n{options_breakdown}"
 
     if lang == "ru":
         text = (
@@ -356,10 +376,11 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
         import time
         cached_at = result.get("cached_at", 0)
         age_minutes = (int(time.time()) - cached_at) // 60 if cached_at else 0
-        if lang == "ru":
-            cache_label = f"\n⚡ Сигнал часа (обновлён {age_minutes} мин назад)"
-        else:
-            cache_label = f"\n⚡ Signal of the hour (updated {age_minutes} min ago)"
+        cache_label = (
+            f"\n⚡ Сигнал часа (обновлён {age_minutes} мин назад)"
+            if lang == "ru"
+            else f"\n⚡ Signal of the hour (updated {age_minutes} min ago)"
+        )
 
     if lang == "ru":
         text = (
@@ -396,6 +417,10 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
         text += f"\n\n🔗 {url}"
     return text
 
+
+# ═══════════════════════════════════════════
+# HANDLERS
+# ═══════════════════════════════════════════
 
 @dp.message_handler(commands=["start"])
 async def start_handler(message: types.Message):
@@ -456,7 +481,11 @@ async def analyze_prompt_handler(message: types.Message):
     lang = get_user_lang(uid)
 
     if can_use_free_trial(uid, "analyses"):
-        trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 You have a free trial analysis!"
+        trial_text = (
+            "🎁 У тебя есть бесплатный пробный анализ!"
+            if lang == "ru"
+            else "🎁 You have a free trial analysis!"
+        )
         await message.answer(
             f"{trial_text}\n\n{t(uid, 'send_link')}",
             reply_markup=get_main_keyboard(uid),
@@ -579,8 +608,7 @@ async def personal_signal_handler(message: types.Message):
             if not _check_tokens(uid, "opportunity_price_tokens", "20"):
                 await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
                 return
-            else:
-                use_tokens = True
+            use_tokens = True
     else:
         if can_use_free_trial(uid, "opportunities"):
             use_free = True
@@ -640,6 +668,7 @@ async def balance_handler(message: types.Message):
     if not user:
         await message.answer("❌ Пользователь не найден")
         return
+
     lang = get_user_lang(uid)
     paid_mode = get_setting("paid_mode", "off")
     analysis_price = get_setting("analysis_price_tokens", "10")
@@ -662,13 +691,13 @@ async def balance_handler(message: types.Message):
             )
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
-            analyses_left = max(0, trial["analyses_limit"] - trial["analyses_used"])
-            opp_left = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
-            if analyses_left > 0 or opp_left > 0:
+            al = max(0, trial["analyses_limit"] - trial["analyses_used"])
+            ol = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
+            if al > 0 or ol > 0:
                 trial_text = (
                     f"\n\n🎁 Пробный период:\n"
-                    f"Анализов осталось: {analyses_left}\n"
-                    f"Сигналов осталось: {opp_left}"
+                    f"Анализов осталось: {al}\n"
+                    f"Сигналов осталось: {ol}"
                 )
         text = (
             f"💰 Ваш баланс\n\n"
@@ -694,13 +723,13 @@ async def balance_handler(message: types.Message):
             )
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
-            analyses_left = max(0, trial["analyses_limit"] - trial["analyses_used"])
-            opp_left = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
-            if analyses_left > 0 or opp_left > 0:
+            al = max(0, trial["analyses_limit"] - trial["analyses_used"])
+            ol = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
+            if al > 0 or ol > 0:
                 trial_text = (
                     f"\n\n🎁 Free trial:\n"
-                    f"Analyses left: {analyses_left}\n"
-                    f"Signals left: {opp_left}"
+                    f"Analyses left: {al}\n"
+                    f"Signals left: {ol}"
                 )
         text = (
             f"💰 Your Balance\n\n"
@@ -716,6 +745,7 @@ async def balance_handler(message: types.Message):
             f"Signal of hour: {cached_price} tokens\n"
             f"Personal signal: {opp_price} tokens"
         )
+
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
@@ -724,15 +754,17 @@ async def buy_tokens_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    if lang == "ru":
-        text = "💎 Купить токены\n\nНажми кнопку ниже чтобы открыть кассу 👇"
-    else:
-        text = "💎 Buy Tokens\n\nTap the button below to open payment 👇"
+    text = (
+        "💎 Купить токены\n\nНажми кнопку ниже чтобы открыть кассу 👇"
+        if lang == "ru"
+        else "💎 Buy Tokens\n\nTap the button below to open payment 👇"
+    )
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
 
 
-@dp.message_handler(lambda m: m.text in ["🔔 Подписка", "✅ Подписка активна",
-                                          "🔔 Subscribe", "✅ Subscription active"])
+@dp.message_handler(lambda m: m.text in [
+    "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active"
+])
 async def subscription_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -747,8 +779,7 @@ async def subscription_handler(message: types.Message):
     if subscribed and sub_until:
         if lang == "ru":
             text = (
-                f"✅ Подписка активна\n\n"
-                f"Действует до: {sub_until[:10]}\n\n"
+                f"✅ Подписка активна\n\nДействует до: {sub_until[:10]}\n\n"
                 f"С подпиской ты получаешь:\n"
                 f"• 🔔 Ежедневные сигналы\n"
                 f"• ⚡ Сигнал часа бесплатно\n"
@@ -759,8 +790,7 @@ async def subscription_handler(message: types.Message):
             )
         else:
             text = (
-                f"✅ Subscription active\n\n"
-                f"Valid until: {sub_until[:10]}\n\n"
+                f"✅ Subscription active\n\nValid until: {sub_until[:10]}\n\n"
                 f"With subscription you get:\n"
                 f"• 🔔 Daily signals\n"
                 f"• ⚡ Signal of the hour free\n"
@@ -772,8 +802,7 @@ async def subscription_handler(message: types.Message):
     else:
         if lang == "ru":
             text = (
-                f"🔔 Подписка DeepAlpha\n\n"
-                f"Цена: {sub_price} TON / {sub_days} дней\n\n"
+                f"🔔 Подписка DeepAlpha\n\nЦена: {sub_price} TON / {sub_days} дней\n\n"
                 f"Что включено:\n"
                 f"• 🔔 Ежедневные сигналы\n"
                 f"• ⚡ Сигнал часа бесплатно\n"
@@ -784,8 +813,7 @@ async def subscription_handler(message: types.Message):
             )
         else:
             text = (
-                f"🔔 DeepAlpha Subscription\n\n"
-                f"Price: {sub_price} TON / {sub_days} days\n\n"
+                f"🔔 DeepAlpha Subscription\n\nPrice: {sub_price} TON / {sub_days} days\n\n"
                 f"Includes:\n"
                 f"• 🔔 Daily signals\n"
                 f"• ⚡ Signal of the hour free\n"
@@ -846,6 +874,7 @@ async def history_handler(message: types.Message):
     if not records:
         await message.answer(t(uid, "no_history"), reply_markup=get_main_keyboard(uid))
         return
+
     lang = get_user_lang(uid)
     lines = [t(uid, "recent")]
     for r in records:
@@ -868,6 +897,7 @@ async def top_handler(message: types.Message):
     if not records:
         await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
         return
+
     lang = get_user_lang(uid)
     lines = [t(uid, "top")]
     for i, r in enumerate(records, 1):
@@ -900,8 +930,7 @@ async def analyze_url_handler(message: types.Message):
             if not _check_tokens(uid, "analysis_price_tokens", "10"):
                 await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
                 return
-            else:
-                use_tokens = True
+            use_tokens = True
     else:
         if can_use_free_trial(uid, "analyses"):
             use_free = True
