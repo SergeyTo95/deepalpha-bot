@@ -26,13 +26,8 @@ class CommunicationAgent:
         )
 
         prob_display = f"{prob_val:.1f}%" if prob_val else ""
-
-        display_prediction = self._build_display_prediction(
-            question=question,
-            semantic_outcome=semantic_outcome,
-            prob_val=prob_val,
-            is_negated=is_negated,
-            semantic_market_type=semantic_market_type,
+        display_prediction = (
+            f"{semantic_outcome} — {prob_display}" if prob_display else semantic_outcome
         )
 
         model_prob = prob_val or 0.0
@@ -97,103 +92,317 @@ class CommunicationAgent:
             "alpha_message": alpha_message,
         }
 
+    # ─────────────────────────────────────────────
+    # CORE PARSER
+    # ─────────────────────────────────────────────
+
+    def _parse_will_question(self, question: str) -> Dict[str, str]:
+        """
+        Парсит вопрос "Will X do Y [time]?" на компоненты.
+
+        Примеры:
+        "Will MicroStrategy sell any Bitcoin in 2025?"
+        → subject="MicroStrategy", verb_phrase="sell any Bitcoin", time="in 2025"
+
+        "Will Bank of Japan decrease rates by April?"
+        → subject="Bank of Japan", verb_phrase="decrease rates", time="by April"
+
+        "Will Trump win the 2028 election?"
+        → subject="Trump", verb_phrase="win the 2028 election", time=""
+        """
+        empty = {"subject": "", "verb_phrase": "", "time": "", "raw_verb": "", "raw_object": ""}
+
+        q = re.sub(r'\?$', '', question.strip())
+
+        # Паттерн: Will [SUBJECT] [VERB_PHRASE]
+        match = re.match(r'^Will\s+(.+)', q, re.IGNORECASE)
+        if not match:
+            return empty
+
+        rest = match.group(1).strip()
+
+        # Список глаголов для разбивки
+        verbs = [
+            "sell any", "sell", "buy any", "buy",
+            "decrease", "cut", "increase", "raise", "hike", "hold", "pause",
+            "win", "lose", "become", "remain", "stay",
+            "sign", "launch", "release", "announce", "publish", "deploy",
+            "approve", "reject", "veto", "implement",
+            "enter", "invade", "withdraw",
+            "file for bankruptcy", "go bankrupt", "default",
+            "collapse", "survive", "merge", "acquire",
+            "reach", "hit", "pass", "exceed", "surpass", "cross",
+            "break", "set", "achieve",
+            "be elected", "be appointed", "be removed",
+        ]
+
+        # Ищем первый глагол в rest
+        subject = ""
+        verb_phrase = ""
+        found_verb = ""
+        found_verb_pos = -1
+
+        for verb in verbs:
+            pattern = r'\b' + re.escape(verb) + r'\b'
+            m = re.search(pattern, rest, re.IGNORECASE)
+            if m:
+                pos = m.start()
+                if found_verb_pos == -1 or pos < found_verb_pos:
+                    found_verb_pos = pos
+                    found_verb = verb
+                    subject = rest[:pos].strip()
+                    verb_phrase = rest[pos:].strip()
+
+        if not subject or not verb_phrase:
+            # Fallback: первое слово = subject, остальное = verb_phrase
+            parts = rest.split(" ", 1)
+            if len(parts) == 2:
+                subject = parts[0]
+                verb_phrase = parts[1]
+            else:
+                return empty
+
+        # Извлекаем время из verb_phrase
+        time_str = ""
+        time_patterns = [
+            (r'\s+in\s+(20\d{2})\b', "in {0}"),
+            (r'\s+by\s+(20\d{2})\b', "by {0}"),
+            (r'\s+before\s+(20\d{2})\b', "before {0}"),
+            (r'\s+by\s+(January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+\d{1,2})?,?\s*(20\d{2})?', "by {0}"),
+            (r'\s+in\s+(Q[1-4]\s*20\d{2})', "in {0}"),
+            (r'\s+(this\s+year)', "{0}"),
+        ]
+
+        for pattern, _ in time_patterns:
+            m = re.search(pattern, verb_phrase, re.IGNORECASE)
+            if m:
+                time_str = m.group(0).strip()
+                verb_phrase = verb_phrase[:m.start()].strip()
+                break
+
+        # Разбиваем verb_phrase на глагол и объект
+        raw_verb = found_verb
+        raw_object = verb_phrase[len(found_verb):].strip() if verb_phrase.lower().startswith(found_verb.lower()) else verb_phrase
+
+        # Убираем лишние слова из объекта
+        raw_object = re.sub(r'^(any|some|the|a|an)\s+', '', raw_object, flags=re.IGNORECASE)
+
+        return {
+            "subject": subject,
+            "verb_phrase": verb_phrase,
+            "time": time_str,
+            "raw_verb": raw_verb,
+            "raw_object": raw_object,
+        }
+
+    def _render_binary_action(
+        self,
+        subject: str,
+        raw_verb: str,
+        raw_object: str,
+        time_str: str,
+        is_negated: bool,
+    ) -> str:
+        """
+        Строит русское предложение из компонентов.
+
+        subject="MicroStrategy", verb="sell", object="Bitcoin", time="in 2025", negated=True
+        → "MicroStrategy НЕ продаст Bitcoin в 2025 году"
+        """
+        subject_ru = self._translate_subject(subject)
+        verb_ru = self._translate_verb(raw_verb, raw_object, is_negated)
+        time_ru = self._translate_time(time_str)
+
+        parts = [subject_ru, verb_ru]
+        if time_ru:
+            parts.append(time_ru)
+
+        return " ".join(p for p in parts if p).strip()
+
+    def _translate_subject(self, subject: str) -> str:
+        subject_map = {
+            "bank of japan": "Банк Японии",
+            "boj": "Банк Японии",
+            "the federal reserve": "ФРС",
+            "federal reserve": "ФРС",
+            "the fed": "ФРС",
+            "fed": "ФРС",
+            "ecb": "ЕЦБ",
+            "bank of england": "Банк Англии",
+            "boe": "Банк Англии",
+            "the us": "США",
+            "the united states": "США",
+            "us ": "США",
+            "russia": "Россия",
+            "ukraine": "Украина",
+            "china": "Китай",
+            "iran": "Иран",
+            "israel": "Израиль",
+            "north korea": "Северная Корея",
+        }
+        s_lower = subject.lower().strip().rstrip(".")
+        for en, ru in subject_map.items():
+            if s_lower == en.strip():
+                return ru
+        # Бренды и имена возвращаем как есть
+        return subject.strip()
+
+    def _translate_verb(self, verb: str, obj: str, is_negated: bool) -> str:
+        """Переводит глагол + объект в русский."""
+        neg = "НЕ " if is_negated else ""
+        v = verb.lower().strip()
+        obj_ru = self._translate_object(obj)
+
+        verb_map = {
+            "sell any": f"{neg}продаст {obj_ru}",
+            "sell": f"{neg}продаст {obj_ru}",
+            "buy any": f"{neg}купит {obj_ru}",
+            "buy": f"{neg}купит {obj_ru}",
+            "decrease": f"{neg}снизит {obj_ru}",
+            "cut": f"{neg}снизит {obj_ru}",
+            "increase": f"{neg}повысит {obj_ru}",
+            "raise": f"{neg}повысит {obj_ru}",
+            "hike": f"{neg}повысит {obj_ru}",
+            "hold": f"{neg}сохранит {obj_ru}",
+            "pause": f"{neg}приостановит {obj_ru}",
+            "win": f"{neg}победит {obj_ru}".strip(),
+            "lose": f"{neg}проиграет {obj_ru}".strip(),
+            "become": f"{neg}станет {obj_ru}".strip(),
+            "remain": f"{neg}останется {obj_ru}".strip(),
+            "stay": f"{neg}останется {obj_ru}".strip(),
+            "sign": f"{neg}подпишет {obj_ru}",
+            "launch": f"{neg}запустит {obj_ru}",
+            "release": f"{neg}выпустит {obj_ru}",
+            "announce": f"{neg}объявит {obj_ru}",
+            "publish": f"{neg}опубликует {obj_ru}",
+            "deploy": f"{neg}развернёт {obj_ru}",
+            "approve": f"{neg}одобрит {obj_ru}",
+            "reject": f"{neg}отклонит {obj_ru}",
+            "veto": f"{neg}наложит вето на {obj_ru}",
+            "implement": f"{neg}внедрит {obj_ru}",
+            "enter": f"{neg}войдёт в {obj_ru}",
+            "invade": f"{neg}вторгнется в {obj_ru}",
+            "withdraw": f"{neg}выведет войска из {obj_ru}",
+            "file for bankruptcy": f"{neg}подаст заявление о банкротстве",
+            "go bankrupt": f"{neg}обанкротится",
+            "default": f"{neg}допустит дефолт",
+            "collapse": f"{neg}обрушится",
+            "survive": f"{neg}выживет",
+            "merge": f"{neg}объединится с {obj_ru}",
+            "acquire": f"{neg}приобретёт {obj_ru}",
+            "reach": f"{neg}достигнет {obj_ru}",
+            "hit": f"{neg}достигнет {obj_ru}",
+            "pass": f"{neg}пройдёт отметку {obj_ru}",
+            "exceed": f"{neg}превысит {obj_ru}",
+            "surpass": f"{neg}превзойдёт {obj_ru}",
+            "cross": f"{neg}пересечёт отметку {obj_ru}",
+            "break": f"{neg}обновит {obj_ru}",
+            "set": f"{neg}установит {obj_ru}",
+            "achieve": f"{neg}достигнет {obj_ru}",
+            "be elected": f"{neg}будет избран",
+            "be appointed": f"{neg}будет назначен",
+            "be removed": f"{neg}будет отстранён",
+        }
+
+        result = verb_map.get(v, f"{neg}выполнит действие")
+        return result.strip()
+
+    def _translate_object(self, obj: str) -> str:
+        """Переводит объект действия."""
+        if not obj:
+            return ""
+
+        object_map = {
+            "bitcoin": "Bitcoin",
+            "btc": "BTC",
+            "ethereum": "Ethereum",
+            "eth": "ETH",
+            "rates": "ставку",
+            "interest rates": "процентную ставку",
+            "the election": "на выборах",
+            "the 2028 election": "на выборах 2028",
+            "the 2024 election": "на выборах 2024",
+            "the presidency": "президентство",
+            "the championship": "чемпионат",
+            "the world cup": "Чемпионат мира",
+            "the super bowl": "Супербоул",
+            "the finals": "финал",
+            "the nba finals": "финал НБА",
+            "the nfl championship": "чемпионат НФЛ",
+            "$100k": "$100k",
+            "$150k": "$150k",
+            "$200k": "$200k",
+        }
+
+        obj_lower = obj.lower().strip()
+        for en, ru in object_map.items():
+            if obj_lower == en:
+                return ru
+
+        # Числовые значения оставляем
+        if re.match(r'^\$[\d,]+[k]?$', obj):
+            return obj
+
+        return obj
+
+    def _translate_time(self, time_str: str) -> str:
+        """Переводит временной контекст."""
+        if not time_str:
+            return ""
+
+        t = time_str.strip().lower()
+
+        # Год
+        year_match = re.search(r'(20\d{2})', time_str)
+        if year_match:
+            year = year_match.group(1)
+            if t.startswith("by"):
+                return f"до конца {year} года"
+            if t.startswith("before"):
+                return f"до {year} года"
+            return f"в {year} году"
+
+        month_map = {
+            "january": "января", "february": "февраля",
+            "march": "марта", "april": "апреля",
+            "may": "мая", "june": "июня",
+            "july": "июля", "august": "августа",
+            "september": "сентября", "october": "октября",
+            "november": "ноября", "december": "декабря",
+        }
+        for en, ru in month_map.items():
+            if en in t:
+                return f"к {ru}"
+
+        if "this year" in t:
+            return "в этом году"
+
+        return f"к {time_str.strip()}"
+
+    # ─────────────────────────────────────────────
+    # SEMANTIC EXTRACTION
+    # ─────────────────────────────────────────────
+
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
         if market_type == "multiple_choice":
             return "multi_outcome"
 
         q = question.lower()
-
         threshold_keywords = [
-            "exceed", "surpass", "above", "below", "reach", "hit",
+            "exceed", "surpass", "above", "below",
             "more than", "less than", "over", "under", "cross",
         ]
         if any(k in q for k in threshold_keywords):
             return "binary_threshold"
 
         entity_keywords = [
-            "who will", "which company", "which team", "which country",
-            "largest", "biggest", "most", "first to",
+            "who will", "which company", "which team",
+            "which country", "largest", "biggest",
         ]
         if any(k in q for k in entity_keywords):
             return "single_entity"
 
         return "binary_action"
-
-    def _build_display_prediction(
-        self,
-        question: str,
-        semantic_outcome: str,
-        prob_val: Optional[float],
-        is_negated: bool,
-        semantic_market_type: str,
-    ) -> str:
-        prob_str = f"{prob_val:.1f}%" if prob_val else ""
-
-        if not prob_str:
-            return semantic_outcome
-
-        if semantic_outcome.lower() not in ("yes", "no"):
-            if self._contains_broken_english(semantic_outcome):
-                fixed = self._fix_broken_english(question, semantic_outcome, is_negated)
-                return f"{fixed} — {prob_str}"
-            return f"{semantic_outcome} — {prob_str}"
-
-        return f"{semantic_outcome} — {prob_str}"
-
-    def _contains_broken_english(self, text: str) -> bool:
-        broken_patterns = [
-            r'\binflation\s+reach\b',
-            r'\binflation\s+exceed\b',
-            r'\brate\s+cut\b',
-            r'\bwin\s+the\b',
-            r'\bhit\s+\$',
-            r'\bmore than\b',
-            r'\bless than\b',
-        ]
-        text_lower = text.lower()
-        return any(re.search(p, text_lower) for p in broken_patterns)
-
-    def _fix_broken_english(self, question: str, outcome: str, is_negated: bool) -> str:
-        q = question.lower()
-
-        if "inflation" in q:
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', q)
-            threshold = match.group(0) if match else ""
-            year_match = re.search(r'(202\d)', question)
-            year_str = f" в {year_match.group(1)} году" if year_match else ""
-            if is_negated:
-                return f"Инфляция НЕ превысит {threshold}{year_str}"
-            return f"Инфляция превысит {threshold}{year_str}"
-
-        if "rate" in q and ("cut" in q or "decrease" in q):
-            entity = self._extract_central_bank(q)
-            if is_negated:
-                return f"{entity} НЕ снизит ставку"
-            return f"{entity} снизит ставку"
-
-        if "rate" in q and ("hike" in q or "raise" in q or "increase" in q):
-            entity = self._extract_central_bank(q)
-            if is_negated:
-                return f"{entity} НЕ повысит ставку"
-            return f"{entity} повысит ставку"
-
-        return outcome
-
-    def _extract_central_bank(self, q: str) -> str:
-        banks = {
-            "bank of japan": "Банк Японии",
-            "boj": "Банк Японии",
-            "federal reserve": "ФРС",
-            "fed ": "ФРС",
-            "ecb": "ЕЦБ",
-            "bank of england": "Банк Англии",
-            "boe": "Банк Англии",
-            "rba": "РБА",
-        }
-        for en, ru in banks.items():
-            if en in q:
-                return ru
-        return "Центробанк"
 
     def _extract_semantic_outcome(
         self,
@@ -225,215 +434,90 @@ class CommunicationAgent:
 
         is_negated = raw_outcome.lower() == "no"
 
-        if is_negated:
-            semantic = self._no_to_semantic(question, semantic_market_type)
-        else:
-            semantic = self._yes_to_semantic(question, semantic_market_type)
+        semantic = self._build_semantic_text(
+            question=question,
+            is_negated=is_negated,
+            semantic_market_type=semantic_market_type,
+        )
 
         return semantic if semantic else raw_outcome, prob_val, is_negated
 
-    def _parse_action_sentence(self, question: str) -> Dict[str, str]:
-        """
-        Извлекает subject, action, object, time из вопроса.
+    def _build_semantic_text(
+        self,
+        question: str,
+        is_negated: bool,
+        semantic_market_type: str,
+    ) -> str:
+        """Главная функция построения semantic текста."""
 
-        "Will MicroStrategy sell any Bitcoin in 2025?"
-        → subject="MicroStrategy", action="sell", object="Bitcoin", time="2025"
-
-        "Will Bank of Japan decrease rates by April?"
-        → subject="Bank of Japan", action="decrease", object="rates", time="April"
-        """
-        q = re.sub(r'\?$', '', question.strip())
-
-        result = {
-            "subject": "",
-            "action": "",
-            "object": "",
-            "time": "",
-            "full_action": "",
-        }
-
-        # Извлекаем время
-        time_patterns = [
-            r'\bin\s+(20\d{2})\b',
-            r'\bby\s+(20\d{2})\b',
-            r'\bby\s+(January|February|March|April|May|June|July|August|September|October|November|December\s*\d{0,4})',
-            r'\bbefore\s+(20\d{2})\b',
-            r'\bbefore\s+(\w+)',
-            r'\bthis\s+year\b',
-            r'\bin\s+(Q[1-4]\s*20\d{2})',
-        ]
-        for pattern in time_patterns:
-            m = re.search(pattern, q, re.IGNORECASE)
-            if m:
-                result["time"] = m.group(1) if m.lastindex else m.group(0)
-                break
-
-        # Основной паттерн: Will [SUBJECT] [ACTION] [OBJECT]
-        main_match = re.match(
-            r'^Will\s+(.+?)\s+(sell|buy|increase|decrease|cut|raise|hike|hold|'
-            r'win|lose|become|sign|launch|approve|reject|enter|file|'
-            r'announce|complete|reach|hit|pass|exceed|break|collapse|'
-            r'deploy|implement|survive|publish|release|default|merge)\s*(.*?)(?:\s+by|\s+in|\s+before|$)',
-            q,
-            re.IGNORECASE,
-        )
-
-        if main_match:
-            result["subject"] = main_match.group(1).strip()
-            result["action"] = main_match.group(2).strip().lower()
-            result["object"] = main_match.group(3).strip()
-            result["full_action"] = f"{result['action']} {result['object']}".strip()
-
-        return result
-
-    def _translate_action(self, action: str, obj: str, is_negated: bool) -> str:
-        """
-        Переводит action + object в русский глагол.
-
-        sell + Bitcoin → продаст Bitcoin
-        decrease + rates → снизит ставку
-        win + election → победит на выборах
-        """
-        action = action.lower().strip()
-        obj_lower = obj.lower().strip()
-
-        # Объекты
-        object_translations = {
-            "bitcoin": "Bitcoin",
-            "any bitcoin": "Bitcoin",
-            "btc": "BTC",
-            "ethereum": "Ethereum",
-            "rates": "ставку",
-            "interest rates": "процентную ставку",
-            "the election": "на выборах",
-            "the presidency": "президентство",
-            "the championship": "чемпионат",
-            "the world cup": "Чемпионат мира",
-            "the super bowl": "Супербоул",
-            "the finals": "финал",
-        }
-
-        translated_obj = obj
-        for en, ru in object_translations.items():
-            if en in obj_lower:
-                translated_obj = ru
-                break
-
-        # Глаголы
-        neg = "НЕ " if is_negated else ""
-        action_map = {
-            "sell": f"{neg}продаст {translated_obj}",
-            "buy": f"{neg}купит {translated_obj}",
-            "increase": f"{neg}повысит {translated_obj}",
-            "decrease": f"{neg}снизит {translated_obj}",
-            "cut": f"{neg}снизит {translated_obj}",
-            "raise": f"{neg}повысит {translated_obj}",
-            "hike": f"{neg}повысит {translated_obj}",
-            "hold": f"{neg}сохранит {translated_obj}",
-            "win": f"{neg}победит {translated_obj}".strip(),
-            "lose": f"{neg}проиграет {translated_obj}".strip(),
-            "become": f"{neg}станет {translated_obj}".strip(),
-            "sign": f"{neg}подпишет {translated_obj}",
-            "launch": f"{neg}запустит {translated_obj}",
-            "approve": f"{neg}одобрит {translated_obj}",
-            "reject": f"{neg}отклонит {translated_obj}",
-            "enter": f"{neg}войдёт в {translated_obj}",
-            "file": f"{neg}подаст {translated_obj}",
-            "announce": f"{neg}объявит {translated_obj}",
-            "complete": f"{neg}завершит {translated_obj}",
-            "reach": f"{neg}достигнет {translated_obj}",
-            "hit": f"{neg}достигнет {translated_obj}",
-            "pass": f"{neg}пройдёт {translated_obj}",
-            "exceed": f"{neg}превысит {translated_obj}",
-            "break": f"{neg}обновит {translated_obj}",
-            "collapse": f"{neg}обрушится",
-            "deploy": f"{neg}развернёт {translated_obj}",
-            "implement": f"{neg}внедрит {translated_obj}",
-            "survive": f"{neg}выживет",
-            "publish": f"{neg}опубликует {translated_obj}",
-            "release": f"{neg}выпустит {translated_obj}",
-            "default": f"{neg}допустит дефолт",
-            "merge": f"{neg}объединится с {translated_obj}",
-        }
-
-        return action_map.get(action, f"{neg}выполнит действие с {translated_obj}".strip())
-
-    def _translate_subject(self, subject: str) -> str:
-        """Переводит известные субъекты в русский."""
-        subject_map = {
-            "bank of japan": "Банк Японии",
-            "boj": "Банк Японии",
-            "the federal reserve": "ФРС",
-            "federal reserve": "ФРС",
-            "the fed": "ФРС",
-            "ecb": "ЕЦБ",
-            "bank of england": "Банк Англии",
-            "the us": "США",
-            "the united states": "США",
-            "russia": "Россия",
-            "ukraine": "Украина",
-            "china": "Китай",
-            "iran": "Иран",
-            "israel": "Израиль",
-        }
-        s_lower = subject.lower().strip()
-        for en, ru in subject_map.items():
-            if s_lower == en:
-                return ru
-        # Если не найдено — возвращаем как есть (бренды, имена)
-        return subject
-
-    def _translate_time(self, time_str: str) -> str:
-        """Переводит время в русский."""
-        if not time_str:
-            return ""
-
-        month_map = {
-            "january": "января", "february": "февраля", "march": "марта",
-            "april": "апреля", "may": "мая", "june": "июня",
-            "july": "июля", "august": "августа", "september": "сентября",
-            "october": "октября", "november": "ноября", "december": "декабря",
-        }
-
-        t = time_str.lower().strip()
-        for en, ru in month_map.items():
-            if en in t:
-                t = t.replace(en, ru)
-
-        # Год
-        if re.match(r'^\d{4}$', t):
-            return f"в {t} году"
-
-        return f"к {t}"
-
-    def _yes_to_semantic(self, question: str, semantic_type: str) -> str:
-        """
-        Полный рендеринг Yes → утвердительное русское предложение.
-
-        Will MicroStrategy sell any Bitcoin in 2025?
-        → MicroStrategy продаст Bitcoin в 2025 году
-        """
-        q = re.sub(r'\?$', '', question.strip())
-        q_lower = q.lower()
-
-        # TYPE B — пороговые
-        if semantic_type == "binary_threshold":
-            result = self._convert_threshold_yes(q)
+        # TYPE B: пороговые
+        if semantic_market_type == "binary_threshold":
+            result = self._render_threshold(question, is_negated)
             if result:
                 return result
 
-        # Пробуем полный парсинг action
-        parsed = self._parse_action_sentence(question)
-        if parsed["subject"] and parsed["action"]:
-            subject_ru = self._translate_subject(parsed["subject"])
-            action_ru = self._translate_action(parsed["action"], parsed["object"], is_negated=False)
-            time_ru = self._translate_time(parsed["time"])
-            sentence = f"{subject_ru} {action_ru}"
-            if time_ru:
-                sentence += f" {time_ru}"
-            return sentence.strip()
+        # TYPE A: бинарное действие — парсим полностью
+        parsed = self._parse_will_question(question)
 
-        # Известные сущности как fallback
+        if parsed["subject"] and parsed["raw_verb"]:
+            sentence = self._render_binary_action(
+                subject=parsed["subject"],
+                raw_verb=parsed["raw_verb"],
+                raw_object=parsed["raw_object"],
+                time_str=parsed["time"],
+                is_negated=is_negated,
+            )
+            if sentence and "выполнит действие" not in sentence:
+                return sentence
+
+        # TYPE C: single entity
+        if semantic_market_type == "single_entity":
+            entity = self._extract_main_entity(question)
+            if entity:
+                return entity
+
+        # Fallback: известные сущности
+        entity = self._extract_main_entity(question)
+        if entity and semantic_market_type != "binary_action":
+            return entity
+
+        # Последний fallback
+        if parsed["subject"]:
+            neg = "НЕ " if is_negated else ""
+            return f"{parsed['subject']} {neg}выполнит действие"
+
+        return "Событие не произойдёт" if is_negated else "Событие произойдёт"
+
+    def _render_threshold(self, question: str, is_negated: bool) -> str:
+        """Рендер пороговых вопросов."""
+        q = question.lower()
+        neg = "НЕ " if is_negated else ""
+
+        if "inflation" in q:
+            match = re.search(r'(\d+(?:\.\d+)?)\s*%', question)
+            threshold = match.group(0) if match else "порогового значения"
+            year_match = re.search(r'(202\d)', question)
+            year_str = f" в {year_match.group(1)} году" if year_match else ""
+            return f"Инфляция {neg}превысит {threshold}{year_str}"
+
+        if "bitcoin" in q or "btc" in q:
+            match = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
+            price = match.group(0) if match else "целевого уровня"
+            return f"Bitcoin {neg}достигнет {price}"
+
+        match = re.match(
+            r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
+            re.sub(r'\?$', '', question), re.IGNORECASE
+        )
+        if match:
+            subject = self._translate_subject(match.group(1).strip())
+            threshold = match.group(3).strip()
+            return f"{subject} {neg}превысит {threshold}"
+
+        return ""
+
+    def _extract_main_entity(self, question: str) -> str:
+        """Извлекает главную сущность из вопроса."""
         known_entities = [
             "NVIDIA", "Apple", "Microsoft", "Google", "Alphabet",
             "Amazon", "Tesla", "Meta", "Anthropic", "OpenAI", "Samsung",
@@ -442,177 +526,15 @@ class CommunicationAgent:
             "Macron", "Modi", "SpaceX", "Intel", "AMD", "Netflix",
             "MicroStrategy", "Bank of Japan", "BOJ", "OPEC", "IMF",
         ]
+        q_lower = question.lower()
         for entity in known_entities:
             if entity.lower() in q_lower:
                 return entity
-
-        match2 = re.match(r'^Will\s+(.+)', q)
-        if match2:
-            rest = match2.group(1).strip()
-            words = rest.split()[:5]
-            return " ".join(words)
-
         return ""
 
-    def _no_to_semantic(self, question: str, semantic_type: str) -> str:
-        """
-        Полный рендеринг No → отрицательное русское предложение.
-
-        Will MicroStrategy sell any Bitcoin in 2025?
-        → MicroStrategy НЕ продаст Bitcoin в 2025 году
-
-        Will Bank of Japan decrease rates?
-        → Банк Японии НЕ снизит ставку
-        """
-        q = re.sub(r'\?$', '', question.strip())
-        q_lower = q.lower()
-
-        # TYPE B — пороговые с отрицанием
-        if semantic_type == "binary_threshold":
-            result = self._convert_threshold_no(q)
-            if result:
-                return result
-
-        # Полный парсинг action
-        parsed = self._parse_action_sentence(question)
-        if parsed["subject"] and parsed["action"]:
-            subject_ru = self._translate_subject(parsed["subject"])
-            action_ru = self._translate_action(parsed["action"], parsed["object"], is_negated=True)
-            time_ru = self._translate_time(parsed["time"])
-            sentence = f"{subject_ru} {action_ru}"
-            if time_ru:
-                sentence += f" {time_ru}"
-            return sentence.strip()
-
-        # Fallback через entity map
-        entity_map = [
-            ("MicroStrategy", "MicroStrategy"),
-            ("Bank of Japan", "Банк Японии"),
-            ("BOJ", "Банк Японии"),
-            ("Federal Reserve", "ФРС"),
-            ("Fed", "ФРС"),
-            ("ECB", "ЕЦБ"),
-            ("NVIDIA", "NVIDIA"),
-            ("Apple", "Apple"),
-            ("Microsoft", "Microsoft"),
-            ("Tesla", "Tesla"),
-            ("Bitcoin", "Bitcoin"),
-            ("Ethereum", "Ethereum"),
-            ("Trump", "Trump"),
-            ("Biden", "Biden"),
-            ("Putin", "Путин"),
-            ("Russia", "Россия"),
-            ("Ukraine", "Украина"),
-            ("Iran", "Иран"),
-            ("Israel", "Израиль"),
-            ("China", "Китай"),
-        ]
-
-        action_map_simple = [
-            ("sell bitcoin", "НЕ продаст Bitcoin"),
-            ("sell any bitcoin", "НЕ продаст Bitcoin"),
-            ("buy bitcoin", "НЕ купит Bitcoin"),
-            ("decrease rates", "НЕ снизит ставку"),
-            ("cut rates", "НЕ снизит ставку"),
-            ("raise rates", "НЕ повысит ставку"),
-            ("hike rates", "НЕ повысит ставку"),
-            ("hold rates", "НЕ сохранит ставку"),
-            ("win the election", "НЕ победит на выборах"),
-            ("win the championship", "НЕ победит в чемпионате"),
-            ("win the world cup", "НЕ выиграет Чемпионат мира"),
-            ("win the super bowl", "НЕ выиграет Супербоул"),
-            ("win", "НЕ победит"),
-            ("become president", "НЕ станет президентом"),
-            ("become", "НЕ станет"),
-            ("file for bankruptcy", "НЕ обанкротится"),
-            ("go bankrupt", "НЕ обанкротится"),
-            ("default", "НЕ допустит дефолт"),
-            ("collapse", "НЕ обрушится"),
-            ("launch", "НЕ запустит"),
-            ("sign", "НЕ подпишет"),
-            ("approve", "НЕ одобрит"),
-            ("reject", "НЕ отклонит"),
-        ]
-
-        entity_ru = None
-        for en, ru in entity_map:
-            if en.lower() in q_lower:
-                entity_ru = ru
-                break
-
-        action_ru = None
-        for en_action, ru_action in action_map_simple:
-            if en_action in q_lower:
-                action_ru = ru_action
-                break
-
-        if entity_ru and action_ru:
-            return f"{entity_ru} {action_ru}"
-
-        # Последний fallback — общий паттерн
-        match = re.match(r'^Will\s+(.+)', q)
-        if match:
-            rest = match.group(1).strip()
-            words = rest.split()[:4]
-            entity = " ".join(words)
-            if len(entity) < 40:
-                return f"{entity} — не произойдёт"
-
-        return "Событие не произойдёт"
-
-    def _convert_threshold_yes(self, q: str) -> str:
-        q_lower = q.lower()
-
-        if "inflation" in q_lower:
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', q)
-            threshold = match.group(0) if match else "порогового значения"
-            year_match = re.search(r'(202\d)', q)
-            year_str = f" в {year_match.group(1)} году" if year_match else ""
-            return f"Инфляция превысит {threshold}{year_str}"
-
-        if "bitcoin" in q_lower or "btc" in q_lower:
-            match = re.search(r'\$[\d,]+[k]?|\d+[k]', q, re.IGNORECASE)
-            price = match.group(0) if match else "целевого уровня"
-            return f"Bitcoin достигнет {price}"
-
-        match = re.match(
-            r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above|be above)\s+(.+)',
-            q, re.IGNORECASE
-        )
-        if match:
-            subject = match.group(1).strip()
-            threshold = match.group(3).strip()
-            subject_ru = self._translate_subject(subject)
-            return f"{subject_ru} превысит {threshold}"
-
-        return ""
-
-    def _convert_threshold_no(self, q: str) -> str:
-        q_lower = q.lower()
-
-        if "inflation" in q_lower:
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', q)
-            threshold = match.group(0) if match else "порогового значения"
-            year_match = re.search(r'(202\d)', q)
-            year_str = f" в {year_match.group(1)} году" if year_match else ""
-            return f"Инфляция НЕ превысит {threshold}{year_str}"
-
-        if "bitcoin" in q_lower or "btc" in q_lower:
-            match = re.search(r'\$[\d,]+[k]?|\d+[k]', q, re.IGNORECASE)
-            price = match.group(0) if match else "целевого уровня"
-            return f"Bitcoin НЕ достигнет {price}"
-
-        match = re.match(
-            r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above|be above)\s+(.+)',
-            q, re.IGNORECASE
-        )
-        if match:
-            subject = match.group(1).strip()
-            threshold = match.group(3).strip()
-            subject_ru = self._translate_subject(subject)
-            return f"{subject_ru} НЕ превысит {threshold}"
-
-        return ""
+    # ─────────────────────────────────────────────
+    # TEXT BUILDERS
+    # ─────────────────────────────────────────────
 
     def _classify_market_balance(self, market_prob: float) -> str:
         if market_prob >= 85:
@@ -636,11 +558,10 @@ class CommunicationAgent:
         market_balance: str,
     ) -> str:
         if clean_reasoning and len(clean_reasoning) > 30:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning).strip()
-            if is_negated:
-                result = re.sub(r'\bNo\b', semantic_outcome, result)
-            else:
-                result = re.sub(r'\bYes\b', semantic_outcome, result)
+            result = re.sub(
+                r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning
+            ).strip()
+            result = re.sub(r'\bNo\b', semantic_outcome, result) if is_negated else re.sub(r'\bYes\b', semantic_outcome, result)
             if len(result) > 30:
                 return result
 
@@ -681,12 +602,8 @@ class CommunicationAgent:
     ) -> str:
         if clean_scenario and len(clean_scenario) > 30:
             result = clean_scenario
-            if is_negated:
-                result = re.sub(r'\bNo\b', semantic_outcome, result)
-            else:
-                result = re.sub(r'\bYes\b', semantic_outcome, result)
+            result = re.sub(r'\bNo\b', semantic_outcome, result) if is_negated else re.sub(r'\bYes\b', semantic_outcome, result)
             result = result.replace("указывают на:", "подтверждают:")
-            result = result.replace("указывают на: ", "")
             return result
 
         if market_balance == "strong_consensus":
@@ -725,13 +642,13 @@ class CommunicationAgent:
         if market_balance == "strong_consensus":
             return (
                 f"Маловероятный сценарий ({alt_prob:.1f}%): резкое изменение политики "
-                f"регулятора, неожиданное геополитическое событие или масштабный "
-                f"макроэкономический шок. Рынок практически исключает этот вариант."
+                f"регулятора, неожиданное геополитическое событие или макроэкономический шок. "
+                f"Рынок практически исключает этот вариант."
             )
         elif market_balance == "moderate_consensus":
             return (
                 f"Альтернативный сценарий ({alt_prob:.1f}%): смена монетарной политики, "
-                f"неожиданные данные или разворот рыночного сентимента могут переломить тренд."
+                f"неожиданные данные или разворот сентимента могут переломить тренд."
             )
         elif market_balance in ("balanced", "slight_lean"):
             return (
@@ -753,11 +670,10 @@ class CommunicationAgent:
         market_balance: str,
     ) -> str:
         if clean_conclusion and len(clean_conclusion) > 20:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
-            if is_negated:
-                result = re.sub(r'\bNo\b', semantic_outcome, result)
-            else:
-                result = re.sub(r'\bYes\b', semantic_outcome, result)
+            result = re.sub(
+                r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion
+            ).strip()
+            result = re.sub(r'\bNo\b', semantic_outcome, result) if is_negated else re.sub(r'\bYes\b', semantic_outcome, result)
             if len(result) > 20:
                 return result
 
@@ -771,11 +687,15 @@ class CommunicationAgent:
         else:
             return f"Следуем рыночной оценке: {display_prediction}."
 
+    # ─────────────────────────────────────────────
+    # HELPERS
+    # ─────────────────────────────────────────────
+
     def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
         try:
             if market_type == "binary":
                 yes_match = re.search(r'Yes:\s*([\d.]+)%', market_probability)
-                no_match = re.search(r'No:\s*([\df.]+)%', market_probability)
+                no_match = re.search(r'No:\s*([\d.]+)%', market_probability)
                 yes_prob = float(yes_match.group(1)) if yes_match else 0
                 no_prob = float(no_match.group(1)) if no_match else 0
                 return max(yes_prob, no_prob)
@@ -861,12 +781,10 @@ class CommunicationAgent:
             if text_stripped == phrase:
                 return ""
 
-        text_stripped = (
+        return (
             text_stripped
             .replace("##", "")
             .replace("###", "")
             .replace("**", "")
             .strip()
         )
-
-        return text_stripped
