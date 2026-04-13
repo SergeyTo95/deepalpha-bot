@@ -1,3 +1,4 @@
+
 from typing import Dict, List, Any, Optional
 
 from services.polymarket_service import (
@@ -77,19 +78,27 @@ class MarketAgent:
                 prices = [float(p) for p in outcome_prices]
             elif isinstance(outcome_prices, str):
                 cleaned = outcome_prices.strip("[]")
-                prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                prices = [
+                    float(p.strip().strip('"'))
+                    for p in cleaned.split(",")
+                    if p.strip()
+                ]
 
             if not prices or not options:
                 return normalized_prob
 
             if market_type == "binary":
                 if len(prices) >= 2 and len(options) >= 2:
-                    yes_idx = next((i for i, o in enumerate(options) if o.strip().lower() == "yes"), 0)
-                    no_idx = next((i for i, o in enumerate(options) if o.strip().lower() == "no"), 1)
+                    yes_idx = next(
+                        (i for i, o in enumerate(options) if o.strip().lower() == "yes"), 0
+                    )
+                    no_idx = next(
+                        (i for i, o in enumerate(options) if o.strip().lower() == "no"), 1
+                    )
                     yes_pct = round(prices[yes_idx] * 100, 2) if yes_idx < len(prices) else 0
                     no_pct = round(prices[no_idx] * 100, 2) if no_idx < len(prices) else 0
                     return f"Yes: {yes_pct}% | No: {no_pct}%"
-                elif len(prices) >= 1:
+                elif prices:
                     yes_pct = round(prices[0] * 100, 2)
                     return f"Yes: {yes_pct}% | No: {round(100 - yes_pct, 2)}%"
 
@@ -97,7 +106,7 @@ class MarketAgent:
                 paired = sorted(
                     zip(options, prices),
                     key=lambda x: x[1],
-                    reverse=True
+                    reverse=True,
                 )
                 parts = [f"{opt}: {round(price * 100, 2)}%" for opt, price in paired]
                 return " | ".join(parts)
@@ -124,22 +133,24 @@ class MarketAgent:
     def _detect_category(self, text: str) -> str:
         s = (text or "").lower()
 
-        # ===== ECONOMY — проверяем ПЕРВЫМ (до Sports) =====
-        # Макроэкономика, банки, ставки — НИКОГДА не Sports
+        # ===== ECONOMY — ПЕРВЫМ (макро, банки, ставки) =====
         economy_priority = [
-            "bank of japan", "boj", "federal reserve", "fed rate", "fed cut",
-            "fed hike", "fed hold", "fed pause", "interest rate", "rate cut",
-            "rate hike", "rate hold", "basis point", "bps",
-            "ecb rate", "bank of england", "boe rate", "rba rate",
-            "inflation", "cpi", "pce", "gdp", "recession", "unemployment",
-            "opec", "oil price", "crude oil", "brent", "wti",
-            "yield curve", "treasury yield", "10-year yield",
-            "imf", "world bank", "debt ceiling",
+            "bank of japan", "boj", "federal reserve", "fed rate",
+            "fed cut", "fed hike", "fed hold", "fed pause",
+            "interest rate", "rate cut", "rate hike", "rate hold",
+            "basis point", "bps", "ecb rate", "bank of england",
+            "boe rate", "rba rate", "inflation rate", "cpi report",
+            "pce report", "gdp growth", "recession risk",
+            "unemployment rate", "opec", "oil price", "crude oil",
+            "brent", "wti", "yield curve", "treasury yield",
+            "10-year yield", "imf forecast", "world bank",
+            "debt ceiling", "fiscal", "monetary policy",
+            "quantitative easing", "qe", "tapering",
         ]
         if any(word in s for word in economy_priority):
             return "Economy"
 
-        # ===== POLITICS — проверяем вторым =====
+        # ===== POLITICS =====
         politics_keywords = [
             "trump", "biden", "harris", "vance", "election", "senate",
             "white house", "president", "congress", "vote", "republican",
@@ -148,26 +159,28 @@ class MarketAgent:
             "orban", "modi", "xi jinping", "nato", "un ", "united nations",
             "eu ", "european union", "parliament", "prime minister",
             "chancellor", "minister", "government", "summit", "embassy",
-            "ambassador", "diplomacy", "treaty", "sanctions", "iran deal",
-            "israel", "ukraine", "russia", "war", "conflict", "ceasefire",
-            "military", "missile", "nuclear", "strike", "attack", "invasion",
-            "troops", "weapon", "bomb", "drone", "navy", "venezuela",
-            "taiwan", "north korea", "pakistan", "peace deal", "peace talks",
-            "negotiations", "geopolitical", "coup", "protest", "revolution",
-            "polling", "approval rating", "impeach", "resign",
+            "ambassador", "diplomacy", "treaty", "sanctions",
+            "iran deal", "israel", "ukraine", "russia", "war", "conflict",
+            "ceasefire", "military", "missile", "nuclear", "strike",
+            "attack", "invasion", "troops", "weapon", "bomb", "drone",
+            "navy", "venezuela", "taiwan", "north korea", "pakistan",
+            "peace deal", "peace talks", "negotiations", "geopolitical",
+            "coup", "protest", "revolution", "polling", "approval rating",
+            "impeach", "resign",
         ]
         if any(word in s for word in politics_keywords):
             return "Politics"
 
         # ===== CRYPTO =====
         crypto_keywords = [
-            "bitcoin", "btc", "eth", "ethereum", "solana", "sol", "crypto",
-            "token", "defi", "memecoin", "blockchain", "coinbase", "binance",
-            "altcoin", "nft", "usdc", "xrp", "ripple", "cardano", "ada",
-            "dogecoin", "doge", "polygon", "matic", "avalanche", "avax",
-            "chainlink", "stablecoin", "halving", "mining", "wallet",
-            "exchange", "dex", "web3", "dao", "smart contract",
-            "crypto etf", "bitcoin etf", "sec crypto",
+            "bitcoin", "btc", "eth", "ethereum", "solana", "sol",
+            "crypto", "token", "defi", "memecoin", "blockchain",
+            "coinbase", "binance", "altcoin", "nft", "usdc", "xrp",
+            "ripple", "cardano", "ada", "dogecoin", "doge", "polygon",
+            "matic", "avalanche", "avax", "chainlink", "stablecoin",
+            "halving", "mining", "wallet", "exchange", "dex", "web3",
+            "dao", "smart contract", "crypto etf", "bitcoin etf",
+            "sec crypto",
         ]
         if any(word in s for word in crypto_keywords):
             return "Crypto"
@@ -176,12 +189,10 @@ class MarketAgent:
         sports_keywords = [
             "nba", "nfl", "mlb", "nhl", "ufc", "mma", "fifa", "nascar",
             "premier league", "champions league", "la liga", "serie a",
-            "bundesliga", "ligue 1", "super bowl", "world cup", "stanley cup",
-            "world series", "march madness", "masters", "wimbledon",
-            "grand slam", "olympics", "formula 1", " f1 ", "grand prix",
-            " nba ", " nfl ", " mlb ", " nhl ",
-            "basketball game", "football game", "soccer match",
-            "tennis match", "golf tournament", "boxing match",
+            "bundesliga", "ligue 1", "super bowl", "world cup",
+            "stanley cup", "world series", "march madness", "masters",
+            "wimbledon", "grand slam", "olympics", "formula 1",
+            " f1 ", "grand prix",
             "celtics", "lakers", "warriors", "heat", "bulls", "knicks",
             "nets", "mavericks", "nuggets", "suns", "clippers", "bucks",
             "76ers", "spurs", "rockets", "pistons", "pacers", "hawks",
@@ -198,13 +209,15 @@ class MarketAgent:
             "win the league", "win the tournament", "win the title",
             "win the world cup", "win the super bowl",
             "playoffs", "postseason", "draft pick",
+            "basketball game", "football game", "soccer match",
+            "tennis match", "golf tournament", "boxing match",
         ]
         if any(word in s for word in sports_keywords):
             return "Sports"
 
         # ===== ECONOMY — общие =====
         economy_general = [
-            "inflation rate", "interest rates", "central bank",
+            "inflation", "interest rates", "central bank",
             "stock market", "s&p 500", "nasdaq", "dow jones",
             "dollar index", "currency", "trade war", "tariff",
             "debt", "deficit", "budget", "fomc", "powell",
@@ -212,19 +225,20 @@ class MarketAgent:
             "bankruptcy", "merger", "acquisition", "ipo",
             "earnings", "revenue", "profit", "market cap",
             "largest company", "biggest company",
-            "economic growth", "economic crisis",
+            "economic growth", "economic crisis", "gdp",
         ]
         if any(word in s for word in economy_general):
             return "Economy"
 
         # ===== TECH =====
         tech_keywords = [
-            "openai", "chatgpt", "gpt-", "ai model", "artificial intelligence",
-            "google", "apple", "tesla", "nvidia", "microsoft", "meta",
-            "amazon", "spacex", "starship", "anthropic", "grok", "xai",
-            "gemini", "claude", "llm", "language model", "chip",
-            "iphone", "android", "samsung", "intel", "amd",
-            "robot", "autonomous", "self-driving", "electric vehicle",
+            "openai", "chatgpt", "gpt-", "ai model",
+            "artificial intelligence", "google", "apple", "tesla",
+            "nvidia", "microsoft", "meta", "amazon", "spacex",
+            "starship", "anthropic", "grok", "xai", "gemini",
+            "claude", "llm", "language model", "chip", "iphone",
+            "android", "samsung", "intel", "amd", "robot",
+            "autonomous", "self-driving", "electric vehicle",
             "neuralink", "starlink", "satellite", "cybertruck",
             "best ai", "which company has the best",
             "software", "hardware", "data center", "cloud",
@@ -246,7 +260,8 @@ class MarketAgent:
         # ===== WEATHER =====
         weather_keywords = [
             "hurricane", "tornado", "earthquake", "flood", "wildfire",
-            "temperature record", "climate", "el nino", "typhoon", "cyclone",
+            "temperature record", "climate", "el nino", "typhoon",
+            "cyclone",
         ]
         if any(word in s for word in weather_keywords):
             return "Weather"
