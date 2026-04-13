@@ -1,3 +1,4 @@
+
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +33,46 @@ def extract_slug_from_url(url: str) -> str:
         return parts[-1]
     except Exception:
         return ""
+
+
+def _clean_slug(slug: str) -> str:
+    """Убирает числовой суффикс из slug: 'some-market-183' -> 'some-market'"""
+    if not slug:
+        return ""
+    return re.sub(r'-\d+$', '', slug)
+
+
+def build_market_url(raw_market: Dict[str, Any]) -> str:
+    """Строит правильный URL для рынка Polymarket."""
+
+    # Сначала берём готовый URL из API
+    url = raw_market.get("url", "") or raw_market.get("marketUrl", "") or raw_market.get("market_url", "")
+    if url and url.startswith("https://polymarket.com"):
+        return url
+
+    slug = raw_market.get("slug", "")
+    if not slug:
+        return ""
+
+    # Пробуем взять eventSlug из вложенных данных
+    event_slug = (
+        raw_market.get("eventSlug") or
+        raw_market.get("event_slug") or
+        ""
+    )
+
+    if not event_slug:
+        event = raw_market.get("event", {})
+        if isinstance(event, dict):
+            event_slug = event.get("slug", "")
+
+    if event_slug:
+        clean = _clean_slug(event_slug)
+        return f"https://polymarket.com/event/{clean}"
+
+    # Убираем числовой суффикс из slug рынка
+    clean = _clean_slug(slug)
+    return f"https://polymarket.com/event/{clean}"
 
 
 def search_markets_by_slug(slug: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -73,83 +114,6 @@ def list_markets(search: str = "", limit: int = 10, offset: int = 0) -> List[Dic
         return []
     except Exception:
         return []
-
-
-def get_event_slug_for_market(market_slug: str) -> str:
-    """Получает eventSlug для рынка через events API."""
-    if not market_slug:
-        return ""
-    try:
-        # Пробуем найти событие по slug рынка
-        response = requests.get(
-            f"{GAMMA_BASE_URL}/events",
-            params={"market_slug": market_slug, "limit": 1},
-            timeout=10,
-        )
-        if response.status_code == 200:
-            data = response.json()
-            events = data if isinstance(data, list) else data.get("data", [])
-            if events and isinstance(events, list):
-                event_slug = events[0].get("slug", "")
-                if event_slug:
-                    return event_slug
-    except Exception:
-        pass
-
-    # Второй вариант — ищем через slug напрямую
-    try:
-        response = requests.get(
-            f"{GAMMA_BASE_URL}/events",
-            params={"slug": market_slug, "limit": 1},
-            timeout=10,
-        )
-        if response.status_code == 200:
-            data = response.json()
-            events = data if isinstance(data, list) else data.get("data", [])
-            if events and isinstance(events, list):
-                event_slug = events[0].get("slug", "")
-                if event_slug:
-                    return event_slug
-    except Exception:
-        pass
-
-    return ""
-
-
-def build_market_url(raw_market: Dict[str, Any]) -> str:
-    """Строит правильный URL для рынка Polymarket."""
-
-    # Сначала берём готовый URL из API
-    url = raw_market.get("url", "") or raw_market.get("marketUrl", "") or raw_market.get("market_url", "")
-    if url and url.startswith("https://"):
-        return url
-
-    slug = raw_market.get("slug", "")
-    if not slug:
-        return ""
-
-    # Пробуем взять eventSlug из вложенных данных
-    event_slug = (
-        raw_market.get("eventSlug") or
-        raw_market.get("event_slug") or
-        ""
-    )
-
-    # Если нет — пробуем из вложенного event объекта
-    if not event_slug:
-        event = raw_market.get("event", {})
-        if isinstance(event, dict):
-            event_slug = event.get("slug", "")
-
-    # Если всё ещё нет — запрашиваем events API
-    if not event_slug:
-        event_slug = get_event_slug_for_market(slug)
-
-    if event_slug:
-        return f"https://polymarket.com/event/{event_slug}"
-
-    # Последний fallback — просто slug рынка
-    return f"https://polymarket.com/event/{slug}"
 
 
 def get_primary_market_from_url(url: str) -> Dict[str, Any]:
@@ -248,18 +212,8 @@ def normalize_market_data(raw_market: Dict[str, Any]) -> Dict[str, Any]:
 
     trend_data = get_market_trend_context(primary_token_id) if primary_token_id else _empty_trend_context()
 
-    # Строим правильный URL без лишних API запросов
-    market_url = raw_market.get("url", "") or raw_market.get("marketUrl", "")
-    if not market_url:
-        event_slug = (
-            raw_market.get("eventSlug") or
-            raw_market.get("event_slug") or
-            (raw_market.get("event", {}) or {}).get("slug", "")
-        )
-        if event_slug:
-            market_url = f"https://polymarket.com/event/{event_slug}"
-        elif slug:
-            market_url = f"https://polymarket.com/event/{slug}"
+    # Строим правильный URL
+    market_url = build_market_url(raw_market)
 
     return {
         "id": raw_market.get("id", ""),
@@ -559,7 +513,6 @@ def _extract_keywords(text: str) -> List[str]:
         "will", "the", "a", "an", "to", "of", "and", "or", "in", "on",
         "for", "be", "is", "are", "today", "this", "that", "what", "when"
     }
-
     keywords = [w for w in words if len(w) > 2 and w not in stop]
     return keywords[:8]
 
@@ -657,3 +610,4 @@ def _empty_trend_context() -> Dict[str, Any]:
         "crowd_behavior": "Crowd behavior unavailable due to missing price history.",
         "price_history": {"24h": [], "7d": []},
     }
+ 
