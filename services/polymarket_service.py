@@ -1,4 +1,3 @@
-
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,17 +35,32 @@ def extract_slug_from_url(url: str) -> str:
 
 
 def _clean_slug(slug: str) -> str:
-    """Убирает числовой суффикс из slug: 'some-market-183' -> 'some-market'"""
+    """Убирает числовые суффиксы-ID из slug.
+    
+    Примеры:
+    'megaeth-market-cap-fdv-2b-one-day-after-launch-738-867-649-272-765' 
+        -> 'megaeth-market-cap-fdv-2b-one-day-after-launch'
+    'will-brazil-win-the-2026-fifa-world-cup-183' 
+        -> 'will-brazil-win-the-2026-fifa-world-cup'
+    'will-trump-win-2028' 
+        -> 'will-trump-win-2028' (год не трогаем)
+    """
     if not slug:
         return ""
-    return re.sub(r'-\d+$', '', slug)
+    # Убираем цепочки числовых суффиксов из 3+ цифр
+    cleaned = re.sub(r'(-\d{3,})+$', '', slug)
+    return cleaned if cleaned else slug
 
 
 def build_market_url(raw_market: Dict[str, Any]) -> str:
     """Строит правильный URL для рынка Polymarket."""
 
     # Сначала берём готовый URL из API
-    url = raw_market.get("url", "") or raw_market.get("marketUrl", "") or raw_market.get("market_url", "")
+    url = (
+        raw_market.get("url", "") or
+        raw_market.get("marketUrl", "") or
+        raw_market.get("market_url", "")
+    )
     if url and url.startswith("https://polymarket.com"):
         return url
 
@@ -610,4 +624,3 @@ def _empty_trend_context() -> Dict[str, Any]:
         "crowd_behavior": "Crowd behavior unavailable due to missing price history.",
         "price_history": {"24h": [], "7d": []},
     }
- 
