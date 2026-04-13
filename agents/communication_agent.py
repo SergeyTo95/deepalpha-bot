@@ -41,13 +41,13 @@ class CommunicationAgent:
             market_prob=market_prob,
         )
 
-        # Шаг 4: Чистим и улучшаем тексты
+        # Шаг 4: Чистим тексты
         clean_reasoning = self._clean_text(reasoning)
         clean_scenario = self._clean_text(main_scenario)
         clean_alt = self._clean_text(alt_scenario)
         clean_conclusion = self._clean_text(conclusion)
 
-        # Шаг 5: Генерируем семантические тексты если нужно
+        # Шаг 5: Финальные тексты с semantic outcome
         final_scenario = self._build_scenario(
             clean_scenario=clean_scenario,
             semantic_outcome=semantic_outcome,
@@ -60,12 +60,23 @@ class CommunicationAgent:
             semantic_outcome=semantic_outcome,
         )
 
-        final_alt = clean_alt if clean_alt else self._build_alt_scenario(semantic_outcome)
+        final_alt = self._build_alt_scenario(
+            clean_alt=clean_alt,
+            semantic_outcome=semantic_outcome,
+            market_prob=market_prob,
+        )
+
+        final_reasoning = self._build_reasoning(
+            clean_reasoning=clean_reasoning,
+            semantic_outcome=semantic_outcome,
+            model_prob=model_prob,
+            market_prob=market_prob,
+        )
 
         return {
             "display_prediction": display_prediction,
             "semantic_outcome": semantic_outcome,
-            "reasoning": clean_reasoning,
+            "reasoning": final_reasoning,
             "main_scenario": final_scenario,
             "alt_scenario": final_alt,
             "conclusion": final_conclusion,
@@ -79,14 +90,9 @@ class CommunicationAgent:
         probability_str: str,
         market_type: str,
     ) -> Tuple[str, Optional[float]]:
-        """
-        Извлекает семантический исход и числовую вероятность.
-        Конвертирует Yes/No в читаемое предсказание.
-        """
         if not probability_str:
             return probability_str, None
 
-        # Парсим строку вида "Yes — 98.3%" или "NVIDIA — 98.3%"
         raw_outcome = ""
         prob_val = None
 
@@ -102,11 +108,9 @@ class CommunicationAgent:
             else:
                 return probability_str, None
 
-        # Если уже не Yes/No — возвращаем как есть
         if raw_outcome.lower() not in ("yes", "no"):
             return raw_outcome, prob_val
 
-        # Конвертируем Yes/No в семантику
         if raw_outcome.lower() == "yes":
             semantic = self._yes_to_semantic(question)
         else:
@@ -115,18 +119,8 @@ class CommunicationAgent:
         return semantic if semantic else raw_outcome, prob_val
 
     def _yes_to_semantic(self, question: str) -> str:
-        """
-        Конвертирует Yes в семантическое предсказание.
-
-        Will NVIDIA be the largest company? → NVIDIA
-        Will Bitcoin hit $150k? → Bitcoin hits $150k
-        Will Trump win the election? → Trump wins
-        Will the Fed cut rates? → Fed cuts rates
-        Will Russia enter Dovha Balka? → Russia enters Dovha Balka
-        """
         q = re.sub(r'\?$', '', question.strip())
 
-        # Известные сущности — возвращаем сразу
         known_entities = [
             "NVIDIA", "Apple", "Microsoft", "Google", "Alphabet",
             "Amazon", "Tesla", "Meta", "Anthropic", "OpenAI", "Samsung",
@@ -134,42 +128,26 @@ class CommunicationAgent:
             "Trump", "Biden", "Harris", "Putin", "Zelensky", "Orban",
             "Macron", "Modi", "Xi", "Fed", "ECB", "NATO", "SpaceX",
             "Intel", "AMD", "Netflix", "Disney", "Uber", "Airbnb",
+            "Russia", "Ukraine", "China", "Iran", "Israel", "US", "USA",
         ]
         q_lower = q.lower()
         for entity in known_entities:
             if entity.lower() in q_lower:
                 return entity
 
-        # Паттерн: "Will [ENTITY] [verb]..."
         match = re.match(
             r'^Will\s+([A-Z][A-Za-z0-9\s&\.\-\']+?)\s+'
             r'(be|win|become|reach|hit|pass|exceed|lose|fall|drop|rise|'
             r'get|make|break|cross|stay|remain|achieve|sign|launch|release|'
-            r'announce|complete|finish|happen|occur|fail|enter|capture|take)',
+            r'announce|complete|finish|happen|occur|fail|enter|capture|take|'
+            r'deploy|implement|approve|reject|survive|collapse)',
             q
         )
         if match:
             entity = match.group(1).strip()
-            verb = match.group(2)
-            verb_map = {
-                "win": "wins", "be": "becomes", "become": "becomes",
-                "reach": "reaches", "hit": "hits", "pass": "passes",
-                "exceed": "exceeds", "rise": "rises", "fall": "falls",
-                "get": "gets", "make": "makes", "break": "breaks",
-                "cross": "crosses", "stay": "stays", "remain": "remains",
-                "achieve": "achieves", "sign": "signs", "launch": "launches",
-                "release": "releases", "announce": "announces",
-                "complete": "completes", "finish": "finishes",
-                "happen": "happens", "occur": "occurs", "fail": "fails",
-                "enter": "enters", "capture": "captures", "take": "takes",
-            }
-            verb_form = verb_map.get(verb, verb + "s")
-
-            # Короткий entity — только его
-            if len(entity.split()) <= 3:
+            if len(entity.split()) <= 4:
                 return entity
 
-        # Общий паттерн: "Will [rest]" → берём первые 5 слов
         match2 = re.match(r'^Will\s+(.+)', q)
         if match2:
             rest = match2.group(1).strip()
@@ -181,9 +159,7 @@ class CommunicationAgent:
         return ""
 
     def _no_to_semantic(self, question: str) -> str:
-        """Конвертирует No в семантическое предсказание."""
         q = re.sub(r'\?$', '', question.strip())
-
         match = re.match(r'^Will\s+(.+)', q)
         if match:
             rest = match.group(1).strip()
@@ -191,8 +167,38 @@ class CommunicationAgent:
             entity = " ".join(words)
             if len(entity) < 40:
                 return f"{entity} — нет"
-
         return ""
+
+    def _build_reasoning(
+        self,
+        clean_reasoning: str,
+        semantic_outcome: str,
+        model_prob: float,
+        market_prob: float,
+    ) -> str:
+        """Строит логику с заменой Yes/No на semantic."""
+        if clean_reasoning and len(clean_reasoning) > 30:
+            result = re.sub(r'\bYes\b', semantic_outcome, clean_reasoning)
+            result = re.sub(r'\bNo\b', f"не {semantic_outcome.lower()}", result)
+            return result
+
+        # Генерируем если нет нормального
+        delta = abs(model_prob - market_prob) if model_prob and market_prob else 0
+        if market_prob >= 90:
+            return (
+                f"Рыночный консенсус на уровне {market_prob:.1f}% отражает высокую уверенность участников рынка. "
+                f"При такой вероятности большинство доступной информации уже учтено в цене."
+            )
+        elif market_prob >= 65:
+            return (
+                f"Рынок оценивает вероятность {semantic_outcome} в {market_prob:.1f}% — "
+                f"умеренный, но устойчивый перевес. Баланс факторов указывает на текущего лидера."
+            )
+        else:
+            return (
+                f"Высокая неопределённость: рынок оценивает вероятность в {market_prob:.1f}%. "
+                f"Ситуация может измениться при появлении новых данных."
+            )
 
     def _build_scenario(
         self,
@@ -200,33 +206,62 @@ class CommunicationAgent:
         semantic_outcome: str,
         model_prob: float,
     ) -> str:
-        """Строит основной сценарий с semantic outcome."""
-        # Если сценарий хороший и не содержит Yes/No — используем
-        if clean_scenario and len(clean_scenario) > 20:
-            # Заменяем Yes/No на semantic
+        if clean_scenario and len(clean_scenario) > 30:
             result = re.sub(r'\bYes\b', semantic_outcome, clean_scenario)
             result = re.sub(r'\bNo\b', f"не {semantic_outcome.lower()}", result)
+            # Убираем роботизированные фразы
+            result = result.replace("указывают на:", "подтверждает:")
+            result = result.replace("указывают на: ", "")
             return result
 
-        # Генерируем семантический сценарий
         prob = model_prob or 50
         if prob >= 90:
             return (
-                f"Рыночный консенсус и AI с высокой уверенностью указывают на: "
-                f"{semantic_outcome}."
+                f"{semantic_outcome} с высокой вероятностью реализуется к указанной дате. "
+                f"Текущее положение лидера устойчиво, серьёзных угроз не выявлено."
             )
-        elif prob >= 70:
-            return f"Умеренно высокая вероятность в пользу: {semantic_outcome}."
-        elif prob >= 50:
-            return f"Небольшой перевес в пользу: {semantic_outcome}."
+        elif prob >= 65:
+            return (
+                f"Умеренно высокая вероятность реализации сценария: {semantic_outcome}. "
+                f"Для подтверждения необходимо сохранение текущих условий."
+            )
         else:
-            return f"Данный сценарий маловероятен. Преобладает альтернативный исход."
+            return (
+                f"Сценарий {semantic_outcome} возможен, но неопределённость остаётся высокой. "
+                f"Исход зависит от развития ключевых факторов."
+            )
 
-    def _build_alt_scenario(self, semantic_outcome: str) -> str:
-        """Строит альтернативный сценарий."""
-        if semantic_outcome and semantic_outcome.lower() not in ("yes", "no"):
-            return f"При изменении ключевых факторов возможен альтернативный исход."
-        return "Альтернативный сценарий возможен при появлении новых данных."
+    def _build_alt_scenario(
+        self,
+        clean_alt: str,
+        semantic_outcome: str,
+        market_prob: float,
+    ) -> str:
+        if clean_alt and len(clean_alt) > 30:
+            # Заменяем дефолтные фразы на конкретные
+            if "внешних факторов" in clean_alt or "external factor" in clean_alt.lower():
+                pass  # Заменим ниже
+            else:
+                return clean_alt
+
+        alt_prob = 100 - market_prob
+        if market_prob >= 90:
+            return (
+                f"Маловероятный сценарий ({alt_prob:.1f}%): резкий разворот ключевых факторов или "
+                f"неожиданный внешний шок способны изменить исход. "
+                f"Рынок практически исключает этот вариант."
+            )
+        elif market_prob >= 65:
+            return (
+                f"Альтернативный сценарий ({alt_prob:.1f}%): изменение баланса сил или "
+                f"появление нового доминирующего фактора может привести к иному исходу. "
+                f"Необходимо следить за ключевыми индикаторами."
+            )
+        else:
+            return (
+                f"Альтернативный исход почти равновероятен ({alt_prob:.1f}%). "
+                f"Небольшое изменение условий способно переломить текущий тренд."
+            )
 
     def _build_conclusion(
         self,
@@ -234,9 +269,7 @@ class CommunicationAgent:
         display_prediction: str,
         semantic_outcome: str,
     ) -> str:
-        """Строит финальный вывод с semantic outcome."""
-        if clean_conclusion and len(clean_conclusion) > 20:
-            # Заменяем Yes/No
+        if clean_conclusion and len(clean_conclusion) > 30:
             result = re.sub(r'\bYes\b', semantic_outcome, clean_conclusion)
             result = re.sub(r'\bNo\b', f"не {semantic_outcome.lower()}", result)
             return result
@@ -267,57 +300,72 @@ class CommunicationAgent:
         market_prob: float,
     ) -> Tuple[str, str]:
         if delta is None:
-            return "📊 Анализ рынка", "Данных недостаточно для оценки."
+            return "📊 Анализ рынка", "Данных недостаточно для оценки эффективности ценообразования."
 
         if delta < 5:
             label = "✅ Консенсус с рынком"
-            if market_prob >= 90:
+            if market_prob >= 95:
                 msg = (
-                    f"При вероятности {market_prob:.1f}% рынок уже учитывает всю информацию. "
-                    f"Такие позиции редко дают альфу — используй как подтверждение тренда."
+                    f"При вероятности {market_prob:.1f}% рынок уже учёл практически всю доступную информацию. "
+                    f"Позиции с такой вероятностью редко дают альфу — цена уже отражает консенсус. "
+                    f"Используй как подтверждение тренда, а не как точку входа."
+                )
+            elif market_prob >= 80:
+                msg = (
+                    f"Модель подтверждает рыночный консенсус (расхождение {delta:.1f}%). "
+                    f"При вероятности {market_prob:.1f}% большинство участников уже заняли позиции. "
+                    f"Потенциал для получения альфы ограничен."
                 )
             else:
-                msg = f"Модель согласна с рынком (расхождение {delta:.1f}%). Явной недооценки не обнаружено."
+                msg = (
+                    f"Модель согласна с рынком — расхождение всего {delta:.1f}%. "
+                    f"Явной недооценки не обнаружено."
+                )
         elif delta < 20:
             label = "⚠️ Слабый сигнал"
             direction = "выше" if model_prob > market_prob else "ниже"
             msg = (
-                f"Модель оценивает вероятность на {delta:.1f}% {direction} рыночной. "
-                f"Возможна небольшая неэффективность."
+                f"Модель оценивает вероятность на {delta:.1f}% {direction} рыночной ({market_prob:.1f}%). "
+                f"Возможна небольшая неэффективность ценообразования. "
+                f"Требуется дополнительная проверка — небольшой сигнал не всегда означает реальную альфу."
             )
         else:
             label = "🔥 Потенциальная альфа"
             direction = "выше" if model_prob > market_prob else "ниже"
             msg = (
-                f"Значительное расхождение: модель {direction} рынка на {delta:.1f}%. "
-                f"Возможна реальная неэффективность. Высокий риск — проверь тщательно."
+                f"Значительное расхождение: модель оценивает вероятность на {delta:.1f}% {direction} рыночной. "
+                f"Это может указывать на реальную неэффективность ценообразования. "
+                f"Высокий риск — тщательно проверь источники перед принятием решения."
             )
 
         return label, msg
 
     def _clean_text(self, text: str) -> str:
-        """Убирает дефолтные фразы БЕЗ обрезки по последнему символу."""
+        """Убирает дефолтные и роботизированные фразы."""
         if not text:
             return ""
 
-        bad_phrases = [
-            "Альтернативный сценарий возможен при изменении внешних факторов.",
-            "Alternative scenario depends on external factor changes.",
-            "Базовый сценарий в пользу",
+        bad_starts = [
             "Резервный анализ для категории",
+            "Базовый сценарий в пользу",
             "Резервная оценка:",
             "No conclusion available.",
             "Analysis unavailable.",
             "Communication Agent fallback mode.",
             "Прогноз основан на рыночных данных.",
-            "Рыночный консенсус указывает на",
+            "Рыночный консенсус указывает на '",
         ]
 
         text_stripped = text.strip()
-
-        for phrase in bad_phrases:
-            if text_stripped.startswith(phrase[:30]):
+        for phrase in bad_starts:
+            if text_stripped.startswith(phrase):
                 return ""
+
+        bad_exact = [
+            "Альтернативный сценарий возможен при изменении внешних факторов.",
+            "Alternative scenario depends on external factor changes.",
+        ]
+        for phrase in bad_exact:
             if text_stripped == phrase:
                 return ""
 
