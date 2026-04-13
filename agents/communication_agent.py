@@ -1,4 +1,3 @@
-
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -7,193 +6,173 @@ class CommunicationAgent:
     def __init__(self) -> None:
         pass
 
-    def run(self, decision_data: Dict[str, Any]) -> str:
-        """Возвращает строку вывода с semantic rendering и alpha detection."""
-
+    def run(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Возвращает словарь с семантически обработанными полями.
+        Все поля используют semantic_prediction вместо Yes/No.
+        """
         probability = decision_data.get("probability", "").strip()
         market_probability = str(decision_data.get("market_probability", "")).strip()
-        confidence = decision_data.get("confidence", "").strip()
         reasoning = decision_data.get("reasoning", "").strip()
         conclusion = decision_data.get("conclusion", "").strip()
         question = decision_data.get("question", "").strip()
         market_type = decision_data.get("market_type", "binary")
-        options_breakdown = decision_data.get("options_breakdown", "").strip()
         main_scenario = decision_data.get("main_scenario", "").strip()
+        alt_scenario = decision_data.get("alt_scenario", "").strip()
 
-        # Семантический рендеринг прогноза
-        rendered_prediction = self._render_human_prediction(
+        # Шаг 1: Семантический рендеринг прогноза
+        semantic_outcome, prob_val = self._extract_semantic_outcome(
             question=question,
             probability_str=probability,
             market_type=market_type,
         )
+        prob_display = f"{prob_val:.1f}%" if prob_val else ""
+        display_prediction = f"{semantic_outcome} — {prob_display}" if prob_display else semantic_outcome
 
-        # Вычисляем delta
-        model_prob = self._extract_prob_value(probability)
+        # Шаг 2: Вычисляем delta
+        model_prob = prob_val or 0.0
         market_prob = self._extract_market_prob(market_probability, market_type)
-        delta = abs(model_prob - market_prob) if model_prob and market_prob else None
+        delta = abs(model_prob - market_prob) if model_prob else None
 
-        # Alpha detection
+        # Шаг 3: Alpha detection
         alpha_label, alpha_message = self._detect_alpha(
             delta=delta,
             model_prob=model_prob,
             market_prob=market_prob,
-            market_type=market_type,
         )
 
-        # Чистим текст
+        # Шаг 4: Чистим и улучшаем тексты
         clean_reasoning = self._clean_text(reasoning)
-        clean_conclusion = self._clean_text(conclusion)
         clean_scenario = self._clean_text(main_scenario)
+        clean_alt = self._clean_text(alt_scenario)
+        clean_conclusion = self._clean_text(conclusion)
 
-        # Генерируем семантический сценарий если дефолтный
-        semantic_scenario = self._generate_semantic_scenario(
-            question=question,
-            rendered_prediction=rendered_prediction,
-            model_prob=model_prob,
-            market_prob=market_prob,
+        # Шаг 5: Генерируем семантические тексты если нужно
+        final_scenario = self._build_scenario(
             clean_scenario=clean_scenario,
-        )
-
-        # Генерируем семантический вывод
-        semantic_conclusion = self._generate_semantic_conclusion(
-            rendered_prediction=rendered_prediction,
-            clean_conclusion=clean_conclusion,
+            semantic_outcome=semantic_outcome,
             model_prob=model_prob,
-            market_prob=market_prob,
-            delta=delta,
         )
 
-        # Строим финальный вывод
-        parts = []
+        final_conclusion = self._build_conclusion(
+            clean_conclusion=clean_conclusion,
+            display_prediction=display_prediction,
+            semantic_outcome=semantic_outcome,
+        )
 
-        parts.append(f"🎯 Прогноз: {rendered_prediction}")
+        final_alt = clean_alt if clean_alt else self._build_alt_scenario(semantic_outcome)
 
-        if clean_reasoning:
-            parts.append(f"\n💭 Логика:\n{clean_reasoning}")
+        return {
+            "display_prediction": display_prediction,
+            "semantic_outcome": semantic_outcome,
+            "reasoning": clean_reasoning,
+            "main_scenario": final_scenario,
+            "alt_scenario": final_alt,
+            "conclusion": final_conclusion,
+            "alpha_label": alpha_label,
+            "alpha_message": alpha_message,
+        }
 
-        parts.append(f"\n✅ Основной сценарий:\n{semantic_scenario}")
-
-        parts.append(f"\n📊 {alpha_label}:\n{alpha_message}")
-
-        parts.append(f"\n📝 Вывод:\n{semantic_conclusion}")
-
-        return "\n".join(parts)
-
-    def _render_human_prediction(
+    def _extract_semantic_outcome(
         self,
         question: str,
         probability_str: str,
         market_type: str,
-    ) -> str:
+    ) -> Tuple[str, Optional[float]]:
         """
-        Семантический рендеринг прогноза.
+        Извлекает семантический исход и числовую вероятность.
         Конвертирует Yes/No в читаемое предсказание.
-
-        Примеры:
-        "Will NVIDIA be the largest company?" + "Yes — 98.3%" → "NVIDIA — 98.3%"
-        "Will Bitcoin hit $150k?" + "Yes — 42%" → "Bitcoin достигнет $150k — 42%"
-        "Will Trump win the election?" + "Yes — 61%" → "Trump победит — 61%"
         """
         if not probability_str:
-            return probability_str
+            return probability_str, None
 
-        # Извлекаем вероятность и исход
-        outcome, prob_val = self._split_outcome_and_prob(probability_str)
+        # Парсим строку вида "Yes — 98.3%" или "NVIDIA — 98.3%"
+        raw_outcome = ""
+        prob_val = None
 
-        if not outcome:
-            return probability_str
+        match = re.match(r'^(.+?)\s*[—–-]\s*([\d.]+)%', probability_str)
+        if match:
+            raw_outcome = match.group(1).strip()
+            prob_val = float(match.group(2))
+        else:
+            match2 = re.match(r'^([\d.]+)%$', probability_str)
+            if match2:
+                raw_outcome = "Yes"
+                prob_val = float(match2.group(1))
+            else:
+                return probability_str, None
 
-        prob_str = f"{prob_val:.1f}%" if prob_val else ""
+        # Если уже не Yes/No — возвращаем как есть
+        if raw_outcome.lower() not in ("yes", "no"):
+            return raw_outcome, prob_val
 
-        # Для multiple choice — уже правильное название
-        if market_type == "multiple_choice":
-            if outcome.lower() not in ("yes", "no"):
-                return probability_str
-            # Если всё ещё Yes/No в multiple choice — извлекаем из вопроса
-            entity = self._extract_entity(question)
-            if entity:
-                return f"{entity} — {prob_str}"
-            return probability_str
+        # Конвертируем Yes/No в семантику
+        if raw_outcome.lower() == "yes":
+            semantic = self._yes_to_semantic(question)
+        else:
+            semantic = self._no_to_semantic(question)
 
-        # Binary рынок
-        if outcome.lower() == "yes":
-            semantic = self._convert_yes_to_semantic(question)
-            if semantic:
-                return f"{semantic} — {prob_str}"
-            return probability_str
+        return semantic if semantic else raw_outcome, prob_val
 
-        elif outcome.lower() == "no":
-            semantic = self._convert_no_to_semantic(question)
-            if semantic:
-                return f"{semantic} — {prob_str}"
-            return probability_str
-
-        # Уже не Yes/No — возвращаем как есть
-        return probability_str
-
-    def _split_outcome_and_prob(self, probability_str: str) -> Tuple[str, Optional[float]]:
-        """Разделяет строку типа 'Yes — 98.3%' на ('Yes', 98.3)."""
-        try:
-            # Формат: "Outcome — XX%"
-            match = re.match(r'^(.+?)\s*[—–-]\s*([\d.]+)%', probability_str)
-            if match:
-                outcome = match.group(1).strip()
-                prob = float(match.group(2))
-                return outcome, prob
-
-            # Только процент
-            match = re.match(r'^([\d.]+)%$', probability_str)
-            if match:
-                return "Yes", float(match.group(1))
-
-        except Exception:
-            pass
-        return probability_str, None
-
-    def _convert_yes_to_semantic(self, question: str) -> str:
+    def _yes_to_semantic(self, question: str) -> str:
         """
         Конвертирует Yes в семантическое предсказание.
 
-        Примеры:
-        "Will NVIDIA be the largest company?" → "NVIDIA"
-        "Will Bitcoin hit $150k before July?" → "Bitcoin hits $150k before July"
-        "Will Trump win the election?" → "Trump wins"
-        "Will the Fed cut rates?" → "Fed cuts rates"
+        Will NVIDIA be the largest company? → NVIDIA
+        Will Bitcoin hit $150k? → Bitcoin hits $150k
+        Will Trump win the election? → Trump wins
+        Will the Fed cut rates? → Fed cuts rates
+        Will Russia enter Dovha Balka? → Russia enters Dovha Balka
         """
-        q = question.strip()
+        q = re.sub(r'\?$', '', question.strip())
 
-        # Убираем вопросительный знак
-        q_clean = re.sub(r'\?$', '', q).strip()
+        # Известные сущности — возвращаем сразу
+        known_entities = [
+            "NVIDIA", "Apple", "Microsoft", "Google", "Alphabet",
+            "Amazon", "Tesla", "Meta", "Anthropic", "OpenAI", "Samsung",
+            "Bitcoin", "Ethereum", "Solana", "BTC", "ETH", "XRP",
+            "Trump", "Biden", "Harris", "Putin", "Zelensky", "Orban",
+            "Macron", "Modi", "Xi", "Fed", "ECB", "NATO", "SpaceX",
+            "Intel", "AMD", "Netflix", "Disney", "Uber", "Airbnb",
+        ]
+        q_lower = q.lower()
+        for entity in known_entities:
+            if entity.lower() in q_lower:
+                return entity
 
-        # Паттерн: "Will [ENTITY] [VERB]..."
-        # Пример: "Will NVIDIA be the largest company..."
+        # Паттерн: "Will [ENTITY] [verb]..."
         match = re.match(
-            r'^Will\s+([A-Z][A-Za-z\s&\.\-]+?)\s+(be|win|become|reach|hit|pass|exceed|lose|fall|drop|rise|get|make|break|cross|stay|remain|achieve|sign|launch|release|announce|complete|finish|happen|occur|pass|fail)',
-            q_clean
+            r'^Will\s+([A-Z][A-Za-z0-9\s&\.\-\']+?)\s+'
+            r'(be|win|become|reach|hit|pass|exceed|lose|fall|drop|rise|'
+            r'get|make|break|cross|stay|remain|achieve|sign|launch|release|'
+            r'announce|complete|finish|happen|occur|fail|enter|capture|take)',
+            q
         )
         if match:
             entity = match.group(1).strip()
             verb = match.group(2)
+            verb_map = {
+                "win": "wins", "be": "becomes", "become": "becomes",
+                "reach": "reaches", "hit": "hits", "pass": "passes",
+                "exceed": "exceeds", "rise": "rises", "fall": "falls",
+                "get": "gets", "make": "makes", "break": "breaks",
+                "cross": "crosses", "stay": "stays", "remain": "remains",
+                "achieve": "achieves", "sign": "signs", "launch": "launches",
+                "release": "releases", "announce": "announces",
+                "complete": "completes", "finish": "finishes",
+                "happen": "happens", "occur": "occurs", "fail": "fails",
+                "enter": "enters", "capture": "captures", "take": "takes",
+            }
+            verb_form = verb_map.get(verb, verb + "s")
 
-            # Короткие entity — просто возвращаем
-            short_entities = [
-                "NVIDIA", "Apple", "Microsoft", "Google", "Tesla", "Meta",
-                "Amazon", "Bitcoin", "Ethereum", "Trump", "Biden", "Harris",
-                "Fed", "NATO", "SpaceX", "OpenAI", "Anthropic", "Samsung",
-            ]
-            for se in short_entities:
-                if se.lower() in entity.lower():
-                    return se
-
-            # Если entity длиннее — возвращаем его
+            # Короткий entity — только его
             if len(entity.split()) <= 3:
                 return entity
 
-        # Паттерн: "Will [someone] [action]" → "[someone] [action]s"
-        match2 = re.match(r'^Will\s+(.+)', q_clean)
+        # Общий паттерн: "Will [rest]" → берём первые 5 слов
+        match2 = re.match(r'^Will\s+(.+)', q)
         if match2:
             rest = match2.group(1).strip()
-            # Берём первые 5 слов
             words = rest.split()[:5]
             short = " ".join(words)
             if len(short) < 50:
@@ -201,15 +180,11 @@ class CommunicationAgent:
 
         return ""
 
-    def _convert_no_to_semantic(self, question: str) -> str:
-        """
-        Конвертирует No в семантическое предсказание.
-        Только если читаемо — иначе возвращаем пустую строку.
-        """
-        q_clean = re.sub(r'\?$', '', question.strip())
+    def _no_to_semantic(self, question: str) -> str:
+        """Конвертирует No в семантическое предсказание."""
+        q = re.sub(r'\?$', '', question.strip())
 
-        # Паттерн: "Will X happen?" + No → "X не произойдёт"
-        match = re.match(r'^Will\s+(.+)', q_clean)
+        match = re.match(r'^Will\s+(.+)', q)
         if match:
             rest = match.group(1).strip()
             words = rest.split()[:4]
@@ -219,77 +194,54 @@ class CommunicationAgent:
 
         return ""
 
-    def _extract_entity(self, question: str) -> str:
-        """Извлекает основной объект из вопроса."""
-        entities = [
-            "NVIDIA", "Apple", "Microsoft", "Google", "Alphabet",
-            "Amazon", "Tesla", "Meta", "Anthropic", "OpenAI",
-            "Bitcoin", "Ethereum", "Solana", "BTC", "ETH",
-            "Trump", "Biden", "Harris", "Putin", "Zelensky", "Orban",
-            "Fed", "ECB", "NATO", "SpaceX", "Samsung", "Intel", "AMD",
-        ]
-        q_lower = question.lower()
-        for entity in entities:
-            if entity.lower() in q_lower:
-                return entity
-        return ""
-
-    def _generate_semantic_scenario(
+    def _build_scenario(
         self,
-        question: str,
-        rendered_prediction: str,
-        model_prob: float,
-        market_prob: float,
         clean_scenario: str,
-    ) -> str:
-        """Генерирует семантический основной сценарий."""
-        # Если сценарий нормальный — используем его
-        if clean_scenario and len(clean_scenario) > 20:
-            return clean_scenario
-
-        # Генерируем на основе прогноза
-        prob = model_prob or market_prob or 50
-
-        # Убираем " — XX%" из rendered_prediction для читаемости
-        prediction_clean = re.sub(r'\s*—\s*[\d.]+%$', '', rendered_prediction).strip()
-
-        if prob >= 80:
-            return f"Рыночный консенсус и AI указывают на высокую вероятность: {prediction_clean}."
-        elif prob >= 60:
-            return f"Умеренная вероятность в пользу: {prediction_clean}."
-        elif prob >= 40:
-            return f"Неопределённость высокая, но небольшой перевес в пользу: {prediction_clean}."
-        else:
-            return f"Данный сценарий маловероятен согласно рыночным данным."
-
-    def _generate_semantic_conclusion(
-        self,
-        rendered_prediction: str,
-        clean_conclusion: str,
+        semantic_outcome: str,
         model_prob: float,
-        market_prob: float,
-        delta: Optional[float],
     ) -> str:
-        """Генерирует семантический вывод."""
+        """Строит основной сценарий с semantic outcome."""
+        # Если сценарий хороший и не содержит Yes/No — используем
+        if clean_scenario and len(clean_scenario) > 20:
+            # Заменяем Yes/No на semantic
+            result = re.sub(r'\bYes\b', semantic_outcome, clean_scenario)
+            result = re.sub(r'\bNo\b', f"не {semantic_outcome.lower()}", result)
+            return result
+
+        # Генерируем семантический сценарий
+        prob = model_prob or 50
+        if prob >= 90:
+            return (
+                f"Рыночный консенсус и AI с высокой уверенностью указывают на: "
+                f"{semantic_outcome}."
+            )
+        elif prob >= 70:
+            return f"Умеренно высокая вероятность в пользу: {semantic_outcome}."
+        elif prob >= 50:
+            return f"Небольшой перевес в пользу: {semantic_outcome}."
+        else:
+            return f"Данный сценарий маловероятен. Преобладает альтернативный исход."
+
+    def _build_alt_scenario(self, semantic_outcome: str) -> str:
+        """Строит альтернативный сценарий."""
+        if semantic_outcome and semantic_outcome.lower() not in ("yes", "no"):
+            return f"При изменении ключевых факторов возможен альтернативный исход."
+        return "Альтернативный сценарий возможен при появлении новых данных."
+
+    def _build_conclusion(
+        self,
+        clean_conclusion: str,
+        display_prediction: str,
+        semantic_outcome: str,
+    ) -> str:
+        """Строит финальный вывод с semantic outcome."""
         if clean_conclusion and len(clean_conclusion) > 20:
-            # Заменяем Yes/No в выводе на semantic prediction
-            conclusion = clean_conclusion
-            prob_clean = re.sub(r'\s*—\s*[\d.]+%$', '', rendered_prediction).strip()
-            conclusion = re.sub(r'\bYes\b', prob_clean, conclusion)
-            conclusion = re.sub(r'\bNo\b', f"не {prob_clean.lower()}", conclusion)
-            return conclusion
+            # Заменяем Yes/No
+            result = re.sub(r'\bYes\b', semantic_outcome, clean_conclusion)
+            result = re.sub(r'\bNo\b', f"не {semantic_outcome.lower()}", result)
+            return result
 
-        # Генерируем
-        return f"Следуем рыночной оценке: {rendered_prediction}."
-
-    def _extract_prob_value(self, prob_str: str) -> float:
-        try:
-            match = re.search(r'([\d.]+)%', str(prob_str))
-            if match:
-                return float(match.group(1))
-        except Exception:
-            pass
-        return 0.0
+        return f"Следуем рыночной оценке: {display_prediction}."
 
     def _extract_market_prob(self, market_probability: str, market_type: str) -> float:
         try:
@@ -313,7 +265,6 @@ class CommunicationAgent:
         delta: Optional[float],
         model_prob: float,
         market_prob: float,
-        market_type: str,
     ) -> Tuple[str, str]:
         if delta is None:
             return "📊 Анализ рынка", "Данных недостаточно для оценки."
@@ -322,20 +273,17 @@ class CommunicationAgent:
             label = "✅ Консенсус с рынком"
             if market_prob >= 90:
                 msg = (
-                    f"При вероятности {market_prob:.1f}% рынок уже учитывает всю доступную информацию. "
+                    f"При вероятности {market_prob:.1f}% рынок уже учитывает всю информацию. "
                     f"Такие позиции редко дают альфу — используй как подтверждение тренда."
                 )
             else:
-                msg = (
-                    f"Модель согласна с рынком (расхождение {delta:.1f}%). "
-                    f"Явной недооценки не обнаружено."
-                )
+                msg = f"Модель согласна с рынком (расхождение {delta:.1f}%). Явной недооценки не обнаружено."
         elif delta < 20:
             label = "⚠️ Слабый сигнал"
             direction = "выше" if model_prob > market_prob else "ниже"
             msg = (
                 f"Модель оценивает вероятность на {delta:.1f}% {direction} рыночной. "
-                f"Возможна небольшая неэффективность. Требуется дополнительная проверка."
+                f"Возможна небольшая неэффективность."
             )
         else:
             label = "🔥 Потенциальная альфа"
@@ -348,6 +296,7 @@ class CommunicationAgent:
         return label, msg
 
     def _clean_text(self, text: str) -> str:
+        """Убирает дефолтные фразы БЕЗ обрезки по последнему символу."""
         if not text:
             return ""
 
@@ -360,22 +309,25 @@ class CommunicationAgent:
             "No conclusion available.",
             "Analysis unavailable.",
             "Communication Agent fallback mode.",
-            "Рыночный консенсус указывает на",
             "Прогноз основан на рыночных данных.",
+            "Рыночный консенсус указывает на",
         ]
 
+        text_stripped = text.strip()
+
         for phrase in bad_phrases:
-            if phrase.lower() in text.lower() and len(text) < 120:
+            if text_stripped.startswith(phrase[:30]):
+                return ""
+            if text_stripped == phrase:
                 return ""
 
-        if text.strip().startswith("Резервный анализ"):
-            return ""
-
         # Убираем markdown
-        text = text.replace("##", "").replace("###", "").replace("**", "").strip()
+        text_stripped = (
+            text_stripped
+            .replace("##", "")
+            .replace("###", "")
+            .replace("**", "")
+            .strip()
+        )
 
-        # Если текст обрезан — не показываем
-        if text and text[-1] not in ".!?%" and len(text) > 60:
-            return ""
-
-        return text
+        return text_stripped
