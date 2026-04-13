@@ -2,7 +2,6 @@ from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
 
-
 class DecisionAgent:
     def __init__(self) -> None:
         pass
