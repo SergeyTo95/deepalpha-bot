@@ -1,4 +1,4 @@
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from services.polymarket_service import (
     extract_slug_from_url,
@@ -24,6 +24,15 @@ class MarketAgent:
         question = normalized.get("question", "Unknown market")
         category = self._detect_category(question)
         options = normalized.get("options", [])
+        market_type = self._detect_market_type(options)
+
+        # Строим правильную рыночную вероятность
+        market_probability = self._build_market_probability(
+            raw_market=raw_market,
+            options=options,
+            market_type=market_type,
+            normalized_prob=normalized.get("market_probability", "Unknown"),
+        )
 
         raw_related = find_related_markets(
             question=question,
@@ -40,8 +49,8 @@ class MarketAgent:
             "slug": slug,
             "question": question,
             "category": category,
-            "market_type": self._detect_market_type(options),
-            "market_probability": normalized.get("market_probability", "Unknown"),
+            "market_type": market_type,
+            "market_probability": market_probability,
             "options": options,
             "related_markets": related_markets,
             "volume": normalized.get("volume", "Unknown"),
@@ -54,14 +63,76 @@ class MarketAgent:
             "raw_market_data": normalized.get("raw_market_data", {}),
         }
 
-    def _detect_market_type(self, options: List[str]) -> str:
-        normalized = {str(x).strip() for x in options}
+    def _build_market_probability(
+        self,
+        raw_market: Dict[str, Any],
+        options: List[str],
+        market_type: str,
+        normalized_prob: str,
+    ) -> str:
+        """Строит читаемую рыночную вероятность с правильными названиями вариантов."""
+        try:
+            outcome_prices = raw_market.get("outcomePrices", "")
 
-        if len(normalized) == 2 and normalized == {"Yes", "No"}:
+            # Парсим цены
+            prices = []
+            if isinstance(outcome_prices, list):
+                prices = [float(p) for p in outcome_prices]
+            elif isinstance(outcome_prices, str):
+                cleaned = outcome_prices.strip("[]")
+                prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+
+            if not prices or not options:
+                return normalized_prob
+
+            if market_type == "binary":
+                # Yes/No рынок — стандартный формат
+                if len(prices) >= 2 and len(options) >= 2:
+                    yes_idx = next((i for i, o in enumerate(options) if o.strip().lower() == "yes"), 0)
+                    no_idx = next((i for i, o in enumerate(options) if o.strip().lower() == "no"), 1)
+                    yes_pct = round(prices[yes_idx] * 100, 2) if yes_idx < len(prices) else 0
+                    no_pct = round(prices[no_idx] * 100, 2) if no_idx < len(prices) else 0
+                    return f"Yes: {yes_pct}% | No: {no_pct}%"
+                elif len(prices) >= 1:
+                    yes_pct = round(prices[0] * 100, 2)
+                    return f"Yes: {yes_pct}% | No: {round(100 - yes_pct, 2)}%"
+
+            elif market_type == "multiple_choice":
+                # Маппим каждый вариант с его реальным именем
+                parts = []
+                for i, (opt, price) in enumerate(zip(options, prices)):
+                    pct = round(price * 100, 2)
+                    parts.append(f"{opt}: {pct}%")
+
+                # Сортируем по убыванию вероятности
+                paired = sorted(
+                    zip(options, prices),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+                parts = [f"{opt}: {round(price * 100, 2)}%" for opt, price in paired]
+                return " | ".join(parts)
+
+        except Exception as e:
+            print(f"MarketAgent._build_market_probability error: {e}")
+
+        return normalized_prob
+
+    def _detect_market_type(self, options: List[str]) -> str:
+        """Определяет тип рынка по вариантам ответа."""
+        normalized = {str(x).strip().lower() for x in options}
+
+        # Строго бинарный — только Yes и No
+        if len(normalized) == 2 and normalized == {"yes", "no"}:
             return "binary"
 
+        # Если есть другие варианты — multiple choice
         if len(normalized) > 2:
             return "multiple_choice"
+
+        # Один вариант или неизвестно
+        if len(normalized) == 1:
+            return "binary"
 
         return "unknown"
 
@@ -127,7 +198,7 @@ class MarketAgent:
             "debt", "deficit", "budget", "treasury", "bond", "fomc",
             "powell", "ecb", "imf", "world bank", "brent", "wti",
             "gold", "silver", "commodities", "bankruptcy", "merger", "ipo",
-            "earnings", "revenue", "profit", "gdp growth",
+            "earnings", "revenue", "profit", "market cap", "largest company",
         ]
 
         tech_keywords = [
@@ -138,6 +209,7 @@ class MarketAgent:
             "iphone", "android", "samsung", "intel", "amd",
             "robot", "autonomous", "self-driving", "electric vehicle", "ev",
             "neuralink", "starlink", "satellite", "cybertruck",
+            "best ai", "ai model", "which company",
         ]
 
         culture_keywords = [
