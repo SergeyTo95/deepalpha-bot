@@ -48,7 +48,7 @@ class DecisionAgent:
 
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
         raw_response = generate_decision_text(prompt)
-        print(f"DecisionAgent.run: LLM response FULL length={len(raw_response)}, lines={len(raw_response.splitlines())}")
+        print(f"DecisionAgent.run: LLM response length={len(raw_response)}, lines={len(raw_response.splitlines())}")
 
         if raw_response:
             parsed = self._parse_llm_output(raw_response, market_type=market_type)
@@ -63,7 +63,6 @@ class DecisionAgent:
                 market_type=market_type,
             )
 
-            # Если сценарии пустые — дополняем через SummaryAgent
             if not wrapped.get("main_scenario") or not wrapped.get("conclusion"):
                 print(f"DecisionAgent.run: calling SummaryAgent to fill missing fields")
                 from agents.summary_agent import SummaryAgent
@@ -84,7 +83,7 @@ class DecisionAgent:
                 print(f"DecisionAgent.run: valid result, probability={wrapped.get('probability')}")
                 return wrapped
             else:
-                print(f"DecisionAgent.run: invalid, probability={wrapped.get('probability')}")
+                print(f"DecisionAgent.run: invalid result")
 
         print(f"DecisionAgent.run: using fallback")
         return self._fallback_decision(
@@ -117,13 +116,12 @@ class DecisionAgent:
         lang: str = "en",
     ) -> str:
 
-        options_text = ", ".join(options) if options else "Yes, No"
         news_block = news_summary[:400] if news_summary else ""
 
         if market_type == "multiple_choice" and options:
-            # Специальный промпт для multiple choice
+            options_block = "\n".join([f"- {opt}" for opt in options])
+
             if lang == "ru":
-                options_block = "\n".join([f"- {opt}" for opt in options])
                 return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
 Отвечай ТОЛЬКО на русском языке. Одна строка на каждый пункт.
 
@@ -137,18 +135,19 @@ class DecisionAgent:
 Новости: {news_block}
 Настроение: {sentiment}
 
-Проанализируй КАЖДЫЙ вариант и дай независимую оценку.
+Внимательно прочитай вопрос. Выбери КОНКРЕТНЫЙ вариант из списка как победителя.
+НЕ отвечай Yes или No — выбери один из вариантов выше!
+
 Заполни ВСЕ пункты:
 
-Вероятность системы: [победитель и его вероятность, например "Орбан — 65%"]
+Вероятность системы: [название конкретного варианта и его вероятность, например "Орбан — 65%" или "Антропик — 70%"]
 Уверенность: [Высокая/Средняя/Низкая]
-Логика: [одно предложение с обоснованием выбора победителя]
-Расклад по вариантам: [перечисли все варианты с твоей оценкой вероятности через запятую]
+Логика: [одно предложение с обоснованием выбора]
+Расклад по вариантам: [перечисли все варианты с твоей оценкой вероятности, например: Орбан 65%, Петер Мадьяр 25%, другой 10%]
 Основной сценарий: [одно предложение]
 Альтернативный сценарий: [одно предложение]
 Вывод: [одно предложение с итогом]""".strip()
             else:
-                options_block = "\n".join([f"- {opt}" for opt in options])
                 return f"""You are DeepAlpha prediction market expert.
 Respond in English. One line per field.
 
@@ -162,18 +161,21 @@ Trend: {trend_summary[:150]}
 News: {news_block}
 Sentiment: {sentiment}
 
-Analyze EACH option and give independent estimates.
+Read the question carefully. Pick ONE SPECIFIC option from the list as the winner.
+DO NOT answer Yes or No — choose one of the options above!
+
 Fill ALL fields:
 
-System Probability: [winner and probability, e.g. "Orban — 65%"]
+System Probability: [specific option name and probability, e.g. "Orban — 65%" or "Anthropic — 70%"]
 Confidence: [High/Medium/Low]
-Reasoning: [one sentence explaining winner choice]
-Options Breakdown: [list all options with your probability estimate, comma separated]
+Reasoning: [one sentence explaining your choice]
+Options Breakdown: [list all options with probability, e.g.: Orban 65%, Peter Magyar 25%, other 10%]
 Main Scenario: [one sentence]
 Alternative Scenario: [one sentence]
 Conclusion: [one sentence summary]""".strip()
+
         else:
-            # Стандартный промпт для binary
+            # Стандартный промпт для binary Yes/No
             if lang == "ru":
                 return f"""Ты эксперт по предсказательным рынкам DeepAlpha.
 Отвечай ТОЛЬКО на русском языке. Одна строка на каждый пункт.
@@ -188,7 +190,7 @@ Conclusion: [one sentence summary]""".strip()
 
 Заполни ВСЕ 6 пунктов одной строкой каждый:
 
-Вероятность системы: [например "Yes — 65%"]
+Вероятность системы: [например "Yes — 65%" или "No — 70%"]
 Уверенность: [Высокая/Средняя/Низкая]
 Логика: [одно предложение с обоснованием]
 Основной сценарий: [одно предложение]
@@ -208,7 +210,7 @@ Sentiment: {sentiment}
 
 Fill ALL 6 fields with one line each:
 
-System Probability: [e.g. "Yes — 65%"]
+System Probability: [e.g. "Yes — 65%" or "No — 70%"]
 Confidence: [High/Medium/Low]
 Reasoning: [one sentence with rationale]
 Main Scenario: [one sentence]
@@ -288,12 +290,21 @@ Conclusion: [one sentence summary]""".strip()
             conclusion = reasoning
         if not reasoning:
             reasoning = conclusion
+
         if not alt_scenario:
             alt_scenario = (
                 "Альтернативный сценарий возможен при изменении внешних факторов."
                 if lang == "ru"
                 else "Alternative scenario depends on external factor changes."
             )
+
+        # Для multiple choice убираем случайные Yes/No если AI всё же ответил неправильно
+        if market_type == "multiple_choice" and options_breakdown:
+            if probability.lower().startswith("yes") or probability.lower().startswith("no"):
+                # Берём первый вариант из breakdown
+                first = options_breakdown.split(",")[0].strip()
+                if first:
+                    probability = first
 
         return {
             "question": question,
@@ -364,7 +375,7 @@ Conclusion: [one sentence summary]""".strip()
 
         main_scenario = f"Базовый сценарий в пользу '{main_option}' на основе доступных данных."
         alt_scenario = "Альтернативный сценарий возможен при изменении тренда или новостного фона."
-        conclusion = f"Резервная оценка: '{main_option}' ~{probability_value} ({confidence.lower()} уверенность)."
+        conclusion = f"Резервная оценка: '{main_option}' ~{probability_value}"
 
         return {
             "question": question,
@@ -439,4 +450,3 @@ Conclusion: [one sentence summary]""".strip()
         if "Yes" in cleaned: return "Yes"
         if "No" in cleaned: return "No"
         return cleaned[0] if cleaned else "Наиболее вероятный исход"
- 
