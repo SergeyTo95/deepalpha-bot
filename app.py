@@ -8,7 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telegram_bot
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
-from services.polymarket_service import list_markets, normalize_market_data, build_market_url
+from services.polymarket_service import (
+    list_markets, list_events, normalize_market_data,
+    normalize_event_for_channel, build_market_url,
+)
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
@@ -35,7 +38,6 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
         if token_price <= 0:
             token_price = 0.1
         tokens = int(ton_amount / token_price)
-        print(f"TON PAYMENT: no package found, calculated {tokens} tokens at {token_price} TON each")
         return tokens
     except Exception:
         return int(ton_amount / 0.1)
@@ -44,7 +46,7 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # ===== CHANNEL POSTER =====
 
 async def post_to_channel():
-    """Постит интересный рынок в канал с ротацией категорий и без повторений."""
+    """Постит интересный рынок в канал с ротацией категорий."""
     if not CHANNEL_ID:
         print("📢 CHANNEL_ID not set, skipping")
         return
@@ -70,85 +72,42 @@ async def post_to_channel():
         shown_raw = get_setting("channel_shown_markets", "")
         shown = set(shown_raw.split(",")) if shown_raw else set()
 
-        # Берём рынки с разными офсетами
-        offset = random.randint(0, 80)
-        markets = list_markets(limit=50, offset=offset)
-        if not markets:
-            markets = list_markets(limit=50, offset=0)
+        # Берём события через events API — там правильные slug для URL
+        offset = random.randint(0, 50)
+        events = list_events(limit=50, offset=offset)
+        if not events:
+            events = list_events(limit=50, offset=0)
 
-        # Логируем первый рынок для отладки
-        if markets:
-            m0 = markets[0]
-            print(f"📢 DEBUG SLUG: {m0.get('slug', 'NONE')}")
-            print(f"📢 DEBUG KEYS: {list(m0.keys())[:15]}")
+        print(f"📢 Got {len(events)} events from API")
 
         agent = MarketAgent()
         candidates = []
 
-        # Ищем рынки нужной категории
-        for m in markets:
-            normalized = normalize_market_data(m)
+        # Ищем события нужной категории
+        for event in events:
+            normalized = normalize_event_for_channel(event)
             if not normalized:
                 continue
+
             question = normalized.get("question", "")
             if not question or len(question) < 10:
                 continue
 
-            market_id = str(m.get("id", ""))
-            if market_id and market_id in shown:
+            event_id = str(normalized.get("id", ""))
+            if event_id and event_id in shown:
                 continue
 
             detected = agent._detect_category(question)
             if detected != category_filter:
                 continue
 
-            market_prob = normalized.get("market_probability", "")
-            if market_prob == "Unknown":
-                continue
-
-            # Фильтруем слишком односторонние
+            # Фильтруем слишком односторонние рынки
             try:
-                outcome_prices = m.get("outcomePrices", "")
-                if isinstance(outcome_prices, str):
-                    cleaned = outcome_prices.strip("[]")
-                    prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
-                elif isinstance(outcome_prices, list):
-                    prices = [float(p) for p in outcome_prices]
-                else:
-                    prices = []
-                if prices and max(prices) >= 0.92:
-                    continue
-            except Exception:
-                pass
-
-            candidates.append({
-                "id": market_id,
-                "question": question,
-                "market_prob": market_prob,
-                "category": detected,
-                "raw": m,
-            })
-
-        # Если нет кандидатов в нужной категории — берём любые кроме Other
-        if not candidates:
-            print(f"📢 No {category_filter} markets, using any category")
-            for m in markets:
-                normalized = normalize_market_data(m)
-                if not normalized:
-                    continue
-                question = normalized.get("question", "")
-                if not question or len(question) < 10:
-                    continue
-                market_id = str(m.get("id", ""))
-                if market_id and market_id in shown:
-                    continue
-                market_prob = normalized.get("market_probability", "Unknown")
-                if market_prob == "Unknown":
-                    continue
-                detected = agent._detect_category(question)
-                if detected == "Other":
-                    continue
-                try:
+                markets = event.get("markets", [])
+                skip = False
+                for m in markets:
+                    if not m.get("active") or m.get("closed"):
+                        continue
                     outcome_prices = m.get("outcomePrices", "")
                     if isinstance(outcome_prices, str):
                         cleaned = outcome_prices.strip("[]")
@@ -158,29 +117,76 @@ async def post_to_channel():
                     else:
                         prices = []
                     if prices and max(prices) >= 0.92:
+                        skip = True
+                    break
+                if skip:
+                    continue
+            except Exception:
+                pass
+
+            candidates.append({
+                "id": event_id,
+                "question": question,
+                "market_prob": normalized.get("market_probability", "Unknown"),
+                "category": detected,
+                "url": normalized.get("url", ""),
+            })
+
+        # Если нет кандидатов в нужной категории — берём любые кроме Other
+        if not candidates:
+            print(f"📢 No {category_filter} events, using any category")
+            for event in events:
+                normalized = normalize_event_for_channel(event)
+                if not normalized:
+                    continue
+                question = normalized.get("question", "")
+                if not question or len(question) < 10:
+                    continue
+                event_id = str(normalized.get("id", ""))
+                if event_id and event_id in shown:
+                    continue
+                detected = agent._detect_category(question)
+                if detected == "Other":
+                    continue
+                try:
+                    markets = event.get("markets", [])
+                    skip = False
+                    for m in markets:
+                        if not m.get("active") or m.get("closed"):
+                            continue
+                        outcome_prices = m.get("outcomePrices", "")
+                        if isinstance(outcome_prices, str):
+                            cleaned = outcome_prices.strip("[]")
+                            prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                        elif isinstance(outcome_prices, list):
+                            prices = [float(p) for p in outcome_prices]
+                        else:
+                            prices = []
+                        if prices and max(prices) >= 0.92:
+                            skip = True
+                        break
+                    if skip:
                         continue
                 except Exception:
                     pass
                 candidates.append({
-                    "id": market_id,
+                    "id": event_id,
                     "question": question,
-                    "market_prob": market_prob,
+                    "market_prob": normalized.get("market_probability", "Unknown"),
                     "category": detected,
-                    "raw": m,
+                    "url": normalized.get("url", ""),
                 })
 
         if not candidates:
-            print("📢 No candidates found at all")
+            print("📢 No candidates found")
             return
 
         market = random.choice(candidates[:10])
         question = market["question"]
         market_prob = market["market_prob"]
         category = market["category"]
-        raw = market["raw"]
+        url = market["url"]
 
-        # Строим правильный URL
-        url = build_market_url(raw)
         print(f"📢 FINAL URL: {url}")
 
         category_emoji = {
@@ -209,7 +215,7 @@ async def post_to_channel():
         )
         print(f"📢 Posted [{category}]: {question[:50]}")
 
-        # Сохраняем в историю (максимум 200)
+        # Сохраняем в историю
         if market["id"]:
             shown.add(market["id"])
             if len(shown) > 200:
@@ -575,7 +581,7 @@ async def main():
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
     asyncio.create_task(channel_worker())
-    # asyncio.create_task(cache_worker())  # Раскомментируй когда нужен кэш
+    # asyncio.create_task(cache_worker())
     await run_polling()
 
 
