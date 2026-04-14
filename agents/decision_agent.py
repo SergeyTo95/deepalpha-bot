@@ -113,26 +113,21 @@ class DecisionAgent:
         )
 
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
-        """Определяет семантический тип рынка."""
         if market_type == "multiple_choice":
             return "multi_outcome"
-
         q = question.lower()
-
         threshold_keywords = [
-            "exceed", "surpass", "above", "below", "reach", "hit",
+            "exceed", "surpass", "above", "below",
             "more than", "less than", "over", "under", "cross",
         ]
         if any(k in q for k in threshold_keywords):
             return "binary_threshold"
-
         entity_keywords = [
-            "who will", "which company", "which team", "which country",
-            "largest", "biggest", "most", "first to",
+            "who will", "which company", "which team",
+            "which country", "largest", "biggest",
         ]
         if any(k in q for k in entity_keywords):
             return "single_entity"
-
         return "binary_action"
 
     def _classify_balance(self, market_prob_value: float) -> str:
@@ -153,7 +148,6 @@ class DecisionAgent:
         options: List[str],
         market_type: str,
     ) -> Tuple[float, str]:
-        """Парсит вероятность и возвращает ЛИДИРУЮЩИЙ исход."""
         try:
             if market_type == "binary" or not options:
                 yes_match = re.search(r'Yes:\s*([\d.]+)%', str(market_probability))
@@ -254,31 +248,25 @@ class DecisionAgent:
         lang: str = "ru",
     ) -> str:
 
-        news_block = news_summary[:500] if news_summary else "Нет данных"
-        days_str = f"{days_to_event} дней" if days_to_event is not None else "неизвестно"
+        news_block = news_summary[:500] if news_summary else ("Нет данных" if lang == "ru" else "No data")
+        days_str = f"{days_to_event} " + ("дней" if lang == "ru" else "days") if days_to_event is not None else ("неизвестно" if lang == "ru" else "unknown")
         max_dev, rule = self._get_divergence_rules(market_prob_value, days_to_event)
 
-        # Инструкции по типу рынка
-        type_instruction = self._get_type_instruction(
-            semantic_type=semantic_type,
-            market_leader=market_leader,
-            market_prob_value=market_prob_value,
-            question=question,
-        )
-
-        # Инструкции по балансу
-        balance_instruction = self._get_balance_instruction(
-            market_balance=market_balance,
-            market_prob_value=market_prob_value,
-        )
+        type_instruction = self._get_type_instruction(semantic_type, market_leader, market_prob_value, lang)
+        balance_instruction = self._get_balance_instruction(market_balance, market_prob_value, lang)
 
         leader_note = ""
         if market_type == "binary":
-            leader_note = f"\nЛИДЕР: {market_leader} ({market_prob_value:.1f}%) — исход с НАИБОЛЬШЕЙ вероятностью."
+            if lang == "ru":
+                leader_note = f"\nЛИДЕР: {market_leader} ({market_prob_value:.1f}%) — исход с НАИБОЛЬШЕЙ вероятностью."
+            else:
+                leader_note = f"\nLEADER: {market_leader} ({market_prob_value:.1f}%) — outcome with HIGHEST probability."
 
         if market_type == "multiple_choice" and options:
             options_block = "\n".join([f"- {opt}" for opt in options])
-            return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
+
+            if lang == "ru":
+                return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
 Отвечай ТОЛЬКО на русском языке. Давай ГЛУБОКИЙ причинно-следственный анализ.
 
 ВОПРОС: {question}
@@ -298,7 +286,7 @@ class DecisionAgent:
 
 ПРАВИЛА:
 1. Выбери вариант с НАИБОЛЬШЕЙ вероятностью
-2. НЕ выбирай Yes/No — только конкретный вариант из списка
+2. НЕ выбирай Yes/No — только конкретный вариант
 3. Максимальное отклонение: {max_dev:.0f}%
 4. НЕ повторяй цифры рынка — объясняй ПРИЧИНЫ
 5. Все тексты только на русском
@@ -307,14 +295,50 @@ class DecisionAgent:
 
 Вероятность системы: [вариант — %]
 Уверенность: [Высокая/Средняя/Низкая]
-Логика: [конкретные причины без повторения цифр рынка]
+Логика: [конкретные причины без повторения цифр]
 Расклад по вариантам: [все варианты с %]
-Основной сценарий: [условия реализации — НЕ повторяй прогноз]
-Альтернативный сценарий: [конкретные триггеры изменения]
+Основной сценарий: [условия реализации]
+Альтернативный сценарий: [конкретные триггеры]
 Вывод: [итоговая оценка]""".strip()
+            else:
+                return f"""You are a senior analyst at DeepAlpha prediction markets.
+Respond ONLY in English. Provide DEEP causal analysis.
+
+QUESTION: {question}
+CATEGORY: {category}
+DAYS TO EVENT: {days_str}
+MARKET ODDS: {market_probability}{leader_note}
+
+OPTIONS:
+{options_block}
+
+TREND: {trend_summary[:200]}
+NEWS: {news_block}
+SENTIMENT: {sentiment}
+
+{type_instruction}
+{balance_instruction}
+
+RULES:
+1. Choose option with HIGHEST probability
+2. Do NOT choose Yes/No — only specific option
+3. Max deviation: {max_dev:.0f}%
+4. Do NOT repeat market numbers — explain REASONS
+5. All text in English only
+
+Fill ALL fields (2-3 sentences each):
+
+System Probability: [option — %]
+Confidence: [High/Medium/Low]
+Reasoning: [specific reasons without repeating numbers]
+Options Breakdown: [all options with %]
+Main Scenario: [conditions for realisation]
+Alternative Scenario: [specific triggers]
+Conclusion: [final assessment]""".strip()
 
         else:
-            return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
+            if lang == "ru":
+                return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
 Отвечай ТОЛЬКО на русском языке. Давай ГЛУБОКИЙ причинно-следственный анализ.
 
 ВОПРОС: {question}
@@ -341,75 +365,133 @@ class DecisionAgent:
 Вероятность системы: [Yes или No — %]
 Уверенность: [Высокая/Средняя/Низкая]
 Логика: [механизм и причины без повторения цифр]
-Основной сценарий: [условия при которых реализуется — НЕ повторяй прогноз]
+Основной сценарий: [условия при которых реализуется]
 Альтернативный сценарий: [конкретные триггеры изменения]
 Вывод: [итоговая оценка]""".strip()
+            else:
+                return f"""You are a senior analyst at DeepAlpha prediction markets.
+Respond ONLY in English. Provide DEEP causal analysis.
 
-    def _get_type_instruction(
-        self,
-        semantic_type: str,
-        market_leader: str,
-        market_prob_value: float,
-        question: str,
-    ) -> str:
-        """Инструкции по семантическому типу рынка."""
-        if semantic_type == "binary_action":
-            leader_meaning = "произойдёт" if market_leader == "Yes" else "НЕ произойдёт"
-            return (
-                f"ТИП РЫНКА: Бинарное действие (Will X do Y?)\n"
-                f"Лидер '{market_leader}' означает: событие {leader_meaning}.\n"
-                f"Объясни ПОЧЕМУ действие {'произойдёт' if market_leader == 'Yes' else 'НЕ произойдёт'} — "
-                f"конкретные причины, не 'рынок оценивает'."
-            )
-        elif semantic_type == "binary_threshold":
-            leader_meaning = "превысит порог" if market_leader == "Yes" else "НЕ превысит порог"
-            return (
-                f"ТИП РЫНКА: Пороговое событие (Will X exceed Y?)\n"
-                f"Лидер '{market_leader}' означает: показатель {leader_meaning}.\n"
-                f"Объясни какие факторы {'толкают к превышению' if market_leader == 'Yes' else 'удерживают ниже порога'}."
-            )
-        elif semantic_type == "single_entity":
-            return (
-                f"ТИП РЫНКА: Определение лидера (Who/Which will be #1?)\n"
-                f"Верни название конкретной компании/персоны/актива как победителя.\n"
-                f"Объясни почему именно этот участник лидирует."
-            )
-        else:
-            return (
-                f"ТИП РЫНКА: Множественный выбор.\n"
-                f"Выбери вариант с наибольшей вероятностью и объясни его преимущество."
-            )
+QUESTION: {question}
+CATEGORY: {category}
+DAYS TO EVENT: {days_str}
+MARKET ODDS: {market_probability}{leader_note}
 
-    def _get_balance_instruction(
-        self,
-        market_balance: str,
-        market_prob_value: float,
-    ) -> str:
-        """Инструкции по балансу рынка."""
-        if market_balance in ("balanced", "slight_lean"):
-            return (
-                f"ВАЖНО — СБАЛАНСИРОВАННЫЙ РЫНОК ({market_prob_value:.1f}%):\n"
-                f"- Явно укажи что ситуация неопределённая\n"
-                f"- Объясни что может сдвинуть вероятность ВВЕРХ\n"
-                f"- Объясни что может сдвинуть вероятность ВНИЗ\n"
-                f"- НЕ делай уверенных заявлений\n"
-                f"- Основной сценарий = условия реализации, НЕ повтор прогноза"
-            )
-        elif market_balance == "moderate_consensus":
-            return (
-                f"ВАЖНО — УМЕРЕННЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
-                f"- Объясни конкретные факторы создающие этот перевес\n"
-                f"- Укажи что может изменить баланс\n"
-                f"- Альтернативный сценарий = конкретные триггеры разворота"
-            )
-        elif market_balance == "strong_consensus":
-            return (
-                f"ВАЖНО — СИЛЬНЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
-                f"- Объясни МЕХАНИЗМ почему рынок так уверен\n"
-                f"- Раскрой реальные причины уверенности участников\n"
-                f"- Альтернативный сценарий = только экстраординарные события"
-            )
+TREND: {trend_summary[:200]}
+NEWS: {news_block}
+SENTIMENT: {sentiment}
+
+{type_instruction}
+{balance_instruction}
+
+RULES:
+1. Leading outcome: {market_leader} ({market_prob_value:.1f}%)
+2. Max deviation: {max_dev:.0f}% ({rule})
+3. Do NOT repeat market numbers — explain REASONS
+4. If No leads — explain why event will NOT happen
+5. All text in English only
+
+Fill ALL fields (2-3 sentences each):
+
+System Probability: [Yes or No — %]
+Confidence: [High/Medium/Low]
+Reasoning: [mechanism and reasons without repeating numbers]
+Main Scenario: [conditions under which it occurs]
+Alternative Scenario: [specific change triggers]
+Conclusion: [final assessment]""".strip()
+
+    def _get_type_instruction(self, semantic_type: str, market_leader: str, market_prob_value: float, lang: str) -> str:
+        if lang == "ru":
+            if semantic_type == "binary_action":
+                leader_meaning = "произойдёт" if market_leader == "Yes" else "НЕ произойдёт"
+                return (
+                    f"ТИП РЫНКА: Бинарное действие (Will X do Y?)\n"
+                    f"Лидер '{market_leader}' означает: событие {leader_meaning}.\n"
+                    f"Объясни ПОЧЕМУ это {'произойдёт' if market_leader == 'Yes' else 'НЕ произойдёт'}."
+                )
+            elif semantic_type == "binary_threshold":
+                leader_meaning = "превысит порог" if market_leader == "Yes" else "НЕ превысит порог"
+                return (
+                    f"ТИП РЫНКА: Пороговое событие (Will X exceed Y?)\n"
+                    f"Лидер '{market_leader}' означает: показатель {leader_meaning}.\n"
+                    f"Объясни какие факторы {'толкают к превышению' if market_leader == 'Yes' else 'удерживают ниже порога'}."
+                )
+            elif semantic_type == "single_entity":
+                return (
+                    f"ТИП РЫНКА: Определение лидера.\n"
+                    f"Верни название конкретной компании/персоны/актива.\n"
+                    f"Объясни почему именно этот участник лидирует."
+                )
+            else:
+                return f"ТИП РЫНКА: Множественный выбор.\nВыбери вариант с наибольшей вероятностью."
         else:
+            if semantic_type == "binary_action":
+                leader_meaning = "will happen" if market_leader == "Yes" else "will NOT happen"
+                return (
+                    f"MARKET TYPE: Binary action (Will X do Y?)\n"
+                    f"Leader '{market_leader}' means: event {leader_meaning}.\n"
+                    f"Explain WHY this {'will' if market_leader == 'Yes' else 'will NOT'} happen."
+                )
+            elif semantic_type == "binary_threshold":
+                leader_meaning = "will exceed threshold" if market_leader == "Yes" else "will NOT exceed threshold"
+                return (
+                    f"MARKET TYPE: Threshold event (Will X exceed Y?)\n"
+                    f"Leader '{market_leader}' means: indicator {leader_meaning}.\n"
+                    f"Explain what factors {'push toward exceeding' if market_leader == 'Yes' else 'keep it below threshold'}."
+                )
+            elif semantic_type == "single_entity":
+                return (
+                    f"MARKET TYPE: Leader determination.\n"
+                    f"Return the name of the specific company/person/asset.\n"
+                    f"Explain why this participant leads."
+                )
+            else:
+                return f"MARKET TYPE: Multiple choice.\nChoose option with highest probability."
+
+    def _get_balance_instruction(self, market_balance: str, market_prob_value: float, lang: str) -> str:
+        if lang == "ru":
+            if market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"ВАЖНО — СБАЛАНСИРОВАННЫЙ РЫНОК ({market_prob_value:.1f}%):\n"
+                    f"- Явно укажи что ситуация неопределённая\n"
+                    f"- Объясни что может сдвинуть вероятность ВВЕРХ\n"
+                    f"- Объясни что может сдвинуть вероятность ВНИЗ\n"
+                    f"- Основной сценарий = условия реализации"
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"ВАЖНО — УМЕРЕННЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
+                    f"- Объясни конкретные факторы создающие этот перевес\n"
+                    f"- Альтернативный сценарий = конкретные триггеры разворота"
+                )
+            elif market_balance == "strong_consensus":
+                return (
+                    f"ВАЖНО — СИЛЬНЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
+                    f"- Объясни МЕХАНИЗМ почему рынок так уверен\n"
+                    f"- Альтернативный сценарий = только экстраординарные события"
+                )
+            return ""
+        else:
+            if market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"IMPORTANT — BALANCED MARKET ({market_prob_value:.1f}%):\n"
+                    f"- Explicitly state that the situation is uncertain\n"
+                    f"- Explain what could push probability UP\n"
+                    f"- Explain what could push probability DOWN\n"
+                    f"- Main scenario = conditions for realisation"
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"IMPORTANT — MODERATE CONSENSUS ({market_prob_value:.1f}%):\n"
+                    f"- Explain specific factors creating this edge\n"
+                    f"- Alternative scenario = specific reversal triggers"
+                )
+            elif market_balance == "strong_consensus":
+                return (
+                    f"IMPORTANT — STRONG CONSENSUS ({market_prob_value:.1f}%):\n"
+                    f"- Explain the MECHANISM behind market confidence\n"
+                    f"- Alternative scenario = only extraordinary events"
+                )
             return ""
 
     def _parse_llm_output(self, text: str, market_type: str = "binary") -> Dict[str, str]:
@@ -485,7 +567,6 @@ class DecisionAgent:
         if market_type == "binary":
             prob_outcome = "yes" if "yes" in prob_str.lower() else "no"
             expected = market_leader.lower()
-
             if prob_outcome != expected and market_prob_value >= 80:
                 print(f"DecisionAgent: Wrong outcome, correcting to {market_leader}")
                 return f"{market_leader} — {market_prob_value:.1f}%", True
@@ -505,6 +586,7 @@ class DecisionAgent:
         market_type: str,
         days_to_event: Optional[int],
         market_balance: str,
+        lang: str = "ru",
     ) -> str:
         conf_lower = confidence.lower()
         if "high" in conf_lower or "высок" in conf_lower:
@@ -514,7 +596,6 @@ class DecisionAgent:
         else:
             base_score = 1
 
-        # Сбалансированный рынок — макс Medium
         if market_balance in ("balanced", "slight_lean"):
             base_score = min(base_score, 2)
 
@@ -527,12 +608,20 @@ class DecisionAgent:
         if days_to_event is not None and days_to_event <= 7:
             base_score = min(3, base_score + 1)
 
-        if base_score >= 3:
-            return "Высокая" if "high" not in confidence.lower() else "High"
-        elif base_score >= 2:
-            return "Средняя" if "medium" not in confidence.lower() else "Medium"
+        if lang == "ru":
+            if base_score >= 3:
+                return "Высокая"
+            elif base_score >= 2:
+                return "Средняя"
+            else:
+                return "Низкая"
         else:
-            return "Низкая" if "low" not in confidence.lower() else "Low"
+            if base_score >= 3:
+                return "High"
+            elif base_score >= 2:
+                return "Medium"
+            else:
+                return "Low"
 
     def _wrap_llm_result(
         self,
@@ -562,9 +651,12 @@ class DecisionAgent:
             reasoning = conclusion
 
         if not alt_scenario:
-            alt_scenario = "Альтернативный сценарий требует изменения ключевых факторов."
+            alt_scenario = (
+                "Альтернативный сценарий требует изменения ключевых факторов."
+                if lang == "ru"
+                else "Alternative scenario requires key factor changes."
+            )
 
-        # Multiple choice — убираем Yes/No
         if market_type == "multiple_choice":
             if probability.lower().startswith("yes") or probability.lower().startswith("no"):
                 if options_breakdown:
@@ -574,17 +666,20 @@ class DecisionAgent:
                 elif market_leader not in ("Yes", "No"):
                     probability = f"{market_leader} — {market_prob_value:.1f}%"
 
-        # Binary — валидируем
         if market_type == "binary":
             probability, was_adjusted = self._validate_and_adjust_probability(
                 probability, market_prob_value, market_leader, market_type, days_to_event
             )
             if was_adjusted:
-                reasoning = f"Прогноз скорректирован к рыночному лидеру. {reasoning}"
+                reasoning = (
+                    f"Прогноз скорректирован к рыночному лидеру. {reasoning}"
+                    if lang == "ru"
+                    else f"Forecast adjusted to market leader. {reasoning}"
+                )
 
         confidence = self._calibrate_confidence(
             confidence, probability, market_prob_value,
-            market_type, days_to_event, market_balance
+            market_type, days_to_event, market_balance, lang
         )
 
         return {
@@ -637,69 +732,88 @@ class DecisionAgent:
             probability = f"{market_leader} — {market_prob_value:.1f}%"
 
         if market_balance in ("balanced", "slight_lean"):
-            confidence = "Низкая"
+            confidence = "Низкая" if lang == "ru" else "Low"
         elif market_prob_value >= 80:
-            confidence = "Высокая"
+            confidence = "Высокая" if lang == "ru" else "High"
         elif market_prob_value >= 60:
-            confidence = "Средняя"
+            confidence = "Средняя" if lang == "ru" else "Medium"
         else:
-            confidence = "Низкая"
+            confidence = "Низкая" if lang == "ru" else "Low"
 
-        days_str = f"{days_to_event} дней" if days_to_event is not None else ""
+        days_str = (f"{days_to_event} " + ("дней" if lang == "ru" else "days")) if days_to_event is not None else ""
         time_ctx = ""
         if days_to_event is not None:
             if days_to_event <= 7:
-                time_ctx = f"До события {days_str} — рынок близок к разрешению."
+                time_ctx = (
+                    f"До события {days_str} — рынок близок к разрешению."
+                    if lang == "ru"
+                    else f"Event in {days_str} — market near resolution."
+                )
             elif days_to_event <= 30:
-                time_ctx = f"До события {days_str}."
+                time_ctx = f"До события {days_str}." if lang == "ru" else f"Event in {days_str}."
 
-        if market_balance in ("balanced", "slight_lean"):
-            reasoning = (
-                f"Рынок в состоянии неопределённости — ни один исход не доминирует. "
-                f"Вероятность {market_prob_value:.1f}% указывает на сбалансированность. "
-                f"Исход зависит от появления нового катализатора."
-            )
-            main_scenario = (
-                f"Сценарий '{market_leader}' реализуется при сохранении текущего баланса. "
-                f"Любое значимое событие может сдвинуть вероятность в любую сторону."
-            )
-            alt_scenario = (
-                f"Противоположный исход ({100 - market_prob_value:.1f}%) равновероятен. "
-                f"Триггером может стать новая статистика, заявление или внешний шок."
-            )
-            conclusion = (
-                f"Сбалансированный рынок — окончательный вывод преждевременен. "
-                f"Небольшой перевес: {probability}."
-            )
-        elif market_balance == "strong_consensus":
-            reasoning = (
-                f"Консенсус {market_prob_value:.1f}% отражает высокую уверенность участников. "
-                f"{time_ctx} Рынок учёл основную часть доступной информации."
-            )
-            main_scenario = (
-                f"Исход '{market_leader}' реализуется при сохранении текущих условий. "
-                f"Серьёзных угроз не выявлено."
-            )
-            alt_scenario = (
-                f"Альтернативный исход ({100 - market_prob_value:.1f}%) возможен только "
-                f"при резком изменении политики или масштабном внешнем шоке. "
-                f"Рынок практически исключает этот сценарий."
-            )
-            conclusion = f"Высокий консенсус подтверждает: {probability}. {time_ctx}".strip()
+        if lang == "ru":
+            if market_balance in ("balanced", "slight_lean"):
+                reasoning = (
+                    f"Рынок в состоянии неопределённости — ни один исход не доминирует. "
+                    f"Исход зависит от появления нового катализатора."
+                )
+                main_scenario = (
+                    f"Сценарий реализуется при сохранении текущего баланса. "
+                    f"Любое значимое событие может сдвинуть вероятность."
+                )
+                alt_scenario = (
+                    f"Противоположный исход ({100 - market_prob_value:.1f}%) равновероятен. "
+                    f"Триггером может стать новая статистика или внешний шок."
+                )
+                conclusion = f"Сбалансированный рынок. Небольшой перевес: {probability}."
+            elif market_balance == "strong_consensus":
+                reasoning = (
+                    f"Консенсус {market_prob_value:.1f}% отражает высокую уверенность участников. "
+                    f"{time_ctx} Рынок учёл основную часть доступной информации."
+                )
+                main_scenario = f"Исход реализуется при сохранении текущих условий. Серьёзных угроз не выявлено."
+                alt_scenario = (
+                    f"Альтернативный исход ({100 - market_prob_value:.1f}%) возможен только "
+                    f"при резком изменении политики или масштабном внешнем шоке."
+                )
+                conclusion = f"Высокий консенсус подтверждает: {probability}. {time_ctx}".strip()
+            else:
+                reasoning = f"Умеренный консенсус {market_prob_value:.1f}% указывает на перевес. {time_ctx}"
+                main_scenario = f"Наиболее вероятный исход: {probability}. Требуется сохранение текущей динамики."
+                alt_scenario = f"Альтернативный исход ({100 - market_prob_value:.1f}%) при изменении ключевых факторов."
+                conclusion = f"Следуем рыночной оценке: {probability}. {time_ctx}".strip()
         else:
-            reasoning = (
-                f"Умеренный консенсус {market_prob_value:.1f}% указывает на перевес. "
-                f"{time_ctx} Ситуация ещё не окончательная."
-            )
-            main_scenario = (
-                f"Наиболее вероятный исход: '{market_leader}' — {market_prob_value:.1f}%. "
-                f"Требуется сохранение текущей динамики."
-            )
-            alt_scenario = (
-                f"Альтернативный исход ({100 - market_prob_value:.1f}%) при изменении "
-                f"ключевых макроэкономических или политических факторов."
-            )
-            conclusion = f"Следуем рыночной оценке: {probability}. {time_ctx}".strip()
+            if market_balance in ("balanced", "slight_lean"):
+                reasoning = (
+                    f"Market is uncertain — no outcome dominates. "
+                    f"Result depends on emergence of new catalyst."
+                )
+                main_scenario = (
+                    f"Scenario plays out if current balance holds. "
+                    f"Any significant event could shift probability."
+                )
+                alt_scenario = (
+                    f"Opposite outcome ({100 - market_prob_value:.1f}%) nearly equally likely. "
+                    f"New data or external shock could be the trigger."
+                )
+                conclusion = f"Balanced market. Slight edge: {probability}."
+            elif market_balance == "strong_consensus":
+                reasoning = (
+                    f"Consensus {market_prob_value:.1f}% reflects high participant confidence. "
+                    f"{time_ctx} Market has priced in most available information."
+                )
+                main_scenario = f"Outcome plays out if current conditions hold. No major threats identified."
+                alt_scenario = (
+                    f"Alternative outcome ({100 - market_prob_value:.1f}%) only possible "
+                    f"with sharp policy change or major external shock."
+                )
+                conclusion = f"High consensus confirms: {probability}. {time_ctx}".strip()
+            else:
+                reasoning = f"Moderate consensus {market_prob_value:.1f}% points to an edge. {time_ctx}"
+                main_scenario = f"Most likely outcome: {probability}. Requires stable current dynamics."
+                alt_scenario = f"Alternative ({100 - market_prob_value:.1f}%) if key factors shift."
+                conclusion = f"Following market estimate: {probability}. {time_ctx}".strip()
 
         return {
             "question": question,
