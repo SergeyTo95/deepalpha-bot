@@ -17,13 +17,8 @@ class CommunicationAgent:
         alt_scenario = decision_data.get("alt_scenario", "").strip()
         lang = decision_data.get("lang", "ru")
 
-        # Шаг 1: парсим вероятность
         raw_outcome, prob_val = self._split_probability(probability)
-
-        # Шаг 2: тип рынка
         semantic_type = self._classify_semantic_type(question, market_type)
-
-        # Шаг 3: строим display_prediction
         is_negated = raw_outcome.lower() == "no" if raw_outcome.lower() in ("yes", "no") else False
 
         if raw_outcome.lower() in ("yes", "no"):
@@ -34,20 +29,17 @@ class CommunicationAgent:
         prob_str = f"{prob_val:.1f}%" if prob_val else ""
         display_prediction = f"{semantic_text} — {prob_str}" if prob_str else semantic_text
 
-        # Шаг 4: метрики
         model_prob = prob_val or 0.0
         market_prob = self._extract_market_leader_prob(market_probability, market_type)
         delta = abs(model_prob - market_prob) if model_prob else None
         market_balance = self._classify_balance(market_prob)
 
-        # Шаг 5: alpha detection
         alpha_label, alpha_message = self._detect_alpha(delta, model_prob, market_prob, market_balance, lang)
 
-        # Шаг 6: тексты
-        clean_reasoning = self._clean_text(reasoning)
-        clean_scenario = self._clean_text(main_scenario)
-        clean_alt = self._clean_text(alt_scenario)
-        clean_conclusion = self._clean_text(conclusion)
+        clean_reasoning = self._clean_text(reasoning, lang)
+        clean_scenario = self._clean_text(main_scenario, lang)
+        clean_alt = self._clean_text(alt_scenario, lang)
+        clean_conclusion = self._clean_text(conclusion, lang)
 
         final_reasoning = self._build_reasoning(clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance, lang)
         final_scenario = self._build_scenario(clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance, lang)
@@ -67,22 +59,55 @@ class CommunicationAgent:
         }
 
     # ═══════════════════════════════════════════
-    # ПАРСЕР ВЕРОЯТНОСТИ
+    # HELPERS
     # ═══════════════════════════════════════════
 
     def _split_probability(self, probability_str: str) -> Tuple[str, Optional[float]]:
         if not probability_str:
             return "Yes", None
-
         match = re.match(r'^(.+?)\s*[—–-]\s*([\d.]+)%', probability_str)
         if match:
             return match.group(1).strip(), float(match.group(2))
-
         match2 = re.match(r'^([\d.]+)%$', probability_str)
         if match2:
             return "Yes", float(match2.group(1))
-
         return probability_str, None
+
+    def _is_wrong_language(self, text: str, lang: str) -> bool:
+        """Проверяет что текст не на нужном языке."""
+        if not text or len(text.strip()) == 0:
+            return False
+        cyrillic = len(re.findall(r'[а-яёА-ЯЁ]', text))
+        total = len(text.strip())
+        cyrillic_ratio = cyrillic / total
+        if lang == "en" and cyrillic_ratio > 0.1:
+            return True
+        return False
+
+    def _is_truncated(self, text: str) -> bool:
+        """Проверяет что текст обрезан."""
+        if not text:
+            return False
+        stripped = text.strip()
+        if len(stripped) > 20 and stripped[-1] not in '.!?%"\')':
+            return True
+        return False
+
+    def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
+        try:
+            if market_type == "binary":
+                yes_m = re.search(r'Yes:\s*([\d.]+)%', market_probability)
+                no_m = re.search(r'No:\s*([\d.]+)%', market_probability)
+                yes_p = float(yes_m.group(1)) if yes_m else 0
+                no_p = float(no_m.group(1)) if no_m else 0
+                return max(yes_p, no_p)
+            else:
+                matches = re.findall(r'[\d.]+%', market_probability)
+                if matches:
+                    return max(float(m.replace('%', '')) for m in matches)
+        except Exception:
+            pass
+        return 50.0
 
     # ═══════════════════════════════════════════
     # КЛАССИФИКАЦИЯ
@@ -91,16 +116,13 @@ class CommunicationAgent:
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
         if market_type == "multiple_choice":
             return "multi_outcome"
-
         q = question.lower()
         threshold_kw = ["exceed", "surpass", "above", "below", "more than", "less than", "over", "under", "cross"]
         if any(k in q for k in threshold_kw):
             return "binary_threshold"
-
         entity_kw = ["who will", "which company", "which team", "which country", "largest", "biggest"]
         if any(k in q for k in entity_kw):
             return "single_entity"
-
         return "binary_action"
 
     def _classify_balance(self, market_prob: float) -> str:
@@ -120,17 +142,12 @@ class CommunicationAgent:
     # ═══════════════════════════════════════════
 
     def _build_semantic_text(self, question: str, is_negated: bool, semantic_type: str, lang: str) -> str:
-        """Строит полное предложение на нужном языке."""
-
-        # TYPE B: пороговые
         if semantic_type == "binary_threshold":
             result = self._render_threshold(question, is_negated, lang)
             if result:
                 return result
 
-        # TYPE A: полный парсинг
         parsed = self._parse_question(question)
-
         if parsed["subject"] and parsed["verb"]:
             result = self._render_action(
                 subject=parsed["subject"],
@@ -143,18 +160,15 @@ class CommunicationAgent:
             if result and "выполнит действие" not in result and "perform action" not in result and len(result) > 5:
                 return result
 
-        # TYPE C: single entity
         if semantic_type == "single_entity":
             entity = self._find_entity(question)
             if entity:
                 return entity
 
-        # Simple fallback
         result = self._simple_fallback(question, is_negated, lang)
         if result:
             return result
 
-        # Последний fallback
         if is_negated:
             return "Event will not occur" if lang == "en" else "Событие не произойдёт"
         return "Event will occur" if lang == "en" else "Событие произойдёт"
@@ -165,7 +179,6 @@ class CommunicationAgent:
 
     def _parse_question(self, question: str) -> Dict[str, str]:
         empty = {"subject": "", "verb": "", "obj": "", "time": ""}
-
         q = re.sub(r'\?$', '', question.strip())
         m = re.match(r'^Will\s+(.+)', q, re.IGNORECASE)
         if not m:
@@ -211,7 +224,6 @@ class CommunicationAgent:
 
         obj = rest[best_pos + len(verb):].strip() if verb else ""
 
-        # Извлекаем время
         time_str = ""
         time_patterns = [
             r'\s+in\s+(20\d{2})\b',
@@ -229,7 +241,6 @@ class CommunicationAgent:
                 break
 
         obj = re.sub(r'^(any|some|the|a|an)\s+', '', obj, flags=re.IGNORECASE).strip()
-
         return {"subject": subject, "verb": verb, "obj": obj, "time": time_str}
 
     # ═══════════════════════════════════════════
@@ -240,11 +251,9 @@ class CommunicationAgent:
         subject_out = self._tr_subject(subject, lang)
         verb_out = self._tr_verb(verb, obj, is_negated, lang)
         time_out = self._tr_time(time_str, lang)
-
         parts = [subject_out, verb_out]
         if time_out:
             parts.append(time_out)
-
         return " ".join(p for p in parts if p).strip()
 
     def _tr_subject(self, subject: str, lang: str) -> str:
@@ -256,6 +265,7 @@ class CommunicationAgent:
             "the fed": "ФРС",
             "fed": "ФРС",
             "ecb": "ЕЦБ",
+            "the ecb": "ЕЦБ",
             "bank of england": "Банк Англии",
             "boe": "Банк Англии",
             "the us": "США",
@@ -269,26 +279,32 @@ class CommunicationAgent:
             "north korea": "Северная Корея",
         }
         s = subject.lower().strip().rstrip(".,")
-
         if lang == "ru":
             return ru_map.get(s, subject.strip())
         else:
-            # Для английского — капитализируем но не переводим
-            return subject.strip()
+            # Для английского — возвращаем как есть (сохраняем капитализацию)
+            en_map = {
+                "ecb": "ECB",
+                "the ecb": "the ECB",
+                "boj": "BOJ",
+                "fed": "Fed",
+                "the fed": "the Fed",
+                "boe": "BOE",
+            }
+            return en_map.get(s, subject.strip())
 
     def _tr_object(self, obj: str, lang: str) -> str:
         if not obj:
             return ""
 
-        # Объекты одинаковы в обоих языках (бренды, криптовалюты)
-        mapping = {
+        common_map = {
             "bitcoin": "Bitcoin",
             "btc": "BTC",
             "ethereum": "Ethereum",
             "eth": "ETH",
         }
 
-        ru_mapping = {
+        ru_map = {
             "rates": "ставку",
             "interest rates": "процентную ставку",
             "the election": "на выборах",
@@ -300,28 +316,17 @@ class CommunicationAgent:
             "the nba finals": "финал НБА",
         }
 
-        en_mapping = {
-            "rates": "rates",
-            "interest rates": "interest rates",
-            "the election": "the election",
-        }
-
         o = obj.lower().strip()
 
-        # Общие для обоих языков
-        for en, out in mapping.items():
+        for en, out in common_map.items():
             if o == en:
                 return out
 
         if lang == "ru":
-            for en, ru in ru_mapping.items():
+            for en, ru in ru_map.items():
                 if o == en:
                     return ru
-        else:
-            for en, out in en_mapping.items():
-                if o == en:
-                    return out
-
+        
         if re.match(r'^\$[\d,]+[k]?$', obj, re.IGNORECASE):
             return obj
 
@@ -389,9 +394,7 @@ class CommunicationAgent:
                 "be removed": f"{neg}будет отстранён",
             }
             result = ru_map.get(v, f"{neg}{v} {obj_out}".strip())
-
         else:
-            # English
             neg = "will not " if is_negated else "will "
             en_map = {
                 "sell any": f"{neg}sell {obj_out}",
@@ -455,7 +458,6 @@ class CommunicationAgent:
     def _tr_time(self, time_str: str, lang: str) -> str:
         if not time_str:
             return ""
-
         t = time_str.strip()
         year_m = re.search(r'(20\d{2})', t)
 
@@ -468,7 +470,6 @@ class CommunicationAgent:
                 if "before" in t_lower:
                     return f"до {year} года"
                 return f"в {year} году"
-
             months_ru = {
                 "january": "января", "february": "февраля", "march": "марта",
                 "april": "апреля", "may": "мая", "june": "июня",
@@ -478,14 +479,10 @@ class CommunicationAgent:
             for en, ru in months_ru.items():
                 if en in t.lower():
                     return f"к {ru}"
-
             if "this year" in t.lower():
                 return "в этом году"
-
             return f"к {t}"
-
         else:
-            # English — возвращаем как есть, только убираем leading space
             return t
 
     # ═══════════════════════════════════════════
@@ -503,12 +500,10 @@ class CommunicationAgent:
                 yr = re.search(r'(202\d)', question)
                 year_str = f" в {yr.group(1)} году" if yr else ""
                 return f"Инфляция {neg}превысит {threshold}{year_str}"
-
             if "bitcoin" in q or "btc" in q:
                 m = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
                 price = m.group(0) if m else "целевого уровня"
                 return f"Bitcoin {neg}достигнет {price}"
-
             match = re.match(
                 r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
                 re.sub(r'\?$', '', question), re.IGNORECASE
@@ -517,7 +512,6 @@ class CommunicationAgent:
                 subj = self._tr_subject(match.group(1).strip(), "ru")
                 threshold = match.group(3).strip()
                 return f"{subj} {neg}превысит {threshold}"
-
         else:
             neg = "will not " if is_negated else "will "
             if "inflation" in q:
@@ -526,12 +520,10 @@ class CommunicationAgent:
                 yr = re.search(r'(202\d)', question)
                 year_str = f" in {yr.group(1)}" if yr else ""
                 return f"Inflation {neg}exceed {threshold}{year_str}"
-
             if "bitcoin" in q or "btc" in q:
                 m = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
                 price = m.group(0) if m else "the target"
                 return f"Bitcoin {neg}reach {price}"
-
             match = re.match(
                 r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
                 re.sub(r'\?$', '', question), re.IGNORECASE
@@ -569,11 +561,11 @@ class CommunicationAgent:
                 (r'Will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg}будет переизбран"),
             ]
         else:
-            neg = "will not " if is_negated else "will "
+            neg_w = "will not " if is_negated else "will "
             patterns = [
-                (r'Will\s+(\w[\w\s]+?)\s+win', lambda m: f"{m.group(1).strip()} {neg}win"),
-                (r'Will\s+(\w[\w\s]+?)\s+become\s+president', lambda m: f"{m.group(1).strip()} {neg}become president"),
-                (r'Will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg}be re-elected"),
+                (r'Will\s+(\w[\w\s]+?)\s+win', lambda m: f"{m.group(1).strip()} {neg_w}win"),
+                (r'Will\s+(\w[\w\s]+?)\s+become\s+president', lambda m: f"{m.group(1).strip()} {neg_w}become president"),
+                (r'Will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg_w}be re-elected"),
             ]
 
         for pattern, formatter in patterns:
@@ -582,7 +574,6 @@ class CommunicationAgent:
                 result = formatter(m)
                 if result and len(result) > 5:
                     return result
-
         return ""
 
     # ═══════════════════════════════════════════
@@ -591,14 +582,12 @@ class CommunicationAgent:
 
     def _build_reasoning(self, clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance, lang):
         if clean_reasoning and len(clean_reasoning) > 30:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning).strip()
-            result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
-            if is_negated:
-                result = re.sub(r'\bNo\b', semantic_text, result)
-            else:
-                result = re.sub(r'\bYes\b', semantic_text, result)
-            if len(result) > 30:
-                return result
+            if not self._is_wrong_language(clean_reasoning, lang) and not self._is_truncated(clean_reasoning):
+                result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning).strip()
+                result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
+                result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
+                if len(result) > 30:
+                    return result
 
         prob = market_prob or model_prob or 50
 
@@ -643,9 +632,12 @@ class CommunicationAgent:
 
     def _build_scenario(self, clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance, lang):
         if clean_scenario and len(clean_scenario) > 30:
-            result = re.sub(r'\bNo\b', semantic_text, clean_scenario) if is_negated else re.sub(r'\bYes\b', semantic_text, clean_scenario)
-            result = result.replace("указывают на:", "подтверждают:") if lang == "ru" else result
-            return result
+            if not self._is_wrong_language(clean_scenario, lang) and not self._is_truncated(clean_scenario):
+                result = re.sub(r'\bNo\b', semantic_text, clean_scenario) if is_negated else re.sub(r'\bYes\b', semantic_text, clean_scenario)
+                if lang == "ru":
+                    result = result.replace("указывают на:", "подтверждают:")
+                if len(result) > 30:
+                    return result
 
         if lang == "ru":
             if market_balance == "strong_consensus":
@@ -668,9 +660,10 @@ class CommunicationAgent:
 
     def _build_alt_scenario(self, clean_alt, semantic_text, is_negated, market_prob, market_balance, lang):
         if clean_alt and len(clean_alt) > 30:
-            bad = ["внешних факторов", "external factor"]
-            if not any(p in clean_alt.lower() for p in bad):
-                return clean_alt
+            if not self._is_wrong_language(clean_alt, lang) and not self._is_truncated(clean_alt):
+                bad = ["внешних факторов", "external factor"]
+                if not any(p in clean_alt.lower() for p in bad):
+                    return clean_alt
 
         alt_prob = 100 - market_prob
 
@@ -715,14 +708,12 @@ class CommunicationAgent:
 
     def _build_conclusion(self, clean_conclusion, display_prediction, semantic_text, is_negated, market_balance, lang):
         if clean_conclusion and len(clean_conclusion) > 20:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
-            result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
-            if is_negated:
-                result = re.sub(r'\bNo\b', semantic_text, result)
-            else:
-                result = re.sub(r'\bYes\b', semantic_text, result)
-            if len(result) > 20:
-                return result
+            if not self._is_wrong_language(clean_conclusion, lang) and not self._is_truncated(clean_conclusion):
+                result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
+                result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
+                result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
+                if len(result) > 20:
+                    return result
 
         if lang == "ru":
             if market_balance in ("balanced", "slight_lean"):
@@ -782,47 +773,19 @@ class CommunicationAgent:
         elif delta < 20:
             direction = ("выше" if model_prob > market_prob else "ниже") if lang == "ru" else ("above" if model_prob > market_prob else "below")
             if lang == "ru":
-                return (
-                    "⚠️ Слабый сигнал",
-                    f"Модель оценивает на {delta:.1f}% {direction} рыночной. Возможна небольшая неэффективность.",
-                )
-            return (
-                "⚠️ Weak Signal",
-                f"Model estimates {delta:.1f}% {direction} market. Possible minor inefficiency.",
-            )
+                return "⚠️ Слабый сигнал", f"Модель оценивает на {delta:.1f}% {direction} рыночной. Возможна небольшая неэффективность."
+            return "⚠️ Weak Signal", f"Model estimates {delta:.1f}% {direction} market. Possible minor inefficiency."
         else:
             direction = ("выше" if model_prob > market_prob else "ниже") if lang == "ru" else ("above" if model_prob > market_prob else "below")
             if lang == "ru":
-                return (
-                    "🔥 Потенциальная альфа",
-                    f"Расхождение {delta:.1f}% {direction} рыночной оценки. Высокий риск — проверь тщательно.",
-                )
-            return (
-                "🔥 Potential Alpha",
-                f"Divergence of {delta:.1f}% {direction} market estimate. High risk — verify carefully.",
-            )
+                return "🔥 Потенциальная альфа", f"Расхождение {delta:.1f}% {direction} рыночной оценки. Высокий риск — проверь тщательно."
+            return "🔥 Potential Alpha", f"Divergence of {delta:.1f}% {direction} market estimate. High risk — verify carefully."
 
     # ═══════════════════════════════════════════
-    # HELPERS
+    # CLEAN TEXT
     # ═══════════════════════════════════════════
 
-    def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
-        try:
-            if market_type == "binary":
-                yes_m = re.search(r'Yes:\s*([\d.]+)%', market_probability)
-                no_m = re.search(r'No:\s*([\d.]+)%', market_probability)
-                yes_p = float(yes_m.group(1)) if yes_m else 0
-                no_p = float(no_m.group(1)) if no_m else 0
-                return max(yes_p, no_p)
-            else:
-                matches = re.findall(r'[\d.]+%', market_probability)
-                if matches:
-                    return max(float(m.replace('%', '')) for m in matches)
-        except Exception:
-            pass
-        return 50.0
-
-    def _clean_text(self, text: str) -> str:
+    def _clean_text(self, text: str, lang: str = "ru") -> str:
         if not text:
             return ""
 
@@ -843,9 +806,18 @@ class CommunicationAgent:
         bad_exact = [
             "Альтернативный сценарий возможен при изменении внешних факторов.",
             "Alternative scenario depends on external factor changes.",
+            "Альтернативный сценарий требует изменения ключевых факторов.",
         ]
         for phrase in bad_exact:
             if t == phrase:
                 return ""
+
+        # Убираем обрезанный текст
+        if self._is_truncated(t):
+            return ""
+
+        # Убираем текст на неправильном языке
+        if self._is_wrong_language(t, lang):
+            return ""
 
         return t.replace("##", "").replace("###", "").replace("**", "").strip()
