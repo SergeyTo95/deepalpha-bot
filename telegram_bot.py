@@ -228,6 +228,37 @@ def _confidence_emoji(confidence: str) -> str:
     return "🔴"
 
 
+def _translate_confidence(confidence: str, lang: str) -> str:
+    """Переводит уверенность на нужный язык."""
+    if lang == "ru":
+        mapping = {
+            "High": "Высокая", "Medium": "Средняя", "Low": "Низкая",
+            "Высокая": "Высокая", "Средняя": "Средняя", "Низкая": "Низкая",
+        }
+    else:
+        mapping = {
+            "Высокая": "High", "Средняя": "Medium", "Низкая": "Low",
+            "High": "High", "Medium": "Medium", "Low": "Low",
+        }
+    return mapping.get(confidence, confidence)
+
+
+def _translate_alpha_label(label: str, lang: str) -> str:
+    """Переводит alpha label на нужный язык."""
+    if not label:
+        return label
+    if lang == "en":
+        ru_to_en = {
+            "✅ Консенсус с рынком": "✅ Market Consensus",
+            "⚠️ Слабый сигнал": "⚠️ Weak Signal",
+            "🔥 Потенциальная альфа": "🔥 Potential Alpha",
+            "🟡 Сигнал: сбалансированный рынок": "🟡 Signal: Balanced Market",
+            "📊 Анализ рынка": "📊 Market Analysis",
+        }
+        return ru_to_en.get(label, label)
+    return label
+
+
 def _build_news_block(sources: list, lang: str) -> str:
     if not sources:
         return ""
@@ -246,20 +277,15 @@ def _build_news_block(sources: list, lang: str) -> str:
     return block
 
 
-def _get_communication_data(result: dict) -> dict:
-    """
-    Получает semantic данные от CommunicationAgent.
-    display_prediction — главный результат, используется везде.
-    """
+def _get_communication_data(result: dict, lang: str = "ru") -> dict:
+    """Получает semantic данные от CommunicationAgent с учётом языка."""
     from agents.communication_agent import CommunicationAgent
     try:
+        result_with_lang = {**result, "lang": lang}
         agent = CommunicationAgent()
-        comm = agent.run(result)
-
-        # Debug логи — видим что генерируется
+        comm = agent.run(result_with_lang)
         print(f"SEMANTIC: {comm.get('semantic_outcome', '')}")
         print(f"DISPLAY:  {comm.get('display_prediction', '')}")
-
         return comm
     except Exception as e:
         print(f"CommunicationAgent error: {e}")
@@ -273,15 +299,15 @@ def _format_analysis(result: dict, uid: int) -> str:
     q = _escape(result.get("question", ""))
     cat = _escape(result.get("category", ""))
     market_prob = _escape(result.get("market_probability", ""))
-    confidence = _escape(result.get("confidence", ""))
+    confidence_raw = result.get("confidence", "")
     market_type = result.get("market_type", "binary")
     options_breakdown = _escape(result.get("options_breakdown", ""))
-    conf_emoji = _confidence_emoji(confidence)
 
-    # Получаем semantic данные — display_prediction единственный источник
-    comm = _get_communication_data(result)
+    confidence = _translate_confidence(confidence_raw, lang)
+    conf_emoji = _confidence_emoji(confidence_raw)
 
-    # Приоритет: semantic > raw probability
+    comm = _get_communication_data(result, lang=lang)
+
     display_prediction = _escape(
         comm.get("display_prediction") or result.get("probability", "")
     )
@@ -297,13 +323,12 @@ def _format_analysis(result: dict, uid: int) -> str:
     semantic_conclusion = _escape(
         comm.get("conclusion") or result.get("conclusion", "")
     )
-    alpha_label = comm.get("alpha_label", "")
+    alpha_label = _translate_alpha_label(comm.get("alpha_label", ""), lang)
     alpha_message = _escape(comm.get("alpha_message", ""))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
 
-    # Расклад для multiple choice
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
         label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
@@ -361,11 +386,12 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
     cat = _escape(result.get("category", ""))
     market_prob = _escape(result.get("market_probability", ""))
     sys_prob = _escape(result.get("probability", ""))
-    confidence = _escape(result.get("confidence", ""))
+    confidence_raw = result.get("confidence", "")
+    confidence = _translate_confidence(confidence_raw, lang)
     conclusion = _escape(result.get("conclusion", ""))
     score = result.get("opportunity_score", 0)
     url = result.get("url", "")
-    conf_emoji = _confidence_emoji(confidence)
+    conf_emoji = _confidence_emoji(confidence_raw)
     score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
