@@ -15,20 +15,21 @@ class CommunicationAgent:
         market_type = decision_data.get("market_type", "binary")
         main_scenario = decision_data.get("main_scenario", "").strip()
         alt_scenario = decision_data.get("alt_scenario", "").strip()
+        lang = decision_data.get("lang", "ru")
 
         # Шаг 1: парсим вероятность
         raw_outcome, prob_val = self._split_probability(probability)
 
-        # Шаг 2: определяем тип рынка
+        # Шаг 2: тип рынка
         semantic_type = self._classify_semantic_type(question, market_type)
 
-        # Шаг 3: строим display_prediction — единственный источник правды
+        # Шаг 3: строим display_prediction
         is_negated = raw_outcome.lower() == "no" if raw_outcome.lower() in ("yes", "no") else False
 
         if raw_outcome.lower() in ("yes", "no"):
-            semantic_text = self._build_semantic_text(question, is_negated, semantic_type)
+            semantic_text = self._build_semantic_text(question, is_negated, semantic_type, lang)
         else:
-            semantic_text = raw_outcome  # multiple choice — уже готово
+            semantic_text = raw_outcome
 
         prob_str = f"{prob_val:.1f}%" if prob_val else ""
         display_prediction = f"{semantic_text} — {prob_str}" if prob_str else semantic_text
@@ -40,18 +41,18 @@ class CommunicationAgent:
         market_balance = self._classify_balance(market_prob)
 
         # Шаг 5: alpha detection
-        alpha_label, alpha_message = self._detect_alpha(delta, model_prob, market_prob, market_balance)
+        alpha_label, alpha_message = self._detect_alpha(delta, model_prob, market_prob, market_balance, lang)
 
-        # Шаг 6: строим тексты используя display_prediction
+        # Шаг 6: тексты
         clean_reasoning = self._clean_text(reasoning)
         clean_scenario = self._clean_text(main_scenario)
         clean_alt = self._clean_text(alt_scenario)
         clean_conclusion = self._clean_text(conclusion)
 
-        final_reasoning = self._build_reasoning(clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance)
-        final_scenario = self._build_scenario(clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance)
-        final_alt = self._build_alt_scenario(clean_alt, semantic_text, is_negated, market_prob, market_balance)
-        final_conclusion = self._build_conclusion(clean_conclusion, display_prediction, semantic_text, is_negated, market_balance)
+        final_reasoning = self._build_reasoning(clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance, lang)
+        final_scenario = self._build_scenario(clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance, lang)
+        final_alt = self._build_alt_scenario(clean_alt, semantic_text, is_negated, market_prob, market_balance, lang)
+        final_conclusion = self._build_conclusion(clean_conclusion, display_prediction, semantic_text, is_negated, market_balance, lang)
 
         return {
             "display_prediction": display_prediction,
@@ -70,7 +71,6 @@ class CommunicationAgent:
     # ═══════════════════════════════════════════
 
     def _split_probability(self, probability_str: str) -> Tuple[str, Optional[float]]:
-        """Разделяет 'Yes — 98.3%' на ('Yes', 98.3)."""
         if not probability_str:
             return "Yes", None
 
@@ -85,7 +85,7 @@ class CommunicationAgent:
         return probability_str, None
 
     # ═══════════════════════════════════════════
-    # КЛАССИФИКАЦИЯ ТИПА РЫНКА
+    # КЛАССИФИКАЦИЯ
     # ═══════════════════════════════════════════
 
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
@@ -93,7 +93,6 @@ class CommunicationAgent:
             return "multi_outcome"
 
         q = question.lower()
-
         threshold_kw = ["exceed", "surpass", "above", "below", "more than", "less than", "over", "under", "cross"]
         if any(k in q for k in threshold_kw):
             return "binary_threshold"
@@ -104,31 +103,32 @@ class CommunicationAgent:
 
         return "binary_action"
 
+    def _classify_balance(self, market_prob: float) -> str:
+        if market_prob >= 85:
+            return "strong_consensus"
+        elif market_prob >= 65:
+            return "moderate_consensus"
+        elif market_prob >= 55:
+            return "slight_lean"
+        elif market_prob >= 45:
+            return "balanced"
+        else:
+            return "lean_against"
+
     # ═══════════════════════════════════════════
-    # ГЛАВНАЯ ФУНКЦИЯ ПОСТРОЕНИЯ SEMANTIC ТЕКСТА
+    # SEMANTIC TEXT
     # ═══════════════════════════════════════════
 
-    def _build_semantic_text(self, question: str, is_negated: bool, semantic_type: str) -> str:
-        """
-        Строит полное русское предложение из вопроса.
-
-        Will MicroStrategy sell any Bitcoin in 2025? + No
-        → MicroStrategy НЕ продаст Bitcoin в 2025 году
-
-        Will Bank of Japan decrease rates? + No
-        → Банк Японии НЕ снизит ставку
-
-        Will inflation exceed 4% in 2026? + Yes
-        → Инфляция превысит 4% в 2026 году
-        """
+    def _build_semantic_text(self, question: str, is_negated: bool, semantic_type: str, lang: str) -> str:
+        """Строит полное предложение на нужном языке."""
 
         # TYPE B: пороговые
         if semantic_type == "binary_threshold":
-            result = self._render_threshold(question, is_negated)
+            result = self._render_threshold(question, is_negated, lang)
             if result:
                 return result
 
-        # TYPE A: бинарное действие — полный парсинг
+        # TYPE A: полный парсинг
         parsed = self._parse_question(question)
 
         if parsed["subject"] and parsed["verb"]:
@@ -138,8 +138,9 @@ class CommunicationAgent:
                 obj=parsed["obj"],
                 time_str=parsed["time"],
                 is_negated=is_negated,
+                lang=lang,
             )
-            if result and "выполнит действие" not in result and len(result) > 5:
+            if result and "выполнит действие" not in result and "perform action" not in result and len(result) > 5:
                 return result
 
         # TYPE C: single entity
@@ -148,23 +149,21 @@ class CommunicationAgent:
             if entity:
                 return entity
 
-        # Fallback через простые паттерны
-        result = self._simple_fallback(question, is_negated)
+        # Simple fallback
+        result = self._simple_fallback(question, is_negated, lang)
         if result:
             return result
 
-        return "Событие не произойдёт" if is_negated else "Событие произойдёт"
+        # Последний fallback
+        if is_negated:
+            return "Event will not occur" if lang == "en" else "Событие не произойдёт"
+        return "Event will occur" if lang == "en" else "Событие произойдёт"
 
     # ═══════════════════════════════════════════
     # ПАРСЕР ВОПРОСА
     # ═══════════════════════════════════════════
 
     def _parse_question(self, question: str) -> Dict[str, str]:
-        """
-        Парсит "Will X verb object [time]?" на компоненты.
-
-        Returns: {subject, verb, obj, time}
-        """
         empty = {"subject": "", "verb": "", "obj": "", "time": ""}
 
         q = re.sub(r'\?$', '', question.strip())
@@ -174,66 +173,24 @@ class CommunicationAgent:
 
         rest = m.group(1).strip()
 
-        # Список глаголов — порядок важен (длинные первыми)
         verbs_ordered = [
-            "file for bankruptcy",
-            "sell any",
-            "buy any",
-            "be elected",
-            "be appointed",
-            "be removed",
-            "go bankrupt",
-            "decrease rates",
-            "cut rates",
-            "raise rates",
-            "hike rates",
-            "hold rates",
-            "sell",
-            "buy",
-            "decrease",
-            "cut",
-            "increase",
-            "raise",
-            "hike",
-            "hold",
-            "pause",
-            "win",
-            "lose",
-            "become",
-            "remain",
-            "stay",
-            "sign",
-            "launch",
-            "release",
-            "announce",
-            "publish",
-            "deploy",
-            "approve",
-            "reject",
-            "veto",
-            "implement",
-            "enter",
-            "invade",
-            "withdraw",
-            "default",
-            "collapse",
-            "survive",
-            "merge",
-            "acquire",
-            "reach",
-            "hit",
-            "pass",
-            "exceed",
-            "surpass",
-            "cross",
-            "break",
-            "set",
-            "achieve",
+            "file for bankruptcy", "sell any", "buy any",
+            "be elected", "be appointed", "be removed",
+            "go bankrupt", "decrease rates", "cut rates",
+            "raise rates", "hike rates", "hold rates",
+            "sell", "buy", "decrease", "cut", "increase",
+            "raise", "hike", "hold", "pause", "win", "lose",
+            "become", "remain", "stay", "sign", "launch",
+            "release", "announce", "publish", "deploy",
+            "approve", "reject", "veto", "implement",
+            "enter", "invade", "withdraw", "default",
+            "collapse", "survive", "merge", "acquire",
+            "reach", "hit", "pass", "exceed", "surpass",
+            "cross", "break", "set", "achieve",
         ]
 
         subject = ""
         verb = ""
-        obj = ""
         best_pos = len(rest) + 1
 
         for v in verbs_ordered:
@@ -243,19 +200,18 @@ class CommunicationAgent:
                 best_pos = vm.start()
                 subject = rest[:vm.start()].strip().rstrip(",")
                 verb = v
-                obj = rest[vm.end():].strip()
 
         if not subject or not verb:
-            # Простой fallback: первое слово = subject
             parts = rest.split(" ", 1)
             if len(parts) == 2:
                 subject = parts[0]
-                obj = parts[1]
                 verb = ""
             else:
                 return empty
 
-        # Убираем время из obj
+        obj = rest[best_pos + len(verb):].strip() if verb else ""
+
+        # Извлекаем время
         time_str = ""
         time_patterns = [
             r'\s+in\s+(20\d{2})\b',
@@ -272,7 +228,6 @@ class CommunicationAgent:
                 obj = obj[:tm.start()].strip()
                 break
 
-        # Убираем артикли из obj
         obj = re.sub(r'^(any|some|the|a|an)\s+', '', obj, flags=re.IGNORECASE).strip()
 
         return {"subject": subject, "verb": verb, "obj": obj, "time": time_str}
@@ -281,24 +236,19 @@ class CommunicationAgent:
     # РЕНДЕР ДЕЙСТВИЯ
     # ═══════════════════════════════════════════
 
-    def _render_action(self, subject: str, verb: str, obj: str, time_str: str, is_negated: bool) -> str:
-        """
-        Рендерит полное русское предложение.
-        subject + verb_ru + obj_ru + time_ru
-        """
-        subject_ru = self._ru_subject(subject)
-        verb_ru = self._ru_verb(verb, obj, is_negated)
-        time_ru = self._ru_time(time_str)
+    def _render_action(self, subject: str, verb: str, obj: str, time_str: str, is_negated: bool, lang: str) -> str:
+        subject_out = self._tr_subject(subject, lang)
+        verb_out = self._tr_verb(verb, obj, is_negated, lang)
+        time_out = self._tr_time(time_str, lang)
 
-        parts = [subject_ru, verb_ru]
-        if time_ru:
-            parts.append(time_ru)
+        parts = [subject_out, verb_out]
+        if time_out:
+            parts.append(time_out)
 
         return " ".join(p for p in parts if p).strip()
 
-    def _ru_subject(self, subject: str) -> str:
-        """Переводит субъект в русский."""
-        mapping = {
+    def _tr_subject(self, subject: str, lang: str) -> str:
+        ru_map = {
             "bank of japan": "Банк Японии",
             "boj": "Банк Японии",
             "the federal reserve": "ФРС",
@@ -319,18 +269,26 @@ class CommunicationAgent:
             "north korea": "Северная Корея",
         }
         s = subject.lower().strip().rstrip(".,")
-        return mapping.get(s, subject.strip())
 
-    def _ru_object(self, obj: str) -> str:
-        """Переводит объект в русский."""
+        if lang == "ru":
+            return ru_map.get(s, subject.strip())
+        else:
+            # Для английского — капитализируем но не переводим
+            return subject.strip()
+
+    def _tr_object(self, obj: str, lang: str) -> str:
         if not obj:
             return ""
 
+        # Объекты одинаковы в обоих языках (бренды, криптовалюты)
         mapping = {
             "bitcoin": "Bitcoin",
             "btc": "BTC",
             "ethereum": "Ethereum",
             "eth": "ETH",
+        }
+
+        ru_mapping = {
             "rates": "ставку",
             "interest rates": "процентную ставку",
             "the election": "на выборах",
@@ -342,146 +300,246 @@ class CommunicationAgent:
             "the nba finals": "финал НБА",
         }
 
-        o = obj.lower().strip()
-        for en, ru in mapping.items():
-            if o == en:
-                return ru
+        en_mapping = {
+            "rates": "rates",
+            "interest rates": "interest rates",
+            "the election": "the election",
+        }
 
-        # Денежные значения оставляем
+        o = obj.lower().strip()
+
+        # Общие для обоих языков
+        for en, out in mapping.items():
+            if o == en:
+                return out
+
+        if lang == "ru":
+            for en, ru in ru_mapping.items():
+                if o == en:
+                    return ru
+        else:
+            for en, out in en_mapping.items():
+                if o == en:
+                    return out
+
         if re.match(r'^\$[\d,]+[k]?$', obj, re.IGNORECASE):
             return obj
 
         return obj
 
-    def _ru_verb(self, verb: str, obj: str, is_negated: bool) -> str:
-        """Строит русский глагол с объектом."""
-        neg = "НЕ " if is_negated else ""
+    def _tr_verb(self, verb: str, obj: str, is_negated: bool, lang: str) -> str:
         v = verb.lower().strip()
-        obj_ru = self._ru_object(obj)
+        obj_out = self._tr_object(obj, lang)
 
-        verb_map = {
-            "sell any": f"{neg}продаст {obj_ru}",
-            "sell": f"{neg}продаст {obj_ru}",
-            "buy any": f"{neg}купит {obj_ru}",
-            "buy": f"{neg}купит {obj_ru}",
-            "decrease rates": f"{neg}снизит ставку",
-            "cut rates": f"{neg}снизит ставку",
-            "raise rates": f"{neg}повысит ставку",
-            "hike rates": f"{neg}повысит ставку",
-            "hold rates": f"{neg}сохранит ставку",
-            "decrease": f"{neg}снизит {obj_ru}",
-            "cut": f"{neg}снизит {obj_ru}",
-            "increase": f"{neg}повысит {obj_ru}",
-            "raise": f"{neg}повысит {obj_ru}",
-            "hike": f"{neg}повысит {obj_ru}",
-            "hold": f"{neg}сохранит {obj_ru}",
-            "pause": f"{neg}приостановит {obj_ru}",
-            "win": f"{neg}победит {obj_ru}".strip(),
-            "lose": f"{neg}проиграет {obj_ru}".strip(),
-            "become": f"{neg}станет {obj_ru}".strip(),
-            "remain": f"{neg}останется {obj_ru}".strip(),
-            "stay": f"{neg}останется {obj_ru}".strip(),
-            "sign": f"{neg}подпишет {obj_ru}",
-            "launch": f"{neg}запустит {obj_ru}",
-            "release": f"{neg}выпустит {obj_ru}",
-            "announce": f"{neg}объявит {obj_ru}",
-            "publish": f"{neg}опубликует {obj_ru}",
-            "deploy": f"{neg}развернёт {obj_ru}",
-            "approve": f"{neg}одобрит {obj_ru}",
-            "reject": f"{neg}отклонит {obj_ru}",
-            "veto": f"{neg}наложит вето на {obj_ru}",
-            "implement": f"{neg}внедрит {obj_ru}",
-            "enter": f"{neg}войдёт в {obj_ru}",
-            "invade": f"{neg}вторгнется в {obj_ru}",
-            "withdraw": f"{neg}выведет войска",
-            "file for bankruptcy": f"{neg}подаст на банкротство",
-            "go bankrupt": f"{neg}обанкротится",
-            "default": f"{neg}допустит дефолт",
-            "collapse": f"{neg}обрушится",
-            "survive": f"{neg}выживет",
-            "merge": f"{neg}объединится с {obj_ru}",
-            "acquire": f"{neg}приобретёт {obj_ru}",
-            "reach": f"{neg}достигнет {obj_ru}",
-            "hit": f"{neg}достигнет {obj_ru}",
-            "pass": f"{neg}пройдёт отметку {obj_ru}",
-            "exceed": f"{neg}превысит {obj_ru}",
-            "surpass": f"{neg}превзойдёт {obj_ru}",
-            "cross": f"{neg}пересечёт {obj_ru}",
-            "break": f"{neg}обновит {obj_ru}",
-            "set": f"{neg}установит {obj_ru}",
-            "achieve": f"{neg}достигнет {obj_ru}",
-            "be elected": f"{neg}будет избран",
-            "be appointed": f"{neg}будет назначен",
-            "be removed": f"{neg}будет отстранён",
-        }
+        if lang == "ru":
+            neg = "НЕ " if is_negated else ""
+            ru_map = {
+                "sell any": f"{neg}продаст {obj_out}",
+                "sell": f"{neg}продаст {obj_out}",
+                "buy any": f"{neg}купит {obj_out}",
+                "buy": f"{neg}купит {obj_out}",
+                "decrease rates": f"{neg}снизит ставку",
+                "cut rates": f"{neg}снизит ставку",
+                "raise rates": f"{neg}повысит ставку",
+                "hike rates": f"{neg}повысит ставку",
+                "hold rates": f"{neg}сохранит ставку",
+                "decrease": f"{neg}снизит {obj_out}",
+                "cut": f"{neg}снизит {obj_out}",
+                "increase": f"{neg}повысит {obj_out}",
+                "raise": f"{neg}повысит {obj_out}",
+                "hike": f"{neg}повысит {obj_out}",
+                "hold": f"{neg}сохранит {obj_out}",
+                "pause": f"{neg}приостановит {obj_out}",
+                "win": f"{neg}победит {obj_out}".strip(),
+                "lose": f"{neg}проиграет {obj_out}".strip(),
+                "become": f"{neg}станет {obj_out}".strip(),
+                "remain": f"{neg}останется {obj_out}".strip(),
+                "stay": f"{neg}останется {obj_out}".strip(),
+                "sign": f"{neg}подпишет {obj_out}",
+                "launch": f"{neg}запустит {obj_out}",
+                "release": f"{neg}выпустит {obj_out}",
+                "announce": f"{neg}объявит {obj_out}",
+                "publish": f"{neg}опубликует {obj_out}",
+                "deploy": f"{neg}развернёт {obj_out}",
+                "approve": f"{neg}одобрит {obj_out}",
+                "reject": f"{neg}отклонит {obj_out}",
+                "veto": f"{neg}наложит вето на {obj_out}",
+                "implement": f"{neg}внедрит {obj_out}",
+                "enter": f"{neg}войдёт в {obj_out}",
+                "invade": f"{neg}вторгнется в {obj_out}",
+                "withdraw": f"{neg}выведет войска",
+                "file for bankruptcy": f"{neg}подаст на банкротство",
+                "go bankrupt": f"{neg}обанкротится",
+                "default": f"{neg}допустит дефолт",
+                "collapse": f"{neg}обрушится",
+                "survive": f"{neg}выживет",
+                "merge": f"{neg}объединится с {obj_out}",
+                "acquire": f"{neg}приобретёт {obj_out}",
+                "reach": f"{neg}достигнет {obj_out}",
+                "hit": f"{neg}достигнет {obj_out}",
+                "pass": f"{neg}пройдёт отметку {obj_out}",
+                "exceed": f"{neg}превысит {obj_out}",
+                "surpass": f"{neg}превзойдёт {obj_out}",
+                "cross": f"{neg}пересечёт {obj_out}",
+                "break": f"{neg}обновит {obj_out}",
+                "set": f"{neg}установит {obj_out}",
+                "achieve": f"{neg}достигнет {obj_out}",
+                "be elected": f"{neg}будет избран",
+                "be appointed": f"{neg}будет назначен",
+                "be removed": f"{neg}будет отстранён",
+            }
+            result = ru_map.get(v, f"{neg}{v} {obj_out}".strip())
 
-        result = verb_map.get(v, "")
-        if not result:
-            # Если глагол не найден — строим вручную
-            result = f"{neg}{verb} {obj_ru}".strip()
+        else:
+            # English
+            neg = "will not " if is_negated else "will "
+            en_map = {
+                "sell any": f"{neg}sell {obj_out}",
+                "sell": f"{neg}sell {obj_out}",
+                "buy any": f"{neg}buy {obj_out}",
+                "buy": f"{neg}buy {obj_out}",
+                "decrease rates": f"{neg}decrease rates",
+                "cut rates": f"{neg}cut rates",
+                "raise rates": f"{neg}raise rates",
+                "hike rates": f"{neg}hike rates",
+                "hold rates": f"{neg}hold rates",
+                "decrease": f"{neg}decrease {obj_out}",
+                "cut": f"{neg}cut {obj_out}",
+                "increase": f"{neg}increase {obj_out}",
+                "raise": f"{neg}raise {obj_out}",
+                "hike": f"{neg}hike {obj_out}",
+                "hold": f"{neg}hold {obj_out}",
+                "pause": f"{neg}pause {obj_out}",
+                "win": f"{neg}win {obj_out}".strip(),
+                "lose": f"{neg}lose {obj_out}".strip(),
+                "become": f"{neg}become {obj_out}".strip(),
+                "remain": f"{neg}remain {obj_out}".strip(),
+                "stay": f"{neg}stay {obj_out}".strip(),
+                "sign": f"{neg}sign {obj_out}",
+                "launch": f"{neg}launch {obj_out}",
+                "release": f"{neg}release {obj_out}",
+                "announce": f"{neg}announce {obj_out}",
+                "publish": f"{neg}publish {obj_out}",
+                "deploy": f"{neg}deploy {obj_out}",
+                "approve": f"{neg}approve {obj_out}",
+                "reject": f"{neg}reject {obj_out}",
+                "veto": f"{neg}veto {obj_out}",
+                "implement": f"{neg}implement {obj_out}",
+                "enter": f"{neg}enter {obj_out}",
+                "invade": f"{neg}invade {obj_out}",
+                "withdraw": f"{neg}withdraw troops",
+                "file for bankruptcy": f"{neg}file for bankruptcy",
+                "go bankrupt": f"{neg}go bankrupt",
+                "default": f"{neg}default",
+                "collapse": f"{neg}collapse",
+                "survive": f"{neg}survive",
+                "merge": f"{neg}merge with {obj_out}",
+                "acquire": f"{neg}acquire {obj_out}",
+                "reach": f"{neg}reach {obj_out}",
+                "hit": f"{neg}hit {obj_out}",
+                "pass": f"{neg}pass {obj_out}",
+                "exceed": f"{neg}exceed {obj_out}",
+                "surpass": f"{neg}surpass {obj_out}",
+                "cross": f"{neg}cross {obj_out}",
+                "break": f"{neg}break {obj_out}",
+                "set": f"{neg}set {obj_out}",
+                "achieve": f"{neg}achieve {obj_out}",
+                "be elected": f"{neg}be elected",
+                "be appointed": f"{neg}be appointed",
+                "be removed": f"{neg}be removed",
+            }
+            result = en_map.get(v, f"{neg}{v} {obj_out}".strip())
 
         return result.strip()
 
-    def _ru_time(self, time_str: str) -> str:
-        """Переводит время в русский."""
+    def _tr_time(self, time_str: str, lang: str) -> str:
         if not time_str:
             return ""
 
         t = time_str.strip()
-
         year_m = re.search(r'(20\d{2})', t)
-        if year_m:
-            year = year_m.group(1)
-            t_lower = t.lower()
-            if "by" in t_lower:
-                return f"до конца {year} года"
-            if "before" in t_lower:
-                return f"до {year} года"
-            return f"в {year} году"
 
-        months = {
-            "january": "января", "february": "февраля", "march": "марта",
-            "april": "апреля", "may": "мая", "june": "июня",
-            "july": "июля", "august": "августа", "september": "сентября",
-            "october": "октября", "november": "ноября", "december": "декабря",
-        }
-        for en, ru in months.items():
-            if en in t.lower():
-                return f"к {ru}"
+        if lang == "ru":
+            if year_m:
+                year = year_m.group(1)
+                t_lower = t.lower()
+                if "by" in t_lower:
+                    return f"до конца {year} года"
+                if "before" in t_lower:
+                    return f"до {year} года"
+                return f"в {year} году"
 
-        if "this year" in t.lower():
-            return "в этом году"
+            months_ru = {
+                "january": "января", "february": "февраля", "march": "марта",
+                "april": "апреля", "may": "мая", "june": "июня",
+                "july": "июля", "august": "августа", "september": "сентября",
+                "october": "октября", "november": "ноября", "december": "декабря",
+            }
+            for en, ru in months_ru.items():
+                if en in t.lower():
+                    return f"к {ru}"
 
-        return f"к {t}"
+            if "this year" in t.lower():
+                return "в этом году"
+
+            return f"к {t}"
+
+        else:
+            # English — возвращаем как есть, только убираем leading space
+            return t
 
     # ═══════════════════════════════════════════
-    # ПОРОГОВЫЕ И ВСПОМОГАТЕЛЬНЫЕ
+    # ПОРОГОВЫЕ
     # ═══════════════════════════════════════════
 
-    def _render_threshold(self, question: str, is_negated: bool) -> str:
+    def _render_threshold(self, question: str, is_negated: bool, lang: str) -> str:
         q = question.lower()
-        neg = "НЕ " if is_negated else ""
 
-        if "inflation" in q:
-            m = re.search(r'(\d+(?:\.\d+)?)\s*%', question)
-            threshold = m.group(0) if m else "порогового значения"
-            yr = re.search(r'(202\d)', question)
-            year_str = f" в {yr.group(1)} году" if yr else ""
-            return f"Инфляция {neg}превысит {threshold}{year_str}"
+        if lang == "ru":
+            neg = "НЕ " if is_negated else ""
+            if "inflation" in q:
+                m = re.search(r'(\d+(?:\.\d+)?)\s*%', question)
+                threshold = m.group(0) if m else "порогового значения"
+                yr = re.search(r'(202\d)', question)
+                year_str = f" в {yr.group(1)} году" if yr else ""
+                return f"Инфляция {neg}превысит {threshold}{year_str}"
 
-        if "bitcoin" in q or "btc" in q:
-            m = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
-            price = m.group(0) if m else "целевого уровня"
-            return f"Bitcoin {neg}достигнет {price}"
+            if "bitcoin" in q or "btc" in q:
+                m = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
+                price = m.group(0) if m else "целевого уровня"
+                return f"Bitcoin {neg}достигнет {price}"
 
-        match = re.match(
-            r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
-            re.sub(r'\?$', '', question), re.IGNORECASE
-        )
-        if match:
-            subj = self._ru_subject(match.group(1).strip())
-            threshold = match.group(3).strip()
-            return f"{subj} {neg}превысит {threshold}"
+            match = re.match(
+                r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
+                re.sub(r'\?$', '', question), re.IGNORECASE
+            )
+            if match:
+                subj = self._tr_subject(match.group(1).strip(), "ru")
+                threshold = match.group(3).strip()
+                return f"{subj} {neg}превысит {threshold}"
+
+        else:
+            neg = "will not " if is_negated else "will "
+            if "inflation" in q:
+                m = re.search(r'(\d+(?:\.\d+)?)\s*%', question)
+                threshold = m.group(0) if m else "the target"
+                yr = re.search(r'(202\d)', question)
+                year_str = f" in {yr.group(1)}" if yr else ""
+                return f"Inflation {neg}exceed {threshold}{year_str}"
+
+            if "bitcoin" in q or "btc" in q:
+                m = re.search(r'\$[\d,]+[k]?|\d+[k]', question, re.IGNORECASE)
+                price = m.group(0) if m else "the target"
+                return f"Bitcoin {neg}reach {price}"
+
+            match = re.match(
+                r'^Will\s+(.+?)\s+(exceed|surpass|reach|hit|pass|cross|go above)\s+(.+)',
+                re.sub(r'\?$', '', question), re.IGNORECASE
+            )
+            if match:
+                subj = match.group(1).strip()
+                threshold = match.group(3).strip()
+                return f"{subj} {neg}exceed {threshold}"
 
         return ""
 
@@ -500,16 +558,23 @@ class CommunicationAgent:
                 return entity
         return ""
 
-    def _simple_fallback(self, question: str, is_negated: bool) -> str:
-        """Простой fallback через известные паттерны."""
-        q = re.sub(r'\?$', '', question.strip()).lower()
-        neg = "НЕ " if is_negated else ""
+    def _simple_fallback(self, question: str, is_negated: bool, lang: str) -> str:
+        q = re.sub(r'\?$', '', question.strip())
 
-        patterns = [
-            (r'will\s+(\w[\w\s]+?)\s+win', lambda m: f"{m.group(1).strip()} {neg}победит"),
-            (r'will\s+(\w[\w\s]+?)\s+become\s+president', lambda m: f"{m.group(1).strip()} {neg}станет президентом"),
-            (r'will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg}будет переизбран"),
-        ]
+        if lang == "ru":
+            neg = "НЕ " if is_negated else ""
+            patterns = [
+                (r'Will\s+(\w[\w\s]+?)\s+win', lambda m: f"{m.group(1).strip()} {neg}победит"),
+                (r'Will\s+(\w[\w\s]+?)\s+become\s+president', lambda m: f"{m.group(1).strip()} {neg}станет президентом"),
+                (r'Will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg}будет переизбран"),
+            ]
+        else:
+            neg = "will not " if is_negated else "will "
+            patterns = [
+                (r'Will\s+(\w[\w\s]+?)\s+win', lambda m: f"{m.group(1).strip()} {neg}win"),
+                (r'Will\s+(\w[\w\s]+?)\s+become\s+president', lambda m: f"{m.group(1).strip()} {neg}become president"),
+                (r'Will\s+(\w[\w\s]+?)\s+be\s+re-?elected', lambda m: f"{m.group(1).strip()} {neg}be re-elected"),
+            ]
 
         for pattern, formatter in patterns:
             m = re.search(pattern, q, re.IGNORECASE)
@@ -521,20 +586,225 @@ class CommunicationAgent:
         return ""
 
     # ═══════════════════════════════════════════
-    # BALANCE И ALPHA
+    # ТЕКСТОВЫЕ БЛОКИ
     # ═══════════════════════════════════════════
 
-    def _classify_balance(self, market_prob: float) -> str:
-        if market_prob >= 85:
-            return "strong_consensus"
-        elif market_prob >= 65:
-            return "moderate_consensus"
-        elif market_prob >= 55:
-            return "slight_lean"
-        elif market_prob >= 45:
-            return "balanced"
+    def _build_reasoning(self, clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance, lang):
+        if clean_reasoning and len(clean_reasoning) > 30:
+            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning).strip()
+            result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
+            if is_negated:
+                result = re.sub(r'\bNo\b', semantic_text, result)
+            else:
+                result = re.sub(r'\bYes\b', semantic_text, result)
+            if len(result) > 30:
+                return result
+
+        prob = market_prob or model_prob or 50
+
+        if lang == "ru":
+            if market_balance == "strong_consensus":
+                return (
+                    f"Подавляющий консенсус ({prob:.1f}%) говорит о том, что участники рынка "
+                    f"уже учли доступную информацию в цене. "
+                    f"Любое отклонение требует экстраординарных доказательств."
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"Умеренный консенсус ({prob:.1f}%) указывает на устойчивый перевес. "
+                    f"Ключевые факторы складываются в пользу текущего лидера."
+                )
+            elif market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"Рынок в состоянии неопределённости — вероятность около {prob:.1f}%. "
+                    f"Ни один из факторов не доминирует однозначно."
+                )
+            else:
+                return f"Текущие условия не благоприятствуют основному сценарию ({prob:.1f}%)."
         else:
-            return "lean_against"
+            if market_balance == "strong_consensus":
+                return (
+                    f"Overwhelming consensus ({prob:.1f}%) indicates that market participants "
+                    f"have already priced in available information. "
+                    f"Any deviation requires extraordinary evidence."
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"Moderate consensus ({prob:.1f}%) points to a solid lead. "
+                    f"Key factors favour the current leader."
+                )
+            elif market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"Market is uncertain — probability around {prob:.1f}%. "
+                    f"No single factor dominates decisively."
+                )
+            else:
+                return f"Current conditions do not favour the main scenario ({prob:.1f}%)."
+
+    def _build_scenario(self, clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance, lang):
+        if clean_scenario and len(clean_scenario) > 30:
+            result = re.sub(r'\bNo\b', semantic_text, clean_scenario) if is_negated else re.sub(r'\bYes\b', semantic_text, clean_scenario)
+            result = result.replace("указывают на:", "подтверждают:") if lang == "ru" else result
+            return result
+
+        if lang == "ru":
+            if market_balance == "strong_consensus":
+                return "Сценарий реализуется при сохранении текущих условий. Тренд устойчив."
+            elif market_balance == "moderate_consensus":
+                return "Сценарий реализуется если текущая динамика сохранится без резких изменений."
+            elif market_balance in ("balanced", "slight_lean"):
+                return "Сценарий реализуется при сохранении текущего баланса. Любой катализатор может изменить расклад."
+            else:
+                return "Умеренная вероятность — требуется подтверждение дополнительных факторов."
+        else:
+            if market_balance == "strong_consensus":
+                return "Scenario plays out if current conditions hold. Trend is stable."
+            elif market_balance == "moderate_consensus":
+                return "Scenario materialises if current dynamics continue without sharp reversals."
+            elif market_balance in ("balanced", "slight_lean"):
+                return "Scenario plays out if balance holds. Any catalyst could shift the outcome."
+            else:
+                return "Moderate probability — additional confirmation required."
+
+    def _build_alt_scenario(self, clean_alt, semantic_text, is_negated, market_prob, market_balance, lang):
+        if clean_alt and len(clean_alt) > 30:
+            bad = ["внешних факторов", "external factor"]
+            if not any(p in clean_alt.lower() for p in bad):
+                return clean_alt
+
+        alt_prob = 100 - market_prob
+
+        if lang == "ru":
+            if market_balance == "strong_consensus":
+                return (
+                    f"Маловероятный сценарий ({alt_prob:.1f}%): резкое изменение политики регулятора, "
+                    f"неожиданное геополитическое событие или макроэкономический шок. "
+                    f"Рынок практически исключает этот вариант."
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"Альтернативный сценарий ({alt_prob:.1f}%): смена монетарной политики, "
+                    f"неожиданные данные или разворот сентимента могут переломить тренд."
+                )
+            elif market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"Альтернативный исход ({alt_prob:.1f}%) практически равновероятен. "
+                    f"Триггером может стать выход важной статистики или неожиданное событие."
+                )
+            else:
+                return f"Альтернативный исход ({alt_prob:.1f}%) возможен при позитивном развитии ключевых факторов."
+        else:
+            if market_balance == "strong_consensus":
+                return (
+                    f"Unlikely scenario ({alt_prob:.1f}%): sharp policy reversal, "
+                    f"unexpected geopolitical event or macroeconomic shock. "
+                    f"Market nearly rules this out."
+                )
+            elif market_balance == "moderate_consensus":
+                return (
+                    f"Alternative scenario ({alt_prob:.1f}%): monetary policy shift, "
+                    f"surprise data or sentiment reversal could break the trend."
+                )
+            elif market_balance in ("balanced", "slight_lean"):
+                return (
+                    f"Alternative outcome ({alt_prob:.1f}%) is nearly equally likely. "
+                    f"Key data release or unexpected event could be the trigger."
+                )
+            else:
+                return f"Alternative outcome ({alt_prob:.1f}%) possible if key factors develop positively."
+
+    def _build_conclusion(self, clean_conclusion, display_prediction, semantic_text, is_negated, market_balance, lang):
+        if clean_conclusion and len(clean_conclusion) > 20:
+            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
+            result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
+            if is_negated:
+                result = re.sub(r'\bNo\b', semantic_text, result)
+            else:
+                result = re.sub(r'\bYes\b', semantic_text, result)
+            if len(result) > 20:
+                return result
+
+        if lang == "ru":
+            if market_balance in ("balanced", "slight_lean"):
+                return f"Сбалансированный рынок. Небольшой перевес: {display_prediction}. Следи за новыми данными."
+            elif market_balance == "strong_consensus":
+                return f"Высокий консенсус подтверждает: {display_prediction}."
+            else:
+                return f"Следуем рыночной оценке: {display_prediction}."
+        else:
+            if market_balance in ("balanced", "slight_lean"):
+                return f"Balanced market. Slight edge: {display_prediction}. Watch for new data."
+            elif market_balance == "strong_consensus":
+                return f"High consensus confirms: {display_prediction}."
+            else:
+                return f"Following market estimate: {display_prediction}."
+
+    # ═══════════════════════════════════════════
+    # ALPHA DETECTION
+    # ═══════════════════════════════════════════
+
+    def _detect_alpha(self, delta, model_prob, market_prob, market_balance, lang):
+        if delta is None:
+            if lang == "ru":
+                return "📊 Анализ рынка", "Данных недостаточно для оценки."
+            return "📊 Market Analysis", "Insufficient data for assessment."
+
+        if market_balance in ("balanced", "slight_lean"):
+            if lang == "ru":
+                return (
+                    "🟡 Сигнал: сбалансированный рынок",
+                    f"Вероятность около {market_prob:.1f}% — явного консенсуса нет. "
+                    f"Возможна альфа при появлении новых данных.",
+                )
+            return (
+                "🟡 Signal: Balanced Market",
+                f"Probability around {market_prob:.1f}% — no clear consensus. "
+                f"Potential alpha if new data emerges.",
+            )
+
+        if delta < 5:
+            if market_prob >= 95:
+                if lang == "ru":
+                    return (
+                        "✅ Консенсус с рынком",
+                        f"При вероятности {market_prob:.1f}% рынок уже учёл всю информацию. "
+                        f"Такие позиции редко дают альфу — используй как подтверждение тренда.",
+                    )
+                return (
+                    "✅ Market Consensus",
+                    f"At {market_prob:.1f}% the market has priced in all available information. "
+                    f"Positions like this rarely offer alpha — use as trend confirmation.",
+                )
+            if lang == "ru":
+                return "✅ Консенсус с рынком", f"Модель подтверждает рыночный консенсус — расхождение {delta:.1f}%."
+            return "✅ Market Consensus", f"Model confirms market consensus — divergence {delta:.1f}%."
+
+        elif delta < 20:
+            direction = ("выше" if model_prob > market_prob else "ниже") if lang == "ru" else ("above" if model_prob > market_prob else "below")
+            if lang == "ru":
+                return (
+                    "⚠️ Слабый сигнал",
+                    f"Модель оценивает на {delta:.1f}% {direction} рыночной. Возможна небольшая неэффективность.",
+                )
+            return (
+                "⚠️ Weak Signal",
+                f"Model estimates {delta:.1f}% {direction} market. Possible minor inefficiency.",
+            )
+        else:
+            direction = ("выше" if model_prob > market_prob else "ниже") if lang == "ru" else ("above" if model_prob > market_prob else "below")
+            if lang == "ru":
+                return (
+                    "🔥 Потенциальная альфа",
+                    f"Расхождение {delta:.1f}% {direction} рыночной оценки. Высокий риск — проверь тщательно.",
+                )
+            return (
+                "🔥 Potential Alpha",
+                f"Divergence of {delta:.1f}% {direction} market estimate. High risk — verify carefully.",
+            )
+
+    # ═══════════════════════════════════════════
+    # HELPERS
+    # ═══════════════════════════════════════════
 
     def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
         try:
@@ -551,139 +821,6 @@ class CommunicationAgent:
         except Exception:
             pass
         return 50.0
-
-    def _detect_alpha(
-        self,
-        delta: Optional[float],
-        model_prob: float,
-        market_prob: float,
-        market_balance: str,
-    ) -> Tuple[str, str]:
-        if delta is None:
-            return "📊 Анализ рынка", "Данных недостаточно для оценки."
-
-        if market_balance in ("balanced", "slight_lean"):
-            return (
-                "🟡 Сигнал: сбалансированный рынок",
-                f"Вероятность около {market_prob:.1f}% — явного консенсуса нет. "
-                f"Возможна альфа при появлении новых данных.",
-            )
-
-        if delta < 5:
-            if market_prob >= 95:
-                return (
-                    "✅ Консенсус с рынком",
-                    f"При вероятности {market_prob:.1f}% рынок уже учёл всю доступную информацию. "
-                    f"Такие позиции редко дают альфу — используй как подтверждение тренда.",
-                )
-            return (
-                "✅ Консенсус с рынком",
-                f"Модель подтверждает рыночный консенсус — расхождение {delta:.1f}%.",
-            )
-        elif delta < 20:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            return (
-                "⚠️ Слабый сигнал",
-                f"Модель оценивает на {delta:.1f}% {direction} рыночной. Возможна небольшая неэффективность.",
-            )
-        else:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            return (
-                "🔥 Потенциальная альфа",
-                f"Расхождение {delta:.1f}% {direction} рыночной оценки. Высокий риск — проверь тщательно.",
-            )
-
-    # ═══════════════════════════════════════════
-    # ТЕКСТОВЫЕ БЛОКИ
-    # ═══════════════════════════════════════════
-
-    def _build_reasoning(self, clean_reasoning, semantic_text, is_negated, model_prob, market_prob, market_balance):
-        if clean_reasoning and len(clean_reasoning) > 30:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_reasoning).strip()
-            result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
-            if len(result) > 30:
-                return result
-
-        prob = market_prob or model_prob or 50
-
-        if market_balance == "strong_consensus":
-            return (
-                f"Подавляющий консенсус ({prob:.1f}%) говорит о том, что участники рынка "
-                f"уже учли доступную информацию в цене. "
-                f"Любое отклонение требует экстраординарных доказательств."
-            )
-        elif market_balance == "moderate_consensus":
-            return (
-                f"Умеренный консенсус ({prob:.1f}%) указывает на устойчивый перевес. "
-                f"Ключевые факторы складываются в пользу текущего лидера."
-            )
-        elif market_balance in ("balanced", "slight_lean"):
-            return (
-                f"Рынок в состоянии неопределённости — вероятность около {prob:.1f}%. "
-                f"Ни один из факторов не доминирует однозначно."
-            )
-        else:
-            return f"Текущие условия не благоприятствуют основному сценарию ({prob:.1f}%)."
-
-    def _build_scenario(self, clean_scenario, semantic_text, display_prediction, is_negated, model_prob, market_balance):
-        if clean_scenario and len(clean_scenario) > 30:
-            result = re.sub(r'\bNo\b', semantic_text, clean_scenario) if is_negated else re.sub(r'\bYes\b', semantic_text, clean_scenario)
-            result = result.replace("указывают на:", "подтверждают:")
-            return result
-
-        if market_balance == "strong_consensus":
-            return f"Сценарий реализуется при сохранении текущих условий. Тренд устойчив."
-        elif market_balance == "moderate_consensus":
-            return f"Сценарий реализуется если текущая динамика сохранится без резких изменений."
-        elif market_balance in ("balanced", "slight_lean"):
-            return f"Сценарий реализуется при сохранении текущего баланса. Любой катализатор может изменить расклад."
-        else:
-            return "Умеренная вероятность — требуется подтверждение дополнительных факторов."
-
-    def _build_alt_scenario(self, clean_alt, semantic_text, is_negated, market_prob, market_balance):
-        if clean_alt and len(clean_alt) > 30:
-            bad = ["внешних факторов", "external factor"]
-            if not any(p in clean_alt.lower() for p in bad):
-                return clean_alt
-
-        alt_prob = 100 - market_prob
-
-        if market_balance == "strong_consensus":
-            return (
-                f"Маловероятный сценарий ({alt_prob:.1f}%): резкое изменение политики, "
-                f"неожиданное геополитическое событие или макроэкономический шок. "
-                f"Рынок практически исключает этот вариант."
-            )
-        elif market_balance == "moderate_consensus":
-            return (
-                f"Альтернативный сценарий ({alt_prob:.1f}%): смена монетарной политики, "
-                f"неожиданные данные или разворот сентимента могут переломить тренд."
-            )
-        elif market_balance in ("balanced", "slight_lean"):
-            return (
-                f"Альтернативный исход ({alt_prob:.1f}%) практически равновероятен. "
-                f"Триггером может стать выход важной статистики или неожиданное событие."
-            )
-        else:
-            return f"Альтернативный исход ({alt_prob:.1f}%) возможен при позитивном развитии ключевых факторов."
-
-    def _build_conclusion(self, clean_conclusion, display_prediction, semantic_text, is_negated, market_balance):
-        if clean_conclusion and len(clean_conclusion) > 20:
-            result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
-            result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
-            if len(result) > 20:
-                return result
-
-        if market_balance in ("balanced", "slight_lean"):
-            return f"Сбалансированный рынок. Небольшой перевес: {display_prediction}. Следи за новыми данными."
-        elif market_balance == "strong_consensus":
-            return f"Высокий консенсус подтверждает: {display_prediction}."
-        else:
-            return f"Следуем рыночной оценке: {display_prediction}."
-
-    # ═══════════════════════════════════════════
-    # CLEAN TEXT
-    # ═══════════════════════════════════════════
 
     def _clean_text(self, text: str) -> str:
         if not text:
