@@ -14,6 +14,7 @@ from db.database import (
     get_top_referrers,
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
+    get_accuracy_stats, get_unresolved_predictions,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -90,6 +91,7 @@ def admin_main_kb():
         InlineKeyboardButton("📦 Пакеты токенов", callback_data="admin_packages"),
         InlineKeyboardButton("👤 Users", callback_data="admin_users"),
         InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics"),
+        InlineKeyboardButton("🎯 Tracking Accuracy", callback_data="admin_tracking"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
@@ -359,6 +361,10 @@ def get_db_stats() -> dict:
     transactions = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM token_packages")
     packages = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM predictions_tracking")
+    tracking_total = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM predictions_tracking WHERE resolved_at IS NOT NULL")
+    tracking_resolved = cursor.fetchone()[0]
     conn.close()
     return {
         "analyses": analyses,
@@ -367,6 +373,8 @@ def get_db_stats() -> dict:
         "settings": settings,
         "transactions": transactions,
         "packages": packages,
+        "tracking_total": tracking_total,
+        "tracking_resolved": tracking_resolved,
         "db_size_kb": "PostgreSQL",
     }
 
@@ -457,6 +465,118 @@ def system_text() -> str:
         f"Последний пост: {last_post_str}"
     )
 
+
+# ═══════════════════════════════════════════
+# TRACKING ACCURACY — метрики предсказаний
+# ═══════════════════════════════════════════
+
+def tracking_menu_kb() -> InlineKeyboardMarkup:
+    tracking_enabled = get_setting("tracking_enabled", "on")
+    last_check = get_setting("last_tracking_check", "")
+    last_check_str = last_check[:16].replace("T", " ") if last_check else "никогда"
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("📊 Общие метрики", callback_data="tracking_overall"),
+        InlineKeyboardButton("🎯 По уверенности", callback_data="tracking_confidence"),
+        InlineKeyboardButton("🧩 По типу рынка", callback_data="tracking_type"),
+        InlineKeyboardButton("⚡ По сигналу альфы", callback_data="tracking_alpha"),
+        InlineKeyboardButton("🏷 По категории", callback_data="tracking_category"),
+        InlineKeyboardButton(
+            f"{'✅' if tracking_enabled == 'on' else '❌'} Автопроверка воркером",
+            callback_data="tracking_toggle"
+        ),
+        InlineKeyboardButton("🔄 Проверить сейчас", callback_data="tracking_force_check"),
+        InlineKeyboardButton(f"🕐 Последняя проверка: {last_check_str}", callback_data="tracking_noop"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
+    return kb
+
+
+def tracking_menu_text() -> str:
+    stats = get_accuracy_stats()
+    total = stats.get("total", 0)
+    correct = stats.get("correct", 0)
+    accuracy = stats.get("accuracy", 0)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM predictions_tracking")
+    total_tracked = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM predictions_tracking WHERE resolved_at IS NULL")
+    pending = cursor.fetchone()[0]
+    conn.close()
+
+    return (
+        f"🎯 Tracking Accuracy\n\n"
+        f"Всего в трекинге: {total_tracked}\n"
+        f"Разрешено: {total}\n"
+        f"Ожидает: {pending}\n\n"
+        f"✅ Точность: {accuracy:.1f}% ({correct}/{total})\n\n"
+        f"Выбери разбивку для деталей ↓"
+    )
+
+
+def format_overall_stats(stats: dict) -> str:
+    total = stats.get("total", 0)
+    if total == 0:
+        return (
+            "📊 Общие метрики\n\n"
+            "Пока нет разрешённых предсказаний.\n"
+            "Метрики появятся когда рынки начнут закрываться."
+        )
+
+    correct = stats.get("correct", 0)
+    accuracy = stats.get("accuracy", 0)
+    avg_brier = stats.get("avg_brier")
+    avg_log_loss = stats.get("avg_log_loss")
+
+    brier_str = f"{avg_brier:.4f}" if avg_brier is not None else "—"
+    log_loss_str = f"{avg_log_loss:.4f}" if avg_log_loss is not None else "—"
+
+    # Интерпретация Brier: 0.00 = идеально, 0.25 = случайно, 1.00 = худший случай
+    brier_quality = ""
+    if avg_brier is not None:
+        if avg_brier < 0.10:
+            brier_quality = " 🟢 Отлично"
+        elif avg_brier < 0.20:
+            brier_quality = " 🟡 Хорошо"
+        elif avg_brier < 0.30:
+            brier_quality = " 🟠 Средне"
+        else:
+            brier_quality = " 🔴 Слабо"
+
+    return (
+        f"📊 Общие метрики\n\n"
+        f"Разрешено: {total}\n"
+        f"Угадано: {correct}\n"
+        f"Точность: {accuracy:.1f}%\n\n"
+        f"Brier Score: {brier_str}{brier_quality}\n"
+        f"Log Loss: {log_loss_str}\n\n"
+        f"ℹ️ Чем меньше Brier — тем лучше\n"
+        f"0.00 = идеально | 0.25 = случайно"
+    )
+
+
+def format_breakdown(stats: dict, key: str, title: str, emoji: str) -> str:
+    """Универсальный форматтер для разбивок (by_confidence, by_type, etc)."""
+    breakdown = stats.get(key, {})
+    if not breakdown:
+        return f"{emoji} {title}\n\nНет данных для разбивки."
+
+    lines = [f"{emoji} {title}\n"]
+    # Сортируем по количеству разрешённых
+    sorted_items = sorted(breakdown.items(), key=lambda x: -x[1].get("total", 0))
+
+    for name, data in sorted_items:
+        t = data.get("total", 0)
+        c = data.get("correct", 0)
+        acc = data.get("accuracy", 0)
+        brier = data.get("avg_brier")
+        brier_str = f" | Brier: {brier:.3f}" if brier is not None else ""
+        lines.append(f"• {name}: {acc:.1f}% ({c}/{t}){brier_str}")
+
+    return "\n".join(lines)
 
 def register_admin(dp: Dispatcher):
 
@@ -1153,6 +1273,95 @@ def register_admin(dp: Dispatcher):
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
         await callback.message.edit_text(f"🏆 Топ рынков\n\n{top}", reply_markup=kb)
 
+    # ═══════════════════════════════════════════
+    # TRACKING ACCURACY — новая секция
+    # ═══════════════════════════════════════════
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_tracking")
+    async def tracking_menu(callback: types.CallbackQuery):
+        await callback.message.edit_text(tracking_menu_text(), reply_markup=tracking_menu_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_noop")
+    async def tracking_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_overall")
+    async def tracking_overall(callback: types.CallbackQuery):
+        stats = get_accuracy_stats()
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_overall"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        await callback.message.edit_text(format_overall_stats(stats), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_confidence")
+    async def tracking_confidence(callback: types.CallbackQuery):
+        stats = get_accuracy_stats()
+        text = format_breakdown(stats, "by_confidence", "По уверенности", "🎯")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_confidence"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_type")
+    async def tracking_type(callback: types.CallbackQuery):
+        stats = get_accuracy_stats()
+        text = format_breakdown(stats, "by_type", "По типу рынка", "🧩")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_type"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_alpha")
+    async def tracking_alpha(callback: types.CallbackQuery):
+        stats = get_accuracy_stats()
+        text = format_breakdown(stats, "by_alpha", "По сигналу альфы", "⚡")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_alpha"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_category")
+    async def tracking_category(callback: types.CallbackQuery):
+        stats = get_accuracy_stats()
+        text = format_breakdown(stats, "by_category", "По категории", "🏷")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_category"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_toggle")
+    async def tracking_toggle(callback: types.CallbackQuery):
+        current = get_setting("tracking_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("tracking_enabled", new_val)
+        await callback.answer(f"Трекинг: {new_val.upper()}")
+        await callback.message.edit_text(tracking_menu_text(), reply_markup=tracking_menu_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "tracking_force_check")
+    async def tracking_force_check(callback: types.CallbackQuery):
+        await callback.answer("⏳ Запускаю проверку...")
+        await callback.message.edit_text(
+            "⏳ Проверяю разрешённые рынки...\n\n"
+            "Это может занять несколько минут если предсказаний много.",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking")
+            )
+        )
+        try:
+            from app import check_resolved_predictions
+            await check_resolved_predictions()
+            await callback.message.edit_text(
+                "✅ Проверка завершена!\n\n" + tracking_menu_text(),
+                reply_markup=tracking_menu_kb()
+            )
+        except Exception as e:
+            await callback.message.edit_text(
+                f"❌ Ошибка: {e}",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking")
+                )
+            )
+
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
     async def system_menu(callback: types.CallbackQuery):
@@ -1259,7 +1468,10 @@ def register_admin(dp: Dispatcher):
             f"Пользователей: {stats['users']}\n"
             f"Транзакций: {stats['transactions']}\n"
             f"Пакетов токенов: {stats['packages']}\n"
-            f"Настроек: {stats['settings']}"
+            f"Настроек: {stats['settings']}\n\n"
+            f"🎯 Tracking:\n"
+            f"Всего предсказаний: {stats['tracking_total']}\n"
+            f"Разрешено: {stats['tracking_resolved']}"
         )
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="system_db_stats"))
@@ -1351,4 +1563,3 @@ def register_admin(dp: Dispatcher):
                     InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
                 )
             )
- 
