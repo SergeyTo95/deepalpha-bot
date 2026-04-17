@@ -975,7 +975,7 @@ async def analyze_url_handler(message: types.Message):
 
     try:
         agent = ChiefAgent()
-        result = agent.run(message.text.strip(), lang=lang)
+        result = agent.run(message.text.strip(), lang=lang, user_id=uid)
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
