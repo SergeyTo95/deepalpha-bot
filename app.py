@@ -1,3 +1,4 @@
+
 import sys
 import os
 import asyncio
@@ -12,6 +13,7 @@ from services.polymarket_service import (
     list_markets, list_events, normalize_market_data,
     normalize_event_for_channel, build_market_url,
 )
+from services.polymarket_resolver import resolve_prediction
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
@@ -19,6 +21,7 @@ from db.database import (
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
+    get_unresolved_predictions, update_resolution,
 )
 
 register_admin(telegram_bot.dp)
@@ -43,7 +46,9 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
         return int(ton_amount / 0.1)
 
 
-# ===== CHANNEL POSTER =====
+# ═══════════════════════════════════════════
+# CHANNEL POSTER
+# ═══════════════════════════════════════════
 
 async def post_to_channel():
     """Постит интересный рынок в канал с ротацией категорий."""
@@ -56,7 +61,6 @@ async def post_to_channel():
         import random
         from agents.market_agent import MarketAgent
 
-        # Ротация категорий
         categories_cycle = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
         last_category = get_setting("last_channel_category", "")
         try:
@@ -68,11 +72,9 @@ async def post_to_channel():
         set_setting("last_channel_category", category_filter)
         print(f"📢 Category: {category_filter}")
 
-        # История показанных рынков
         shown_raw = get_setting("channel_shown_markets", "")
         shown = set(shown_raw.split(",")) if shown_raw else set()
 
-        # Берём события через events API — там правильные slug для URL
         offset = random.randint(0, 50)
         events = list_events(limit=50, offset=offset)
         if not events:
@@ -83,7 +85,6 @@ async def post_to_channel():
         agent = MarketAgent()
         candidates = []
 
-        # Ищем события нужной категории
         for event in events:
             normalized = normalize_event_for_channel(event)
             if not normalized:
@@ -101,7 +102,6 @@ async def post_to_channel():
             if detected != category_filter:
                 continue
 
-            # Фильтруем слишком односторонние рынки
             try:
                 markets = event.get("markets", [])
                 skip = False
@@ -132,7 +132,6 @@ async def post_to_channel():
                 "url": normalized.get("url", ""),
             })
 
-        # Если нет кандидатов в нужной категории — берём любые кроме Other
         if not candidates:
             print(f"📢 No {category_filter} events, using any category")
             for event in events:
@@ -215,7 +214,6 @@ async def post_to_channel():
         )
         print(f"📢 Posted [{category}]: {question[:50]}")
 
-        # Сохраняем в историю
         if market["id"]:
             shown.add(market["id"])
             if len(shown) > 200:
@@ -250,7 +248,9 @@ async def channel_worker():
             await asyncio.sleep(60)
 
 
-# ===== SIGNAL CACHE =====
+# ═══════════════════════════════════════════
+# SIGNAL CACHE
+# ═══════════════════════════════════════════
 
 async def update_signal_cache():
     print("🔄 Starting signal cache update...")
@@ -293,7 +293,113 @@ async def cache_worker():
             await asyncio.sleep(60)
 
 
-# ===== TON PAYMENTS =====
+# ═══════════════════════════════════════════
+# PREDICTIONS TRACKING — проверка resolved рынков
+# ═══════════════════════════════════════════
+
+async def check_resolved_predictions():
+    """
+    Проходит по неразрешённым предсказаниям,
+    проверяет через Polymarket API их статус
+    и обновляет метрики точности.
+    """
+    print("🎯 Checking resolved predictions...")
+    try:
+        predictions = get_unresolved_predictions(limit=100)
+        if not predictions:
+            print("🎯 No unresolved predictions to check")
+            return
+
+        print(f"🎯 Checking {len(predictions)} predictions...")
+        resolved_count = 0
+        skipped_count = 0
+        errors_count = 0
+
+        for pred in predictions:
+            try:
+                slug = pred.get("market_slug", "")
+                if not slug:
+                    skipped_count += 1
+                    continue
+
+                system_outcome = pred.get("system_outcome", "")
+                system_probability = pred.get("system_probability", 0) or 0
+
+                if not system_outcome or system_probability <= 0:
+                    skipped_count += 1
+                    continue
+
+                result = resolve_prediction(
+                    system_outcome=system_outcome,
+                    system_probability=float(system_probability),
+                    market_slug=slug,
+                )
+
+                if result is None:
+                    skipped_count += 1
+                    continue
+
+                update_resolution(
+                    prediction_id=pred["id"],
+                    actual_outcome=result["actual_outcome"],
+                    is_correct=result["is_correct"],
+                    brier_score=result["brier_score"],
+                    log_loss=result["log_loss"],
+                )
+
+                status = "✅" if result["is_correct"] else "❌"
+                print(
+                    f"🎯 {status} slug={slug[:30]} "
+                    f"predicted={system_outcome} actual={result['actual_outcome']} "
+                    f"brier={result['brier_score']:.3f}"
+                )
+                resolved_count += 1
+
+                # Пауза чтобы не долбить Polymarket API
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                errors_count += 1
+                print(f"🎯 ERROR for prediction id={pred.get('id')}: {e}")
+                await asyncio.sleep(0.5)
+
+        print(
+            f"🎯 Tracking done — resolved: {resolved_count}, "
+            f"skipped: {skipped_count}, errors: {errors_count}"
+        )
+        set_setting("last_tracking_check", datetime.now(timezone.utc).isoformat())
+
+    except Exception as e:
+        print(f"🎯 TRACKING ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def tracking_worker():
+    """Проверяет разрешённые рынки каждые 6 часов."""
+    # Первый запуск через 10 минут после старта
+    await asyncio.sleep(600)
+    await check_resolved_predictions()
+
+    while True:
+        try:
+            # Каждые 6 часов
+            await asyncio.sleep(6 * 3600)
+
+            tracking_enabled = get_setting("tracking_enabled", "on")
+            if tracking_enabled == "on":
+                await check_resolved_predictions()
+            else:
+                print("🎯 Tracking disabled in settings")
+
+        except Exception as e:
+            print(f"TRACKING WORKER ERROR: {e}")
+            await asyncio.sleep(60)
+
+
+# ═══════════════════════════════════════════
+# TON PAYMENTS
+# ═══════════════════════════════════════════
 
 async def check_ton_payments():
     await asyncio.sleep(15)
@@ -428,7 +534,9 @@ async def check_ton_payments():
         await asyncio.sleep(60)
 
 
-# ===== NOTIFICATIONS =====
+# ═══════════════════════════════════════════
+# NOTIFICATIONS
+# ═══════════════════════════════════════════
 
 async def send_daily_notifications():
     try:
@@ -549,7 +657,9 @@ async def notification_worker():
         await asyncio.sleep(60)
 
 
-# ===== POLLING =====
+# ═══════════════════════════════════════════
+# POLLING + MAIN
+# ═══════════════════════════════════════════
 
 async def run_polling():
     while True:
@@ -581,6 +691,7 @@ async def main():
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
     asyncio.create_task(channel_worker())
+    asyncio.create_task(tracking_worker())   # ← новый воркер для трекинга точности
     # asyncio.create_task(cache_worker())
     await run_polling()
 
