@@ -1310,6 +1310,190 @@ async def analyze_url_handler(message: types.Message):
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
+# ═══════════════════════════════════════════
+# INLINE QUERY HANDLER
+# ═══════════════════════════════════════════
+
+@dp.inline_handler()
+async def inline_query_handler(inline_query: types.InlineQuery):
+    """
+    Обрабатывает inline-запросы @DeepAlphaAI_bot.
+    Два режима:
+    - Пустой запрос: показывает топ кешированных сигналов
+    - Ссылка Polymarket: показывает превью рынка
+    """
+    from services.inline_service import (
+        extract_url_from_query, build_quick_market_preview,
+        format_inline_market_text, format_inline_signal_text,
+        get_top_cached_signals,
+        format_preview_title, format_preview_description,
+        format_signal_title, format_signal_description,
+    )
+    from db.database import increment_inline_queries
+
+    uid = inline_query.from_user.id
+    query_text = inline_query.query.strip()
+    lang = get_user_lang(uid) if uid in user_languages else "ru"
+
+    # Регистрируем юзера и инкрементируем счётчик
+    try:
+        ensure_user(
+            user_id=uid,
+            username=inline_query.from_user.username or "",
+            first_name=inline_query.from_user.first_name or "",
+        )
+        increment_inline_queries(uid)
+    except Exception as e:
+        print(f"inline_query user tracking error: {e}")
+
+    results = []
+
+    try:
+        # Режим 1: есть ссылка Polymarket
+        url = extract_url_from_query(query_text)
+        if url:
+            preview = build_quick_market_preview(url, lang=lang)
+            if preview:
+                text = format_inline_market_text(preview, uid, BOT_USERNAME, lang=lang)
+                title = format_preview_title(preview, lang=lang)
+                description = format_preview_description(preview, lang=lang)
+
+                # Inline-кнопка "Открыть в боте"
+                open_label = "🤖 Получить AI-анализ" if lang == "ru" else "🤖 Get AI analysis"
+                ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
+                kb = InlineKeyboardMarkup()
+                kb.add(InlineKeyboardButton(open_label, url=ref_link))
+
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id=f"market_{hash(url)}",
+                        title=title,
+                        description=description,
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=text,
+                            disable_web_page_preview=True,
+                        ),
+                        reply_markup=kb,
+                        thumb_url="https://em-content.zobj.net/source/apple/354/chart-increasing_1f4c8.png",
+                    )
+                )
+            else:
+                # Ссылка не распарсилась
+                error_label = (
+                    "❌ Не удалось загрузить рынок"
+                    if lang == "ru"
+                    else "❌ Could not load market"
+                )
+                error_desc = (
+                    "Проверь что ссылка правильная"
+                    if lang == "ru"
+                    else "Check the link"
+                )
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id="error_url",
+                        title=error_label,
+                        description=error_desc,
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=f"❌ {error_label}\n\nhttps://t.me/{BOT_USERNAME}",
+                        ),
+                    )
+                )
+
+        # Режим 2: пустой запрос или текст — показываем топ сигналов
+        elif not query_text or len(query_text) < 5:
+            signals = get_top_cached_signals(limit=5)
+            if signals:
+                for i, signal in enumerate(signals):
+                    text = format_inline_signal_text(signal, uid, BOT_USERNAME, lang=lang)
+                    title = format_signal_title(signal, lang=lang)
+                    description = format_signal_description(signal, lang=lang)
+
+                    open_label = "🤖 Открыть в боте" if lang == "ru" else "🤖 Open in bot"
+                    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
+                    kb = InlineKeyboardMarkup()
+                    kb.add(InlineKeyboardButton(open_label, url=ref_link))
+
+                    results.append(
+                        types.InlineQueryResultArticle(
+                            id=f"signal_{i}",
+                            title=title,
+                            description=description,
+                            input_message_content=types.InputTextMessageContent(
+                                message_text=text,
+                                disable_web_page_preview=True,
+                            ),
+                            reply_markup=kb,
+                            thumb_url="https://em-content.zobj.net/source/apple/354/light-bulb_1f4a1.png",
+                        )
+                    )
+            else:
+                # Нет кешированных сигналов
+                empty_label = (
+                    "💡 Отправь ссылку Polymarket"
+                    if lang == "ru"
+                    else "💡 Send Polymarket link"
+                )
+                empty_desc = (
+                    "Пример: @DeepAlphaAI_bot https://polymarket.com/..."
+                    if lang == "ru"
+                    else "Example: @DeepAlphaAI_bot https://polymarket.com/..."
+                )
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id="empty_hint",
+                        title=empty_label,
+                        description=empty_desc,
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=(
+                                f"🤖 DeepAlpha AI — анализ Polymarket\n\n"
+                                f"👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}"
+                                if lang == "ru"
+                                else f"🤖 DeepAlpha AI — Polymarket analysis\n\n"
+                                f"👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}"
+                            ),
+                        ),
+                    )
+                )
+
+        # Режим 3: произвольный текст без ссылки
+        else:
+            hint_label = (
+                "💡 Вставь ссылку Polymarket"
+                if lang == "ru"
+                else "💡 Paste Polymarket link"
+            )
+            hint_desc = (
+                "Нужна ссылка вида polymarket.com/event/..."
+                if lang == "ru"
+                else "Need link like polymarket.com/event/..."
+            )
+            results.append(
+                types.InlineQueryResultArticle(
+                    id="hint_paste_url",
+                    title=hint_label,
+                    description=hint_desc,
+                    input_message_content=types.InputTextMessageContent(
+                        message_text=f"🤖 DeepAlpha AI\n\n👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}",
+                    ),
+                )
+            )
+
+    except Exception as e:
+        print(f"inline_query_handler error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    try:
+        await bot.answer_inline_query(
+            inline_query.id,
+            results=results,
+            cache_time=60,  # кешируем ответ на 1 минуту
+            is_personal=True,  # каждому юзеру свои результаты (из-за реф-ссылки)
+        )
+    except Exception as e:
+        print(f"answer_inline_query error: {e}")
+
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/"))
 async def fallback_handler(message: types.Message):
