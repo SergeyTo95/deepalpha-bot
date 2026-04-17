@@ -100,7 +100,7 @@ def init_db():
         referrer_id BIGINT DEFAULT NULL,
         created_at TEXT
     )
-    """)
+""")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS pending_payments (
@@ -140,6 +140,58 @@ def init_db():
         created_at TEXT,
         updated_at TEXT
     )
+    """)
+
+    # ===== НОВАЯ ТАБЛИЦА ДЛЯ ТРЕКИНГА ТОЧНОСТИ =====
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS predictions_tracking (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT DEFAULT 0,
+        market_slug TEXT,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        market_type TEXT,
+        semantic_type TEXT,
+        
+        market_probability_yes REAL,
+        market_probability_no REAL,
+        market_leader TEXT,
+        market_prob_value REAL,
+        
+        system_prediction TEXT,
+        system_probability REAL,
+        system_outcome TEXT,
+        confidence TEXT,
+        
+        delta REAL,
+        alpha_label TEXT,
+        market_balance TEXT,
+        
+        display_prediction TEXT,
+        
+        created_at TEXT,
+        market_end_date TEXT,
+        resolved_at TEXT DEFAULT NULL,
+        
+        actual_outcome TEXT DEFAULT NULL,
+        is_correct INTEGER DEFAULT NULL,
+        brier_score REAL DEFAULT NULL,
+        log_loss REAL DEFAULT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tracking_slug ON predictions_tracking(market_slug)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tracking_resolved ON predictions_tracking(resolved_at)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tracking_user ON predictions_tracking(user_id)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tracking_category ON predictions_tracking(category)
     """)
 
     migrations = [
@@ -209,8 +261,6 @@ def set_setting(key: str, value: str) -> None:
     """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
-
-
 # ===== TOKEN PACKAGES =====
 
 def get_token_packages(active_only: bool = True) -> List[Dict[str, Any]]:
@@ -311,8 +361,6 @@ def delete_token_package(package_id: int) -> None:
         print(f"delete_token_package error: {e}")
     finally:
         conn.close()
-
-
 def find_package_by_amount(ton_amount: float, tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
     packages = get_token_packages(active_only=True)
     for package in packages:
@@ -405,8 +453,6 @@ def get_free_trial_status(user_id: int) -> Dict[str, Any]:
                 "analyses_limit": limits["analyses"], "opportunities_limit": limits["opportunities"]}
     finally:
         conn.close()
-
-
 # ===== PENDING PAYMENTS =====
 
 def save_pending(user_id: int, amount: float, payment_type: str = "tokens") -> None:
@@ -502,8 +548,6 @@ def get_subscribed_users() -> List[Dict[str, Any]]:
     conn.close()
     return [{"user_id": r[0], "username": r[1], "first_name": r[2], "subscription_until": r[3]}
             for r in rows]
-
-
 # ===== DAILY LIMITS =====
 
 def _reset_daily_if_needed(cursor, user_id: int) -> None:
@@ -626,8 +670,6 @@ def get_signal_cache(category: str, max_age_seconds: int = 3600) -> Optional[dic
         return None
     finally:
         conn.close()
-
-
 def get_all_cache_status() -> Dict[str, Any]:
     conn = get_connection()
     cursor = conn.cursor()
@@ -714,8 +756,6 @@ def set_user_vip(user_id: int, vip: bool) -> None:
                    (1 if vip else 0, datetime.utcnow().isoformat(), user_id))
     conn.commit()
     conn.close()
-
-
 def add_tokens(user_id: int, amount: int) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -823,7 +863,6 @@ def get_top_referrers(limit: int = 10) -> List[Dict[str, Any]]:
     return [{"user_id": r[0], "username": r[1], "first_name": r[2],
              "total_referrals": r[3], "referral_earnings_ton": r[4]} for r in rows]
 
-
 # ===== TRANSACTIONS =====
 
 def is_tx_processed(tx_hash: str) -> bool:
@@ -918,8 +957,6 @@ def get_recent_analyses(limit: int = 10) -> List[Dict[str, Any]]:
     return [{"url": r[0], "question": r[1], "category": r[2],
              "system_probability": r[3], "confidence": r[4], "created_at": r[5]}
             for r in rows]
-
-
 def get_top_opportunities(limit: int = 10) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
@@ -949,3 +986,263 @@ def get_user_analyses(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
             for r in rows]
 
 
+# ═══════════════════════════════════════════
+# PREDICTIONS TRACKING — трекинг точности предсказаний
+# ═══════════════════════════════════════════
+
+def save_prediction(
+    user_id: int,
+    market_slug: str,
+    market_url: str,
+    question: str,
+    category: str,
+    market_type: str,
+    semantic_type: str,
+    market_probability_yes: Optional[float],
+    market_probability_no: Optional[float],
+    market_leader: str,
+    market_prob_value: float,
+    system_prediction: str,
+    system_probability: float,
+    system_outcome: str,
+    confidence: str,
+    delta: Optional[float],
+    alpha_label: str,
+    market_balance: str,
+    display_prediction: str,
+    market_end_date: Optional[str] = None,
+) -> int:
+    """
+    Сохраняет предсказание для последующей сверки с resolved исходом.
+    Возвращает id записи.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO predictions_tracking (
+            user_id, market_slug, market_url, question, category,
+            market_type, semantic_type,
+            market_probability_yes, market_probability_no, market_leader, market_prob_value,
+            system_prediction, system_probability, system_outcome, confidence,
+            delta, alpha_label, market_balance, display_prediction,
+            created_at, market_end_date
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            user_id, market_slug, market_url, question, category,
+            market_type, semantic_type,
+            market_probability_yes, market_probability_no, market_leader, market_prob_value,
+            system_prediction, system_probability, system_outcome, confidence,
+            delta, alpha_label, market_balance, display_prediction,
+            datetime.utcnow().isoformat(), market_end_date,
+        ))
+        prediction_id = cursor.fetchone()[0]
+        conn.commit()
+        return prediction_id
+    except Exception as e:
+        print(f"save_prediction error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def get_unresolved_predictions(limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Возвращает предсказания без resolved исхода — для воркера проверки.
+    Фильтрует по market_end_date <= сейчас (событие уже должно было завершиться).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        now_iso = datetime.utcnow().isoformat()
+        cursor.execute("""
+        SELECT id, market_slug, market_url, question, category,
+               market_type, semantic_type, system_prediction, system_probability,
+               system_outcome, market_leader, market_prob_value,
+               market_end_date, created_at
+        FROM predictions_tracking
+        WHERE resolved_at IS NULL
+          AND (market_end_date IS NULL OR market_end_date <= %s)
+        ORDER BY id ASC LIMIT %s
+        """, (now_iso, limit))
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "market_slug": r[1], "market_url": r[2],
+            "question": r[3], "category": r[4],
+            "market_type": r[5], "semantic_type": r[6],
+            "system_prediction": r[7], "system_probability": r[8],
+            "system_outcome": r[9], "market_leader": r[10],
+            "market_prob_value": r[11], "market_end_date": r[12],
+            "created_at": r[13],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_unresolved_predictions error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def update_resolution(
+    prediction_id: int,
+    actual_outcome: str,
+    is_correct: bool,
+    brier_score: float,
+    log_loss: float,
+) -> None:
+    """
+    Обновляет запись после разрешения рынка.
+    actual_outcome: "Yes", "No" или название опции для multi
+    is_correct: совпал ли наш system_outcome с actual_outcome
+    brier_score: (system_probability/100 - actual_prob)^2, где actual_prob = 1 если угадали, 0 если нет
+    log_loss: -ln(system_probability/100) если угадали, -ln(1 - system_probability/100) если нет
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE predictions_tracking SET
+            resolved_at = %s,
+            actual_outcome = %s,
+            is_correct = %s,
+            brier_score = %s,
+            log_loss = %s
+        WHERE id = %s
+        """, (
+            datetime.utcnow().isoformat(),
+            actual_outcome,
+            1 if is_correct else 0,
+            brier_score,
+            log_loss,
+            prediction_id,
+        ))
+        conn.commit()
+    except Exception as e:
+        print(f"update_resolution error: {e}")
+    finally:
+        conn.close()
+
+
+def get_accuracy_stats(category: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Считает метрики точности по resolved предсказаниям.
+    Опционально фильтрует по категории.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        where_clause = "WHERE resolved_at IS NOT NULL"
+        params: List[Any] = []
+        if category:
+            where_clause += " AND category = %s"
+            params.append(category)
+
+        # Общая статистика
+        cursor.execute(f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(is_correct) AS correct,
+            AVG(brier_score) AS avg_brier,
+            AVG(log_loss) AS avg_log_loss
+        FROM predictions_tracking {where_clause}
+        """, params)
+        row = cursor.fetchone()
+        total = row[0] or 0
+        correct = row[1] or 0
+        avg_brier = float(row[2]) if row[2] is not None else None
+        avg_log_loss = float(row[3]) if row[3] is not None else None
+        accuracy = (correct / total * 100) if total else 0
+
+        # По уверенности
+        cursor.execute(f"""
+        SELECT confidence, COUNT(*) AS total, SUM(is_correct) AS correct,
+               AVG(brier_score) AS avg_brier
+        FROM predictions_tracking {where_clause}
+        GROUP BY confidence
+        """, params)
+        by_confidence = {}
+        for cr in cursor.fetchall():
+            c_total = cr[1] or 0
+            c_correct = cr[2] or 0
+            by_confidence[cr[0] or "Unknown"] = {
+                "total": c_total,
+                "correct": c_correct,
+                "accuracy": (c_correct / c_total * 100) if c_total else 0,
+                "avg_brier": float(cr[3]) if cr[3] is not None else None,
+            }
+
+        # По типу рынка
+        cursor.execute(f"""
+        SELECT semantic_type, COUNT(*) AS total, SUM(is_correct) AS correct,
+               AVG(brier_score) AS avg_brier
+        FROM predictions_tracking {where_clause}
+        GROUP BY semantic_type
+        """, params)
+        by_type = {}
+        for tr in cursor.fetchall():
+            t_total = tr[1] or 0
+            t_correct = tr[2] or 0
+            by_type[tr[0] or "Unknown"] = {
+                "total": t_total,
+                "correct": t_correct,
+                "accuracy": (t_correct / t_total * 100) if t_total else 0,
+                "avg_brier": float(tr[3]) if tr[3] is not None else None,
+            }
+
+        # По alpha label
+        cursor.execute(f"""
+        SELECT alpha_label, COUNT(*) AS total, SUM(is_correct) AS correct,
+               AVG(brier_score) AS avg_brier
+        FROM predictions_tracking {where_clause}
+        GROUP BY alpha_label
+        """, params)
+        by_alpha = {}
+        for ar in cursor.fetchall():
+            a_total = ar[1] or 0
+            a_correct = ar[2] or 0
+            by_alpha[ar[0] or "Unknown"] = {
+                "total": a_total,
+                "correct": a_correct,
+                "accuracy": (a_correct / a_total * 100) if a_total else 0,
+                "avg_brier": float(ar[3]) if ar[3] is not None else None,
+            }
+
+        # По категории (если не фильтруем по конкретной)
+        by_category = {}
+        if not category:
+            cursor.execute("""
+            SELECT category, COUNT(*) AS total, SUM(is_correct) AS correct,
+                   AVG(brier_score) AS avg_brier
+            FROM predictions_tracking
+            WHERE resolved_at IS NOT NULL
+            GROUP BY category
+            """)
+            for cr in cursor.fetchall():
+                c_total = cr[1] or 0
+                c_correct = cr[2] or 0
+                by_category[cr[0] or "Unknown"] = {
+                    "total": c_total,
+                    "correct": c_correct,
+                    "accuracy": (c_correct / c_total * 100) if c_total else 0,
+                    "avg_brier": float(cr[3]) if cr[3] is not None else None,
+                }
+
+        return {
+            "total": total,
+            "correct": correct,
+            "accuracy": accuracy,
+            "avg_brier": avg_brier,
+            "avg_log_loss": avg_log_loss,
+            "by_confidence": by_confidence,
+            "by_type": by_type,
+            "by_alpha": by_alpha,
+            "by_category": by_category,
+        }
+    except Exception as e:
+        print(f"get_accuracy_stats error: {e}")
+        return {"total": 0, "correct": 0, "accuracy": 0,
+                "avg_brier": None, "avg_log_loss": None,
+                "by_confidence": {}, "by_type": {},
+                "by_alpha": {}, "by_category": {}}
+    finally:
+        conn.close()
