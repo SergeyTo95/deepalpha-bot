@@ -1255,3 +1255,249 @@ def get_accuracy_stats(category: Optional[str] = None) -> Dict[str, Any]:
                 "by_alpha": {}, "by_category": {}}
     finally:
         conn.close()
+
+
+# ═══════════════════════════════════════════
+# AUTHOR PROFILE
+# ═══════════════════════════════════════════
+
+def set_author_status(user_id: int, is_author: bool) -> None:
+    """Устанавливает/снимает статус автора."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        now = datetime.utcnow().isoformat()
+        if is_author:
+            cursor.execute("""
+            UPDATE users SET is_author = 1, author_since = COALESCE(author_since, %s),
+                   updated_at = %s WHERE user_id = %s
+            """, (now, now, user_id))
+        else:
+            cursor.execute("""
+            UPDATE users SET is_author = 0, updated_at = %s WHERE user_id = %s
+            """, (now, user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"set_author_status error: {e}")
+    finally:
+        conn.close()
+
+
+def is_author(user_id: int) -> bool:
+    """Проверяет является ли юзер автором."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT is_author FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        return bool(row[0]) if row and row[0] else False
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_author_profile(user_id: int) -> Optional[Dict[str, Any]]:
+    """Возвращает полный профиль автора."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT user_id, username, first_name, is_author, author_balance_ton,
+               author_withdrawn_ton, author_bio, author_since, ton_wallet,
+               total_analyses, total_opportunities
+        FROM users WHERE user_id = %s
+        """, (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "user_id": row[0],
+            "username": row[1],
+            "first_name": row[2],
+            "is_author": bool(row[3]) if row[3] else False,
+            "author_balance_ton": row[4] or 0,
+            "author_withdrawn_ton": row[5] or 0,
+            "author_bio": row[6] or "",
+            "author_since": row[7],
+            "ton_wallet": row[8] or "",
+            "total_analyses": row[9] or 0,
+            "total_opportunities": row[10] or 0,
+        }
+    except Exception as e:
+        print(f"get_author_profile error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def set_author_bio(user_id: int, bio: str) -> None:
+    """Устанавливает bio автора."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET author_bio = %s, updated_at = %s WHERE user_id = %s
+        """, (bio, datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"set_author_bio error: {e}")
+    finally:
+        conn.close()
+
+
+def set_ton_wallet(user_id: int, wallet: str) -> None:
+    """Устанавливает TON кошелёк для вывода донатов."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET ton_wallet = %s, updated_at = %s WHERE user_id = %s
+        """, (wallet, datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"set_ton_wallet error: {e}")
+    finally:
+        conn.close()
+
+
+def add_author_balance(user_id: int, amount_ton: float) -> float:
+    """Прибавляет к балансу автора. Возвращает новый баланс."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET author_balance_ton = author_balance_ton + %s,
+               updated_at = %s WHERE user_id = %s
+        """, (amount_ton, datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+        cursor.execute("SELECT author_balance_ton FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        return float(row[0]) if row else 0.0
+    except Exception as e:
+        print(f"add_author_balance error: {e}")
+        return 0.0
+    finally:
+        conn.close()
+
+
+def withdraw_author_balance(user_id: int, amount_ton: float) -> bool:
+    """
+    Списывает с баланса автора при выводе.
+    Возвращает True если успешно.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET
+            author_balance_ton = author_balance_ton - %s,
+            author_withdrawn_ton = author_withdrawn_ton + %s,
+            updated_at = %s
+        WHERE user_id = %s AND author_balance_ton >= %s
+        """, (amount_ton, amount_ton, datetime.utcnow().isoformat(), user_id, amount_ton))
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+    except Exception as e:
+        print(f"withdraw_author_balance error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_all_authors(limit: int = 100) -> List[Dict[str, Any]]:
+    """Возвращает всех авторов отсортированных по balance."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT user_id, username, first_name, author_balance_ton,
+               author_withdrawn_ton, author_since, total_analyses
+        FROM users WHERE is_author = 1
+        ORDER BY author_balance_ton + author_withdrawn_ton DESC LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [{
+            "user_id": r[0], "username": r[1], "first_name": r[2],
+            "author_balance_ton": r[3] or 0,
+            "author_withdrawn_ton": r[4] or 0,
+            "author_since": r[5],
+            "total_analyses": r[6] or 0,
+        } for r in rows]
+    except Exception as e:
+        print(f"get_all_authors error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════
+# USER LANGUAGE PERSISTENCE
+# ═══════════════════════════════════════════
+
+def set_user_language(user_id: int, lang: str) -> None:
+    """Сохраняет язык юзера в БД."""
+    if lang not in ("ru", "en"):
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET language = %s, updated_at = %s WHERE user_id = %s
+        """, (lang, datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"set_user_language error: {e}")
+    finally:
+        conn.close()
+
+
+def get_user_language(user_id: int) -> str:
+    """Возвращает язык юзера из БД."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT language FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return "ru"
+
+
+# ═══════════════════════════════════════════
+# INLINE QUERIES COUNTER (для бейджа ⚡ Speed)
+# ═══════════════════════════════════════════
+
+def increment_inline_queries(user_id: int) -> None:
+    """Инкрементирует счётчик inline queries юзера."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET inline_queries_count = COALESCE(inline_queries_count, 0) + 1,
+               updated_at = %s WHERE user_id = %s
+        """, (datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"increment_inline_queries error: {e}")
+    finally:
+        conn.close()
+
+
+def get_inline_queries_count(user_id: int) -> int:
+    """Возвращает количество inline queries юзера."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT inline_queries_count FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        return int(row[0]) if row and row[0] else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
