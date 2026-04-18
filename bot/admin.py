@@ -1757,7 +1757,7 @@ def register_admin(dp: Dispatcher):
                 return
             set_setting("watchlist_limit_vip", str(val))
             await state.finish()
-            await
+            
             message.answer(f"✅ Лимит VIP: {val}")
         except ValueError:
             await message.answer("❌")
