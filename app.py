@@ -1,8 +1,7 @@
-
 import sys
 import os
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,7 +12,7 @@ from services.polymarket_service import (
     list_markets, list_events, normalize_market_data,
     normalize_event_for_channel, build_market_url,
 )
-from services.polymarket_resolver import resolve_prediction
+from services.polymarket_resolver import resolve_prediction, fetch_market_by_slug, is_market_resolved
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
@@ -22,6 +21,10 @@ from db.database import (
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
     get_unresolved_predictions, update_resolution,
+    get_active_watchlist_items, get_watchlist_subscribers,
+    update_watchlist_probability, mark_watchlist_notified,
+    reset_watchlist_change_notification, close_watchlist_market,
+    cleanup_old_closed_watchlist,
 )
 
 register_admin(telegram_bot.dp)
@@ -294,14 +297,13 @@ async def cache_worker():
 
 
 # ═══════════════════════════════════════════
-# PREDICTIONS TRACKING — проверка resolved рынков
+# PREDICTIONS TRACKING
 # ═══════════════════════════════════════════
 
 async def check_resolved_predictions():
     """
     Проходит по неразрешённым предсказаниям,
-    проверяет через Polymarket API их статус
-    и обновляет метрики точности.
+    проверяет через Polymarket API и обновляет метрики.
     """
     print("🎯 Checking resolved predictions...")
     try:
@@ -355,7 +357,6 @@ async def check_resolved_predictions():
                 )
                 resolved_count += 1
 
-                # Пауза чтобы не долбить Polymarket API
                 await asyncio.sleep(1)
 
             except Exception as e:
@@ -377,23 +378,256 @@ async def check_resolved_predictions():
 
 async def tracking_worker():
     """Проверяет разрешённые рынки каждые 6 часов."""
-    # Первый запуск через 10 минут после старта
     await asyncio.sleep(600)
     await check_resolved_predictions()
 
     while True:
         try:
-            # Каждые 6 часов
             await asyncio.sleep(6 * 3600)
-
             tracking_enabled = get_setting("tracking_enabled", "on")
             if tracking_enabled == "on":
                 await check_resolved_predictions()
             else:
                 print("🎯 Tracking disabled in settings")
-
         except Exception as e:
             print(f"TRACKING WORKER ERROR: {e}")
+            await asyncio.sleep(60)
+
+
+# ═══════════════════════════════════════════
+# WATCHLIST WORKER
+# ═══════════════════════════════════════════
+
+async def check_watchlist():
+    """
+    Проверяет все рынки в watchlist, отправляет уведомления:
+    - при изменении вероятности >= threshold
+    - за N часов до закрытия рынка
+    - когда рынок закрылся (с результатом)
+    """
+    print("⭐ Checking watchlist...")
+    try:
+        items = get_active_watchlist_items(limit=500)
+        if not items:
+            print("⭐ Watchlist is empty")
+            return
+
+        print(f"⭐ Checking {len(items)} unique markets...")
+
+        threshold = float(get_setting("watchlist_probability_threshold", "10"))
+        closing_hours = int(get_setting("watchlist_closing_hours", "24"))
+
+        checked = 0
+        resolved = 0
+        notifications_sent = 0
+        errors = 0
+
+        for item in items:
+            try:
+                slug = item.get("market_slug", "")
+                if not slug:
+                    continue
+
+                # Получаем текущие данные с Polymarket
+                market_data = fetch_market_by_slug(slug)
+                if not market_data:
+                    errors += 1
+                    continue
+
+                # Проверяем закрылся ли рынок
+                if is_market_resolved(market_data):
+                    await _handle_resolved_market(slug, item, market_data)
+                    resolved += 1
+                    continue
+
+                # Получаем текущую вероятность
+                current_prob = _get_current_probability(market_data)
+                if current_prob is None:
+                    errors += 1
+                    continue
+
+                # Проверяем всех подписчиков этого рынка
+                subscribers = get_watchlist_subscribers(slug)
+                for sub in subscribers:
+                    try:
+                        await _check_subscriber_notifications(
+                            sub, item, current_prob, threshold, closing_hours
+                        )
+                        notifications_sent += 1
+                    except Exception as e:
+                        print(f"⭐ Notification error for user {sub.get('user_id')}: {e}")
+
+                checked += 1
+                await asyncio.sleep(1)  # пауза между рынками
+
+            except Exception as e:
+                errors += 1
+                print(f"⭐ Watchlist check error for {item.get('market_slug', '')[:30]}: {e}")
+                await asyncio.sleep(0.5)
+
+        # Очищаем старые закрытые записи (раз в день примерно)
+        try:
+            cleaned = cleanup_old_closed_watchlist(days=30)
+            if cleaned > 0:
+                print(f"⭐ Cleaned up {cleaned} old closed items")
+        except Exception as e:
+            print(f"⭐ Cleanup error: {e}")
+
+        print(
+            f"⭐ Watchlist done — checked: {checked}, resolved: {resolved}, "
+            f"notified: {notifications_sent}, errors: {errors}"
+        )
+        set_setting("last_watchlist_check", datetime.now(timezone.utc).isoformat())
+
+    except Exception as e:
+        print(f"⭐ WATCHLIST ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _get_current_probability(market_data: dict) -> float:
+    """Извлекает текущую вероятность лидера из market_data."""
+    try:
+        outcome_prices = market_data.get("outcomePrices", "")
+        if isinstance(outcome_prices, str):
+            cleaned = outcome_prices.strip("[]")
+            prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+        elif isinstance(outcome_prices, list):
+            prices = [float(p) for p in outcome_prices]
+        else:
+            return None
+
+        if not prices:
+            return None
+
+        return max(prices) * 100  # возвращаем в процентах
+    except Exception:
+        return None
+
+
+async def _check_subscriber_notifications(
+    sub: dict, item: dict, current_prob: float,
+    threshold: float, closing_hours: int
+) -> None:
+    """Проверяет нужно ли отправить уведомление подписчику."""
+    user_id = sub["user_id"]
+    watchlist_id = sub["id"]
+    initial_prob = sub.get("initial_probability", 0)
+
+    # Обновляем last_checked_probability всегда
+    update_watchlist_probability(watchlist_id, current_prob)
+
+    if not sub.get("notify_enabled"):
+        return  # уведомления отключены
+
+    question = item.get("question", "")
+    url = item.get("market_url", "")
+
+    # Проверка 1: изменение вероятности >= threshold
+    change = current_prob - initial_prob
+    abs_change = abs(change)
+
+    if abs_change >= threshold and not sub.get("notified_change"):
+        direction = "📈" if change > 0 else "📉"
+        text = (
+            f"{direction} Watchlist — изменение рынка!\n\n"
+            f"📌 {question}\n\n"
+            f"Было: {initial_prob:.1f}%\n"
+            f"Стало: {current_prob:.1f}%\n"
+            f"Изменение: {'+' if change > 0 else ''}{change:.1f}%\n\n"
+            f"🔗 {url}"
+        )
+        try:
+            await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
+            # Сбрасываем базу чтобы следить за новыми изменениями от текущей точки
+            reset_watchlist_change_notification(watchlist_id, current_prob)
+        except Exception as e:
+            print(f"⭐ Failed to notify {user_id} about change: {e}")
+
+    # Проверка 2: скорое закрытие
+    end_date = sub.get("market_end_date") or item.get("market_end_date")
+    if end_date and not sub.get("notified_closing_soon"):
+        try:
+            end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            hours_left = (end_dt - now).total_seconds() / 3600
+
+            if 0 < hours_left <= closing_hours:
+                text = (
+                    f"⏰ Watchlist — рынок скоро закроется!\n\n"
+                    f"📌 {question}\n\n"
+                    f"Осталось: ~{int(hours_left)} часов\n"
+                    f"Текущая вероятность: {current_prob:.1f}%\n\n"
+                    f"🔗 {url}"
+                )
+                await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
+                mark_watchlist_notified(watchlist_id, "closing_soon")
+        except Exception as e:
+            print(f"⭐ Failed to check closing date for {user_id}: {e}")
+
+
+async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> None:
+    """Обрабатывает закрытие рынка — уведомляет всех подписчиков."""
+    try:
+        from services.polymarket_resolver import extract_actual_outcome
+
+        subscribers = get_watchlist_subscribers(slug)
+        if not subscribers:
+            close_watchlist_market(slug)
+            return
+
+        actual_outcome = extract_actual_outcome(market_data)
+        question = item.get("question", "")
+        url = item.get("market_url", "")
+
+        for sub in subscribers:
+            if not sub.get("notify_enabled"):
+                continue
+            if sub.get("notified_resolved"):
+                continue
+
+            try:
+                text = (
+                    f"🎯 Watchlist — рынок закрылся!\n\n"
+                    f"📌 {question}\n\n"
+                    f"Результат: {actual_outcome or 'неизвестен'}\n\n"
+                    f"🔗 {url}\n\n"
+                    f"Рынок удалён из watchlist."
+                )
+                await telegram_bot.bot.send_message(
+                    sub["user_id"], text, disable_web_page_preview=True
+                )
+                mark_watchlist_notified(sub["id"], "resolved")
+            except Exception as e:
+                print(f"⭐ Failed to notify {sub.get('user_id')} about resolution: {e}")
+
+        # Отмечаем рынок как закрытый (больше не проверяем)
+        close_watchlist_market(slug)
+        print(f"⭐ Market resolved: {slug[:40]} -> {actual_outcome}")
+
+    except Exception as e:
+        print(f"⭐ _handle_resolved_market error: {e}")
+
+
+async def watchlist_worker():
+    """Проверяет watchlist каждые N часов."""
+    await asyncio.sleep(900)  # первый запуск через 15 минут
+    watchlist_enabled = get_setting("watchlist_enabled", "on")
+    if watchlist_enabled == "on":
+        await check_watchlist()
+
+    while True:
+        try:
+            interval_hours = int(get_setting("watchlist_check_interval_hours", "3"))
+            await asyncio.sleep(interval_hours * 3600)
+
+            watchlist_enabled = get_setting("watchlist_enabled", "on")
+            if watchlist_enabled == "on":
+                await check_watchlist()
+            else:
+                print("⭐ Watchlist disabled in settings")
+        except Exception as e:
+            print(f"WATCHLIST WORKER ERROR: {e}")
             await asyncio.sleep(60)
 
 
@@ -692,9 +926,11 @@ async def main():
     asyncio.create_task(notification_worker())
     asyncio.create_task(channel_worker())
     asyncio.create_task(tracking_worker())
+    asyncio.create_task(watchlist_worker())
     asyncio.create_task(cache_worker())
     await run_polling()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
