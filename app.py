@@ -691,8 +691,8 @@ async def main():
     asyncio.create_task(check_ton_payments())
     asyncio.create_task(notification_worker())
     asyncio.create_task(channel_worker())
-    asyncio.create_task(tracking_worker())   # ← новый воркер для трекинга точности
-     asyncio.create_task(cache_worker())
+    asyncio.create_task(tracking_worker())
+    asyncio.create_task(cache_worker())
     await run_polling()
 
 
