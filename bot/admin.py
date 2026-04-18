@@ -1,4 +1,3 @@
-
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
@@ -16,7 +15,11 @@ from db.database import (
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
     get_accuracy_stats, get_unresolved_predictions,
-    get_watchlist_stats, get_all_authors, set_author_status,
+    get_watchlist_stats,
+    get_all_authors, set_author_status, get_author_profile,
+    get_top_authors_by_donations, get_donation_stats,
+    get_pending_withdrawals, approve_withdrawal, reject_withdrawal,
+    get_author_posts,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -92,6 +95,18 @@ class WatchlistStates(StatesGroup):
     waiting_check_interval = State()
 
 
+class AuthorAdminStates(StatesGroup):
+    waiting_author_status_price = State()
+    waiting_platform_fee = State()
+    waiting_min_donation = State()
+    waiting_min_withdrawal = State()
+    waiting_max_posts_per_day = State()
+    waiting_grant_author_id = State()
+    waiting_revoke_author_id = State()
+    waiting_withdrawal_tx = State()
+    waiting_withdrawal_reject = State()
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -106,6 +121,7 @@ def admin_main_kb():
         InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics"),
         InlineKeyboardButton("🎯 Tracking Accuracy", callback_data="admin_tracking"),
         InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
+        InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
@@ -218,6 +234,8 @@ def package_edit_kb(package_id: int, is_active: bool):
 def user_kb(user_id: int) -> InlineKeyboardMarkup:
     banned = is_user_banned(user_id)
     vip = is_user_vip(user_id)
+    from db.database import is_author as db_is_author
+    is_auth = db_is_author(user_id)
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton(
@@ -227,6 +245,10 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             "👑 Убрать VIP" if vip else "👑 Дать VIP",
             callback_data=f"user_vip_{user_id}"
+        ),
+        InlineKeyboardButton(
+            "📢 Убрать автора" if is_auth else "📢 Дать статус автора",
+            callback_data=f"user_author_{user_id}"
         ),
         InlineKeyboardButton("🎁 Подарить токены", callback_data=f"user_gift_{user_id}"),
         InlineKeyboardButton("✏️ Установить баланс", callback_data=f"user_setbal_{user_id}"),
@@ -238,11 +260,17 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
 
 
 def format_user_info(user: dict) -> str:
-    from db.database import is_subscribed, get_subscription_until, get_free_trial_status
+    from db.database import is_subscribed, get_subscription_until, get_free_trial_status, is_author as db_is_author
     subscribed = is_subscribed(user["user_id"])
     sub_until = get_subscription_until(user["user_id"])
     sub_text = f"✅ до {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
     trial = get_free_trial_status(user["user_id"])
+    is_auth = db_is_author(user["user_id"])
+    auth_line = "📢 Автор" if is_auth else ""
+    if is_auth:
+        auth_balance = user.get("author_balance_ton", 0) or 0
+        auth_line += f" (баланс: {auth_balance:.4f} TON)"
+
     return (
         f"👤 Пользователь\n\n"
         f"ID: {user['user_id']}\n"
@@ -251,6 +279,7 @@ def format_user_info(user: dict) -> str:
         f"Баланс: {user['token_balance']} токенов\n"
         f"Статус: {'🚫 Забанен' if user['is_banned'] else '✅ Активен'}\n"
         f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
+        f"{auth_line}\n" if auth_line else ""
         f"Подписка: {sub_text}\n"
         f"Анализов: {user['total_analyses']}\n"
         f"Сигналов: {user['total_opportunities']}\n"
@@ -381,6 +410,26 @@ def get_db_stats() -> dict:
     tracking_resolved = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM watchlist WHERE is_closed = 0")
     watchlist_active = cursor.fetchone()[0]
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_author = 1")
+        authors_count = cursor.fetchone()[0]
+    except Exception:
+        authors_count = 0
+    try:
+        cursor.execute("SELECT COUNT(*) FROM author_posts WHERE is_deleted = 0")
+        posts_count = cursor.fetchone()[0]
+    except Exception:
+        posts_count = 0
+    try:
+        cursor.execute("SELECT COUNT(*) FROM author_subscriptions")
+        subs_count = cursor.fetchone()[0]
+    except Exception:
+        subs_count = 0
+    try:
+        cursor.execute("SELECT COUNT(*) FROM author_donations WHERE status = 'completed'")
+        donations_count = cursor.fetchone()[0]
+    except Exception:
+        donations_count = 0
     conn.close()
     return {
         "analyses": analyses,
@@ -392,6 +441,10 @@ def get_db_stats() -> dict:
         "tracking_total": tracking_total,
         "tracking_resolved": tracking_resolved,
         "watchlist_active": watchlist_active,
+        "authors_count": authors_count,
+        "posts_count": posts_count,
+        "subs_count": subs_count,
+        "donations_count": donations_count,
         "db_size_kb": "PostgreSQL",
     }
 
@@ -484,7 +537,7 @@ def system_text() -> str:
 
 
 # ═══════════════════════════════════════════
-# TRACKING ACCURACY
+# TRACKING
 # ═══════════════════════════════════════════
 
 def tracking_menu_kb() -> InlineKeyboardMarkup:
@@ -694,6 +747,141 @@ def watchlist_stats_text() -> str:
 
 
 # ═══════════════════════════════════════════
+# AUTHORS ADMIN
+# ═══════════════════════════════════════════
+
+def authors_admin_kb() -> InlineKeyboardMarkup:
+    authors_enabled = get_setting("authors_enabled", "on")
+    donations_enabled = get_setting("donations_enabled", "on")
+    status_price = get_setting("author_status_price_ton", "5")
+    platform_fee = get_setting("platform_fee_percent", "20")
+    min_donation = get_setting("min_donation_ton", "0.1")
+    min_withdrawal = get_setting("min_withdrawal_ton", "1")
+    max_posts = get_setting("max_posts_per_day", "5")
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton(
+            f"{'✅' if authors_enabled == 'on' else '❌'} Авторы: {'ON' if authors_enabled == 'on' else 'OFF'}",
+            callback_data="auth_admin_toggle_authors"
+        ),
+        InlineKeyboardButton(
+            f"{'✅' if donations_enabled == 'on' else '❌'} Донаты: {'ON' if donations_enabled == 'on' else 'OFF'}",
+            callback_data="auth_admin_toggle_donations"
+        ),
+        InlineKeyboardButton("─── 💰 Цены ───", callback_data="auth_admin_noop"),
+        InlineKeyboardButton(f"💎 Цена статуса: {status_price} TON", callback_data="auth_admin_status_price"),
+        InlineKeyboardButton(f"🏦 Комиссия платформы: {platform_fee}%", callback_data="auth_admin_platform_fee"),
+        InlineKeyboardButton(f"💵 Мин. донат: {min_donation} TON", callback_data="auth_admin_min_donation"),
+        InlineKeyboardButton(f"💳 Мин. вывод: {min_withdrawal} TON", callback_data="auth_admin_min_withdrawal"),
+        InlineKeyboardButton(f"📝 Постов в день: {max_posts}", callback_data="auth_admin_max_posts"),
+        InlineKeyboardButton("─── 📋 Управление ───", callback_data="auth_admin_noop"),
+        InlineKeyboardButton("📢 Список авторов", callback_data="auth_admin_list"),
+        InlineKeyboardButton("🎁 Дать статус автора", callback_data="auth_admin_grant"),
+        InlineKeyboardButton("❌ Забрать статус", callback_data="auth_admin_revoke"),
+        InlineKeyboardButton("💰 Заявки на вывод", callback_data="auth_admin_withdrawals"),
+        InlineKeyboardButton("📊 Статистика донатов", callback_data="auth_admin_stats"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
+    return kb
+
+
+def authors_admin_text() -> str:
+    stats = get_donation_stats()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_author = 1")
+        authors_count = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM author_posts WHERE is_deleted = 0")
+        posts_count = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM author_subscriptions")
+        subs_count = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM withdrawal_requests WHERE status = 'pending'")
+        pending_withdrawals = cursor.fetchone()[0] or 0
+    except Exception:
+        authors_count = posts_count = subs_count = pending_withdrawals = 0
+    finally:
+        conn.close()
+
+    return (
+        f"📢 Авторы и Донаты\n\n"
+        f"👤 Авторов: {authors_count}\n"
+        f"📝 Опубликовано постов: {posts_count}\n"
+        f"🔔 Подписок: {subs_count}\n"
+        f"💝 Донатов всего: {stats['total_donations']}\n"
+        f"💰 Собрано: {stats['total_ton']:.4f} TON\n"
+        f"🏦 Комиссия платформы: {stats['platform_revenue_ton']:.4f} TON\n"
+        f"👑 Выплачено авторам: {stats['authors_received_ton']:.4f} TON\n"
+        f"💳 Заявок на вывод (pending): {pending_withdrawals}\n\n"
+        f"Настройки ↓"
+    )
+
+
+def authors_list_text() -> str:
+    authors = get_all_authors(limit=30)
+    if not authors:
+        return "📢 Авторов пока нет"
+
+    text = f"📢 Авторы ({len(authors)})\n\n"
+    for i, a in enumerate(authors, 1):
+        name = a.get("username") or a.get("first_name") or str(a["user_id"])
+        subs = a.get("total_subscribers", 0)
+        posts = a.get("total_posts", 0)
+        balance = a.get("author_balance_ton", 0) or 0
+        earned = balance + (a.get("author_withdrawn_ton", 0) or 0)
+        text += (
+            f"{i}. @{name} (id: {a['user_id']})\n"
+            f"   👥 {subs} | 📝 {posts} | 💰 {earned:.2f} TON\n"
+            f"   Баланс: {balance:.4f} TON\n\n"
+        )
+    return text
+
+
+def donation_stats_text() -> str:
+    stats = get_donation_stats()
+    top = get_top_authors_by_donations(limit=5)
+
+    text = (
+        f"📊 Статистика донатов\n\n"
+        f"Всего донатов: {stats['total_donations']}\n"
+        f"Сумма: {stats['total_ton']:.4f} TON\n"
+        f"💼 Доход платформы: {stats['platform_revenue_ton']:.4f} TON\n"
+        f"👑 Получено авторами: {stats['authors_received_ton']:.4f} TON\n"
+        f"👥 Уникальных донатеров: {stats['unique_donors']}\n"
+        f"📢 Авторов получили донаты: {stats['unique_authors']}\n\n"
+    )
+
+    if top:
+        text += "🏆 Топ авторов:\n"
+        for i, a in enumerate(top, 1):
+            name = a.get("username") or a.get("first_name") or str(a["user_id"])
+            text += f"{i}. @{name}: {a['total_earned']:.2f} TON ({a['total_subscribers']} подп.)\n"
+
+    return text
+
+
+def withdrawals_list_text() -> str:
+    pending = get_pending_withdrawals(limit=20)
+    if not pending:
+        return "💰 Нет заявок на вывод"
+
+    text = f"💰 Заявки на вывод ({len(pending)})\n\n"
+    for w in pending:
+        name = w.get("author_username") or w.get("author_first_name") or str(w["author_id"])
+        created = w.get("created_at", "")[:16].replace("T", " ") if w.get("created_at") else ""
+        text += (
+            f"#{w['id']} — @{name} (id: {w['author_id']})\n"
+            f"💎 Сумма: {w['amount_ton']:.4f} TON\n"
+            f"💰 Текущий баланс: {w['current_balance']:.4f} TON\n"
+            f"💳 Кошелёк: `{w['ton_wallet']}`\n"
+            f"📅 {created}\n"
+            f"➡️ /wd_approve_{w['id']} или /wd_reject_{w['id']}\n\n"
+        )
+    return text
+
+
+# ═══════════════════════════════════════════
 # REGISTER
 # ═══════════════════════════════════════════
 
@@ -728,7 +916,7 @@ def register_admin(dp: Dispatcher):
         set_setting("active_model", info["model"])
         set_setting("active_model_news", info["news"])
         set_setting("active_model_decision", info["decision"])
-        await callback.answer(f"✅ Модель переключена на {info['name']}")
+        await callback.answer(f"✅ {info['name']}")
         await callback.message.edit_text(
             f"🤖 AI Settings\n\nТекущая модель: {info['model']}",
             reply_markup=ai_menu_kb()
@@ -756,51 +944,51 @@ def register_admin(dp: Dispatcher):
         current = get_setting("free_trial_enabled", "on")
         new_val = "off" if current == "on" else "on"
         set_setting("free_trial_enabled", new_val)
-        await callback.answer(f"Пробный период: {new_val.upper()}")
+        await callback.answer(f"Пробный: {new_val.upper()}")
         await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_free_analyses")
     async def set_free_analyses(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_free_trial_analyses.set()
         current = get_setting("free_trial_analyses", "1")
-        await callback.message.answer(f"Текущий лимит бесплатных анализов: {current}\n\nВведи новый лимит:")
+        await callback.message.answer(f"Текущий: {current}\n\nВведи новый лимит:")
 
     @dp.message_handler(state=PricingStates.waiting_free_trial_analyses)
     async def save_free_analyses(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 0 or val > 100:
-                await message.answer("❌ Введи число от 0 до 100")
+                await message.answer("❌ 0-100")
                 return
             set_setting("free_trial_analyses", str(val))
             await state.finish()
             await message.answer(f"✅ Бесплатных анализов: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_free_opp")
     async def set_free_opp(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_free_trial_opportunities.set()
         current = get_setting("free_trial_opportunities", "1")
-        await callback.message.answer(f"Текущий лимит бесплатных сигналов: {current}\n\nВведи новый лимит:")
+        await callback.message.answer(f"Текущий: {current}\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_free_trial_opportunities)
     async def save_free_opp(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 0 or val > 100:
-                await message.answer("❌ Введи число от 0 до 100")
+                await message.answer("❌ 0-100")
                 return
             set_setting("free_trial_opportunities", str(val))
             await state.finish()
             await message.answer(f"✅ Бесплатных сигналов: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_token")
     async def set_token_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_token_price.set()
-        await callback.message.answer("Введи цену одного токена в TON (например: 0.05):")
+        await callback.message.answer("Введи цену токена в TON:")
 
     @dp.message_handler(state=PricingStates.waiting_token_price)
     async def save_token_price(message: types.Message, state: FSMContext):
@@ -808,14 +996,14 @@ def register_admin(dp: Dispatcher):
             float(message.text.strip())
             set_setting("token_price_ton", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена токена: {message.text.strip()} TON")
+            await message.answer(f"✅ Цена: {message.text.strip()} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 0.05")
+            await message.answer("❌ Число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_analysis")
     async def set_analysis_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_analysis_price.set()
-        await callback.message.answer("Введи цену анализа в токенах (например: 10):")
+        await callback.message.answer("Цена анализа в токенах:")
 
     @dp.message_handler(state=PricingStates.waiting_analysis_price)
     async def save_analysis_price(message: types.Message, state: FSMContext):
@@ -823,14 +1011,14 @@ def register_admin(dp: Dispatcher):
             int(message.text.strip())
             set_setting("analysis_price_tokens", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена анализа: {message.text.strip()} токенов")
+            await message.answer(f"✅ Цена: {message.text.strip()} токенов")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_opportunity")
     async def set_opportunity_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_opportunity_price.set()
-        await callback.message.answer("Введи цену сигнала в токенах (например: 20):")
+        await callback.message.answer("Цена сигнала в токенах:")
 
     @dp.message_handler(state=PricingStates.waiting_opportunity_price)
     async def save_opportunity_price(message: types.Message, state: FSMContext):
@@ -838,34 +1026,34 @@ def register_admin(dp: Dispatcher):
             int(message.text.strip())
             set_setting("opportunity_price_tokens", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена сигнала: {message.text.strip()} токенов")
+            await message.answer(f"✅ Цена: {message.text.strip()} токенов")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_referral")
     async def set_referral_percent(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_referral_percent.set()
         current = get_setting("referral_percent", "10")
-        await callback.message.answer(f"Текущий реферальный %: {current}%\n\nВведи новый %:")
+        await callback.message.answer(f"Текущий: {current}%\n\nВведи %:")
 
     @dp.message_handler(state=PricingStates.waiting_referral_percent)
     async def save_referral_percent(message: types.Message, state: FSMContext):
         try:
             val = float(message.text.strip())
             if val < 0 or val > 50:
-                await message.answer("❌ Введи число от 0 до 50")
+                await message.answer("❌ 0-50")
                 return
             set_setting("referral_percent", str(val))
             await state.finish()
-            await message.answer(f"✅ Реферальный %: {val}%")
+            await message.answer(f"✅ Реферальный: {val}%")
         except ValueError:
-            await message.answer("❌ Введи число")
+            await message.answer("❌ Число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_price")
     async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_price.set()
         current = get_setting("subscription_price_ton", "1")
-        await callback.message.answer(f"Текущая цена подписки: {current} TON\n\nВведи новую цену (например: 2):")
+        await callback.message.answer(f"Текущая: {current} TON\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_price)
     async def save_sub_price(message: types.Message, state: FSMContext):
@@ -873,66 +1061,66 @@ def register_admin(dp: Dispatcher):
             float(message.text.strip())
             set_setting("subscription_price_ton", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена подписки: {message.text.strip()} TON")
+            await message.answer(f"✅ Цена: {message.text.strip()} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 2")
+            await message.answer("❌ Число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_days")
     async def set_sub_days(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_days.set()
         current = get_setting("subscription_days", "30")
-        await callback.message.answer(f"Текущий срок: {current} дней\n\nВведи новый срок:")
+        await callback.message.answer(f"Текущий: {current} дней\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_days)
     async def save_sub_days(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 365:
-                await message.answer("❌ Введи число от 1 до 365")
+                await message.answer("❌ 1-365")
                 return
             set_setting("subscription_days", str(val))
             await state.finish()
-            await message.answer(f"✅ Срок подписки: {val} дней")
+            await message.answer(f"✅ Срок: {val} дней")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_analyses")
     async def set_sub_analyses(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_sub_daily_analyses.set()
         current = get_setting("sub_daily_analyses", "15")
-        await callback.message.answer(f"Текущий лимит анализов: {current}/день\n\nВведи новый лимит:")
+        await callback.message.answer(f"Текущий: {current}/день\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_sub_daily_analyses)
     async def save_sub_analyses(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 1000:
-                await message.answer("❌ Введи число от 1 до 1000")
+                await message.answer("❌ 1-1000")
                 return
             set_setting("sub_daily_analyses", str(val))
             await state.finish()
-            await message.answer(f"✅ Лимит анализов: {val}/день")
+            await message.answer(f"✅ Лимит: {val}/день")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_sub_opp")
     async def set_sub_opp(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_sub_daily_opportunities.set()
         current = get_setting("sub_daily_opportunities", "3")
-        await callback.message.answer(f"Текущий лимит сигналов: {current}/день\n\nВведи новый лимит:")
+        await callback.message.answer(f"Текущий: {current}/день\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_sub_daily_opportunities)
     async def save_sub_opp(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 100:
-                await message.answer("❌ Введи число от 1 до 100")
+                await message.answer("❌ 1-100")
                 return
             set_setting("sub_daily_opportunities", str(val))
             await state.finish()
-            await message.answer(f"✅ Лимит сигналов: {val}/день")
+            await message.answer(f"✅ Лимит: {val}/день")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     # === PACKAGES ===
     @dp.callback_query_handler(lambda c: c.data == "admin_packages")
@@ -951,46 +1139,46 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "pkg_add")
     async def pkg_add_start(callback: types.CallbackQuery, state: FSMContext):
         await PackageStates.waiting_name.set()
-        await callback.message.answer("Введи название пакета (например: Стартовый):")
+        await callback.message.answer("Название пакета:")
 
     @dp.message_handler(state=PackageStates.waiting_name)
     async def pkg_add_name(message: types.Message, state: FSMContext):
         await state.update_data(name=message.text.strip())
         await PackageStates.waiting_tokens.set()
-        await message.answer("Введи количество токенов в пакете (например: 50):")
+        await message.answer("Количество токенов:")
 
     @dp.message_handler(state=PackageStates.waiting_tokens)
     async def pkg_add_tokens(message: types.Message, state: FSMContext):
         try:
             tokens = int(message.text.strip())
             if tokens < 1:
-                await message.answer("❌ Минимум 1 токен")
+                await message.answer("❌ Минимум 1")
                 return
             await state.update_data(tokens=tokens)
             await PackageStates.waiting_price.set()
-            await message.answer("Введи цену пакета в TON (например: 1.55):")
+            await message.answer("Цена в TON:")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое число")
 
     @dp.message_handler(state=PackageStates.waiting_price)
     async def pkg_add_price(message: types.Message, state: FSMContext):
         try:
             price = float(message.text.strip().replace(",", "."))
             if price <= 0:
-                await message.answer("❌ Цена должна быть больше 0")
+                await message.answer("❌ > 0")
                 return
             await state.update_data(price=price)
             await PackageStates.waiting_discount.set()
-            await message.answer("Введи скидку в % (0 если без скидки, например: 20):")
+            await message.answer("Скидка % (0 если нет):")
         except ValueError:
-            await message.answer("❌ Введи число, например: 1.55")
+            await message.answer("❌ Число")
 
     @dp.message_handler(state=PackageStates.waiting_discount)
     async def pkg_add_discount(message: types.Message, state: FSMContext):
         try:
             discount = int(message.text.strip())
             if discount < 0 or discount > 99:
-                await message.answer("❌ Введи число от 0 до 99")
+                await message.answer("❌ 0-99")
                 return
             data = await state.get_data()
             create_token_package(
@@ -1000,22 +1188,16 @@ def register_admin(dp: Dispatcher):
                 discount_percent=discount,
             )
             await state.finish()
-            discount_text = f" (скидка {discount}%)" if discount > 0 else ""
-            await message.answer(
-                f"✅ Пакет создан!\n\n"
-                f"📦 {data['name']}\n"
-                f"Токены: {data['tokens']}\n"
-                f"Цена: {data['price']} TON{discount_text}"
-            )
+            await message.answer(f"✅ Пакет создан: {data['name']}")
         except ValueError:
-            await message.answer("❌ Введи целое число от 0 до 99")
+            await message.answer("❌ Целое 0-99")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_edit_"))
     async def pkg_edit(callback: types.CallbackQuery):
         pkg_id = int(callback.data.replace("pkg_edit_", ""))
         package = get_token_package(pkg_id)
         if not package:
-            await callback.answer("Пакет не найден")
+            await callback.answer("Не найден")
             return
         discount_text = f" (скидка {package['discount_percent']}%)" if package["discount_percent"] > 0 else ""
         text = (
@@ -1032,19 +1214,18 @@ def register_admin(dp: Dispatcher):
         pkg_id = int(callback.data.replace("pkg_toggle_", ""))
         package = get_token_package(pkg_id)
         if not package:
-            await callback.answer("Пакет не найден")
             return
         new_active = not package["is_active"]
         update_token_package(pkg_id, package["name"], package["tokens"],
                              package["price_ton"], package["discount_percent"], new_active)
-        await callback.answer("✅ Статус изменён")
+        await callback.answer("✅")
         discount_text = f" (скидка {package['discount_percent']}%)" if package["discount_percent"] > 0 else ""
         text = (
-            f"📦 Редактирование пакета\n\n"
+            f"📦 Редактирование\n\n"
             f"Название: {package['name']}\n"
             f"Токены: {package['tokens']}\n"
             f"Цена: {package['price_ton']} TON{discount_text}\n"
-            f"Статус: {'✅ Активен' if new_active else '❌ Неактивен'}"
+            f"Статус: {'✅' if new_active else '❌'}"
         )
         await callback.message.edit_text(text, reply_markup=package_edit_kb(pkg_id, new_active))
 
@@ -1052,16 +1233,12 @@ def register_admin(dp: Dispatcher):
     async def pkg_delete(callback: types.CallbackQuery):
         pkg_id = int(callback.data.replace("pkg_delete_", ""))
         delete_token_package(pkg_id)
-        await callback.answer("🗑 Пакет удалён")
+        await callback.answer("🗑")
         packages = get_token_packages(active_only=False)
-        text = "📦 Пакеты токенов\n\n"
-        if packages:
-            for p in packages:
-                status = "✅" if p["is_active"] else "❌"
-                discount = f" (скидка {p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
-                text += f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}\n"
-        else:
-            text += "Пакетов нет"
+        text = "📦 Пакеты\n\n"
+        for p in packages:
+            status = "✅" if p["is_active"] else "❌"
+            text += f"{status} {p['name']}: {p['tokens']} = {p['price_ton']} TON\n"
         await callback.message.edit_text(text, reply_markup=packages_kb())
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_name_"))
@@ -1069,7 +1246,7 @@ def register_admin(dp: Dispatcher):
         pkg_id = int(callback.data.replace("pkg_name_", ""))
         await state.update_data(pkg_id=pkg_id)
         await PackageStates.editing_name.set()
-        await callback.message.answer("Введи новое название пакета:")
+        await callback.message.answer("Новое название:")
 
     @dp.message_handler(state=PackageStates.editing_name)
     async def pkg_save_name(message: types.Message, state: FSMContext):
@@ -1080,14 +1257,14 @@ def register_admin(dp: Dispatcher):
             update_token_package(pkg_id, message.text.strip(), package["tokens"],
                                  package["price_ton"], package["discount_percent"], package["is_active"])
         await state.finish()
-        await message.answer(f"✅ Название изменено: {message.text.strip()}")
+        await message.answer(f"✅ {message.text.strip()}")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_tokens_"))
     async def pkg_edit_tokens(callback: types.CallbackQuery, state: FSMContext):
         pkg_id = int(callback.data.replace("pkg_tokens_", ""))
         await state.update_data(pkg_id=pkg_id)
         await PackageStates.editing_tokens.set()
-        await callback.message.answer("Введи новое количество токенов:")
+        await callback.message.answer("Новое кол-во токенов:")
 
     @dp.message_handler(state=PackageStates.editing_tokens)
     async def pkg_save_tokens(message: types.Message, state: FSMContext):
@@ -1100,23 +1277,23 @@ def register_admin(dp: Dispatcher):
                 update_token_package(pkg_id, package["name"], tokens,
                                      package["price_ton"], package["discount_percent"], package["is_active"])
             await state.finish()
-            await message.answer(f"✅ Токенов в пакете: {tokens}")
+            await message.answer(f"✅ {tokens}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_price_"))
     async def pkg_edit_price(callback: types.CallbackQuery, state: FSMContext):
         pkg_id = int(callback.data.replace("pkg_price_", ""))
         await state.update_data(pkg_id=pkg_id)
         await PackageStates.editing_price.set()
-        await callback.message.answer("Введи новую цену в TON (например: 1.55):")
+        await callback.message.answer("Новая цена TON:")
 
     @dp.message_handler(state=PackageStates.editing_price)
     async def pkg_save_price(message: types.Message, state: FSMContext):
         try:
             price = float(message.text.strip().replace(",", "."))
             if price <= 0:
-                await message.answer("❌ Цена должна быть больше 0")
+                await message.answer("❌")
                 return
             data = await state.get_data()
             pkg_id = data["pkg_id"]
@@ -1125,23 +1302,23 @@ def register_admin(dp: Dispatcher):
                 update_token_package(pkg_id, package["name"], package["tokens"],
                                      price, package["discount_percent"], package["is_active"])
             await state.finish()
-            await message.answer(f"✅ Цена пакета: {price} TON")
+            await message.answer(f"✅ {price} TON")
         except ValueError:
-            await message.answer("❌ Введи число, например: 1.55")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_discount_"))
     async def pkg_edit_discount(callback: types.CallbackQuery, state: FSMContext):
         pkg_id = int(callback.data.replace("pkg_discount_", ""))
         await state.update_data(pkg_id=pkg_id)
         await PackageStates.editing_discount.set()
-        await callback.message.answer("Введи скидку в % (0 если без скидки):")
+        await callback.message.answer("Новая скидка %:")
 
     @dp.message_handler(state=PackageStates.editing_discount)
     async def pkg_save_discount(message: types.Message, state: FSMContext):
         try:
             discount = int(message.text.strip())
             if discount < 0 or discount > 99:
-                await message.answer("❌ Введи число от 0 до 99")
+                await message.answer("❌")
                 return
             data = await state.get_data()
             pkg_id = data["pkg_id"]
@@ -1150,9 +1327,9 @@ def register_admin(dp: Dispatcher):
                 update_token_package(pkg_id, package["name"], package["tokens"],
                                      package["price_ton"], discount, package["is_active"])
             await state.finish()
-            await message.answer(f"✅ Скидка: {discount}%")
+            await message.answer(f"✅ {discount}%")
         except ValueError:
-            await message.answer("❌ Введи целое число от 0 до 99")
+            await message.answer("❌")
 
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
@@ -1170,7 +1347,7 @@ def register_admin(dp: Dispatcher):
             ))
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
         await callback.message.edit_text(
-            f"👤 Users\n\nВсего: {len(users)} пользователей",
+            f"👤 Users\n\nВсего: {len(users)}",
             reply_markup=kb
         )
 
@@ -1183,7 +1360,7 @@ def register_admin(dp: Dispatcher):
         lines = ["🏆 Топ рефереров\n"]
         for i, r in enumerate(referrers, 1):
             name = r.get("username") or r.get("first_name") or str(r["user_id"])
-            lines.append(f"{i}. @{name} — {r['total_referrals']} реф. | {r['referral_earnings_ton']:.4f} TON")
+            lines.append(f"{i}. @{name} — {r['total_referrals']} | {r['referral_earnings_ton']:.4f} TON")
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -1191,7 +1368,7 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "user_find")
     async def find_user_start(callback: types.CallbackQuery, state: FSMContext):
         await UserStates.waiting_find_user.set()
-        await callback.message.answer("Введи Telegram ID пользователя:")
+        await callback.message.answer("Введи Telegram ID:")
 
     @dp.message_handler(state=UserStates.waiting_find_user)
     async def find_user_result(message: types.Message, state: FSMContext):
@@ -1200,18 +1377,18 @@ def register_admin(dp: Dispatcher):
             user = get_user(uid)
             await state.finish()
             if not user:
-                await message.answer("❌ Пользователь не найден")
+                await message.answer("❌ Не найден")
                 return
             await message.answer(format_user_info(user), reply_markup=user_kb(uid))
         except ValueError:
-            await message.answer("❌ Введи числовой ID")
+            await message.answer("❌ ID должен быть числом")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("user_view_"))
     async def view_user(callback: types.CallbackQuery):
         uid = int(callback.data.replace("user_view_", ""))
         user = get_user(uid)
         if not user:
-            await callback.answer("Пользователь не найден")
+            await callback.answer("Не найден")
             return
         await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
 
@@ -1221,7 +1398,7 @@ def register_admin(dp: Dispatcher):
         banned = is_user_banned(uid)
         set_user_ban(uid, not banned)
         action = "разбанен" if banned else "забанен"
-        await callback.answer(f"✅ Пользователь {action}")
+        await callback.answer(f"✅ {action}")
         user = get_user(uid)
         if user:
             await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
@@ -1231,8 +1408,43 @@ def register_admin(dp: Dispatcher):
         uid = int(callback.data.replace("user_vip_", ""))
         vip = is_user_vip(uid)
         set_user_vip(uid, not vip)
-        action = "убран VIP" if vip else "получил VIP"
-        await callback.answer(f"✅ Пользователь {action}")
+        action = "убран VIP" if vip else "VIP"
+        await callback.answer(f"✅ {action}")
+        user = get_user(uid)
+        if user:
+            await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_author_"))
+    async def toggle_user_author(callback: types.CallbackQuery):
+        """Дать или забрать статус автора из карточки юзера."""
+        uid = int(callback.data.replace("user_author_", ""))
+        from db.database import is_author as db_is_author
+        is_auth = db_is_author(uid)
+        set_author_status(uid, not is_auth)
+        action = "Забран статус автора" if is_auth else "Выдан статус автора"
+        await callback.answer(f"✅ {action}")
+
+        # Уведомим юзера
+        if not is_auth:
+            try:
+                from aiogram import Bot
+                bot_token = os.getenv("BOT_TOKEN")
+                bot = Bot(token=bot_token)
+                await bot.send_message(
+                    uid,
+                    "🎉 Поздравляем! Тебе выдан статус Автора!\n\n"
+                    "Теперь ты можешь:\n"
+                    "• Публиковать свои прогнозы\n"
+                    "• Получать подписчиков\n"
+                    "• Получать донаты в TON\n\n"
+                    "Настрой профиль: /profile\n"
+                    "Установи bio: /edit_bio\n"
+                    "Кошелёк для выплат: /set_wallet"
+                )
+                await bot.close()
+            except Exception as e:
+                print(f"Notify author grant error: {e}")
+
         user = get_user(uid)
         if user:
             await callback.message.edit_text(format_user_info(user), reply_markup=user_kb(uid))
@@ -1242,7 +1454,7 @@ def register_admin(dp: Dispatcher):
         uid = int(callback.data.replace("user_gift_", ""))
         await state.update_data(target_user_id=uid)
         await UserStates.waiting_gift_tokens.set()
-        await callback.message.answer(f"Сколько токенов подарить пользователю {uid}?")
+        await callback.message.answer(f"Сколько токенов подарить {uid}?")
 
     @dp.message_handler(state=UserStates.waiting_gift_tokens)
     async def gift_tokens_save(message: types.Message, state: FSMContext):
@@ -1252,16 +1464,16 @@ def register_admin(dp: Dispatcher):
             uid = data.get("target_user_id")
             new_balance = add_tokens(uid, amount)
             await state.finish()
-            await message.answer(f"✅ Подарено {amount} токенов. Новый баланс: {new_balance}")
+            await message.answer(f"✅ {amount} токенов. Баланс: {new_balance}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("user_setbal_"))
     async def set_balance_start(callback: types.CallbackQuery, state: FSMContext):
         uid = int(callback.data.replace("user_setbal_", ""))
         await state.update_data(target_user_id=uid)
         await UserStates.waiting_set_tokens.set()
-        await callback.message.answer(f"Введи новый баланс токенов для пользователя {uid}:")
+        await callback.message.answer(f"Новый баланс для {uid}:")
 
     @dp.message_handler(state=UserStates.waiting_set_tokens)
     async def set_balance_save(message: types.Message, state: FSMContext):
@@ -1271,18 +1483,18 @@ def register_admin(dp: Dispatcher):
             uid = data.get("target_user_id")
             set_tokens(uid, amount)
             await state.finish()
-            await message.answer(f"✅ Баланс установлен: {amount} токенов")
+            await message.answer(f"✅ Баланс: {amount}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌ Целое")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("user_history_"))
     async def user_history(callback: types.CallbackQuery):
         uid = int(callback.data.replace("user_history_", ""))
         analyses = get_user_analyses(uid, limit=5)
         if not analyses:
-            await callback.answer("История пустая")
+            await callback.answer("Пусто")
             return
-        lines = [f"📊 История запросов пользователя {uid}\n"]
+        lines = [f"📊 История {uid}\n"]
         for r in analyses:
             lines.append(f"• {r['question'][:50]}")
             lines.append(f"  {r['created_at'][:10]}")
@@ -1296,12 +1508,12 @@ def register_admin(dp: Dispatcher):
         uid = int(callback.data.replace("user_refs_", ""))
         refs = get_referrals(uid)
         if not refs:
-            await callback.answer("Рефералов нет")
+            await callback.answer("Нет")
             return
-        lines = [f"👥 Рефералы пользователя {uid}\n"]
+        lines = [f"👥 Рефералы {uid}\n"]
         for r in refs[:10]:
             name = r.get("username") or r.get("first_name") or str(r["user_id"])
-            lines.append(f"• @{name} — {r['total_analyses']} анализов")
+            lines.append(f"• @{name} — {r['total_analyses']}")
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -1324,48 +1536,46 @@ def register_admin(dp: Dispatcher):
     async def stats_full(callback: types.CallbackQuery):
         data = get_analytics_data()
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_full"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="stats_full"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_analytics"))
         await callback.message.edit_text(format_analytics(data), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "stats_daily")
     async def stats_daily(callback: types.CallbackQuery):
         data = get_analytics_data()
         text = (
-            f"📈 Daily Stats\n\n"
+            f"📈 Daily\n\n"
             f"Сегодня:\n"
             f"  Анализов: {data['analyses_today']}\n"
             f"  Сигналов: {data['opp_today']}\n"
-            f"  Новых юзеров: {data['new_users_today']}\n\n"
-            f"Вчера:\n"
-            f"  Анализов: {data['analyses_yesterday']}\n\n"
-            f"За неделю:\n"
+            f"  Новых: {data['new_users_today']}\n\n"
+            f"Вчера:\n  Анализов: {data['analyses_yesterday']}\n\n"
+            f"Неделя:\n"
             f"  Анализов: {data['analyses_week']}\n"
             f"  Сигналов: {data['opp_week']}\n"
-            f"  Новых юзеров: {data['new_users_week']}"
+            f"  Новых: {data['new_users_week']}"
         )
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_daily"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="stats_daily"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_analytics"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "stats_users")
     async def stats_users(callback: types.CallbackQuery):
         data = get_analytics_data()
         text = (
-            f"👥 User Stats\n\n"
-            f"Всего пользователей: {data['total_users']}\n"
+            f"👥 Users\n\n"
+            f"Всего: {data['total_users']}\n"
             f"VIP: {data['vip_users']}\n"
             f"Подписчиков: {data['total_subscribed']}\n"
             f"Забанено: {data['banned_users']}\n"
             f"Новых сегодня: {data['new_users_today']}\n"
             f"Новых за неделю: {data['new_users_week']}\n\n"
-            f"👥 Рефералы\n"
-            f"Всего приглашено: {data['total_referred']}"
+            f"👥 Рефералы: {data['total_referred']}"
         )
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_users"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="stats_users"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_analytics"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "stats_revenue")
@@ -1373,26 +1583,26 @@ def register_admin(dp: Dispatcher):
         data = get_analytics_data()
         text = (
             f"💰 Revenue\n\n"
-            f"Всего получено: {data['total_ton']:.4f} TON\n"
-            f"Реф. выплаты: {data['total_referral_ton']:.4f} TON\n"
-            f"Чистый доход: {(data['total_ton'] - data['total_referral_ton']):.4f} TON"
+            f"Всего TON: {data['total_ton']:.4f}\n"
+            f"Реф. выплаты: {data['total_referral_ton']:.4f}\n"
+            f"Чистый доход: {(data['total_ton'] - data['total_referral_ton']):.4f}"
         )
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_revenue"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="stats_revenue"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_analytics"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "stats_top_markets")
     async def stats_top_markets(callback: types.CallbackQuery):
         data = get_analytics_data()
         top = "\n".join([f"{i+1}. {m[0][:50]} — {m[1]}x"
-                         for i, m in enumerate(data["top_markets"])]) or "Нет данных"
+                         for i, m in enumerate(data["top_markets"])]) or "Нет"
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="stats_top_markets"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
-        await callback.message.edit_text(f"🏆 Топ рынков\n\n{top}", reply_markup=kb)
+        kb.add(InlineKeyboardButton("🔄", callback_data="stats_top_markets"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_analytics"))
+        await callback.message.edit_text(f"🏆 Топ\n\n{top}", reply_markup=kb)
 
-    # === TRACKING ACCURACY ===
+    # === TRACKING ===
     @dp.callback_query_handler(lambda c: c.data == "admin_tracking")
     async def tracking_menu(callback: types.CallbackQuery):
         await callback.message.edit_text(tracking_menu_text(), reply_markup=tracking_menu_kb())
@@ -1405,8 +1615,8 @@ def register_admin(dp: Dispatcher):
     async def tracking_overall(callback: types.CallbackQuery):
         stats = get_accuracy_stats()
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_overall"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="tracking_overall"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_tracking"))
         await callback.message.edit_text(format_overall_stats(stats), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_confidence")
@@ -1414,8 +1624,8 @@ def register_admin(dp: Dispatcher):
         stats = get_accuracy_stats()
         text = format_breakdown(stats, "by_confidence", "По уверенности", "🎯")
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_confidence"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="tracking_confidence"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_tracking"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_type")
@@ -1423,8 +1633,8 @@ def register_admin(dp: Dispatcher):
         stats = get_accuracy_stats()
         text = format_breakdown(stats, "by_type", "По типу рынка", "🧩")
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_type"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="tracking_type"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_tracking"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_alpha")
@@ -1432,8 +1642,8 @@ def register_admin(dp: Dispatcher):
         stats = get_accuracy_stats()
         text = format_breakdown(stats, "by_alpha", "По сигналу альфы", "⚡")
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_alpha"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="tracking_alpha"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_tracking"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_category")
@@ -1441,8 +1651,8 @@ def register_admin(dp: Dispatcher):
         stats = get_accuracy_stats()
         text = format_breakdown(stats, "by_category", "По категории", "🏷")
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="tracking_category"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="tracking_category"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_tracking"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_toggle")
@@ -1455,26 +1665,25 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "tracking_force_check")
     async def tracking_force_check(callback: types.CallbackQuery):
-        await callback.answer("⏳ Запускаю проверку...")
+        await callback.answer("⏳")
         await callback.message.edit_text(
-            "⏳ Проверяю разрешённые рынки...\n\n"
-            "Это может занять несколько минут если предсказаний много.",
+            "⏳ Проверяю разрешённые рынки...",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking")
+                InlineKeyboardButton("⬅️", callback_data="admin_tracking")
             )
         )
         try:
             from app import check_resolved_predictions
             await check_resolved_predictions()
             await callback.message.edit_text(
-                "✅ Проверка завершена!\n\n" + tracking_menu_text(),
+                "✅ Готово!\n\n" + tracking_menu_text(),
                 reply_markup=tracking_menu_kb()
             )
         except Exception as e:
             await callback.message.edit_text(
-                f"❌ Ошибка: {e}",
+                f"❌ {e}",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking")
+                    InlineKeyboardButton("⬅️", callback_data="admin_tracking")
                 )
             )
 
@@ -1499,65 +1708,59 @@ def register_admin(dp: Dispatcher):
     async def wl_admin_price(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_price.set()
         current = get_setting("watchlist_price_tokens", "5")
-        await callback.message.answer(
-            f"Текущая цена добавления в Watchlist: {current} токенов\n\n"
-            f"Введи новую цену:"
-        )
+        await callback.message.answer(f"Текущая: {current} токенов\n\nВведи:")
 
     @dp.message_handler(state=WatchlistStates.waiting_price)
     async def wl_save_price(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 0 or val > 1000:
-                await message.answer("❌ Введи число от 0 до 1000")
+                await message.answer("❌ 0-1000")
                 return
             set_setting("watchlist_price_tokens", str(val))
             await state.finish()
-            await message.answer(f"✅ Цена Watchlist: {val} токенов")
+            await message.answer(f"✅ Цена: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_limit_regular")
     async def wl_admin_limit_regular(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_limit_regular.set()
         current = get_setting("watchlist_limit_regular", "10")
-        await callback.message.answer(
-            f"Текущий лимит (обычные юзеры): {current}\n\nВведи новый лимит:"
-        )
+        await callback.message.answer(f"Текущий: {current}\n\nВведи:")
 
     @dp.message_handler(state=WatchlistStates.waiting_limit_regular)
     async def wl_save_limit_regular(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 1000:
-                await message.answer("❌ Введи число от 1 до 1000")
+                await message.answer("❌")
                 return
             set_setting("watchlist_limit_regular", str(val))
             await state.finish()
-            await message.answer(f"✅ Лимит (обычные): {val}")
+            await message.answer(f"✅ Лимит: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_limit_vip")
     async def wl_admin_limit_vip(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_limit_vip.set()
         current = get_setting("watchlist_limit_vip", "50")
-        await callback.message.answer(
-            f"Текущий лимит (VIP/подписка): {current}\n\nВведи новый лимит:"
-        )
+        await callback.message.answer(f"Текущий: {current}\n\nВведи:")
 
     @dp.message_handler(state=WatchlistStates.waiting_limit_vip)
     async def wl_save_limit_vip(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 5000:
-                await message.answer("❌ Введи число от 1 до 5000")
+                await message.answer("❌")
                 return
             set_setting("watchlist_limit_vip", str(val))
             await state.finish()
-            await message.answer(f"✅ Лимит (VIP): {val}")
+            await
+            message.answer(f"✅ Лимит VIP: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_extra_price")
     async def wl_admin_extra_price(callback: types.CallbackQuery, state: FSMContext):
@@ -1565,8 +1768,7 @@ def register_admin(dp: Dispatcher):
         current = get_setting("watchlist_extra_slots_price", "20")
         count = get_setting("watchlist_extra_slots_count", "5")
         await callback.message.answer(
-            f"Текущая цена пакета доп. слотов ({count} слотов): {current} токенов\n\n"
-            f"Введи новую цену:"
+            f"Текущая цена {count} слотов: {current} токенов\n\nВведи:"
         )
 
     @dp.message_handler(state=WatchlistStates.waiting_extra_price)
@@ -1574,136 +1776,491 @@ def register_admin(dp: Dispatcher):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 10000:
-                await message.answer("❌ Введи число от 1 до 10000")
+                await message.answer("❌")
                 return
             set_setting("watchlist_extra_slots_price", str(val))
             await state.finish()
-            await message.answer(f"✅ Цена пакета доп. слотов: {val} токенов")
+            await message.answer(f"✅ Цена: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_extra_count")
     async def wl_admin_extra_count(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_extra_count.set()
         current = get_setting("watchlist_extra_slots_count", "5")
-        await callback.message.answer(
-            f"Текущее количество слотов в одном пакете: {current}\n\n"
-            f"Введи новое количество:"
-        )
+        await callback.message.answer(f"Текущее: {current}\n\nВведи:")
 
     @dp.message_handler(state=WatchlistStates.waiting_extra_count)
     async def wl_save_extra_count(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 100:
-                await message.answer("❌ Введи число от 1 до 100")
+                await message.answer("❌")
                 return
             set_setting("watchlist_extra_slots_count", str(val))
             await state.finish()
-            await message.answer(f"✅ Слотов в пакете: {val}")
+            await message.answer(f"✅ Слотов: {val}")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_threshold")
     async def wl_admin_threshold(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_threshold.set()
         current = get_setting("watchlist_probability_threshold", "10")
-        await callback.message.answer(
-            f"Текущий порог изменения вероятности: {current}%\n\n"
-            f"При изменении на этот % или больше юзер получает уведомление.\n"
-            f"Введи новый порог (1-100):"
-        )
+        await callback.message.answer(f"Текущий: {current}%\n\nВведи порог (1-100):")
 
     @dp.message_handler(state=WatchlistStates.waiting_threshold)
     async def wl_save_threshold(message: types.Message, state: FSMContext):
         try:
             val = float(message.text.strip().replace(",", "."))
             if val < 1 or val > 100:
-                await message.answer("❌ Введи число от 1 до 100")
+                await message.answer("❌")
                 return
             set_setting("watchlist_probability_threshold", str(val))
             await state.finish()
-            await message.answer(f"✅ Порог изменения: {val}%")
+            await message.answer(f"✅ Порог: {val}%")
         except ValueError:
-            await message.answer("❌ Введи число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_closing_hours")
     async def wl_admin_closing_hours(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_closing_hours.set()
         current = get_setting("watchlist_closing_hours", "24")
-        await callback.message.answer(
-            f"Текущее значение: {current} часов до закрытия\n\n"
-            f"За сколько часов до закрытия рынка отправлять предупреждение?\n"
-            f"Введи количество часов (1-168):"
-        )
+        await callback.message.answer(f"Текущее: {current} часов\n\nВведи:")
 
     @dp.message_handler(state=WatchlistStates.waiting_closing_hours)
     async def wl_save_closing_hours(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 168:
-                await message.answer("❌ Введи число от 1 до 168")
+                await message.answer("❌")
                 return
             set_setting("watchlist_closing_hours", str(val))
             await state.finish()
-            await message.answer(f"✅ Предупреждение за: {val} часов")
+            await message.answer(f"✅ За: {val} часов")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_check_interval")
     async def wl_admin_check_interval(callback: types.CallbackQuery, state: FSMContext):
         await WatchlistStates.waiting_check_interval.set()
         current = get_setting("watchlist_check_interval_hours", "3")
-        await callback.message.answer(
-            f"Текущий интервал проверки: каждые {current} часа\n\n"
-            f"Как часто воркер проверяет рынки?\n"
-            f"Введи интервал в часах (1-24):"
-        )
+        await callback.message.answer(f"Текущий: {current} ч\n\nВведи (1-24):")
 
     @dp.message_handler(state=WatchlistStates.waiting_check_interval)
     async def wl_save_check_interval(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 24:
-                await message.answer("❌ Введи число от 1 до 24")
+                await message.answer("❌")
                 return
             set_setting("watchlist_check_interval_hours", str(val))
             await state.finish()
-            await message.answer(f"✅ Интервал проверки: каждые {val} ч")
+            await message.answer(f"✅ Интервал: {val} ч")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_force_check")
     async def wl_admin_force_check(callback: types.CallbackQuery):
-        await callback.answer("⏳ Запускаю проверку...")
+        await callback.answer("⏳")
         await callback.message.edit_text(
-            "⏳ Проверяю все рынки в Watchlist...\n\n"
-            "Это может занять несколько минут.",
+            "⏳ Проверяю watchlist...",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist")
+                InlineKeyboardButton("⬅️", callback_data="admin_watchlist")
             )
         )
         try:
             from app import check_watchlist
             await check_watchlist()
             await callback.message.edit_text(
-                "✅ Проверка завершена!\n\n" + watchlist_admin_text(),
+                "✅ Готово!\n\n" + watchlist_admin_text(),
                 reply_markup=watchlist_admin_kb()
             )
         except Exception as e:
             await callback.message.edit_text(
-                f"❌ Ошибка: {e}",
+                f"❌ {e}",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist")
+                    InlineKeyboardButton("⬅️", callback_data="admin_watchlist")
                 )
             )
 
     @dp.callback_query_handler(lambda c: c.data == "wl_admin_stats")
     async def wl_admin_stats(callback: types.CallbackQuery):
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="wl_admin_stats"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="wl_admin_stats"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_watchlist"))
         await callback.message.edit_text(watchlist_stats_text(), reply_markup=kb)
+
+    # === AUTHORS ADMIN ===
+    @dp.callback_query_handler(lambda c: c.data == "admin_authors")
+    async def authors_admin_menu(callback: types.CallbackQuery):
+        await callback.message.edit_text(authors_admin_text(), reply_markup=authors_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_noop")
+    async def auth_admin_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_toggle_authors")
+    async def auth_admin_toggle_authors(callback: types.CallbackQuery):
+        current = get_setting("authors_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("authors_enabled", new_val)
+        await callback.answer(f"Авторы: {new_val.upper()}")
+        await callback.message.edit_text(authors_admin_text(), reply_markup=authors_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_toggle_donations")
+    async def auth_admin_toggle_donations(callback: types.CallbackQuery):
+        current = get_setting("donations_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("donations_enabled", new_val)
+        await callback.answer(f"Донаты: {new_val.upper()}")
+        await callback.message.edit_text(authors_admin_text(), reply_markup=authors_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_status_price")
+    async def auth_admin_status_price(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_author_status_price.set()
+        current = get_setting("author_status_price_ton", "5")
+        await callback.message.answer(
+            f"Текущая цена статуса автора: {current} TON\n\nВведи новую цену:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_author_status_price)
+    async def save_author_status_price(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip().replace(",", "."))
+            if val <= 0 or val > 1000:
+                await message.answer("❌ 0-1000")
+                return
+            set_setting("author_status_price_ton", str(val))
+            await state.finish()
+            await message.answer(f"✅ Цена статуса автора: {val} TON")
+        except ValueError:
+            await message.answer("❌ Число")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_platform_fee")
+    async def auth_admin_platform_fee(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_platform_fee.set()
+        current = get_setting("platform_fee_percent", "20")
+        await callback.message.answer(
+            f"Текущая комиссия: {current}%\n\n"
+            f"С каждого доната платформа берёт N%, остальное получает автор.\n"
+            f"Введи новый % (0-99):"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_platform_fee)
+    async def save_platform_fee(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip().replace(",", "."))
+            if val < 0 or val > 99:
+                await message.answer("❌ 0-99")
+                return
+            set_setting("platform_fee_percent", str(val))
+            await state.finish()
+            await message.answer(f"✅ Комиссия: {val}%")
+        except ValueError:
+            await message.answer("❌ Число")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_min_donation")
+    async def auth_admin_min_donation(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_min_donation.set()
+        current = get_setting("min_donation_ton", "0.1")
+        await callback.message.answer(
+            f"Текущий минимум: {current} TON\n\nВведи новый:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_min_donation)
+    async def save_min_donation(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip().replace(",", "."))
+            if val <= 0 or val > 100:
+                await message.answer("❌ > 0")
+                return
+            set_setting("min_donation_ton", str(val))
+            await state.finish()
+            await message.answer(f"✅ Мин. донат: {val} TON")
+        except ValueError:
+            await message.answer("❌ Число")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_min_withdrawal")
+    async def auth_admin_min_withdrawal(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_min_withdrawal.set()
+        current = get_setting("min_withdrawal_ton", "1")
+        await callback.message.answer(
+            f"Текущий минимум вывода: {current} TON\n\nВведи новый:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_min_withdrawal)
+    async def save_min_withdrawal(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip().replace(",", "."))
+            if val <= 0 or val > 100:
+                await message.answer("❌ > 0")
+                return
+            set_setting("min_withdrawal_ton", str(val))
+            await state.finish()
+            await message.answer(f"✅ Мин. вывод: {val} TON")
+        except ValueError:
+            await message.answer("❌ Число")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_max_posts")
+    async def auth_admin_max_posts(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_max_posts_per_day.set()
+        current = get_setting("max_posts_per_day", "5")
+        await callback.message.answer(
+            f"Текущий лимит: {current} постов/день\n\nВведи новый:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_max_posts_per_day)
+    async def save_max_posts(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 100:
+                await message.answer("❌ 1-100")
+                return
+            set_setting("max_posts_per_day", str(val))
+            await state.finish()
+            await message.answer(f"✅ Лимит: {val} постов/день")
+        except ValueError:
+            await message.answer("❌ Целое")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_list")
+    async def auth_admin_list(callback: types.CallbackQuery):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄", callback_data="auth_admin_list"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_authors"))
+        await callback.message.edit_text(authors_list_text(), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_grant")
+    async def auth_admin_grant(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_grant_author_id.set()
+        await callback.message.answer(
+            "🎁 Выдать статус автора\n\nВведи Telegram ID пользователя:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_grant_author_id)
+    async def save_grant_author(message: types.Message, state: FSMContext):
+        try:
+            uid = int(message.text.strip())
+            user = get_user(uid)
+            if not user:
+                await message.answer("❌ Пользователь не найден")
+                await state.finish()
+                return
+
+            set_author_status(uid, True)
+            await state.finish()
+
+            name = user.get("username") or user.get("first_name") or str(uid)
+            await message.answer(f"✅ @{name} ({uid}) теперь автор!")
+
+            # Уведомим юзера
+            try:
+                from aiogram import Bot
+                bot_token = os.getenv("BOT_TOKEN")
+                b = Bot(token=bot_token)
+                await b.send_message(
+                    uid,
+                    "🎉 Поздравляем! Тебе выдан статус Автора DeepAlpha!\n\n"
+                    "Теперь ты можешь:\n"
+                    "• Публиковать свои прогнозы\n"
+                    "• Получать подписчиков\n"
+                    "• Получать донаты в TON\n\n"
+                    "Настрой профиль: /profile\n"
+                    "Установи bio: /edit_bio\n"
+                    "Кошелёк для выплат: /set_wallet"
+                )
+                await b.close()
+            except Exception as e:
+                print(f"Grant notify error: {e}")
+        except ValueError:
+            await message.answer("❌ ID должен быть числом")
+            await state.finish()
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_revoke")
+    async def auth_admin_revoke(callback: types.CallbackQuery, state: FSMContext):
+        await AuthorAdminStates.waiting_revoke_author_id.set()
+        await callback.message.answer(
+            "❌ Забрать статус автора\n\nВведи Telegram ID:"
+        )
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_revoke_author_id)
+    async def save_revoke_author(message: types.Message, state: FSMContext):
+        try:
+            uid = int(message.text.strip())
+            user = get_user(uid)
+            if not user:
+                await message.answer("❌ Не найден")
+                await state.finish()
+                return
+
+            set_author_status(uid, False)
+            await state.finish()
+
+            name = user.get("username") or user.get("first_name") or str(uid)
+            await message.answer(f"✅ @{name} ({uid}) больше не автор")
+
+            try:
+                from aiogram import Bot
+                bot_token = os.getenv("BOT_TOKEN")
+                b = Bot(token=bot_token)
+                await b.send_message(
+                    uid,
+                    "ℹ️ Статус автора отозван администратором.\n\n"
+                    "Твои посты останутся, но новые публиковать нельзя.\n"
+                    "По вопросам обращайся в поддержку."
+                )
+                await b.close()
+            except Exception as e:
+                print(f"Revoke notify error: {e}")
+        except ValueError:
+            await message.answer("❌ Число")
+            await state.finish()
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_withdrawals")
+    async def auth_admin_withdrawals(callback: types.CallbackQuery):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄", callback_data="auth_admin_withdrawals"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_authors"))
+        await callback.message.edit_text(withdrawals_list_text(), reply_markup=kb)
+
+    @dp.message_handler(lambda m: m.text and m.text.startswith("/wd_approve_"))
+    async def wd_approve_command(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        try:
+            wid = int(message.text.replace("/wd_approve_", "").strip())
+            await state.update_data(withdrawal_id=wid)
+            await AuthorAdminStates.waiting_withdrawal_tx.set()
+            await message.answer(
+                f"💰 Заявка #{wid}\n\n"
+                f"Введи TX hash транзакции после отправки TON на кошелёк автора.\n\n"
+                f"Или /cancel для отмены."
+            )
+        except ValueError:
+            await message.answer("❌ Неверный ID")
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_withdrawal_tx)
+    async def save_withdrawal_tx(message: types.Message, state: FSMContext):
+        if message.text.strip() == "/cancel":
+            await state.finish()
+            await message.answer("❌ Отменено")
+            return
+
+        tx_hash = message.text.strip()
+        if len(tx_hash) < 20:
+            await message.answer("❌ TX hash слишком короткий")
+            return
+
+        data = await state.get_data()
+        wid = data.get("withdrawal_id")
+        await state.finish()
+
+        # Получаем данные заявки до апрува
+        pending = get_pending_withdrawals(limit=100)
+        withdrawal = next((w for w in pending if w["id"] == wid), None)
+
+        if not withdrawal:
+            await message.answer("❌ Заявка не найдена или уже обработана")
+            return
+
+        success = approve_withdrawal(wid, tx_hash, admin_note="approved via admin")
+        if success:
+            author_id = withdrawal["author_id"]
+            amount = withdrawal["amount_ton"]
+            wallet = withdrawal["ton_wallet"]
+
+            await message.answer(
+                f"✅ Заявка #{wid} одобрена!\n\n"
+                f"Автор: {author_id}\n"
+                f"Сумма: {amount:.4f} TON\n"
+                f"TX: {tx_hash[:30]}..."
+            )
+
+            # Уведомляем автора
+            try:
+                from aiogram import Bot
+                bot_token = os.getenv("BOT_TOKEN")
+                b = Bot(token=bot_token)
+                await b.send_message(
+                    author_id,
+                    f"💰 Твоя заявка на вывод одобрена!\n\n"
+                    f"💎 Сумма: {amount:.4f} TON\n"
+                    f"💳 Кошелёк: {wallet[:20]}...\n"
+                    f"🔗 TX: {tx_hash[:30]}...\n\n"
+                    f"Средства отправлены! Проверь кошелёк."
+                )
+                await b.close()
+            except Exception as e:
+                print(f"Approve notify error: {e}")
+        else:
+            await message.answer("❌ Ошибка — возможно недостаточно баланса у автора")
+
+    @dp.message_handler(lambda m: m.text and m.text.startswith("/wd_reject_"))
+    async def wd_reject_command(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        try:
+            wid = int(message.text.replace("/wd_reject_", "").strip())
+            await state.update_data(withdrawal_id=wid)
+            await AuthorAdminStates.waiting_withdrawal_reject.set()
+            await message.answer(
+                f"❌ Отклонение заявки #{wid}\n\n"
+                f"Введи причину отклонения (будет отправлена автору):\n\n"
+                f"Или /cancel для отмены."
+            )
+        except ValueError:
+            await message.answer("❌")
+
+    @dp.message_handler(state=AuthorAdminStates.waiting_withdrawal_reject)
+    async def save_withdrawal_reject(message: types.Message, state: FSMContext):
+        if message.text.strip() == "/cancel":
+            await state.finish()
+            await message.answer("❌ Отменено")
+            return
+
+        admin_note = message.text.strip()[:500]
+
+        data = await state.get_data()
+        wid = data.get("withdrawal_id")
+        await state.finish()
+
+        pending = get_pending_withdrawals(limit=100)
+        withdrawal = next((w for w in pending if w["id"] == wid), None)
+
+        if not withdrawal:
+            await message.answer("❌ Заявка не найдена")
+            return
+
+        success = reject_withdrawal(wid, admin_note=admin_note)
+        if success:
+            author_id = withdrawal["author_id"]
+            amount = withdrawal["amount_ton"]
+
+            await message.answer(f"❌ Заявка #{wid} отклонена")
+
+            try:
+                from aiogram import Bot
+                bot_token = os.getenv("BOT_TOKEN")
+                b = Bot(token=bot_token)
+                await b.send_message(
+                    author_id,
+                    f"❌ Твоя заявка на вывод отклонена\n\n"
+                    f"💎 Сумма: {amount:.4f} TON\n\n"
+                    f"Причина:\n{admin_note}\n\n"
+                    f"Средства остаются на твоём балансе."
+                )
+                await b.close()
+            except Exception as e:
+                print(f"Reject notify error: {e}")
+        else:
+            await message.answer("❌ Ошибка")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_stats")
+    async def auth_admin_stats(callback: types.CallbackQuery):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄", callback_data="auth_admin_stats"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_authors"))
+        await callback.message.edit_text(donation_stats_text(), reply_markup=kb)
 
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
@@ -1719,53 +2276,51 @@ def register_admin(dp: Dispatcher):
         current = get_setting("channel_posting_enabled", "on")
         new_val = "off" if current == "on" else "on"
         set_setting("channel_posting_enabled", new_val)
-        await callback.answer(f"Постинг в канал: {new_val.upper()}")
+        await callback.answer(f"Канал: {new_val.upper()}")
         await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_set_channel_interval")
     async def set_channel_interval(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_channel_interval.set()
         current = get_setting("channel_post_interval_hours", "3")
-        await callback.message.answer(
-            f"Текущий интервал: каждые {current} часа\n\nВведи новый интервал в часах (1-24):"
-        )
+        await callback.message.answer(f"Текущий: {current} ч\n\nВведи (1-24):")
 
     @dp.message_handler(state=SystemStates.waiting_channel_interval)
     async def save_channel_interval(message: types.Message, state: FSMContext):
         try:
             val = int(message.text.strip())
             if val < 1 or val > 24:
-                await message.answer("❌ Введи число от 1 до 24")
+                await message.answer("❌")
                 return
             set_setting("channel_post_interval_hours", str(val))
             await state.finish()
-            await message.answer(f"✅ Интервал постинга: каждые {val} ч")
+            await message.answer(f"✅ Интервал: {val} ч")
         except ValueError:
-            await message.answer("❌ Введи целое число")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "system_post_channel_now")
     async def post_channel_now(callback: types.CallbackQuery):
-        await callback.answer("⏳ Публикую...")
+        await callback.answer("⏳")
         await callback.message.edit_text(
-            "⏳ Публикую пост в канал...",
+            "⏳ Публикую...",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                InlineKeyboardButton("⬅️", callback_data="admin_system")
             )
         )
         try:
             from app import post_to_channel
             await post_to_channel()
             await callback.message.edit_text(
-                "✅ Пост опубликован в канал!",
+                "✅ Опубликовано!",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                    InlineKeyboardButton("⬅️", callback_data="admin_system")
                 )
             )
         except Exception as e:
             await callback.message.edit_text(
-                f"❌ Ошибка: {e}",
+                f"❌ {e}",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                    InlineKeyboardButton("⬅️", callback_data="admin_system")
                 )
             )
 
@@ -1773,18 +2328,18 @@ def register_admin(dp: Dispatcher):
     async def edit_prompt_start(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_system_prompt.set()
         current = get_setting("system_prompt", "")
-        await callback.message.answer(f"Текущий промпт:\n{current}\n\nВведи новый системный промпт:")
+        await callback.message.answer(f"Текущий:\n{current}\n\nНовый:")
 
     @dp.message_handler(state=SystemStates.waiting_system_prompt)
     async def save_system_prompt(message: types.Message, state: FSMContext):
         set_setting("system_prompt", message.text.strip())
         await state.finish()
-        await message.answer("✅ Системный промпт сохранён")
+        await message.answer("✅ Промпт сохранён")
 
     @dp.callback_query_handler(lambda c: c.data == "system_broadcast")
     async def broadcast_start(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_broadcast.set()
-        await callback.message.answer("Введи сообщение для рассылки всем пользователям:")
+        await callback.message.answer("Сообщение для рассылки:")
 
     @dp.message_handler(state=SystemStates.waiting_broadcast)
     async def broadcast_send(message: types.Message, state: FSMContext):
@@ -1798,7 +2353,7 @@ def register_admin(dp: Dispatcher):
                 sent += 1
             except Exception:
                 failed += 1
-        await message.answer(f"✅ Рассылка завершена\nОтправлено: {sent}\nОшибок: {failed}")
+        await message.answer(f"✅ Отправлено: {sent}\nОшибок: {failed}")
 
     @dp.callback_query_handler(lambda c: c.data == "system_db_stats")
     async def db_stats(callback: types.CallbackQuery):
@@ -1810,17 +2365,21 @@ def register_admin(dp: Dispatcher):
             f"Сигналов: {stats['opportunities']}\n"
             f"Пользователей: {stats['users']}\n"
             f"Транзакций: {stats['transactions']}\n"
-            f"Пакетов токенов: {stats['packages']}\n"
+            f"Пакетов: {stats['packages']}\n"
             f"Настроек: {stats['settings']}\n\n"
             f"🎯 Tracking:\n"
-            f"Всего предсказаний: {stats['tracking_total']}\n"
+            f"Всего: {stats['tracking_total']}\n"
             f"Разрешено: {stats['tracking_resolved']}\n\n"
-            f"⭐ Watchlist:\n"
-            f"Активных рынков: {stats['watchlist_active']}"
+            f"⭐ Watchlist: {stats['watchlist_active']}\n\n"
+            f"📢 Авторы:\n"
+            f"Авторов: {stats['authors_count']}\n"
+            f"Постов: {stats['posts_count']}\n"
+            f"Подписок: {stats['subs_count']}\n"
+            f"Донатов: {stats['donations_count']}"
         )
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="system_db_stats"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_system"))
+        kb.add(InlineKeyboardButton("🔄", callback_data="system_db_stats"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_system"))
         await callback.message.edit_text(text, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_news")
@@ -1828,7 +2387,7 @@ def register_admin(dp: Dispatcher):
         current = get_setting("agent_news_enabled", "on")
         new_val = "off" if current == "on" else "on"
         set_setting("agent_news_enabled", new_val)
-        await callback.answer(f"News Agent: {new_val.upper()}")
+        await callback.answer(f"News: {new_val.upper()}")
         await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_decision")
@@ -1836,7 +2395,7 @@ def register_admin(dp: Dispatcher):
         current = get_setting("agent_decision_enabled", "on")
         new_val = "off" if current == "on" else "on"
         set_setting("agent_decision_enabled", new_val)
-        await callback.answer(f"Decision Agent: {new_val.upper()}")
+        await callback.answer(f"Decision: {new_val.upper()}")
         await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_market")
@@ -1844,7 +2403,7 @@ def register_admin(dp: Dispatcher):
         current = get_setting("agent_market_enabled", "on")
         new_val = "off" if current == "on" else "on"
         set_setting("agent_market_enabled", new_val)
-        await callback.answer(f"Market Agent: {new_val.upper()}")
+        await callback.answer(f"Market: {new_val.upper()}")
         await callback.message.edit_text(system_text(), reply_markup=system_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_notifications")
@@ -1859,20 +2418,20 @@ def register_admin(dp: Dispatcher):
     async def set_notify_hour_start(callback: types.CallbackQuery, state: FSMContext):
         await SystemStates.waiting_notify_hour.set()
         current = get_setting("notification_hour", "9")
-        await callback.message.answer(f"Текущее время рассылки: {current}:00 UTC\n\nВведи час (0-23):")
+        await callback.message.answer(f"Текущее: {current}:00 UTC\n\nВведи час (0-23):")
 
     @dp.message_handler(state=SystemStates.waiting_notify_hour)
     async def save_notify_hour(message: types.Message, state: FSMContext):
         try:
             hour = int(message.text.strip())
             if hour < 0 or hour > 23:
-                await message.answer("❌ Введи число от 0 до 23")
+                await message.answer("❌ 0-23")
                 return
             set_setting("notification_hour", str(hour))
             await state.finish()
-            await message.answer(f"✅ Время рассылки: {hour}:00 UTC")
+            await message.answer(f"✅ Время: {hour}:00 UTC")
         except ValueError:
-            await message.answer("❌ Введи целое число от 0 до 23")
+            await message.answer("❌")
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_interval")
     async def toggle_interval(callback: types.CallbackQuery):
@@ -1885,26 +2444,28 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "system_send_now")
     async def send_notifications_now(callback: types.CallbackQuery):
-        await callback.answer("⏳ Отправляю...")
+        await callback.answer("⏳")
         await callback.message.edit_text(
-            "⏳ Запускаю рассылку...",
+            "⏳ Отправляю...",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                InlineKeyboardButton("⬅️", callback_data="admin_system")
             )
         )
         try:
             from app import send_daily_notifications
             await send_daily_notifications()
             await callback.message.edit_text(
-                "✅ Рассылка завершена!",
+                "✅ Отправлено!",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                    InlineKeyboardButton("⬅️", callback_data="admin_system")
                 )
             )
         except Exception as e:
             await callback.message.edit_text(
-                f"❌ Ошибка: {e}",
+                f"❌ {e}",
                 reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("⬅️ Back", callback_data="admin_system")
+                    InlineKeyboardButton("⬅️", callback_data="admin_system")
                 )
             )
+
+
