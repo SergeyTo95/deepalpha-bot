@@ -142,6 +142,40 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS watchlist (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        market_slug TEXT NOT NULL,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        initial_probability REAL,
+        initial_market_prob_str TEXT,
+        last_checked_probability REAL,
+        last_probability_change REAL DEFAULT 0,
+        market_end_date TEXT,
+        notify_enabled INTEGER DEFAULT 1,
+        notified_change INTEGER DEFAULT 0,
+        notified_closing_soon INTEGER DEFAULT 0,
+        notified_resolved INTEGER DEFAULT 0,
+        is_closed INTEGER DEFAULT 0,
+        extra_slot INTEGER DEFAULT 0,
+        created_at TEXT,
+        last_checked_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_watchlist_slug ON watchlist(market_slug)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_watchlist_closed ON watchlist(is_closed)
+    """)
+
     # ===== НОВАЯ ТАБЛИЦА ДЛЯ ТРЕКИНГА ТОЧНОСТИ =====
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS predictions_tracking (
@@ -1499,5 +1533,499 @@ def get_inline_queries_count(user_id: int) -> int:
         return int(row[0]) if row and row[0] else 0
     except Exception:
         return 0
+    finally:
+        conn.close()
+
+# ═══════════════════════════════════════════
+# WATCHLIST — отслеживаемые рынки
+# ═══════════════════════════════════════════
+
+def add_to_watchlist(
+    user_id: int,
+    market_slug: str,
+    market_url: str,
+    question: str,
+    category: str,
+    initial_probability: float,
+    initial_market_prob_str: str,
+    market_end_date: Optional[str] = None,
+    is_extra_slot: bool = False,
+) -> Optional[int]:
+    """
+    Добавляет рынок в watchlist пользователя.
+    Возвращает id записи или None если уже есть.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT id FROM watchlist
+        WHERE user_id = %s AND market_slug = %s AND is_closed = 0
+        """, (user_id, market_slug))
+        existing = cursor.fetchone()
+        if existing:
+            return None
+
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+        INSERT INTO watchlist (
+            user_id, market_slug, market_url, question, category,
+            initial_probability, initial_market_prob_str,
+            last_checked_probability, last_probability_change,
+            market_end_date, extra_slot,
+            created_at, last_checked_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            user_id, market_slug, market_url, question, category,
+            initial_probability, initial_market_prob_str,
+            initial_probability,
+            market_end_date,
+            1 if is_extra_slot else 0,
+            now, now,
+        ))
+        watchlist_id = cursor.fetchone()[0]
+        conn.commit()
+        return watchlist_id
+    except Exception as e:
+        print(f"add_to_watchlist error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def remove_from_watchlist(user_id: int, watchlist_id: int) -> bool:
+    """Удаляет запись из watchlist. Токены не возвращаются."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        DELETE FROM watchlist WHERE id = %s AND user_id = %s
+        """, (watchlist_id, user_id))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        print(f"remove_from_watchlist error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_user_watchlist(user_id: int, include_closed: bool = False) -> List[Dict[str, Any]]:
+    """Возвращает watchlist пользователя."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if include_closed:
+            cursor.execute("""
+            SELECT id, market_slug, market_url, question, category,
+                   initial_probability, last_checked_probability,
+                   last_probability_change, market_end_date,
+                   notify_enabled, is_closed, extra_slot,
+                   created_at, last_checked_at
+            FROM watchlist WHERE user_id = %s
+            ORDER BY id DESC
+            """, (user_id,))
+        else:
+            cursor.execute("""
+            SELECT id, market_slug, market_url, question, category,
+                   initial_probability, last_checked_probability,
+                   last_probability_change, market_end_date,
+                   notify_enabled, is_closed, extra_slot,
+                   created_at, last_checked_at
+            FROM watchlist WHERE user_id = %s AND is_closed = 0
+            ORDER BY id DESC
+            """, (user_id,))
+
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "market_slug": r[1], "market_url": r[2],
+            "question": r[3], "category": r[4],
+            "initial_probability": r[5] or 0,
+            "last_checked_probability": r[6] or 0,
+            "last_probability_change": r[7] or 0,
+            "market_end_date": r[8],
+            "notify_enabled": bool(r[9]) if r[9] is not None else True,
+            "is_closed": bool(r[10]) if r[10] else False,
+            "extra_slot": bool(r[11]) if r[11] else False,
+            "created_at": r[12],
+            "last_checked_at": r[13],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_user_watchlist error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def count_user_watchlist(user_id: int) -> int:
+    """Считает активные записи в watchlist у пользователя."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT COUNT(*) FROM watchlist
+        WHERE user_id = %s AND is_closed = 0
+        """, (user_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def get_user_watchlist_limit(user_id: int) -> int:
+    """
+    Возвращает лимит watchlist с учётом:
+    - базовый лимит (обычный или VIP/подписчик)
+    - дополнительные купленные слоты
+    """
+    user = get_user(user_id)
+    if not user:
+        return 0
+
+    if user.get("is_vip") or is_subscribed(user_id):
+        base_limit = int(get_setting("watchlist_limit_vip", "50"))
+    else:
+        base_limit = int(get_setting("watchlist_limit_regular", "10"))
+
+    extra_slots = user.get("extra_watchlist_slots", 0) or 0
+    return base_limit + extra_slots
+
+
+def can_add_to_watchlist(user_id: int) -> Dict[str, Any]:
+    """
+    Проверяет может ли юзер добавить ещё рынок в watchlist.
+    Возвращает:
+    {
+        "allowed": bool,
+        "reason": str | None,
+        "current": int,
+        "limit": int
+    }
+    """
+    current = count_user_watchlist(user_id)
+    limit = get_user_watchlist_limit(user_id)
+
+    if current >= limit:
+        return {
+            "allowed": False,
+            "reason": "limit_reached",
+            "current": current,
+            "limit": limit,
+        }
+
+    return {
+        "allowed": True,
+        "reason": None,
+        "current": current,
+        "limit": limit,
+    }
+
+
+def add_watchlist_extra_slots(user_id: int, count: int) -> int:
+    """
+    Добавляет дополнительные слоты в watchlist.
+    Возвращает новое количество extra slots.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users SET
+            extra_watchlist_slots = COALESCE(extra_watchlist_slots, 0) + %s,
+            updated_at = %s
+        WHERE user_id = %s
+        """, (count, datetime.utcnow().isoformat(), user_id))
+        conn.commit()
+
+        cursor.execute(
+            "SELECT extra_watchlist_slots FROM users WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row and row[0] else 0
+    except Exception as e:
+        print(f"add_watchlist_extra_slots error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def toggle_watchlist_notifications(user_id: int, watchlist_id: int, enabled: bool) -> bool:
+    """Включает/выключает уведомления для конкретной записи."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist SET notify_enabled = %s
+        WHERE id = %s AND user_id = %s
+        """, (1 if enabled else 0, watchlist_id, user_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+    except Exception as e:
+        print(f"toggle_watchlist_notifications error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_active_watchlist_items(limit: int = 500) -> List[Dict[str, Any]]:
+    """
+    Все уникальные рынки из watchlist для воркера.
+    Сгруппировано по market_slug — не дублируем запросы к API.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT DISTINCT market_slug, market_url, question, category,
+                        market_end_date
+        FROM watchlist WHERE is_closed = 0
+        LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [{
+            "market_slug": r[0],
+            "market_url": r[1],
+            "question": r[2],
+            "category": r[3],
+            "market_end_date": r[4],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_active_watchlist_items error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_watchlist_subscribers(market_slug: str) -> List[Dict[str, Any]]:
+    """Возвращает всех юзеров отслеживающих конкретный рынок."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT id, user_id, initial_probability, last_checked_probability,
+               notify_enabled, notified_change, notified_closing_soon,
+               notified_resolved, market_end_date
+        FROM watchlist
+        WHERE market_slug = %s AND is_closed = 0
+        """, (market_slug,))
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0],
+            "user_id": r[1],
+            "initial_probability": r[2] or 0,
+            "last_checked_probability": r[3] or 0,
+            "notify_enabled": bool(r[4]) if r[4] is not None else True,
+            "notified_change": bool(r[5]) if r[5] else False,
+            "notified_closing_soon": bool(r[6]) if r[6] else False,
+            "notified_resolved": bool(r[7]) if r[7] else False,
+            "market_end_date": r[8],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_watchlist_subscribers error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def update_watchlist_probability(
+    watchlist_id: int,
+    new_probability: float,
+) -> None:
+    """Обновляет last_checked_probability после проверки."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist SET
+            last_checked_probability = %s,
+            last_checked_at = %s
+        WHERE id = %s
+        """, (new_probability, datetime.utcnow().isoformat(), watchlist_id))
+        conn.commit()
+    except Exception as e:
+        print(f"update_watchlist_probability error: {e}")
+    finally:
+        conn.close()
+
+
+def mark_watchlist_notified(watchlist_id: int, notification_type: str) -> None:
+    """
+    Отмечает что юзер уже получил уведомление.
+    notification_type: 'change', 'closing_soon', 'resolved'
+    """
+    valid_types = {"change", "closing_soon", "resolved"}
+    if notification_type not in valid_types:
+        return
+
+    field_map = {
+        "change": "notified_change",
+        "closing_soon": "notified_closing_soon",
+        "resolved": "notified_resolved",
+    }
+    field = field_map[notification_type]
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"""
+        UPDATE watchlist SET {field} = 1 WHERE id = %s
+        """, (watchlist_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"mark_watchlist_notified error: {e}")
+    finally:
+        conn.close()
+
+
+def reset_watchlist_change_notification(watchlist_id: int, new_probability: float) -> None:
+    """
+    Сбрасывает флаг notified_change и обновляет initial_probability.
+    Вызывается после уведомления — чтобы юзер получал новые уведомления
+    об изменениях уже с новой базы.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist SET
+            notified_change = 0,
+            initial_probability = %s,
+            last_checked_probability = %s,
+            last_checked_at = %s
+        WHERE id = %s
+        """, (new_probability, new_probability, datetime.utcnow().isoformat(), watchlist_id))
+        conn.commit()
+    except Exception as e:
+        print(f"reset_watchlist_change_notification error: {e}")
+    finally:
+        conn.close()
+
+
+def close_watchlist_market(market_slug: str) -> int:
+    """
+    Отмечает рынок как закрытый для всех подписчиков.
+    Возвращает количество обновлённых записей.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist SET is_closed = 1
+        WHERE market_slug = %s AND is_closed = 0
+        """, (market_slug,))
+        count = cursor.rowcount
+        conn.commit()
+        return count
+    except Exception as e:
+        print(f"close_watchlist_market error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def cleanup_old_closed_watchlist(days: int = 30) -> int:
+    """
+    Удаляет закрытые записи старше N дней.
+    Запускается периодически для экономии места.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cursor.execute("""
+        DELETE FROM watchlist
+        WHERE is_closed = 1 AND last_checked_at < %s
+        """, (cutoff,))
+        count = cursor.rowcount
+        conn.commit()
+        return count
+    except Exception as e:
+        print(f"cleanup_old_closed_watchlist error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def get_watchlist_stats() -> Dict[str, Any]:
+    """Статистика watchlist для админки."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM watchlist WHERE is_closed = 0")
+        active = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM watchlist WHERE is_closed = 0")
+        unique_users = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT market_slug) FROM watchlist WHERE is_closed = 0")
+        unique_markets = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(*) FROM watchlist WHERE is_closed = 1")
+        closed = cursor.fetchone()[0] or 0
+
+        cursor.execute("""
+        SELECT SUM(extra_watchlist_slots) FROM users
+        WHERE extra_watchlist_slots > 0
+        """)
+        extra_sum = cursor.fetchone()[0] or 0
+
+        return {
+            "active": active,
+            "unique_users": unique_users,
+            "unique_markets": unique_markets,
+            "closed": closed,
+            "total_extra_slots_purchased": extra_sum,
+        }
+    except Exception as e:
+        print(f"get_watchlist_stats error: {e}")
+        return {
+            "active": 0,
+            "unique_users": 0,
+            "unique_markets": 0,
+            "closed": 0,
+            "total_extra_slots_purchased": 0,
+        }
+    finally:
+        conn.close()
+
+
+def get_watchlist_by_id(watchlist_id: int) -> Optional[Dict[str, Any]]:
+    """Возвращает одну запись watchlist по id."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT id, user_id, market_slug, market_url, question, category,
+               initial_probability, last_checked_probability,
+               last_probability_change, market_end_date,
+               notify_enabled, is_closed, extra_slot,
+               created_at, last_checked_at
+        FROM watchlist WHERE id = %s
+        """, (watchlist_id,))
+        r = cursor.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0], "user_id": r[1], "market_slug": r[2],
+            "market_url": r[3], "question": r[4], "category": r[5],
+            "initial_probability": r[6] or 0,
+            "last_checked_probability": r[7] or 0,
+            "last_probability_change": r[8] or 0,
+            "market_end_date": r[9],
+            "notify_enabled": bool(r[10]) if r[10] is not None else True,
+            "is_closed": bool(r[11]) if r[11] else False,
+            "extra_slot": bool(r[12]) if r[12] else False,
+            "created_at": r[13],
+            "last_checked_at": r[14],
+        }
+    except Exception as e:
+        print(f"get_watchlist_by_id error: {e}")
+        return None
     finally:
         conn.close()
