@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -209,6 +208,91 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_slug ON watchlist(market_slug)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_closed ON watchlist(is_closed)")
 
+    # ═══ AUTHORS & POSTS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_posts (
+        id SERIAL PRIMARY KEY,
+        author_id BIGINT NOT NULL,
+        market_slug TEXT,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        display_prediction TEXT,
+        confidence TEXT,
+        market_probability TEXT,
+        alpha_label TEXT,
+        author_comment TEXT,
+        full_analysis_json TEXT,
+        total_donations_ton REAL DEFAULT 0,
+        total_donors INTEGER DEFAULT 0,
+        created_at TEXT,
+        is_deleted INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON author_posts(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON author_posts(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_deleted ON author_posts(is_deleted)")
+
+    # ═══ SUBSCRIPTIONS (бесплатные) ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_subscriptions (
+        id SERIAL PRIMARY KEY,
+        subscriber_id BIGINT NOT NULL,
+        author_id BIGINT NOT NULL,
+        notifications_enabled INTEGER DEFAULT 1,
+        created_at TEXT,
+        UNIQUE(subscriber_id, author_id)
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_subscriber ON author_subscriptions(subscriber_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_author ON author_subscriptions(author_id)")
+
+    # ═══ DONATIONS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_donations (
+        id SERIAL PRIMARY KEY,
+        donor_id BIGINT NOT NULL,
+        author_id BIGINT NOT NULL,
+        post_id INTEGER DEFAULT NULL,
+        ton_amount REAL NOT NULL,
+        platform_fee_ton REAL DEFAULT 0,
+        author_received_ton REAL DEFAULT 0,
+        tx_hash TEXT,
+        status TEXT DEFAULT 'pending',
+        comment TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_author ON author_donations(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_donor ON author_donations(donor_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_post ON author_donations(post_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_status ON author_donations(status)")
+
+    # ═══ WITHDRAWAL REQUESTS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+        id SERIAL PRIMARY KEY,
+        author_id BIGINT NOT NULL,
+        amount_ton REAL NOT NULL,
+        ton_wallet TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        admin_note TEXT,
+        tx_hash TEXT,
+        created_at TEXT,
+        processed_at TEXT
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -231,6 +315,10 @@ def init_db():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS inline_queries_count INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'ru'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS extra_watchlist_slots INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_subscribers INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_posts INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_today INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_reset_date TEXT DEFAULT NULL",
     ]
     for migration in migrations:
         try:
@@ -268,6 +356,24 @@ def init_db():
         ("watchlist_check_interval_hours", "3"),
     ]
     for key, value in watchlist_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
+    authors_defaults = [
+        ("authors_enabled", "on"),
+        ("donations_enabled", "on"),
+        ("author_status_price_ton", "5"),
+        ("platform_fee_percent", "20"),
+        ("min_donation_ton", "0.1"),
+        ("min_withdrawal_ton", "1"),
+        ("max_posts_per_day", "5"),
+    ]
+    for key, value in authors_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
         if not cursor.fetchone():
             cursor.execute("""
@@ -527,7 +633,7 @@ def add_referral_earnings(user_id: int, amount_ton: float) -> None:
 
 
 # ═══════════════════════════════════════════
-# SUBSCRIPTIONS
+# SUBSCRIPTIONS (платные — paid plan)
 # ═══════════════════════════════════════════
 
 def set_subscription(user_id: int, days: int = 30) -> str:
@@ -1306,7 +1412,7 @@ def get_author_profile(user_id: int) -> Optional[Dict[str, Any]]:
         cursor.execute("""
         SELECT user_id, username, first_name, is_author, author_balance_ton,
                author_withdrawn_ton, author_bio, author_since, ton_wallet,
-               total_analyses, total_opportunities
+               total_analyses, total_opportunities, total_subscribers, total_posts
         FROM users WHERE user_id = %s
         """, (user_id,))
         row = cursor.fetchone()
@@ -1324,6 +1430,8 @@ def get_author_profile(user_id: int) -> Optional[Dict[str, Any]]:
             "ton_wallet": row[8] or "",
             "total_analyses": row[9] or 0,
             "total_opportunities": row[10] or 0,
+            "total_subscribers": row[11] or 0,
+            "total_posts": row[12] or 0,
         }
     except Exception as e:
         print(f"get_author_profile error: {e}")
@@ -1406,9 +1514,11 @@ def get_all_authors(limit: int = 100) -> List[Dict[str, Any]]:
     try:
         cursor.execute("""
         SELECT user_id, username, first_name, author_balance_ton,
-               author_withdrawn_ton, author_since, total_analyses
+               author_withdrawn_ton, author_since, total_analyses,
+               total_subscribers, total_posts, author_bio
         FROM users WHERE is_author = 1
-        ORDER BY author_balance_ton + author_withdrawn_ton DESC LIMIT %s
+        ORDER BY (author_balance_ton + author_withdrawn_ton) DESC, total_subscribers DESC
+        LIMIT %s
         """, (limit,))
         rows = cursor.fetchall()
         return [{
@@ -1417,9 +1527,755 @@ def get_all_authors(limit: int = 100) -> List[Dict[str, Any]]:
             "author_withdrawn_ton": r[4] or 0,
             "author_since": r[5],
             "total_analyses": r[6] or 0,
+            "total_subscribers": r[7] or 0,
+            "total_posts": r[8] or 0,
+            "author_bio": r[9] or "",
         } for r in rows]
     except Exception as e:
         print(f"get_all_authors error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_top_authors_by_donations(limit: int = 10) -> List[Dict[str, Any]]:
+    """Топ авторов по сумме полученных донатов."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT user_id, username, first_name,
+               (author_balance_ton + author_withdrawn_ton) as total_earned,
+               total_subscribers
+        FROM users WHERE is_author = 1
+          AND (author_balance_ton + author_withdrawn_ton) > 0
+        ORDER BY total_earned DESC LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [{
+            "user_id": r[0], "username": r[1], "first_name": r[2],
+            "total_earned": r[3] or 0,
+            "total_subscribers": r[4] or 0,
+        } for r in rows]
+    except Exception as e:
+        print(f"get_top_authors_by_donations error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════
+# AUTHOR POSTS (публикации прогнозов)
+# ═══════════════════════════════════════════
+
+def _reset_posts_today_if_needed(author_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        cursor.execute("SELECT posts_reset_date FROM users WHERE user_id = %s", (author_id,))
+        row = cursor.fetchone()
+        if not row or row[0] != today:
+            cursor.execute("""
+            UPDATE users SET posts_today = 0, posts_reset_date = %s
+            WHERE user_id = %s
+            """, (today, author_id))
+            conn.commit()
+    except Exception as e:
+        print(f"_reset_posts_today_if_needed error: {e}")
+    finally:
+        conn.close()
+
+
+def can_author_post_today(author_id: int) -> bool:
+    """Проверяет не превышен ли дневной лимит публикаций."""
+    _reset_posts_today_if_needed(author_id)
+    user = get_user(author_id)
+    if not user:
+        return False
+    max_per_day = int(get_setting("max_posts_per_day", "5"))
+    posts_today = user.get("posts_today", 0) or 0
+    return posts_today < max_per_day
+
+
+def create_author_post(
+    author_id: int,
+    market_slug: str,
+    market_url: str,
+    question: str,
+    category: str,
+    display_prediction: str,
+    confidence: str,
+    market_probability: str,
+    alpha_label: str,
+    author_comment: str,
+    full_analysis: Dict[str, Any],
+) -> Optional[int]:
+    """
+    Создаёт пост автора (публикует анализ как прогноз).
+    Возвращает id поста или None.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+        INSERT INTO author_posts (
+            author_id, market_slug, market_url, question, category,
+            display_prediction, confidence, market_probability,
+            alpha_label, author_comment, full_analysis_json,
+            created_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            author_id, market_slug, market_url, question, category,
+            display_prediction, confidence, market_probability,
+            alpha_label, author_comment, json.dumps(full_analysis),
+            now,
+        ))
+        post_id = cursor.fetchone()[0]
+
+        cursor.execute("""
+        UPDATE users SET
+            total_posts = COALESCE(total_posts, 0) + 1,
+            posts_today = COALESCE(posts_today, 0) + 1,
+            updated_at = %s
+        WHERE user_id = %s
+        """, (now, author_id))
+
+        conn.commit()
+        return post_id
+    except Exception as e:
+        print(f"create_author_post error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_author_post(post_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT * FROM author_posts WHERE id = %s AND is_deleted = 0
+        """, (post_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if data.get("full_analysis_json"):
+            try:
+                data["full_analysis"] = json.loads(data["full_analysis_json"])
+            except Exception:
+                data["full_analysis"] = {}
+        return data
+    except Exception as e:
+        print(f"get_author_post error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_author_posts(author_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Список постов автора."""
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT id, author_id, market_slug, market_url, question, category,
+               display_prediction, confidence, market_probability,
+               alpha_label, author_comment,
+               total_donations_ton, total_donors, created_at
+        FROM author_posts
+        WHERE author_id = %s AND is_deleted = 0
+        ORDER BY created_at DESC LIMIT %s
+        """, (author_id, limit))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"get_author_posts error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def delete_author_post(post_id: int, author_id: int) -> bool:
+    """Мягкое удаление — меняет флаг is_deleted."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE author_posts SET is_deleted = 1
+        WHERE id = %s AND author_id = %s
+        """, (post_id, author_id))
+        success = cursor.rowcount > 0
+
+        if success:
+            cursor.execute("""
+            UPDATE users SET total_posts = GREATEST(COALESCE(total_posts, 0) - 1, 0)
+            WHERE user_id = %s
+            """, (author_id,))
+
+        conn.commit()
+        return success
+    except Exception as e:
+        print(f"delete_author_post error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def update_post_donations(post_id: int, ton_amount: float, is_new_donor: bool) -> None:
+    """Обновляет счётчики доната у поста."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if is_new_donor:
+            cursor.execute("""
+            UPDATE author_posts SET
+                total_donations_ton = total_donations_ton + %s,
+                total_donors = total_donors + 1
+            WHERE id = %s
+            """, (ton_amount, post_id))
+        else:
+            cursor.execute("""
+            UPDATE author_posts SET
+                total_donations_ton = total_donations_ton + %s
+            WHERE id = %s
+            """, (ton_amount, post_id))
+        conn.commit()
+    except Exception as e:
+        print(f"update_post_donations error: {e}")
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════
+# AUTHOR SUBSCRIPTIONS (бесплатные)
+# ═══════════════════════════════════════════
+
+def subscribe_to_author(subscriber_id: int, author_id: int) -> bool:
+    """Подписка на автора (бесплатная). Возвращает True если подписка создана."""
+    if subscriber_id == author_id:
+        return False
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO author_subscriptions (subscriber_id, author_id, created_at)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (subscriber_id, author_id) DO NOTHING
+        """, (subscriber_id, author_id, datetime.utcnow().isoformat()))
+        created = cursor.rowcount > 0
+
+        if created:
+            cursor.execute("""
+            UPDATE users SET total_subscribers = COALESCE(total_subscribers, 0) + 1
+            WHERE user_id = %s
+            """, (author_id,))
+
+        conn.commit()
+        return created
+    except Exception as e:
+        print(f"subscribe_to_author error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def unsubscribe_from_author(subscriber_id: int, author_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        DELETE FROM author_subscriptions
+        WHERE subscriber_id = %s AND author_id = %s
+        """, (subscriber_id, author_id))
+        deleted = cursor.rowcount > 0
+
+        if deleted:
+            cursor.execute("""
+            UPDATE users SET total_subscribers = GREATEST(COALESCE(total_subscribers, 0) - 1, 0)
+            WHERE user_id = %s
+            """, (author_id,))
+
+        conn.commit()
+        return deleted
+    except Exception as e:
+        print(f"unsubscribe_from_author error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def is_subscribed_to_author(subscriber_id: int, author_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT 1 FROM author_subscriptions
+        WHERE subscriber_id = %s AND author_id = %s
+        """, (subscriber_id, author_id))
+        return cursor.fetchone() is not None
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_user_subscriptions(subscriber_id: int) -> List[Dict[str, Any]]:
+    """Все авторы на которых подписан юзер."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT s.author_id, s.notifications_enabled, s.created_at,
+               u.username, u.first_name, u.is_author,
+               u.total_posts, u.total_subscribers
+        FROM author_subscriptions s
+        JOIN users u ON u.user_id = s.author_id
+        WHERE s.subscriber_id = %s
+        ORDER BY s.created_at DESC
+        """, (subscriber_id,))
+        rows = cursor.fetchall()
+        return [{
+            "author_id": r[0],
+            "notifications_enabled": bool(r[1]) if r[1] is not None else True,
+            "subscribed_at": r[2],
+            "username": r[3],
+            "first_name": r[4],
+            "is_author": bool(r[5]) if r[5] else False,
+            "total_posts": r[6] or 0,
+            "total_subscribers": r[7] or 0,
+        } for r in rows]
+    except Exception as e:
+        print(f"get_user_subscriptions error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_author_subscribers(author_id: int, notifications_only: bool = True) -> List[int]:
+    """Список user_id подписчиков автора."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if notifications_only:
+            cursor.execute("""
+            SELECT subscriber_id FROM author_subscriptions
+            WHERE author_id = %s AND notifications_enabled = 1
+            """, (author_id,))
+        else:
+            cursor.execute("""
+            SELECT subscriber_id FROM author_subscriptions
+            WHERE author_id = %s
+            """, (author_id,))
+        rows = cursor.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"get_author_subscribers error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def toggle_subscription_notifications(subscriber_id: int, author_id: int, enabled: bool) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE author_subscriptions SET notifications_enabled = %s
+        WHERE subscriber_id = %s AND author_id = %s
+        """, (1 if enabled else 0, subscriber_id, author_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+    except Exception as e:
+        print(f"toggle_subscription_notifications error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_subscription_feed(subscriber_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Лента прогнозов от авторов на которых подписан юзер."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT p.id, p.author_id, p.question, p.category,
+               p.display_prediction, p.confidence, p.market_probability,
+               p.alpha_label, p.author_comment,
+               p.total_donations_ton, p.total_donors, p.created_at,
+               u.username, u.first_name
+        FROM author_posts p
+        JOIN author_subscriptions s ON s.author_id = p.author_id
+        JOIN users u ON u.user_id = p.author_id
+        WHERE s.subscriber_id = %s AND p.is_deleted = 0
+        ORDER BY p.created_at DESC LIMIT %s
+        """, (subscriber_id, limit))
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "author_id": r[1], "question": r[2],
+            "category": r[3], "display_prediction": r[4],
+            "confidence": r[5], "market_probability": r[6],
+            "alpha_label": r[7], "author_comment": r[8],
+            "total_donations_ton": r[9] or 0,
+            "total_donors": r[10] or 0,
+            "created_at": r[11],
+            "author_username": r[12],
+            "author_first_name": r[13],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_subscription_feed error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════
+# DONATIONS
+# ═══════════════════════════════════════════
+
+def create_donation(
+    donor_id: int,
+    author_id: int,
+    ton_amount: float,
+    post_id: Optional[int] = None,
+    comment: str = "",
+    tx_hash: str = "",
+    status: str = "pending",
+) -> Optional[int]:
+    """Создаёт запись доната. Статус 'pending' пока не пришла TON транзакция."""
+    platform_fee_percent = float(get_setting("platform_fee_percent", "20"))
+    platform_fee = round(ton_amount * platform_fee_percent / 100, 6)
+    author_received = round(ton_amount - platform_fee, 6)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO author_donations (
+            donor_id, author_id, post_id, ton_amount,
+            platform_fee_ton, author_received_ton,
+            tx_hash, status, comment, created_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            donor_id, author_id, post_id, ton_amount,
+            platform_fee, author_received,
+            tx_hash, status, comment,
+            datetime.utcnow().isoformat(),
+        ))
+        donation_id = cursor.fetchone()[0]
+        conn.commit()
+        return donation_id
+    except Exception as e:
+        print(f"create_donation error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def complete_donation(donation_id: int, tx_hash: str) -> bool:
+    """
+    Завершает донат: статус -> 'completed', зачисляет автору на баланс,
+    обновляет счётчики у поста.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT donor_id, author_id, post_id, ton_amount,
+               author_received_ton, status
+        FROM author_donations WHERE id = %s
+        """, (donation_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+
+        donor_id, author_id, post_id, ton_amount, author_received, status = row
+
+        if status == "completed":
+            return True  # уже обработано
+
+        # Помечаем донат как завершённый
+        cursor.execute("""
+        UPDATE author_donations SET
+            status = 'completed',
+            tx_hash = %s
+        WHERE id = %s
+        """, (tx_hash, donation_id))
+
+        # Зачисляем автору
+        cursor.execute("""
+        UPDATE users SET
+            author_balance_ton = author_balance_ton + %s,
+            updated_at = %s
+        WHERE user_id = %s
+        """, (author_received, datetime.utcnow().isoformat(), author_id))
+
+        conn.commit()
+
+        # Обновляем счётчики поста (если указан)
+        if post_id:
+            # Проверяем — новый ли донор для этого поста
+            cursor.execute("""
+            SELECT COUNT(*) FROM author_donations
+            WHERE post_id = %s AND donor_id = %s AND status = 'completed' AND id != %s
+            """, (post_id, donor_id, donation_id))
+            existing = cursor.fetchone()[0]
+            is_new_donor = existing == 0
+
+            update_post_donations(post_id, ton_amount, is_new_donor)
+
+        return True
+    except Exception as e:
+        print(f"complete_donation error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_donation(donation_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT * FROM author_donations WHERE id = %s", (donation_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def get_pending_donations(limit: int = 50) -> List[Dict[str, Any]]:
+    """Донаты ожидающие подтверждения — для TON-воркера."""
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT * FROM author_donations
+        WHERE status = 'pending' ORDER BY created_at ASC LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"get_pending_donations error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_author_donations_list(author_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Все донаты полученные автором."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT d.id, d.donor_id, d.ton_amount, d.author_received_ton,
+               d.comment, d.status, d.created_at,
+               u.username, u.first_name
+        FROM author_donations d
+        LEFT JOIN users u ON u.user_id = d.donor_id
+        WHERE d.author_id = %s AND d.status = 'completed'
+        ORDER BY d.created_at DESC LIMIT %s
+        """, (author_id, limit))
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "donor_id": r[1],
+            "ton_amount": r[2] or 0,
+            "author_received_ton": r[3] or 0,
+            "comment": r[4] or "",
+            "status": r[5],
+            "created_at": r[6],
+            "donor_username": r[7],
+            "donor_first_name": r[8],
+        } for r in rows]
+    except Exception as e:
+        print(f"get_author_donations_list error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_donation_stats() -> Dict[str, Any]:
+    """Глобальная статистика донатов для админки."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT COUNT(*), COALESCE(SUM(ton_amount), 0),
+               COALESCE(SUM(platform_fee_ton), 0),
+               COALESCE(SUM(author_received_ton), 0)
+        FROM author_donations WHERE status = 'completed'
+        """)
+        row = cursor.fetchone()
+        total_count = row[0] or 0
+        total_ton = row[1] or 0
+        total_fee = row[2] or 0
+        total_to_authors = row[3] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT donor_id) FROM author_donations WHERE status = 'completed'")
+        unique_donors = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT author_id) FROM author_donations WHERE status = 'completed'")
+        unique_authors = cursor.fetchone()[0] or 0
+
+        return {
+            "total_donations": total_count,
+            "total_ton": total_ton,
+            "platform_revenue_ton": total_fee,
+            "authors_received_ton": total_to_authors,
+            "unique_donors": unique_donors,
+            "unique_authors": unique_authors,
+        }
+    except Exception as e:
+        print(f"get_donation_stats error: {e}")
+        return {
+            "total_donations": 0, "total_ton": 0,
+            "platform_revenue_ton": 0, "authors_received_ton": 0,
+            "unique_donors": 0, "unique_authors": 0,
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════
+# WITHDRAWAL REQUESTS (заявки на вывод)
+# ═══════════════════════════════════════════
+
+def create_withdrawal_request(author_id: int, amount_ton: float, ton_wallet: str) -> Optional[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        INSERT INTO withdrawal_requests (
+            author_id, amount_ton, ton_wallet, status, created_at
+        ) VALUES (%s, %s, %s, 'pending', %s)
+        RETURNING id
+        """, (author_id, amount_ton, ton_wallet, datetime.utcnow().isoformat()))
+        wid = cursor.fetchone()[0]
+        conn.commit()
+        return wid
+    except Exception as e:
+        print(f"create_withdrawal_request error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_pending_withdrawals(limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT w.id, w.author_id, w.amount_ton, w.ton_wallet,
+               w.status, w.created_at,
+               u.username, u.first_name, u.author_balance_ton
+        FROM withdrawal_requests w
+        LEFT JOIN users u ON u.user_id = w.author_id
+        WHERE w.status = 'pending'
+        ORDER BY w.created_at ASC LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [{
+            "id": r[0], "author_id": r[1],
+            "amount_ton": r[2] or 0,
+            "ton_wallet": r[3] or "",
+            "status": r[4],
+            "created_at": r[5],
+            "author_username": r[6],
+            "author_first_name": r[7],
+            "current_balance": r[8] or 0,
+        } for r in rows]
+    except Exception as e:
+        print(f"get_pending_withdrawals error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def approve_withdrawal(withdrawal_id: int, tx_hash: str, admin_note: str = "") -> bool:
+    """Админ подтверждает выплату. Списывает с баланса автора."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT author_id, amount_ton, status
+        FROM withdrawal_requests WHERE id = %s
+        """, (withdrawal_id,))
+        row = cursor.fetchone()
+        if not row or row[2] != "pending":
+            return False
+
+        author_id, amount_ton, _ = row
+
+        # Списываем с баланса (атомарно)
+        cursor.execute("""
+        UPDATE users SET
+            author_balance_ton = author_balance_ton - %s,
+            author_withdrawn_ton = author_withdrawn_ton + %s,
+            updated_at = %s
+        WHERE user_id = %s AND author_balance_ton >= %s
+        """, (amount_ton, amount_ton, datetime.utcnow().isoformat(), author_id, amount_ton))
+
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return False  # недостаточно баланса
+
+        cursor.execute("""
+        UPDATE withdrawal_requests SET
+            status = 'approved',
+            tx_hash = %s,
+            admin_note = %s,
+            processed_at = %s
+        WHERE id = %s
+        """, (tx_hash, admin_note, datetime.utcnow().isoformat(), withdrawal_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"approve_withdrawal error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def reject_withdrawal(withdrawal_id: int, admin_note: str = "") -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE withdrawal_requests SET
+            status = 'rejected',
+            admin_note = %s,
+            processed_at = %s
+        WHERE id = %s AND status = 'pending'
+        """, (admin_note, datetime.utcnow().isoformat(), withdrawal_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+    except Exception as e:
+        print(f"reject_withdrawal error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_author_withdrawals(author_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT * FROM withdrawal_requests
+        WHERE author_id = %s ORDER BY created_at DESC LIMIT %s
+        """, (author_id, limit))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"get_author_withdrawals error: {e}")
         return []
     finally:
         conn.close()
