@@ -1,3 +1,4 @@
+
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
@@ -15,6 +16,7 @@ from db.database import (
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
     get_accuracy_stats, get_unresolved_predictions,
+    get_watchlist_stats, get_all_authors, set_author_status,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -79,6 +81,17 @@ class SystemStates(StatesGroup):
     waiting_channel_interval = State()
 
 
+class WatchlistStates(StatesGroup):
+    waiting_price = State()
+    waiting_limit_regular = State()
+    waiting_limit_vip = State()
+    waiting_extra_price = State()
+    waiting_extra_count = State()
+    waiting_threshold = State()
+    waiting_closing_hours = State()
+    waiting_check_interval = State()
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -92,6 +105,7 @@ def admin_main_kb():
         InlineKeyboardButton("👤 Users", callback_data="admin_users"),
         InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics"),
         InlineKeyboardButton("🎯 Tracking Accuracy", callback_data="admin_tracking"),
+        InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
@@ -365,6 +379,8 @@ def get_db_stats() -> dict:
     tracking_total = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM predictions_tracking WHERE resolved_at IS NOT NULL")
     tracking_resolved = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM watchlist WHERE is_closed = 0")
+    watchlist_active = cursor.fetchone()[0]
     conn.close()
     return {
         "analyses": analyses,
@@ -375,6 +391,7 @@ def get_db_stats() -> dict:
         "packages": packages,
         "tracking_total": tracking_total,
         "tracking_resolved": tracking_resolved,
+        "watchlist_active": watchlist_active,
         "db_size_kb": "PostgreSQL",
     }
 
@@ -467,7 +484,7 @@ def system_text() -> str:
 
 
 # ═══════════════════════════════════════════
-# TRACKING ACCURACY — метрики предсказаний
+# TRACKING ACCURACY
 # ═══════════════════════════════════════════
 
 def tracking_menu_kb() -> InlineKeyboardMarkup:
@@ -534,7 +551,6 @@ def format_overall_stats(stats: dict) -> str:
     brier_str = f"{avg_brier:.4f}" if avg_brier is not None else "—"
     log_loss_str = f"{avg_log_loss:.4f}" if avg_log_loss is not None else "—"
 
-    # Интерпретация Brier: 0.00 = идеально, 0.25 = случайно, 1.00 = худший случай
     brier_quality = ""
     if avg_brier is not None:
         if avg_brier < 0.10:
@@ -559,13 +575,11 @@ def format_overall_stats(stats: dict) -> str:
 
 
 def format_breakdown(stats: dict, key: str, title: str, emoji: str) -> str:
-    """Универсальный форматтер для разбивок (by_confidence, by_type, etc)."""
     breakdown = stats.get(key, {})
     if not breakdown:
         return f"{emoji} {title}\n\nНет данных для разбивки."
 
     lines = [f"{emoji} {title}\n"]
-    # Сортируем по количеству разрешённых
     sorted_items = sorted(breakdown.items(), key=lambda x: -x[1].get("total", 0))
 
     for name, data in sorted_items:
@@ -577,6 +591,111 @@ def format_breakdown(stats: dict, key: str, title: str, emoji: str) -> str:
         lines.append(f"• {name}: {acc:.1f}% ({c}/{t}){brier_str}")
 
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════
+# WATCHLIST ADMIN
+# ═══════════════════════════════════════════
+
+def watchlist_admin_kb() -> InlineKeyboardMarkup:
+    enabled = get_setting("watchlist_enabled", "on")
+    price = get_setting("watchlist_price_tokens", "5")
+    limit_regular = get_setting("watchlist_limit_regular", "10")
+    limit_vip = get_setting("watchlist_limit_vip", "50")
+    extra_price = get_setting("watchlist_extra_slots_price", "20")
+    extra_count = get_setting("watchlist_extra_slots_count", "5")
+    threshold = get_setting("watchlist_probability_threshold", "10")
+    closing_hours = get_setting("watchlist_closing_hours", "24")
+    check_interval = get_setting("watchlist_check_interval_hours", "3")
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton(
+            f"{'✅' if enabled == 'on' else '❌'} Watchlist: {'ON' if enabled == 'on' else 'OFF'}",
+            callback_data="wl_admin_toggle"
+        ),
+        InlineKeyboardButton(f"💰 Цена добавления: {price} токенов", callback_data="wl_admin_price"),
+        InlineKeyboardButton(f"📊 Лимит (обычные): {limit_regular}", callback_data="wl_admin_limit_regular"),
+        InlineKeyboardButton(f"👑 Лимит (VIP/подписка): {limit_vip}", callback_data="wl_admin_limit_vip"),
+        InlineKeyboardButton("─── ➕ Доп. слоты ───", callback_data="wl_admin_noop"),
+        InlineKeyboardButton(f"💎 Цена {extra_count} слотов: {extra_price} токенов", callback_data="wl_admin_extra_price"),
+        InlineKeyboardButton(f"🔢 Слотов за покупку: {extra_count}", callback_data="wl_admin_extra_count"),
+        InlineKeyboardButton("─── ⚙️ Настройки ───", callback_data="wl_admin_noop"),
+        InlineKeyboardButton(f"📈 Порог изменения: {threshold}%", callback_data="wl_admin_threshold"),
+        InlineKeyboardButton(f"⏰ Часов до закрытия: {closing_hours}", callback_data="wl_admin_closing_hours"),
+        InlineKeyboardButton(f"🔄 Проверка каждые: {check_interval} ч", callback_data="wl_admin_check_interval"),
+        InlineKeyboardButton("🔄 Проверить watchlist сейчас", callback_data="wl_admin_force_check"),
+        InlineKeyboardButton("📊 Статистика", callback_data="wl_admin_stats"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
+    return kb
+
+
+def watchlist_admin_text() -> str:
+    stats = get_watchlist_stats()
+    last_check = get_setting("last_watchlist_check", "")
+    last_check_str = last_check[:16].replace("T", " ") if last_check else "никогда"
+
+    return (
+        f"⭐ Watchlist Settings\n\n"
+        f"📊 Активных рынков: {stats['active']}\n"
+        f"👥 Уникальных юзеров: {stats['unique_users']}\n"
+        f"📌 Уникальных рынков: {stats['unique_markets']}\n"
+        f"✅ Закрыто: {stats['closed']}\n"
+        f"💎 Куплено доп. слотов: {stats['total_extra_slots_purchased']}\n\n"
+        f"🕐 Последняя проверка: {last_check_str}\n\n"
+        f"Настройки ↓"
+    )
+
+
+def watchlist_stats_text() -> str:
+    stats = get_watchlist_stats()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT category, COUNT(*) FROM watchlist
+    WHERE is_closed = 0
+    GROUP BY category ORDER BY COUNT(*) DESC LIMIT 5
+    """)
+    by_category = cursor.fetchall()
+
+    cursor.execute("""
+    SELECT user_id, COUNT(*) FROM watchlist
+    WHERE is_closed = 0
+    GROUP BY user_id ORDER BY COUNT(*) DESC LIMIT 5
+    """)
+    top_users = cursor.fetchall()
+    conn.close()
+
+    text = (
+        f"📊 Watchlist Статистика\n\n"
+        f"Активных рынков: {stats['active']}\n"
+        f"Уникальных юзеров: {stats['unique_users']}\n"
+        f"Уникальных рынков: {stats['unique_markets']}\n"
+        f"Закрыто (всего): {stats['closed']}\n"
+        f"💎 Доп. слотов куплено: {stats['total_extra_slots_purchased']}\n\n"
+    )
+
+    if by_category:
+        text += "🏷 По категориям:\n"
+        for cat, cnt in by_category:
+            text += f"• {cat or 'Без категории'}: {cnt}\n"
+        text += "\n"
+
+    if top_users:
+        text += "👥 Топ пользователей:\n"
+        for uid, cnt in top_users:
+            user = get_user(uid)
+            name = user.get("username") or user.get("first_name") or str(uid) if user else str(uid)
+            text += f"• @{name}: {cnt} рынков\n"
+
+    return text
+
+
+# ═══════════════════════════════════════════
+# REGISTER
+# ═══════════════════════════════════════════
 
 def register_admin(dp: Dispatcher):
 
@@ -1273,10 +1392,7 @@ def register_admin(dp: Dispatcher):
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_analytics"))
         await callback.message.edit_text(f"🏆 Топ рынков\n\n{top}", reply_markup=kb)
 
-    # ═══════════════════════════════════════════
-    # TRACKING ACCURACY — новая секция
-    # ═══════════════════════════════════════════
-
+    # === TRACKING ACCURACY ===
     @dp.callback_query_handler(lambda c: c.data == "admin_tracking")
     async def tracking_menu(callback: types.CallbackQuery):
         await callback.message.edit_text(tracking_menu_text(), reply_markup=tracking_menu_kb())
@@ -1361,6 +1477,233 @@ def register_admin(dp: Dispatcher):
                     InlineKeyboardButton("⬅️ Back", callback_data="admin_tracking")
                 )
             )
+
+    # === WATCHLIST ADMIN ===
+    @dp.callback_query_handler(lambda c: c.data == "admin_watchlist")
+    async def watchlist_admin_menu(callback: types.CallbackQuery):
+        await callback.message.edit_text(watchlist_admin_text(), reply_markup=watchlist_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_noop")
+    async def wl_admin_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_toggle")
+    async def wl_admin_toggle(callback: types.CallbackQuery):
+        current = get_setting("watchlist_enabled", "on")
+        new_val = "off" if current == "on" else "on"
+        set_setting("watchlist_enabled", new_val)
+        await callback.answer(f"Watchlist: {new_val.upper()}")
+        await callback.message.edit_text(watchlist_admin_text(), reply_markup=watchlist_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_price")
+    async def wl_admin_price(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_price.set()
+        current = get_setting("watchlist_price_tokens", "5")
+        await callback.message.answer(
+            f"Текущая цена добавления в Watchlist: {current} токенов\n\n"
+            f"Введи новую цену:"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_price)
+    async def wl_save_price(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 0 or val > 1000:
+                await message.answer("❌ Введи число от 0 до 1000")
+                return
+            set_setting("watchlist_price_tokens", str(val))
+            await state.finish()
+            await message.answer(f"✅ Цена Watchlist: {val} токенов")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_limit_regular")
+    async def wl_admin_limit_regular(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_limit_regular.set()
+        current = get_setting("watchlist_limit_regular", "10")
+        await callback.message.answer(
+            f"Текущий лимит (обычные юзеры): {current}\n\nВведи новый лимит:"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_limit_regular)
+    async def wl_save_limit_regular(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 1000:
+                await message.answer("❌ Введи число от 1 до 1000")
+                return
+            set_setting("watchlist_limit_regular", str(val))
+            await state.finish()
+            await message.answer(f"✅ Лимит (обычные): {val}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_limit_vip")
+    async def wl_admin_limit_vip(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_limit_vip.set()
+        current = get_setting("watchlist_limit_vip", "50")
+        await callback.message.answer(
+            f"Текущий лимит (VIP/подписка): {current}\n\nВведи новый лимит:"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_limit_vip)
+    async def wl_save_limit_vip(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 5000:
+                await message.answer("❌ Введи число от 1 до 5000")
+                return
+            set_setting("watchlist_limit_vip", str(val))
+            await state.finish()
+            await message.answer(f"✅ Лимит (VIP): {val}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_extra_price")
+    async def wl_admin_extra_price(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_extra_price.set()
+        current = get_setting("watchlist_extra_slots_price", "20")
+        count = get_setting("watchlist_extra_slots_count", "5")
+        await callback.message.answer(
+            f"Текущая цена пакета доп. слотов ({count} слотов): {current} токенов\n\n"
+            f"Введи новую цену:"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_extra_price)
+    async def wl_save_extra_price(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 10000:
+                await message.answer("❌ Введи число от 1 до 10000")
+                return
+            set_setting("watchlist_extra_slots_price", str(val))
+            await state.finish()
+            await message.answer(f"✅ Цена пакета доп. слотов: {val} токенов")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_extra_count")
+    async def wl_admin_extra_count(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_extra_count.set()
+        current = get_setting("watchlist_extra_slots_count", "5")
+        await callback.message.answer(
+            f"Текущее количество слотов в одном пакете: {current}\n\n"
+            f"Введи новое количество:"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_extra_count)
+    async def wl_save_extra_count(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 100:
+                await message.answer("❌ Введи число от 1 до 100")
+                return
+            set_setting("watchlist_extra_slots_count", str(val))
+            await state.finish()
+            await message.answer(f"✅ Слотов в пакете: {val}")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_threshold")
+    async def wl_admin_threshold(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_threshold.set()
+        current = get_setting("watchlist_probability_threshold", "10")
+        await callback.message.answer(
+            f"Текущий порог изменения вероятности: {current}%\n\n"
+            f"При изменении на этот % или больше юзер получает уведомление.\n"
+            f"Введи новый порог (1-100):"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_threshold)
+    async def wl_save_threshold(message: types.Message, state: FSMContext):
+        try:
+            val = float(message.text.strip().replace(",", "."))
+            if val < 1 or val > 100:
+                await message.answer("❌ Введи число от 1 до 100")
+                return
+            set_setting("watchlist_probability_threshold", str(val))
+            await state.finish()
+            await message.answer(f"✅ Порог изменения: {val}%")
+        except ValueError:
+            await message.answer("❌ Введи число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_closing_hours")
+    async def wl_admin_closing_hours(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_closing_hours.set()
+        current = get_setting("watchlist_closing_hours", "24")
+        await callback.message.answer(
+            f"Текущее значение: {current} часов до закрытия\n\n"
+            f"За сколько часов до закрытия рынка отправлять предупреждение?\n"
+            f"Введи количество часов (1-168):"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_closing_hours)
+    async def wl_save_closing_hours(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 168:
+                await message.answer("❌ Введи число от 1 до 168")
+                return
+            set_setting("watchlist_closing_hours", str(val))
+            await state.finish()
+            await message.answer(f"✅ Предупреждение за: {val} часов")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_check_interval")
+    async def wl_admin_check_interval(callback: types.CallbackQuery, state: FSMContext):
+        await WatchlistStates.waiting_check_interval.set()
+        current = get_setting("watchlist_check_interval_hours", "3")
+        await callback.message.answer(
+            f"Текущий интервал проверки: каждые {current} часа\n\n"
+            f"Как часто воркер проверяет рынки?\n"
+            f"Введи интервал в часах (1-24):"
+        )
+
+    @dp.message_handler(state=WatchlistStates.waiting_check_interval)
+    async def wl_save_check_interval(message: types.Message, state: FSMContext):
+        try:
+            val = int(message.text.strip())
+            if val < 1 or val > 24:
+                await message.answer("❌ Введи число от 1 до 24")
+                return
+            set_setting("watchlist_check_interval_hours", str(val))
+            await state.finish()
+            await message.answer(f"✅ Интервал проверки: каждые {val} ч")
+        except ValueError:
+            await message.answer("❌ Введи целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_force_check")
+    async def wl_admin_force_check(callback: types.CallbackQuery):
+        await callback.answer("⏳ Запускаю проверку...")
+        await callback.message.edit_text(
+            "⏳ Проверяю все рынки в Watchlist...\n\n"
+            "Это может занять несколько минут.",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist")
+            )
+        )
+        try:
+            from app import check_watchlist
+            await check_watchlist()
+            await callback.message.edit_text(
+                "✅ Проверка завершена!\n\n" + watchlist_admin_text(),
+                reply_markup=watchlist_admin_kb()
+            )
+        except Exception as e:
+            await callback.message.edit_text(
+                f"❌ Ошибка: {e}",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist")
+                )
+            )
+
+    @dp.callback_query_handler(lambda c: c.data == "wl_admin_stats")
+    async def wl_admin_stats(callback: types.CallbackQuery):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="wl_admin_stats"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_watchlist"))
+        await callback.message.edit_text(watchlist_stats_text(), reply_markup=kb)
 
     # === SYSTEM ===
     @dp.callback_query_handler(lambda c: c.data == "admin_system")
@@ -1471,7 +1814,9 @@ def register_admin(dp: Dispatcher):
             f"Настроек: {stats['settings']}\n\n"
             f"🎯 Tracking:\n"
             f"Всего предсказаний: {stats['tracking_total']}\n"
-            f"Разрешено: {stats['tracking_resolved']}"
+            f"Разрешено: {stats['tracking_resolved']}\n\n"
+            f"⭐ Watchlist:\n"
+            f"Активных рынков: {stats['watchlist_active']}"
         )
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🔄 Обновить", callback_data="system_db_stats"))
