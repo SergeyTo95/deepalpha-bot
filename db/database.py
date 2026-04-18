@@ -279,6 +279,27 @@ def init_db():
 
     conn.close()
 
+# Watchlist default settings
+    watchlist_defaults = [
+        ("watchlist_enabled", "on"),
+        ("watchlist_price_tokens", "5"),
+        ("watchlist_limit_regular", "10"),
+        ("watchlist_limit_vip", "50"),
+        ("watchlist_extra_slots_price", "20"),
+        ("watchlist_extra_slots_count", "5"),
+        ("watchlist_probability_threshold", "10"),
+        ("watchlist_closing_hours", "24"),
+        ("watchlist_check_interval_hours", "3"),
+    ]
+    for key, value in watchlist_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
 
 # ===== SETTINGS =====
 
