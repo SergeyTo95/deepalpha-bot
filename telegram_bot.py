@@ -1,10 +1,12 @@
-
 import os
 import logging
+import json
 from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 from agents.chief_agent import ChiefAgent
@@ -24,6 +26,14 @@ from db.database import (
     count_user_watchlist, can_add_to_watchlist,
     toggle_watchlist_notifications, get_watchlist_by_id,
     add_watchlist_extra_slots,
+    set_author_bio, set_ton_wallet, get_all_authors,
+    get_top_authors_by_donations, can_author_post_today,
+    create_author_post, get_author_post, get_author_posts,
+    delete_author_post,
+    subscribe_to_author, unsubscribe_from_author,
+    is_subscribed_to_author, get_user_subscriptions,
+    get_author_subscribers, toggle_subscription_notifications,
+    get_subscription_feed, get_author_donations_list,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -48,9 +58,16 @@ init_db()
 # Кеш языков в памяти
 user_languages: Dict[int, str] = {}
 
-# Временное хранение контекста анализа (для кнопки "В Watchlist")
-# key = user_id, value = последний анализ
+# Временное хранение контекста анализа (для кнопок "В Watchlist" и "Опубликовать")
 last_analysis_cache: Dict[int, dict] = {}
+
+
+class AuthorStates(StatesGroup):
+    waiting_bio = State()
+    waiting_wallet = State()
+    waiting_post_comment = State()
+    waiting_donation_amount = State()
+
 
 CATEGORY_LABELS = {
     "ru": {
@@ -90,11 +107,11 @@ TEXTS = {
         "no_answer": "Не удалось получить ответ от системы.",
         "banned": "🚫 Ваш аккаунт заблокирован.",
         "not_enough_tokens": "❌ Недостаточно токенов.\n\nКупи токены через 💎 Купить токены",
-        "limit_analyses": "❌ Дневной лимит анализов исчерпан.\n\nКупи токены через 💎 Купить токены",
-        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан.\n\nКупи токены через 💎 Купить токены",
+        "limit_analyses": "❌ Дневной лимит анализов исчерпан.",
+        "limit_opportunities": "❌ Дневной лимит сигналов исчерпан.",
         "choose_category": "Выбери категорию сигнала:",
-        "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nБот уведомит тебя как только найдёт лучший сигнал!\n\nОбычно занимает 1-2 минуты.",
-        "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки\nОбычно занимает 30-60 секунд",
+        "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nОбычно занимает 1-2 минуты.",
+        "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки",
         "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
         "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
     },
@@ -117,12 +134,12 @@ TEXTS = {
         "send_link": "Send a Polymarket link.",
         "no_answer": "Could not get a response from the system.",
         "banned": "🚫 Your account is banned.",
-        "not_enough_tokens": "❌ Not enough tokens.\n\nBuy tokens via 💎 Buy tokens",
-        "limit_analyses": "❌ Daily limit reached.\n\nBuy tokens via 💎 Buy tokens",
-        "limit_opportunities": "❌ Daily signal limit reached.\n\nBuy tokens via 💎 Buy tokens",
+        "not_enough_tokens": "❌ Not enough tokens.",
+        "limit_analyses": "❌ Daily limit reached.",
+        "limit_opportunities": "❌ Daily signal limit reached.",
         "choose_category": "Choose signal category:",
-        "cache_empty": "⏳ Signal for this category is being prepared...\n\nBot will notify you when ready!\n\nUsually takes 1-2 minutes.",
-        "deep_signal_searching": "🧠 Searching personal signal...\n\n⏱ Analyzing markets\nUsually takes 30-60 seconds",
+        "cache_empty": "⏳ Signal is being prepared...\n\nUsually takes 1-2 minutes.",
+        "deep_signal_searching": "🧠 Searching personal signal...",
         "free_trial_analysis": "🎁 Using free trial analysis!",
         "free_trial_signal": "🎁 Using free trial signal!",
     }
@@ -158,11 +175,16 @@ def t(user_id: int, key: str) -> str:
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
     subscribed = is_subscribed(user_id)
+    user_is_author = is_author(user_id)
+
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
         kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
+        if user_is_author:
+            kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
         kb.add(KeyboardButton("💎 Купить токены"))
         kb.add(
@@ -174,6 +196,9 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
+        if user_is_author:
+            kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
         kb.add(KeyboardButton("💎 Buy tokens"))
         kb.add(
@@ -220,10 +245,9 @@ def get_subscribe_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 
 def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKeyboardMarkup:
-    """
-    Inline-клавиатура под анализом: Watchlist + Поделиться + Polymarket.
-    """
+    """Inline-клавиатура под анализом: Watchlist + Опубликовать (если автор) + Поделиться + Polymarket."""
     lang = get_user_lang(user_id)
+    user_is_author = is_author(user_id)
 
     question = analysis_result.get("question", "")[:100]
     display_pred = analysis_result.get("display_prediction", "")
@@ -231,7 +255,6 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     category = analysis_result.get("category", "")
     url = analysis_result.get("url", "")
 
-    # Текст для шеринга
     if lang == "ru":
         share_text = (
             f"🔍 DeepAlpha анализ:\n\n"
@@ -257,16 +280,21 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     watchlist_price = get_setting("watchlist_price_tokens", "5")
 
     kb = InlineKeyboardMarkup(row_width=2)
+
+    # Для автора — кнопка публикации
+    if user_is_author:
+        publish_label = "📢 Опубликовать как прогноз" if lang == "ru" else "📢 Publish as forecast"
+        kb.add(InlineKeyboardButton(publish_label, callback_data=f"pub_post_{user_id}"))
+
     if lang == "ru":
         watchlist_label = f"⭐ В Watchlist ({watchlist_price} ток.)"
         share_label = "📤 Поделиться"
         open_label = "🔗 Polymarket"
     else:
-        watchlist_label = f"⭐ Add to Watchlist ({watchlist_price} tok.)"
+        watchlist_label = f"⭐ Watchlist ({watchlist_price} tok.)"
         share_label = "📤 Share"
         open_label = "🔗 Polymarket"
 
-    # Кнопка Watchlist — callback (обрабатывается отдельно)
     kb.add(InlineKeyboardButton(watchlist_label, callback_data=f"wl_add_{user_id}"))
     kb.add(InlineKeyboardButton(share_label, url=share_url))
     if url:
@@ -287,9 +315,18 @@ def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
     share_url = f"https://t.me/share/url?url={quote(profile_url)}&text={quote(share_text)}"
 
+    user_is_author = is_author(user_id)
+
     kb = InlineKeyboardMarkup(row_width=1)
     share_label = "📤 Поделиться профилем" if lang == "ru" else "📤 Share profile"
     badges_label = "🏆 Все бейджи" if lang == "ru" else "🏆 All badges"
+
+    if user_is_author:
+        edit_bio_label = "✏️ Изменить bio" if lang == "ru" else "✏️ Edit bio"
+        wallet_label = "💳 TON кошелёк" if lang == "ru" else "💳 TON wallet"
+        kb.add(InlineKeyboardButton(edit_bio_label, callback_data="author_edit_bio"))
+        kb.add(InlineKeyboardButton(wallet_label, callback_data="author_set_wallet"))
+
     kb.add(
         InlineKeyboardButton(share_label, url=share_url),
         InlineKeyboardButton(badges_label, callback_data="show_all_badges"),
@@ -314,6 +351,94 @@ def get_watchlist_item_keyboard(user_id: int, watchlist_id: int, notify_enabled:
         InlineKeyboardButton(remove_label, callback_data=f"wl_remove_{watchlist_id}"),
     )
     kb.add(InlineKeyboardButton(back_label, callback_data="wl_list"))
+    return kb
+
+
+def get_author_profile_keyboard(viewer_id: int, author_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(viewer_id)
+    subscribed = is_subscribed_to_author(viewer_id, author_id)
+    is_self = viewer_id == author_id
+
+    kb = InlineKeyboardMarkup(row_width=1)
+
+    if not is_self:
+        if subscribed:
+            unsub_label = "🔕 Отписаться" if lang == "ru" else "🔕 Unsubscribe"
+            kb.add(InlineKeyboardButton(unsub_label, callback_data=f"auth_unsub_{author_id}"))
+        else:
+            sub_label = "🔔 Подписаться" if lang == "ru" else "🔔 Subscribe"
+            kb.add(InlineKeyboardButton(sub_label, callback_data=f"auth_sub_{author_id}"))
+
+        donate_label = "💝 Поддержать автора" if lang == "ru" else "💝 Support author"
+        kb.add(InlineKeyboardButton(
+            donate_label,
+            web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=donate&author={author_id}"),
+        ))
+
+    posts_label = "📝 Прогнозы автора" if lang == "ru" else "📝 Author's posts"
+    kb.add(InlineKeyboardButton(posts_label, callback_data=f"auth_posts_{author_id}"))
+
+    back_label = "⬅️ Назад" if lang == "ru" else "⬅️ Back"
+    kb.add(InlineKeyboardButton(back_label, callback_data="auth_list"))
+
+    return kb
+
+
+def get_author_post_keyboard(viewer_id: int, post: dict) -> InlineKeyboardMarkup:
+    lang = get_user_lang(viewer_id)
+    author_id = post.get("author_id")
+    post_id = post.get("id")
+    market_url = post.get("market_url", "")
+    is_self = viewer_id == author_id
+
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    if not is_self:
+        donate_label = "💝 Поддержать автора" if lang == "ru" else "💝 Support"
+        kb.add(InlineKeyboardButton(
+            donate_label,
+            web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=donate&author={author_id}&post={post_id}"),
+        ))
+
+        subscribed = is_subscribed_to_author(viewer_id, author_id)
+        if not subscribed:
+            sub_label = "🔔 Подписаться на автора" if lang == "ru" else "🔔 Subscribe"
+            kb.add(InlineKeyboardButton(sub_label, callback_data=f"auth_sub_{author_id}"))
+
+    author_label = "👤 Профиль автора" if lang == "ru" else "👤 Author profile"
+    kb.add(InlineKeyboardButton(author_label, callback_data=f"auth_view_{author_id}"))
+
+    if market_url:
+        poly_label = "🔗 Polymarket" if lang == "ru" else "🔗 Polymarket"
+        kb.add(InlineKeyboardButton(poly_label, url=market_url))
+
+    # Автор может удалить свой пост
+    if is_self:
+        delete_label = "🗑 Удалить" if lang == "ru" else "🗑 Delete"
+        kb.add(InlineKeyboardButton(delete_label, callback_data=f"post_delete_{post_id}"))
+
+    return kb
+
+
+def get_subscription_item_keyboard(subscriber_id: int, author_id: int, notifications_enabled: bool) -> InlineKeyboardMarkup:
+    lang = get_user_lang(subscriber_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    if notifications_enabled:
+        mute_label = "🔕 Отключить уведомления" if lang == "ru" else "🔕 Mute"
+    else:
+        mute_label = "🔔 Включить уведомления" if lang == "ru" else "🔔 Unmute"
+
+    unsub_label = "❌ Отписаться" if lang == "ru" else "❌ Unsubscribe"
+    view_label = "👤 Профиль" if lang == "ru" else "👤 Profile"
+    back_label = "⬅️ Назад" if lang == "ru" else "⬅️ Back"
+
+    kb.add(
+        InlineKeyboardButton(mute_label, callback_data=f"sub_mute_{author_id}"),
+        InlineKeyboardButton(unsub_label, callback_data=f"auth_unsub_{author_id}"),
+    )
+    kb.add(InlineKeyboardButton(view_label, callback_data=f"auth_view_{author_id}"))
+    kb.add(InlineKeyboardButton(back_label, callback_data="subs_list"))
     return kb
 
 
@@ -617,7 +742,15 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
     if user.get("is_vip"):
         author_line += "👑 VIP\n"
     if author_profile and author_profile.get("is_author"):
-        author_line += "📢 Автор прогнозов\n" if lang == "ru" else "📢 Prediction author\n"
+        subs = author_profile.get("total_subscribers", 0)
+        posts = author_profile.get("total_posts", 0)
+        if lang == "ru":
+            author_line += f"📢 Автор прогнозов | {subs} подписчиков | {posts} постов\n"
+        else:
+            author_line += f"📢 Author | {subs} subscribers | {posts} posts\n"
+
+    if author_profile and author_profile.get("author_bio"):
+        author_line += f"\n💬 {author_profile['author_bio']}\n"
 
     if lang == "ru":
         text = f"👤 Профиль {username_display}\n{'─' * 30}\n\n"
@@ -682,10 +815,9 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
 
 
 def _format_watchlist_list(user_id: int) -> str:
-    """Форматирует список watchlist пользователя."""
     lang = get_user_lang(user_id)
     items = get_user_watchlist(user_id)
-    limit = count_user_watchlist(user_id)
+    current_count = count_user_watchlist(user_id)
     from db.database import get_user_watchlist_limit
     max_limit = get_user_watchlist_limit(user_id)
 
@@ -694,25 +826,21 @@ def _format_watchlist_list(user_id: int) -> str:
             return (
                 f"📋 Мой Watchlist\n\n"
                 f"Список пуст.\n\n"
-                f"Добавляй рынки кнопкой ⭐ В Watchlist под любым анализом.\n\n"
-                f"💡 Ты будешь получать уведомления при изменении вероятности, "
-                f"скором закрытии рынка и финальном результате.\n\n"
+                f"Добавляй рынки кнопкой ⭐ В Watchlist под анализом.\n\n"
                 f"📊 Слотов использовано: 0 / {max_limit}"
             )
         else:
             return (
                 f"📋 My Watchlist\n\n"
-                f"List is empty.\n\n"
-                f"Add markets using ⭐ Add to Watchlist button under any analysis.\n\n"
-                f"💡 You'll get notifications on probability changes, "
-                f"market closing soon, and final results.\n\n"
-                f"📊 Slots used: 0 / {max_limit}"
+                f"Empty.\n\n"
+                f"Add markets via ⭐ button under analysis.\n\n"
+                f"📊 Slots: 0 / {max_limit}"
             )
 
     if lang == "ru":
-        text = f"📋 Мой Watchlist ({limit}/{max_limit})\n\n"
+        text = f"📋 Мой Watchlist ({current_count}/{max_limit})\n\n"
     else:
-        text = f"📋 My Watchlist ({limit}/{max_limit})\n\n"
+        text = f"📋 My Watchlist ({current_count}/{max_limit})\n\n"
 
     for i, item in enumerate(items, 1):
         q = item.get("question", "")[:60]
@@ -730,26 +858,20 @@ def _format_watchlist_list(user_id: int) -> str:
         if lang == "ru":
             text += (
                 f"{i}. {mute} {q}\n"
-                f"   Начало: {initial:.1f}% → Сейчас: {current:.1f}%{change_str}\n"
+                f"   {initial:.1f}% → {current:.1f}%{change_str}\n"
                 f"   /wl_{item['id']}\n\n"
             )
         else:
             text += (
                 f"{i}. {mute} {q}\n"
-                f"   Start: {initial:.1f}% → Now: {current:.1f}%{change_str}\n"
+                f"   {initial:.1f}% → {current:.1f}%{change_str}\n"
                 f"   /wl_{item['id']}\n\n"
             )
-
-    if lang == "ru":
-        text += "\n💡 Нажми на /wl_ID чтобы управлять конкретным рынком"
-    else:
-        text += "\n💡 Tap /wl_ID to manage a specific market"
 
     return text
 
 
 def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
-    """Форматирует детали одной записи watchlist."""
     lang = get_user_lang(user_id)
     item = get_watchlist_by_id(watchlist_id)
 
@@ -811,8 +933,368 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
         )
 
 
+def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
+    """Форматирует один пост автора."""
+    lang = get_user_lang(uid)
+
+    q = _escape(post.get("question", ""))
+    category = post.get("category", "")
+    display_pred = _escape(post.get("display_prediction", ""))
+    confidence_raw = post.get("confidence", "")
+    confidence = _translate_confidence(confidence_raw, lang)
+    conf_emoji = _confidence_emoji(confidence_raw)
+    market_prob = _escape(post.get("market_probability", ""))
+    alpha_label = _translate_alpha_label(post.get("alpha_label", ""), lang)
+    comment = _escape(post.get("author_comment", ""))
+    total_donations = post.get("total_donations_ton", 0) or 0
+    total_donors = post.get("total_donors", 0) or 0
+    created = post.get("created_at", "")[:16].replace("T", " ") if post.get("created_at") else ""
+
+    author_line = ""
+    if show_author:
+        author_username = post.get("author_username") or post.get("author_first_name", "")
+        if author_username:
+            author_line = f"📢 @{author_username}\n\n" if lang == "ru" else f"📢 @{author_username}\n\n"
+
+    donations_line = ""
+    if total_donations > 0:
+        if lang == "ru":
+            donations_line = f"\n💝 Донатов: {total_donations:.2f} TON от {total_donors} поддержавших"
+        else:
+            donations_line = f"\n💝 Donations: {total_donations:.2f} TON from {total_donors} supporters"
+
+    if lang == "ru":
+        text = (
+            f"{author_line}"
+            f"📌 {q}\n\n"
+            f"🏷 {category}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"🎯 Прогноз: {display_pred}\n"
+            f"{conf_emoji} Уверенность: {confidence}\n"
+        )
+        if alpha_label:
+            text += f"{alpha_label}\n"
+        if comment:
+            text += f"\n💬 От автора:\n{comment}\n"
+        text += f"{donations_line}\n\n📅 {created}"
+    else:
+        text = (
+            f"{author_line}"
+            f"📌 {q}\n\n"
+            f"🏷 {category}\n"
+            f"📊 Market: {market_prob}\n"
+            f"🎯 Forecast: {display_pred}\n"
+            f"{conf_emoji} Confidence: {confidence}\n"
+        )
+        if alpha_label:
+            text += f"{alpha_label}\n"
+        if comment:
+            text += f"\n💬 Author comment:\n{comment}\n"
+        text += f"{donations_line}\n\n📅 {created}"
+
+    return text
+
+
+def _format_author_profile(viewer_id: int, author_id: int) -> str:
+    """Форматирует профиль автора (публичный)."""
+    lang = get_user_lang(viewer_id)
+    author = get_author_profile(author_id)
+
+    if not author or not author.get("is_author"):
+        return "❌ Автор не найден" if lang == "ru" else "❌ Author not found"
+
+    name = author.get("username") or author.get("first_name") or f"User {author_id}"
+    username_display = f"@{author['username']}" if author.get("username") else name
+
+    subs = author.get("total_subscribers", 0)
+    posts = author.get("total_posts", 0)
+    earned = (author.get("author_balance_ton", 0) or 0) + (author.get("author_withdrawn_ton", 0) or 0)
+    bio = author.get("author_bio", "") or ""
+    since = author.get("author_since", "")[:10] if author.get("author_since") else ""
+
+    subscribed = is_subscribed_to_author(viewer_id, author_id)
+
+    if lang == "ru":
+        text = (
+            f"📢 Автор {username_display}\n"
+            f"{'─' * 30}\n\n"
+        )
+        if bio:
+            text += f"💬 {bio}\n\n"
+        text += (
+            f"👥 Подписчиков: {subs}\n"
+            f"📝 Опубликовано прогнозов: {posts}\n"
+        )
+        if earned > 0:
+            text += f"💝 Заработано донатов: {earned:.2f} TON\n"
+        if since:
+            text += f"📅 Автор с {since}\n"
+
+        if subscribed:
+            text += f"\n✅ Ты подписан на этого автора"
+    else:
+        text = (
+            f"📢 Author {username_display}\n"
+            f"{'─' * 30}\n\n"
+        )
+        if bio:
+            text += f"💬 {bio}\n\n"
+        text += (
+            f"👥 Subscribers: {subs}\n"
+            f"📝 Posts published: {posts}\n"
+        )
+        if earned > 0:
+            text += f"💝 Total donations: {earned:.2f} TON\n"
+        if since:
+            text += f"📅 Author since {since}\n"
+
+        if subscribed:
+            text += f"\n✅ You are subscribed"
+
+    return text
+
+
+def _format_authors_list(uid: int) -> str:
+    lang = get_user_lang(uid)
+    authors = get_all_authors(limit=30)
+
+    if not authors:
+        if lang == "ru":
+            return (
+                "📢 Авторы\n\n"
+                "Пока нет авторов.\n\n"
+                "Хочешь стать автором и публиковать свои прогнозы?\n"
+                "Напиши /become_author"
+            )
+        else:
+            return (
+                "📢 Authors\n\n"
+                "No authors yet.\n\n"
+                "Want to become an author?\n"
+                "Send /become_author"
+            )
+
+    if lang == "ru":
+        text = f"📢 Авторы DeepAlpha ({len(authors)})\n\n"
+    else:
+        text = f"📢 DeepAlpha Authors ({len(authors)})\n\n"
+
+    for i, a in enumerate(authors[:20], 1):
+        name = a.get("username") or a.get("first_name") or str(a["user_id"])
+        subs = a.get("total_subscribers", 0)
+        posts = a.get("total_posts", 0)
+        earned = (a.get("author_balance_ton", 0) or 0) + (a.get("author_withdrawn_ton", 0) or 0)
+
+        if lang == "ru":
+            text += (
+                f"{i}. @{name}\n"
+                f"   👥 {subs} | 📝 {posts}"
+            )
+        else:
+            text += (
+                f"{i}. @{name}\n"
+                f"   👥 {subs} | 📝 {posts}"
+            )
+
+        if earned > 0:
+            text += f" | 💝 {earned:.1f} TON"
+
+        text += f"\n   /author_{a['user_id']}\n\n"
+
+    return text
+
+
+def _format_subscriptions(uid: int) -> str:
+    lang = get_user_lang(uid)
+    subs = get_user_subscriptions(uid)
+
+    if not subs:
+        if lang == "ru":
+            return (
+                "📰 Мои подписки\n\n"
+                "Ты пока ни на кого не подписан.\n\n"
+                "Открой 📢 Авторы чтобы найти интересных авторов!"
+            )
+        else:
+            return (
+                "📰 My Subscriptions\n\n"
+                "Not subscribed to anyone yet.\n\n"
+                "Open 📢 Authors to find interesting authors!"
+            )
+
+    feed = get_subscription_feed(uid, limit=15)
+
+    if lang == "ru":
+        text = f"📰 Мои подписки ({len(subs)})\n\n"
+    else:
+        text = f"📰 My Subscriptions ({len(subs)})\n\n"
+
+    if feed:
+        if lang == "ru":
+            text += f"🔥 Последние прогнозы:\n{'─' * 30}\n\n"
+        else:
+            text += f"🔥 Latest posts:\n{'─' * 30}\n\n"
+
+        for i, p in enumerate(feed[:10], 1):
+            q = p.get("question", "")[:55]
+            author_name = p.get("author_username") or p.get("author_first_name", "?")
+            pred = p.get("display_prediction", "")[:30]
+            created = p.get("created_at", "")[:10] if p.get("created_at") else ""
+
+            text += (
+                f"{i}. @{author_name}\n"
+                f"   📌 {q}\n"
+                f"   🎯 {pred}\n"
+                f"   📅 {created} /post_{p['id']}\n\n"
+            )
+    else:
+        if lang == "ru":
+            text += "Авторы пока ничего не опубликовали.\n\n"
+        else:
+            text += "Authors haven't posted yet.\n\n"
+
+    if lang == "ru":
+        text += f"{'─' * 30}\n📋 Все подписки:\n\n"
+    else:
+        text += f"{'─' * 30}\n📋 All subscriptions:\n\n"
+
+    for i, s in enumerate(subs[:15], 1):
+        name = s.get("username") or s.get("first_name") or str(s["author_id"])
+        mute = "🔕" if not s.get("notifications_enabled") else "🔔"
+        posts = s.get("total_posts", 0)
+
+        text += f"{i}. {mute} @{name} ({posts} постов) /author_{s['author_id']}\n"
+
+    return text
+
+
+def _format_my_posts(uid: int) -> str:
+    lang = get_user_lang(uid)
+    posts = get_author_posts(uid, limit=20)
+
+    if not posts:
+        if lang == "ru":
+            return (
+                "✍️ Мои прогнозы\n\n"
+                "Ты ещё не публиковал прогнозов.\n\n"
+                "Сделай анализ любого рынка и нажми кнопку\n"
+                "📢 Опубликовать как прогноз"
+            )
+        else:
+            return (
+                "✍️ My posts\n\n"
+                "You haven't published any posts yet.\n\n"
+                "Analyze any market and tap\n"
+                "📢 Publish as forecast"
+            )
+
+    max_per_day = int(get_setting("max_posts_per_day", "5"))
+    user = get_user(uid)
+    posts_today = user.get("posts_today", 0) or 0 if user else 0
+
+    if lang == "ru":
+        text = (
+            f"✍️ Мои прогнозы ({len(posts)})\n"
+            f"Сегодня: {posts_today}/{max_per_day}\n\n"
+        )
+    else:
+        text = (
+            f"✍️ My posts ({len(posts)})\n"
+            f"Today: {posts_today}/{max_per_day}\n\n"
+        )
+
+    for i, p in enumerate(posts[:15], 1):
+        q = p.get("question", "")[:55]
+        pred = p.get("display_prediction", "")[:30]
+        donations = p.get("total_donations_ton", 0) or 0
+        donors = p.get("total_donors", 0) or 0
+        created = p.get("created_at", "")[:10] if p.get("created_at") else ""
+
+        if lang == "ru":
+            text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
+            if donations > 0:
+                text += f"   💝 {donations:.2f} TON ({donors})\n"
+            text += f"   📅 {created} /post_{p['id']}\n\n"
+        else:
+            text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
+            if donations > 0:
+                text += f"   💝 {donations:.2f} TON ({donors})\n"
+            text += f"   📅 {created} /post_{p['id']}\n\n"
+
+    return text
+
+
+def _format_author_balance(uid: int) -> str:
+    lang = get_user_lang(uid)
+    author = get_author_profile(uid)
+
+    if not author or not author.get("is_author"):
+        return "❌ Ты не автор" if lang == "ru" else "❌ Not an author"
+
+    balance = author.get("author_balance_ton", 0) or 0
+    withdrawn = author.get("author_withdrawn_ton", 0) or 0
+    total_earned = balance + withdrawn
+    wallet = author.get("ton_wallet", "") or ""
+    min_withdrawal = float(get_setting("min_withdrawal_ton", "1"))
+
+    donations = get_author_donations_list(uid, limit=5)
+
+    if lang == "ru":
+        text = (
+            f"💰 Баланс автора\n"
+            f"{'─' * 30}\n\n"
+            f"💎 Доступно к выводу: {balance:.4f} TON\n"
+            f"💸 Уже выведено: {withdrawn:.4f} TON\n"
+            f"📊 Всего заработано: {total_earned:.4f} TON\n\n"
+        )
+        if wallet:
+            text += f"💳 Кошелёк: {wallet[:20]}...\n\n"
+        else:
+            text += "💳 Кошелёк не установлен\n\n"
+
+        text += f"Минимум для вывода: {min_withdrawal} TON\n\n"
+
+        if donations:
+            text += f"🎁 Последние донаты:\n{'─' * 30}\n"
+            for d in donations[:5]:
+                donor = d.get("donor_username") or d.get("donor_first_name", "?")
+                amount = d.get("ton_amount", 0) or 0
+                received = d.get("author_received_ton", 0) or 0
+                comment = d.get("comment", "") or ""
+                text += f"• @{donor}: {amount:.2f} TON (получил {received:.2f})\n"
+                if comment:
+                    text += f"  💬 {comment[:50]}\n"
+    else:
+        text = (
+            f"💰 Author Balance\n"
+            f"{'─' * 30}\n\n"
+            f"💎 Available: {balance:.4f} TON\n"
+            f"💸 Withdrawn: {withdrawn:.4f} TON\n"
+            f"📊 Total earned: {total_earned:.4f} TON\n\n"
+        )
+        if wallet:
+            text += f"💳 Wallet: {wallet[:20]}...\n\n"
+        else:
+            text += "💳 No wallet set\n\n"
+
+        text += f"Min withdrawal: {min_withdrawal} TON\n\n"
+
+        if donations:
+            text += f"🎁 Latest donations:\n{'─' * 30}\n"
+            for d in donations[:5]:
+                donor = d.get("donor_username") or d.get("donor_first_name", "?")
+                amount = d.get("ton_amount", 0) or 0
+                received = d.get("author_received_ton", 0) or 0
+                comment = d.get("comment", "") or ""
+                text += f"• @{donor}: {amount:.2f} TON (got {received:.2f})\n"
+                if comment:
+                    text += f"  💬 {comment[:50]}\n"
+
+    return text
+
+
 # ═══════════════════════════════════════════
-# HANDLERS: START / LANG / MENU
+# COMMAND HANDLERS
 # ═══════════════════════════════════════════
 
 @dp.message_handler(commands=["start"])
@@ -883,6 +1365,266 @@ async def watchlist_command(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
+@dp.message_handler(commands=["authors"])
+async def authors_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_authors_list(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["my_subscriptions"])
+async def my_subscriptions_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_subscriptions(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["my_posts"])
+async def my_posts_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Ты не автор. Напиши /become_author" if lang == "ru" else "❌ Not an author"
+        await message.answer(msg)
+        return
+
+    text = _format_my_posts(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["become_author"])
+async def become_author_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if is_author(uid):
+        msg = (
+            "✅ Ты уже автор!\n\nТвой профиль: /profile"
+            if lang == "ru"
+            else "✅ You are already an author!\n\nProfile: /profile"
+        )
+        await message.answer(msg)
+        return
+
+    if get_setting("authors_enabled", "on") != "on":
+        msg = (
+            "❌ Система авторов временно недоступна"
+            if lang == "ru"
+            else "❌ Authors system unavailable"
+        )
+        await message.answer(msg)
+        return
+
+    price = get_setting("author_status_price_ton", "5")
+
+    if lang == "ru":
+        text = (
+            f"📢 Стать автором DeepAlpha\n\n"
+            f"Цена: {price} TON (одноразовая оплата)\n\n"
+            f"Что ты получаешь:\n"
+            f"• 📝 Возможность публиковать свои прогнозы\n"
+            f"• 📰 Подписчики будут получать уведомления\n"
+            f"• 💝 Получай донаты в TON от благодарных юзеров\n"
+            f"• 👤 Публичный профиль автора\n"
+            f"• 📊 Статистика по донатам и подписчикам\n\n"
+            f"💳 Оплата через WebApp ниже"
+        )
+    else:
+        text = (
+            f"📢 Become a DeepAlpha Author\n\n"
+            f"Price: {price} TON (one-time)\n\n"
+            f"You get:\n"
+            f"• 📝 Publish your predictions\n"
+            f"• 📰 Subscribers get notifications\n"
+            f"• 💝 Receive TON donations\n"
+            f"• 👤 Public author profile\n"
+            f"• 📊 Stats on donations & subscribers\n\n"
+            f"💳 Pay via WebApp below"
+        )
+
+    kb = InlineKeyboardMarkup()
+    label = "💳 Стать автором" if lang == "ru" else "💳 Become author"
+    kb.add(InlineKeyboardButton(
+        label,
+        web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=author_status"),
+    ))
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.message_handler(commands=["edit_bio"])
+async def edit_bio_command(message: types.Message, state: FSMContext):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Доступно только авторам" if lang == "ru" else "❌ Authors only"
+        await message.answer(msg)
+        return
+
+    author = get_author_profile(uid)
+    current_bio = author.get("author_bio", "") if author else ""
+
+    await AuthorStates.waiting_bio.set()
+
+    if lang == "ru":
+        text = (
+            f"✏️ Изменить bio\n\n"
+            f"Текущее bio:\n{current_bio or 'не установлено'}\n\n"
+            f"Введи новое bio (до 200 символов). Расскажи о себе, своей стратегии."
+        )
+    else:
+        text = (
+            f"✏️ Edit bio\n\n"
+            f"Current bio:\n{current_bio or 'not set'}\n\n"
+            f"Enter new bio (up to 200 chars)."
+        )
+
+    await message.answer(text)
+
+
+@dp.message_handler(state=AuthorStates.waiting_bio)
+async def save_bio(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    bio = message.text.strip()[:200]
+    set_author_bio(uid, bio)
+    await state.finish()
+
+    msg = f"✅ Bio обновлено!" if lang == "ru" else f"✅ Bio updated!"
+    await message.answer(msg, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["set_wallet"])
+async def set_wallet_command(message: types.Message, state: FSMContext):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Доступно только авторам" if lang == "ru" else "❌ Authors only"
+        await message.answer(msg)
+        return
+
+    author = get_author_profile(uid)
+    current_wallet = author.get("ton_wallet", "") if author else ""
+
+    await AuthorStates.waiting_wallet.set()
+
+    if lang == "ru":
+        text = (
+            f"💳 TON кошелёк для вывода донатов\n\n"
+            f"Текущий: {current_wallet[:30] + '...' if current_wallet else 'не установлен'}\n\n"
+            f"Введи адрес TON кошелька (начинается с EQ или UQ)."
+        )
+    else:
+        text = (
+            f"💳 TON wallet for withdrawals\n\n"
+            f"Current: {current_wallet[:30] + '...' if current_wallet else 'not set'}\n\n"
+            f"Enter TON wallet address (starts with EQ or UQ)."
+        )
+
+    await message.answer(text)
+
+
+@dp.message_handler(state=AuthorStates.waiting_wallet)
+async def save_wallet(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    wallet = message.text.strip()
+
+    if not (wallet.startswith("EQ") or wallet.startswith("UQ")) or len(wallet) < 40:
+        msg = "❌ Некорректный адрес TON" if lang == "ru" else "❌ Invalid TON address"
+        await message.answer(msg)
+        return
+
+    set_ton_wallet(uid, wallet)
+    await state.finish()
+
+    msg = "✅ Кошелёк сохранён" if lang == "ru" else "✅ Wallet saved"
+    await message.answer(msg, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["withdraw"])
+async def withdraw_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Доступно только авторам" if lang == "ru" else "❌ Authors only"
+        await message.answer(msg)
+        return
+
+    author = get_author_profile(uid)
+    balance = author.get("author_balance_ton", 0) or 0
+    wallet = author.get("ton_wallet", "") or ""
+    min_withdrawal = float(get_setting("min_withdrawal_ton", "1"))
+
+    if not wallet:
+        msg = (
+            "❌ Установи кошелёк: /set_wallet"
+            if lang == "ru"
+            else "❌ Set wallet first: /set_wallet"
+        )
+        await message.answer(msg)
+        return
+
+    if balance < min_withdrawal:
+        if lang == "ru":
+            msg = f"❌ Минимум для вывода: {min_withdrawal} TON\nТвой баланс: {balance:.4f} TON"
+        else:
+            msg = f"❌ Min withdrawal: {min_withdrawal} TON\nYour balance: {balance:.4f} TON"
+        await message.answer(msg)
+        return
+
+    from db.database import create_withdrawal_request
+    request_id = create_withdrawal_request(uid, balance, wallet)
+
+    if request_id:
+        if lang == "ru":
+            text = (
+                f"✅ Заявка на вывод создана!\n\n"
+                f"💎 Сумма: {balance:.4f} TON\n"
+                f"💳 Кошелёк: {wallet[:20]}...\n\n"
+                f"Админ обработает заявку в течение 24 часов.\n"
+                f"После подтверждения деньги придут на твой кошелёк."
+            )
+        else:
+            text = (
+                f"✅ Withdrawal request created!\n\n"
+                f"💎 Amount: {balance:.4f} TON\n"
+                f"💳 Wallet: {wallet[:20]}...\n\n"
+                f"Admin will process within 24 hours."
+            )
+        await message.answer(text)
+
+        # Уведомляем админа
+        admin_id = int(os.getenv("ADMIN_ID", "0"))
+        if admin_id:
+            try:
+                author_name = message.from_user.username or str(uid)
+                await bot.send_message(
+                    admin_id,
+                    f"💰 Новая заявка на вывод #{request_id}\n\n"
+                    f"Автор: @{author_name} ({uid})\n"
+                    f"Сумма: {balance:.4f} TON\n"
+                    f"Кошелёк: {wallet}\n\n"
+                    f"Обработать в /admin → 📢 Авторы"
+                )
+            except Exception as e:
+                print(f"Admin notify error: {e}")
+    else:
+        msg = "❌ Ошибка создания заявки" if lang == "ru" else "❌ Failed to create request"
+        await message.answer(msg)
+
+
 @dp.message_handler(lambda m: m.text and m.text.startswith("/wl_"))
 async def watchlist_item_handler(message: types.Message):
     _register_user(message)
@@ -890,23 +1632,65 @@ async def watchlist_item_handler(message: types.Message):
     try:
         wl_id = int(message.text.replace("/wl_", "").strip())
     except ValueError:
-        await message.answer(
-            "❌ Неверный ID" if get_user_lang(uid) == "ru" else "❌ Invalid ID"
-        )
+        await message.answer("❌ Неверный ID")
         return
 
     item = get_watchlist_by_id(wl_id)
     if not item or item.get("user_id") != uid:
         lang = get_user_lang(uid)
-        await message.answer(
-            "❌ Запись не найдена" if lang == "ru" else "❌ Not found"
-        )
+        await message.answer("❌ Запись не найдена" if lang == "ru" else "❌ Not found")
         return
 
     text = _format_watchlist_item(uid, wl_id)
     kb = get_watchlist_item_keyboard(uid, wl_id, item.get("notify_enabled", True))
     await message.answer(text, reply_markup=kb)
 
+
+@dp.message_handler(lambda m: m.text and m.text.startswith("/author_"))
+async def author_view_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    try:
+        author_id = int(message.text.replace("/author_", "").strip())
+    except ValueError:
+        await message.answer("❌ Неверный ID")
+        return
+
+    text = _format_author_profile(uid, author_id)
+    kb = get_author_profile_keyboard(uid, author_id)
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.message_handler(lambda m: m.text and m.text.startswith("/post_"))
+async def post_view_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    try:
+        post_id = int(message.text.replace("/post_", "").strip())
+    except ValueError:
+        await message.answer("❌ Неверный ID")
+        return
+
+    post = get_author_post(post_id)
+    if not post:
+        lang = get_user_lang(uid)
+        await message.answer("❌ Пост не найден" if lang == "ru" else "❌ Post not found")
+        return
+
+    # Обогащаем post данными автора
+    author = get_author_profile(post["author_id"])
+    if author:
+        post["author_username"] = author.get("username")
+        post["author_first_name"] = author.get("first_name")
+
+    text = _format_author_post(post, uid, show_author=True)
+    kb = get_author_post_keyboard(uid, post)
+    await message.answer(text, reply_markup=kb)
+
+
+# ═══════════════════════════════════════════
+# CALLBACKS: PROFILE / BADGES
+# ═══════════════════════════════════════════
 
 @dp.callback_query_handler(lambda c: c.data == "show_all_badges")
 async def show_all_badges_callback(callback: types.CallbackQuery):
@@ -926,6 +1710,66 @@ async def back_to_profile_callback(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=get_profile_keyboard(uid))
 
 
+@dp.callback_query_handler(lambda c: c.data == "author_edit_bio")
+async def author_edit_bio_callback(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        await callback.answer("❌ Только для авторов" if lang == "ru" else "❌ Authors only", show_alert=True)
+        return
+
+    author = get_author_profile(uid)
+    current_bio = author.get("author_bio", "") if author else ""
+
+    await AuthorStates.waiting_bio.set()
+
+    if lang == "ru":
+        text = (
+            f"✏️ Текущее bio:\n{current_bio or 'не установлено'}\n\n"
+            f"Введи новое bio (до 200 символов):"
+        )
+    else:
+        text = (
+            f"✏️ Current bio:\n{current_bio or 'not set'}\n\n"
+            f"Enter new bio (up to 200 chars):"
+        )
+
+    await callback.message.answer(text)
+
+
+@dp.callback_query_handler(lambda c: c.data == "author_set_wallet")
+async def author_set_wallet_callback(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        await callback.answer("❌ Только для авторов" if lang == "ru" else "❌ Authors only", show_alert=True)
+        return
+
+    author = get_author_profile(uid)
+    current_wallet = author.get("ton_wallet", "") if author else ""
+
+    await AuthorStates.waiting_wallet.set()
+
+    if lang == "ru":
+        text = (
+            f"💳 Текущий: {current_wallet[:30] + '...' if current_wallet else 'не установлен'}\n\n"
+            f"Введи адрес TON кошелька (EQ... или UQ...):"
+        )
+    else:
+        text = (
+            f"💳 Current: {current_wallet[:30] + '...' if current_wallet else 'not set'}\n\n"
+            f"Enter TON wallet (EQ... or UQ...):"
+        )
+
+    await callback.message.answer(text)
+
+
+# ═══════════════════════════════════════════
+# BUTTON HANDLERS
+# ═══════════════════════════════════════════
+
 @dp.message_handler(lambda m: m.text in ["👤 Профиль", "👤 Profile"])
 async def profile_button_handler(message: types.Message):
     _register_user(message)
@@ -940,6 +1784,121 @@ async def watchlist_button_handler(message: types.Message):
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
     await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["📢 Авторы", "📢 Authors"])
+async def authors_button_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_authors_list(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["📰 Подписки", "📰 Subscriptions"])
+async def subscriptions_button_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_subscriptions(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["✍️ Мои прогнозы", "✍️ My posts"])
+async def my_posts_button_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Ты не автор. Напиши /become_author" if lang == "ru" else "❌ Not an author"
+        await message.answer(msg)
+        return
+
+    text = _format_my_posts(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["💰 Баланс автора", "💰 Author balance"])
+async def author_balance_button_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        msg = "❌ Ты не автор" if lang == "ru" else "❌ Not an author"
+        await message.answer(msg)
+        return
+
+    text = _format_author_balance(uid)
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    wallet_label = "💳 TON кошелёк" if lang == "ru" else "💳 TON wallet"
+    withdraw_label = "💸 Запросить вывод" if lang == "ru" else "💸 Request withdrawal"
+    kb.add(InlineKeyboardButton(wallet_label, callback_data="author_set_wallet"))
+    kb.add(InlineKeyboardButton(withdraw_label, callback_data="author_withdraw"))
+
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "author_withdraw")
+async def author_withdraw_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    # Используем ту же логику что в команде /withdraw
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        await callback.answer("❌ Только для авторов", show_alert=True)
+        return
+
+    author = get_author_profile(uid)
+    balance = author.get("author_balance_ton", 0) or 0
+    wallet = author.get("ton_wallet", "") or ""
+    min_withdrawal = float(get_setting("min_withdrawal_ton", "1"))
+
+    if not wallet:
+        msg = "❌ Сначала установи кошелёк" if lang == "ru" else "❌ Set wallet first"
+        await callback.answer(msg, show_alert=True)
+        return
+
+    if balance < min_withdrawal:
+        if lang == "ru":
+            msg = f"❌ Минимум: {min_withdrawal} TON. Баланс: {balance:.4f}"
+        else:
+            msg = f"❌ Min: {min_withdrawal} TON. Balance: {balance:.4f}"
+        await callback.answer(msg, show_alert=True)
+        return
+
+    from db.database import create_withdrawal_request
+    request_id = create_withdrawal_request(uid, balance, wallet)
+
+    if request_id:
+        if lang == "ru":
+            text = (
+                f"✅ Заявка на вывод создана!\n\n"
+                f"💎 Сумма: {balance:.4f} TON\n"
+                f"💳 Кошелёк: {wallet[:20]}...\n\n"
+                f"Админ обработает в течение 24 часов."
+            )
+        else:
+            text = (
+                f"✅ Withdrawal request created!\n\n"
+                f"💎 Amount: {balance:.4f} TON\n"
+                f"💳 Wallet: {wallet[:20]}...\n\n"
+                f"Admin will process within 24 hours."
+            )
+        await callback.message.answer(text)
+
+        admin_id = int(os.getenv("ADMIN_ID", "0"))
+        if admin_id:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"💰 Новая заявка на вывод #{request_id}\n\n"
+                    f"Автор: {uid}\n"
+                    f"Сумма: {balance:.4f} TON\n"
+                    f"Кошелёк: {wallet}"
+                )
+            except Exception:
+                pass
 
 
 @dp.message_handler(lambda m: m.text in ["🌐 Язык", "🌐 Language"])
@@ -977,58 +1936,35 @@ async def set_english_handler(message: types.Message):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("wl_add_"))
 async def watchlist_add_callback(callback: types.CallbackQuery):
-    """Обработка кнопки '⭐ В Watchlist' под анализом."""
     uid = callback.from_user.id
     lang = get_user_lang(uid)
 
-    # Проверка что watchlist включён
     if get_setting("watchlist_enabled", "on") != "on":
-        await callback.answer(
-            "Watchlist временно недоступен" if lang == "ru" else "Watchlist unavailable",
-            show_alert=True,
-        )
+        await callback.answer("Watchlist временно недоступен" if lang == "ru" else "Unavailable", show_alert=True)
         return
 
-    # Получаем данные последнего анализа из кеша
     analysis = last_analysis_cache.get(uid)
     if not analysis:
         await callback.answer(
-            "Анализ устарел. Сделай новый анализ." if lang == "ru"
-            else "Analysis expired. Make a new one.",
+            "Анализ устарел. Сделай новый." if lang == "ru" else "Expired. Make a new one.",
             show_alert=True,
         )
         return
 
-    # Проверка лимита
     limit_check = can_add_to_watchlist(uid)
     if not limit_check["allowed"]:
         current = limit_check["current"]
         limit = limit_check["limit"]
-        extra_price = get_setting("watchlist_extra_slots_price", "20")
-        extra_count = get_setting("watchlist_extra_slots_count", "5")
-
         if lang == "ru":
-            msg = (
-                f"❌ Лимит Watchlist: {current}/{limit}\n\n"
-                f"Удали что-нибудь или купи {extra_count} доп. слотов "
-                f"за {extra_price} токенов.\n\n"
-                f"Или оформи подписку — лимит 50 рынков."
-            )
+            msg = f"❌ Лимит: {current}/{limit}\nУдали что-нибудь или купи доп. слоты."
         else:
-            msg = (
-                f"❌ Watchlist limit: {current}/{limit}\n\n"
-                f"Remove something or buy {extra_count} extra slots "
-                f"for {extra_price} tokens.\n\n"
-                f"Or get subscription — 50 markets limit."
-            )
+            msg = f"❌ Limit: {current}/{limit}"
         await callback.answer(msg, show_alert=True)
         return
 
-    # Проверка оплаты
     user = get_user(uid)
     subscribed = is_subscribed(uid)
     is_free = (user and user.get("is_vip")) or subscribed
-
     price = int(get_setting("watchlist_price_tokens", "5"))
 
     if not is_free and get_setting("paid_mode", "off") == "on":
@@ -1036,12 +1972,11 @@ async def watchlist_add_callback(callback: types.CallbackQuery):
             msg = (
                 f"❌ Нужно {price} токенов. Баланс: {user['token_balance'] if user else 0}"
                 if lang == "ru"
-                else f"❌ Need {price} tokens. Balance: {user['token_balance'] if user else 0}"
+                else f"❌ Need {price} tokens"
             )
             await callback.answer(msg, show_alert=True)
             return
 
-    # Извлекаем данные для сохранения
     market_slug = analysis.get("market_slug", "") or _extract_slug_from_url(analysis.get("url", ""))
     if not market_slug:
         await callback.answer(
@@ -1050,11 +1985,8 @@ async def watchlist_add_callback(callback: types.CallbackQuery):
         )
         return
 
-    # Извлекаем числовую вероятность
-    market_prob_str = analysis.get("market_probability", "")
-    initial_prob = _parse_probability(market_prob_str)
+    initial_prob = _parse_probability(analysis.get("market_probability", ""))
 
-    # Добавляем в watchlist
     wl_id = add_to_watchlist(
         user_id=uid,
         market_slug=market_slug,
@@ -1062,7 +1994,7 @@ async def watchlist_add_callback(callback: types.CallbackQuery):
         question=analysis.get("question", ""),
         category=analysis.get("category", ""),
         initial_probability=initial_prob,
-        initial_market_prob_str=market_prob_str,
+        initial_market_prob_str=analysis.get("market_probability", ""),
         market_end_date=analysis.get("market_end_date"),
     )
 
@@ -1073,29 +2005,14 @@ async def watchlist_add_callback(callback: types.CallbackQuery):
         )
         return
 
-    # Списываем токены (если не бесплатно)
     if not is_free and get_setting("paid_mode", "off") == "on":
         add_tokens(uid, -price)
 
-    # Успех
     if lang == "ru":
-        msg = (
-            f"✅ Добавлено в Watchlist!\n\n"
-            f"Ты получишь уведомления о:\n"
-            f"• Изменении вероятности\n"
-            f"• Скором закрытии рынка\n"
-            f"• Результате\n\n"
-            f"📋 Все рынки: /watchlist"
-        )
+        msg = f"✅ Добавлено! Уведомления при изменениях.\n📋 /watchlist"
     else:
-        msg = (
-            f"✅ Added to Watchlist!\n\n"
-            f"You'll get notifications on:\n"
-            f"• Probability changes\n"
-            f"• Market closing soon\n"
-            f"• Final result\n\n"
-            f"📋 All markets: /watchlist"
-        )
+        msg = f"✅ Added! You'll get notifications.\n📋 /watchlist"
+
     await callback.answer("✅", show_alert=False)
     await callback.message.answer(msg)
 
@@ -1120,21 +2037,18 @@ async def watchlist_mute_callback(callback: types.CallbackQuery):
 
     item = get_watchlist_by_id(wl_id)
     if not item or item.get("user_id") != uid:
-        await callback.answer(
-            "❌ Запись не найдена" if lang == "ru" else "❌ Not found",
-            show_alert=True,
-        )
+        await callback.answer("❌ Не найдено", show_alert=True)
         return
 
     new_enabled = not item.get("notify_enabled", True)
     toggle_watchlist_notifications(uid, wl_id, new_enabled)
 
-    if new_enabled:
-        await callback.answer("🔔 Уведомления включены" if lang == "ru" else "🔔 Notifications on")
-    else:
-        await callback.answer("🔕 Уведомления отключены" if lang == "ru" else "🔕 Notifications off")
+    await callback.answer(
+        ("🔔 Уведомления ВКЛ" if new_enabled else "🔕 Уведомления ВЫКЛ")
+        if lang == "ru" else
+        ("🔔 ON" if new_enabled else "🔕 OFF")
+    )
 
-    # Перерисовываем
     text = _format_watchlist_item(uid, wl_id)
     kb = get_watchlist_item_keyboard(uid, wl_id, new_enabled)
     try:
@@ -1156,24 +2070,405 @@ async def watchlist_remove_callback(callback: types.CallbackQuery):
 
     success = remove_from_watchlist(uid, wl_id)
     if success:
-        await callback.answer(
-            "✅ Удалено из Watchlist" if lang == "ru" else "✅ Removed from Watchlist",
-            show_alert=False,
-        )
+        await callback.answer("✅ Удалено" if lang == "ru" else "✅ Removed")
         text = _format_watchlist_list(uid)
         try:
             await callback.message.edit_text(text)
         except Exception:
             pass
     else:
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+# ═══════════════════════════════════════════
+# AUTHOR CALLBACKS
+# ═══════════════════════════════════════════
+
+@dp.callback_query_handler(lambda c: c.data.startswith("auth_view_"))
+async def author_view_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    try:
+        author_id = int(callback.data.replace("auth_view_", ""))
+    except ValueError:
+        return
+
+    text = _format_author_profile(uid, author_id)
+    kb = get_author_profile_keyboard(uid, author_id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("auth_sub_"))
+async def author_subscribe_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        author_id = int(callback.data.replace("auth_sub_", ""))
+    except ValueError:
+        return
+
+    if uid == author_id:
         await callback.answer(
-            "❌ Не удалось удалить" if lang == "ru" else "❌ Could not remove",
+            "Нельзя подписаться на себя" if lang == "ru" else "Can't subscribe to yourself",
+            show_alert=True,
+        )
+        return
+
+    success = subscribe_to_author(uid, author_id)
+    if success:
+        await callback.answer(
+            "✅ Подписка оформлена!" if lang == "ru" else "✅ Subscribed!",
+            show_alert=False,
+        )
+        # Обновляем сообщение
+        text = _format_author_profile(uid, author_id)
+        kb = get_author_profile_keyboard(uid, author_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            pass
+
+        # Уведомим автора
+        try:
+            name = callback.from_user.username or callback.from_user.first_name or str(uid)
+            await bot.send_message(
+                author_id,
+                f"🎉 У тебя новый подписчик!\n\n@{name}"
+                if lang == "ru"
+                else f"🎉 New subscriber!\n\n@{name}"
+            )
+        except Exception:
+            pass
+    else:
+        await callback.answer(
+            "Уже подписан" if lang == "ru" else "Already subscribed",
             show_alert=True,
         )
 
 
+@dp.callback_query_handler(lambda c: c.data.startswith("auth_unsub_"))
+async def author_unsubscribe_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        author_id = int(callback.data.replace("auth_unsub_", ""))
+    except ValueError:
+        return
+
+    success = unsubscribe_from_author(uid, author_id)
+    if success:
+        await callback.answer(
+            "✅ Отписка" if lang == "ru" else "✅ Unsubscribed",
+            show_alert=False,
+        )
+        text = _format_author_profile(uid, author_id)
+        kb = get_author_profile_keyboard(uid, author_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            pass
+    else:
+        await callback.answer("❌", show_alert=True)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("auth_posts_"))
+async def author_posts_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        author_id = int(callback.data.replace("auth_posts_", ""))
+    except ValueError:
+        return
+
+    posts = get_author_posts(author_id, limit=15)
+
+    if not posts:
+        if lang == "ru":
+            text = "📝 У автора пока нет прогнозов"
+        else:
+            text = "📝 No posts yet"
+    else:
+        author = get_author_profile(author_id)
+        name = author.get("username") or author.get("first_name") or str(author_id) if author else str(author_id)
+
+        if lang == "ru":
+            text = f"📝 Прогнозы @{name} ({len(posts)})\n\n"
+        else:
+            text = f"📝 Posts by @{name} ({len(posts)})\n\n"
+
+        for i, p in enumerate(posts, 1):
+            q = p.get("question", "")[:55]
+            pred = p.get("display_prediction", "")[:30]
+            donations = p.get("total_donations_ton", 0) or 0
+            text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
+            if donations > 0:
+                text += f"   💝 {donations:.2f} TON\n"
+            text += f"   /post_{p['id']}\n\n"
+
+    kb = InlineKeyboardMarkup()
+    back_label = "⬅️ К профилю" if lang == "ru" else "⬅️ To profile"
+    kb.add(InlineKeyboardButton(back_label, callback_data=f"auth_view_{author_id}"))
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "auth_list")
+async def auth_list_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    text = _format_authors_list(uid)
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
+
+
+@dp.callback_query_handler(lambda c: c.data == "subs_list")
+async def subs_list_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    text = _format_subscriptions(uid)
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("sub_mute_"))
+async def subscription_mute_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        author_id = int(callback.data.replace("sub_mute_", ""))
+    except ValueError:
+        return
+
+    subs = get_user_subscriptions(uid)
+    current = next((s for s in subs if s["author_id"] == author_id), None)
+    if not current:
+        await callback.answer("❌", show_alert=True)
+        return
+
+    new_enabled = not current.get("notifications_enabled", True)
+    toggle_subscription_notifications(uid, author_id, new_enabled)
+
+    await callback.answer(
+        ("🔔 Уведомления ВКЛ" if new_enabled else "🔕 ВЫКЛ")
+        if lang == "ru" else
+        ("🔔 ON" if new_enabled else "🔕 OFF")
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("pub_post_"))
+async def publish_post_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Автор публикует анализ как прогноз."""
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    if not is_author(uid):
+        await callback.answer(
+            "❌ Только для авторов" if lang == "ru" else "❌ Authors only",
+            show_alert=True,
+        )
+        return
+
+    # Проверка дневного лимита
+    if not can_author_post_today(uid):
+        max_per_day = get_setting("max_posts_per_day", "5")
+        msg = (
+            f"❌ Превышен дневной лимит: {max_per_day} постов"
+            if lang == "ru"
+            else f"❌ Daily limit: {max_per_day} posts"
+        )
+        await callback.answer(msg, show_alert=True)
+        return
+
+    analysis = last_analysis_cache.get(uid)
+    if not analysis:
+        await callback.answer(
+            "Анализ устарел. Сделай новый." if lang == "ru" else "Expired",
+            show_alert=True,
+        )
+        return
+
+    # Переходим в state ввода комментария
+    await state.update_data(analysis=analysis)
+    await AuthorStates.waiting_post_comment.set()
+
+    if lang == "ru":
+        text = (
+            f"📢 Публикация прогноза\n\n"
+            f"📌 {analysis.get('question', '')[:80]}\n\n"
+            f"Добавь свой комментарий к прогнозу (до 500 символов).\n"
+            f"Расскажи почему ты считаешь именно так.\n\n"
+            f"Или отправь /skip чтобы опубликовать без комментария."
+        )
+    else:
+        text = (
+            f"📢 Publish forecast\n\n"
+            f"📌 {analysis.get('question', '')[:80]}\n\n"
+            f"Add your comment (up to 500 chars).\n"
+            f"Or send /skip to publish without comment."
+        )
+
+    await callback.message.answer(text)
+
+
+@dp.message_handler(commands=["skip"], state=AuthorStates.waiting_post_comment)
+async def skip_post_comment(message: types.Message, state: FSMContext):
+    await _publish_post_with_comment(message, state, comment="")
+
+
+@dp.message_handler(state=AuthorStates.waiting_post_comment)
+async def save_post_comment(message: types.Message, state: FSMContext):
+    comment = message.text.strip()[:500]
+    await _publish_post_with_comment(message, state, comment=comment)
+
+
+async def _publish_post_with_comment(message: types.Message, state: FSMContext, comment: str):
+    """Общая логика публикации поста."""
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    data = await state.get_data()
+    analysis = data.get("analysis") or last_analysis_cache.get(uid)
+    await state.finish()
+
+    if not analysis:
+        msg = "❌ Анализ устарел" if lang == "ru" else "❌ Analysis expired"
+        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        return
+
+    market_slug = analysis.get("market_slug", "") or _extract_slug_from_url(analysis.get("url", ""))
+    if not market_slug:
+        msg = "❌ Не удалось определить рынок" if lang == "ru" else "❌ Cannot detect market"
+        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        return
+
+    # Создаём пост
+    post_id = create_author_post(
+        author_id=uid,
+        market_slug=market_slug,
+        market_url=analysis.get("url", ""),
+        question=analysis.get("question", ""),
+        category=analysis.get("category", ""),
+        display_prediction=analysis.get("display_prediction", "") or analysis.get("probability", ""),
+        confidence=analysis.get("confidence", ""),
+        market_probability=analysis.get("market_probability", ""),
+        alpha_label=analysis.get("alpha_label", ""),
+        author_comment=comment,
+        full_analysis=analysis,
+    )
+
+    if not post_id:
+        msg = "❌ Ошибка публикации" if lang == "ru" else "❌ Publish error"
+        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        return
+
+    if lang == "ru":
+        success_msg = (
+            f"✅ Прогноз опубликован!\n\n"
+            f"📝 /post_{post_id}\n"
+            f"👥 Подписчикам отправлены уведомления"
+        )
+    else:
+        success_msg = (
+            f"✅ Post published!\n\n"
+            f"📝 /post_{post_id}\n"
+            f"👥 Subscribers notified"
+        )
+
+    await message.answer(success_msg, reply_markup=get_main_keyboard(uid))
+
+    # Рассылаем подписчикам
+    subscribers = get_author_subscribers(uid, notifications_only=True)
+    if subscribers:
+        await _notify_subscribers(uid, post_id, analysis, comment, subscribers)
+
+
+async def _notify_subscribers(author_id: int, post_id: int, analysis: dict,
+                               comment: str, subscribers: list):
+    """Рассылает уведомления подписчикам автора."""
+    author = get_user(author_id)
+    author_name = (author.get("username") or author.get("first_name") or str(author_id)) if author else str(author_id)
+
+    question = analysis.get("question", "")[:80]
+    display_pred = analysis.get("display_prediction", "") or analysis.get("probability", "")
+
+    sent = 0
+    failed = 0
+    for sub_id in subscribers:
+        try:
+            sub_lang = get_user_language(sub_id)
+
+            if sub_lang == "ru":
+                text = (
+                    f"📢 Новый прогноз от @{author_name}\n\n"
+                    f"📌 {question}\n"
+                    f"🎯 {display_pred}\n"
+                )
+                if comment:
+                    text += f"\n💬 {comment[:200]}\n"
+                text += f"\n📝 Читать: /post_{post_id}"
+            else:
+                text = (
+                    f"📢 New post from @{author_name}\n\n"
+                    f"📌 {question}\n"
+                    f"🎯 {display_pred}\n"
+                )
+                if comment:
+                    text += f"\n💬 {comment[:200]}\n"
+                text += f"\n📝 Read: /post_{post_id}"
+
+            await bot.send_message(sub_id, text)
+            sent += 1
+            import asyncio
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            failed += 1
+            print(f"Notify sub {sub_id} error: {e}")
+
+    print(f"📢 Author {author_id} post {post_id}: notified {sent}/{len(subscribers)} ({failed} failed)")
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("post_delete_"))
+async def post_delete_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        post_id = int(callback.data.replace("post_delete_", ""))
+    except ValueError:
+        return
+
+    post = get_author_post(post_id)
+    if not post or post.get("author_id") != uid:
+        await callback.answer("❌ Нет прав" if lang == "ru" else "❌ No rights", show_alert=True)
+        return
+
+    success = delete_author_post(post_id, uid)
+    if success:
+        await callback.answer("✅ Удалено" if lang == "ru" else "✅ Deleted")
+        try:
+            msg = "🗑 Пост удалён" if lang == "ru" else "🗑 Post deleted"
+            await callback.message.edit_text(msg)
+        except Exception:
+            pass
+    else:
+        await callback.answer("❌", show_alert=True)
+
+
+# ═══════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════
+
 def _extract_slug_from_url(url: str) -> str:
-    """Извлекает slug из URL Polymarket."""
     if not url:
         return ""
     try:
@@ -1189,7 +2484,6 @@ def _extract_slug_from_url(url: str) -> str:
 
 
 def _parse_probability(prob_str: str) -> float:
-    """Извлекает число из строки вида '75%' или 'Yes 75% / No 25%'."""
     if not prob_str:
         return 0.0
     try:
@@ -1203,7 +2497,7 @@ def _parse_probability(prob_str: str) -> float:
 
 
 # ═══════════════════════════════════════════
-# HANDLERS: ANALYSIS / SIGNALS
+# ANALYSIS / SIGNALS
 # ═══════════════════════════════════════════
 
 @dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"])
@@ -1213,15 +2507,8 @@ async def analyze_prompt_handler(message: types.Message):
     lang = get_user_lang(uid)
 
     if can_use_free_trial(uid, "analyses"):
-        trial_text = (
-            "🎁 У тебя есть бесплатный пробный анализ!"
-            if lang == "ru"
-            else "🎁 You have a free trial analysis!"
-        )
-        await message.answer(
-            f"{trial_text}\n\n{t(uid, 'send_link')}",
-            reply_markup=get_main_keyboard(uid),
-        )
+        trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 Free trial available!"
+        await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=get_main_keyboard(uid))
     else:
         await message.answer(t(uid, "send_link"), reply_markup=get_main_keyboard(uid))
 
@@ -1267,7 +2554,6 @@ async def signal_category_handler(callback: types.CallbackQuery):
         async def notify_when_ready():
             import asyncio
             await asyncio.sleep(5)
-            from agents.opportunity_agent import OpportunityAgent
             try:
                 agent = OpportunityAgent()
                 result = agent.run(lang=lang, limit=2, category_filter=category)
@@ -1392,17 +2678,13 @@ async def personal_signal_handler(message: types.Message):
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
 
-# ═══════════════════════════════════════════
-# HANDLERS: BALANCE / SUBSCRIPTION / REFERRALS
-# ═══════════════════════════════════════════
-
 @dp.message_handler(lambda m: m.text in ["💰 Баланс", "💰 Balance"])
 async def balance_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     user = get_user(uid)
     if not user:
-        await message.answer("❌ Пользователь не найден")
+        await message.answer("❌")
         return
 
     lang = get_user_lang(uid)
@@ -1423,66 +2705,54 @@ async def balance_handler(message: types.Message):
         daily_text = ""
         if subscribed or user["is_vip"]:
             daily_text = (
-                f"\n📊 Анализов сегодня: {daily['analyses']}/{sub_analyses_limit}\n"
-                f"💡 Сигналов сегодня: {daily['opportunities']}/{sub_opp_limit}"
+                f"\n📊 Анализов: {daily['analyses']}/{sub_analyses_limit}\n"
+                f"💡 Сигналов: {daily['opportunities']}/{sub_opp_limit}"
             )
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
             al = max(0, trial["analyses_limit"] - trial["analyses_used"])
             ol = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
             if al > 0 or ol > 0:
-                trial_text = (
-                    f"\n\n🎁 Пробный период:\n"
-                    f"Анализов осталось: {al}\n"
-                    f"Сигналов осталось: {ol}"
-                )
+                trial_text = f"\n\n🎁 Пробный:\nАнализов: {al}\nСигналов: {ol}"
         text = (
-            f"💰 Ваш баланс\n\n"
+            f"💰 Баланс\n\n"
             f"Токены: {user['token_balance']}\n"
-            f"Анализов всего: {user['total_analyses']}\n"
-            f"Сигналов всего: {user['total_opportunities']}\n"
+            f"Анализов: {user['total_analyses']}\n"
+            f"Сигналов: {user['total_opportunities']}\n"
             f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
             f"Подписка: {sub_text}"
             f"{daily_text}"
             f"{trial_text}\n\n"
-            f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
-            f"Анализ: {analysis_price} токенов\n"
-            f"Сигнал часа: {cached_price} токенов\n"
-            f"Личный сигнал: {opp_price} токенов\n"
-            f"⭐ Watchlist: {watchlist_price} токенов"
+            f"{'💳 Платный' if paid_mode == 'on' else '🆓 Бесплатный'}\n"
+            f"Анализ: {analysis_price} | Сигнал: {cached_price}\n"
+            f"Личный: {opp_price} | Watchlist: {watchlist_price}"
         )
     else:
         sub_text = f"✅ Until {sub_until[:10]}" if subscribed and sub_until else "❌ No"
         daily_text = ""
         if subscribed or user["is_vip"]:
             daily_text = (
-                f"\n📊 Analyses today: {daily['analyses']}/{sub_analyses_limit}\n"
-                f"💡 Signals today: {daily['opportunities']}/{sub_opp_limit}"
+                f"\n📊 Analyses: {daily['analyses']}/{sub_analyses_limit}\n"
+                f"💡 Signals: {daily['opportunities']}/{sub_opp_limit}"
             )
         trial_text = ""
         if get_setting("free_trial_enabled", "on") == "on":
             al = max(0, trial["analyses_limit"] - trial["analyses_used"])
             ol = max(0, trial["opportunities_limit"] - trial["opportunities_used"])
             if al > 0 or ol > 0:
-                trial_text = (
-                    f"\n\n🎁 Free trial:\n"
-                    f"Analyses left: {al}\n"
-                    f"Signals left: {ol}"
-                )
+                trial_text = f"\n\n🎁 Trial:\nAnalyses: {al}\nSignals: {ol}"
         text = (
-            f"💰 Your Balance\n\n"
+            f"💰 Balance\n\n"
             f"Tokens: {user['token_balance']}\n"
-            f"Total analyses: {user['total_analyses']}\n"
-            f"Total signals: {user['total_opportunities']}\n"
-            f"VIP: {'👑 Yes' if user['is_vip'] else 'No'}\n"
-            f"Subscription: {sub_text}"
+            f"Analyses: {user['total_analyses']}\n"
+            f"Signals: {user['total_opportunities']}\n"
+            f"VIP: {'👑' if user['is_vip'] else 'No'}\n"
+            f"Sub: {sub_text}"
             f"{daily_text}"
             f"{trial_text}\n\n"
-            f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
-            f"Analysis: {analysis_price} tokens\n"
-            f"Signal of hour: {cached_price} tokens\n"
-            f"Personal signal: {opp_price} tokens\n"
-            f"⭐ Watchlist: {watchlist_price} tokens"
+            f"{'💳 Paid' if paid_mode == 'on' else '🆓 Free'}\n"
+            f"Analysis: {analysis_price} | Signal: {cached_price}\n"
+            f"Personal: {opp_price} | Watchlist: {watchlist_price}"
         )
 
     await message.answer(text, reply_markup=get_main_keyboard(uid))
@@ -1493,17 +2763,11 @@ async def buy_tokens_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    text = (
-        "💎 Купить токены\n\nНажми кнопку ниже чтобы открыть кассу 👇"
-        if lang == "ru"
-        else "💎 Buy Tokens\n\nTap the button below to open payment 👇"
-    )
+    text = "💎 Купить токены\n\nНажми кнопку 👇" if lang == "ru" else "💎 Buy Tokens\n\nTap button 👇"
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
 
 
-@dp.message_handler(lambda m: m.text in [
-    "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active"
-])
+@dp.message_handler(lambda m: m.text in ["🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active"])
 async def subscription_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -1519,52 +2783,42 @@ async def subscription_handler(message: types.Message):
     if subscribed and sub_until:
         if lang == "ru":
             text = (
-                f"✅ Подписка активна\n\nДействует до: {sub_until[:10]}\n\n"
-                f"С подпиской ты получаешь:\n"
-                f"• 🔔 Ежедневные сигналы\n"
-                f"• ⚡ Сигнал часа бесплатно\n"
-                f"• 📊 {sub_analyses} анализов в день\n"
-                f"• 💡 {sub_opp} сигнала в день\n"
-                f"• ⭐ Watchlist бесплатно ({wl_vip_limit} рынков)\n"
-                f"• 🚀 Приоритетный AI анализ\n\n"
-                f"Продлить — {sub_price} TON / {sub_days} дней 👇"
+                f"✅ Подписка до {sub_until[:10]}\n\n"
+                f"• Ежедневные сигналы\n"
+                f"• ⚡ Сигнал часа free\n"
+                f"• 📊 {sub_analyses} анализов/день\n"
+                f"• 💡 {sub_opp} сигнала/день\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit})\n\n"
+                f"Продлить — {sub_price} TON / {sub_days} дней"
             )
         else:
             text = (
-                f"✅ Subscription active\n\nValid until: {sub_until[:10]}\n\n"
-                f"With subscription you get:\n"
-                f"• 🔔 Daily signals\n"
-                f"• ⚡ Signal of the hour free\n"
-                f"• 📊 {sub_analyses} analyses per day\n"
-                f"• 💡 {sub_opp} signals per day\n"
-                f"• ⭐ Watchlist free ({wl_vip_limit} markets)\n"
-                f"• 🚀 Priority AI analysis\n\n"
-                f"Renew — {sub_price} TON / {sub_days} days 👇"
+                f"✅ Sub until {sub_until[:10]}\n\n"
+                f"• Daily signals\n"
+                f"• ⚡ Signal of hour free\n"
+                f"• 📊 {sub_analyses} analyses/day\n"
+                f"• 💡 {sub_opp} signals/day\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit})\n\n"
+                f"Renew — {sub_price} TON / {sub_days} days"
             )
     else:
         if lang == "ru":
             text = (
-                f"🔔 Подписка DeepAlpha\n\nЦена: {sub_price} TON / {sub_days} дней\n\n"
-                f"Что включено:\n"
-                f"• 🔔 Ежедневные сигналы\n"
-                f"• ⚡ Сигнал часа бесплатно\n"
-                f"• 📊 {sub_analyses} анализов в день\n"
-                f"• 💡 {sub_opp} сигнала в день\n"
-                f"• ⭐ Watchlist бесплатно ({wl_vip_limit} рынков)\n"
-                f"• 🚀 Приоритетный AI анализ\n\n"
-                f"Оплати через кассу 👇"
+                f"🔔 Подписка {sub_price} TON / {sub_days} дней\n\n"
+                f"• Ежедневные сигналы\n"
+                f"• ⚡ Сигнал часа free\n"
+                f"• 📊 {sub_analyses} анализов/день\n"
+                f"• 💡 {sub_opp} сигнала/день\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit})"
             )
         else:
             text = (
-                f"🔔 DeepAlpha Subscription\n\nPrice: {sub_price} TON / {sub_days} days\n\n"
-                f"Includes:\n"
-                f"• 🔔 Daily signals\n"
-                f"• ⚡ Signal of the hour free\n"
-                f"• 📊 {sub_analyses} analyses per day\n"
-                f"• 💡 {sub_opp} signals per day\n"
-                f"• ⭐ Watchlist free ({wl_vip_limit} markets)\n"
-                f"• 🚀 Priority AI analysis\n\n"
-                f"Pay via checkout 👇"
+                f"🔔 Sub {sub_price} TON / {sub_days} days\n\n"
+                f"• Daily signals\n"
+                f"• ⚡ Signal of hour free\n"
+                f"• 📊 {sub_analyses} analyses/day\n"
+                f"• 💡 {sub_opp} signals/day\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit})"
             )
 
     await message.answer(text, reply_markup=get_subscribe_keyboard(lang))
@@ -1582,27 +2836,27 @@ async def referrals_handler(message: types.Message):
 
     if lang == "ru":
         text = (
-            f"👥 Реферальная программа\n\n"
-            f"Ваша ссылка:\n`{ref_link}`\n\n"
-            f"Приглашено друзей: {user['total_referrals'] if user else 0}\n"
+            f"👥 Рефералы\n\n"
+            f"Ссылка:\n`{ref_link}`\n\n"
+            f"Приглашено: {user['total_referrals'] if user else 0}\n"
             f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
-            f"За каждую покупку реферала вы получаете {ref_percent}% в токенах.\n\n"
+            f"Ты получаешь {ref_percent}% с покупок рефералов\n\n"
         )
         if referrals:
-            text += "Ваши рефералы:\n"
+            text += "Список:\n"
             for r in referrals[:5]:
                 name = r.get("username") or r.get("first_name") or str(r["user_id"])
                 text += f"• @{name} — {r['total_analyses']} анализов\n"
     else:
         text = (
-            f"👥 Referral Program\n\n"
-            f"Your link:\n`{ref_link}`\n\n"
-            f"Friends invited: {user['total_referrals'] if user else 0}\n"
+            f"👥 Referrals\n\n"
+            f"Link:\n`{ref_link}`\n\n"
+            f"Invited: {user['total_referrals'] if user else 0}\n"
             f"Earned: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
-            f"You get {ref_percent}% of each referral purchase in tokens.\n\n"
+            f"You get {ref_percent}% from each referral purchase\n\n"
         )
         if referrals:
-            text += "Your referrals:\n"
+            text += "List:\n"
             for r in referrals[:5]:
                 name = r.get("username") or r.get("first_name") or str(r["user_id"])
                 text += f"• @{name} — {r['total_analyses']} analyses\n"
@@ -1648,16 +2902,14 @@ async def top_handler(message: types.Message):
         score = r["opportunity_score"]
         score_bar = "🟩" * min(int(score / 20), 5) + "⬜" * (5 - min(int(score / 20), 5))
         lines.append(f"{i}. 📌 {_escape(r['question'][:50])}")
-        label_score = "Скор" if lang == "ru" else "Score"
-        label_conf = "Уверенность" if lang == "ru" else "Confidence"
-        lines.append(f"   {label_score}: {score} {score_bar}")
-        lines.append(f"   {label_conf}: {r['confidence']}")
+        lines.append(f"   Score: {score} {score_bar}")
+        lines.append(f"   {r['confidence']}")
         lines.append("")
     await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
 
 
 # ═══════════════════════════════════════════
-# HANDLERS: URL ANALYSIS
+# URL ANALYSIS
 # ═══════════════════════════════════════════
 
 @dp.message_handler(lambda m: m.text and "polymarket.com" in m.text)
@@ -1712,7 +2964,7 @@ async def analyze_url_handler(message: types.Message):
 
         increment_user_stat(uid, "total_analyses")
 
-        # Сохраняем результат в кеш для кнопки Watchlist
+        # Кешируем для кнопок Watchlist и Опубликовать
         result["url"] = url
         result["market_slug"] = _extract_slug_from_url(url)
         last_analysis_cache[uid] = result
@@ -1720,17 +2972,14 @@ async def analyze_url_handler(message: types.Message):
         text = _format_analysis(result, uid)
         share_kb = get_share_analysis_keyboard(uid, result)
         await message.answer(text, reply_markup=share_kb, parse_mode="HTML")
-        await message.answer(
-            t(uid, "fallback"),
-            reply_markup=get_main_keyboard(uid),
-        )
+        await message.answer(t(uid, "fallback"), reply_markup=get_main_keyboard(uid))
 
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
 
 # ═══════════════════════════════════════════
-# INLINE QUERY HANDLER
+# INLINE QUERY
 # ═══════════════════════════════════════════
 
 @dp.inline_handler()
@@ -1787,19 +3036,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                         thumb_url="https://em-content.zobj.net/source/apple/354/chart-increasing_1f4c8.png",
                     )
                 )
-            else:
-                error_label = "❌ Не удалось загрузить рынок" if lang == "ru" else "❌ Could not load market"
-                error_desc = "Проверь что ссылка правильная" if lang == "ru" else "Check the link"
-                results.append(
-                    types.InlineQueryResultArticle(
-                        id="error_url",
-                        title=error_label,
-                        description=error_desc,
-                        input_message_content=types.InputTextMessageContent(
-                            message_text=f"❌ {error_label}\n\nhttps://t.me/{BOT_USERNAME}",
-                        ),
-                    )
-                )
 
         elif not query_text or len(query_text) < 5:
             signals = get_top_cached_signals(limit=5)
@@ -1828,41 +3064,23 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                         )
                     )
             else:
-                empty_label = "💡 Отправь ссылку Polymarket" if lang == "ru" else "💡 Send Polymarket link"
-                empty_desc = (
-                    "Пример: @DeepAlphaAI_bot https://polymarket.com/..."
-                    if lang == "ru"
-                    else "Example: @DeepAlphaAI_bot https://polymarket.com/..."
-                )
                 results.append(
                     types.InlineQueryResultArticle(
                         id="empty_hint",
-                        title=empty_label,
-                        description=empty_desc,
+                        title="💡 Отправь ссылку Polymarket" if lang == "ru" else "💡 Send Polymarket link",
+                        description="Пример: @DeepAlphaAI_bot https://..." if lang == "ru" else "Ex: @DeepAlphaAI_bot https://...",
                         input_message_content=types.InputTextMessageContent(
-                            message_text=(
-                                f"🤖 DeepAlpha AI — анализ Polymarket\n\n"
-                                f"👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}"
-                                if lang == "ru"
-                                else f"🤖 DeepAlpha AI — Polymarket analysis\n\n"
-                                f"👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}"
-                            ),
+                            message_text=f"🤖 DeepAlpha AI\n\n👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}",
                         ),
                     )
                 )
 
         else:
-            hint_label = "💡 Вставь ссылку Polymarket" if lang == "ru" else "💡 Paste Polymarket link"
-            hint_desc = (
-                "Нужна ссылка вида polymarket.com/event/..."
-                if lang == "ru"
-                else "Need link like polymarket.com/event/..."
-            )
             results.append(
                 types.InlineQueryResultArticle(
                     id="hint_paste_url",
-                    title=hint_label,
-                    description=hint_desc,
+                    title="💡 Вставь ссылку Polymarket" if lang == "ru" else "💡 Paste Polymarket link",
+                    description="polymarket.com/event/..." if lang == "ru" else "polymarket.com/event/...",
                     input_message_content=types.InputTextMessageContent(
                         message_text=f"🤖 DeepAlpha AI\n\n👉 https://t.me/{BOT_USERNAME}?start=ref_{uid}",
                     ),
@@ -1871,8 +3089,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 
     except Exception as e:
         print(f"inline_query_handler error: {e}")
-        import traceback
-        traceback.print_exc()
 
     try:
         await bot.answer_inline_query(
@@ -1896,4 +3112,3 @@ async def fallback_handler(message: types.Message):
         t(message.from_user.id, "fallback"),
         reply_markup=get_main_keyboard(message.from_user.id),
     )
-
