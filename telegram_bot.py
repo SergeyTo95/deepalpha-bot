@@ -1,3 +1,4 @@
+
 import os
 import logging
 from typing import Dict
@@ -19,6 +20,10 @@ from db.database import (
     can_use_free_trial, use_free_trial, get_free_trial_status,
     get_accuracy_stats, get_author_profile, is_author,
     set_user_language, get_user_language,
+    add_to_watchlist, remove_from_watchlist, get_user_watchlist,
+    count_user_watchlist, can_add_to_watchlist,
+    toggle_watchlist_notifications, get_watchlist_by_id,
+    add_watchlist_extra_slots,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -40,8 +45,12 @@ dp = Dispatcher(bot, storage=storage)
 
 init_db()
 
-# Кеш языков в памяти для скорости (обновляется из БД)
+# Кеш языков в памяти
 user_languages: Dict[int, str] = {}
+
+# Временное хранение контекста анализа (для кнопки "В Watchlist")
+# key = user_id, value = последний анализ
+last_analysis_cache: Dict[int, dict] = {}
 
 CATEGORY_LABELS = {
     "ru": {
@@ -88,11 +97,6 @@ TEXTS = {
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки\nОбычно занимает 30-60 секунд",
         "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
         "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
-        "share_caption": "📤 Поделиться",
-        "share_text": "🔍 Анализ рынка Polymarket\n\n",
-        "my_profile": "👤 Мой профиль",
-        "share_profile": "📤 Поделиться профилем",
-        "all_badges": "🏆 Все бейджи",
     },
     "en": {
         "start": (
@@ -121,11 +125,6 @@ TEXTS = {
         "deep_signal_searching": "🧠 Searching personal signal...\n\n⏱ Analyzing markets\nUsually takes 30-60 seconds",
         "free_trial_analysis": "🎁 Using free trial analysis!",
         "free_trial_signal": "🎁 Using free trial signal!",
-        "share_caption": "📤 Share",
-        "share_text": "🔍 Polymarket analysis\n\n",
-        "my_profile": "👤 My Profile",
-        "share_profile": "📤 Share profile",
-        "all_badges": "🏆 All badges",
     }
 }
 
@@ -135,7 +134,6 @@ TEXTS = {
 # ═══════════════════════════════════════════
 
 def get_user_lang(user_id: int) -> str:
-    """Возвращает язык из кеша, если нет — читает из БД."""
     if user_id in user_languages:
         return user_languages[user_id]
     lang = get_user_language(user_id)
@@ -144,7 +142,6 @@ def get_user_lang(user_id: int) -> str:
 
 
 def set_lang(user_id: int, lang: str) -> None:
-    """Устанавливает язык в БД и в кеше."""
     user_languages[user_id] = lang
     set_user_language(user_id, lang)
 
@@ -165,8 +162,9 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
         kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
-        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📊 История"))
-        kb.add(KeyboardButton("💰 Баланс"), KeyboardButton("💎 Купить токены"))
+        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("💎 Купить токены"))
         kb.add(
             KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
             KeyboardButton("👥 Рефералы"),
@@ -175,8 +173,9 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
-        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📊 History"))
-        kb.add(KeyboardButton("💰 Balance"), KeyboardButton("💎 Buy tokens"))
+        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("💎 Buy tokens"))
         kb.add(
             KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
             KeyboardButton("👥 Referrals"),
@@ -222,8 +221,7 @@ def get_subscribe_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKeyboardMarkup:
     """
-    Inline-клавиатура под анализом с кнопкой "Поделиться".
-    При нажатии открывается Telegram share-диалог с готовым текстом и реф-ссылкой.
+    Inline-клавиатура под анализом: Watchlist + Поделиться + Polymarket.
     """
     lang = get_user_lang(user_id)
 
@@ -233,7 +231,7 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     category = analysis_result.get("category", "")
     url = analysis_result.get("url", "")
 
-    # Текст тизера для шеринга
+    # Текст для шеринга
     if lang == "ru":
         share_text = (
             f"🔍 DeepAlpha анализ:\n\n"
@@ -253,17 +251,24 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
             f"👉 Get your analysis: https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
         )
 
-    # Telegram share URL
     from urllib.parse import quote
     share_url = f"https://t.me/share/url?url={quote(url or f'https://t.me/{BOT_USERNAME}')}&text={quote(share_text)}"
 
-    kb = InlineKeyboardMarkup(row_width=2)
-    share_label = "📤 Поделиться" if lang == "ru" else "📤 Share"
-    open_label = "🔗 Polymarket" if lang == "ru" else "🔗 Polymarket"
+    watchlist_price = get_setting("watchlist_price_tokens", "5")
 
-    kb.add(
-        InlineKeyboardButton(share_label, url=share_url),
-    )
+    kb = InlineKeyboardMarkup(row_width=2)
+    if lang == "ru":
+        watchlist_label = f"⭐ В Watchlist ({watchlist_price} ток.)"
+        share_label = "📤 Поделиться"
+        open_label = "🔗 Polymarket"
+    else:
+        watchlist_label = f"⭐ Add to Watchlist ({watchlist_price} tok.)"
+        share_label = "📤 Share"
+        open_label = "🔗 Polymarket"
+
+    # Кнопка Watchlist — callback (обрабатывается отдельно)
+    kb.add(InlineKeyboardButton(watchlist_label, callback_data=f"wl_add_{user_id}"))
+    kb.add(InlineKeyboardButton(share_label, url=share_url))
     if url:
         kb.add(InlineKeyboardButton(open_label, url=url))
 
@@ -271,7 +276,6 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
 
 
 def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура профиля: поделиться, все бейджи."""
     lang = get_user_lang(user_id)
     from urllib.parse import quote
 
@@ -290,6 +294,26 @@ def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(share_label, url=share_url),
         InlineKeyboardButton(badges_label, callback_data="show_all_badges"),
     )
+    return kb
+
+
+def get_watchlist_item_keyboard(user_id: int, watchlist_id: int, notify_enabled: bool) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    if notify_enabled:
+        mute_label = "🔕 Отключить уведомления" if lang == "ru" else "🔕 Mute"
+    else:
+        mute_label = "🔔 Включить уведомления" if lang == "ru" else "🔔 Unmute"
+
+    remove_label = "❌ Удалить" if lang == "ru" else "❌ Remove"
+    back_label = "⬅️ Назад к списку" if lang == "ru" else "⬅️ Back to list"
+
+    kb.add(
+        InlineKeyboardButton(mute_label, callback_data=f"wl_mute_{watchlist_id}"),
+        InlineKeyboardButton(remove_label, callback_data=f"wl_remove_{watchlist_id}"),
+    )
+    kb.add(InlineKeyboardButton(back_label, callback_data="wl_list"))
     return kb
 
 
@@ -414,8 +438,6 @@ def _format_analysis(result: dict, uid: int) -> str:
     confidence = _translate_confidence(confidence_raw, lang)
     conf_emoji = _confidence_emoji(confidence_raw)
 
-    # Поля из CommunicationAgent (если уже есть в result от ChiefAgent)
-    # или запрашиваем заново
     if "display_prediction" in result and result["display_prediction"]:
         display_prediction = _escape(result.get("display_prediction", ""))
         semantic_reasoning = _escape(result.get("reasoning", ""))
@@ -553,10 +575,6 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
 
 
 def _format_profile(user_id: int, target_user_id: int = None) -> str:
-    """
-    Форматирует профиль пользователя.
-    Если target_user_id указан — показывает чужой профиль.
-    """
     uid = target_user_id if target_user_id else user_id
     lang = get_user_lang(user_id)
 
@@ -565,10 +583,8 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
         return "❌ Пользователь не найден" if lang == "ru" else "❌ User not found"
 
     badges = get_user_badges(uid)
-    stats = get_accuracy_stats()
     author_profile = get_author_profile(uid)
 
-    # Считаем точность конкретного пользователя
     from db.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
@@ -597,37 +613,26 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
     badges_line = format_badges_line(badges, lang) if badges else ""
     badges_count = len(badges)
 
-    # Автор?
     author_line = ""
     if user.get("is_vip"):
-        author_line += "👑 VIP\n" if lang == "ru" else "👑 VIP\n"
+        author_line += "👑 VIP\n"
     if author_profile and author_profile.get("is_author"):
-        author_line += (
-            f"📢 Автор прогнозов\n"
-            if lang == "ru"
-            else f"📢 Prediction author\n"
-        )
+        author_line += "📢 Автор прогнозов\n" if lang == "ru" else "📢 Prediction author\n"
 
     if lang == "ru":
-        text = (
-            f"👤 Профиль {username_display}\n"
-            f"{'─' * 30}\n\n"
-        )
+        text = f"👤 Профиль {username_display}\n{'─' * 30}\n\n"
         if badges_line:
             text += f"{badges_line}  ({badges_count} бейджей)\n\n"
         else:
-            text += f"Бейджей пока нет — продолжай анализировать!\n\n"
-
+            text += "Бейджей пока нет — продолжай анализировать!\n\n"
         if author_line:
             text += author_line + "\n"
-
         text += (
             f"📊 Статистика\n"
             f"Анализов: {user['total_analyses']}\n"
             f"Сигналов: {user['total_opportunities']}\n"
             f"Рефералов: {user.get('total_referrals', 0)}\n"
         )
-
         if user_resolved > 0:
             text += f"\n🎯 Точность прогнозов\n"
             text += f"Разрешено: {user_resolved}\n"
@@ -636,36 +641,27 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             if user_brier is not None:
                 text += f"Brier Score: {user_brier:.3f}\n"
         else:
-            text += f"\n🎯 Точность появится после закрытия первых прогнозов\n"
-
+            text += "\n🎯 Точность появится после закрытия первых прогнозов\n"
         if badges:
             text += f"\n🏆 Твои бейджи:\n{format_badges_list(badges, lang)}\n"
-
-        # Подсказка для следующих бейджей (только для своего профиля)
         if target_user_id is None or target_user_id == user_id:
             hint = format_next_badge_hint(uid, lang)
             if hint:
                 text += f"\n{hint}"
     else:
-        text = (
-            f"👤 Profile {username_display}\n"
-            f"{'─' * 30}\n\n"
-        )
+        text = f"👤 Profile {username_display}\n{'─' * 30}\n\n"
         if badges_line:
             text += f"{badges_line}  ({badges_count} badges)\n\n"
         else:
-            text += f"No badges yet — keep analyzing!\n\n"
-
+            text += "No badges yet — keep analyzing!\n\n"
         if author_line:
             text += author_line + "\n"
-
         text += (
             f"📊 Stats\n"
             f"Analyses: {user['total_analyses']}\n"
             f"Signals: {user['total_opportunities']}\n"
             f"Referrals: {user.get('total_referrals', 0)}\n"
         )
-
         if user_resolved > 0:
             text += f"\n🎯 Prediction Accuracy\n"
             text += f"Resolved: {user_resolved}\n"
@@ -674,11 +670,9 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             if user_brier is not None:
                 text += f"Brier Score: {user_brier:.3f}\n"
         else:
-            text += f"\n🎯 Accuracy will appear after first predictions resolve\n"
-
+            text += "\n🎯 Accuracy will appear after first predictions resolve\n"
         if badges:
             text += f"\n🏆 Your badges:\n{format_badges_list(badges, lang)}\n"
-
         if target_user_id is None or target_user_id == user_id:
             hint = format_next_badge_hint(uid, lang)
             if hint:
@@ -687,8 +681,138 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
     return text
 
 
+def _format_watchlist_list(user_id: int) -> str:
+    """Форматирует список watchlist пользователя."""
+    lang = get_user_lang(user_id)
+    items = get_user_watchlist(user_id)
+    limit = count_user_watchlist(user_id)
+    from db.database import get_user_watchlist_limit
+    max_limit = get_user_watchlist_limit(user_id)
+
+    if not items:
+        if lang == "ru":
+            return (
+                f"📋 Мой Watchlist\n\n"
+                f"Список пуст.\n\n"
+                f"Добавляй рынки кнопкой ⭐ В Watchlist под любым анализом.\n\n"
+                f"💡 Ты будешь получать уведомления при изменении вероятности, "
+                f"скором закрытии рынка и финальном результате.\n\n"
+                f"📊 Слотов использовано: 0 / {max_limit}"
+            )
+        else:
+            return (
+                f"📋 My Watchlist\n\n"
+                f"List is empty.\n\n"
+                f"Add markets using ⭐ Add to Watchlist button under any analysis.\n\n"
+                f"💡 You'll get notifications on probability changes, "
+                f"market closing soon, and final results.\n\n"
+                f"📊 Slots used: 0 / {max_limit}"
+            )
+
+    if lang == "ru":
+        text = f"📋 Мой Watchlist ({limit}/{max_limit})\n\n"
+    else:
+        text = f"📋 My Watchlist ({limit}/{max_limit})\n\n"
+
+    for i, item in enumerate(items, 1):
+        q = item.get("question", "")[:60]
+        initial = item.get("initial_probability", 0)
+        current = item.get("last_checked_probability", 0)
+        change = current - initial
+        mute = "🔕" if not item.get("notify_enabled") else "🔔"
+
+        if abs(change) >= 0.1:
+            change_emoji = "📈" if change > 0 else "📉"
+            change_str = f" {change_emoji}{'+' if change > 0 else ''}{change:.1f}%"
+        else:
+            change_str = ""
+
+        if lang == "ru":
+            text += (
+                f"{i}. {mute} {q}\n"
+                f"   Начало: {initial:.1f}% → Сейчас: {current:.1f}%{change_str}\n"
+                f"   /wl_{item['id']}\n\n"
+            )
+        else:
+            text += (
+                f"{i}. {mute} {q}\n"
+                f"   Start: {initial:.1f}% → Now: {current:.1f}%{change_str}\n"
+                f"   /wl_{item['id']}\n\n"
+            )
+
+    if lang == "ru":
+        text += "\n💡 Нажми на /wl_ID чтобы управлять конкретным рынком"
+    else:
+        text += "\n💡 Tap /wl_ID to manage a specific market"
+
+    return text
+
+
+def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
+    """Форматирует детали одной записи watchlist."""
+    lang = get_user_lang(user_id)
+    item = get_watchlist_by_id(watchlist_id)
+
+    if not item or item.get("user_id") != user_id:
+        return "❌ Запись не найдена" if lang == "ru" else "❌ Not found"
+
+    q = _escape(item.get("question", ""))
+    category = item.get("category", "")
+    initial = item.get("initial_probability", 0)
+    current = item.get("last_checked_probability", 0)
+    change = current - initial
+    notify = item.get("notify_enabled", True)
+    end_date = item.get("market_end_date", "")
+    created = item.get("created_at", "")[:10] if item.get("created_at") else ""
+
+    if change > 0:
+        change_line = f"📈 +{change:.1f}%"
+    elif change < 0:
+        change_line = f"📉 {change:.1f}%"
+    else:
+        change_line = "➖ без изменений" if lang == "ru" else "➖ no change"
+
+    notify_line = (
+        ("🔔 Уведомления: ВКЛ" if lang == "ru" else "🔔 Notifications: ON")
+        if notify else
+        ("🔕 Уведомления: ВЫКЛ" if lang == "ru" else "🔕 Notifications: OFF")
+    )
+
+    end_line = ""
+    if end_date:
+        try:
+            end_line = f"\n⏰ Закрытие: {end_date[:10]}" if lang == "ru" else f"\n⏰ Closes: {end_date[:10]}"
+        except Exception:
+            pass
+
+    if lang == "ru":
+        return (
+            f"⭐ Watchlist\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Категория: {category}\n"
+            f"📊 Начальная: {initial:.1f}%\n"
+            f"📊 Текущая: {current:.1f}%\n"
+            f"{change_line}\n"
+            f"{notify_line}\n"
+            f"📅 Добавлено: {created}"
+            f"{end_line}"
+        )
+    else:
+        return (
+            f"⭐ Watchlist\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Category: {category}\n"
+            f"📊 Initial: {initial:.1f}%\n"
+            f"📊 Current: {current:.1f}%\n"
+            f"{change_line}\n"
+            f"{notify_line}\n"
+            f"📅 Added: {created}"
+            f"{end_line}"
+        )
+
+
 # ═══════════════════════════════════════════
-# HANDLERS
+# HANDLERS: START / LANG / MENU
 # ═══════════════════════════════════════════
 
 @dp.message_handler(commands=["start"])
@@ -713,11 +837,9 @@ async def start_handler(message: types.Message):
 
     _register_user(message, referred_by=referred_by)
 
-    # Для нового юзера ставим русский по умолчанию
     if not get_user_language(message.from_user.id):
         set_lang(message.from_user.id, "ru")
 
-    # Если открыли по ссылке на чужой профиль
     if show_profile_of:
         text = _format_profile(message.from_user.id, target_user_id=show_profile_of)
         await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
@@ -753,6 +875,39 @@ async def badges_command(message: types.Message):
     await message.answer(text)
 
 
+@dp.message_handler(commands=["watchlist"])
+async def watchlist_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_watchlist_list(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text and m.text.startswith("/wl_"))
+async def watchlist_item_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    try:
+        wl_id = int(message.text.replace("/wl_", "").strip())
+    except ValueError:
+        await message.answer(
+            "❌ Неверный ID" if get_user_lang(uid) == "ru" else "❌ Invalid ID"
+        )
+        return
+
+    item = get_watchlist_by_id(wl_id)
+    if not item or item.get("user_id") != uid:
+        lang = get_user_lang(uid)
+        await message.answer(
+            "❌ Запись не найдена" if lang == "ru" else "❌ Not found"
+        )
+        return
+
+    text = _format_watchlist_item(uid, wl_id)
+    kb = get_watchlist_item_keyboard(uid, wl_id, item.get("notify_enabled", True))
+    await message.answer(text, reply_markup=kb)
+
+
 @dp.callback_query_handler(lambda c: c.data == "show_all_badges")
 async def show_all_badges_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
@@ -777,6 +932,14 @@ async def profile_button_handler(message: types.Message):
     uid = message.from_user.id
     text = _format_profile(uid)
     await message.answer(text, reply_markup=get_profile_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["📋 Watchlist"])
+async def watchlist_button_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    text = _format_watchlist_list(uid)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
 @dp.message_handler(lambda m: m.text in ["🌐 Язык", "🌐 Language"])
@@ -807,6 +970,241 @@ async def set_english_handler(message: types.Message):
         reply_markup=get_main_keyboard(message.from_user.id),
     )
 
+
+# ═══════════════════════════════════════════
+# WATCHLIST CALLBACKS
+# ═══════════════════════════════════════════
+
+@dp.callback_query_handler(lambda c: c.data.startswith("wl_add_"))
+async def watchlist_add_callback(callback: types.CallbackQuery):
+    """Обработка кнопки '⭐ В Watchlist' под анализом."""
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    # Проверка что watchlist включён
+    if get_setting("watchlist_enabled", "on") != "on":
+        await callback.answer(
+            "Watchlist временно недоступен" if lang == "ru" else "Watchlist unavailable",
+            show_alert=True,
+        )
+        return
+
+    # Получаем данные последнего анализа из кеша
+    analysis = last_analysis_cache.get(uid)
+    if not analysis:
+        await callback.answer(
+            "Анализ устарел. Сделай новый анализ." if lang == "ru"
+            else "Analysis expired. Make a new one.",
+            show_alert=True,
+        )
+        return
+
+    # Проверка лимита
+    limit_check = can_add_to_watchlist(uid)
+    if not limit_check["allowed"]:
+        current = limit_check["current"]
+        limit = limit_check["limit"]
+        extra_price = get_setting("watchlist_extra_slots_price", "20")
+        extra_count = get_setting("watchlist_extra_slots_count", "5")
+
+        if lang == "ru":
+            msg = (
+                f"❌ Лимит Watchlist: {current}/{limit}\n\n"
+                f"Удали что-нибудь или купи {extra_count} доп. слотов "
+                f"за {extra_price} токенов.\n\n"
+                f"Или оформи подписку — лимит 50 рынков."
+            )
+        else:
+            msg = (
+                f"❌ Watchlist limit: {current}/{limit}\n\n"
+                f"Remove something or buy {extra_count} extra slots "
+                f"for {extra_price} tokens.\n\n"
+                f"Or get subscription — 50 markets limit."
+            )
+        await callback.answer(msg, show_alert=True)
+        return
+
+    # Проверка оплаты
+    user = get_user(uid)
+    subscribed = is_subscribed(uid)
+    is_free = (user and user.get("is_vip")) or subscribed
+
+    price = int(get_setting("watchlist_price_tokens", "5"))
+
+    if not is_free and get_setting("paid_mode", "off") == "on":
+        if not user or user["token_balance"] < price:
+            msg = (
+                f"❌ Нужно {price} токенов. Баланс: {user['token_balance'] if user else 0}"
+                if lang == "ru"
+                else f"❌ Need {price} tokens. Balance: {user['token_balance'] if user else 0}"
+            )
+            await callback.answer(msg, show_alert=True)
+            return
+
+    # Извлекаем данные для сохранения
+    market_slug = analysis.get("market_slug", "") or _extract_slug_from_url(analysis.get("url", ""))
+    if not market_slug:
+        await callback.answer(
+            "❌ Не удалось определить рынок" if lang == "ru" else "❌ Cannot detect market",
+            show_alert=True,
+        )
+        return
+
+    # Извлекаем числовую вероятность
+    market_prob_str = analysis.get("market_probability", "")
+    initial_prob = _parse_probability(market_prob_str)
+
+    # Добавляем в watchlist
+    wl_id = add_to_watchlist(
+        user_id=uid,
+        market_slug=market_slug,
+        market_url=analysis.get("url", ""),
+        question=analysis.get("question", ""),
+        category=analysis.get("category", ""),
+        initial_probability=initial_prob,
+        initial_market_prob_str=market_prob_str,
+        market_end_date=analysis.get("market_end_date"),
+    )
+
+    if wl_id is None:
+        await callback.answer(
+            "Уже в watchlist!" if lang == "ru" else "Already in watchlist!",
+            show_alert=True,
+        )
+        return
+
+    # Списываем токены (если не бесплатно)
+    if not is_free and get_setting("paid_mode", "off") == "on":
+        add_tokens(uid, -price)
+
+    # Успех
+    if lang == "ru":
+        msg = (
+            f"✅ Добавлено в Watchlist!\n\n"
+            f"Ты получишь уведомления о:\n"
+            f"• Изменении вероятности\n"
+            f"• Скором закрытии рынка\n"
+            f"• Результате\n\n"
+            f"📋 Все рынки: /watchlist"
+        )
+    else:
+        msg = (
+            f"✅ Added to Watchlist!\n\n"
+            f"You'll get notifications on:\n"
+            f"• Probability changes\n"
+            f"• Market closing soon\n"
+            f"• Final result\n\n"
+            f"📋 All markets: /watchlist"
+        )
+    await callback.answer("✅", show_alert=False)
+    await callback.message.answer(msg)
+
+
+@dp.callback_query_handler(lambda c: c.data == "wl_list")
+async def watchlist_list_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    text = _format_watchlist_list(uid)
+    await callback.message.edit_text(text)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("wl_mute_"))
+async def watchlist_mute_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        wl_id = int(callback.data.replace("wl_mute_", ""))
+    except ValueError:
+        await callback.answer("❌")
+        return
+
+    item = get_watchlist_by_id(wl_id)
+    if not item or item.get("user_id") != uid:
+        await callback.answer(
+            "❌ Запись не найдена" if lang == "ru" else "❌ Not found",
+            show_alert=True,
+        )
+        return
+
+    new_enabled = not item.get("notify_enabled", True)
+    toggle_watchlist_notifications(uid, wl_id, new_enabled)
+
+    if new_enabled:
+        await callback.answer("🔔 Уведомления включены" if lang == "ru" else "🔔 Notifications on")
+    else:
+        await callback.answer("🔕 Уведомления отключены" if lang == "ru" else "🔕 Notifications off")
+
+    # Перерисовываем
+    text = _format_watchlist_item(uid, wl_id)
+    kb = get_watchlist_item_keyboard(uid, wl_id, new_enabled)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("wl_remove_"))
+async def watchlist_remove_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    try:
+        wl_id = int(callback.data.replace("wl_remove_", ""))
+    except ValueError:
+        await callback.answer("❌")
+        return
+
+    success = remove_from_watchlist(uid, wl_id)
+    if success:
+        await callback.answer(
+            "✅ Удалено из Watchlist" if lang == "ru" else "✅ Removed from Watchlist",
+            show_alert=False,
+        )
+        text = _format_watchlist_list(uid)
+        try:
+            await callback.message.edit_text(text)
+        except Exception:
+            pass
+    else:
+        await callback.answer(
+            "❌ Не удалось удалить" if lang == "ru" else "❌ Could not remove",
+            show_alert=True,
+        )
+
+
+def _extract_slug_from_url(url: str) -> str:
+    """Извлекает slug из URL Polymarket."""
+    if not url:
+        return ""
+    try:
+        if "/event/" in url:
+            parts = url.split("/event/")[1].split("?")[0].split("/")
+            return parts[0] if parts else ""
+        if "/market/" in url:
+            parts = url.split("/market/")[1].split("?")[0].split("/")
+            return parts[0] if parts else ""
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_probability(prob_str: str) -> float:
+    """Извлекает число из строки вида '75%' или 'Yes 75% / No 25%'."""
+    if not prob_str:
+        return 0.0
+    try:
+        import re
+        match = re.search(r'(\d+(?:\.\d+)?)\s*%', prob_str)
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return 0.0
+
+
+# ═══════════════════════════════════════════
+# HANDLERS: ANALYSIS / SIGNALS
+# ═══════════════════════════════════════════
 
 @dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"])
 async def analyze_prompt_handler(message: types.Message):
@@ -994,6 +1392,10 @@ async def personal_signal_handler(message: types.Message):
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
 
+# ═══════════════════════════════════════════
+# HANDLERS: BALANCE / SUBSCRIPTION / REFERRALS
+# ═══════════════════════════════════════════
+
 @dp.message_handler(lambda m: m.text in ["💰 Баланс", "💰 Balance"])
 async def balance_handler(message: types.Message):
     _register_user(message)
@@ -1008,6 +1410,7 @@ async def balance_handler(message: types.Message):
     analysis_price = get_setting("analysis_price_tokens", "10")
     opp_price = get_setting("opportunity_price_tokens", "20")
     cached_price = get_setting("cached_signal_price_tokens", "5")
+    watchlist_price = get_setting("watchlist_price_tokens", "5")
     subscribed = is_subscribed(uid)
     sub_until = get_subscription_until(uid)
     daily = get_daily_usage(uid)
@@ -1045,7 +1448,8 @@ async def balance_handler(message: types.Message):
             f"{'💳 Режим: Платный' if paid_mode == 'on' else '🆓 Режим: Бесплатный'}\n"
             f"Анализ: {analysis_price} токенов\n"
             f"Сигнал часа: {cached_price} токенов\n"
-            f"Личный сигнал: {opp_price} токенов"
+            f"Личный сигнал: {opp_price} токенов\n"
+            f"⭐ Watchlist: {watchlist_price} токенов"
         )
     else:
         sub_text = f"✅ Until {sub_until[:10]}" if subscribed and sub_until else "❌ No"
@@ -1077,7 +1481,8 @@ async def balance_handler(message: types.Message):
             f"{'💳 Mode: Paid' if paid_mode == 'on' else '🆓 Mode: Free'}\n"
             f"Analysis: {analysis_price} tokens\n"
             f"Signal of hour: {cached_price} tokens\n"
-            f"Personal signal: {opp_price} tokens"
+            f"Personal signal: {opp_price} tokens\n"
+            f"⭐ Watchlist: {watchlist_price} tokens"
         )
 
     await message.answer(text, reply_markup=get_main_keyboard(uid))
@@ -1109,6 +1514,7 @@ async def subscription_handler(message: types.Message):
     sub_days = get_setting("subscription_days", "30")
     sub_analyses = get_setting("sub_daily_analyses", "15")
     sub_opp = get_setting("sub_daily_opportunities", "3")
+    wl_vip_limit = get_setting("watchlist_limit_vip", "50")
 
     if subscribed and sub_until:
         if lang == "ru":
@@ -1119,6 +1525,7 @@ async def subscription_handler(message: types.Message):
                 f"• ⚡ Сигнал часа бесплатно\n"
                 f"• 📊 {sub_analyses} анализов в день\n"
                 f"• 💡 {sub_opp} сигнала в день\n"
+                f"• ⭐ Watchlist бесплатно ({wl_vip_limit} рынков)\n"
                 f"• 🚀 Приоритетный AI анализ\n\n"
                 f"Продлить — {sub_price} TON / {sub_days} дней 👇"
             )
@@ -1130,6 +1537,7 @@ async def subscription_handler(message: types.Message):
                 f"• ⚡ Signal of the hour free\n"
                 f"• 📊 {sub_analyses} analyses per day\n"
                 f"• 💡 {sub_opp} signals per day\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit} markets)\n"
                 f"• 🚀 Priority AI analysis\n\n"
                 f"Renew — {sub_price} TON / {sub_days} days 👇"
             )
@@ -1142,6 +1550,7 @@ async def subscription_handler(message: types.Message):
                 f"• ⚡ Сигнал часа бесплатно\n"
                 f"• 📊 {sub_analyses} анализов в день\n"
                 f"• 💡 {sub_opp} сигнала в день\n"
+                f"• ⭐ Watchlist бесплатно ({wl_vip_limit} рынков)\n"
                 f"• 🚀 Приоритетный AI анализ\n\n"
                 f"Оплати через кассу 👇"
             )
@@ -1153,6 +1562,7 @@ async def subscription_handler(message: types.Message):
                 f"• ⚡ Signal of the hour free\n"
                 f"• 📊 {sub_analyses} analyses per day\n"
                 f"• 💡 {sub_opp} signals per day\n"
+                f"• ⭐ Watchlist free ({wl_vip_limit} markets)\n"
                 f"• 🚀 Priority AI analysis\n\n"
                 f"Pay via checkout 👇"
             )
@@ -1246,6 +1656,10 @@ async def top_handler(message: types.Message):
     await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
 
 
+# ═══════════════════════════════════════════
+# HANDLERS: URL ANALYSIS
+# ═══════════════════════════════════════════
+
 @dp.message_handler(lambda m: m.text and "polymarket.com" in m.text)
 async def analyze_url_handler(message: types.Message):
     _register_user(message)
@@ -1282,8 +1696,9 @@ async def analyze_url_handler(message: types.Message):
     await message.answer(t(uid, "analyzing"))
 
     try:
+        url = message.text.strip()
         agent = ChiefAgent()
-        result = agent.run(message.text.strip(), lang=lang, user_id=uid)
+        result = agent.run(url, lang=lang, user_id=uid)
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
@@ -1296,12 +1711,15 @@ async def analyze_url_handler(message: types.Message):
             increment_daily(uid, "daily_analyses")
 
         increment_user_stat(uid, "total_analyses")
-        text = _format_analysis(result, uid)
 
-        # Отправляем анализ с inline-кнопкой "Поделиться"
+        # Сохраняем результат в кеш для кнопки Watchlist
+        result["url"] = url
+        result["market_slug"] = _extract_slug_from_url(url)
+        last_analysis_cache[uid] = result
+
+        text = _format_analysis(result, uid)
         share_kb = get_share_analysis_keyboard(uid, result)
         await message.answer(text, reply_markup=share_kb, parse_mode="HTML")
-        # И отдельно показываем основную клавиатуру
         await message.answer(
             t(uid, "fallback"),
             reply_markup=get_main_keyboard(uid),
@@ -1310,18 +1728,13 @@ async def analyze_url_handler(message: types.Message):
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
+
 # ═══════════════════════════════════════════
 # INLINE QUERY HANDLER
 # ═══════════════════════════════════════════
 
 @dp.inline_handler()
 async def inline_query_handler(inline_query: types.InlineQuery):
-    """
-    Обрабатывает inline-запросы @DeepAlphaAI_bot.
-    Два режима:
-    - Пустой запрос: показывает топ кешированных сигналов
-    - Ссылка Polymarket: показывает превью рынка
-    """
     from services.inline_service import (
         extract_url_from_query, build_quick_market_preview,
         format_inline_market_text, format_inline_signal_text,
@@ -1335,7 +1748,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     query_text = inline_query.query.strip()
     lang = get_user_lang(uid) if uid in user_languages else "ru"
 
-    # Регистрируем юзера и инкрементируем счётчик
     try:
         ensure_user(
             user_id=uid,
@@ -1349,7 +1761,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     results = []
 
     try:
-        # Режим 1: есть ссылка Polymarket
         url = extract_url_from_query(query_text)
         if url:
             preview = build_quick_market_preview(url, lang=lang)
@@ -1358,7 +1769,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                 title = format_preview_title(preview, lang=lang)
                 description = format_preview_description(preview, lang=lang)
 
-                # Inline-кнопка "Открыть в боте"
                 open_label = "🤖 Получить AI-анализ" if lang == "ru" else "🤖 Get AI analysis"
                 ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
                 kb = InlineKeyboardMarkup()
@@ -1378,17 +1788,8 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                     )
                 )
             else:
-                # Ссылка не распарсилась
-                error_label = (
-                    "❌ Не удалось загрузить рынок"
-                    if lang == "ru"
-                    else "❌ Could not load market"
-                )
-                error_desc = (
-                    "Проверь что ссылка правильная"
-                    if lang == "ru"
-                    else "Check the link"
-                )
+                error_label = "❌ Не удалось загрузить рынок" if lang == "ru" else "❌ Could not load market"
+                error_desc = "Проверь что ссылка правильная" if lang == "ru" else "Check the link"
                 results.append(
                     types.InlineQueryResultArticle(
                         id="error_url",
@@ -1400,7 +1801,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                     )
                 )
 
-        # Режим 2: пустой запрос или текст — показываем топ сигналов
         elif not query_text or len(query_text) < 5:
             signals = get_top_cached_signals(limit=5)
             if signals:
@@ -1428,12 +1828,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                         )
                     )
             else:
-                # Нет кешированных сигналов
-                empty_label = (
-                    "💡 Отправь ссылку Polymarket"
-                    if lang == "ru"
-                    else "💡 Send Polymarket link"
-                )
+                empty_label = "💡 Отправь ссылку Polymarket" if lang == "ru" else "💡 Send Polymarket link"
                 empty_desc = (
                     "Пример: @DeepAlphaAI_bot https://polymarket.com/..."
                     if lang == "ru"
@@ -1456,13 +1851,8 @@ async def inline_query_handler(inline_query: types.InlineQuery):
                     )
                 )
 
-        # Режим 3: произвольный текст без ссылки
         else:
-            hint_label = (
-                "💡 Вставь ссылку Polymarket"
-                if lang == "ru"
-                else "💡 Paste Polymarket link"
-            )
+            hint_label = "💡 Вставь ссылку Polymarket" if lang == "ru" else "💡 Paste Polymarket link"
             hint_desc = (
                 "Нужна ссылка вида polymarket.com/event/..."
                 if lang == "ru"
@@ -1488,12 +1878,16 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         await bot.answer_inline_query(
             inline_query.id,
             results=results,
-            cache_time=60,  # кешируем ответ на 1 минуту
-            is_personal=True,  # каждому юзеру свои результаты (из-за реф-ссылки)
+            cache_time=60,
+            is_personal=True,
         )
     except Exception as e:
         print(f"answer_inline_query error: {e}")
 
+
+# ═══════════════════════════════════════════
+# FALLBACK
+# ═══════════════════════════════════════════
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/"))
 async def fallback_handler(message: types.Message):
@@ -1502,4 +1896,4 @@ async def fallback_handler(message: types.Message):
         t(message.from_user.id, "fallback"),
         reply_markup=get_main_keyboard(message.from_user.id),
     )
- 
+
