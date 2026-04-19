@@ -2,11 +2,10 @@ import os
 import json
 from aiohttp import web
 from db.database import (
-    get_user, get_setting, add_pending, is_subscribed,
+    get_user, get_setting, is_subscribed,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post,
-    is_author, create_donation,
-    get_author_profile as get_author_db,
+    is_author, create_donation, add_pending,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -78,10 +77,6 @@ def _json_response(data: dict, status: int = 200) -> web.Response:
     )
 
 
-# ═══════════════════════════════════════════
-# USER API (расширенный)
-# ═══════════════════════════════════════════
-
 async def handle_user_api(request):
     user_id = request.match_info.get("user_id", "")
     try:
@@ -93,7 +88,6 @@ async def handle_user_api(request):
         subscribed = is_subscribed(uid)
         sub_until = get_subscription_until(uid)
 
-        # Загружаем активные пакеты
         packages_raw = get_token_packages(active_only=True)
         packages = [
             {
@@ -121,14 +115,12 @@ async def handle_user_api(request):
             "subscription_price": get_setting("subscription_price_ton", "1"),
             "subscription_days": get_setting("subscription_days", "30"),
             "packages": packages,
-            # ═══ NEW: author / donations / watchlist slots ═══
             "is_author": bool(user.get("is_author")),
             "author_balance_ton": user.get("author_balance_ton", 0) or 0,
             "author_withdrawn_ton": user.get("author_withdrawn_ton", 0) or 0,
             "ton_wallet": user.get("ton_wallet", "") or "",
             "extra_watchlist_slots": user.get("extra_watchlist_slots", 0) or 0,
             "author_bio": user.get("author_bio", "") or "",
-            # Публичные настройки для UI
             "authors_enabled": get_setting("authors_enabled", "on"),
             "donations_enabled": get_setting("donations_enabled", "on"),
             "watchlist_enabled": get_setting("watchlist_enabled", "on"),
@@ -145,15 +137,12 @@ async def handle_user_api(request):
         return _json_response(data)
     except Exception as e:
         print(f"handle_user_api error: {e}")
+        import traceback
+        traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# PENDING API (совместимость со старым WebApp)
-# ═══════════════════════════════════════════
-
 async def handle_pending(request):
-    """Старый эндпоинт — сохраняет pending для tokens/subscription."""
     try:
         data = await request.json()
         user_id = int(data.get("user_id", 0))
@@ -163,7 +152,6 @@ async def handle_pending(request):
         if user_id <= 0:
             return _json_response({"error": "Invalid user_id"}, status=400)
 
-        # Валидация типа для безопасности
         valid_types = ("tokens", "subscription", "author_status", "watchlist_slots")
         if payment_type not in valid_types and not payment_type.startswith("donation:"):
             return _json_response({"error": "Invalid payment_type"}, status=400)
@@ -174,15 +162,12 @@ async def handle_pending(request):
         return _json_response({"ok": True})
     except Exception as e:
         print(f"handle_pending error: {e}")
+        import traceback
+        traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# AUTHORS LIST
-# ═══════════════════════════════════════════
-
 async def handle_authors_list(request):
-    """Возвращает список всех авторов для выбора при донате."""
     try:
         authors = get_all_authors(limit=100)
         result = []
@@ -204,15 +189,12 @@ async def handle_authors_list(request):
         return _json_response({"authors": result})
     except Exception as e:
         print(f"handle_authors_list error: {e}")
+        import traceback
+        traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# AUTHOR PROFILE
-# ═══════════════════════════════════════════
-
 async def handle_author_profile(request):
-    """Возвращает публичный профиль одного автора."""
     author_id = request.match_info.get("author_id", "")
     try:
         aid = int(author_id)
@@ -221,11 +203,7 @@ async def handle_author_profile(request):
         if not author or not author.get("is_author"):
             return _json_response({"error": "Author not found"}, status=404)
 
-        name = (
-            author.get("username")
-            or author.get("first_name")
-            or f"User {aid}"
-        )
+        name = author.get("username") or author.get("first_name") or f"User {aid}"
 
         data = {
             "user_id": aid,
@@ -241,15 +219,12 @@ async def handle_author_profile(request):
         return _json_response(data)
     except Exception as e:
         print(f"handle_author_profile error: {e}")
+        import traceback
+        traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# POST DETAILS
-# ═══════════════════════════════════════════
-
 async def handle_post_details(request):
-    """Возвращает детали поста для отображения на странице доната."""
     post_id = request.match_info.get("post_id", "")
     try:
         pid = int(post_id)
@@ -282,15 +257,84 @@ async def handle_post_details(request):
         return _json_response(data)
     except Exception as e:
         print(f"handle_post_details error: {e}")
+        import traceback
+        traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# CREATE DONATION
-# ═══════════════════════════════════════════
+async def handle_create_donation(request):
+    try:
+        data = await request.json()
+        donor_id = int(data.get("donor_id", 0))
+        author_id = int(data.get("author_id", 0))
+        ton_amount = float(data.get("ton_amount", 0))
+        post_id_raw = data.get("post_id")
+        comment = (data.get("comment", "") or "").strip()[:500]
+
+        if donor_id <= 0:
+            return _json_response({"error": "Invalid donor_id"}, status=400)
+        if author_id <= 0:
+            return _json_response({"error": "Invalid author_id"}, status=400)
+        if donor_id == author_id:
+            return _json_response({"error": "Cannot donate to yourself"}, status=400)
+        if ton_amount <= 0:
+            return _json_response({"error": "Invalid amount"}, status=400)
+
+        if get_setting("donations_enabled", "on") != "on":
+            return _json_response({"error": "Donations disabled"}, status=400)
+
+        min_donation = float(get_setting("min_donation_ton", "0.1"))
+        if ton_amount < min_donation:
+            return _json_response({
+                "error": f"Minimum donation: {min_donation} TON"
+            }, status=400)
+
+        if not is_author(author_id):
+            return _json_response({"error": "User is not an author"}, status=400)
+
+        post_id = None
+        if post_id_raw:
+            try:
+                post_id = int(post_id_raw)
+                post = get_author_post(post_id)
+                if not post or post.get("author_id") != author_id:
+                    post_id = None
+            except (ValueError, TypeError):
+                post_id = None
+
+        donation_id = create_donation(
+            donor_id=donor_id,
+            author_id=author_id,
+            ton_amount=ton_amount,
+            post_id=post_id,
+            comment=comment,
+            status="pending",
+        )
+
+        if not donation_id:
+            return _json_response({"error": "Failed to create donation"}, status=500)
+
+        add_pending(donor_id, ton_amount, f"donation:{donation_id}")
+
+        print(
+            f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
+            f"author={author_id}, amount={ton_amount} TON, post={post_id}"
+        )
+
+        return _json_response({
+            "ok": True,
+            "donation_id": donation_id,
+            "amount": ton_amount,
+            "payment_type": f"donation:{donation_id}",
+        })
+    except Exception as e:
+        print(f"handle_create_donation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return _json_response({"error": str(e)}, status=500)
 
 
-            async def handle_public_settings(request):
+async def handle_public_settings(request):
     try:
         data = {
             "authors_enabled": get_setting("authors_enabled", "on"),
