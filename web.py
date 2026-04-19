@@ -396,6 +396,64 @@ async def handle_public_settings(request):
     except Exception as e:
         return _json_response({"error": str(e)}, status=500)
 
+"""
+    Покупка доп. слотов Watchlist за токены.
+    Списывает токены с баланса пользователя, добавляет слоты.
+    """
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+
+        if user_id <= 0:
+            return _json_response({"error": "Invalid user_id"}, status=400)
+
+        # Проверки настроек
+        if get_setting("watchlist_enabled", "on") != "on":
+            return _json_response({"error": "Watchlist disabled"}, status=400)
+
+        # Получаем цену и кол-во слотов
+        slots_price = int(get_setting("watchlist_extra_slots_price", "20"))
+        slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
+
+        # Проверяем юзера
+        user = get_user(user_id)
+        if not user:
+            return _json_response({"error": "User not found"}, status=404)
+
+        current_balance = user.get("token_balance", 0) or 0
+
+        # VIP — бесплатно? Нет, слоты платные даже для VIP (в настройках)
+        if current_balance < slots_price:
+            return _json_response({
+                "error": f"Insufficient tokens: need {slots_price}, have {current_balance}",
+                "need_tokens": slots_price - current_balance,
+            }, status=400)
+
+        # Атомарно: списываем токены и добавляем слоты
+        from db.database import add_tokens, add_watchlist_extra_slots
+
+        new_balance = add_tokens(user_id, -slots_price)
+        new_slots = add_watchlist_extra_slots(user_id, slots_count)
+
+        print(
+            f"SLOTS PURCHASED: user_id={user_id}, "
+            f"price={slots_price} tokens, slots=+{slots_count}, "
+            f"new_balance={new_balance}, total_extra={new_slots}"
+        )
+
+        return _json_response({
+            "ok": True,
+            "slots_added": slots_count,
+            "total_extra_slots": new_slots,
+            "tokens_spent": slots_price,
+            "new_balance": new_balance,
+        })
+    except Exception as e:
+        print(f"handle_buy_slots error: {e}")
+        import traceback
+        traceback.print_exc()
+        return _json_response({"error": str(e)}, status=500)
+
 
 # ═══════════════════════════════════════════
 # OPTIONS / HEALTH
@@ -434,7 +492,8 @@ app.router.add_get("/api/post/{post_id}", handle_post_details)
 app.router.add_post("/api/donation/create", handle_create_donation)
 app.router.add_route("OPTIONS", "/api/donation/create", handle_options)
 app.router.add_get("/api/settings/public", handle_public_settings)
-
+app.router.add_post("/api/watchlist/buy_slots", handle_buy_slots)
+app.router.add_route("OPTIONS", "/api/watchlist/buy_slots", handle_options)
 # Health
 app.router.add_get("/health", handle_health)
 
