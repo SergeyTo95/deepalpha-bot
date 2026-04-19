@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -45,7 +44,6 @@
         .sub-feature { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 14px; color: rgba(255,255,255,0.8); border-bottom: 1px solid rgba(255,255,255,0.06); }
         .sub-feature:last-child { border-bottom: none; }
 
-        /* Пакеты токенов */
         .packages-section { margin-bottom: 16px; }
         .packages-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 12px; }
         .package-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
@@ -72,6 +70,68 @@
         .sub-pay-btn { width: 100%; background: linear-gradient(135deg, #ff6b35, #f7c59f); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(255,107,53,0.4); margin-bottom: 12px; }
         .sub-pay-btn:active { transform: scale(0.98); }
         .sub-pay-btn:disabled { opacity: 0.6; }
+
+        /* Author status button */
+        .author-pay-btn { width: 100%; background: linear-gradient(135deg, #f093fb, #f5576c); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(240,147,251,0.4); margin-bottom: 12px; }
+        .author-pay-btn:active { transform: scale(0.98); }
+        .author-pay-btn:disabled { opacity: 0.6; }
+
+        /* Donate button */
+        .donate-btn { width: 100%; background: linear-gradient(135deg, #ff6ec7, #c850c0); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(255,110,199,0.4); margin-bottom: 12px; }
+        .donate-btn:active { transform: scale(0.98); }
+        .donate-btn:disabled { opacity: 0.6; }
+
+        /* Slots button */
+        .slots-pay-btn { width: 100%; background: linear-gradient(135deg, #00d4ff, #6236ff); border: none; border-radius: 16px; padding: 18px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: all 0.2s; box-shadow: 0 8px 30px rgba(0,212,255,0.4); margin-bottom: 12px; }
+        .slots-pay-btn:active { transform: scale(0.98); }
+        .slots-pay-btn:disabled { opacity: 0.6; }
+
+        /* Author card */
+        .author-card { background: linear-gradient(135deg, rgba(240,147,251,0.15), rgba(245,87,108,0.1)); border: 1px solid rgba(240,147,251,0.4); border-radius: 20px; padding: 24px; margin-bottom: 16px; text-align: center; }
+        .author-icon { font-size: 48px; margin-bottom: 12px; }
+        .author-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+        .author-desc { font-size: 14px; color: rgba(255,255,255,0.6); margin-bottom: 16px; line-height: 1.5; }
+        .author-price-big { font-size: 36px; font-weight: 800; background: linear-gradient(135deg, #f093fb, #f5576c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin: 12px 0; }
+        .author-features { text-align: left; margin-top: 16px; }
+        .author-feature { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; font-size: 14px; color: rgba(255,255,255,0.85); border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .author-feature:last-child { border-bottom: none; }
+
+        /* Donate: author selector */
+        .author-selector { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; margin-bottom: 16px; max-height: 300px; overflow-y: auto; }
+        .author-selector-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
+        .author-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; margin-bottom: 6px; }
+        .author-row:hover, .author-row.active { background: rgba(98,54,255,0.2); border-color: rgba(98,54,255,0.5); }
+        .author-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #6236ff, #c850c0); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
+        .author-info { flex: 1; min-width: 0; }
+        .author-name { font-size: 14px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .author-stats { font-size: 11px; color: rgba(255,255,255,0.4); }
+
+        /* Selected author card (when author=X in URL) */
+        .selected-author { background: linear-gradient(135deg, rgba(255,110,199,0.15), rgba(200,80,192,0.1)); border: 1px solid rgba(255,110,199,0.4); border-radius: 16px; padding: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 14px; }
+        .selected-author .author-avatar { width: 52px; height: 52px; font-size: 22px; }
+        .selected-author .author-name { font-size: 18px; font-weight: 700; }
+        .selected-author-bio { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 4px; }
+
+        /* Selected post preview (for donate-to-post) */
+        .selected-post { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 14px; margin-bottom: 16px; }
+        .selected-post-label { font-size: 11px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .selected-post-q { font-size: 14px; color: #fff; line-height: 1.4; margin-bottom: 6px; }
+        .selected-post-pred { font-size: 13px; color: #c850c0; }
+
+        /* Donation amounts presets */
+        .amount-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+        .amount-preset { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px 4px; text-align: center; cursor: pointer; transition: all 0.15s; font-weight: 700; font-size: 14px; color: rgba(255,255,255,0.8); }
+        .amount-preset:hover { background: rgba(255,110,199,0.15); border-color: rgba(255,110,199,0.4); }
+        .amount-preset.active { background: rgba(255,110,199,0.25); border-color: #ff6ec7; color: #fff; box-shadow: 0 0 15px rgba(255,110,199,0.3); }
+
+        .donate-fee-note { font-size: 12px; color: rgba(255,255,255,0.4); text-align: center; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 10px; margin-bottom: 12px; }
+
+        /* Slots card */
+        .slots-card { background: linear-gradient(135deg, rgba(0,212,255,0.12), rgba(98,54,255,0.1)); border: 1px solid rgba(0,212,255,0.4); border-radius: 20px; padding: 24px; margin-bottom: 16px; text-align: center; }
+        .slots-icon { font-size: 48px; margin-bottom: 12px; }
+        .slots-big-count { font-size: 48px; font-weight: 800; background: linear-gradient(135deg, #00d4ff, #6236ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1; margin: 12px 0; }
+        .slots-current-info { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-top: 12px; font-size: 13px; color: rgba(255,255,255,0.7); }
+
         .manual-pay { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
         .manual-title { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 10px; text-align: center; }
         .address-box { background: rgba(0,0,0,0.3); border-radius: 10px; padding: 10px 14px; font-size: 11px; color: rgba(255,255,255,0.6); word-break: break-all; margin-bottom: 8px; font-family: monospace; }
@@ -91,10 +151,11 @@
         .refresh-indicator { text-align: center; font-size: 12px; color: rgba(255,255,255,0.3); padding: 8px; display: none; }
         .refresh-indicator.active { display: block; }
         .no-packages { text-align: center; color: rgba(255,255,255,0.4); font-size: 13px; padding: 20px; }
+        .section-title { font-size: 13px; color: rgba(255,255,255,0.5); margin: 20px 0 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
     </style>
 </head>
 <body>
-    <div class="bg-glow"></div>
+<div class="bg-glow"></div>
     <div class="container">
         <div class="header">
             <img src="/webapp/logo.png" class="logo" onerror="this.style.display='none'; document.getElementById('logo-placeholder').style.display='flex'">
@@ -108,6 +169,7 @@
             <div class="balance-amount" id="balance">—</div>
             <div class="balance-sub">токенов</div>
             <div id="sub-badge" style="display:none" class="sub-badge">✅ Подписка активна</div>
+            <div id="author-badge" style="display:none" class="sub-badge" style="background:linear-gradient(135deg,#f093fb,#f5576c);margin-left:6px;">📢 Автор</div>
         </div>
 
         <div class="stats-row">
@@ -123,7 +185,8 @@
             </div>
         </div>
 
-        <div class="tabs">
+        <!-- Основные вкладки (скрываются если открыто через ?tab=author_status/donate/watchlist_slots) -->
+        <div class="tabs" id="main-tabs">
             <div class="tab active" id="tab-btn-tokens" onclick="switchTab('tokens', this)">💎 Токены</div>
             <div class="tab" id="tab-btn-subscription" onclick="switchTab('subscription', this)">🔔 Подписка</div>
         </div>
@@ -146,7 +209,6 @@
                 </div>
             </div>
 
-            <!-- Пакеты токенов -->
             <div class="packages-section">
                 <div class="packages-title">📦 Пакеты токенов</div>
                 <div id="packages-list">
@@ -154,7 +216,6 @@
                 </div>
             </div>
 
-            <!-- Своя сумма -->
             <div class="custom-amount-section">
                 <div class="custom-amount-title">Или введи свою сумму в TON:</div>
                 <input type="number" class="custom-input" id="custom-amount"
@@ -194,6 +255,7 @@
                 <div class="sub-feature">⚡ Сигнал часа бесплатно</div>
                 <div class="sub-feature">📊 До 15 анализов в день</div>
                 <div class="sub-feature">💡 До 3 сигналов в день</div>
+                <div class="sub-feature">⭐ Watchlist бесплатно (50 рынков)</div>
                 <div class="sub-feature">🚀 Приоритетный AI анализ</div>
             </div>
 
@@ -221,6 +283,158 @@
             </div>
         </div>
 
+        <!-- Стать автором -->
+        <div class="tab-content" id="tab-author-status">
+            <div class="author-card">
+                <div class="author-icon">📢</div>
+                <div class="author-title">Стать автором DeepAlpha</div>
+                <div class="author-price-big" id="author-price-display">5 TON</div>
+                <div class="author-desc">Одноразовая оплата — пожизненный статус</div>
+
+                <div class="author-features">
+                    <div class="author-feature">📝 Публикуй свои прогнозы как автор</div>
+                    <div class="author-feature">👥 Получай подписчиков</div>
+                    <div class="author-feature">💝 Принимай донаты в TON от юзеров</div>
+                    <div class="author-feature">👤 Публичный профиль автора</div>
+                    <div class="author-feature">📊 Статистика донатов и подписок</div>
+                    <div class="author-feature">💳 Вывод донатов на свой кошелёк</div>
+                </div>
+            </div>
+
+            <div id="already-author-card" style="display:none; background:rgba(74,222,128,0.1); border:1px solid rgba(74,222,128,0.3); border-radius:16px; padding:20px; margin-bottom:16px; text-align:center;">
+                <div style="font-size:36px; margin-bottom:8px;">✅</div>
+                <div style="font-weight:700; color:#4ade80; font-size:18px; margin-bottom:4px;">Ты уже автор!</div>
+                <div style="font-size:13px; color:rgba(255,255,255,0.5);">Иди публиковать прогнозы в боте</div>
+            </div>
+
+            <div class="ton-connect-wrapper">
+                <div id="ton-connect-button-author"></div>
+            </div>
+
+            <button class="author-pay-btn" id="author-pay-btn" onclick="handlePay('author_status')">
+                📢 Стать автором
+            </button>
+
+            <div class="divider">или вручную</div>
+
+            <div class="manual-pay">
+                <div class="manual-title">Отправь TON напрямую</div>
+                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
+                <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
+                    В комментарии укажи свой ID:
+                </div>
+                <div class="user-id-box" id="user-id-display-3">загрузка...</div>
+                <button class="copy-btn" onclick="copyUserId()">📋 Скопировать ID</button>
+            </div>
+        </div>
+
+        <!-- Донат автору -->
+        <div class="tab-content" id="tab-donate">
+            <div style="text-align:center;margin-bottom:16px;">
+                <div style="font-size:36px;">💝</div>
+                <div style="font-size:22px;font-weight:800;margin-top:4px;">Поддержать автора</div>
+                <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:4px;">
+                    Отправь донат в TON выбранному автору
+                </div>
+            </div>
+
+            <!-- Выбранный автор (если ?author=X в URL) -->
+            <div class="selected-author" id="selected-author-card" style="display:none;">
+                <div class="author-avatar" id="selected-author-avatar">?</div>
+                <div class="author-info">
+                    <div class="author-name" id="selected-author-name">—</div>
+                    <div class="selected-author-bio" id="selected-author-bio"></div>
+                </div>
+            </div>
+
+            <!-- Выбранный пост (если ?post=X) -->
+            <div class="selected-post" id="selected-post-card" style="display:none;">
+                <div class="selected-post-label">📝 За прогноз</div>
+                <div class="selected-post-q" id="selected-post-question">—</div>
+                <div class="selected-post-pred" id="selected-post-pred"></div>
+            </div>
+
+            <!-- Список всех авторов (если автор не выбран) -->
+            <div class="author-selector" id="authors-list-wrapper" style="display:none;">
+                <div class="author-selector-title">Выбери автора:</div>
+                <div id="authors-list">
+                    <div class="no-packages">⏳ Загрузка...</div>
+                </div>
+            </div>
+
+            <div class="section-title">💎 Сумма доната</div>
+
+            <div class="amount-presets">
+                <div class="amount-preset" data-amount="0.5" onclick="setDonationAmount(0.5, this)">0.5</div>
+                <div class="amount-preset" data-amount="1" onclick="setDonationAmount(1, this)">1</div>
+                <div class="amount-preset active" data-amount="2" onclick="setDonationAmount(2, this)">2</div>
+                <div class="amount-preset" data-amount="5" onclick="setDonationAmount(5, this)">5</div>
+            </div>
+
+            <div class="custom-amount-section">
+                <div class="custom-amount-title">Или введи свою сумму (TON):</div>
+                <input type="number" class="custom-input" id="donation-custom-amount"
+                       placeholder="Мин: 0.1"
+                       step="0.1" min="0.1"
+                       oninput="handleDonationCustomAmount(this.value)">
+            </div>
+
+            <div class="section-title">💬 Комментарий (необязательно)</div>
+
+            <div class="custom-amount-section">
+                <input type="text" class="custom-input" id="donation-comment"
+                       placeholder="Спасибо за прогноз!" maxlength="300">
+                <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:6px;">
+                    До 300 символов. Автор увидит комментарий.
+                </div>
+            </div>
+
+            <div class="donate-fee-note" id="donate-fee-note">
+                ℹ️ Комиссия платформы: 20%. Остальное получит автор.
+            </div>
+
+            <div class="ton-connect-wrapper">
+                <div id="ton-connect-button-donate"></div>
+            </div>
+
+            <button class="donate-btn" id="donate-btn" onclick="handleDonate()">
+                💝 Отправить донат
+            </button>
+        </div>
+
+        <!-- Доп. слоты Watchlist -->
+        <div class="tab-content" id="tab-watchlist-slots">
+            <div class="slots-card">
+                <div class="slots-icon">⭐</div>
+                <div class="author-title">Доп. слоты Watchlist</div>
+                <div class="slots-big-count" id="slots-count-display">+5</div>
+                <div class="author-desc">слотов в твой Watchlist</div>
+                <div class="author-price-big" id="slots-price-display" style="background:linear-gradient(135deg,#00d4ff,#6236ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">
+                    20 токенов
+                </div>
+
+                <div class="slots-current-info" id="slots-current-info">
+                    Загрузка...
+                </div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:16px;margin-bottom:16px;">
+                <div style="font-size:13px;color:rgba(255,255,255,0.7);line-height:1.6;">
+                    💡 Доп. слоты оплачиваются <b>токенами</b>, не TON.<br>
+                    Нажми кнопку ниже — перейди на вкладку Токены чтобы купить токены, затем купи слоты.
+                </div>
+            </div>
+
+            <button class="slots-pay-btn" id="slots-pay-btn" onclick="handleBuySlots()">
+                ⭐ Купить слоты за токены
+            </button>
+
+            <div style="text-align:center;margin-top:16px;font-size:12px;color:rgba(255,255,255,0.4);">
+                Нажав кнопку — токены спишутся с баланса,<br>слоты добавятся моментально.
+            </div>
+        </div>
+
         <div id="status-msg" class="status-msg"></div>
         <div class="loading" id="loading">
             <div class="spinner"></div>
@@ -230,7 +444,6 @@
             🔄 Обновляем данные...
         </div>
     </div>
-
     <script>
         const OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
         const API_BASE = window.location.origin;
@@ -247,6 +460,25 @@
         let refreshInterval = null;
         let refreshCount = 0;
 
+        // Author/donation state
+        let userData = null;
+        let authorStatusPrice = 5;
+        let slotsPrice = 20;
+        let slotsCount = 5;
+        let platformFeePercent = 20;
+        let minDonation = 0.1;
+
+        // Donate state
+        let donationAmount = 2;
+        let selectedAuthorId = null;
+        let selectedAuthorData = null;
+        let selectedPostId = null;
+        let selectedPostData = null;
+        let allAuthors = [];
+
+        let currentTab = "tokens";
+        let specialMode = null;  // 'author_status' / 'donate' / 'watchlist_slots'
+
         tg.ready();
         tg.expand();
         try { tg.setHeaderColor('#0d0b1e'); } catch(e) {}
@@ -256,19 +488,59 @@
             userId = tg.initDataUnsafe.user.id;
             document.getElementById('user-id-display').textContent = userId;
             document.getElementById('user-id-display-2').textContent = userId;
+            document.getElementById('user-id-display-3').textContent = userId;
         } else {
             document.getElementById('user-id-display').textContent = 'Открой через Telegram';
             document.getElementById('user-id-display-2').textContent = 'Открой через Telegram';
+            document.getElementById('user-id-display-3').textContent = 'Открой через Telegram';
         }
 
+        // ═══ Разбираем URL параметры ═══
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
+        const authorParam = urlParams.get('author');
+        const postParam = urlParams.get('post');
+
         if (tabParam === 'subscription') {
+            currentTab = 'subscription';
+            activateTab('subscription');
+        } else if (tabParam === 'author_status') {
+            specialMode = 'author_status';
+            currentTab = 'author-status';
+            showOnlyTab('author-status');
+        } else if (tabParam === 'donate') {
+            specialMode = 'donate';
+            currentTab = 'donate';
+            if (authorParam) {
+                selectedAuthorId = parseInt(authorParam);
+            }
+            if (postParam) {
+                selectedPostId = parseInt(postParam);
+            }
+            showOnlyTab('donate');
+        } else if (tabParam === 'watchlist_slots') {
+            specialMode = 'watchlist_slots';
+            currentTab = 'watchlist-slots';
+            showOnlyTab('watchlist-slots');
+        }
+
+        function activateTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.getElementById('tab-subscription').classList.add('active');
-            document.getElementById('tab-btn-subscription').classList.add('active');
-            document.getElementById('tab-btn-tokens').classList.remove('active');
+            const tabBtn = document.getElementById(`tab-btn-${tab}`);
+            if (tabBtn) tabBtn.classList.add('active');
+            const content = document.getElementById(`tab-${tab}`);
+            if (content) content.classList.add('active');
+        }
+
+        function showOnlyTab(tab) {
+            // Скрываем главные табы (Токены/Подписка)
+            document.getElementById('main-tabs').style.display = 'none';
+            // Скрываем все содержимое
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            // Показываем нужную
+            const content = document.getElementById(`tab-${tab}`);
+            if (content) content.classList.add('active');
         }
 
         function switchTab(tab, btn) {
@@ -276,18 +548,31 @@
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.getElementById(`tab-${tab}`).classList.add('active');
             if (btn) btn.classList.add('active');
+            currentTab = tab;
         }
 
         async function initTonConnect() {
             try {
+                // Находим актуальный контейнер
+                let rootId = 'ton-connect-button';
+                if (specialMode === 'author_status') rootId = 'ton-connect-button-author';
+                else if (specialMode === 'donate') rootId = 'ton-connect-button-donate';
+                // watchlist_slots — без TON Connect, только токены
+
+                if (specialMode === 'watchlist_slots') return;  // не инициализируем
+
                 tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
                     manifestUrl: `${API_BASE}/tonconnect-manifest.json`,
-                    buttonRootId: 'ton-connect-button',
+                    buttonRootId: rootId,
                 });
             } catch(e) {
                 console.log('TON Connect error:', e);
             }
         }
+
+        // ═══════════════════════════════════════════
+        // PACKAGES
+        // ═══════════════════════════════════════════
 
         function renderPackages() {
             const container = document.getElementById('packages-list');
@@ -296,12 +581,11 @@
                 return;
             }
 
-            // Находим самый популярный (средний по цене)
             const sortedByPrice = [...packages].sort((a, b) => a.price_ton - b.price_ton);
             const popularIdx = Math.floor(sortedByPrice.length / 2);
             const popularId = sortedByPrice[popularIdx]?.id;
 
-            container.innerHTML = packages.map((pkg, idx) => {
+            container.innerHTML = packages.map((pkg) => {
                 const isPopular = pkg.id === popularId;
                 const perToken = (pkg.price_ton / pkg.tokens).toFixed(3);
                 const discountText = pkg.discount_percent > 0
@@ -328,7 +612,6 @@
                 </div>`;
             }).join('');
 
-            // Выбираем популярный по умолчанию
             if (popularId) {
                 const popularPkg = packages.find(p => p.id === popularId);
                 if (popularPkg) {
@@ -373,37 +656,45 @@
             }
         }
 
+        // ═══════════════════════════════════════════
+        // USER DATA
+        // ═══════════════════════════════════════════
+
         async function loadUserData() {
             if (!userId) return;
             try {
                 const resp = await fetch(`${API_BASE}/api/user/${userId}`);
                 if (resp.ok) {
                     const data = await resp.json();
+                    userData = data;
+
                     document.getElementById('balance').textContent = data.token_balance ?? 0;
                     document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
                     document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
 
-                    if (data.token_price) {
-                        tokenPrice = parseFloat(data.token_price);
-                    }
-                    if (data.analysis_price) {
-                        document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
-                    }
-                    if (data.opp_price) {
-                        document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
-                    }
-                    if (data.cached_price) {
-                        document.getElementById('price-cached').textContent = `${data.cached_price} токенов`;
-                    }
-                    if (data.subscription_price) {
-                        subPrice = parseFloat(data.subscription_price);
-                    }
-                    if (data.subscription_days) {
-                        subDays = parseInt(data.subscription_days);
-                    }
+                    if (data.token_price) tokenPrice = parseFloat(data.token_price);
+                    if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
+                    if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                    if (data.cached_price) document.getElementById('price-cached').textContent = `${data.cached_price} токенов`;
+                    if (data.subscription_price) subPrice = parseFloat(data.subscription_price);
+                    if (data.subscription_days) subDays = parseInt(data.subscription_days);
+
                     document.getElementById('sub-price-display').textContent = `${subPrice} TON / ${subDays} дней`;
                     document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} TON`;
 
+                    // Настройки авторов/донатов/слотов
+                    if (data.author_status_price_ton) authorStatusPrice = parseFloat(data.author_status_price_ton);
+                    if (data.platform_fee_percent) platformFeePercent = parseFloat(data.platform_fee_percent);
+                    if (data.min_donation_ton) minDonation = parseFloat(data.min_donation_ton);
+                    if (data.watchlist_extra_slots_price) slotsPrice = parseInt(data.watchlist_extra_slots_price);
+                    if (data.watchlist_extra_slots_count) slotsCount = parseInt(data.watchlist_extra_slots_count);
+
+                    // Обновляем UI вкладок
+                    updateAuthorStatusUI();
+                    updateSlotsUI();
+                    updateDonateUI();
+
+                    // Подписка / автор бейджи
                     if (data.is_subscribed) {
                         document.getElementById('sub-badge').style.display = 'inline-block';
                         document.getElementById('sub-status-card').style.display = 'block';
@@ -416,7 +707,13 @@
                         document.getElementById('sub-status-card').style.display = 'none';
                     }
 
-                    // Загружаем пакеты
+                    if (data.is_author) {
+                        document.getElementById('author-badge').style.display = 'inline-block';
+                    } else {
+                        document.getElementById('author-badge').style.display = 'none';
+                    }
+
+                    // Пакеты
                     if (data.packages && data.packages.length > 0) {
                         packages = data.packages;
                         renderPackages();
@@ -429,6 +726,362 @@
             }
             return null;
         }
+
+        // ═══════════════════════════════════════════
+        // AUTHOR STATUS TAB
+        // ═══════════════════════════════════════════
+
+        function updateAuthorStatusUI() {
+            document.getElementById('author-price-display').textContent = `${authorStatusPrice} TON`;
+            document.getElementById('author-pay-btn').textContent = `📢 Стать автором — ${authorStatusPrice} TON`;
+
+            if (userData && userData.is_author) {
+                document.getElementById('already-author-card').style.display = 'block';
+                document.getElementById('author-pay-btn').style.display = 'none';
+            } else {
+                document.getElementById('already-author-card').style.display = 'none';
+                document.getElementById('author-pay-btn').style.display = 'block';
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // WATCHLIST SLOTS TAB
+        // ═══════════════════════════════════════════
+
+        function updateSlotsUI() {
+            document.getElementById('slots-count-display').textContent = `+${slotsCount}`;
+            document.getElementById('slots-price-display').textContent = `${slotsPrice} токенов`;
+            document.getElementById('slots-pay-btn').textContent = `⭐ Купить +${slotsCount} слотов за ${slotsPrice} токенов`;
+
+            if (userData) {
+                const currentBalance = userData.token_balance || 0;
+                const currentExtraSlots = userData.extra_watchlist_slots || 0;
+                const isVipOrSub = userData.is_vip || userData.is_subscribed;
+                const baseLimit = isVipOrSub
+                    ? parseInt(userData.watchlist_limit_vip || 50)
+                    : parseInt(userData.watchlist_limit_regular || 10);
+                const totalLimit = baseLimit + currentExtraSlots;
+
+                document.getElementById('slots-current-info').innerHTML =
+                    `💰 Твой баланс: <b>${currentBalance}</b> токенов<br>` +
+                    `📊 Текущий лимит Watchlist: <b>${totalLimit}</b> рынков<br>` +
+                    `➕ Уже куплено доп. слотов: <b>${currentExtraSlots}</b>`;
+
+                if (currentBalance < slotsPrice) {
+                    document.getElementById('slots-pay-btn').textContent =
+                        `❌ Не хватает ${slotsPrice - currentBalance} токенов`;
+                    document.getElementById('slots-pay-btn').disabled = true;
+                } else {
+                    document.getElementById('slots-pay-btn').disabled = false;
+                }
+            }
+        }
+
+        async function handleBuySlots() {
+            if (!userId) {
+                showStatus('❌ Открой через Telegram', 'error');
+                return;
+            }
+            if (!userData) {
+                showStatus('❌ Загрузка данных...', 'error');
+                return;
+            }
+            if ((userData.token_balance || 0) < slotsPrice) {
+                showStatus(`❌ Не хватает ${slotsPrice - userData.token_balance} токенов`, 'error');
+                return;
+            }
+
+            try {
+                document.getElementById('slots-pay-btn').disabled = true;
+                document.getElementById('slots-pay-btn').textContent = '⏳ Обработка...';
+
+                // Покупка через TG бот — показываем инструкцию
+                showStatus(
+                    '⚠️ Покупка слотов за токены пока недоступна через WebApp.\n' +
+                    'Напиши в боте "Купить слоты" — откроется оплата в TON.',
+                    'error'
+                );
+
+                setTimeout(() => {
+                    updateSlotsUI();
+                }, 3000);
+
+            } catch(e) {
+                updateSlotsUI();
+                showStatus('❌ ' + (e.message || 'Ошибка'), 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // DONATE TAB
+        // ═══════════════════════════════════════════
+
+        async function updateDonateUI() {
+            if (!userData) return;
+
+            platformFeePercent = parseFloat(userData.platform_fee_percent || 20);
+            minDonation = parseFloat(userData.min_donation_ton || 0.1);
+
+            document.getElementById('donate-fee-note').innerHTML =
+                `ℹ️ Комиссия платформы: <b>${platformFeePercent}%</b>. Остальное получит автор.`;
+
+            document.getElementById('donation-custom-amount').placeholder = `Мин: ${minDonation}`;
+            document.getElementById('donation-custom-amount').min = minDonation;
+
+            updateDonateButton();
+        }
+
+        async function loadDonateData() {
+            // Если есть selectedAuthorId — загружаем его данные
+            if (selectedAuthorId) {
+                try {
+                    const resp = await fetch(`${API_BASE}/api/author/${selectedAuthorId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        selectedAuthorData = data;
+                        renderSelectedAuthor(data);
+                    } else {
+                        showStatus('❌ Автор не найден', 'error');
+                        await loadAuthorsList();
+                    }
+                } catch(e) {
+                    console.log('Author fetch error:', e);
+                    await loadAuthorsList();
+                }
+            } else {
+                // Нет конкретного автора — показываем список
+                await loadAuthorsList();
+            }
+
+            // Если есть selectedPostId — загружаем пост
+            if (selectedPostId) {
+                try {
+                    const resp = await fetch(`${API_BASE}/api/post/${selectedPostId}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        selectedPostData = data;
+                        renderSelectedPost(data);
+                        // Если автора не было — устанавливаем из поста
+                        if (!selectedAuthorId && data.author_id) {
+                            selectedAuthorId = data.author_id;
+                            const authorResp = await fetch(`${API_BASE}/api/author/${data.author_id}`);
+                            if (authorResp.ok) {
+                                selectedAuthorData = await authorResp.json();
+                                renderSelectedAuthor(selectedAuthorData);
+                            }
+                        }
+                    }
+                } catch(e) {
+                    console.log('Post fetch error:', e);
+                }
+            }
+
+            updateDonateButton();
+        }
+
+        async function loadAuthorsList() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/authors`);
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+                allAuthors = data.authors || [];
+                renderAuthorsList();
+                document.getElementById('authors-list-wrapper').style.display = 'block';
+            } catch(e) {
+                console.log('Authors list error:', e);
+                document.getElementById('authors-list').innerHTML =
+                    '<div class="no-packages">Не удалось загрузить авторов</div>';
+                document.getElementById('authors-list-wrapper').style.display = 'block';
+            }
+        }
+
+        function renderAuthorsList() {
+            const container = document.getElementById('authors-list');
+            if (!allAuthors || allAuthors.length === 0) {
+                container.innerHTML = '<div class="no-packages">Авторов пока нет</div>';
+                return;
+            }
+
+            container.innerHTML = allAuthors
+                .filter(a => a.user_id !== userId)  // не показываем себя
+                .map(a => {
+                    const initial = (a.display_name || '?').charAt(0).toUpperCase();
+                    const activeClass = a.user_id === selectedAuthorId ? ' active' : '';
+                    return `
+                    <div class="author-row${activeClass}" onclick="selectAuthorForDonate(${a.user_id})">
+                        <div class="author-avatar">${initial}</div>
+                        <div class="author-info">
+                            <div class="author-name">@${a.display_name}</div>
+                            <div class="author-stats">👥 ${a.total_subscribers} · 📝 ${a.total_posts} · 💰 ${a.total_earned_ton.toFixed(2)} TON</div>
+                        </div>
+                    </div>`;
+                }).join('');
+        }
+
+        async function selectAuthorForDonate(authorId) {
+            selectedAuthorId = authorId;
+            try {
+                const resp = await fetch(`${API_BASE}/api/author/${authorId}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    selectedAuthorData = data;
+                    renderSelectedAuthor(data);
+                    // Обновляем активность
+                    renderAuthorsList();
+                }
+            } catch(e) {
+                console.log('Select author error:', e);
+            }
+            updateDonateButton();
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+        }
+
+        function renderSelectedAuthor(data) {
+            const initial = (data.display_name || '?').charAt(0).toUpperCase();
+            document.getElementById('selected-author-avatar').textContent = initial;
+            document.getElementById('selected-author-name').textContent = `@${data.display_name}`;
+
+            let bio = `👥 ${data.total_subscribers} подписчиков · 📝 ${data.total_posts} постов`;
+            if (data.bio) bio = data.bio;
+            document.getElementById('selected-author-bio').textContent = bio;
+
+            document.getElementById('selected-author-card').style.display = 'flex';
+        }
+
+        function renderSelectedPost(data) {
+            document.getElementById('selected-post-question').textContent = data.question || '—';
+            const pred = data.display_prediction || '';
+            document.getElementById('selected-post-pred').textContent = pred ? `🎯 ${pred}` : '';
+            document.getElementById('selected-post-card').style.display = 'block';
+        }
+
+        function setDonationAmount(amount, btn) {
+            donationAmount = amount;
+            document.getElementById('donation-custom-amount').value = '';
+
+            document.querySelectorAll('.amount-preset').forEach(p => p.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+
+            updateDonateButton();
+            try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
+        }
+
+        function handleDonationCustomAmount(val) {
+            if (val && parseFloat(val) > 0) {
+                donationAmount = parseFloat(val);
+                document.querySelectorAll('.amount-preset').forEach(p => p.classList.remove('active'));
+            }
+            updateDonateButton();
+        }
+
+        function updateDonateButton() {
+            const btn = document.getElementById('donate-btn');
+            if (!selectedAuthorId) {
+                btn.textContent = '👆 Выбери автора';
+                btn.disabled = true;
+                return;
+            }
+            if (!donationAmount || donationAmount < minDonation) {
+                btn.textContent = `❌ Минимум ${minDonation} TON`;
+                btn.disabled = true;
+                return;
+            }
+
+            const authorGets = (donationAmount * (100 - platformFeePercent) / 100).toFixed(4);
+            btn.textContent = `💝 Донат ${donationAmount} TON (автор получит ${authorGets})`;
+            btn.disabled = false;
+        }
+
+        async function handleDonate() {
+            if (!userId) {
+                showStatus('❌ Открой через Telegram', 'error');
+                return;
+            }
+            if (!tonConnectUI || !tonConnectUI.wallet) {
+                showStatus('⚠️ Сначала подключи кошелёк', 'error');
+                return;
+            }
+            if (!selectedAuthorId) {
+                showStatus('❌ Выбери автора', 'error');
+                return;
+            }
+            if (!donationAmount || donationAmount < minDonation) {
+                showStatus(`❌ Минимум ${minDonation} TON`, 'error');
+                return;
+            }
+            if (userId === selectedAuthorId) {
+                showStatus('❌ Нельзя донатить себе', 'error');
+                return;
+            }
+
+            const comment = document.getElementById('donation-comment').value.trim();
+
+            try {
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('donate-btn').disabled = true;
+
+                // Создаём запись доната
+                const createResp = await fetch(`${API_BASE}/api/donation/create`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        donor_id: userId,
+                        author_id: selectedAuthorId,
+                        ton_amount: donationAmount,
+                        post_id: selectedPostId || null,
+                        comment: comment,
+                    })
+                });
+
+                if (!createResp.ok) {
+                    const err = await createResp.json().catch(() => ({}));
+                    throw new Error(err.error || 'Не удалось создать донат');
+                }
+
+                const createData = await createResp.json();
+                if (!createData.ok) {
+                    throw new Error(createData.error || 'Не удалось создать донат');
+                }
+
+                // Отправляем транзакцию TON
+                const amountNano = Math.floor(donationAmount * 1e9).toString();
+
+                await tonConnectUI.sendTransaction({
+                    validUntil: Math.floor(Date.now() / 1000) + 600,
+                    messages: [{
+                        address: OWNER_ADDRESS,
+                        amount: amountNano,
+                    }]
+                });
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('donate-btn').disabled = false;
+
+                const authorName = selectedAuthorData
+                    ? `@${selectedAuthorData.display_name}`
+                    : 'автору';
+                showStatus(
+                    `✅ Донат ${donationAmount} TON отправлен ${authorName}!\n` +
+                    `Автор получит подтверждение через 1-2 минуты.`,
+                    'success'
+                );
+
+                try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+                startAutoRefresh('donation');
+
+            } catch(e) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('donate-btn').disabled = false;
+                const msg = e.message || '';
+                if (!msg.includes('User rejected') && !msg.includes('cancel')) {
+                    showStatus('❌ ' + msg, 'error');
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // AUTO REFRESH
+        // ═══════════════════════════════════════════
 
         function startAutoRefresh(paymentType) {
             refreshCount = 0;
@@ -444,7 +1097,12 @@
                         showStatus('✅ Подписка активирована!', 'success');
                         return;
                     }
-                    if (paymentType === 'tokens' && refreshCount > 1) {
+                    if (paymentType === 'author_status' && data.is_author) {
+                        stopAutoRefresh();
+                        showStatus('✅ Статус автора выдан! Проверь бота.', 'success');
+                        return;
+                    }
+                    if ((paymentType === 'tokens' || paymentType === 'donation') && refreshCount > 1) {
                         stopAutoRefresh();
                         return;
                     }
@@ -464,6 +1122,10 @@
             document.getElementById('refresh-indicator').classList.remove('active');
         }
 
+        // ═══════════════════════════════════════════
+        // PENDING REGISTRATION
+        // ═══════════════════════════════════════════
+
         async function registerPending(amount, paymentType) {
             try {
                 await fetch(`${API_BASE}/api/pending`, {
@@ -480,6 +1142,10 @@
             }
         }
 
+        // ═══════════════════════════════════════════
+        // MAIN PAY HANDLER
+        // ═══════════════════════════════════════════
+
         async function handlePay(paymentType) {
             if (!userId) {
                 showStatus('❌ Открой через Telegram', 'error');
@@ -494,7 +1160,15 @@
                 return;
             }
 
-            const amount = paymentType === 'subscription' ? subPrice : selectedAmount;
+            let amount;
+            if (paymentType === 'subscription') {
+                amount = subPrice;
+            } else if (paymentType === 'author_status') {
+                amount = authorStatusPrice;
+            } else {
+                amount = selectedAmount;
+            }
+
             if (!amount || amount <= 0) {
                 showStatus('❌ Выбери пакет или введи сумму', 'error');
                 return;
@@ -505,6 +1179,7 @@
                 document.getElementById('loading').style.display = 'block';
                 document.getElementById('pay-btn').disabled = true;
                 document.getElementById('sub-pay-btn').disabled = true;
+                document.getElementById('author-pay-btn').disabled = true;
 
                 await registerPending(amount, paymentType);
 
@@ -519,9 +1194,12 @@
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('pay-btn').disabled = false;
                 document.getElementById('sub-pay-btn').disabled = false;
+                document.getElementById('author-pay-btn').disabled = false;
 
                 if (paymentType === 'subscription') {
                     showStatus('✅ Транзакция отправлена! Подписка активируется через 1-2 минуты.', 'success');
+                } else if (paymentType === 'author_status') {
+                    showStatus('✅ Транзакция отправлена! Статус автора активируется через 1-2 минуты.', 'success');
                 } else {
                     const pkg = packages.find(p => p.id === selectedPackageId);
                     const tokensText = pkg ? `${pkg.tokens} токенов` : `≈${Math.floor(amount / tokenPrice)} токенов`;
@@ -535,12 +1213,17 @@
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('pay-btn').disabled = false;
                 document.getElementById('sub-pay-btn').disabled = false;
+                document.getElementById('author-pay-btn').disabled = false;
                 const msg = e.message || '';
                 if (!msg.includes('User rejected') && !msg.includes('cancel')) {
                     showStatus('❌ ' + msg, 'error');
                 }
             }
         }
+
+        // ═══════════════════════════════════════════
+        // UTILITIES
+        // ═══════════════════════════════════════════
 
         function showStatus(msg, type) {
             const el = document.getElementById('status-msg');
@@ -567,9 +1250,19 @@
             });
         }
 
-        initTonConnect();
-        loadUserData();
+        // ═══════════════════════════════════════════
+        // INIT
+        // ═══════════════════════════════════════════
+
+        (async function init() {
+            await initTonConnect();
+            await loadUserData();
+
+            // Если это special mode — дополнительно загружаем данные
+            if (specialMode === 'donate') {
+                await loadDonateData();
+            }
+        })();
     </script>
 </body>
 </html>
- 
