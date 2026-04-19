@@ -9,9 +9,140 @@ from services.news_service import (
 )
 
 
+# ═══════════════════════════════════════════
+# UNIFIED CATEGORY DETECTION
+# Используется везде: OpportunityAgent, post_to_channel, ChiefAgent
+# ═══════════════════════════════════════════
+
+POLITICS_KEYWORDS = [
+    "trump", "biden", "harris", "vance", "election", "senate", "white house",
+    "president", "congress", "vote", "republican", "democrat", "electoral",
+    "campaign", "cabinet", "administration", "governor", "mayor", "midterm",
+    "putin", "zelensky", "macron", "orban", "modi", "xi jinping",
+    "nato", "un ", "united nations", "european union", "parliament",
+    "prime minister", "chancellor", "minister", "government", "summit",
+    "embassy", "ambassador", "diplomacy", "treaty", "sanctions",
+    "iran", "israel", "ukraine", "russia", "china", "war ", "conflict",
+    "ceasefire", "military", "missile", "nuclear", "strike", "attack",
+    "invasion", "troops", "weapon", "bomb", "drone", "navy",
+    "venezuela", "taiwan", "north korea", "pakistan", "syria", "gaza",
+    "hezbollah", "hamas", "houthi", "political", "politician",
+]
+
+CRYPTO_KEYWORDS = [
+    "bitcoin", "btc", "eth ", "ethereum", "solana", "sol ", "crypto",
+    "token", "sec ", " etf ", "airdrop", "defi", "memecoin",
+    "blockchain", "coinbase", "binance", "altcoin", "nft", "usdc",
+    "xrp", "ripple", "cardano", " ada ", "dogecoin", "doge",
+    "polygon", "matic", "avalanche", "avax", "chainlink",
+    "stablecoin", "halving", "mining", "wallet", "exchange", " dex ",
+    "web3", "metaverse", "ton ",
+]
+
+SPORTS_KEYWORDS = [
+    "nba", "nfl", "mlb", "nhl", "ufc", "mma", "fifa", "nascar",
+    "premier league", "champions league", "la liga", "serie a",
+    "bundesliga", "ligue 1", "super bowl", "world cup", "stanley cup",
+    "world series", "march madness", "masters", "wimbledon", "grand slam",
+    "olympics", "formula 1", " f1 ", "grand prix",
+    "football", "soccer", "basketball", "baseball", "hockey", "tennis",
+    "golf", "boxing", "wrestling", "cricket", "rugby",
+    "esports", "league of legends", "valorant", "cs2 ", "dota",
+    "celtics", "lakers", "warriors", "heat", "bulls", "knicks",
+    "nets", "mavericks", "nuggets", "suns", "clippers", "bucks",
+    "76ers", "spurs", "rockets", "pistons", "pacers", "hawks",
+    "thunder", "trail blazers", "jazz", "timberwolves", "grizzlies",
+    "chiefs", "patriots", "cowboys", "eagles", "49ers", "ravens",
+    "bengals", "bills", "dolphins", "steelers", "browns", "broncos",
+    "yankees", "dodgers", "red sox", "cubs", "astros", "braves",
+    "mets", "cardinals", "giants", "phillies",
+    "arsenal", "chelsea", "liverpool", "manchester", "barcelona",
+    "real madrid", "psg", "juventus", "bayern", "inter milan", "ac milan",
+    "atletico", "borussia", "ajax", "porto", "benfica",
+    "djokovic", "nadal", "federer", "alcaraz", "sinner", "swiatek",
+    "championship", "playoff", "finals", "tournament",
+    " cup ", "trophy", "title", "will win the", "champion",
+    "season", "transfer", "roster", " goal ",
+    "boxing", "fight", "knockout", "ko ",
+]
+
+ECONOMY_KEYWORDS = [
+    "inflation", " fed ", "federal reserve", "recession", " gdp ",
+    " cpi ", "unemployment",
+    "interest rate", "wall street", "stock market", " s&p ", "nasdaq",
+    "dow jones", "dollar", "currency", "trade war", "tariff",
+    "debt", "deficit", "budget", "treasury", "bond ", "fomc ",
+    "powell", " ecb ", " imf ", "world bank", "brent", " wti ",
+    "gold ", "silver", "commodit", "bankruptcy", "merger", " ipo ",
+    "jobless", "payrolls", "economic",
+]
+
+TECH_KEYWORDS = [
+    "openai", "chatgpt", " gpt", "ai ", "artificial intelligence",
+    "google", "apple", "tesla", "nvidia", "microsoft", "meta ",
+    "amazon", "spacex", "starship", "anthropic", "grok", "xai ",
+    "gemini", "claude", " llm ", "launch", " chip ",
+    "iphone", "android", "samsung", "intel ", " amd ",
+    "robot", "autonomous", "self-driving", "electric vehicle", " ev ",
+    "neuralink", "starlink", "satellite",
+]
+
+CULTURE_KEYWORDS = [
+    "oscar", "grammy", "emmy", "golden globe", "academy award",
+    "box office", "album", "song ", "artist", "celebrity",
+    "movie", "film ", " show ", "series", "netflix", "disney",
+    "taylor swift", "beyonce", "drake", "kanye", "rihanna",
+    "billboard", "spotify", "halftime",
+]
+
+WEATHER_KEYWORDS = [
+    "hurricane", "tornado", "earthquake", "flood", "wildfire",
+    "temperature", "celsius", "fahrenheit", "snowfall", "rainfall",
+    "climate", "el nino", "storm ", "typhoon", "cyclone",
+]
+
+
+def detect_category_from_text(text: str) -> str:
+    """
+    Единая функция определения категории для всего бота.
+    Используй её вместо локальных _detect_category.
+    Порядок важен — сначала политика, потом спорт, крипта, экономика.
+    """
+    if not text:
+        return "Other"
+
+    # Добавляем пробелы по краям чтобы правильно работать с "word boundary"
+    s = " " + text.lower() + " "
+
+    if any(kw in s for kw in POLITICS_KEYWORDS):
+        return "Politics"
+    if any(kw in s for kw in SPORTS_KEYWORDS):
+        return "Sports"
+    if any(kw in s for kw in CRYPTO_KEYWORDS):
+        return "Crypto"
+    if any(kw in s for kw in ECONOMY_KEYWORDS):
+        return "Economy"
+    if any(kw in s for kw in TECH_KEYWORDS):
+        return "Tech"
+    if any(kw in s for kw in CULTURE_KEYWORDS):
+        return "Culture"
+    if any(kw in s for kw in WEATHER_KEYWORDS):
+        return "Weather"
+
+    return "Other"
+
+
+# ═══════════════════════════════════════════
+# NEWS AGENT
+# ═══════════════════════════════════════════
+
 class NewsAgent:
     def __init__(self) -> None:
         pass
+
+    def _detect_category(self, text: str) -> str:
+        """Обёртка над единой функцией — для обратной совместимости."""
+        return detect_category_from_text(text)
 
     def run(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         question = market_data.get("question", "Unknown market")
@@ -27,7 +158,6 @@ class NewsAgent:
 
         news_items = search_google_news(news_query, limit=7)
 
-        # Дополнительный поиск Twitter/X упоминаний
         twitter_query = f"{news_query} site:twitter.com OR site:x.com"
         twitter_items = search_google_news(twitter_query, limit=3)
 
@@ -95,7 +225,6 @@ class NewsAgent:
 
         has_news = live_news_summary and "No relevant" not in live_news_summary
 
-        # Форматируем топ новости со ссылками
         top_news_block = ""
         if news_items:
             lines = []
