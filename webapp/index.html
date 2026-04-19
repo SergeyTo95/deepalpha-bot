@@ -787,28 +787,54 @@
                 return;
             }
             if ((userData.token_balance || 0) < slotsPrice) {
-                showStatus(`❌ Не хватает ${slotsPrice - userData.token_balance} токенов`, 'error');
+                showStatus(`❌ Не хватает ${slotsPrice - userData.token_balance} токенов. Купи токены на вкладке 💎 Токены.`, 'error');
                 return;
             }
+
+            // Подтверждение покупки
+            const confirmMsg = `Купить +${slotsCount} слотов Watchlist за ${slotsPrice} токенов?`;
+            const confirmed = confirm(confirmMsg);
+            if (!confirmed) return;
 
             try {
                 document.getElementById('slots-pay-btn').disabled = true;
                 document.getElementById('slots-pay-btn').textContent = '⏳ Обработка...';
 
-                // Покупка через TG бот — показываем инструкцию
+                const resp = await fetch(`${API_BASE}/api/watchlist/buy_slots`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: userId,
+                    })
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok || !data.ok) {
+                    const errMsg = data.error || 'Ошибка покупки';
+                    showStatus(`❌ ${errMsg}`, 'error');
+                    updateSlotsUI();
+                    return;
+                }
+
+                // Успех
+                try { tg.HapticFeedback.notificationOccurred('success'); } catch(e) {}
+
                 showStatus(
-                    '⚠️ Покупка слотов за токены пока недоступна через WebApp.\n' +
-                    'Напиши в боте "Купить слоты" — откроется оплата в TON.',
-                    'error'
+                    `✅ +${data.slots_added} слотов добавлено!\n` +
+                    `Списано: ${data.tokens_spent} токенов\n` +
+                    `Баланс: ${data.new_balance} токенов\n` +
+                    `Всего доп. слотов: ${data.total_extra_slots}`,
+                    'success'
                 );
 
-                setTimeout(() => {
-                    updateSlotsUI();
-                }, 3000);
+                // Обновляем данные юзера
+                await loadUserData();
 
             } catch(e) {
-                updateSlotsUI();
+                console.log('Buy slots error:', e);
                 showStatus('❌ ' + (e.message || 'Ошибка'), 'error');
+                updateSlotsUI();
             }
         }
 
