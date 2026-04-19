@@ -1645,8 +1645,9 @@ async def watchlist_item_handler(message: types.Message):
     kb = get_watchlist_item_keyboard(uid, wl_id, item.get("notify_enabled", True))
     await message.answer(text, reply_markup=kb)
 
-    def get_watchlist_buy_slots_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    
+
+def get_watchlist_buy_slots_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для покупки доп. слотов Watchlist."""
     lang = get_user_lang(user_id)
     price = get_setting("watchlist_extra_slots_price", "20")
     count = get_setting("watchlist_extra_slots_count", "5")
@@ -1662,6 +1663,46 @@ async def watchlist_item_handler(message: types.Message):
         web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=watchlist_slots"),
     ))
     return kb
+
+
+@dp.message_handler(commands=["buy_slots"])
+async def buy_slots_command(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if get_setting("watchlist_enabled", "on") != "on":
+        msg = "❌ Watchlist временно недоступен" if lang == "ru" else "❌ Watchlist unavailable"
+        await message.answer(msg)
+        return
+
+    price = get_setting("watchlist_extra_slots_price", "20")
+    count = get_setting("watchlist_extra_slots_count", "5")
+    user = get_user(uid)
+    balance = user.get("token_balance", 0) if user else 0
+
+    current = count_user_watchlist(uid)
+    from db.database import get_user_watchlist_limit
+    limit = get_user_watchlist_limit(uid)
+
+    if lang == "ru":
+        text = (
+            f"⭐ Доп. слоты Watchlist\n\n"
+            f"Сколько: +{count} слотов за {price} токенов\n\n"
+            f"💰 Твой баланс: {balance} токенов\n"
+            f"📊 Текущий лимит: {current}/{limit} рынков\n\n"
+            f"Нажми кнопку чтобы купить 👇"
+        )
+    else:
+        text = (
+            f"⭐ Extra Watchlist slots\n\n"
+            f"+{count} slots for {price} tokens\n\n"
+            f"💰 Balance: {balance} tokens\n"
+            f"📊 Current limit: {current}/{limit} markets\n\n"
+            f"Tap to buy 👇"
+        )
+
+    await message.answer(text, reply_markup=get_watchlist_buy_slots_keyboard(uid))
 
 
 @dp.message_handler(commands=["buy_slots"])
