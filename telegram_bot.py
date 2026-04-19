@@ -1646,7 +1646,7 @@ async def watchlist_item_handler(message: types.Message):
     await message.answer(text, reply_markup=kb)
 
         def get_watchlist_buy_slots_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для покупки доп. слотов Watchlist."""
+    
     lang = get_user_lang(user_id)
     price = get_setting("watchlist_extra_slots_price", "20")
     count = get_setting("watchlist_extra_slots_count", "5")
