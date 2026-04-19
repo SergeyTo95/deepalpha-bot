@@ -289,94 +289,8 @@ async def handle_post_details(request):
 # CREATE DONATION
 # ═══════════════════════════════════════════
 
-async def handle_create_donation(request):
-    """
-    Создаёт запись доната в author_donations со статусом 'pending'.
-    Создаёт pending_payment с payment_type="donation:<id>".
-    Возвращает donation_id для последующей оплаты.
-    """
-    try:
-        data = await request.json()
-        donor_id = int(data.get("donor_id", 0))
-        author_id = int(data.get("author_id", 0))
-        ton_amount = float(data.get("ton_amount", 0))
-        post_id_raw = data.get("post_id")
-        comment = (data.get("comment", "") or "").strip()[:500]
 
-        # Валидация
-        if donor_id <= 0:
-            return _json_response({"error": "Invalid donor_id"}, status=400)
-        if author_id <= 0:
-            return _json_response({"error": "Invalid author_id"}, status=400)
-        if donor_id == author_id:
-            return _json_response({"error": "Cannot donate to yourself"}, status=400)
-        if ton_amount <= 0:
-            return _json_response({"error": "Invalid amount"}, status=400)
-
-        # Проверки по настройкам
-        if get_setting("donations_enabled", "on") != "on":
-            return _json_response({"error": "Donations disabled"}, status=400)
-
-        min_donation = float(get_setting("min_donation_ton", "0.1"))
-        if ton_amount < min_donation:
-            return _json_response({
-                "error": f"Minimum donation: {min_donation} TON"
-            }, status=400)
-
-        # Проверяем что автор существует
-        if not is_author(author_id):
-            return _json_response({"error": "User is not an author"}, status=400)
-
-        # Парсим post_id (необязательный)
-        post_id = None
-        if post_id_raw:
-            try:
-                post_id = int(post_id_raw)
-                # Проверяем что пост существует и принадлежит автору
-                post = get_author_post(post_id)
-                if not post or post.get("author_id") != author_id:
-                    post_id = None
-            except (ValueError, TypeError):
-                post_id = None
-
-        # Создаём запись доната (статус 'pending')
-        donation_id = create_donation(
-            donor_id=donor_id,
-            author_id=author_id,
-            ton_amount=ton_amount,
-            post_id=post_id,
-            comment=comment,
-            status="pending",
-        )
-
-        if not donation_id:
-            return _json_response({"error": "Failed to create donation"}, status=500)
-
-        # Создаём pending_payment с типом donation:<id>
-        add_pending(donor_id, ton_amount, f"donation:{donation_id}")
-
-        print(
-            f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
-            f"author={author_id}, amount={ton_amount} TON, post={post_id}"
-        )
-
-        return _json_response({
-            "ok": True,
-            "donation_id": donation_id,
-            "amount": ton_amount,
-            "payment_type": f"donation:{donation_id}",
-        })
-    except Exception as e:
-        print(f"handle_create_donation error: {e}")
-        return _json_response({"error": str(e)}, status=500)
-
-
-# ═══════════════════════════════════════════
-# PUBLIC SETTINGS (для любого клиента)
-# ═══════════════════════════════════════════
-
-async def handle_public_settings(request):
-    """Публичные настройки системы — доступны без user_id."""
+            async def handle_public_settings(request):
     try:
         data = {
             "authors_enabled": get_setting("authors_enabled", "on"),
@@ -397,6 +311,8 @@ async def handle_public_settings(request):
         return _json_response({"error": str(e)}, status=500)
 
 
+async def handle_buy_slots(request):
+    """Покупка доп. слотов Watchlist за токены."""
     try:
         data = await request.json()
         user_id = int(data.get("user_id", 0))
@@ -404,29 +320,24 @@ async def handle_public_settings(request):
         if user_id <= 0:
             return _json_response({"error": "Invalid user_id"}, status=400)
 
-        # Проверки настроек
         if get_setting("watchlist_enabled", "on") != "on":
             return _json_response({"error": "Watchlist disabled"}, status=400)
 
-        # Получаем цену и кол-во слотов
         slots_price = int(get_setting("watchlist_extra_slots_price", "20"))
         slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
 
-        # Проверяем юзера
         user = get_user(user_id)
         if not user:
             return _json_response({"error": "User not found"}, status=404)
 
         current_balance = user.get("token_balance", 0) or 0
 
-        # VIP — бесплатно? Нет, слоты платные даже для VIP (в настройках)
         if current_balance < slots_price:
             return _json_response({
                 "error": f"Insufficient tokens: need {slots_price}, have {current_balance}",
                 "need_tokens": slots_price - current_balance,
             }, status=400)
 
-        # Атомарно: списываем токены и добавляем слоты
         from db.database import add_tokens, add_watchlist_extra_slots
 
         new_balance = add_tokens(user_id, -slots_price)
@@ -452,10 +363,6 @@ async def handle_public_settings(request):
         return _json_response({"error": str(e)}, status=500)
 
 
-# ═══════════════════════════════════════════
-# OPTIONS / HEALTH
-# ═══════════════════════════════════════════
-
 async def handle_options(request):
     return web.Response(headers=CORS_HEADERS)
 
@@ -464,37 +371,28 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 
-# ═══════════════════════════════════════════
-# APP
-# ═══════════════════════════════════════════
-
 app = web.Application()
 
-# Страницы и статика
 app.router.add_get("/", handle_index)
 app.router.add_get("/tonconnect-manifest.json", handle_manifest)
 app.router.add_get("/webapp/{filename}", handle_static)
 
-# User API (оставлено для обратной совместимости)
 app.router.add_get("/api/user/{user_id}", handle_user_api)
 
-# Pending payments — универсальный эндпоинт
 app.router.add_post("/api/pending", handle_pending)
 app.router.add_route("OPTIONS", "/api/pending", handle_options)
 
-# ═══ NEW: Authors / Donations / Settings ═══
 app.router.add_get("/api/authors", handle_authors_list)
 app.router.add_get("/api/author/{author_id}", handle_author_profile)
 app.router.add_get("/api/post/{post_id}", handle_post_details)
 app.router.add_post("/api/donation/create", handle_create_donation)
 app.router.add_route("OPTIONS", "/api/donation/create", handle_options)
 app.router.add_get("/api/settings/public", handle_public_settings)
+
 app.router.add_post("/api/watchlist/buy_slots", handle_buy_slots)
 app.router.add_route("OPTIONS", "/api/watchlist/buy_slots", handle_options)
-# Health
+
 app.router.add_get("/health", handle_health)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=PORT)
-
-
