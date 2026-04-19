@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import random
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +26,9 @@ from db.database import (
     update_watchlist_probability, mark_watchlist_notified,
     reset_watchlist_change_notification, close_watchlist_market,
     cleanup_old_closed_watchlist,
+    # ═══ NEW: Authors / Donations / Watchlist slots ═══
+    set_author_status, add_watchlist_extra_slots,
+    complete_donation, get_donation, get_author_profile,
 )
 
 register_admin(telegram_bot.dp)
@@ -54,38 +58,30 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # ═══════════════════════════════════════════
 
 async def post_to_channel():
-    """Постит интересный рынок в канал с ротацией категорий."""
+    """Постит рандомный рынок Polymarket в канал."""
     if not CHANNEL_ID:
-        print("📢 CHANNEL_ID not set, skipping")
+        print("📢 CHANNEL_ID not set, skip")
         return
 
     try:
-        print("📢 Posting to channel...")
-        import random
-        from agents.market_agent import MarketAgent
+        shown_str = get_setting("channel_shown_markets", "")
+        shown = set(shown_str.split(",")) if shown_str else set()
 
-        categories_cycle = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
-        last_category = get_setting("last_channel_category", "")
-        try:
-            last_idx = categories_cycle.index(last_category)
-            next_idx = (last_idx + 1) % len(categories_cycle)
-        except ValueError:
-            next_idx = 0
-        category_filter = categories_cycle[next_idx]
-        set_setting("last_channel_category", category_filter)
-        print(f"📢 Category: {category_filter}")
+        last_category = get_setting("channel_last_category", "")
+        available_categories = [c for c in CATEGORIES if c != last_category]
+        if not available_categories:
+            available_categories = CATEGORIES
+        category_filter = random.choice(available_categories)
+        set_setting("channel_last_category", category_filter)
+        print(f"📢 Chose category: {category_filter}")
 
-        shown_raw = get_setting("channel_shown_markets", "")
-        shown = set(shown_raw.split(",")) if shown_raw else set()
-
-        offset = random.randint(0, 50)
-        events = list_events(limit=50, offset=offset)
+        events = list_events(limit=50)
         if not events:
-            events = list_events(limit=50, offset=0)
+            print("📢 No events from Polymarket")
+            return
 
-        print(f"📢 Got {len(events)} events from API")
-
-        agent = MarketAgent()
+        from agents.news_agent import NewsAgent
+        agent = NewsAgent()
         candidates = []
 
         for event in events:
@@ -393,7 +389,6 @@ async def tracking_worker():
             print(f"TRACKING WORKER ERROR: {e}")
             await asyncio.sleep(60)
 
-
 # ═══════════════════════════════════════════
 # WATCHLIST WORKER
 # ═══════════════════════════════════════════
@@ -428,25 +423,21 @@ async def check_watchlist():
                 if not slug:
                     continue
 
-                # Получаем текущие данные с Polymarket
                 market_data = fetch_market_by_slug(slug)
                 if not market_data:
                     errors += 1
                     continue
 
-                # Проверяем закрылся ли рынок
                 if is_market_resolved(market_data):
                     await _handle_resolved_market(slug, item, market_data)
                     resolved += 1
                     continue
 
-                # Получаем текущую вероятность
                 current_prob = _get_current_probability(market_data)
                 if current_prob is None:
                     errors += 1
                     continue
 
-                # Проверяем всех подписчиков этого рынка
                 subscribers = get_watchlist_subscribers(slug)
                 for sub in subscribers:
                     try:
@@ -458,14 +449,13 @@ async def check_watchlist():
                         print(f"⭐ Notification error for user {sub.get('user_id')}: {e}")
 
                 checked += 1
-                await asyncio.sleep(1)  # пауза между рынками
+                await asyncio.sleep(1)
 
             except Exception as e:
                 errors += 1
                 print(f"⭐ Watchlist check error for {item.get('market_slug', '')[:30]}: {e}")
                 await asyncio.sleep(0.5)
 
-        # Очищаем старые закрытые записи (раз в день примерно)
         try:
             cleaned = cleanup_old_closed_watchlist(days=30)
             if cleaned > 0:
@@ -500,7 +490,7 @@ def _get_current_probability(market_data: dict) -> float:
         if not prices:
             return None
 
-        return max(prices) * 100  # возвращаем в процентах
+        return max(prices) * 100
     except Exception:
         return None
 
@@ -514,16 +504,14 @@ async def _check_subscriber_notifications(
     watchlist_id = sub["id"]
     initial_prob = sub.get("initial_probability", 0)
 
-    # Обновляем last_checked_probability всегда
     update_watchlist_probability(watchlist_id, current_prob)
 
     if not sub.get("notify_enabled"):
-        return  # уведомления отключены
+        return
 
     question = item.get("question", "")
     url = item.get("market_url", "")
 
-    # Проверка 1: изменение вероятности >= threshold
     change = current_prob - initial_prob
     abs_change = abs(change)
 
@@ -539,12 +527,10 @@ async def _check_subscriber_notifications(
         )
         try:
             await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
-            # Сбрасываем базу чтобы следить за новыми изменениями от текущей точки
             reset_watchlist_change_notification(watchlist_id, current_prob)
         except Exception as e:
             print(f"⭐ Failed to notify {user_id} about change: {e}")
 
-    # Проверка 2: скорое закрытие
     end_date = sub.get("market_end_date") or item.get("market_end_date")
     if end_date and not sub.get("notified_closing_soon"):
         try:
@@ -601,7 +587,6 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
             except Exception as e:
                 print(f"⭐ Failed to notify {sub.get('user_id')} about resolution: {e}")
 
-        # Отмечаем рынок как закрытый (больше не проверяем)
         close_watchlist_market(slug)
         print(f"⭐ Market resolved: {slug[:40]} -> {actual_outcome}")
 
@@ -611,7 +596,7 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
 
 async def watchlist_worker():
     """Проверяет watchlist каждые N часов."""
-    await asyncio.sleep(900)  # первый запуск через 15 минут
+    await asyncio.sleep(900)
     watchlist_enabled = get_setting("watchlist_enabled", "on")
     if watchlist_enabled == "on":
         await check_watchlist()
@@ -632,7 +617,12 @@ async def watchlist_worker():
 
 
 # ═══════════════════════════════════════════
-# TON PAYMENTS
+# TON PAYMENTS — обрабатывает 5 типов:
+#   - tokens              → начисление токенов
+#   - subscription        → активация подписки
+#   - author_status       → выдача статуса автора
+#   - watchlist_slots     → добавление +N слотов
+#   - donation:<id>       → завершение доната
 # ═══════════════════════════════════════════
 
 async def check_ton_payments():
@@ -660,8 +650,15 @@ async def check_ton_payments():
                 user_id = None
                 payment_type = "tokens"
 
+                # Поиск user_id + payment_type:
+                # сперва через parse_payment (комментарий к транзакции),
+                # затем через pending по времени и сумме
                 if payment and payment.get("user_id"):
                     user_id = payment["user_id"]
+                    # Даже если нашли через комментарий — проверим pending для payment_type
+                    p = pending.get(user_id)
+                    if p:
+                        payment_type = p.get("payment_type", "tokens")
                 else:
                     tx_time = tx.get("utime", 0)
                     for uid, p in list(pending.items()):
@@ -677,34 +674,43 @@ async def check_ton_payments():
 
                 ensure_user(user_id)
 
+                # ═══ РЕФЕРАЛЬНЫЙ БОНУС (только для tokens/subscription) ═══
+                # Для author_status/watchlist_slots/donation не даём рефералку
                 referral_bonus_ton = 0
                 referrer_id = None
-                user = get_user(user_id)
-                if user and user.get("referred_by"):
-                    referrer_id = user["referred_by"]
-                    try:
-                        ref_percent = float(get_setting("referral_percent", "10"))
-                    except Exception:
-                        ref_percent = 10
-                    referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
 
-                    referral_tokens = calculate_tokens_for_amount(referral_bonus_ton)
-                    if referral_tokens > 0:
-                        add_tokens(referrer_id, referral_tokens)
-                    add_referral_earnings(referrer_id, referral_bonus_ton)
+                is_token_or_sub = payment_type in ("tokens", "subscription")
 
-                    try:
-                        await telegram_bot.bot.send_message(
-                            referrer_id,
-                            f"🎉 Ваш реферал пополнил баланс!\n\n"
-                            f"💎 Его покупка: {ton_amount:.2f} TON\n"
-                            f"🎁 Ваш бонус: {referral_bonus_ton:.4f} TON "
-                            f"({referral_tokens} токенов)"
-                        )
-                    except Exception as e:
-                        print(f"REFERRAL NOTIFY ERROR: {e}")
+                if is_token_or_sub:
+                    user = get_user(user_id)
+                    if user and user.get("referred_by"):
+                        referrer_id = user["referred_by"]
+                        try:
+                            ref_percent = float(get_setting("referral_percent", "10"))
+                        except Exception:
+                            ref_percent = 10
+                        referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
+
+                        referral_tokens = calculate_tokens_for_amount(referral_bonus_ton)
+                        if referral_tokens > 0:
+                            add_tokens(referrer_id, referral_tokens)
+                        add_referral_earnings(referrer_id, referral_bonus_ton)
+
+                        try:
+                            await telegram_bot.bot.send_message(
+                                referrer_id,
+                                f"🎉 Ваш реферал пополнил баланс!\n\n"
+                                f"💎 Его покупка: {ton_amount:.2f} TON\n"
+                                f"🎁 Ваш бонус: {referral_bonus_ton:.4f} TON "
+                                f"({referral_tokens} токенов)"
+                            )
+                        except Exception as e:
+                            print(f"REFERRAL NOTIFY ERROR: {e}")
+
+                # ═══ ВЕТВЛЕНИЕ ПО ТИПУ ПЛАТЕЖА ═══
 
                 if payment_type == "subscription":
+                    # Активация подписки
                     sub_days = int(get_setting("subscription_days", "30"))
                     until = set_subscription(user_id, days=sub_days)
 
@@ -723,12 +729,142 @@ async def check_ton_payments():
                             f"Теперь у тебя:\n"
                             f"• 🔔 Ежедневные сигналы\n"
                             f"• 📊 До 15 анализов в день\n"
-                            f"• 💡 До 3 сигналов в день"
+                            f"• 💡 До 3 сигналов в день\n"
+                            f"• ⭐ Watchlist бесплатно"
                         )
                     except Exception as e:
                         print(f"SUB NOTIFY ERROR: {e}")
 
+                elif payment_type == "author_status":
+                    # Выдача статуса автора
+                    set_author_status(user_id, True)
+
+                    save_transaction(
+                        tx_hash, user_id, ton_amount, 0,
+                        referral_bonus_ton=0, referrer_id=None,
+                    )
+
+                    try:
+                        await telegram_bot.bot.send_message(
+                            user_id,
+                            f"🎉 Поздравляем! Ты теперь Автор DeepAlpha!\n\n"
+                            f"💎 Оплачено: {ton_amount:.2f} TON\n\n"
+                            f"Теперь ты можешь:\n"
+                            f"• 📝 Публиковать свои прогнозы\n"
+                            f"• 👥 Получать подписчиков\n"
+                            f"• 💝 Получать донаты в TON от юзеров\n\n"
+                            f"Настрой профиль: /profile\n"
+                            f"Установи bio: /edit_bio\n"
+                            f"Добавь TON кошелёк для выплат: /set_wallet"
+                        )
+                    except Exception as e:
+                        print(f"AUTHOR STATUS NOTIFY ERROR: {e}")
+
+                elif payment_type == "watchlist_slots":
+                    # Покупка доп. слотов Watchlist
+                    slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
+                    new_total = add_watchlist_extra_slots(user_id, slots_count)
+
+                    save_transaction(
+                        tx_hash, user_id, ton_amount, 0,
+                        referral_bonus_ton=0, referrer_id=None,
+                    )
+
+                    try:
+                        await telegram_bot.bot.send_message(
+                            user_id,
+                            f"✅ Доп. слоты Watchlist добавлены!\n\n"
+                            f"💎 Оплачено: {ton_amount:.2f} TON\n"
+                            f"➕ Добавлено: {slots_count} слотов\n"
+                            f"📊 Всего доп. слотов: {new_total}\n\n"
+                            f"Теперь ты можешь добавить больше рынков!\n"
+                            f"📋 /watchlist"
+                        )
+                    except Exception as e:
+                        print(f"WATCHLIST SLOTS NOTIFY ERROR: {e}")
+
+                elif payment_type.startswith("donation:"):
+                    # Завершение доната автору
+                    try:
+                        donation_id = int(payment_type.split(":", 1)[1])
+                    except (ValueError, IndexError):
+                        print(f"⚠️ Invalid donation payment_type: {payment_type}")
+                        delete_pending(user_id)
+                        continue
+
+                    donation = get_donation(donation_id)
+                    if not donation:
+                        print(f"⚠️ Donation {donation_id} not found, user {user_id}")
+                        delete_pending(user_id)
+                        continue
+
+                    author_id = donation["author_id"]
+                    post_id = donation.get("post_id")
+                    comment = donation.get("comment", "") or ""
+
+                    success = complete_donation(donation_id, tx_hash)
+
+                    if not success:
+                        print(f"⚠️ Failed to complete donation {donation_id}")
+                        delete_pending(user_id)
+                        continue
+
+                    save_transaction(
+                        tx_hash, user_id, ton_amount, 0,
+                        referral_bonus_ton=0, referrer_id=None,
+                    )
+
+                    # Получаем актуальные данные после завершения
+                    updated_donation = get_donation(donation_id)
+                    author_received = updated_donation.get("author_received_ton", 0) if updated_donation else 0
+                    platform_fee = updated_donation.get("platform_fee_ton", 0) if updated_donation else 0
+
+                    # Уведомление донору
+                    try:
+                        author = get_author_profile(author_id)
+                        author_name = (
+                            author.get("username") or author.get("first_name") or str(author_id)
+                        ) if author else str(author_id)
+
+                        donor_text = (
+                            f"💝 Донат отправлен!\n\n"
+                            f"👤 Автору: @{author_name}\n"
+                            f"💎 Сумма: {ton_amount:.4f} TON\n"
+                        )
+                        if post_id:
+                            donor_text += f"📝 Пост: /post_{post_id}\n"
+                        donor_text += f"\nСпасибо за поддержку автора! 🙏"
+
+                        await telegram_bot.bot.send_message(user_id, donor_text)
+                    except Exception as e:
+                        print(f"DONATION DONOR NOTIFY ERROR: {e}")
+
+                    # Уведомление автору
+                    try:
+                        donor = get_user(user_id)
+                        donor_name = (
+                            donor.get("username") or donor.get("first_name") or str(user_id)
+                        ) if donor else str(user_id)
+
+                        author_text = (
+                            f"💝 Ты получил донат!\n\n"
+                            f"👤 От: @{donor_name}\n"
+                            f"💎 Сумма доната: {ton_amount:.4f} TON\n"
+                            f"🏦 Комиссия платформы: {platform_fee:.4f} TON\n"
+                            f"💰 Тебе зачислено: {author_received:.4f} TON\n"
+                        )
+                        if post_id:
+                            author_text += f"📝 За пост: /post_{post_id}\n"
+                        if comment:
+                            author_text += f"\n💬 Комментарий:\n{comment[:300]}\n"
+                        author_text += f"\n💰 Проверить баланс: нажми 💰 Баланс автора"
+
+                        await telegram_bot.bot.send_message(author_id, author_text)
+                    except Exception as e:
+                        print(f"DONATION AUTHOR NOTIFY ERROR: {e}")
+
                 else:
+                    # Дефолт: tokens
                     tokens = calculate_tokens_for_amount(ton_amount)
                     if tokens <= 0:
                         continue
@@ -933,4 +1069,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
