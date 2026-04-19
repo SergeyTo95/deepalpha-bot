@@ -396,10 +396,7 @@ async def handle_public_settings(request):
     except Exception as e:
         return _json_response({"error": str(e)}, status=500)
 
-"""
-    Покупка доп. слотов Watchlist за токены.
-    Списывает токены с баланса пользователя, добавляет слоты.
-    """
+
     try:
         data = await request.json()
         user_id = int(data.get("user_id", 0))
