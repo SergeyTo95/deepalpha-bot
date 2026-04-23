@@ -85,13 +85,33 @@ class CommunicationAgent:
         return False
 
     def _is_truncated(self, text: str) -> bool:
-        """Проверяет что текст обрезан."""
-        if not text:
-            return False
-        stripped = text.strip()
-        if len(stripped) > 20 and stripped[-1] not in '.!?%"\')':
-            return True
+    """Проверяет что текст обрезан — не заканчивается нормально."""
+    if not text:
         return False
+    stripped = text.strip()
+    if len(stripped) <= 20:
+        return False
+
+    last_char = stripped[-1]
+    if last_char not in '.!?%"\')':
+        return True
+
+    # Дополнительно: заканчивается предлогом/союзом (обрезка посреди предложения)
+    last_word = stripped.split()[-1].lower().rstrip('.!?%"\')')
+    incomplete_ru = {
+        "для", "на", "в", "с", "по", "от", "за", "при",
+        "или", "и", "что", "как", "если", "но", "а", "то",
+        "об", "без", "до", "из", "к", "у", "о",
+    }
+    incomplete_en = {
+        "for", "to", "in", "on", "at", "by", "of",
+        "the", "a", "an", "and", "or", "but", "if",
+        "with", "from", "into", "about",
+    }
+    if last_word in incomplete_ru or last_word in incomplete_en:
+        return True
+
+    return False
 
     def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
         try:
