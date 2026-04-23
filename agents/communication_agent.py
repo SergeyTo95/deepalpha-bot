@@ -21,10 +21,23 @@ class CommunicationAgent:
         semantic_type = self._classify_semantic_type(question, market_type)
         is_negated = raw_outcome.lower() == "no" if raw_outcome.lower() in ("yes", "no") else False
 
-        if raw_outcome.lower() in ("yes", "no"):
-            semantic_text = self._build_semantic_text(question, is_negated, semantic_type, lang)
+        if market_type == "multiple_choice":
+    # Для рынков с несколькими вариантами — не показываем Да/Нет
+    if raw_outcome.lower() in ("yes", "no"):
+        # LLM вернул бинарный ответ для multi-choice рынка
+        # Берём breakdown опций если есть
+        options_breakdown = decision_data.get("options_breakdown", "")
+        if options_breakdown and len(options_breakdown) > 5:
+            semantic_text = options_breakdown.split("|")[0].strip()
         else:
-            semantic_text = raw_outcome
+            semantic_text = "Ведущий исход" if lang == "ru" else "Leading outcome"
+        is_negated = False
+    else:
+        semantic_text = raw_outcome
+elif raw_outcome.lower() in ("yes", "no"):
+    semantic_text = self._build_semantic_text(question, is_negated, semantic_type, lang)
+else:
+    semantic_text = raw_outcome
 
         prob_str = f"{prob_val:.1f}%" if prob_val else ""
         display_prediction = f"{semantic_text} — {prob_str}" if prob_str else semantic_text
