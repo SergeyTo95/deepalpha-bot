@@ -358,7 +358,7 @@ class ChiefAgent:
         f"Следуем рыночной оценке: {probability_str}." if probability_str else ""
     )
 
-        return {
+    return {
         "display_prediction": probability_str,
         "semantic_outcome": "",
         "is_negated": False,
