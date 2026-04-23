@@ -743,10 +743,11 @@ else:
         if clean_conclusion and len(clean_conclusion) > 20:
             if not self._is_wrong_language(clean_conclusion, lang) and not self._is_truncated(clean_conclusion):
                 result = re.sub(r'[Рр]ынок оценивает вероятность[^\.]+\.', '', clean_conclusion).strip()
-                result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
-                result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
-                if len(result) > 20:
-                    return result
+result = re.sub(r'Market (estimates|prices in)[^\.]+\.', '', result).strip()
+result = re.sub(r'\bNo\b', semantic_text, result) if is_negated else re.sub(r'\bYes\b', semantic_text, result)
+# Проверяем что результат не стал обрезанным после regex-замен
+if len(result) > 20 and not self._is_truncated(result):
+    return result
 
         if lang == "ru":
             if market_balance in ("balanced", "slight_lean"):
