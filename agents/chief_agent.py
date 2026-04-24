@@ -73,7 +73,7 @@ class ChiefAgent:
 
         # Сохраняем анализ в историю
         try:
-            save_analysis(url, final_result)
+            save_analysis(final_result, user_id=user_id)
         except Exception as e:
             logger.error(f"ChiefAgent save_analysis error: {e}")
 
