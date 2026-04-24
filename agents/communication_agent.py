@@ -108,7 +108,10 @@ else:
     # Не заканчивается нормальным знаком препинания
     last_char = stripped[-1]
     if last_char not in '.!?%"\')':
-        return True
+        return True   
+    #Обрыв на запятой или двоеточии — тоже обрезка
+    if last_char in ',:;':
+    return True
 
     # Заканчивается предлогом или союзом
     last_word = stripped.rstrip('.!?%"\')').split()[-1].lower() if stripped.split() else ""
