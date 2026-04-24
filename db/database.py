@@ -825,12 +825,16 @@ def get_free_trial_status(user_id: int) -> Dict[str, int]:
 
 def save_analysis(data: Dict[str, Any], user_id: int = 0) -> int:
     conn = get_connection()
+    cursor = conn.cursor()
     safe_user_id = int(user_id) if user_id else 0
+
     try:
         cursor.execute("""
-        INSERT INTO analyses (url, question, category, market_probability, system_probability,
-                              confidence, reasoning, main_scenario, alt_scenario, conclusion,
-                              created_at, user_id)
+        INSERT INTO analyses (
+            url, question, category, market_probability, system_probability,
+            confidence, reasoning, main_scenario, alt_scenario, conclusion,
+            created_at, user_id
+        )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """, (
@@ -847,12 +851,17 @@ def save_analysis(data: Dict[str, Any], user_id: int = 0) -> int:
             datetime.utcnow().isoformat(),
             safe_user_id,
         ))
-        analysis_id = cursor.fetchone()[0]
+
+        row = cursor.fetchone()
+        analysis_id = row[0] if row else 0
+
         conn.commit()
         return analysis_id
+
     except Exception as e:
         print(f"save_analysis error: {e}")
         return 0
+
     finally:
         conn.close()
 
