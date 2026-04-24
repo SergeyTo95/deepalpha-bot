@@ -76,16 +76,59 @@ else:
     # ═══════════════════════════════════════════
 
     def _split_probability(self, probability_str: str) -> Tuple[str, Optional[float]]:
-        if not probability_str:
-            return "Yes", None
-        match = re.match(r'^(.+?)\s*[—–-]\s*([\d.]+)%', probability_str)
-        if match:
-            return match.group(1).strip(), float(match.group(2))
-        match2 = re.match(r'^([\d.]+)%$', probability_str)
-        if match2:
-            return "Yes", float(match2.group(1))
-        return probability_str, None
+    if not probability_str:
+        return "Yes", None
 
+    # Стандартный формат: "No — 71.5%"
+    match = re.match(r'^(.+?)\s*[—–-]\s*([\d.]+)%', probability_str)
+    if match:
+        return match.group(1).strip(), float(match.group(2))
+
+    # Просто число: "71.5%"
+    match2 = re.match(r'^([\d.]+)%$', probability_str)
+    if match2:
+        return "Yes", float(match2.group(1))
+
+    # Текстовые дроби на русском: "No — более двух третей", "около 70%"
+    text_lower = probability_str.lower()
+
+    # Ищем outcome (Yes/No/название) до тире
+    outcome_match = re.match(r'^(.+?)\s*[—–-]\s*(.+)$', probability_str)
+    outcome = outcome_match.group(1).strip() if outcome_match else "Yes"
+    rest = outcome_match.group(2).strip() if outcome_match else probability_str
+
+    # Конвертируем текстовые вероятности в числа
+    text_to_num = {
+        "более двух третей": 70.0,
+        "две трети": 67.0,
+        "около двух третей": 65.0,
+        "три четверти": 75.0,
+        "более трёх четвертей": 77.0,
+        "половина": 50.0,
+        "чуть больше половины": 55.0,
+        "чуть меньше половины": 45.0,
+        "подавляющее большинство": 85.0,
+        "почти наверняка": 90.0,
+        "маловероятно": 20.0,
+        "very likely": 85.0,
+        "likely": 70.0,
+        "unlikely": 30.0,
+        "very unlikely": 15.0,
+        "two thirds": 67.0,
+        "three quarters": 75.0,
+    }
+
+    for phrase, num in text_to_num.items():
+        if phrase in rest.lower():
+            return outcome, num
+
+    # Ищем любое число в тексте: "около 70" → 70
+    num_match = re.search(r'(\d+(?:\.\d+)?)', rest)
+    if num_match:
+        return outcome, float(num_match.group(1))
+
+    # Ничего не нашли — возвращаем как есть без числа
+    return outcome, None
     def _is_wrong_language(self, text: str, lang: str) -> bool:
         """Проверяет что текст не на нужном языке."""
         if not text or len(text.strip()) == 0:
