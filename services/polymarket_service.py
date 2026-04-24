@@ -197,7 +197,7 @@ def get_primary_market_from_url(url: str) -> Dict[str, Any]:
             for event in events:
                 markets = event.get("markets", [])
                 if markets:
-                    market = markets[0]
+                    market = _pick_best_sub_market(markets)
                     if not market.get("eventSlug"):
                         market["eventSlug"] = event.get("slug", "")
                     return market
