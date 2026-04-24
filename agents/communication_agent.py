@@ -207,19 +207,30 @@ def _extract_market_leader_prob(self, market_probability: str, market_type: str)
     # КЛАССИФИКАЦИЯ
     # ═══════════════════════════════════════════
 
-    def _classify_semantic_type(self, question: str, market_type: str) -> str:
+        def _classify_semantic_type(self, question: str, market_type: str) -> str:
         if market_type == "multiple_choice":
             return "multi_outcome"
+
         q = question.lower()
-        threshold_kw = ["exceed", "surpass", "above", "below", "more than", "less than", "over", "under", "cross"]
+
+        threshold_kw = [
+            "exceed", "surpass", "above", "below",
+            "more than", "less than", "over", "under", "cross"
+        ]
         if any(k in q for k in threshold_kw):
             return "binary_threshold"
-        entity_kw = ["who will", "which company", "which team", "which country", "largest", "biggest"]
+
+        entity_kw = [
+            "who will", "which company", "which team",
+            "which country", "largest", "biggest"
+        ]
         if any(k in q for k in entity_kw):
             return "single_entity"
+
         return "binary_action"
 
-    def _classify_balance(self, market_prob: float) -> str:
+
+        def _classify_balance(self, market_prob: float) -> str:
         if market_prob >= 85:
             return "strong_consensus"
         elif market_prob >= 65:
@@ -235,7 +246,7 @@ def _extract_market_leader_prob(self, market_probability: str, market_type: str)
     # SEMANTIC TEXT
     # ═══════════════════════════════════════════
 
-    def _build_semantic_text(self, question: str, is_negated: bool, semantic_type: str, lang: str) -> str:
+        def _build_semantic_text(self, question: str, is_negated: bool, semantic_type: str, lang: str) -> str:
         if semantic_type == "binary_threshold":
             result = self._render_threshold(question, is_negated, lang)
             if result:
