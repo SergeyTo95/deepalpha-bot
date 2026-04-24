@@ -151,28 +151,28 @@ class ChiefAgent:
             market_type,
         )
 
-        save_prediction(
-            user_id=user_id,
-            market_slug=market_slug,
-            market_url=url,
-            question=final_result.get("question", ""),
-            category=final_result.get("category", ""),
-            market_type=market_type,
-            semantic_type=semantic_type,
-            market_probability_yes=market_probability_yes,
-            market_probability_no=market_probability_no,
-            market_leader=market_leader,
-            market_prob_value=market_prob_value,
-            system_prediction=probability_str,
-            system_probability=system_probability,
-            system_outcome=system_outcome,
-            confidence=str(final_result.get("confidence", "")),
-            delta=delta,
-            alpha_label=final_result.get("alpha_label", ""),
-            market_balance=self._classify_balance(market_prob_value),
-            display_prediction=final_result.get("display_prediction", ""),
-            market_end_date=market_data.get("date_context"),
-        )
+        save_prediction({
+    "user_id": user_id,
+    "market_slug": market_slug,
+    "market_url": url,
+    "question": final_result.get("question", ""),
+    "category": final_result.get("category", ""),
+    "market_type": market_type,
+    "semantic_type": semantic_type,
+    "market_probability_yes": market_probability_yes,
+    "market_probability_no": market_probability_no,
+    "market_leader": market_leader,
+    "market_prob_value": market_prob_value,
+    "system_prediction": probability_str,
+    "system_probability": system_probability,
+    "system_outcome": system_outcome,
+    "confidence": str(final_result.get("confidence", "")),
+    "delta": delta,
+    "alpha_label": final_result.get("alpha_label", ""),
+    "market_balance": self._classify_balance(market_prob_value),
+    "display_prediction": final_result.get("display_prediction", ""),
+    "market_end_date": market_data.get("date_context"),
+})
         logger.info(f"Tracking saved: slug={market_slug}, outcome={system_outcome}, prob={system_probability}")
 
     def _extract_slug(self, url: str) -> str:
