@@ -653,11 +653,11 @@ Conclusion: [final assessment]""".strip()
     ) -> Dict[str, Any]:
         probability = parsed.get("System Probability", "").strip() or "N/A"
 
-# Защита от "мусорных" значений — когда LLM вывел инструкцию вместо числа
-bad_probability_phrases = [
-    "не повторяем", "не повторяй", "объясняй", "причины",
-    "повторяй цифры", "значение", "don't repeat", "do not repeat",
-    "explain", "reasons", "mechanism",
+        # Защита от "мусорных" значений — когда LLM вывел инструкцию вместо числа
+        bad_probability_phrases = [
+            "не повторяем", "не повторяй", "объясняй", "причины",
+            "повторяй цифры", "значение", "don't repeat", "do not repeat",
+            "explain", "reasons", "mechanism",
 ]
         prob_lower = probability.lower()
         if any(phrase in prob_lower for phrase in bad_probability_phrases):
