@@ -98,28 +98,29 @@ else:
         return False
 
     def _is_truncated(self, text: str) -> bool:
-    """Проверяет что текст обрезан — не заканчивается нормально."""
+    """Проверяет что текст обрезан."""
     if not text:
         return False
     stripped = text.strip()
     if len(stripped) <= 20:
         return False
 
+    # Не заканчивается нормальным знаком препинания
     last_char = stripped[-1]
     if last_char not in '.!?%"\')':
         return True
 
-    # Дополнительно: заканчивается предлогом/союзом (обрезка посреди предложения)
-    last_word = stripped.split()[-1].lower().rstrip('.!?%"\')')
+    # Заканчивается предлогом или союзом
+    last_word = stripped.rstrip('.!?%"\')').split()[-1].lower() if stripped.split() else ""
     incomplete_ru = {
         "для", "на", "в", "с", "по", "от", "за", "при",
         "или", "и", "что", "как", "если", "но", "а", "то",
-        "об", "без", "до", "из", "к", "у", "о",
+        "об", "без", "до", "из", "к", "у", "о", "не",
     }
     incomplete_en = {
-        "for", "to", "in", "on", "at", "by", "of",
+        "for", "to", "in", "on", "at", "by", "of", "not",
         "the", "a", "an", "and", "or", "but", "if",
-        "with", "from", "into", "about",
+        "with", "from", "into", "about", "no",
     }
     if last_word in incomplete_ru or last_word in incomplete_en:
         return True
