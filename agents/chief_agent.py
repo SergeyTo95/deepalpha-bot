@@ -341,16 +341,19 @@ class ChiefAgent:
 
     def _communication_fallback(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
     # Берём conclusion из decision_data, но проверяем на обрезку
-       raw_conclusion = decision_data.get("conclusion", "")
-       probability_str = decision_data.get("probability", "")
+    raw_conclusion = decision_data.get("conclusion", "")
+    probability_str = decision_data.get("probability", "")
 
     # Если conclusion обрезан — используем probability как вывод
     if raw_conclusion:
         stripped = raw_conclusion.strip()
         last_char = stripped[-1] if stripped else ""
-        last_word = stripped.split()[-1].lower().rstrip('.!?%"\')')  if stripped.split() else ""
-        incomplete = {"для", "на", "в", "с", "по", "от", "за", "или", "и", "for", "to", "in", "the"}
-        is_bad = (last_char not in '.!?%"\')') or (last_word in incomplete)
+        last_word = stripped.split()[-1].lower().rstrip(".!?%\"')") if stripped.split() else ""
+        incomplete = {
+            "для", "на", "в", "с", "по", "от", "за", "или", "и",
+            "for", "to", "in", "the"
+        }
+        is_bad = (last_char not in ".!?%\"')") or (last_word in incomplete)
         if is_bad:
             raw_conclusion = ""
 
@@ -358,14 +361,11 @@ class ChiefAgent:
         f"Следуем рыночной оценке: {probability_str}." if probability_str else ""
     )
 
-         return {
+    return {
         "display_prediction": probability_str,
         "semantic_outcome": "",
         "is_negated": False,
         "reasoning": decision_data.get("reasoning", ""),
         "main_scenario": decision_data.get("main_scenario", ""),
         "alt_scenario": decision_data.get("alt_scenario", ""),
-        "conclusion": safe_conclusion,
-        "alpha_label": "",
-        "alpha_message": "",
-    }
+        "con
