@@ -151,20 +151,24 @@ class CommunicationAgent:
         return False
 
     def _is_truncated(self, text: str) -> bool:
-    """Проверяет что текст обрезан."""
-    if not text:
-        return False
-    stripped = text.strip()
-    if len(stripped) <= 20:
-        return False
+        """Проверяет что текст обрезан."""
+        if not text:
+            return False
 
-    # Не заканчивается нормальным знаком препинания
-    last_char = stripped[-1]
-    if last_char not in '.!?%"\')':
-        return True   
-    #Обрыв на запятой или двоеточии — тоже обрезка
-    if last_char in ',:;':
-    return True
+        stripped = text.strip()
+        if len(stripped) <= 20:
+            return False
+
+        # Не заканчивается нормальным знаком препинания
+        last_char = stripped[-1]
+        if last_char not in ".!?%\"')":
+            return True
+
+        # Обрыв на запятой или двоеточии — тоже обрезка
+        if last_char in ",:;":
+            return True
+
+        return False
 
     # Заканчивается предлогом или союзом
     last_word = stripped.rstrip('.!?%"\')').split()[-1].lower() if stripped.split() else ""
