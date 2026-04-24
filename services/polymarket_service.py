@@ -481,6 +481,100 @@ def _extract_markets_from_public_search(data: Any) -> List[Dict[str, Any]]:
 
     return []
 
+def _pick_best_sub_market(markets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Выбирает лучший sub-рынок из события.
+    Приоритет:
+    1. Активный и не закрытый
+    2. Наибольшая неопределённость (вероятность ближе к 50%)
+    3. Наибольший volume/liquidity
+    Избегаем рынков с No: 99-100% — они уже фактически закрыты.
+    """
+    if not markets:
+        return {}
+
+    if len(markets) == 1:
+        return markets[0]
+
+    active = []
+    for m in markets:
+        # Пропускаем закрытые
+        if m.get("closed") or not m.get("active", True):
+            continue
+
+        # Считаем неопределённость
+        outcome_prices = m.get("outcomePrices", "")
+        try:
+            if isinstance(outcome_prices, str):
+                cleaned = outcome_prices.strip("[]")
+                prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+            elif isinstance(outcome_prices, list):
+                prices = [float(p) for p in outcome_prices]
+            else:
+                prices = []
+
+            if prices:
+                max_prob = max(prices)
+                # Пропускаем практически решённые рынки (>= 98%)
+                if max_prob >= 0.98:
+                    continue
+                # Неопределённость = насколько далеко от 100%
+                # Чем ближе к 50% — тем интереснее (uncertainty = 1 - |p - 0.5| * 2)
+                uncertainty = 1.0 - abs(max_prob - 0.5) * 2
+                m["_uncertainty"] = uncertainty
+                m["_max_prob"] = max_prob
+            else:
+                m["_uncertainty"] = 0.5
+                m["_max_prob"] = 0.5
+
+        except Exception:
+            m["_uncertainty"] = 0.5
+            m["_max_prob"] = 0.5
+
+        active.append(m)
+
+    # Если все активные рынки практически решены — берём с наименьшей уверенностью
+    if not active:
+        fallback = []
+        for m in markets:
+            if m.get("closed"):
+                continue
+            outcome_prices = m.get("outcomePrices", "")
+            try:
+                if isinstance(outcome_prices, str):
+                    cleaned = outcome_prices.strip("[]")
+                    prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                elif isinstance(outcome_prices, list):
+                    prices = [float(p) for p in outcome_prices]
+                else:
+                    prices = []
+                max_prob = max(prices) if prices else 0.5
+                m["_max_prob"] = max_prob
+                m["_uncertainty"] = 1.0 - abs(max_prob - 0.5) * 2
+            except Exception:
+                m["_uncertainty"] = 0.0
+                m["_max_prob"] = 1.0
+            fallback.append(m)
+
+        if fallback:
+            return max(fallback, key=lambda x: x.get("_uncertainty", 0))
+        return markets[0]
+
+    # Сортируем: сначала по неопределённости, потом по volume
+    def score(m: Dict[str, Any]) -> float:
+        uncertainty = m.get("_uncertainty", 0.5)
+        try:
+            vol = float(str(m.get("volume", "0")).replace(",", "") or 0)
+        except Exception:
+            vol = 0
+        try:
+            liq = float(str(m.get("liquidity", "0")).replace(",", "") or 0)
+        except Exception:
+            liq = 0
+        # Неопределённость важнее volume
+        return uncertainty * 1000 + vol * 0.001 + liq * 0.001
+
+    return max(active, key=score)
 
 def _pick_best_market(candidates: List[Dict[str, Any]], slug: str) -> Optional[Dict[str, Any]]:
     slug = (slug or "").lower()
