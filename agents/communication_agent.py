@@ -187,7 +187,7 @@ class CommunicationAgent:
 
     return False
 
-    def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
+def _extract_market_leader_prob(self, market_probability: str, market_type: str) -> float:
         try:
             if market_type == "binary":
                 yes_m = re.search(r'Yes:\s*([\d.]+)%', market_probability)
