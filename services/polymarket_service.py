@@ -486,23 +486,30 @@ def _pick_best_sub_market(markets: List[Dict[str, Any]]) -> Dict[str, Any]:
     Выбирает лучший sub-рынок из события.
     Приоритет:
     1. Активный и не закрытый
-    2. Наибольшая неопределённость (вероятность ближе к 50%)
-    3. Наибольший volume/liquidity
-    Избегаем рынков с No: 99-100% — они уже фактически закрыты.
+    2. Не практически решённый (< 95%)
+    3. Наиболее поздняя дата закрытия (дальше = интереснее)
+    4. Наибольшая неопределённость
     """
     if not markets:
         return {}
-
     if len(markets) == 1:
         return markets[0]
 
-    active = []
-    for m in markets:
-        # Пропускаем закрытые
-        if m.get("closed") or not m.get("active", True):
-            continue
+    def parse_end_date(m: Dict[str, Any]) -> float:
+        """Возвращает timestamp даты окончания или 0."""
+        for key in ("endDate", "end_date", "endDateIso"):
+            val = m.get(key, "")
+            if val:
+                try:
+                    from datetime import datetime, timezone
+                    val = val.replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(val)
+                    return dt.timestamp()
+                except Exception:
+                    pass
+        return 0.0
 
-        # Считаем неопределённость
+    def get_max_prob(m: Dict[str, Any]) -> float:
         outcome_prices = m.get("outcomePrices", "")
         try:
             if isinstance(outcome_prices, str):
@@ -511,68 +518,48 @@ def _pick_best_sub_market(markets: List[Dict[str, Any]]) -> Dict[str, Any]:
             elif isinstance(outcome_prices, list):
                 prices = [float(p) for p in outcome_prices]
             else:
-                prices = []
-
-            if prices:
-                max_prob = max(prices)
-                # Пропускаем практически решённые рынки (>= 98%)
-                if max_prob >= 0.98:
-                    continue
-                # Неопределённость = насколько далеко от 100%
-                # Чем ближе к 50% — тем интереснее (uncertainty = 1 - |p - 0.5| * 2)
-                uncertainty = 1.0 - abs(max_prob - 0.5) * 2
-                m["_uncertainty"] = uncertainty
-                m["_max_prob"] = max_prob
-            else:
-                m["_uncertainty"] = 0.5
-                m["_max_prob"] = 0.5
-
+                return 0.5
+            return max(prices) if prices else 0.5
         except Exception:
-            m["_uncertainty"] = 0.5
-            m["_max_prob"] = 0.5
+            return 0.5
 
+    # Фильтруем закрытые и практически решённые (>= 95%)
+    active = []
+    for m in markets:
+        if m.get("closed"):
+            continue
+        if not m.get("active", True):
+            continue
+        max_prob = get_max_prob(m)
+        if max_prob >= 0.95:
+            continue
+        m["_max_prob"] = max_prob
+        m["_end_ts"] = parse_end_date(m)
+        m["_uncertainty"] = 1.0 - abs(max_prob - 0.5) * 2
         active.append(m)
 
-    # Если все активные рынки практически решены — берём с наименьшей уверенностью
+    # Если все >= 95% — берём с наибольшей датой и наименьшей уверенностью
     if not active:
-        fallback = []
-        for m in markets:
-            if m.get("closed"):
-                continue
-            outcome_prices = m.get("outcomePrices", "")
-            try:
-                if isinstance(outcome_prices, str):
-                    cleaned = outcome_prices.strip("[]")
-                    prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
-                elif isinstance(outcome_prices, list):
-                    prices = [float(p) for p in outcome_prices]
-                else:
-                    prices = []
-                max_prob = max(prices) if prices else 0.5
-                m["_max_prob"] = max_prob
-                m["_uncertainty"] = 1.0 - abs(max_prob - 0.5) * 2
-            except Exception:
-                m["_uncertainty"] = 0.0
-                m["_max_prob"] = 1.0
-            fallback.append(m)
+        fallback = [m for m in markets if not m.get("closed")]
+        if not fallback:
+            return markets[0]
+        for m in fallback:
+            m["_max_prob"] = get_max_prob(m)
+            m["_end_ts"] = parse_end_date(m)
+            m["_uncertainty"] = 1.0 - abs(m["_max_prob"] - 0.5) * 2
+        # Сначала самые поздние, потом менее решённые
+        return max(fallback, key=lambda x: (x["_end_ts"], x["_uncertainty"]))
 
-        if fallback:
-            return max(fallback, key=lambda x: x.get("_uncertainty", 0))
-        return markets[0]
-
-    # Сортируем: сначала по неопределённости, потом по volume
+    # Основной выбор: сначала поздняя дата, потом неопределённость
     def score(m: Dict[str, Any]) -> float:
+        end_ts = m.get("_end_ts", 0)
         uncertainty = m.get("_uncertainty", 0.5)
         try:
             vol = float(str(m.get("volume", "0")).replace(",", "") or 0)
         except Exception:
             vol = 0
-        try:
-            liq = float(str(m.get("liquidity", "0")).replace(",", "") or 0)
-        except Exception:
-            liq = 0
-        # Неопределённость важнее volume
-        return uncertainty * 1000 + vol * 0.001 + liq * 0.001
+        # Дата — главный фактор, неопределённость — второй
+        return end_ts * 10 + uncertainty * 1000 + vol * 0.001
 
     return max(active, key=score)
 
