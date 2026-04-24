@@ -356,7 +356,7 @@ Conclusion: [final assessment]""".strip()
 ПРАВИЛА:
 1. Лидирующий исход: {market_leader} ({market_prob_value:.1f}%)
 2. Максимальное отклонение: {max_dev:.0f}% ({rule})
-3. НЕ повторяй цифры рынка — объясняй ПРИЧИНЫ
+3. В поле "Логика" объясняй МЕХАНИЗМ и ПРИЧИНЫ, не пересказывай цифры
 4. Если No лидирует — объясни почему событие НЕ произойдёт
 5. Все тексты только на русском языке
 
@@ -387,7 +387,7 @@ SENTIMENT: {sentiment}
 RULES:
 1. Leading outcome: {market_leader} ({market_prob_value:.1f}%)
 2. Max deviation: {max_dev:.0f}% ({rule})
-3. Do NOT repeat market numbers — explain REASONS
+3. In Reasoning field explain the MECHANISM and CAUSES, don't just restate numbers
 4. If No leads — explain why event will NOT happen
 5. All text in English only
 
