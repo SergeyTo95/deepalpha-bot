@@ -825,7 +825,7 @@ def get_free_trial_status(user_id: int) -> Dict[str, int]:
 
 def save_analysis(data: Dict[str, Any], user_id: int = 0) -> int:
     conn = get_connection()
-    cursor = conn.cursor()
+    safe_user_id = int(user_id) if user_id else 0
     try:
         cursor.execute("""
         INSERT INTO analyses (url, question, category, market_probability, system_probability,
@@ -845,7 +845,7 @@ def save_analysis(data: Dict[str, Any], user_id: int = 0) -> int:
             data.get("alt_scenario", ""),
             data.get("conclusion", ""),
             datetime.utcnow().isoformat(),
-            user_id,
+            safe_user_id,
         ))
         analysis_id = cursor.fetchone()[0]
         conn.commit()
