@@ -539,8 +539,22 @@ Conclusion: [final assessment]""".strip()
                     fields[current_key] += " " + stripped
                 else:
                     fields[current_key] = stripped
+        # Чистим System Probability от мусора
+            prob = fields.get("System Probability", "")
+            if prob:
+                prob_lower = prob.lower()
 
-        return fields
+                # Оставляем только если содержит % или yes/no
+                if "%" not in prob and "yes" not in prob_lower and "no" not in prob_lower:
+                    # Пробуем извлечь число
+                    num_match = re.search(r'([\d.]+)', prob)
+
+                    if num_match:
+                        fields["System Probability"] = f"{num_match.group(1)}%"
+                    else:
+                        fields["System Probability"] = ""
+
+            return fields
 
     def _extract_prob_value(self, prob_str: str) -> Optional[float]:
         try:
