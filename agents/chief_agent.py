@@ -340,11 +340,11 @@ class ChiefAgent:
         }
 
     def _communication_fallback(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
-    # Берём conclusion из decision_data, но проверяем на обрезку
+        # Берём conclusion из decision_data, но проверяем на обрезку
     raw_conclusion = decision_data.get("conclusion", "")
     probability_str = decision_data.get("probability", "")
 
-    # Если conclusion обрезан — используем probability как вывод
+        # Если conclusion обрезан — используем probability как вывод
     if raw_conclusion:
         stripped = raw_conclusion.strip()
         last_char = stripped[-1] if stripped else ""
