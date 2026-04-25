@@ -1,5 +1,7 @@
-
-from typing import Any, Dict, List
+import re
+import time
+import random
+from typing import Any, Dict, List, Optional
 
 from services.llm_service import generate_news_text
 from services.news_service import (
@@ -11,7 +13,6 @@ from services.news_service import (
 
 # ═══════════════════════════════════════════
 # UNIFIED CATEGORY DETECTION
-# Используется везде: OpportunityAgent, post_to_channel, ChiefAgent
 # ═══════════════════════════════════════════
 
 POLITICS_KEYWORDS = [
@@ -55,26 +56,23 @@ SPORTS_KEYWORDS = [
     "chiefs", "patriots", "cowboys", "eagles", "49ers", "ravens",
     "bengals", "bills", "dolphins", "steelers", "browns", "broncos",
     "yankees", "dodgers", "red sox", "cubs", "astros", "braves",
-    "mets", "cardinals", "giants", "phillies",
     "arsenal", "chelsea", "liverpool", "manchester", "barcelona",
     "real madrid", "psg", "juventus", "bayern", "inter milan", "ac milan",
     "atletico", "borussia", "ajax", "porto", "benfica",
     "djokovic", "nadal", "federer", "alcaraz", "sinner", "swiatek",
     "championship", "playoff", "finals", "tournament",
-    " cup ", "trophy", "title", "will win the", "champion",
-    "season", "transfer", "roster", " goal ",
-    "boxing", "fight", "knockout", "ko ",
+    " cup ", "trophy", "title", " goal ", "boxing", "fight",
 ]
 
 ECONOMY_KEYWORDS = [
     "inflation", " fed ", "federal reserve", "recession", " gdp ",
-    " cpi ", "unemployment",
-    "interest rate", "wall street", "stock market", " s&p ", "nasdaq",
-    "dow jones", "dollar", "currency", "trade war", "tariff",
-    "debt", "deficit", "budget", "treasury", "bond ", "fomc ",
-    "powell", " ecb ", " imf ", "world bank", "brent", " wti ",
-    "gold ", "silver", "commodit", "bankruptcy", "merger", " ipo ",
-    "jobless", "payrolls", "economic",
+    " cpi ", "unemployment", "interest rate", "wall street",
+    "stock market", " s&p ", "nasdaq", "dow jones", "dollar",
+    "currency", "trade war", "tariff", "debt", "deficit", "budget",
+    "treasury", "bond ", "fomc ", "powell", " ecb ", " imf ",
+    "world bank", "brent", " wti ", "gold ", "silver",
+    "commodit", "bankruptcy", "merger", " ipo ", "jobless",
+    "payrolls", "economic",
 ]
 
 TECH_KEYWORDS = [
@@ -106,12 +104,10 @@ def detect_category_from_text(text: str) -> str:
     """
     Единая функция определения категории для всего бота.
     Используй её вместо локальных _detect_category.
-    Порядок важен — сначала политика, потом спорт, крипта, экономика.
     """
     if not text:
         return "Other"
 
-    # Добавляем пробелы по краям чтобы правильно работать с "word boundary"
     s = " " + text.lower() + " "
 
     if any(kw in s for kw in POLITICS_KEYWORDS):
@@ -130,6 +126,138 @@ def detect_category_from_text(text: str) -> str:
         return "Weather"
 
     return "Other"
+
+
+# ═══════════════════════════════════════════
+# TWITTER / X SCRAPER
+# ═══════════════════════════════════════════
+
+def _fetch_twitter_signals(query: str, limit: int = 5) -> List[Dict[str, str]]:
+    """
+    Ищет сигналы из Twitter/X через Nitter (публичный frontend без API).
+    Возвращает список: [{"title": str, "source": "Twitter/X", "link": str}]
+    """
+    results = []
+
+    nitter_instances = [
+        "https://nitter.net",
+        "https://nitter.privacydev.net",
+        "https://nitter.poast.org",
+    ]
+
+    clean_query = re.sub(r'[^\w\s]', '', query)[:80].strip()
+    encoded = clean_query.replace(" ", "+")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    for instance in nitter_instances:
+        if len(results) >= limit:
+            break
+        try:
+            import requests
+            url = f"{instance}/search?q={encoded}&f=tweets"
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                continue
+
+            html = resp.text
+
+            tweet_blocks = re.findall(
+                r'<div class="tweet-content[^"]*"[^>]*>(.*?)</div>',
+                html,
+                re.DOTALL,
+            )
+
+            for block in tweet_blocks[:limit]:
+                text = re.sub(r'<[^>]+>', '', block).strip()
+                text = re.sub(r'\s+', ' ', text).strip()
+
+                if len(text) < 20:
+                    continue
+                if any(
+                    spam in text.lower()
+                    for spam in ["follow me", "click here", "buy now", "promo"]
+                ):
+                    continue
+
+                results.append({
+                    "title": text[:200],
+                    "source": "Twitter/X",
+                    "published": "recent",
+                    "link": f"{instance}/search?q={encoded}",
+                })
+
+                if len(results) >= limit:
+                    break
+
+            if results:
+                break
+
+        except Exception as e:
+            print(f"Nitter {instance} error: {e}")
+            continue
+
+    return results
+
+
+def _fetch_twitter_via_google(query: str, limit: int = 4) -> List[Dict[str, str]]:
+    """
+    Fallback: ищет Twitter через Google News (site:twitter.com OR x.com).
+    """
+    try:
+        twitter_query = f"{query} site:twitter.com OR site:x.com"
+        items = search_google_news(twitter_query, limit=limit)
+        for item in items:
+            item["source"] = "Twitter/X (via Google)"
+        return items
+    except Exception:
+        return []
+
+
+# ═══════════════════════════════════════════
+# KEY SIGNALS EXTRACTOR
+# ═══════════════════════════════════════════
+
+def _extract_key_signals(llm_text: str, news_items: List[Dict]) -> List[str]:
+    """
+    Извлекает ключевые сигналы из LLM-ответа и новостных заголовков.
+    Возвращает список строк — конкретных фактов/сигналов.
+    """
+    signals = []
+
+    if llm_text:
+        signal_section = re.search(
+            r'Key Signals?:(.*?)(?:Supporting|Opposing|Social|Sentiment|$)',
+            llm_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if signal_section:
+            raw = signal_section.group(1).strip()
+            lines = [
+                re.sub(r'^[-•*\d\.\s]+', '', line).strip()
+                for line in raw.splitlines()
+                if line.strip() and len(line.strip()) > 15
+            ]
+            signals.extend(lines[:4])
+
+    if len(signals) < 2 and news_items:
+        for item in news_items[:5]:
+            title = item.get("title", "").strip()
+            if title and len(title) > 20:
+                clean = re.sub(r'\s+', ' ', title).strip()
+                if clean not in signals:
+                    signals.append(clean)
+            if len(signals) >= 4:
+                break
+
+    return signals[:5]
 
 
 # ═══════════════════════════════════════════
@@ -156,13 +284,23 @@ class NewsAgent:
             date_context=date_context,
         )
 
+        # Основные новости
         news_items = search_google_news(news_query, limit=7)
 
-        twitter_query = f"{news_query} site:twitter.com OR site:x.com"
-        twitter_items = search_google_news(twitter_query, limit=3)
+        # Twitter/X — сначала пробуем Nitter, потом Google fallback
+        twitter_items = _fetch_twitter_signals(news_query, limit=4)
+        if not twitter_items:
+            twitter_items = _fetch_twitter_via_google(news_query, limit=3)
 
-        all_items = news_items + [i for i in twitter_items if i not in news_items]
-        live_news_summary = summarize_news_items(all_items[:7])
+        # Дедуплицируем
+        seen_titles = {item.get("title", "")[:50] for item in news_items}
+        unique_twitter = [
+            item for item in twitter_items
+            if item.get("title", "")[:50] not in seen_titles
+        ]
+
+        all_items = news_items + unique_twitter
+        live_news_summary = summarize_news_items(all_items[:8])
 
         prompt = self._build_prompt(
             question=question,
@@ -170,21 +308,27 @@ class NewsAgent:
             date_context=date_context,
             related_markets=related_markets,
             live_news_summary=live_news_summary,
-            news_items=all_items[:5],
+            news_items=all_items[:6],
             lang=lang,
         )
 
         llm_result = generate_news_text(prompt)
 
+        has_twitter = bool(unique_twitter)
+
         if llm_result and not llm_result.lower().startswith("llm service is not configured"):
+            key_signals = _extract_key_signals(llm_result, all_items)
             return self._wrap_llm_result(
                 question=question,
                 category=category,
                 llm_result=llm_result,
                 news_query=news_query,
-                news_items=all_items[:5],
+                news_items=all_items[:6],
+                key_signals=key_signals,
+                has_twitter=has_twitter,
             )
 
+        key_signals = _extract_key_signals("", all_items)
         return self._fallback_news(
             question=question,
             category=category,
@@ -192,7 +336,8 @@ class NewsAgent:
             related_markets=related_markets,
             live_news_summary=live_news_summary,
             news_query=news_query,
-            news_items=all_items[:5],
+            news_items=all_items[:6],
+            key_signals=key_signals,
         )
 
     def _build_prompt(
@@ -214,7 +359,9 @@ class NewsAgent:
                 f"- {title} | relation: {relation_type} | probability: {probability}"
             )
 
-        related_block = "\n".join(related_lines) if related_lines else "- No related markets"
+        related_block = (
+            "\n".join(related_lines) if related_lines else "- No related markets"
+        )
 
         lang_instruction = (
             "Respond ONLY in Russian. Every single word must be in Russian language. "
@@ -223,29 +370,43 @@ class NewsAgent:
             else "Respond in English."
         )
 
-        has_news = live_news_summary and "No relevant" not in live_news_summary
+        has_news = bool(
+            live_news_summary and "No relevant" not in live_news_summary
+        )
 
         top_news_block = ""
         if news_items:
             lines = []
-            for i, item in enumerate(news_items[:5], 1):
+            for i, item in enumerate(news_items[:6], 1):
                 title = item.get("title", "")
                 source = item.get("source", "")
                 published = item.get("published", "")
                 link = item.get("link", "")
                 if title:
-                    line = f"{i}. {title} ({source}, {published})"
+                    line = f"{i}. [{source}] {title} ({published})"
                     if link:
                         line += f" — {link}"
                     lines.append(line)
             top_news_block = "\n".join(lines)
 
+        twitter_count = sum(
+            1 for item in (news_items or [])
+            if "twitter" in item.get("source", "").lower()
+            or "x.com" in item.get("source", "").lower()
+        )
+        twitter_note = (
+            f"\nNote: {twitter_count} sources are from Twitter/X social media."
+            if twitter_count > 0
+            else ""
+        )
+
         return f"""
-You are DeepAlpha News Intelligence — an expert analyst for prediction markets.
+You are DeepAlpha — a senior analyst for prediction markets with hedge fund expertise.
 
 {lang_instruction}
 
-TASK: Analyze real-world news context for this prediction market and identify signals that affect probability. Base your analysis STRICTLY on the provided news — do not invent facts.
+TASK: Provide DEEP analysis of news context for this prediction market.
+Go beyond summarizing — identify what DRIVES the probability and what could CHANGE it.
 
 MARKET QUESTION: {question}
 CATEGORY: {category}
@@ -254,38 +415,40 @@ DEADLINE: {date_context}
 RELATED MARKETS:
 {related_block}
 
-TOP NEWS SOURCES:
+TOP NEWS SOURCES:{twitter_note}
 {top_news_block if top_news_block else "No news sources found."}
 
 FULL NEWS FEED:
 {live_news_summary if has_news else "No recent news found for this topic."}
 
 ANALYSIS RULES:
-1. Base your analysis ONLY on the provided news above — do not hallucinate
-2. If news feed is empty — explicitly state "No recent news found" and use only market data
-3. Clearly separate SUPPORTING signals from OPPOSING signals
-4. Rate signal strength: Strong / Moderate / Weak
-5. Be specific — mention dates, names, numbers from the news
-6. Focus on what CHANGES the probability
-7. Include Twitter/X sentiment if social media sources are present
+1. Base analysis ONLY on provided news — do not hallucinate facts
+2. Explain WHY the market is priced as it is — causal reasoning
+3. Identify STRUCTURAL factors (not just surface-level news)
+4. Distinguish between signal (changes probability) and noise (irrelevant)
+5. Twitter/X sources = social sentiment signal, not hard facts
+6. Be specific: mention names, dates, numbers from sources
 
 REQUIRED OUTPUT FORMAT:
 
 News Summary:
-[2-3 sentence overview based strictly on provided news]
+[2-3 sentences: what is happening RIGHT NOW that affects this market]
 
 Key Signals:
-- [Signal 1 with strength rating]
-- [Signal 2 with strength rating]
-- [Signal 3 with strength rating]
+- [Signal 1 — specific fact + strength: Strong/Moderate/Weak]
+- [Signal 2 — specific fact + strength: Strong/Moderate/Weak]
+- [Signal 3 — specific fact + strength: Strong/Moderate/Weak]
 
 Supporting Factors:
-- [Factor that increases YES probability]
-- [Factor that increases YES probability]
+- [Concrete reason why YES outcome becomes more likely]
+- [Concrete reason why YES outcome becomes more likely]
 
 Opposing Factors:
-- [Factor that decreases YES probability]
-- [Factor that decreases YES probability]
+- [Concrete reason why NO outcome becomes more likely]
+- [Concrete reason why NO outcome becomes more likely]
+
+Structural Context:
+[1-2 sentences about underlying structural forces — historical patterns, institutional constraints, political dynamics]
 
 Social Sentiment:
 [Twitter/X and social media sentiment if available, otherwise "No social data"]
@@ -301,6 +464,8 @@ Confidence: Low / Medium / High
         llm_result: str,
         news_query: str,
         news_items: List[Dict[str, str]],
+        key_signals: List[str] = None,
+        has_twitter: bool = False,
     ) -> Dict[str, Any]:
         return {
             "question": question,
@@ -310,6 +475,8 @@ Confidence: Low / Medium / High
             "sources": news_items,
             "sentiment": self._extract_sentiment(llm_result),
             "confidence": self._extract_confidence(llm_result),
+            "key_signals": key_signals or [],
+            "has_twitter": has_twitter,
             "raw_news_text": llm_result,
         }
 
@@ -322,6 +489,7 @@ Confidence: Low / Medium / High
         live_news_summary: str,
         news_query: str,
         news_items: List[Dict[str, str]],
+        key_signals: List[str] = None,
     ) -> Dict[str, Any]:
         summary_parts = [
             f"News analysis for: {question}.",
@@ -350,6 +518,8 @@ Confidence: Low / Medium / High
             "sources": news_items,
             "sentiment": "Mixed" if news_items else "Unclear",
             "confidence": "Medium" if news_items else "Low",
+            "key_signals": key_signals or [],
+            "has_twitter": False,
             "raw_news_text": "",
         }
 
