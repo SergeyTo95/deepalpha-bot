@@ -390,7 +390,9 @@ def _build_prompt(
         )
 
         if lang == "ru":
-            return f"""Ты — DeepAlpha AI, профессиональный аналитик prediction markets (Polymarket).
+            return f
+
+"""Ты — DeepAlpha AI, профессиональный аналитик prediction markets (Polymarket).
 
 Твоя задача — не пересказать рынок, а дать ПОЛЕЗНУЮ аналитику и практическую ценность.
 
