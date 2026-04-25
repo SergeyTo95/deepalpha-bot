@@ -248,157 +248,193 @@ class DecisionAgent:
         lang: str = "ru",
     ) -> str:
 
-        news_block = news_summary[:500] if news_summary else ("Нет данных" if lang == "ru" else "No data")
-        days_str = f"{days_to_event} " + ("дней" if lang == "ru" else "days") if days_to_event is not None else ("неизвестно" if lang == "ru" else "unknown")
+        news_block = (
+            news_summary[:600] if news_summary
+            else ("Нет данных" if lang == "ru" else "No data")
+        )
+        days_str = (
+            f"{days_to_event} " + ("дней" if lang == "ru" else "days")
+            if days_to_event is not None
+            else ("неизвестно" if lang == "ru" else "unknown")
+        )
         max_dev, rule = self._get_divergence_rules(market_prob_value, days_to_event)
 
-        type_instruction = self._get_type_instruction(semantic_type, market_leader, market_prob_value, lang)
-        balance_instruction = self._get_balance_instruction(market_balance, market_prob_value, lang)
+        # Парсим Yes/No вероятности для промпта
+        import re as _re
+        yes_prob = 50.0
+        no_prob = 50.0
+        yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_probability)
+        no_m = _re.search(r'No:\s*([\d.]+)%', market_probability)
+        if yes_m:
+            yes_prob = float(yes_m.group(1))
+        if no_m:
+            no_prob = float(no_m.group(1))
 
-        leader_note = ""
-        if market_type == "binary":
-            if lang == "ru":
-                leader_note = f"\nЛИДЕР: {market_leader} ({market_prob_value:.1f}%) — исход с НАИБОЛЬШЕЙ вероятностью."
-            else:
-                leader_note = f"\nLEADER: {market_leader} ({market_prob_value:.1f}%) — outcome with HIGHEST probability."
-
+        # Для multiple choice — берём топ-2
         if market_type == "multiple_choice" and options:
-            options_block = "\n".join([f"- {opt}" for opt in options])
+            options_block = "\n".join(f"- {opt}" for opt in options[:5])
+        else:
+            options_block = f"Yes: {yes_prob}%\nNo: {no_prob}%"
 
-            if lang == "ru":
-                return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
-Отвечай ТОЛЬКО на русском языке. Давай ГЛУБОКИЙ причинно-следственный анализ.
+        # Deadlines блок (если есть days_to_event)
+        if days_to_event is not None:
+            deadlines_block = f"До события: {days_str}"
+        else:
+            deadlines_block = "Нет данных о дедлайне"
 
-ВОПРОС: {question}
-КАТЕГОРИЯ: {category}
-ДО СОБЫТИЯ: {days_str}
-СТАВКИ РЫНКА: {market_probability}{leader_note}
+        if lang == "ru":
+            return f"""Ты — аналитический модуль DeepAlpha AI.
 
-ВАРИАНТЫ:
+Твоя задача — на основе входных данных построить ПРОФЕССИОНАЛЬНЫЙ анализ уровня hedge fund.
+
+⚠️ ВАЖНО:
+— НЕ переписывай вопрос
+— НЕ меняй вероятности рынка
+— НЕ фантазируй цифры
+— Пиши строго по структуре ниже
+— Стиль: лаконично, уверенно, без воды
+— Максимальное отклонение от рынка: {max_dev:.0f}% ({rule})
+— Язык: русский
+
+========================================
+
+ВХОД:
+
+Question: {question}
+Категория: {category}
+Дней до события: {days_str}
+
+Market:
 {options_block}
 
-ТРЕНД: {trend_summary[:200]}
-НОВОСТИ: {news_block}
-НАСТРОЕНИЕ: {sentiment}
+Тренд: {trend_summary[:200]}
+Поведение толпы: {crowd_behavior[:150]}
 
-{type_instruction}
-{balance_instruction}
+Новости (Google + Twitter/X):
+{news_block}
 
-ПРАВИЛА:
-1. Выбери вариант с НАИБОЛЬШЕЙ вероятностью
-2. НЕ выбирай Yes/No — только конкретный вариант
-3. Максимальное отклонение: {max_dev:.0f}%
-4. НЕ повторяй цифры рынка — объясняй ПРИЧИНЫ
-5. Все тексты только на русском
+Настроение: {sentiment}
 
-Заполни ВСЕ пункты (2-3 предложения каждый):
+========================================
 
-Вероятность системы: [вариант — %]
+СДЕЛАЙ АНАЛИЗ:
+
+1. Определи прогноз:
+— если No > Yes → исход "НЕ произойдёт"
+— если Yes > No → исход "произойдёт"
+— Для multiple choice → назови лидирующий вариант
+
+2. Уровень уверенности:
+55–65 → Средняя
+65–80 → Умеренная
+80+ → Высокая
+
+3. Логика:
+— кратко, 2-3 предложения
+— используй новости как сигналы, не копируй их
+— объясни ПОЧЕМУ рынок так думает
+
+4. Основной сценарий:
+— конкретные условия реализации
+
+5. Альтернативный сценарий:
+— что должно измениться
+
+6. Trigger Watch (КРИТИЧНО):
+⚠️ НЕ копируй новости — преобразуй в КОНКРЕТНЫЕ СОБЫТИЯ
+Пример:
+❌ "Reuters пишет о переговорах"
+✅ "официальное объявление о прямых переговорах"
+
+7. Mispricing:
+— расхождение < 5% → "Явного расхождения нет"
+— иначе → укажи направление и размер
+
+8. Market Psychology:
+— как думает рынок (уверен / сомневается / в равновесии)
+
+9. Alpha Note:
+— где ценность: ставка / ожидание / мониторинг триггеров
+
+========================================
+
+ФОРМАТ ОТВЕТА (строго этот):
+
+Вероятность системы: [Yes или No — X.X%]
 Уверенность: [Высокая/Средняя/Низкая]
-Логика: [конкретные причины без повторения цифр]
-Расклад по вариантам: [все варианты с %]
-Основной сценарий: [условия реализации]
-Альтернативный сценарий: [конкретные триггеры]
-Вывод: [итоговая оценка]""".strip()
-            else:
-                return f"""You are a senior analyst at DeepAlpha prediction markets.
-Respond ONLY in English. Provide DEEP causal analysis.
+Логика: [2-3 предложения без воды]
+Основной сценарий: [1-2 предложения]
+Альтернативный сценарий: [1-2 предложения]
+Trigger Watch: [событие1 | событие2 | событие3]
+Mispricing: [есть/нет + краткое описание]
+Market Psychology: [1-2 предложения]
+Alpha Note: [1 предложение]
+Вывод: [1 сильное предложение]
 
-QUESTION: {question}
-CATEGORY: {category}
-DAYS TO EVENT: {days_str}
-MARKET ODDS: {market_probability}{leader_note}
+========================================
 
-OPTIONS:
-{options_block}
-
-TREND: {trend_summary[:200]}
-NEWS: {news_block}
-SENTIMENT: {sentiment}
-
-{type_instruction}
-{balance_instruction}
-
-RULES:
-1. Choose option with HIGHEST probability
-2. Do NOT choose Yes/No — only specific option
-3. Max deviation: {max_dev:.0f}%
-4. Do NOT repeat market numbers — explain REASONS
-5. All text in English only
-
-Fill ALL fields (2-3 sentences each):
-
-System Probability: [option — %]
-Confidence: [High/Medium/Low]
-Reasoning: [specific reasons without repeating numbers]
-Options Breakdown: [all options with %]
-Main Scenario: [conditions for realisation]
-Alternative Scenario: [specific triggers]
-Conclusion: [final assessment]""".strip()
+⚠️ КРИТИЧЕСКИЕ ПРАВИЛА:
+— НЕ дублируй текст
+— НЕ пиши длинно
+— Trigger Watch = события, не пересказ новостей
+— Пиши как аналитик фонда, не как школьник
+— Все тексты только на русском языке""".strip()
 
         else:
-            if lang == "ru":
-                return f"""Ты старший аналитик предсказательных рынков DeepAlpha.
-Отвечай ТОЛЬКО на русском языке. Давай ГЛУБОКИЙ причинно-следственный анализ.
+            return f"""You are an analytical module for DeepAlpha AI.
 
-ВОПРОС: {question}
-КАТЕГОРИЯ: {category}
-ДО СОБЫТИЯ: {days_str}
-СТАВКИ РЫНКА: {market_probability}{leader_note}
+Your task: build a PROFESSIONAL hedge fund level analysis based on the input data.
 
-ТРЕНД: {trend_summary[:200]}
-НОВОСТИ: {news_block}
-НАСТРОЕНИЕ: {sentiment}
+⚠️ RULES:
+— Do NOT rewrite the question
+— Do NOT change market probabilities
+— Do NOT invent numbers
+— Write strictly in the structure below
+— Style: concise, confident, no filler
+— Max deviation from market: {max_dev:.0f}% ({rule})
 
-{type_instruction}
-{balance_instruction}
+========================================
 
-ПРАВИЛА:
-1. Лидирующий исход: {market_leader} ({market_prob_value:.1f}%)
-2. Максимальное отклонение: {max_dev:.0f}% ({rule})
-3. В поле "Логика" объясняй МЕХАНИЗМ и ПРИЧИНЫ, не пересказывай цифры
-4. Если No лидирует — объясни почему событие НЕ произойдёт
-5. Все тексты только на русском языке
+INPUT:
 
-Заполни ВСЕ пункты (2-3 предложения каждый):
+Question: {question}
+Category: {category}
+Days to event: {days_str}
 
-Вероятность системы: [Yes или No — %]
-Уверенность: [Высокая/Средняя/Низкая]
-Логика: [механизм и причины без повторения цифр]
-Основной сценарий: [условия при которых реализуется]
-Альтернативный сценарий: [конкретные триггеры изменения]
-Вывод: [итоговая оценка]""".strip()
-            else:
-                return f"""You are a senior analyst at DeepAlpha prediction markets.
-Respond ONLY in English. Provide DEEP causal analysis.
+Market:
+{options_block}
 
-QUESTION: {question}
-CATEGORY: {category}
-DAYS TO EVENT: {days_str}
-MARKET ODDS: {market_probability}{leader_note}
+Trend: {trend_summary[:200]}
+Crowd behavior: {crowd_behavior[:150]}
 
-TREND: {trend_summary[:200]}
-NEWS: {news_block}
-SENTIMENT: {sentiment}
+News (Google + Twitter/X):
+{news_block}
 
-{type_instruction}
-{balance_instruction}
+Sentiment: {sentiment}
 
-RULES:
-1. Leading outcome: {market_leader} ({market_prob_value:.1f}%)
-2. Max deviation: {max_dev:.0f}% ({rule})
-3. In Reasoning field explain the MECHANISM and CAUSES, don't just restate numbers
-4. If No leads — explain why event will NOT happen
-5. All text in English only
+========================================
 
-Fill ALL fields (2-3 sentences each):
+REQUIRED OUTPUT FORMAT (strictly this):
 
-System Probability: [Yes or No — %]
+System Probability: [Yes or No — X.X%]
 Confidence: [High/Medium/Low]
-Reasoning: [mechanism and reasons without repeating numbers]
-Main Scenario: [conditions under which it occurs]
-Alternative Scenario: [specific change triggers]
-Conclusion: [final assessment]""".strip()
+Reasoning: [2-3 sentences, no filler]
+Main Scenario: [1-2 sentences]
+Alternative Scenario: [1-2 sentences]
+Trigger Watch: [event1 | event2 | event3]
+Mispricing: [yes/no + brief description]
+Market Psychology: [1-2 sentences]
+Alpha Note: [1 sentence]
+Conclusion: [1 strong sentence]
+
+========================================
+
+⚠️ CRITICAL RULES:
+— No duplicated text
+— No long-winded answers
+— Trigger Watch = specific events, NOT news headlines
+— Write like a fund analyst, not a student
+— All text in English only""".strip()
 
     def _get_type_instruction(self, semantic_type: str, market_leader: str, market_prob_value: float, lang: str) -> str:
         if lang == "ru":
