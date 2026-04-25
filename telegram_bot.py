@@ -549,7 +549,109 @@ def _get_communication_data(result: dict, lang: str = "ru") -> dict:
     except Exception as e:
         print(f"CommunicationAgent error: {e}")
         return {}
+def _build_extra_blocks(result: dict, lang: str) -> str:
+    """
+    Собирает дополнительные аналитические блоки из результата анализа.
+    Блоки генерируются в CommunicationAgent и хранятся в result.
+    """
+    parts = []
 
+    time_shift_block = result.get("time_shift_block", "")
+    mispricing_block = result.get("mispricing_block", "")
+    trigger_block = result.get("trigger_block", "")
+    psychology_block = result.get("psychology_block", "")
+    alpha_note_block = result.get("alpha_note_block", "")
+
+    # Если блоки не пришли из агента — пробуем сгенерировать на лету
+    if not any([time_shift_block, mispricing_block, trigger_block]):
+        try:
+            from agents.alpha_layer import (
+                build_mispricing_block,
+                build_market_psychology,
+                build_alpha_note,
+            )
+            from agents.trigger_layer import build_trigger_watch
+            from agents.time_shift_layer import build_time_shift_block
+
+            # Time shift
+            sub_markets = result.get("sub_markets", [])
+            if sub_markets:
+                time_shift_block = build_time_shift_block(
+                    time_series=sub_markets, lang=lang
+                )
+
+            # Вероятности
+            market_prob_str = str(result.get("market_probability", ""))
+            probability_str = str(result.get("probability", ""))
+
+            import re
+            market_prob = 50.0
+            yes_m = re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
+            no_m = re.search(r'No:\s*([\d.]+)%', market_prob_str)
+            if yes_m and no_m:
+                market_prob = max(float(yes_m.group(1)), float(no_m.group(1)))
+            else:
+                m = re.search(r'([\d.]+)%', market_prob_str)
+                if m:
+                    market_prob = float(m.group(1))
+
+            model_prob = market_prob
+            prob_m = re.search(r'([\d.]+)%', probability_str)
+            if prob_m:
+                model_prob = float(prob_m.group(1))
+
+            if market_prob > 0:
+                mispricing_block = build_mispricing_block(
+                    model_prob=model_prob,
+                    market_prob=market_prob,
+                    lang=lang,
+                )
+                psychology_block = build_market_psychology(
+                    probability=market_prob,
+                    lang=lang,
+                )
+
+                if market_prob >= 85:
+                    market_balance = "strong_consensus"
+                elif market_prob >= 65:
+                    market_balance = "moderate_consensus"
+                elif market_prob >= 55:
+                    market_balance = "slight_lean"
+                elif market_prob >= 45:
+                    market_balance = "balanced"
+                else:
+                    market_balance = "lean_against"
+
+                alpha_note_block = build_alpha_note(
+                    model_prob=model_prob,
+                    market_prob=market_prob,
+                    market_balance=market_balance,
+                    lang=lang,
+                )
+
+            trigger_block = build_trigger_watch(
+                question=result.get("question", ""),
+                category=result.get("category", ""),
+                key_signals=result.get("key_signals", []),
+                lang=lang,
+            )
+
+        except Exception as e:
+            print(f"_build_extra_blocks fallback error: {e}")
+
+    # Собираем в нужном порядке
+    if time_shift_block:
+        parts.append(_escape(time_shift_block))
+    if mispricing_block:
+        parts.append(_escape(mispricing_block))
+    if trigger_block:
+        parts.append(_escape(trigger_block))
+    if psychology_block:
+        parts.append(_escape(psychology_block))
+    if alpha_note_block:
+        parts.append(_escape(alpha_note_block))
+
+    return "\n\n".join(parts)
 
 def _format_analysis(result: dict, uid: int) -> str:
     lang = get_user_lang(uid)
