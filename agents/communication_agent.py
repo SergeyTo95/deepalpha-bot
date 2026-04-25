@@ -18,6 +18,7 @@ class CommunicationAgent:
         market_type = decision_data.get("market_type", "binary")
         options_breakdown = decision_data.get("options_breakdown", "").strip()
         lang = decision_data.get("lang", "ru")
+        sub_markets = decision_data.get("sub_markets", [])
 
         raw_outcome, prob_val = self._split_probability(probability)
         semantic_type = self._classify_semantic_type(question, market_type)
@@ -32,7 +33,9 @@ class CommunicationAgent:
                 if options_breakdown and len(options_breakdown) > 5:
                     semantic_text = options_breakdown.split("|")[0].strip()
                 else:
-                    semantic_text = "Ведущий исход" if lang == "ru" else "Leading outcome"
+                    semantic_text = (
+                        "Ведущий исход" if lang == "ru" else "Leading outcome"
+                    )
                 is_negated = False
             else:
                 semantic_text = raw_outcome
@@ -80,12 +83,22 @@ class CommunicationAgent:
             is_negated, market_balance, lang
         )
 
+        time_shift = self._analyze_time_shift(sub_markets) if sub_markets else None
+
         short_signal = self._build_short_signal(
             question, raw_outcome, prob_val, confidence, alpha_message, lang
         )
         full_analysis = self._build_full_analysis(
-            question, market_probability, display_prediction, confidence,
-            final_reasoning, final_scenario, final_alt, final_conclusion, lang
+            question=question,
+            market_probability=market_probability,
+            display_prediction=display_prediction,
+            confidence=confidence,
+            reasoning=final_reasoning,
+            main_scenario=final_scenario,
+            alt_scenario=final_alt,
+            conclusion=final_conclusion,
+            lang=lang,
+            time_shift=time_shift,
         )
 
         return {
@@ -101,6 +114,104 @@ class CommunicationAgent:
             "confidence": confidence,
             "alpha_label": alpha_label,
             "alpha_message": alpha_message,
+            "time_shift": time_shift,
+        }
+
+    # ═══════════════════════════════════════════
+    # TIME SHIFT ANALYSIS
+    # ═══════════════════════════════════════════
+
+    def _analyze_time_shift(self, market_data: list) -> dict:
+        """
+        Анализирует временную структуру вероятностей по нескольким sub-рынкам.
+
+        market_data = [
+            {"date": "Apr 30", "yes_prob": 6.5},
+            {"date": "May 31", "yes_prob": 33.5},
+            {"date": "Jun 30", "yes_prob": 54.0},
+        ]
+        """
+        if not market_data or len(market_data) < 2:
+            return {"trend": "flat", "description": "", "insight": ""}
+
+        points = [
+            p for p in market_data
+            if isinstance(p.get("yes_prob"), (int, float))
+            and 0 <= p["yes_prob"] <= 100
+        ]
+
+        if len(points) < 2:
+            return {"trend": "flat", "description": "", "insight": ""}
+
+        probs = [p["yes_prob"] for p in points]
+        dates = [p.get("date", f"T{i + 1}") for i, p in enumerate(points)]
+
+        deltas = [probs[i + 1] - probs[i] for i in range(len(probs) - 1)]
+        avg_delta = sum(deltas) / len(deltas)
+
+        up_steps = sum(1 for d in deltas if d > 1.0)
+        down_steps = sum(1 for d in deltas if d < -1.0)
+        total_steps = len(deltas)
+
+        total_change = probs[-1] - probs[0]
+        abs_change = abs(total_change)
+
+        prob_sequence = " → ".join(f"{p:.1f}%" for p in probs)
+        date_sequence = " → ".join(dates)
+
+        if abs_change < 5 and abs(avg_delta) < 3:
+            trend = "flat"
+        elif up_steps >= total_steps * 0.6 and avg_delta > 2:
+            trend = "up"
+        elif down_steps >= total_steps * 0.6 and avg_delta < -2:
+            trend = "down"
+        elif total_change > 10:
+            trend = "up"
+        elif total_change < -10:
+            trend = "down"
+        else:
+            trend = "flat"
+
+        if trend == "up":
+            description = f"Вероятность растёт со временем ({prob_sequence})"
+            if probs[-1] >= 50:
+                insight = (
+                    f"Рынок не отрицает событие, но ожидает его позже ближайшего "
+                    f"дедлайна. Долгосрочные контракты ценятся значительно выше — "
+                    f"сигнал на отложенную реализацию."
+                )
+            else:
+                insight = (
+                    f"Рынок постепенно повышает оценку вероятности, но пока ниже 50%. "
+                    f"Ожидание роста уверенности при появлении новых данных."
+                )
+        elif trend == "down":
+            description = f"Вероятность падает со временем ({prob_sequence})"
+            if probs[0] >= 40:
+                insight = (
+                    f"Рынок теряет уверенность в событии с удалением горизонта. "
+                    f"Краткосрочный оптимизм не подкреплён долгосрочным консенсусом."
+                )
+            else:
+                insight = (
+                    f"Низкая и снижающаяся вероятность — рынок последовательно "
+                    f"исключает данный исход."
+                )
+        else:
+            description = f"Вероятность стабильна по датам ({prob_sequence})"
+            insight = (
+                f"Нет временного сдвига ожиданий. Рынок одинаково оценивает "
+                f"событие независимо от горизонта — устойчивый консенсус."
+            )
+
+        return {
+            "trend": trend,
+            "description": description,
+            "insight": insight,
+            "prob_sequence": prob_sequence,
+            "date_sequence": date_sequence,
+            "total_change": round(total_change, 1),
+            "avg_delta": round(avg_delta, 2),
         }
 
     # ═══════════════════════════════════════════
@@ -119,13 +230,14 @@ class CommunicationAgent:
         short_q = question[:60] + "..." if len(question) > 60 else question
         prob_str = f"{prob_val:.1f}%" if prob_val is not None else "—"
 
-        outcome_upper = raw_outcome.upper() if raw_outcome else "—"
         if raw_outcome.lower() == "yes":
             outcome_icon = "✅"
         elif raw_outcome.lower() == "no":
             outcome_icon = "❌"
         else:
             outcome_icon = "📌"
+
+        outcome_upper = raw_outcome.upper() if raw_outcome else "—"
 
         if lang == "ru":
             return (
@@ -157,7 +269,33 @@ class CommunicationAgent:
         alt_scenario: str,
         conclusion: str,
         lang: str,
+        time_shift: Optional[dict] = None,
     ) -> str:
+        time_shift_block = ""
+        if time_shift and time_shift.get("description"):
+            trend = time_shift["trend"]
+            if trend == "up":
+                trend_icon = "📈"
+            elif trend == "down":
+                trend_icon = "📉"
+            else:
+                trend_icon = "➡️"
+
+            if lang == "ru":
+                time_shift_block = (
+                    f"\n\n{trend_icon} Временной сдвиг:\n"
+                    f"{time_shift['description']}\n\n"
+                    f"📌 Интерпретация:\n"
+                    f"{time_shift['insight']}"
+                )
+            else:
+                time_shift_block = (
+                    f"\n\n{trend_icon} Time Shift Signal:\n"
+                    f"{time_shift['description']}\n\n"
+                    f"📌 Interpretation:\n"
+                    f"{time_shift['insight']}"
+                )
+
         if lang == "ru":
             return (
                 f"📊 DeepAlpha Анализ\n\n"
@@ -167,7 +305,8 @@ class CommunicationAgent:
                 f"⚖️ Уверенность:\n{confidence}\n\n"
                 f"🔎 Логика:\n{reasoning}\n\n"
                 f"🧩 Основной сценарий:\n{main_scenario}\n\n"
-                f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
+                f"⚠️ Альтернативный сценарий:\n{alt_scenario}"
+                f"{time_shift_block}\n\n"
                 f"📌 Вывод:\n{conclusion}"
             )
         else:
@@ -179,7 +318,8 @@ class CommunicationAgent:
                 f"⚖️ Confidence:\n{confidence}\n\n"
                 f"🔎 Reasoning:\n{reasoning}\n\n"
                 f"🧩 Main Scenario:\n{main_scenario}\n\n"
-                f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
+                f"⚠️ Alternative Scenario:\n{alt_scenario}"
+                f"{time_shift_block}\n\n"
                 f"📌 Conclusion:\n{conclusion}"
             )
 
@@ -211,13 +351,17 @@ class CommunicationAgent:
             level = "low"
 
         if lang == "ru":
-            return {"high": "Высокая", "medium": "Средняя", "low": "Низкая"}.get(
-                level, "Низкая"
-            )
+            return {
+                "high": "Высокая",
+                "medium": "Средняя",
+                "low": "Низкая",
+            }.get(level, "Низкая")
         else:
-            return {"high": "High", "medium": "Moderate", "low": "Weak"}.get(
-                level, "Weak"
-            )
+            return {
+                "high": "High",
+                "medium": "Moderate",
+                "low": "Weak",
+            }.get(level, "Weak")
 
     # ═══════════════════════════════════════════
     # SPLIT / PARSE
@@ -982,8 +1126,8 @@ class CommunicationAgent:
                 )
             elif market_balance == "moderate_consensus":
                 return (
-                    f"Moderate consensus ({prob:.1f}%) — solid lead for the current favourite. "
-                    f"Key factors support this outcome."
+                    f"Moderate consensus ({prob:.1f}%) — solid lead for the current "
+                    f"favourite. Key factors support this outcome."
                 )
             elif market_balance == "slight_lean":
                 return (
@@ -1047,7 +1191,9 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return "Scenario plays out if current conditions hold. Trend is stable."
             elif market_balance == "moderate_consensus":
-                return "Scenario materialises if dynamics continue without sharp reversals."
+                return (
+                    "Scenario materialises if dynamics continue without sharp reversals."
+                )
             elif market_balance == "slight_lean":
                 return (
                     "Slight edge holds under current balance. "
@@ -1112,7 +1258,8 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return (
                     f"Unlikely scenario ({alt_prob:.1f}%): sharp policy reversal, "
-                    f"geopolitical shock or black swan event. Market nearly rules this out."
+                    f"geopolitical shock or black swan event. "
+                    f"Market nearly rules this out."
                 )
             elif market_balance == "moderate_consensus":
                 return (
@@ -1174,9 +1321,7 @@ class CommunicationAgent:
                 return f"Следуем рыночной оценке: {display_prediction}."
         else:
             if market_balance in ("balanced", "slight_lean"):
-                return (
-                    f"Slight edge: {display_prediction}. Watch for new data."
-                )
+                return f"Slight edge: {display_prediction}. Watch for new data."
             elif market_balance == "strong_consensus":
                 return f"High consensus confirms: {display_prediction}."
             else:
