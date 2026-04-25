@@ -346,96 +346,168 @@ Market:
 ❌ "Reuters пишет о переговорах"
 ✅ "официальное объявление о прямых переговорах"
 
-7. Mispricing:
-— расхождение < 5% → "Явного расхождения нет"
-— иначе → укажи направление и размер
+def _build_prompt(
+        self,
+        question: str,
+        category: str,
+        market_probability: str,
+        market_prob_value: float,
+        market_leader: str,
+        options: List[str],
+        trend_summary: str,
+        crowd_behavior: str,
+        news_summary: str,
+        sentiment: str,
+        market_type: str,
+        days_to_event: Optional[int],
+        market_balance: str,
+        semantic_type: str,
+        lang: str = "ru",
+    ) -> str:
+        import re as _re
 
-8. Market Psychology:
-— как думает рынок (уверен / сомневается / в равновесии)
+        news_block = news_summary[:800] if news_summary else "Нет данных"
+        max_dev, rule = self._get_divergence_rules(market_prob_value, days_to_event)
 
-9. Alpha Note:
-— где ценность: ставка / ожидание / мониторинг триггеров
+        yes_prob = 50.0
+        no_prob = 50.0
+        yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_probability)
+        no_m = _re.search(r'No:\s*([\d.]+)%', market_probability)
+        if yes_m:
+            yes_prob = float(yes_m.group(1))
+        if no_m:
+            no_prob = float(no_m.group(1))
 
-========================================
-
-ФОРМАТ ОТВЕТА (строго этот):
-
-Вероятность системы: [Yes или No — X.X%]
-Уверенность: [Высокая/Средняя/Низкая]
-Логика: [2-3 предложения без воды]
-Основной сценарий: [1-2 предложения]
-Альтернативный сценарий: [1-2 предложения]
-Trigger Watch: [событие1 | событие2 | событие3]
-Mispricing: [есть/нет + краткое описание]
-Market Psychology: [1-2 предложения]
-Alpha Note: [1 предложение]
-Вывод: [1 сильное предложение]
-
-========================================
-
-⚠️ КРИТИЧЕСКИЕ ПРАВИЛА:
-— НЕ дублируй текст
-— НЕ пиши длинно
-— Trigger Watch = события, не пересказ новостей
-— Пиши как аналитик фонда, не как школьник
-— Все тексты только на русском языке""".strip()
-
+        if market_type == "multiple_choice" and options:
+            market_block = "\n".join(f"- {opt}" for opt in options[:5])
         else:
-            return f"""You are an analytical module for DeepAlpha AI.
+            market_block = f"Yes: {yes_prob}% | No: {no_prob}%"
 
-Your task: build a PROFESSIONAL hedge fund level analysis based on the input data.
+        model_prob_note = f"{market_prob_value:.1f}% (лидер: {market_leader})"
 
-⚠️ RULES:
-— Do NOT rewrite the question
-— Do NOT change market probabilities
-— Do NOT invent numbers
-— Write strictly in the structure below
-— Style: concise, confident, no filler
-— Max deviation from market: {max_dev:.0f}% ({rule})
+        days_str = (
+            f"{days_to_event} дней" if days_to_event is not None else "неизвестно"
+        )
 
-========================================
+        if lang == "ru":
+            return f"""Ты — DeepAlpha AI, профессиональный аналитик prediction markets (Polymarket).
 
+Твоя задача — не пересказать рынок, а дать ПОЛЕЗНУЮ аналитику и практическую ценность.
+
+ВАЖНО:
+— Не повторяй просто рынок
+— Давай интерпретацию
+— Давай стратегию
+— Давай где альфа, а где её нет
+— Максимальное отклонение от рынка: {max_dev:.0f}% ({rule})
+— Пиши ТОЛЬКО на русском языке
+
+──────────────────────────────
 INPUT:
 
 Question: {question}
 Category: {category}
+Market: {market_block}
+Model Probability: {model_prob_note}
 Days to event: {days_str}
-
-Market:
-{options_block}
-
 Trend: {trend_summary[:200]}
-Crowd behavior: {crowd_behavior[:150]}
-
-News (Google + Twitter/X):
-{news_block}
-
+Crowd: {crowd_behavior[:150]}
 Sentiment: {sentiment}
 
-========================================
+News:
+{news_block}
 
-REQUIRED OUTPUT FORMAT (strictly this):
+──────────────────────────────
+
+Сгенерируй ответ СТРОГО в следующем формате. Заполни каждый блок.
+
+Вероятность системы: [Yes или No — X.X%]
+Уверенность: [Высокая/Средняя/Низкая]
+Логика: [1-2 предложения — ЧТО означает состояние рынка, без повторения цифр]
+Основной сценарий: [что должно произойти чтобы рынок оказался прав]
+Альтернативный сценарий: [когда рынок может ошибаться]
+Trigger Watch: [событие1 | событие2 | событие3 | событие4]
+Trigger High: [события с высоким влиянием]
+Trigger Medium: [события со средним влиянием]
+Trigger Low: [шум и медиа]
+Mispricing: [есть/нет + Δ и описание если есть]
+Market Psychology: [рынок уверен или нет, страх/ожидание/неопределённость]
+Alpha Note: [если альфы нет — написать "Альфа отсутствует. Рынок эффективен." Если есть — где именно и при каких условиях]
+Trade Insight: [имеет ли смысл вход сейчас, почему]
+Trade Strategy: [ждать / входить / игнорировать]
+Trade Entry: [условия входа если есть]
+Trade Risk: [что может сломать сценарий]
+Вывод: [1 сильное предложение — что делать]
+
+──────────────────────────────
+
+КРИТИЧЕСКИЕ ПРАВИЛА:
+1. НЕ ПОВТОРЯЙ цифры без смысла
+2. НЕ ПИШИ воду и общие фразы
+3. КАЖДЫЙ блок должен давать ценность
+4. Если нет альфы — прямо скажи
+5. Пиши как аналитик фонда, не как блогер
+6. Все тексты строго на русском языке""".strip()
+
+        else:
+            return f"""You are DeepAlpha AI, a professional prediction markets analyst (Polymarket).
+
+Your task: provide USEFUL analytics and practical value — not just restate the market.
+
+IMPORTANT:
+— Do NOT just repeat market numbers
+— Give interpretation
+— Give strategy
+— State clearly where alpha exists or doesn't
+— Max deviation from market: {max_dev:.0f}% ({rule})
+— All text in English only
+
+──────────────────────────────
+INPUT:
+
+Question: {question}
+Category: {category}
+Market: {market_block}
+Model Probability: {model_prob_note}
+Days to event: {days_str}
+Trend: {trend_summary[:200]}
+Crowd: {crowd_behavior[:150]}
+Sentiment: {sentiment}
+
+News:
+{news_block}
+
+──────────────────────────────
+
+Generate response STRICTLY in this format:
 
 System Probability: [Yes or No — X.X%]
 Confidence: [High/Medium/Low]
-Reasoning: [2-3 sentences, no filler]
-Main Scenario: [1-2 sentences]
-Alternative Scenario: [1-2 sentences]
-Trigger Watch: [event1 | event2 | event3]
-Mispricing: [yes/no + brief description]
-Market Psychology: [1-2 sentences]
-Alpha Note: [1 sentence]
-Conclusion: [1 strong sentence]
+Reasoning: [1-2 sentences — WHAT the market state means, no number repetition]
+Main Scenario: [what must happen for market to be right]
+Alternative Scenario: [when market could be wrong]
+Trigger Watch: [event1 | event2 | event3 | event4]
+Trigger High: [high impact events]
+Trigger Medium: [medium impact events]
+Trigger Low: [noise and media]
+Mispricing: [yes/no + Δ and description if exists]
+Market Psychology: [confident or not, fear/expectation/uncertainty]
+Alpha Note: [if no alpha — write "No alpha. Market is efficient." If exists — where exactly and under what conditions]
+Trade Insight: [does entry make sense now, why]
+Trade Strategy: [wait / enter / ignore]
+Trade Entry: [entry conditions if any]
+Trade Risk: [what could break the scenario]
+Conclusion: [1 strong sentence — what to do]
 
-========================================
+──────────────────────────────
 
-⚠️ CRITICAL RULES:
-— No duplicated text
-— No long-winded answers
-— Trigger Watch = specific events, NOT news headlines
-— Write like a fund analyst, not a student
-— All text in English only""".strip()
-
+CRITICAL RULES:
+1. Do NOT repeat numbers without meaning
+2. Do NOT write filler or generic phrases
+3. EVERY block must give value
+4. If no alpha — say it directly
+5. Write like a fund analyst, not a blogger
+6. All text in English only""".strip()
     def _get_type_instruction(self, semantic_type: str, market_leader: str, market_prob_value: float, lang: str) -> str:
         if lang == "ru":
             if semantic_type == "binary_action":
