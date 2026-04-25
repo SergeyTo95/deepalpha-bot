@@ -770,6 +770,11 @@ Conclusion: [1 strong sentence]
             "options_breakdown": options_breakdown,
             "market_type": market_type,
             "raw_decision_text": raw_text,
+            # ═══ NEW fields from enhanced prompt ═══
+            "trigger_watch_raw": parsed.get("Trigger Watch", ""),
+            "mispricing_raw": parsed.get("Mispricing", ""),
+            "market_psychology_raw": parsed.get("Market Psychology", ""),
+            "alpha_note_raw": parsed.get("Alpha Note", ""),
         }
 
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
