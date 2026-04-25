@@ -606,6 +606,12 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
         if semantic_alt:
             text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
+
+        # ═══ NEW ANALYTICAL BLOCKS ═══
+        extra_blocks = _build_extra_blocks(result, lang)
+        if extra_blocks:
+            text += f"\n{extra_blocks}\n"
+
         if alpha_label and alpha_message:
             text += f"\n{alpha_label}:\n{alpha_message}\n"
         text += f"\n{'─' * 30}\n"
@@ -627,6 +633,12 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
         if semantic_alt:
             text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
+
+        # ═══ NEW ANALYTICAL BLOCKS ═══
+        extra_blocks = _build_extra_blocks(result, lang)
+        if extra_blocks:
+            text += f"\n{extra_blocks}\n"
+
         if alpha_label and alpha_message:
             text += f"\n{alpha_label}:\n{alpha_message}\n"
         text += f"\n{'─' * 30}\n"
