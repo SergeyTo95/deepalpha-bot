@@ -552,7 +552,6 @@ def _get_communication_data(result: dict, lang: str = "ru") -> dict:
 def _build_extra_blocks(result: dict, lang: str) -> str:
     parts = []
 
-    # Берём что LLM сгенерировал
     trigger_watch_raw = result.get("trigger_watch_raw", "")
     trigger_high = result.get("trigger_high", "")
     trigger_medium = result.get("trigger_medium", "")
@@ -565,6 +564,33 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
     trade_entry = result.get("trade_entry", "")
     trade_risk = result.get("trade_risk", "")
 
+    import re as _re
+
+    market_prob_str = str(result.get("market_probability", ""))
+    market_prob = 50.0
+    yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
+    no_m = _re.search(r'No:\s*([\d.]+)%', market_prob_str)
+    if yes_m and no_m:
+        market_prob = max(float(yes_m.group(1)), float(no_m.group(1)))
+    else:
+        m = _re.search(r'([\d.]+)%', market_prob_str)
+        if m:
+            market_prob = float(m.group(1))
+
+    prob_m = _re.search(r'([\d.]+)%', str(result.get("probability", "")))
+    model_prob = float(prob_m.group(1)) if prob_m else market_prob
+
+    if market_prob >= 85:
+        market_balance = "strong_consensus"
+    elif market_prob >= 65:
+        market_balance = "moderate_consensus"
+    elif market_prob >= 55:
+        market_balance = "slight_lean"
+    elif market_prob >= 45:
+        market_balance = "balanced"
+    else:
+        market_balance = "lean_against"
+
     # Time Shift
     sub_markets = result.get("sub_markets", [])
     if sub_markets:
@@ -576,87 +602,51 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
         except Exception as e:
             print(f"time_shift error: {e}")
 
-    # Mispricing
+    # Mispricing — из LLM или генерируем
     if mispricing_raw:
         parts.append(f"💣 Mispricing Signal:\n{mispricing_raw}")
+    else:
+        try:
+            from agents.alpha_layer import build_mispricing_block
+            mb = build_mispricing_block(model_prob, market_prob, lang)
+            if mb:
+                parts.append(mb)
+        except Exception as e:
+            print(f"mispricing error: {e}")
 
-    # Trigger Watch — с уровнями если есть
+    # Trigger Watch — из LLM с уровнями или генерируем
     if trigger_high or trigger_medium or trigger_low:
         trigger_block = "📡 Trigger Watch:\n"
         if trigger_high:
-            trigger_block += f"🔴 High impact:\n{trigger_high}\n"
+            lines = "\n".join(
+                f"— {e.strip()}"
+                for e in trigger_high.replace("|", ",").split(",")
+                if e.strip()
+            )
+            trigger_block += f"🔴 High impact:\n{lines}\n\n"
         if trigger_medium:
-            trigger_block += f"🟡 Medium:\n{trigger_medium}\n"
+            lines = "\n".join(
+                f"— {e.strip()}"
+                for e in trigger_medium.replace("|", ",").split(",")
+                if e.strip()
+            )
+            trigger_block += f"🟡 Medium:\n{lines}\n\n"
         if trigger_low:
-            trigger_block += f"🟢 Low:\n{trigger_low}"
+            lines = "\n".join(
+                f"— {e.strip()}"
+                for e in trigger_low.replace("|", ",").split(",")
+                if e.strip()
+            )
+            trigger_block += f"🟢 Low:\n{lines}"
         parts.append(trigger_block.strip())
     elif trigger_watch_raw:
         events = [e.strip() for e in trigger_watch_raw.split("|") if e.strip()]
         if events:
             lines = "\n".join(f"— {e}" for e in events[:6])
             parts.append(f"📡 Trigger Watch:\n{lines}")
-
-    # Market Psychology
-    if market_psychology_raw:
-        parts.append(f"🧠 Market Psychology:\n{market_psychology_raw}")
-
-    # Alpha Note
-    if alpha_note_raw:
-        parts.append(f"🟡 Alpha Note:\n{alpha_note_raw}")
-
-    # Trade Insight — самый важный блок
-    if trade_insight or trade_strategy:
-        trade_block = "📊 Trade Insight:\n"
-        if trade_insight:
-            trade_block += f"{trade_insight}\n"
-        if trade_strategy:
-            strategy_label = "📌 Стратегия:" if lang == "ru" else "📌 Strategy:"
-            trade_block += f"\n{strategy_label}\n{trade_strategy}\n"
-        if trade_entry:
-            entry_label = "📌 Условия входа:" if lang == "ru" else "📌 Entry Conditions:"
-            trade_block += f"\n{entry_label}\n{trade_entry}\n"
-        if trade_risk:
-            risk_label = "📌 Риск:" if lang == "ru" else "📌 Risk:"
-            trade_block += f"\n{risk_label}\n{trade_risk}"
-        parts.append(trade_block.strip())
-
-    # Fallback если LLM ничего не дал
-    if not parts:
+    else:
         try:
-            from agents.alpha_layer import (
-                build_mispricing_block,
-                build_market_psychology,
-                build_alpha_note,
-            )
             from agents.trigger_layer import build_trigger_watch
-            import re as _re
-
-            market_prob_str = str(result.get("market_probability", ""))
-            market_prob = 50.0
-            yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
-            no_m = _re.search(r'No:\s*([\d.]+)%', market_prob_str)
-            if yes_m and no_m:
-                market_prob = max(float(yes_m.group(1)), float(no_m.group(1)))
-
-            prob_m = _re.search(r'([\d.]+)%', str(result.get("probability", "")))
-            model_prob = float(prob_m.group(1)) if prob_m else market_prob
-
-            if market_prob > 0:
-                if market_prob >= 85:
-                    mb = "strong_consensus"
-                elif market_prob >= 65:
-                    mb = "moderate_consensus"
-                elif market_prob >= 55:
-                    mb = "slight_lean"
-                elif market_prob >= 45:
-                    mb = "balanced"
-                else:
-                    mb = "lean_against"
-
-                parts.append(build_mispricing_block(model_prob, market_prob, lang))
-                parts.append(build_market_psychology(market_prob, lang=lang))
-                parts.append(build_alpha_note(model_prob, market_prob, mb, lang))
-
             tw = build_trigger_watch(
                 question=result.get("question", ""),
                 category=result.get("category", ""),
@@ -665,9 +655,62 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
             )
             if tw:
                 parts.append(tw)
-
         except Exception as e:
-            print(f"_build_extra_blocks fallback error: {e}")
+            print(f"trigger error: {e}")
+
+    # Market Psychology — из LLM или генерируем
+    if market_psychology_raw:
+        parts.append(f"🧠 Market Psychology:\n{market_psychology_raw}")
+    else:
+        try:
+            from agents.alpha_layer import build_market_psychology
+            mp = build_market_psychology(market_prob, lang=lang)
+            if mp:
+                parts.append(mp)
+        except Exception as e:
+            print(f"psychology error: {e}")
+
+    # Alpha Note — из LLM или генерируем
+    if alpha_note_raw:
+        parts.append(f"🟡 Alpha Note:\n{alpha_note_raw}")
+    else:
+        try:
+            from agents.alpha_layer import build_alpha_note
+            an = build_alpha_note(model_prob, market_prob, market_balance, lang)
+            if an:
+                parts.append(an)
+        except Exception as e:
+            print(f"alpha_note error: {e}")
+
+    # Trade Insight — из LLM или генерируем
+    if trade_insight or trade_strategy:
+        trade_block = "📊 Trade Insight:\n"
+        if trade_insight:
+            trade_block += f"{trade_insight}\n"
+        if trade_strategy:
+            label = "📌 Стратегия:" if lang == "ru" else "📌 Strategy:"
+            trade_block += f"\n{label}\n{trade_strategy}\n"
+        if trade_entry:
+            label = "📌 Условия входа:" if lang == "ru" else "📌 Entry Conditions:"
+            trade_block += f"\n{label}\n{trade_entry}\n"
+        if trade_risk:
+            label = "📌 Риск:" if lang == "ru" else "📌 Risk:"
+            trade_block += f"\n{label}\n{trade_risk}"
+        parts.append(trade_block.strip())
+    else:
+        try:
+            from agents.alpha_layer import build_trade_insight
+            ti = build_trade_insight(
+                model_prob=model_prob,
+                market_prob=market_prob,
+                market_balance=market_balance,
+                category=result.get("category", ""),
+                lang=lang,
+            )
+            if ti:
+                parts.append(ti)
+        except Exception as e:
+            print(f"trade_insight error: {e}")
 
     return "\n\n".join(_escape(p) for p in parts if p)
 def _format_analysis(result: dict, uid: int) -> str:
