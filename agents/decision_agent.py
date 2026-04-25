@@ -862,6 +862,17 @@ CRITICAL RULES:
             "mispricing_raw": parsed.get("Mispricing", ""),
             "market_psychology_raw": parsed.get("Market Psychology", ""),
             "alpha_note_raw": parsed.get("Alpha Note", ""),
+            "trigger_watch_raw": parsed.get("Trigger Watch", ""),
+            "trigger_high": parsed.get("Trigger High", ""),
+            "trigger_medium": parsed.get("Trigger Medium", ""),
+            "trigger_low": parsed.get("Trigger Low", ""),
+            "mispricing_raw": parsed.get("Mispricing", ""),
+            "market_psychology_raw": parsed.get("Market Psychology", ""),
+            "alpha_note_raw": parsed.get("Alpha Note", ""),
+            "trade_insight": parsed.get("Trade Insight", ""),
+            "trade_strategy": parsed.get("Trade Strategy", ""),
+            "trade_entry": parsed.get("Trade Entry", ""),
+            "trade_risk": parsed.get("Trade Risk", ""),
         }
 
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
