@@ -539,6 +539,11 @@ Conclusion: [1 strong sentence]
             "Alternative Scenario": "",
             "Conclusion": "",
             "Options Breakdown": "",
+            # ═══ NEW ═══
+            "Trigger Watch": "",
+            "Mispricing": "",
+            "Market Psychology": "",
+            "Alpha Note": "",
         }
 
         russian_map = {
@@ -553,6 +558,15 @@ Conclusion: [1 strong sentence]
             "Заключение": "Conclusion",
             "Расклад по вариантам": "Options Breakdown",
             "Варианты": "Options Breakdown",
+            # ═══ NEW ═══
+            "Trigger Watch": "Trigger Watch",
+            "Триггеры": "Trigger Watch",
+            "Mispricing": "Mispricing",
+            "Расхождение": "Mispricing",
+            "Market Psychology": "Market Psychology",
+            "Психология рынка": "Market Psychology",
+            "Alpha Note": "Alpha Note",
+            "Альфа": "Alpha Note",
         }
 
         current_key = None
