@@ -568,10 +568,19 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
 
     market_prob_str = str(result.get("market_probability", ""))
     market_prob = 50.0
+    market_leader = "Yes"
+
     yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
     no_m = _re.search(r'No:\s*([\d.]+)%', market_prob_str)
     if yes_m and no_m:
-        market_prob = max(float(yes_m.group(1)), float(no_m.group(1)))
+        yes_p = float(yes_m.group(1))
+        no_p = float(no_m.group(1))
+        if no_p > yes_p:
+            market_prob = no_p
+            market_leader = "No"
+        else:
+            market_prob = yes_p
+            market_leader = "Yes"
     else:
         m = _re.search(r'([\d.]+)%', market_prob_str)
         if m:
@@ -602,19 +611,19 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
         except Exception as e:
             print(f"time_shift error: {e}")
 
-    # Mispricing — из LLM или генерируем
+    # Mispricing
     if mispricing_raw:
         parts.append(f"💣 Mispricing Signal:\n{mispricing_raw}")
     else:
         try:
             from agents.alpha_layer import build_mispricing_block
-            mb = build_mispricing_block(model_prob, market_prob, lang)
+            mb = build_mispricing_block(model_prob, market_prob, lang, market_leader)
             if mb:
                 parts.append(mb)
         except Exception as e:
             print(f"mispricing error: {e}")
 
-    # Trigger Watch — из LLM с уровнями или генерируем
+    # Trigger Watch
     if trigger_high or trigger_medium or trigger_low:
         trigger_block = "📡 Trigger Watch:\n"
         if trigger_high:
@@ -658,7 +667,7 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
         except Exception as e:
             print(f"trigger error: {e}")
 
-    # Market Psychology — из LLM или генерируем
+    # Market Psychology
     if market_psychology_raw:
         parts.append(f"🧠 Market Psychology:\n{market_psychology_raw}")
     else:
@@ -670,19 +679,21 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
         except Exception as e:
             print(f"psychology error: {e}")
 
-    # Alpha Note — из LLM или генерируем
+    # Alpha Note
     if alpha_note_raw:
         parts.append(f"🟡 Alpha Note:\n{alpha_note_raw}")
     else:
         try:
             from agents.alpha_layer import build_alpha_note
-            an = build_alpha_note(model_prob, market_prob, market_balance, lang)
+            an = build_alpha_note(
+                model_prob, market_prob, market_balance, lang, market_leader
+            )
             if an:
                 parts.append(an)
         except Exception as e:
             print(f"alpha_note error: {e}")
 
-    # Trade Insight — из LLM или генерируем
+    # Trade Insight
     if trade_insight or trade_strategy:
         trade_block = "📊 Trade Insight:\n"
         if trade_insight:
@@ -706,6 +717,7 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
                 market_balance=market_balance,
                 category=result.get("category", ""),
                 lang=lang,
+                market_leader=market_leader,
             )
             if ti:
                 parts.append(ti)
