@@ -19,6 +19,9 @@ class CommunicationAgent:
         options_breakdown = decision_data.get("options_breakdown", "").strip()
         lang = decision_data.get("lang", "ru")
         sub_markets = decision_data.get("sub_markets", [])
+        key_signals = decision_data.get("key_signals", [])
+        sentiment = decision_data.get("sentiment", "Unclear")
+        category = decision_data.get("category", "")
 
         raw_outcome, prob_val = self._split_probability(probability)
         semantic_type = self._classify_semantic_type(question, market_type)
@@ -68,25 +71,34 @@ class CommunicationAgent:
 
         final_reasoning = self._build_reasoning(
             clean_reasoning, semantic_text, is_negated,
-            model_prob, market_prob, market_balance, lang
+            model_prob, market_prob, market_balance,
+            key_signals, sentiment, lang,
         )
         final_scenario = self._build_scenario(
             clean_scenario, semantic_text, display_prediction,
-            is_negated, model_prob, market_balance, lang
+            is_negated, model_prob, market_balance, lang,
         )
         final_alt = self._build_alt_scenario(
             clean_alt, semantic_text, is_negated,
-            market_prob, market_balance, lang
+            market_prob, market_balance, lang,
         )
         final_conclusion = self._build_conclusion(
             clean_conclusion, display_prediction, semantic_text,
-            is_negated, market_balance, lang
+            is_negated, market_balance, lang,
+        )
+
+        alpha_signal_block = self._build_alpha_signal_block(
+            market_prob, market_balance, is_negated,
+            semantic_text, lang,
+        )
+        triggers_block = self._build_triggers_block(
+            category, question, key_signals, market_balance, lang,
         )
 
         time_shift = self._analyze_time_shift(sub_markets) if sub_markets else None
 
         short_signal = self._build_short_signal(
-            question, raw_outcome, prob_val, confidence, alpha_message, lang
+            question, raw_outcome, prob_val, confidence, alpha_message, lang,
         )
         full_analysis = self._build_full_analysis(
             question=question,
@@ -97,6 +109,8 @@ class CommunicationAgent:
             main_scenario=final_scenario,
             alt_scenario=final_alt,
             conclusion=final_conclusion,
+            alpha_signal_block=alpha_signal_block,
+            triggers_block=triggers_block,
             lang=lang,
             time_shift=time_shift,
         )
@@ -114,23 +128,247 @@ class CommunicationAgent:
             "confidence": confidence,
             "alpha_label": alpha_label,
             "alpha_message": alpha_message,
+            "alpha_signal_block": alpha_signal_block,
+            "triggers_block": triggers_block,
             "time_shift": time_shift,
         }
+
+    # ═══════════════════════════════════════════
+    # ALPHA SIGNAL BLOCK
+    # ═══════════════════════════════════════════
+
+    def _build_alpha_signal_block(
+        self,
+        market_prob: float,
+        market_balance: str,
+        is_negated: bool,
+        semantic_text: str,
+        lang: str,
+    ) -> str:
+        if lang == "ru":
+            if market_balance == "strong_consensus":
+                if market_prob >= 85:
+                    icon = "🟢"
+                    text = (
+                        f"Сильный консенсус ({market_prob:.1f}%). "
+                        f"Рынок с высокой уверенностью оценивает исход. "
+                        f"Ставки против требуют экстраординарных событий."
+                    )
+                else:
+                    icon = "🟢"
+                    text = (
+                        f"Устойчивый перевес ({market_prob:.1f}%). "
+                        f"Текущий лидер контролирует ситуацию."
+                    )
+            elif market_balance == "moderate_consensus":
+                icon = "🟡"
+                text = (
+                    f"Умеренный перевес ({market_prob:.1f}%). "
+                    f"Рынок склоняется к одному исходу, но новые данные "
+                    f"могут изменить баланс."
+                )
+            elif market_balance == "slight_lean":
+                icon = "🟡"
+                text = (
+                    f"Слабый перевес ({market_prob:.1f}%). "
+                    f"Рынок неопределён — небольшой сдвиг в пользу одного исхода, "
+                    f"но без явного консенсуса."
+                )
+            elif market_balance == "balanced":
+                icon = "⚪"
+                text = (
+                    f"Рынок неопределён (~{market_prob:.1f}%). "
+                    f"Ни один исход не доминирует — высокая чувствительность "
+                    f"к новым данным."
+                )
+            else:
+                icon = "🔴"
+                text = (
+                    f"Рынок против основного исхода ({market_prob:.1f}%). "
+                    f"Необходим разворот для смены лидера."
+                )
+            return f"{icon} Alpha-сигнал:\n{text}"
+        else:
+            if market_balance == "strong_consensus":
+                icon = "🟢"
+                text = (
+                    f"Strong consensus ({market_prob:.1f}%). "
+                    f"Market prices in this outcome with high conviction. "
+                    f"Fading requires extraordinary catalysts."
+                )
+            elif market_balance == "moderate_consensus":
+                icon = "🟡"
+                text = (
+                    f"Moderate edge ({market_prob:.1f}%). "
+                    f"Market leans one way but new data could shift the balance."
+                )
+            elif market_balance == "slight_lean":
+                icon = "🟡"
+                text = (
+                    f"Weak edge ({market_prob:.1f}%). "
+                    f"Market is uncertain — slight lean without clear consensus."
+                )
+            elif market_balance == "balanced":
+                icon = "⚪"
+                text = (
+                    f"Market is uncertain (~{market_prob:.1f}%). "
+                    f"No dominant outcome — highly sensitive to new data."
+                )
+            else:
+                icon = "🔴"
+                text = (
+                    f"Market leans against main scenario ({market_prob:.1f}%). "
+                    f"Reversal needed for leadership change."
+                )
+            return f"{icon} Alpha Signal:\n{text}"
+
+    # ═══════════════════════════════════════════
+    # TRIGGERS BLOCK
+    # ═══════════════════════════════════════════
+
+    def _build_triggers_block(
+        self,
+        category: str,
+        question: str,
+        key_signals: List[str],
+        market_balance: str,
+        lang: str,
+    ) -> str:
+        cat = category.lower()
+        q = question.lower()
+
+        if lang == "ru":
+            triggers = self._get_triggers_ru(cat, q, market_balance, key_signals)
+            header = "📡 Триггеры:"
+        else:
+            triggers = self._get_triggers_en(cat, q, market_balance, key_signals)
+            header = "📡 Triggers:"
+
+        if not triggers:
+            return ""
+
+        lines = "\n".join(f"• {t}" for t in triggers[:4])
+        return f"{header}\n{lines}"
+
+    def _get_triggers_ru(
+        self,
+        cat: str,
+        question: str,
+        market_balance: str,
+        key_signals: List[str],
+    ) -> List[str]:
+        triggers = []
+
+        if key_signals:
+            for sig in key_signals[:2]:
+                if len(sig) > 15:
+                    triggers.append(f"Развитие событий: {sig[:120]}")
+
+        if "politics" in cat or "war" in question or "invade" in question:
+            triggers.extend([
+                "Официальные переговоры или дипломатические контакты",
+                "Заявления лидеров государств или министров иностранных дел",
+                "Изменение санкционной политики или военной активности",
+            ])
+        elif "crypto" in cat or "bitcoin" in question or "btc" in question:
+            triggers.extend([
+                "Решение SEC или крупного регулятора по крипто-активам",
+                "Значимые институциональные покупки или продажи",
+                "Макро-события: данные по инфляции, решение ФРС",
+            ])
+        elif "economy" in cat:
+            triggers.extend([
+                "Решение ФРС / ЕЦБ по процентной ставке",
+                "Данные по инфляции (CPI) или занятости (NFP)",
+                "Геополитические события влияющие на рынки",
+            ])
+        elif "sports" in cat:
+            triggers.extend([
+                "Травмы ключевых игроков или изменения состава",
+                "Результаты предыдущих матчей / форма команд",
+                "Погодные условия или место проведения",
+            ])
+        elif "tech" in cat:
+            triggers.extend([
+                "Анонс нового продукта или модели от ключевого игрока",
+                "Регуляторные решения в сфере AI или Big Tech",
+                "Финансовые результаты или прогнозы компании",
+            ])
+        else:
+            triggers.extend([
+                "Появление новых данных или официальных заявлений",
+                "Изменение макроэкономического фона",
+            ])
+
+        if market_balance in ("balanced", "slight_lean"):
+            triggers.append(
+                "Любое неожиданное событие может резко сдвинуть вероятность"
+            )
+
+        return triggers[:4]
+
+    def _get_triggers_en(
+        self,
+        cat: str,
+        question: str,
+        market_balance: str,
+        key_signals: List[str],
+    ) -> List[str]:
+        triggers = []
+
+        if key_signals:
+            for sig in key_signals[:2]:
+                if len(sig) > 15:
+                    triggers.append(f"Development: {sig[:120]}")
+
+        if "politics" in cat or "war" in question or "invade" in question:
+            triggers.extend([
+                "Official negotiations or diplomatic contacts",
+                "Statements from heads of state or foreign ministers",
+                "Change in sanctions policy or military activity",
+            ])
+        elif "crypto" in cat or "bitcoin" in question or "btc" in question:
+            triggers.extend([
+                "SEC or major regulator decision on crypto assets",
+                "Significant institutional buys or sells",
+                "Macro events: inflation data, Fed decision",
+            ])
+        elif "economy" in cat:
+            triggers.extend([
+                "Fed / ECB interest rate decision",
+                "CPI or NFP data release",
+                "Geopolitical events affecting markets",
+            ])
+        elif "sports" in cat:
+            triggers.extend([
+                "Key player injuries or roster changes",
+                "Recent form and head-to-head record",
+                "Weather or venue conditions",
+            ])
+        elif "tech" in cat:
+            triggers.extend([
+                "New product or model announcement from key player",
+                "Regulatory decisions on AI or Big Tech",
+                "Earnings report or company guidance",
+            ])
+        else:
+            triggers.extend([
+                "New data release or official statements",
+                "Shift in macroeconomic conditions",
+            ])
+
+        if market_balance in ("balanced", "slight_lean"):
+            triggers.append(
+                "Any unexpected event could sharply shift the probability"
+            )
+
+        return triggers[:4]
 
     # ═══════════════════════════════════════════
     # TIME SHIFT ANALYSIS
     # ═══════════════════════════════════════════
 
     def _analyze_time_shift(self, market_data: list) -> dict:
-        """
-        Анализирует временную структуру вероятностей по нескольким sub-рынкам.
-
-        market_data = [
-            {"date": "Apr 30", "yes_prob": 6.5},
-            {"date": "May 31", "yes_prob": 33.5},
-            {"date": "Jun 30", "yes_prob": 54.0},
-        ]
-        """
         if not market_data or len(market_data) < 2:
             return {"trend": "flat", "description": "", "insight": ""}
 
@@ -182,14 +420,14 @@ class CommunicationAgent:
                 )
             else:
                 insight = (
-                    f"Рынок постепенно повышает оценку вероятности, но пока ниже 50%. "
-                    f"Ожидание роста уверенности при появлении новых данных."
+                    f"Рынок постепенно повышает оценку, но пока ниже 50%. "
+                    f"Ожидание роста уверенности при новых данных."
                 )
         elif trend == "down":
             description = f"Вероятность падает со временем ({prob_sequence})"
             if probs[0] >= 40:
                 insight = (
-                    f"Рынок теряет уверенность в событии с удалением горизонта. "
+                    f"Рынок теряет уверенность с удалением горизонта. "
                     f"Краткосрочный оптимизм не подкреплён долгосрочным консенсусом."
                 )
             else:
@@ -268,6 +506,8 @@ class CommunicationAgent:
         main_scenario: str,
         alt_scenario: str,
         conclusion: str,
+        alpha_signal_block: str,
+        triggers_block: str,
         lang: str,
         time_shift: Optional[dict] = None,
     ) -> str:
@@ -296,6 +536,9 @@ class CommunicationAgent:
                     f"{time_shift['insight']}"
                 )
 
+        alpha_part = f"\n\n{alpha_signal_block}" if alpha_signal_block else ""
+        triggers_part = f"\n\n{triggers_block}" if triggers_block else ""
+
         if lang == "ru":
             return (
                 f"📊 DeepAlpha Анализ\n\n"
@@ -306,6 +549,8 @@ class CommunicationAgent:
                 f"🔎 Логика:\n{reasoning}\n\n"
                 f"🧩 Основной сценарий:\n{main_scenario}\n\n"
                 f"⚠️ Альтернативный сценарий:\n{alt_scenario}"
+                f"{alpha_part}"
+                f"{triggers_part}"
                 f"{time_shift_block}\n\n"
                 f"📌 Вывод:\n{conclusion}"
             )
@@ -319,6 +564,8 @@ class CommunicationAgent:
                 f"🔎 Reasoning:\n{reasoning}\n\n"
                 f"🧩 Main Scenario:\n{main_scenario}\n\n"
                 f"⚠️ Alternative Scenario:\n{alt_scenario}"
+                f"{alpha_part}"
+                f"{triggers_part}"
                 f"{time_shift_block}\n\n"
                 f"📌 Conclusion:\n{conclusion}"
             )
@@ -1070,6 +1317,8 @@ class CommunicationAgent:
         model_prob: float,
         market_prob: float,
         market_balance: str,
+        key_signals: List[str],
+        sentiment: str,
         lang: str,
     ) -> str:
         if clean_reasoning and len(clean_reasoning) > 30:
@@ -1087,62 +1336,89 @@ class CommunicationAgent:
                     result = re.sub(r'\bNo\b', semantic_text, result)
                 else:
                     result = re.sub(r'\bYes\b', semantic_text, result)
+
+                if key_signals and len(result) > 30:
+                    signals_text = "; ".join(key_signals[:2])
+                    if signals_text and signals_text.lower() not in result.lower():
+                        if lang == "ru":
+                            result = result + f" Ключевые сигналы: {signals_text}."
+                        else:
+                            result = result + f" Key signals: {signals_text}."
+
                 if len(result) > 30:
                     return result
 
         prob = market_prob or model_prob or 50.0
 
+        signals_suffix = ""
+        if key_signals:
+            sig = key_signals[0][:100]
+            if lang == "ru":
+                signals_suffix = f" Контекст: {sig}."
+            else:
+                signals_suffix = f" Context: {sig}."
+
+        sentiment_note = ""
+        if sentiment and sentiment.lower() not in ("unclear", "unknown"):
+            if lang == "ru":
+                sent_map = {
+                    "positive": "позитивный", "negative": "негативный",
+                    "mixed": "смешанный",
+                }
+                sent_ru = sent_map.get(sentiment.lower(), sentiment.lower())
+                sentiment_note = f" Настроение рынка: {sent_ru}."
+            else:
+                sentiment_note = f" Market sentiment: {sentiment.lower()}."
+
         if lang == "ru":
             if market_balance == "strong_consensus":
-                return (
+                base = (
                     f"Подавляющий консенсус ({prob:.1f}%) — участники рынка "
                     f"уже учли доступную информацию. "
                     f"Отклонение требует экстраординарных доказательств."
                 )
             elif market_balance == "moderate_consensus":
-                return (
-                    f"Умеренный консенсус ({prob:.1f}%) указывает на устойчивый перевес. "
-                    f"Ключевые факторы на стороне текущего лидера."
+                base = (
+                    f"Умеренный консенсус ({prob:.1f}%) — устойчивый перевес "
+                    f"в пользу текущего лидера."
                 )
             elif market_balance == "slight_lean":
-                return (
-                    f"Небольшой перевес ({prob:.1f}%) — рынок склоняется к одному исходу, "
-                    f"но ситуация остаётся открытой."
+                base = (
+                    f"Небольшой перевес ({prob:.1f}%) — рынок склоняется к одному "
+                    f"исходу, но ситуация открыта."
                 )
             elif market_balance == "balanced":
-                return (
+                base = (
                     f"Рынок неопределён — вероятность около {prob:.1f}%. "
                     f"Ни один фактор не доминирует."
                 )
             else:
-                return (
-                    f"Условия не благоприятствуют основному сценарию ({prob:.1f}%)."
-                )
+                base = f"Условия не благоприятствуют основному сценарию ({prob:.1f}%)."
+            return base + signals_suffix + sentiment_note
         else:
             if market_balance == "strong_consensus":
-                return (
+                base = (
                     f"Overwhelming consensus ({prob:.1f}%) — market has fully priced "
                     f"available information. Deviation requires extraordinary evidence."
                 )
             elif market_balance == "moderate_consensus":
-                return (
+                base = (
                     f"Moderate consensus ({prob:.1f}%) — solid lead for the current "
-                    f"favourite. Key factors support this outcome."
+                    f"favourite."
                 )
             elif market_balance == "slight_lean":
-                return (
+                base = (
                     f"Slight edge ({prob:.1f}%) — market leans one way "
                     f"but remains open to new data."
                 )
             elif market_balance == "balanced":
-                return (
+                base = (
                     f"Uncertain market — probability around {prob:.1f}%. "
                     f"No single factor dominates."
                 )
             else:
-                return (
-                    f"Conditions do not favour the main scenario ({prob:.1f}%)."
-                )
+                base = f"Conditions do not favour the main scenario ({prob:.1f}%)."
+            return base + signals_suffix + sentiment_note
 
     def _build_scenario(
         self,
@@ -1172,9 +1448,7 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return "Сценарий реализуется при сохранении текущих условий. Тренд устойчив."
             elif market_balance == "moderate_consensus":
-                return (
-                    "Сценарий реализуется если динамика сохранится без резких изменений."
-                )
+                return "Сценарий реализуется если динамика сохранится без резких изменений."
             elif market_balance == "slight_lean":
                 return (
                     "Небольшое преимущество держится при текущем балансе. "
@@ -1191,9 +1465,7 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return "Scenario plays out if current conditions hold. Trend is stable."
             elif market_balance == "moderate_consensus":
-                return (
-                    "Scenario materialises if dynamics continue without sharp reversals."
-                )
+                return "Scenario materialises if dynamics continue without sharp reversals."
             elif market_balance == "slight_lean":
                 return (
                     "Slight edge holds under current balance. "
@@ -1258,13 +1530,12 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return (
                     f"Unlikely scenario ({alt_prob:.1f}%): sharp policy reversal, "
-                    f"geopolitical shock or black swan event. "
-                    f"Market nearly rules this out."
+                    f"geopolitical shock or black swan. Market nearly rules this out."
                 )
             elif market_balance == "moderate_consensus":
                 return (
                     f"Alternative scenario ({alt_prob:.1f}%): key factor shift, "
-                    f"surprise data or sentiment reversal could break the trend."
+                    f"surprise data or sentiment reversal."
                 )
             elif market_balance == "slight_lean":
                 return (
