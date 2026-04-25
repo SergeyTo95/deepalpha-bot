@@ -22,11 +22,6 @@ def detect_mispricing(
     market_prob: float,
     market_leader: str = "Yes",
 ) -> dict:
-    """
-    model_prob > market_prob → рынок НЕДООЦЕНИВАЕТ лидера → альфа за market_leader
-    model_prob < market_prob → рынок ПЕРЕОЦЕНИВАЕТ лидера → альфа за противоположный
-    Δ < 5 → альфы нет
-    """
     delta = abs(model_prob - market_prob)
     opposite = "No" if market_leader == "Yes" else "Yes"
 
@@ -242,12 +237,6 @@ def build_alpha_note(
     lang: str = "ru",
     market_leader: str = "Yes",
 ) -> str:
-    """
-    Δ < 5  → альфы нет, стратегия ожидания
-    Δ 5-10 → слабая альфа, нужен триггер
-    Δ 10-20 → умеренная альфа, можно рассматривать
-    Δ > 20 → сильная альфа, высокий риск
-    """
     delta = abs(model_prob - market_prob)
     opposite = "No" if market_leader == "Yes" else "Yes"
 
@@ -276,7 +265,8 @@ def build_alpha_note(
             note = (
                 f"Умеренная альфа (Δ {delta:.1f}%) в сторону {alpha_side}. "
                 f"Рынок может быть неэффективен — возможность в {alpha_side}. "
-                "Условия входа: подтверждение от 1–2 независимых источников. "
+                "Условия входа: дождаться отката от максимума, "
+                "подтверждение от 1–2 независимых источников. "
                 "Размер позиции умеренный, риск ограничить."
             )
         else:
@@ -308,7 +298,8 @@ def build_alpha_note(
             note = (
                 f"Moderate alpha (Δ {delta:.1f}%) toward {alpha_side}. "
                 f"Market may be inefficient — opportunity in {alpha_side}. "
-                "Entry conditions: confirmation from 1–2 independent sources. "
+                "Entry conditions: wait for pullback from peak, "
+                "confirmation from 1–2 independent sources. "
                 "Moderate position size, limit risk."
             )
         else:
@@ -331,11 +322,13 @@ def build_trade_insight(
     market_leader: str = "Yes",
 ) -> str:
     """
-    Δ < 5  → альфы нет → НЕ предлагать вход, только ждать/мониторить
-    Δ ≥ 5  → можно давать сценарий входа
+    Δ < 5  → альфы нет → НЕ предлагать вход
+    Δ 5-10 → слабая альфа → вход только при триггере
+    Δ 10-20 → умеренная альфа → вход через откаты, не на максимумах
+    Δ > 20 → сильная альфа → высокий риск, проверка
 
-    model_prob > market_prob → рынок недооценивает лидера → торгуем за market_leader
-    model_prob < market_prob → рынок переоценивает лидера → торгуем за opposite
+    model_prob > market_prob → рынок недооценивает → торгуем за market_leader
+    model_prob < market_prob → рынок переоценивает → торгуем за opposite
     """
     delta = abs(model_prob - market_prob)
     opposite = "No" if market_leader == "Yes" else "Yes"
@@ -349,7 +342,7 @@ def build_trade_insight(
 
     if lang == "ru":
         if not has_alpha:
-            # Δ < 5 — альфы нет, вход не предлагаем
+            # Δ < 5 — альфы нет
             if market_balance == "strong_consensus":
                 insight = (
                     f"Расхождение модели и рынка минимально (Δ {delta:.1f}%). "
@@ -362,7 +355,7 @@ def build_trade_insight(
                     "— реагировать первым при появлении значимого события"
                 )
                 entry = "— только при появлении нового сильного триггера изменившего расклад"
-                risk = f"— без триггера вход даёт нулевое преимущество"
+                risk = "— без триггера вход даёт нулевое преимущество"
             elif market_balance in ("balanced", "slight_lean"):
                 insight = (
                     f"Расхождение минимально (Δ {delta:.1f}%). "
@@ -390,25 +383,35 @@ def build_trade_insight(
                 risk = "— рынок уже правильно оценивает ситуацию"
 
         else:
-            # Δ ≥ 5 — есть расхождение — можно давать сценарий
             if market_balance == "strong_consensus":
                 if model_prob > market_prob:
                     insight = (
                         f"Рынок недооценивает {market_leader} ({market_prob:.1f}%), "
                         f"модель видит {model_prob:.1f}%. "
                         f"Расхождение {delta:.1f}% — потенциал в {trade_side}. "
-                        "Консенсус сильный — входить только на откате."
+                        "Консенсус сильный — входить только на откатах."
                     )
-                    strategy = (
-                        f"— рассмотреть {trade_side} при откате от максимума\n"
-                        "— не входить на пике вероятности\n"
-                        "— размер позиции умеренный"
-                    )
-                    entry = (
-                        f"— если цена {trade_side} откатится к {market_prob - 8:.0f}–"
-                        f"{market_prob - 5:.0f}%\n"
-                        "— при подтверждении события в пользу этого исхода"
-                    )
+                    if delta < 20:
+                        strategy = (
+                            f"— рассматривать вход в {trade_side} при откатах от максимума\n"
+                            f"— не заходить на локальных максимумах\n"
+                            "— умеренный размер позиции"
+                        )
+                        entry = (
+                            f"— если цена {trade_side} откатится к "
+                            f"{market_prob - 8:.0f}–{market_prob - 5:.0f}%\n"
+                            "— при подтверждении события в пользу этого исхода"
+                        )
+                    else:
+                        strategy = (
+                            f"— рассматривать {trade_side} только на глубоких откатах\n"
+                            "— не входить вблизи текущей цены\n"
+                            "— минимальный размер позиции из-за высокого риска"
+                        )
+                        entry = (
+                            f"— при откате {trade_side} к {market_prob - 12:.0f}% или ниже\n"
+                            "— при появлении сильного подтверждающего события"
+                        )
                     risk = (
                         f"— разворотный триггер может быстро сдвинуть к {alt_prob}%\n"
                         "— консенсус может быть завышен"
@@ -442,12 +445,12 @@ def build_trade_insight(
                         f"Расхождение {delta:.1f}% — рынок недооценивает {trade_side}."
                     )
                     strategy = (
-                        f"— рассмотреть вход в {trade_side} при подтверждении\n"
-                        "— умеренный размер позиции\n"
-                        "— не ждать идеального момента"
+                        f"— рассматривать вход в {trade_side} при откатах от текущих уровней\n"
+                        f"— не заходить на локальных максимумах вероятности\n"
+                        "— умеренный размер позиции"
                     )
                     entry = (
-                        f"— при удержании {market_leader} выше {market_prob - 5:.0f}%\n"
+                        f"— при откате {trade_side} к {market_prob - 5:.0f}–{market_prob - 3:.0f}%\n"
                         "— при выходе подтверждающего события"
                     )
                     risk = (
@@ -463,7 +466,7 @@ def build_trade_insight(
                     strategy = (
                         f"— ждать сигнала для входа в {trade_side}\n"
                         "— не входить до появления подтверждающего триггера\n"
-                        "— размер позиции умеренный при подтверждении"
+                        "— умеренный размер позиции при подтверждении"
                     )
                     entry = (
                         f"— если {market_leader} начнёт падать ниже {market_prob - 5:.0f}%\n"
@@ -479,7 +482,7 @@ def build_trade_insight(
                     f"Рынок нестабилен ({market_leader}: {market_prob:.1f}% | "
                     f"{opposite}: {alt_prob}%). "
                     f"Расхождение {delta:.1f}% в сторону {trade_side} — "
-                    "но без чёткого сигнала риск высокий."
+                    "без чёткого сигнала риск высокий."
                 )
                 strategy = (
                     f"— наблюдать за {trade_side}\n"
@@ -572,18 +575,29 @@ def build_trade_insight(
                         f"Market underpricing {market_leader} ({market_prob:.1f}%), "
                         f"model sees {model_prob:.1f}%. "
                         f"{delta:.1f}% divergence — opportunity in {trade_side}. "
-                        "Strong consensus — enter only on pullback."
+                        "Strong consensus — enter on pullbacks only."
                     )
-                    strategy = (
-                        f"— consider {trade_side} on pullback from peak\n"
-                        "— do not enter at probability peak\n"
-                        "— moderate position size"
-                    )
-                    entry = (
-                        f"— if {trade_side} pulls back to "
-                        f"{market_prob - 8:.0f}–{market_prob - 5:.0f}%\n"
-                        "— on confirmation of supporting event"
-                    )
+                    if delta < 20:
+                        strategy = (
+                            f"— look for entry in {trade_side} on pullbacks from peak\n"
+                            "— do not enter at local probability highs\n"
+                            "— moderate position size"
+                        )
+                        entry = (
+                            f"— if {trade_side} pulls back to "
+                            f"{market_prob - 8:.0f}–{market_prob - 5:.0f}%\n"
+                            "— on confirmation of supporting event"
+                        )
+                    else:
+                        strategy = (
+                            f"— consider {trade_side} only on deep pullbacks\n"
+                            "— avoid entering near current price level\n"
+                            "— minimum position size due to high risk"
+                        )
+                        entry = (
+                            f"— on {trade_side} pullback to {market_prob - 12:.0f}% or below\n"
+                            "— on strong confirming event"
+                        )
                     risk = (
                         f"— reversal trigger could quickly push to {alt_prob}%\n"
                         "— consensus may be inflated"
@@ -617,12 +631,13 @@ def build_trade_insight(
                         f"{delta:.1f}% divergence — market underpricing {trade_side}."
                     )
                     strategy = (
-                        f"— consider entry in {trade_side} on confirmation\n"
-                        "— moderate position size\n"
-                        "— don't wait for perfect timing"
+                        f"— look for entry in {trade_side} on pullbacks from current levels\n"
+                        "— do not enter at local probability highs\n"
+                        "— moderate position size"
                     )
                     entry = (
-                        f"— if {market_leader} holds above {market_prob - 5:.0f}%\n"
+                        f"— on {trade_side} pullback to "
+                        f"{market_prob - 5:.0f}–{market_prob - 3:.0f}%\n"
                         "— on confirming event"
                     )
                     risk = (
@@ -654,7 +669,7 @@ def build_trade_insight(
                     f"Market unstable ({market_leader}: {market_prob:.1f}% | "
                     f"{opposite}: {alt_prob}%). "
                     f"{delta:.1f}% divergence toward {trade_side} — "
-                    "but high risk without clear signal."
+                    "high risk without clear signal."
                 )
                 strategy = (
                     f"— watch {trade_side}\n"
