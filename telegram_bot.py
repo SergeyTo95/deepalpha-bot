@@ -552,29 +552,75 @@ def _get_communication_data(result: dict, lang: str = "ru") -> dict:
 def _build_extra_blocks(result: dict, lang: str) -> str:
     parts = []
 
-    # Сначала берём то что LLM сгенерировал сам
+    # Берём что LLM сгенерировал
     trigger_watch_raw = result.get("trigger_watch_raw", "")
+    trigger_high = result.get("trigger_high", "")
+    trigger_medium = result.get("trigger_medium", "")
+    trigger_low = result.get("trigger_low", "")
     mispricing_raw = result.get("mispricing_raw", "")
     market_psychology_raw = result.get("market_psychology_raw", "")
     alpha_note_raw = result.get("alpha_note_raw", "")
+    trade_insight = result.get("trade_insight", "")
+    trade_strategy = result.get("trade_strategy", "")
+    trade_entry = result.get("trade_entry", "")
+    trade_risk = result.get("trade_risk", "")
 
-    # Если LLM дал данные — используем их
-    if trigger_watch_raw:
-        events = [e.strip() for e in trigger_watch_raw.split("|") if e.strip()]
-        if events:
-            lines = "\n".join(f"— {e}" for e in events[:5])
-            parts.append(f"📡 Trigger Watch:\n{lines}")
+    # Time Shift
+    sub_markets = result.get("sub_markets", [])
+    if sub_markets:
+        try:
+            from agents.time_shift_layer import build_time_shift_block
+            ts = build_time_shift_block(time_series=sub_markets, lang=lang)
+            if ts:
+                parts.append(ts)
+        except Exception as e:
+            print(f"time_shift error: {e}")
 
+    # Mispricing
     if mispricing_raw:
         parts.append(f"💣 Mispricing Signal:\n{mispricing_raw}")
 
+    # Trigger Watch — с уровнями если есть
+    if trigger_high or trigger_medium or trigger_low:
+        trigger_block = "📡 Trigger Watch:\n"
+        if trigger_high:
+            trigger_block += f"🔴 High impact:\n{trigger_high}\n"
+        if trigger_medium:
+            trigger_block += f"🟡 Medium:\n{trigger_medium}\n"
+        if trigger_low:
+            trigger_block += f"🟢 Low:\n{trigger_low}"
+        parts.append(trigger_block.strip())
+    elif trigger_watch_raw:
+        events = [e.strip() for e in trigger_watch_raw.split("|") if e.strip()]
+        if events:
+            lines = "\n".join(f"— {e}" for e in events[:6])
+            parts.append(f"📡 Trigger Watch:\n{lines}")
+
+    # Market Psychology
     if market_psychology_raw:
         parts.append(f"🧠 Market Psychology:\n{market_psychology_raw}")
 
+    # Alpha Note
     if alpha_note_raw:
         parts.append(f"🟡 Alpha Note:\n{alpha_note_raw}")
 
-    # Fallback — если LLM не дал блоки, генерируем через агентов
+    # Trade Insight — самый важный блок
+    if trade_insight or trade_strategy:
+        trade_block = "📊 Trade Insight:\n"
+        if trade_insight:
+            trade_block += f"{trade_insight}\n"
+        if trade_strategy:
+            strategy_label = "📌 Стратегия:" if lang == "ru" else "📌 Strategy:"
+            trade_block += f"\n{strategy_label}\n{trade_strategy}\n"
+        if trade_entry:
+            entry_label = "📌 Условия входа:" if lang == "ru" else "📌 Entry Conditions:"
+            trade_block += f"\n{entry_label}\n{trade_entry}\n"
+        if trade_risk:
+            risk_label = "📌 Риск:" if lang == "ru" else "📌 Risk:"
+            trade_block += f"\n{risk_label}\n{trade_risk}"
+        parts.append(trade_block.strip())
+
+    # Fallback если LLM ничего не дал
     if not parts:
         try:
             from agents.alpha_layer import (
@@ -583,14 +629,7 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
                 build_alpha_note,
             )
             from agents.trigger_layer import build_trigger_watch
-            from agents.time_shift_layer import build_time_shift_block
             import re as _re
-
-            sub_markets = result.get("sub_markets", [])
-            if sub_markets:
-                ts_block = build_time_shift_block(time_series=sub_markets, lang=lang)
-                if ts_block:
-                    parts.append(ts_block)
 
             market_prob_str = str(result.get("market_probability", ""))
             market_prob = 50.0
@@ -630,9 +669,7 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
         except Exception as e:
             print(f"_build_extra_blocks fallback error: {e}")
 
-    # Escape и соединяем
     return "\n\n".join(_escape(p) for p in parts if p)
-
 def _format_analysis(result: dict, uid: int) -> str:
     lang = get_user_lang(uid)
     q = _escape(result.get("question", ""))
