@@ -262,7 +262,7 @@ def _extract_market_leader_prob(self, market_probability: str, market_type: str)
                 is_negated=is_negated,
                 lang=lang,
             )
-            if result and "выполнит действие" not in result and "perform action" not in result and len(result) > 5:
+            if result and "выполнит действие" not in result:
                 return result
 
         if semantic_type == "single_entity":
@@ -277,7 +277,6 @@ def _extract_market_leader_prob(self, market_probability: str, market_type: str)
         if is_negated:
             return "Event will not occur" if lang == "en" else "Событие не произойдёт"
         return "Event will occur" if lang == "en" else "Событие произойдёт"
-
     # ═══════════════════════════════════════════
     # ПАРСЕР ВОПРОСА
     # ═══════════════════════════════════════════
