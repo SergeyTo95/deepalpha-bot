@@ -88,9 +88,15 @@ class DecisionAgent:
                     reasoning=wrapped.get("reasoning", ""),
                     lang=lang,
                 )
-                wrapped["main_scenario"] = summary.get("main_scenario") or wrapped.get("main_scenario", "")
-                wrapped["alt_scenario"] = summary.get("alt_scenario") or wrapped.get("alt_scenario", "")
-                wrapped["conclusion"] = summary.get("conclusion") or wrapped.get("conclusion", "")
+                wrapped["main_scenario"] = (
+                    summary.get("main_scenario") or wrapped.get("main_scenario", "")
+                )
+                wrapped["alt_scenario"] = (
+                    summary.get("alt_scenario") or wrapped.get("alt_scenario", "")
+                )
+                wrapped["conclusion"] = (
+                    summary.get("conclusion") or wrapped.get("conclusion", "")
+                )
 
             if self._is_valid_result(wrapped):
                 print(f"DecisionAgent.run: valid, probability={wrapped.get('probability')}")
@@ -111,6 +117,10 @@ class DecisionAgent:
             trend_summary=trend_summary,
             lang=lang,
         )
+
+    # ═══════════════════════════════════════════
+    # CLASSIFICATION
+    # ═══════════════════════════════════════════
 
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
         if market_type == "multiple_choice":
@@ -141,6 +151,10 @@ class DecisionAgent:
             return "balanced"
         else:
             return "lean_against"
+
+    # ═══════════════════════════════════════════
+    # PARSE MARKET PROBABILITY
+    # ═══════════════════════════════════════════
 
     def _parse_market_probability(
         self,
@@ -229,6 +243,10 @@ class DecisionAgent:
         else:
             return 40 * time_factor, "market<50%: max 40%"
 
+    # ═══════════════════════════════════════════
+    # BUILD PROMPT
+    # ═══════════════════════════════════════════
+
     def _build_prompt(
         self,
         question: str,
@@ -247,132 +265,15 @@ class DecisionAgent:
         semantic_type: str,
         lang: str = "ru",
     ) -> str:
-
-        news_block = (
-            news_summary[:600] if news_summary
-            else ("Нет данных" if lang == "ru" else "No data")
+        news_block = news_summary[:800] if news_summary else (
+            "Нет данных" if lang == "ru" else "No data"
         )
-        days_str = (
-            f"{days_to_event} " + ("дней" if lang == "ru" else "days")
-            if days_to_event is not None
-            else ("неизвестно" if lang == "ru" else "unknown")
-        )
-        max_dev, rule = self._get_divergence_rules(market_prob_value, days_to_event)
-
-        # Парсим Yes/No вероятности для промпта
-        import re as _re
-        yes_prob = 50.0
-        no_prob = 50.0
-        yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_probability)
-        no_m = _re.search(r'No:\s*([\d.]+)%', market_probability)
-        if yes_m:
-            yes_prob = float(yes_m.group(1))
-        if no_m:
-            no_prob = float(no_m.group(1))
-
-        # Для multiple choice — берём топ-2
-        if market_type == "multiple_choice" and options:
-            options_block = "\n".join(f"- {opt}" for opt in options[:5])
-        else:
-            options_block = f"Yes: {yes_prob}%\nNo: {no_prob}%"
-
-        # Deadlines блок (если есть days_to_event)
-        if days_to_event is not None:
-            deadlines_block = f"До события: {days_str}"
-        else:
-            deadlines_block = "Нет данных о дедлайне"
-
-        if lang == "ru":
-            return f"""Ты — аналитический модуль DeepAlpha AI.
-
-Твоя задача — на основе входных данных построить ПРОФЕССИОНАЛЬНЫЙ анализ уровня hedge fund.
-
-⚠️ ВАЖНО:
-— НЕ переписывай вопрос
-— НЕ меняй вероятности рынка
-— НЕ фантазируй цифры
-— Пиши строго по структуре ниже
-— Стиль: лаконично, уверенно, без воды
-— Максимальное отклонение от рынка: {max_dev:.0f}% ({rule})
-— Язык: русский
-
-========================================
-
-ВХОД:
-
-Question: {question}
-Категория: {category}
-Дней до события: {days_str}
-
-Market:
-{options_block}
-
-Тренд: {trend_summary[:200]}
-Поведение толпы: {crowd_behavior[:150]}
-
-Новости (Google + Twitter/X):
-{news_block}
-
-Настроение: {sentiment}
-
-========================================
-
-СДЕЛАЙ АНАЛИЗ:
-
-1. Определи прогноз:
-— если No > Yes → исход "НЕ произойдёт"
-— если Yes > No → исход "произойдёт"
-— Для multiple choice → назови лидирующий вариант
-
-2. Уровень уверенности:
-55–65 → Средняя
-65–80 → Умеренная
-80+ → Высокая
-
-3. Логика:
-— кратко, 2-3 предложения
-— используй новости как сигналы, не копируй их
-— объясни ПОЧЕМУ рынок так думает
-
-4. Основной сценарий:
-— конкретные условия реализации
-
-5. Альтернативный сценарий:
-— что должно измениться
-
-6. Trigger Watch (КРИТИЧНО):
-⚠️ НЕ копируй новости — преобразуй в КОНКРЕТНЫЕ СОБЫТИЯ
-Пример:
-❌ "Reuters пишет о переговорах"
-✅ "официальное объявление о прямых переговорах"
-
-def _build_prompt(
-        self,
-        question: str,
-        category: str,
-        market_probability: str,
-        market_prob_value: float,
-        market_leader: str,
-        options: List[str],
-        trend_summary: str,
-        crowd_behavior: str,
-        news_summary: str,
-        sentiment: str,
-        market_type: str,
-        days_to_event: Optional[int],
-        market_balance: str,
-        semantic_type: str,
-        lang: str = "ru",
-    ) -> str:
-        import re as _re
-
-        news_block = news_summary[:800] if news_summary else "Нет данных"
         max_dev, rule = self._get_divergence_rules(market_prob_value, days_to_event)
 
         yes_prob = 50.0
         no_prob = 50.0
-        yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_probability)
-        no_m = _re.search(r'No:\s*([\d.]+)%', market_probability)
+        yes_m = re.search(r'Yes:\s*([\d.]+)%', market_probability)
+        no_m = re.search(r'No:\s*([\d.]+)%', market_probability)
         if yes_m:
             yes_prob = float(yes_m.group(1))
         if no_m:
@@ -386,11 +287,12 @@ def _build_prompt(
         model_prob_note = f"{market_prob_value:.1f}% (лидер: {market_leader})"
 
         days_str = (
-            f"{days_to_event} дней" if days_to_event is not None else "неизвестно"
+            f"{days_to_event} дней" if days_to_event is not None
+            else ("неизвестно" if lang == "ru" else "unknown")
         )
 
         if lang == "ru":
-            return """Ты — DeepAlpha AI, профессиональный аналитик prediction markets (Polymarket).
+            return f"""Ты — DeepAlpha AI, профессиональный аналитик prediction markets (Polymarket).
 
 Твоя задача — не пересказать рынок, а дать ПОЛЕЗНУЮ аналитику и практическую ценность.
 
@@ -427,9 +329,9 @@ News:
 Основной сценарий: [что должно произойти чтобы рынок оказался прав]
 Альтернативный сценарий: [когда рынок может ошибаться]
 Trigger Watch: [событие1 | событие2 | событие3 | событие4]
-Trigger High: [события с высоким влиянием]
-Trigger Medium: [события со средним влиянием]
-Trigger Low: [шум и медиа]
+Trigger High: [события с высоким влиянием через запятую]
+Trigger Medium: [события со средним влиянием через запятую]
+Trigger Low: [шум и медиа через запятую]
 Mispricing: [есть/нет + Δ и описание если есть]
 Market Psychology: [рынок уверен или нет, страх/ожидание/неопределённость]
 Alpha Note: [если альфы нет — написать "Альфа отсутствует. Рынок эффективен." Если есть — где именно и при каких условиях]
@@ -487,10 +389,10 @@ Reasoning: [1-2 sentences — WHAT the market state means, no number repetition]
 Main Scenario: [what must happen for market to be right]
 Alternative Scenario: [when market could be wrong]
 Trigger Watch: [event1 | event2 | event3 | event4]
-Trigger High: [high impact events]
-Trigger Medium: [medium impact events]
-Trigger Low: [noise and media]
-Mispricing: [yes/no + Δ and description if exists]
+Trigger High: [high impact events comma separated]
+Trigger Medium: [medium impact events comma separated]
+Trigger Low: [noise and media comma separated]
+Mispricing: [yes/no + delta and description if exists]
 Market Psychology: [confident or not, fear/expectation/uncertainty]
 Alpha Note: [if no alpha — write "No alpha. Market is efficient." If exists — where exactly and under what conditions]
 Trade Insight: [does entry make sense now, why]
@@ -508,99 +410,10 @@ CRITICAL RULES:
 4. If no alpha — say it directly
 5. Write like a fund analyst, not a blogger
 6. All text in English only""".strip()
-    def _get_type_instruction(self, semantic_type: str, market_leader: str, market_prob_value: float, lang: str) -> str:
-        if lang == "ru":
-            if semantic_type == "binary_action":
-                leader_meaning = "произойдёт" if market_leader == "Yes" else "НЕ произойдёт"
-                return (
-                    f"ТИП РЫНКА: Бинарное действие (Will X do Y?)\n"
-                    f"Лидер '{market_leader}' означает: событие {leader_meaning}.\n"
-                    f"Объясни ПОЧЕМУ это {'произойдёт' if market_leader == 'Yes' else 'НЕ произойдёт'}."
-                )
-            elif semantic_type == "binary_threshold":
-                leader_meaning = "превысит порог" if market_leader == "Yes" else "НЕ превысит порог"
-                return (
-                    f"ТИП РЫНКА: Пороговое событие (Will X exceed Y?)\n"
-                    f"Лидер '{market_leader}' означает: показатель {leader_meaning}.\n"
-                    f"Объясни какие факторы {'толкают к превышению' if market_leader == 'Yes' else 'удерживают ниже порога'}."
-                )
-            elif semantic_type == "single_entity":
-                return (
-                    f"ТИП РЫНКА: Определение лидера.\n"
-                    f"Верни название конкретной компании/персоны/актива.\n"
-                    f"Объясни почему именно этот участник лидирует."
-                )
-            else:
-                return f"ТИП РЫНКА: Множественный выбор.\nВыбери вариант с наибольшей вероятностью."
-        else:
-            if semantic_type == "binary_action":
-                leader_meaning = "will happen" if market_leader == "Yes" else "will NOT happen"
-                return (
-                    f"MARKET TYPE: Binary action (Will X do Y?)\n"
-                    f"Leader '{market_leader}' means: event {leader_meaning}.\n"
-                    f"Explain WHY this {'will' if market_leader == 'Yes' else 'will NOT'} happen."
-                )
-            elif semantic_type == "binary_threshold":
-                leader_meaning = "will exceed threshold" if market_leader == "Yes" else "will NOT exceed threshold"
-                return (
-                    f"MARKET TYPE: Threshold event (Will X exceed Y?)\n"
-                    f"Leader '{market_leader}' means: indicator {leader_meaning}.\n"
-                    f"Explain what factors {'push toward exceeding' if market_leader == 'Yes' else 'keep it below threshold'}."
-                )
-            elif semantic_type == "single_entity":
-                return (
-                    f"MARKET TYPE: Leader determination.\n"
-                    f"Return the name of the specific company/person/asset.\n"
-                    f"Explain why this participant leads."
-                )
-            else:
-                return f"MARKET TYPE: Multiple choice.\nChoose option with highest probability."
 
-    def _get_balance_instruction(self, market_balance: str, market_prob_value: float, lang: str) -> str:
-        if lang == "ru":
-            if market_balance in ("balanced", "slight_lean"):
-                return (
-                    f"ВАЖНО — СБАЛАНСИРОВАННЫЙ РЫНОК ({market_prob_value:.1f}%):\n"
-                    f"- Явно укажи что ситуация неопределённая\n"
-                    f"- Объясни что может сдвинуть вероятность ВВЕРХ\n"
-                    f"- Объясни что может сдвинуть вероятность ВНИЗ\n"
-                    f"- Основной сценарий = условия реализации"
-                )
-            elif market_balance == "moderate_consensus":
-                return (
-                    f"ВАЖНО — УМЕРЕННЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
-                    f"- Объясни конкретные факторы создающие этот перевес\n"
-                    f"- Альтернативный сценарий = конкретные триггеры разворота"
-                )
-            elif market_balance == "strong_consensus":
-                return (
-                    f"ВАЖНО — СИЛЬНЫЙ КОНСЕНСУС ({market_prob_value:.1f}%):\n"
-                    f"- Объясни МЕХАНИЗМ почему рынок так уверен\n"
-                    f"- Альтернативный сценарий = только экстраординарные события"
-                )
-            return ""
-        else:
-            if market_balance in ("balanced", "slight_lean"):
-                return (
-                    f"IMPORTANT — BALANCED MARKET ({market_prob_value:.1f}%):\n"
-                    f"- Explicitly state that the situation is uncertain\n"
-                    f"- Explain what could push probability UP\n"
-                    f"- Explain what could push probability DOWN\n"
-                    f"- Main scenario = conditions for realisation"
-                )
-            elif market_balance == "moderate_consensus":
-                return (
-                    f"IMPORTANT — MODERATE CONSENSUS ({market_prob_value:.1f}%):\n"
-                    f"- Explain specific factors creating this edge\n"
-                    f"- Alternative scenario = specific reversal triggers"
-                )
-            elif market_balance == "strong_consensus":
-                return (
-                    f"IMPORTANT — STRONG CONSENSUS ({market_prob_value:.1f}%):\n"
-                    f"- Explain the MECHANISM behind market confidence\n"
-                    f"- Alternative scenario = only extraordinary events"
-                )
-            return ""
+    # ═══════════════════════════════════════════
+    # PARSE LLM OUTPUT
+    # ═══════════════════════════════════════════
 
     def _parse_llm_output(self, text: str, market_type: str = "binary") -> Dict[str, str]:
         fields = {
@@ -659,39 +472,47 @@ CRITICAL RULES:
         current_key = None
         for line in text.splitlines():
             stripped = line.strip()
+            if not stripped:
+                continue
             matched = False
 
-            for key in list(fields.keys()) + list(russian_map.keys()):
+            all_keys = list(fields.keys()) + list(russian_map.keys())
+            for key in all_keys:
                 prefix = f"{key}:"
                 if stripped.startswith(prefix):
                     actual_key = russian_map.get(key, key)
-                    value = stripped[len(prefix):].strip()
-                    fields[actual_key] = value
-                    current_key = actual_key
-                    matched = True
-                    break
+                    if actual_key in fields:
+                        value = stripped[len(prefix):].strip()
+                        fields[actual_key] = value
+                        current_key = actual_key
+                        matched = True
+                        break
 
             if not matched and current_key and stripped:
                 if fields[current_key]:
                     fields[current_key] += " " + stripped
                 else:
                     fields[current_key] = stripped
+
         # Чистим System Probability от мусора
-            prob = fields.get("System Probability", "")
-            if prob:
-                prob_lower = prob.lower()
+        prob = fields.get("System Probability", "")
+        if prob:
+            prob_lower = prob.lower()
+            bad_phrases = [
+                "не повторяем", "не повторяй", "объясняй", "причины",
+                "повторяй цифры", "значение", "don't repeat", "do not repeat",
+                "explain", "reasons", "mechanism",
+            ]
+            if any(p in prob_lower for p in bad_phrases):
+                fields["System Probability"] = ""
+            elif "%" not in prob and "yes" not in prob_lower and "no" not in prob_lower:
+                num_match = re.search(r'([\d.]+)', prob)
+                if num_match:
+                    fields["System Probability"] = f"{num_match.group(1)}%"
+                else:
+                    fields["System Probability"] = ""
 
-                # Оставляем только если содержит % или yes/no
-                if "%" not in prob and "yes" not in prob_lower and "no" not in prob_lower:
-                    # Пробуем извлечь число
-                    num_match = re.search(r'([\d.]+)', prob)
-
-                    if num_match:
-                        fields["System Probability"] = f"{num_match.group(1)}%"
-                    else:
-                        fields["System Probability"] = ""
-
-            return fields
+        return fields
 
     def _extract_prob_value(self, prob_str: str) -> Optional[float]:
         try:
@@ -701,6 +522,10 @@ CRITICAL RULES:
         except Exception:
             pass
         return None
+
+    # ═══════════════════════════════════════════
+    # VALIDATE AND ADJUST
+    # ═══════════════════════════════════════════
 
     def _validate_and_adjust_probability(
         self,
@@ -774,6 +599,10 @@ CRITICAL RULES:
             else:
                 return "Low"
 
+    # ═══════════════════════════════════════════
+    # WRAP LLM RESULT
+    # ═══════════════════════════════════════════
+
     def _wrap_llm_result(
         self,
         question: str,
@@ -789,17 +618,6 @@ CRITICAL RULES:
         market_balance: str = "moderate_consensus",
     ) -> Dict[str, Any]:
         probability = parsed.get("System Probability", "").strip() or "N/A"
-
-        # Защита от "мусорных" значений — когда LLM вывел инструкцию вместо числа
-        bad_probability_phrases = [
-            "не повторяем", "не повторяй", "объясняй", "причины",
-            "повторяй цифры", "значение", "don't repeat", "do not repeat",
-            "explain", "reasons", "mechanism",
-]
-        prob_lower = probability.lower()
-        if any(phrase in prob_lower for phrase in bad_probability_phrases):
-            print(f"DecisionAgent: bad probability detected: '{probability}', using market fallback")
-            probability = f"{market_leader} — {market_prob_value:.1f}%"
         confidence = parsed.get("Confidence", "").strip() or "Medium"
         reasoning = parsed.get("Reasoning", "").strip() or ""
         main_scenario = parsed.get("Main Scenario", "").strip() or ""
@@ -857,11 +675,6 @@ CRITICAL RULES:
             "options_breakdown": options_breakdown,
             "market_type": market_type,
             "raw_decision_text": raw_text,
-            # ═══ NEW fields from enhanced prompt ═══
-            "trigger_watch_raw": parsed.get("Trigger Watch", ""),
-            "mispricing_raw": parsed.get("Mispricing", ""),
-            "market_psychology_raw": parsed.get("Market Psychology", ""),
-            "alpha_note_raw": parsed.get("Alpha Note", ""),
             "trigger_watch_raw": parsed.get("Trigger Watch", ""),
             "trigger_high": parsed.get("Trigger High", ""),
             "trigger_medium": parsed.get("Trigger Medium", ""),
@@ -875,6 +688,10 @@ CRITICAL RULES:
             "trade_risk": parsed.get("Trade Risk", ""),
         }
 
+    # ═══════════════════════════════════════════
+    # IS VALID RESULT
+    # ═══════════════════════════════════════════
+
     def _is_valid_result(self, result: Dict[str, Any]) -> bool:
         probability = str(result.get("probability", "")).strip()
         confidence = str(result.get("confidence", "")).strip()
@@ -887,6 +704,10 @@ CRITICAL RULES:
         if not reasoning and not conclusion:
             return False
         return True
+
+    # ═══════════════════════════════════════════
+    # MARKET ALIGNED FALLBACK
+    # ═══════════════════════════════════════════
 
     def _market_aligned_fallback(
         self,
@@ -903,7 +724,6 @@ CRITICAL RULES:
         trend_summary: str,
         lang: str = "ru",
     ) -> Dict[str, Any]:
-
         if market_type == "multiple_choice" and market_leader not in ("Yes", "No", "Unknown"):
             probability = f"{market_leader} — {market_prob_value:.1f}%"
         else:
@@ -918,7 +738,10 @@ CRITICAL RULES:
         else:
             confidence = "Низкая" if lang == "ru" else "Low"
 
-        days_str = (f"{days_to_event} " + ("дней" if lang == "ru" else "days")) if days_to_event is not None else ""
+        days_str = (
+            (f"{days_to_event} " + ("дней" if lang == "ru" else "days"))
+            if days_to_event is not None else ""
+        )
         time_ctx = ""
         if days_to_event is not None:
             if days_to_event <= 7:
@@ -928,7 +751,13 @@ CRITICAL RULES:
                     else f"Event in {days_str} — market near resolution."
                 )
             elif days_to_event <= 30:
-                time_ctx = f"До события {days_str}." if lang == "ru" else f"Event in {days_str}."
+                time_ctx = (
+                    f"До события {days_str}."
+                    if lang == "ru"
+                    else f"Event in {days_str}."
+                )
+
+        news_excerpt = (news_summary[:150].strip() + "...") if news_summary else ""
 
         if lang == "ru":
             if market_balance in ("balanced", "slight_lean"):
@@ -936,6 +765,8 @@ CRITICAL RULES:
                     f"Рынок в состоянии неопределённости — ни один исход не доминирует. "
                     f"Исход зависит от появления нового катализатора."
                 )
+                if news_excerpt:
+                    reasoning += f" Контекст: {news_excerpt}"
                 main_scenario = (
                     f"Сценарий реализуется при сохранении текущего баланса. "
                     f"Любое значимое событие может сдвинуть вероятность."
@@ -950,16 +781,30 @@ CRITICAL RULES:
                     f"Консенсус {market_prob_value:.1f}% отражает высокую уверенность участников. "
                     f"{time_ctx} Рынок учёл основную часть доступной информации."
                 )
-                main_scenario = f"Исход реализуется при сохранении текущих условий. Серьёзных угроз не выявлено."
+                main_scenario = (
+                    f"Исход реализуется при сохранении текущих условий. "
+                    f"Серьёзных угроз не выявлено."
+                )
                 alt_scenario = (
                     f"Альтернативный исход ({100 - market_prob_value:.1f}%) возможен только "
                     f"при резком изменении политики или масштабном внешнем шоке."
                 )
                 conclusion = f"Высокий консенсус подтверждает: {probability}. {time_ctx}".strip()
             else:
-                reasoning = f"Умеренный консенсус {market_prob_value:.1f}% указывает на перевес. {time_ctx}"
-                main_scenario = f"Наиболее вероятный исход: {probability}. Требуется сохранение текущей динамики."
-                alt_scenario = f"Альтернативный исход ({100 - market_prob_value:.1f}%) при изменении ключевых факторов."
+                reasoning = (
+                    f"Умеренный консенсус {market_prob_value:.1f}% указывает на перевес. "
+                    f"{time_ctx}"
+                )
+                if news_excerpt:
+                    reasoning += f" Контекст: {news_excerpt}"
+                main_scenario = (
+                    f"Наиболее вероятный исход: {probability}. "
+                    f"Требуется сохранение текущей динамики."
+                )
+                alt_scenario = (
+                    f"Альтернативный исход ({100 - market_prob_value:.1f}%) "
+                    f"при изменении ключевых факторов."
+                )
                 conclusion = f"Следуем рыночной оценке: {probability}. {time_ctx}".strip()
         else:
             if market_balance in ("balanced", "slight_lean"):
@@ -981,16 +826,26 @@ CRITICAL RULES:
                     f"Consensus {market_prob_value:.1f}% reflects high participant confidence. "
                     f"{time_ctx} Market has priced in most available information."
                 )
-                main_scenario = f"Outcome plays out if current conditions hold. No major threats identified."
+                main_scenario = (
+                    f"Outcome plays out if current conditions hold. "
+                    f"No major threats identified."
+                )
                 alt_scenario = (
                     f"Alternative outcome ({100 - market_prob_value:.1f}%) only possible "
                     f"with sharp policy change or major external shock."
                 )
                 conclusion = f"High consensus confirms: {probability}. {time_ctx}".strip()
             else:
-                reasoning = f"Moderate consensus {market_prob_value:.1f}% points to an edge. {time_ctx}"
-                main_scenario = f"Most likely outcome: {probability}. Requires stable current dynamics."
-                alt_scenario = f"Alternative ({100 - market_prob_value:.1f}%) if key factors shift."
+                reasoning = (
+                    f"Moderate consensus {market_prob_value:.1f}% points to an edge. {time_ctx}"
+                )
+                main_scenario = (
+                    f"Most likely outcome: {probability}. "
+                    f"Requires stable current dynamics."
+                )
+                alt_scenario = (
+                    f"Alternative ({100 - market_prob_value:.1f}%) if key factors shift."
+                )
                 conclusion = f"Following market estimate: {probability}. {time_ctx}".strip()
 
         return {
@@ -1006,4 +861,15 @@ CRITICAL RULES:
             "options_breakdown": "",
             "market_type": market_type,
             "raw_decision_text": "",
+            "trigger_watch_raw": "",
+            "trigger_high": "",
+            "trigger_medium": "",
+            "trigger_low": "",
+            "mispricing_raw": "",
+            "market_psychology_raw": "",
+            "alpha_note_raw": "",
+            "trade_insight": "",
+            "trade_strategy": "",
+            "trade_entry": "",
+            "trade_risk": "",
         }
