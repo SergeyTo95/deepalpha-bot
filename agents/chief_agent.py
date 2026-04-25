@@ -14,54 +14,81 @@ class ChiefAgent:
 
     def run(self, url: str, lang: str = "en", user_id: int = 0) -> Dict[str, Any]:
         logger.info(f"ChiefAgent: starting analysis for {url[:50]}")
+
         market_data = self._run_market_agent(url)
-        logger.info(f"ChiefAgent: market_data done, question={market_data.get('question', '')[:50]}")
+        logger.info(
+            f"ChiefAgent: market_data done, "
+            f"question={market_data.get('question', '')[:50]}, "
+            f"sub_markets={len(market_data.get('sub_markets', []))}"
+        )
 
         news_data = self._run_news_agent(market_data, lang=lang)
-        logger.info(f"ChiefAgent: news_data done, sentiment={news_data.get('sentiment', 'N/A')}")
+        logger.info(
+            f"ChiefAgent: news_data done, "
+            f"sentiment={news_data.get('sentiment', 'N/A')}"
+        )
 
         decision_data = self._run_decision_agent(market_data, news_data, lang=lang)
-        logger.info(f"ChiefAgent: decision_data done, probability={decision_data.get('probability', 'N/A')}")
+        logger.info(
+            f"ChiefAgent: decision_data done, "
+            f"probability={decision_data.get('probability', 'N/A')}"
+        )
 
-        # CommunicationAgent вызывается ОДИН раз, здесь
-        comm = self._run_communication_agent(decision_data, lang=lang)
-        logger.info(f"ChiefAgent: comm done, display={comm.get('display_prediction', '')[:60]}")
+        comm = self._run_communication_agent(
+            decision_data=decision_data,
+            sub_markets=market_data.get("sub_markets", []),
+            lang=lang,
+        )
+        logger.info(
+            f"ChiefAgent: comm done, "
+            f"display={comm.get('display_prediction', '')[:60]}"
+        )
 
         news_sources = news_data.get("sources", [])
 
         final_result = {
             "question": (
-                decision_data.get("question") or
-                market_data.get("question", "Unknown market")
+                decision_data.get("question")
+                or market_data.get("question", "Unknown market")
             ),
             "category": (
-                decision_data.get("category") or
-                market_data.get("category", "Unknown")
+                decision_data.get("category")
+                or market_data.get("category", "Unknown")
             ),
             "market_probability": (
-                decision_data.get("market_probability") or
-                market_data.get("market_probability", "Unknown")
+                decision_data.get("market_probability")
+                or market_data.get("market_probability", "Unknown")
             ),
             "probability": decision_data.get("probability", "N/A"),
-            "confidence": decision_data.get("confidence", "Unknown"),
-            "market_type": decision_data.get("market_type", market_data.get("market_type", "binary")),
+            "confidence": comm.get("confidence", decision_data.get("confidence", "Unknown")),
+            "market_type": decision_data.get(
+                "market_type", market_data.get("market_type", "binary")
+            ),
             "options_breakdown": decision_data.get("options_breakdown", ""),
 
-            # Поля из CommunicationAgent — готовые к показу
             "display_prediction": comm.get("display_prediction", ""),
             "semantic_outcome": comm.get("semantic_outcome", ""),
             "is_negated": comm.get("is_negated", False),
             "reasoning": comm.get("reasoning", decision_data.get("reasoning", "")),
-            "main_scenario": comm.get("main_scenario", decision_data.get("main_scenario", "")),
-            "alt_scenario": comm.get("alt_scenario", decision_data.get("alt_scenario", "")),
+            "main_scenario": comm.get(
+                "main_scenario", decision_data.get("main_scenario", "")
+            ),
+            "alt_scenario": comm.get(
+                "alt_scenario", decision_data.get("alt_scenario", "")
+            ),
             "conclusion": comm.get("conclusion", decision_data.get("conclusion", "")),
             "alpha_label": comm.get("alpha_label", ""),
             "alpha_message": comm.get("alpha_message", ""),
+
+            "short_signal": comm.get("short_signal", ""),
+            "full_analysis": comm.get("full_analysis", ""),
+            "time_shift": comm.get("time_shift"),
 
             "url": url,
             "mode": "analysis",
             "lang": lang,
             "related_markets": market_data.get("related_markets", []),
+            "sub_markets": market_data.get("sub_markets", []),
             "news_sources": news_sources,
             "news_items": news_sources,
             "trend_summary": market_data.get("trend_summary", ""),
@@ -71,13 +98,11 @@ class ChiefAgent:
             "decision_data": decision_data,
         }
 
-        # Сохраняем анализ в историю
         try:
             save_analysis(final_result, user_id=user_id)
         except Exception as e:
             logger.error(f"ChiefAgent save_analysis error: {e}")
 
-        # Сохраняем предсказание в tracking для метрик точности
         try:
             self._track_prediction(final_result, market_data, user_id, url)
         except Exception as e:
@@ -92,11 +117,9 @@ class ChiefAgent:
         user_id: int,
         url: str,
     ) -> None:
-        """Сохраняет предсказание в predictions_tracking для последующей сверки."""
         market_prob_str = str(final_result.get("market_probability", ""))
         market_type = final_result.get("market_type", "binary")
 
-        # Парсим Yes/No вероятности
         market_probability_yes = None
         market_probability_no = None
         if market_type == "binary":
@@ -105,7 +128,6 @@ class ChiefAgent:
             market_probability_yes = float(yes_m.group(1)) if yes_m else None
             market_probability_no = float(no_m.group(1)) if no_m else None
 
-        # Лидер рынка + его вероятность
         market_leader = "Yes"
         market_prob_value = 50.0
         if market_probability_yes is not None and market_probability_no is not None:
@@ -116,14 +138,12 @@ class ChiefAgent:
                 market_leader = "Yes"
                 market_prob_value = market_probability_yes
         else:
-            # Для multi-choice — берём максимум из всех опций
             matches = re.findall(r'([^|:]+):\s*([\d.]+)%', market_prob_str)
             if matches:
                 best = max(matches, key=lambda x: float(x[1]))
                 market_leader = best[0].strip()
                 market_prob_value = float(best[1])
 
-        # Наша вероятность и исход (Yes/No/option_name)
         probability_str = str(final_result.get("probability", ""))
         system_probability = 0.0
         system_outcome = ""
@@ -137,51 +157,47 @@ class ChiefAgent:
                 system_probability = float(pct_m.group(1))
                 system_outcome = "Yes"
 
-        # Delta
         delta = None
         if system_probability > 0:
             delta = abs(system_probability - market_prob_value)
 
-        # Slug из URL
         market_slug = self._extract_slug(url)
-
-        # Семантический тип
         semantic_type = self._classify_semantic_type(
-            final_result.get("question", ""),
-            market_type,
+            final_result.get("question", ""), market_type
         )
 
         save_prediction({
-    "user_id": user_id,
-    "market_slug": market_slug,
-    "market_url": url,
-    "question": final_result.get("question", ""),
-    "category": final_result.get("category", ""),
-    "market_type": market_type,
-    "semantic_type": semantic_type,
-    "market_probability_yes": market_probability_yes,
-    "market_probability_no": market_probability_no,
-    "market_leader": market_leader,
-    "market_prob_value": market_prob_value,
-    "system_prediction": probability_str,
-    "system_probability": system_probability,
-    "system_outcome": system_outcome,
-    "confidence": str(final_result.get("confidence", "")),
-    "delta": delta,
-    "alpha_label": final_result.get("alpha_label", ""),
-    "market_balance": self._classify_balance(market_prob_value),
-    "display_prediction": final_result.get("display_prediction", ""),
-    "market_end_date": market_data.get("date_context"),
-})
-        logger.info(f"Tracking saved: slug={market_slug}, outcome={system_outcome}, prob={system_probability}")
+            "user_id": user_id,
+            "market_slug": market_slug,
+            "market_url": url,
+            "question": final_result.get("question", ""),
+            "category": final_result.get("category", ""),
+            "market_type": market_type,
+            "semantic_type": semantic_type,
+            "market_probability_yes": market_probability_yes,
+            "market_probability_no": market_probability_no,
+            "market_leader": market_leader,
+            "market_prob_value": market_prob_value,
+            "system_prediction": probability_str,
+            "system_probability": system_probability,
+            "system_outcome": system_outcome,
+            "confidence": str(final_result.get("confidence", "")),
+            "delta": delta,
+            "alpha_label": final_result.get("alpha_label", ""),
+            "market_balance": self._classify_balance(market_prob_value),
+            "display_prediction": final_result.get("display_prediction", ""),
+            "market_end_date": market_data.get("date_context"),
+        })
+        logger.info(
+            f"Tracking saved: slug={market_slug}, "
+            f"outcome={system_outcome}, prob={system_probability}"
+        )
 
     def _extract_slug(self, url: str) -> str:
-        """Извлекает slug из Polymarket URL."""
         try:
             m = re.search(r'/(?:event|market)/([^/?#]+)', url)
             if m:
                 slug = m.group(1)
-                # Убираем числовые хвосты типа -123456
                 slug = re.sub(r'-\d{5,}$', '', slug)
                 return slug
         except Exception:
@@ -192,12 +208,16 @@ class ChiefAgent:
         if market_type == "multiple_choice":
             return "multi_outcome"
         q = question.lower()
-        threshold_kw = ["exceed", "surpass", "above", "below",
-                        "more than", "less than", "over", "under", "cross"]
+        threshold_kw = [
+            "exceed", "surpass", "above", "below",
+            "more than", "less than", "over", "under", "cross",
+        ]
         if any(k in q for k in threshold_kw):
             return "binary_threshold"
-        entity_kw = ["who will", "which company", "which team",
-                     "which country", "largest", "biggest"]
+        entity_kw = [
+            "who will", "which company", "which team",
+            "which country", "largest", "biggest",
+        ]
         if any(k in q for k in entity_kw):
             return "single_entity"
         return "binary_action"
@@ -220,11 +240,11 @@ class ChiefAgent:
 
     def _run_market_agent(self, url: str) -> Dict[str, Any]:
         try:
-            logger.info(f"MarketAgent: starting")
+            logger.info("MarketAgent: starting")
             from agents.market_agent import MarketAgent
             agent = MarketAgent()
             result = agent.run(url)
-            logger.info(f"MarketAgent: done")
+            logger.info("MarketAgent: done")
             if isinstance(result, dict):
                 return result
             return self._market_fallback(url)
@@ -232,13 +252,17 @@ class ChiefAgent:
             logger.error(f"MarketAgent ERROR: {e}")
             return self._market_fallback(url)
 
-    def _run_news_agent(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
+    def _run_news_agent(
+        self, market_data: Dict[str, Any], lang: str = "en"
+    ) -> Dict[str, Any]:
         try:
-            logger.info(f"NewsAgent: starting")
+            logger.info("NewsAgent: starting")
             from agents.news_agent import NewsAgent
             agent = NewsAgent()
             result = agent.run(market_data, lang=lang)
-            logger.info(f"NewsAgent: done, sources={len(result.get('sources', []))}")
+            logger.info(
+                f"NewsAgent: done, sources={len(result.get('sources', []))}"
+            )
             if isinstance(result, dict):
                 return result
             return self._news_fallback(market_data)
@@ -253,11 +277,13 @@ class ChiefAgent:
         lang: str = "en",
     ) -> Dict[str, Any]:
         try:
-            logger.info(f"DecisionAgent: starting")
+            logger.info("DecisionAgent: starting")
             from agents.decision_agent import DecisionAgent
             agent = DecisionAgent()
             result = agent.run(market_data, news_data, lang=lang)
-            logger.info(f"DecisionAgent: done, probability={result.get('probability', 'N/A')}")
+            logger.info(
+                f"DecisionAgent: done, probability={result.get('probability', 'N/A')}"
+            )
             if isinstance(result, dict):
                 return result
             return self._decision_fallback(market_data, news_data)
@@ -265,20 +291,23 @@ class ChiefAgent:
             logger.error(f"DecisionAgent ERROR: {e}")
             return self._decision_fallback(market_data, news_data)
 
-    def _run_communication_agent(self, decision_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
-        """
-        Возвращает dict с готовыми полями для показа:
-        display_prediction, semantic_outcome, reasoning, main_scenario,
-        alt_scenario, conclusion, alpha_label, alpha_message
-        """
+    def _run_communication_agent(
+        self,
+        decision_data: Dict[str, Any],
+        sub_markets: list,
+        lang: str = "en",
+    ) -> Dict[str, Any]:
         try:
-            logger.info(f"CommunicationAgent: starting")
+            logger.info("CommunicationAgent: starting")
             from agents.communication_agent import CommunicationAgent
             agent = CommunicationAgent()
-            # Передаём lang внутрь decision_data
-            decision_data_with_lang = {**decision_data, "lang": lang}
+            decision_data_with_lang = {
+                **decision_data,
+                "lang": lang,
+                "sub_markets": sub_markets,
+            }
             result = agent.run(decision_data_with_lang)
-            logger.info(f"CommunicationAgent: done")
+            logger.info("CommunicationAgent: done")
             if isinstance(result, dict):
                 return result
             return self._communication_fallback(decision_data)
@@ -306,6 +335,7 @@ class ChiefAgent:
             "date_context": "Unknown",
             "raw_market_data": {},
             "price_history": {"24h": [], "7d": []},
+            "sub_markets": [],
         }
 
     def _news_fallback(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -322,7 +352,7 @@ class ChiefAgent:
     def _decision_fallback(
         self,
         market_data: Dict[str, Any],
-        news_data: Dict[str, Any],
+        news_data: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         return {
             "question": market_data.get("question", "Unknown market"),
@@ -340,23 +370,34 @@ class ChiefAgent:
         }
 
     def _communication_fallback(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
-        raw_conclusion = decision_data.get("conclusion", "")
         probability_str = decision_data.get("probability", "")
 
+        raw_conclusion = decision_data.get("conclusion", "")
         if raw_conclusion:
             stripped = raw_conclusion.strip()
             last_char = stripped[-1] if stripped else ""
-            last_word = stripped.split()[-1].lower().rstrip(".!?%\"')") if stripped.split() else ""
-            incomplete = {"для", "на", "в", "с", "по", "от", "за", "или", "и", "for", "to", "in", "the"}
-            is_bad = (last_char not in ".!?%\"')") or (last_word in incomplete)
+            last_word = (
+                stripped.split()[-1].lower().rstrip('.!?%"\')')
+                if stripped.split()
+                else ""
+            )
+            incomplete = {
+                "для", "на", "в", "с", "по", "от", "за", "или", "и",
+                "for", "to", "in", "the", "не", "not", "no",
+            }
+            is_bad = (last_char not in '.!?%"\')') or (last_word in incomplete)
             if is_bad:
                 raw_conclusion = ""
 
         safe_conclusion = raw_conclusion or (
-            f"Следуем рыночной оценке: {probability_str}." if probability_str else ""
+            f"Следуем рыночной оценке: {probability_str}."
+            if probability_str
+            else ""
         )
 
         return {
+            "short_signal": "",
+            "full_analysis": "",
             "display_prediction": probability_str,
             "semantic_outcome": "",
             "is_negated": False,
@@ -364,6 +405,8 @@ class ChiefAgent:
             "main_scenario": decision_data.get("main_scenario", ""),
             "alt_scenario": decision_data.get("alt_scenario", ""),
             "conclusion": safe_conclusion,
+            "confidence": decision_data.get("confidence", "Low"),
             "alpha_label": "",
             "alpha_message": "",
+            "time_shift": None,
         }
