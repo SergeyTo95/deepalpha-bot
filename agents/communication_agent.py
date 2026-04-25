@@ -108,6 +108,14 @@ class CommunicationAgent:
             model_prob, market_prob, market_leader, lang,
         )
 
+        # ═══ NEW: Decision block ═══
+        decision_block = self._build_decision_block(
+            delta=delta or 0.0,
+            market_balance=market_balance,
+            has_triggers=bool(key_signals),
+            lang=lang,
+        )
+
         safe_model = model_prob if model_prob > 0 else market_prob
         safe_market = market_prob if market_prob > 0 else 50.0
 
@@ -177,6 +185,7 @@ class CommunicationAgent:
             main_scenario=final_scenario,
             alt_scenario=final_alt,
             conclusion=final_conclusion,
+            decision_block=decision_block,
             alpha_label=alpha_label,
             alpha_message=alpha_message,
             time_shift_block=time_shift_block,
@@ -201,6 +210,7 @@ class CommunicationAgent:
             "confidence": confidence,
             "alpha_label": alpha_label,
             "alpha_message": alpha_message,
+            "decision_block": decision_block,
             "extra_blocks": extra_blocks,
             "time_shift_block": time_shift_block,
             "mispricing_block": mispricing_block,
@@ -209,6 +219,58 @@ class CommunicationAgent:
             "trigger_block": trigger_block,
             "time_shift": analyze_time_shift_safe(sub_markets),
         }
+
+    # ═══════════════════════════════════════════
+    # DECISION BLOCK — NEW
+    # ═══════════════════════════════════════════
+
+    def _build_decision_block(
+        self,
+        delta: float,
+        market_balance: str,
+        has_triggers: bool,
+        lang: str,
+    ) -> str:
+        """
+        NO TRADE → Δ < 5%  (нет преимущества)
+        WAIT     → Δ ≥ 5%, но нет подтверждения (триггеры есть, консенсус сильный)
+        TRADE    → Δ ≥ 5%, рынок не перегрет, есть логика для входа
+        """
+        if delta < 5:
+            verdict = "NO TRADE"
+            if lang == "ru":
+                reason = "расхождения с рынком нет — нет преимущества"
+            else:
+                reason = "no model-market divergence — no edge"
+        elif market_balance == "strong_consensus":
+            verdict = "WAIT"
+            if lang == "ru":
+                reason = "консенсус сильный — ждать отката или подтверждения триггера"
+            else:
+                reason = "strong consensus — wait for pullback or trigger confirmation"
+        elif market_balance in ("balanced", "slight_lean"):
+            verdict = "WAIT"
+            if lang == "ru":
+                reason = "рынок нестабилен — ждать чёткого сигнала"
+            else:
+                reason = "market unstable — wait for clear signal"
+        elif delta >= 5 and market_balance in ("moderate_consensus", "lean_against"):
+            verdict = "TRADE"
+            if lang == "ru":
+                reason = "есть расхождение — вход при откате с подтверждением"
+            else:
+                reason = "divergence present — entry on pullback with confirmation"
+        else:
+            verdict = "WAIT"
+            if lang == "ru":
+                reason = "ждать дополнительного подтверждения"
+            else:
+                reason = "wait for additional confirmation"
+
+        if lang == "ru":
+            return f"📊 Decision: {verdict}\n— {reason}"
+        else:
+            return f"📊 Decision: {verdict}\n— {reason}"
 
     # ═══════════════════════════════════════════
     # FULL ANALYSIS BUILDER
@@ -224,6 +286,7 @@ class CommunicationAgent:
         main_scenario: str,
         alt_scenario: str,
         conclusion: str,
+        decision_block: str,
         alpha_label: str,
         alpha_message: str,
         time_shift_block: str,
@@ -257,6 +320,8 @@ class CommunicationAgent:
                 label = "📰 Источники:" if lang == "ru" else "📰 Sources:"
                 sources_block = f"\n{label}\n" + "\n".join(lines)
 
+        decision_section = f"\n{decision_block}\n" if decision_block else ""
+
         if lang == "ru":
             return (
                 f"🔍 DeepAlpha Analysis\n"
@@ -274,6 +339,7 @@ class CommunicationAgent:
                 f"{_section(trigger_block)}"
                 f"{_section(psychology_block)}"
                 f"{_section(alpha_note_block)}"
+                f"{decision_section}"
                 f"\n{sep}\n"
                 f"📝 Вывод:\n{conclusion}"
                 f"{sources_block}"
@@ -295,6 +361,7 @@ class CommunicationAgent:
                 f"{_section(trigger_block)}"
                 f"{_section(psychology_block)}"
                 f"{_section(alpha_note_block)}"
+                f"{decision_section}"
                 f"\n{sep}\n"
                 f"📝 Conclusion:\n{conclusion}"
                 f"{sources_block}"
@@ -1297,13 +1364,6 @@ class CommunicationAgent:
         market_leader: str,
         lang: str,
     ) -> str:
-        """
-        ПРАВИЛО:
-        - Если Δ ≥ 5% → НЕ писать 'следуем рынку'
-          → указать что модель более уверена / рынок может ошибаться
-        - Если Δ < 5% → можно констатировать консенсус
-        - Никогда не противоречить alpha_label
-        """
         delta = abs(model_prob - market_prob) if model_prob and market_prob else 0.0
         has_divergence = delta >= 5
         opposite = "No" if market_leader == "Yes" else "Yes"
@@ -1317,7 +1377,7 @@ class CommunicationAgent:
             divergence_direction_ru = f"переоценивает {market_leader}"
             divergence_direction_en = f"overpricing {market_leader}"
 
-        # Пробуем использовать LLM-вывод, но фильтруем плохие формулировки
+        # Пробуем использовать LLM-вывод
         if clean_conclusion and len(clean_conclusion) > 20:
             if (
                 not self._is_wrong_language(clean_conclusion, lang)
@@ -1334,7 +1394,6 @@ class CommunicationAgent:
                 else:
                     result = re.sub(r'\bYes\b', semantic_text, result)
 
-                # Фильтруем формулировки которые противоречат расхождению
                 bad_when_divergence = [
                     "следуем рынку", "следуем рыночной", "following market",
                     "следуем рыночной оценке", "следуем перевесу рынка",
@@ -1347,15 +1406,38 @@ class CommunicationAgent:
                 if len(result) > 20 and not self._is_truncated(result) and not is_bad:
                     return result
 
-        # Генерируем вывод
         if lang == "ru":
-            if has_divergence:
+            if not has_divergence:
+                # Δ < 5 — рынок эффективен — явно говорим "вне позиции"
+                if market_balance == "strong_consensus":
+                    return (
+                        "Рынок оценивает ситуацию адекватно — модель подтверждает консенсус. "
+                        "Прямого преимущества нет. "
+                        "Оптимальная стратегия — оставаться вне позиции "
+                        "и реагировать на новые события."
+                    )
+                elif market_balance in ("balanced", "slight_lean"):
+                    return (
+                        "Рынок эффективен — расхождения нет, ситуация нестабильна. "
+                        "Прямого преимущества нет. "
+                        "Оптимальная стратегия — оставаться вне позиции "
+                        "и ждать первого значимого триггера."
+                    )
+                else:
+                    return (
+                        "Рынок оценивает ситуацию адекватно. "
+                        "Прямого преимущества нет. "
+                        "Оптимальная стратегия — оставаться вне позиции "
+                        "и реагировать на новые события."
+                    )
+            else:
+                # Δ ≥ 5 — есть расхождение
                 if market_balance == "strong_consensus":
                     return (
                         f"Модель более уверена в исходе, чем рынок (Δ {delta:.1f}%). "
                         f"Рынок может {divergence_direction_ru}. "
                         f"Позиция в {alpha_side} оправдана только при подтверждении "
-                        f"триггеров и достаточной ликвидности."
+                        "триггеров и достаточной ликвидности."
                     )
                 elif market_balance == "moderate_consensus":
                     return (
@@ -1368,39 +1450,44 @@ class CommunicationAgent:
                     return (
                         f"Рынок нестабилен, модель видит перевес {delta:.1f}% "
                         f"в сторону {alpha_side}. "
-                        f"Не входить без чёткого сигнала — ждать триггера."
+                        "Не входить без чёткого сигнала — ждать триггера."
                     )
                 else:
                     return (
                         f"Модель видит расхождение {delta:.1f}% в сторону {alpha_side}. "
                         f"Рынок {divergence_direction_ru}. "
-                        f"Вход оправдан только при подтверждении и достаточной ликвидности."
+                        "Вход оправдан только при подтверждении и достаточной ликвидности."
                     )
-            else:
-                # Нет расхождения — констатируем
+        else:
+            if not has_divergence:
                 if market_balance == "strong_consensus":
                     return (
-                        f"Модель подтверждает консенсус: {display_prediction}. "
-                        f"Альфы нет — стратегия ожидания и мониторинг триггеров."
+                        "Market is pricing the situation adequately — model confirms consensus. "
+                        "No direct edge. "
+                        "Optimal strategy: stay out of position "
+                        "and react to new events as they emerge."
                     )
                 elif market_balance in ("balanced", "slight_lean"):
                     return (
-                        f"Рынок неопределён. Прогноз: {display_prediction}. "
-                        f"Ждать триггера — не входить без сигнала."
+                        "Market is efficient — no divergence, situation unstable. "
+                        "No direct edge. "
+                        "Optimal strategy: stay out of position "
+                        "and wait for the first significant trigger."
                     )
                 else:
                     return (
-                        f"Модель подтверждает рынок: {display_prediction}. "
-                        f"Расхождений нет — ждать новых данных."
+                        "Market is pricing the situation adequately. "
+                        "No direct edge. "
+                        "Optimal strategy: stay out of position "
+                        "and react to new events as they emerge."
                     )
-        else:
-            if has_divergence:
+            else:
                 if market_balance == "strong_consensus":
                     return (
                         f"Model is more confident than market (Δ {delta:.1f}%). "
                         f"Market may be {divergence_direction_en}. "
                         f"Position in {alpha_side} justified only on trigger confirmation "
-                        f"and sufficient liquidity."
+                        "and sufficient liquidity."
                     )
                 elif market_balance == "moderate_consensus":
                     return (
@@ -1412,29 +1499,13 @@ class CommunicationAgent:
                 elif market_balance in ("balanced", "slight_lean"):
                     return (
                         f"Market unstable, model sees {delta:.1f}% edge toward {alpha_side}. "
-                        f"Do not enter without clear signal — wait for trigger."
+                        "Do not enter without clear signal — wait for trigger."
                     )
                 else:
                     return (
                         f"Model sees {delta:.1f}% divergence toward {alpha_side}. "
                         f"Market {divergence_direction_en}. "
-                        f"Entry justified only on confirmation and sufficient liquidity."
-                    )
-            else:
-                if market_balance == "strong_consensus":
-                    return (
-                        f"Model confirms consensus: {display_prediction}. "
-                        f"No alpha — waiting strategy, monitor triggers."
-                    )
-                elif market_balance in ("balanced", "slight_lean"):
-                    return (
-                        f"Market uncertain. Forecast: {display_prediction}. "
-                        f"Wait for trigger — do not enter without signal."
-                    )
-                else:
-                    return (
-                        f"Model confirms market: {display_prediction}. "
-                        f"No divergence — wait for new data."
+                        "Entry justified only on confirmation and sufficient liquidity."
                     )
 
     # ═══════════════════════════════════════════
