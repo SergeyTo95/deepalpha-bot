@@ -611,11 +611,17 @@ CRITICAL RULES:
             "Alternative Scenario": "",
             "Conclusion": "",
             "Options Breakdown": "",
-            # ═══ NEW ═══
             "Trigger Watch": "",
+            "Trigger High": "",
+            "Trigger Medium": "",
+            "Trigger Low": "",
             "Mispricing": "",
             "Market Psychology": "",
             "Alpha Note": "",
+            "Trade Insight": "",
+            "Trade Strategy": "",
+            "Trade Entry": "",
+            "Trade Risk": "",
         }
 
         russian_map = {
@@ -630,15 +636,24 @@ CRITICAL RULES:
             "Заключение": "Conclusion",
             "Расклад по вариантам": "Options Breakdown",
             "Варианты": "Options Breakdown",
-            # ═══ NEW ═══
             "Trigger Watch": "Trigger Watch",
-            "Триггеры": "Trigger Watch",
+            "Trigger High": "Trigger High",
+            "Trigger Medium": "Trigger Medium",
+            "Trigger Low": "Trigger Low",
             "Mispricing": "Mispricing",
             "Расхождение": "Mispricing",
             "Market Psychology": "Market Psychology",
             "Психология рынка": "Market Psychology",
             "Alpha Note": "Alpha Note",
             "Альфа": "Alpha Note",
+            "Trade Insight": "Trade Insight",
+            "Анализ входа": "Trade Insight",
+            "Trade Strategy": "Trade Strategy",
+            "Стратегия": "Trade Strategy",
+            "Trade Entry": "Trade Entry",
+            "Условия входа": "Trade Entry",
+            "Trade Risk": "Trade Risk",
+            "Риск": "Trade Risk",
         }
 
         current_key = None
