@@ -91,6 +91,9 @@ class ChiefAgent:
             "short_signal": comm.get("short_signal", ""),
             "full_analysis": comm.get("full_analysis", ""),
             "time_shift": comm.get("time_shift"),
+            "decision_block": comm.get("decision_block", ""),
+            "full_analysis": comm.get("full_analysis", ""),
+            "time_shift": comm.get("time_shift"),
 
             # Meta
             "url": url,
