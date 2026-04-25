@@ -20,8 +20,16 @@ def _parse_prob(value) -> Optional[float]:
 def detect_mispricing(
     model_prob: float,
     market_prob: float,
-    outcome: str = "",
+    market_leader: str = "Yes",
 ) -> dict:
+    """
+    model_prob  — вероятность лидирующего исхода по модели
+    market_prob — вероятность лидирующего исхода по рынку
+    market_leader — "Yes" или "No" — какой исход лидирует на рынке
+
+    model_prob > market_prob → рынок НЕДООЦЕНИВАЕТ лидера → альфа в сторону market_leader
+    model_prob < market_prob → рынок ПЕРЕОЦЕНИВАЕТ лидера → альфа против market_leader
+    """
     delta = abs(model_prob - market_prob)
 
     if delta < 5:
@@ -33,27 +41,36 @@ def detect_mispricing(
     else:
         edge = "STRONG"
 
+    opposite = "No" if market_leader == "Yes" else "Yes"
+
     if edge == "NONE":
         message = f"Δ: {delta:.1f}%"
-        interpretation = "Рынок оценен справедливо. Явного расхождения нет."
+        interpretation = "Рынок оценен справедливо. Модель и рынок сходятся."
+        alpha_direction = None
     elif model_prob > market_prob:
+        # Модель выше рынка → рынок недооценивает лидера
         message = f"Модель выше рынка на {delta:.1f}%"
         interpretation = (
-            "Модель оценивает вероятность выше рынка — "
-            "рынок может недооценивать этот исход."
+            f"Рынок недооценивает {market_leader} ({market_prob:.1f}% vs {model_prob:.1f}% по модели). "
+            f"Потенциальная альфа в сторону {market_leader}."
         )
+        alpha_direction = market_leader
     else:
+        # Модель ниже рынка → рынок переоценивает лидера
         message = f"Модель ниже рынка на {delta:.1f}%"
         interpretation = (
-            "Модель оценивает вероятность ниже рынка — "
-            "рынок может переоценивать этот исход."
+            f"Рынок переоценивает {market_leader} ({market_prob:.1f}% vs {model_prob:.1f}% по модели). "
+            f"Потенциальная альфа в сторону {opposite}."
         )
+        alpha_direction = opposite
 
     return {
         "delta": round(delta, 2),
         "edge": edge,
         "message": message,
         "interpretation": interpretation,
+        "alpha_direction": alpha_direction,
+        "market_leader": market_leader,
     }
 
 
@@ -61,10 +78,14 @@ def build_mispricing_block(
     model_prob: float,
     market_prob: float,
     lang: str = "ru",
+    market_leader: str = "Yes",
 ) -> str:
-    result = detect_mispricing(model_prob, market_prob)
+    result = detect_mispricing(model_prob, market_prob, market_leader)
     delta = result["delta"]
     edge = result["edge"]
+    interpretation = result["interpretation"]
+    alpha_direction = result["alpha_direction"]
+    opposite = "No" if market_leader == "Yes" else "Yes"
 
     if lang == "ru":
         if edge == "NONE":
@@ -77,42 +98,32 @@ def build_mispricing_block(
                 "мониторить триггеры и реагировать быстрее толпы."
             )
         elif edge == "WEAK":
-            direction = "выше" if model_prob > market_prob else "ниже"
-            opposite = "ниже" if model_prob > market_prob else "выше"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Модель: {model_prob:.1f}% | Рынок: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: СЛАБЫЙ\n"
                 "📌 Интерпретация:\n"
-                f"Модель на {delta:.1f}% {direction} рыночной оценки. "
+                f"{interpretation} "
                 "Расхождение есть, но недостаточное для уверенного действия. "
-                f"Рынок может быть {opposite} справедливой цены — "
-                "нужен новостной триггер для подтверждения позиции."
+                "Нужен новостной триггер для подтверждения."
             )
         elif edge == "MODERATE":
-            direction = "выше" if model_prob > market_prob else "ниже"
-            side = "недооценивает" if model_prob > market_prob else "переоценивает"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Модель: {model_prob:.1f}% | Рынок: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: УМЕРЕННЫЙ\n"
                 "📌 Интерпретация:\n"
-                f"Рынок {side} исход на {delta:.1f}%. "
-                "Потенциальная неэффективность — рынок мог не учесть свежие данные. "
-                "Проверь ликвидность и убедись что расхождение не вызвано тонким рынком."
+                f"{interpretation} "
+                "Проверь ликвидность — убедись что расхождение не из-за тонкого рынка."
             )
         else:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            action = "Yes" if model_prob > market_prob else "No"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Модель: {model_prob:.1f}% | Рынок: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: СИЛЬНЫЙ\n"
                 "📌 Интерпретация:\n"
-                f"Значительное расхождение {delta:.1f}% — модель видит {action} "
-                f"существенно {direction} рыночной цены. "
-                "Потенциальная alpha-зона, но высокий риск. "
-                "Обязательно: проверь источники, ликвидность и нет ли скрытого события."
+                f"{interpretation} "
+                "Высокий риск — проверь источники, объём и скрытые риски перед входом."
             )
     else:
         if edge == "NONE":
@@ -125,38 +136,32 @@ def build_mispricing_block(
                 "monitor triggers and react faster than the crowd."
             )
         elif edge == "WEAK":
-            direction = "above" if model_prob > market_prob else "below"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Model: {model_prob:.1f}% | Market: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: WEAK\n"
                 "📌 Interpretation:\n"
-                f"Model is {delta:.1f}% {direction} market. "
+                f"{interpretation} "
                 "Divergence exists but not strong enough for confident action. "
-                "Needs a news trigger for confirmation."
+                "Needs news trigger for confirmation."
             )
         elif edge == "MODERATE":
-            direction = "above" if model_prob > market_prob else "below"
-            side = "underpricing" if model_prob > market_prob else "overpricing"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Model: {model_prob:.1f}% | Market: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: MODERATE\n"
                 "📌 Interpretation:\n"
-                f"Market may be {side} this outcome by {delta:.1f}%. "
-                "Check liquidity and confirm divergence isn't caused by thin market."
+                f"{interpretation} "
+                "Check liquidity — confirm divergence isn't caused by thin market."
             )
         else:
-            direction = "above" if model_prob > market_prob else "below"
-            action = "Yes" if model_prob > market_prob else "No"
             return (
                 "💣 Mispricing Signal:\n"
                 f"Model: {model_prob:.1f}% | Market: {market_prob:.1f}% | Δ: {delta:.1f}%\n\n"
                 "📊 Edge: STRONG\n"
                 "📌 Interpretation:\n"
-                f"Strong divergence {delta:.1f}% — model sees {action} significantly "
-                f"{direction} market price. Potential alpha zone, but high risk. "
-                "Verify sources, liquidity, and hidden event risk."
+                f"{interpretation} "
+                "High risk — verify sources, volume and hidden risks before entry."
             )
 
 
@@ -238,15 +243,31 @@ def build_alpha_note(
     market_prob: float,
     market_balance: str = "",
     lang: str = "ru",
+    market_leader: str = "Yes",
 ) -> str:
+    """
+    model_prob > market_prob → рынок недооценивает лидера → альфа в сторону market_leader
+    model_prob < market_prob → рынок переоценивает лидера → альфа против market_leader
+    """
     delta = abs(model_prob - market_prob)
+    opposite = "No" if market_leader == "Yes" else "Yes"
+
+    # Определяем направление альфы
+    if model_prob > market_prob:
+        alpha_side = market_leader      # рынок недооценивает → берём лидера
+        alpha_direction_ru = f"в сторону {market_leader} (рынок недооценивает)"
+        alpha_direction_en = f"toward {market_leader} (market underpricing)"
+    else:
+        alpha_side = opposite           # рынок переоценивает → берём противоположный
+        alpha_direction_ru = f"в сторону {opposite} (рынок переоценивает {market_leader})"
+        alpha_direction_en = f"toward {opposite} (market overpricing {market_leader})"
 
     if lang == "ru":
         if delta < 5:
             if market_balance == "strong_consensus":
                 note = (
                     "Альфа отсутствует — модель подтверждает рыночный консенсус. "
-                    "Входить против рынка нет смысла. "
+                    f"Входить против {market_leader} нет смысла. "
                     "Альфа появится только при резком внешнем событии — "
                     "быть готовым реагировать первым."
                 )
@@ -263,28 +284,22 @@ def build_alpha_note(
                     "которые рынок ещё не учёл."
                 )
         elif delta < 10:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Слабая альфа — модель на {delta:.1f}% {direction} рынка. "
-                f"Возможность в {outcome}, но нужно подтверждение: "
+                f"Слабая альфа ({delta:.1f}%) — {alpha_direction_ru}. "
+                f"Возможность в {alpha_side}, но нужно подтверждение: "
                 "жди новостного триггера перед входом. "
                 "Без него риск выше потенциальной прибыли."
             )
         elif delta < 20:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Умеренная альфа — расхождение {delta:.1f}% в пользу {outcome}. "
-                "Рынок может быть неэффективен. "
-                "Действие: рассмотреть позицию при подтверждении от 1–2 источников. "
+                f"Умеренная альфа — расхождение {delta:.1f}% {alpha_direction_ru}. "
+                f"Рассмотреть позицию в {alpha_side} при подтверждении от 1–2 источников. "
                 "Размер позиции — умеренный, риск ограничить."
             )
         else:
-            direction = "выше" if model_prob > market_prob else "ниже"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Сильная потенциальная альфа — расхождение {delta:.1f}% в пользу {outcome}. "
+                f"Сильная потенциальная альфа — расхождение {delta:.1f}% {alpha_direction_ru}. "
+                f"Направление: {alpha_side}. "
                 "Высокий риск: такие расхождения часто говорят о скрытой информации "
                 "или тонком рынке. "
                 "Проверь ликвидность, объём и источники перед входом."
@@ -294,8 +309,8 @@ def build_alpha_note(
         if delta < 5:
             if market_balance == "strong_consensus":
                 note = (
-                    "No alpha — model confirms market consensus. "
-                    "No reason to fade the market. "
+                    f"No alpha — model confirms market consensus. "
+                    f"No reason to fade {market_leader}. "
                     "Alpha only appears on sharp external event — "
                     "be ready to react first."
                 )
@@ -312,28 +327,22 @@ def build_alpha_note(
                     "that the market hasn't priced in yet."
                 )
         elif delta < 10:
-            direction = "above" if model_prob > market_prob else "below"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Weak alpha — model {delta:.1f}% {direction} market. "
-                f"Opportunity in {outcome}, but needs confirmation: "
+                f"Weak alpha ({delta:.1f}%) — {alpha_direction_en}. "
+                f"Opportunity in {alpha_side}, but needs confirmation: "
                 "wait for a news trigger before entering. "
                 "Without it, risk outweighs potential gain."
             )
         elif delta < 20:
-            direction = "above" if model_prob > market_prob else "below"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Moderate alpha — {delta:.1f}% divergence in favour of {outcome}. "
-                "Market may be inefficient. "
-                "Action: consider position on confirmation from 1–2 sources. "
+                f"Moderate alpha — {delta:.1f}% divergence {alpha_direction_en}. "
+                f"Consider position in {alpha_side} on confirmation from 1–2 sources. "
                 "Moderate size, limit risk."
             )
         else:
-            direction = "above" if model_prob > market_prob else "below"
-            outcome = "Yes" if model_prob > market_prob else "No"
             note = (
-                f"Strong potential alpha — {delta:.1f}% divergence in favour of {outcome}. "
+                f"Strong potential alpha — {delta:.1f}% divergence {alpha_direction_en}. "
+                f"Direction: {alpha_side}. "
                 "High risk: large divergences often signal hidden info or thin market. "
                 "Check liquidity, volume and sources before entering."
             )
@@ -346,73 +355,140 @@ def build_trade_insight(
     market_balance: str = "",
     category: str = "",
     lang: str = "ru",
+    market_leader: str = "Yes",
 ) -> str:
+    """
+    model_prob > market_prob → рынок недооценивает лидера → Trade Insight за market_leader
+    model_prob < market_prob → рынок переоценивает лидера → Trade Insight за противоположный
+    """
     delta = abs(model_prob - market_prob)
-    leader_side = "Yes" if market_prob >= 50 else "No"
-    leader_prob = market_prob if market_prob >= 50 else 100 - market_prob
-    alt_prob = 100 - leader_prob
+    opposite = "No" if market_leader == "Yes" else "Yes"
+
+    # Определяем торговое направление
+    if model_prob >= market_prob:
+        trade_side = market_leader      # модель выше → берём лидера
+        fade_side = opposite
+        model_higher = True
+    else:
+        trade_side = opposite           # модель ниже → берём противоположный
+        fade_side = market_leader
+        model_higher = False
+
+    alt_prob = round(100 - market_prob, 1)
 
     if lang == "ru":
         if market_balance == "strong_consensus":
-            insight = (
-                f"Рынок сильно смещён в сторону {leader_side} ({leader_prob:.1f}%). "
-                "Прямого value для входа против рынка нет — консенсус слишком сильный."
-            )
-            strategy = "— не входить против рынка\n— ждать отката или новостного триггера"
-            if leader_prob >= 85:
-                entry = (
-                    f"— если цена {leader_side} откатится к {leader_prob - 10:.0f}–{leader_prob - 7:.0f}%\n"
-                    "— при подтверждении нового негативного/позитивного события"
+            if model_higher:
+                # Модель выше → рынок недооценивает лидера → подтверждаем позицию
+                insight = (
+                    f"Рынок и модель сходятся на {market_leader} ({market_prob:.1f}%). "
+                    "Консенсус сильный — входить против нет смысла. "
+                    f"Позиция в {trade_side} оправдана только при откате."
                 )
+                strategy = (
+                    f"— удерживать или докупать {trade_side} на откатах\n"
+                    "— не входить на максимуме вероятности"
+                )
+                entry = (
+                    f"— если цена {trade_side} откатится к {market_prob - 8:.0f}–{market_prob - 5:.0f}%\n"
+                    "— при подтверждении нового события в пользу этого исхода"
+                )
+                risk = f"— разворотный триггер может быстро сдвинуть рынок к {alt_prob}%"
             else:
-                entry = (
-                    f"— при откате к {leader_prob - 8:.0f}–{leader_prob - 5:.0f}%\n"
-                    "— если выйдут данные подтверждающие сценарий"
+                # Модель ниже → рынок переоценивает лидера → смотрим на fade
+                insight = (
+                    f"Рынок переоценивает {market_leader} ({market_prob:.1f}%), "
+                    f"модель видит {model_prob:.1f}%. "
+                    f"Потенциальная возможность в {trade_side}, но консенсус сильный — высокий риск."
                 )
-            risk = f"— разворотный триггер может быстро сдвинуть рынок к {alt_prob:.1f}%"
+                strategy = (
+                    f"— не входить в {trade_side} без сильного триггера\n"
+                    "— ждать подтверждения разворота"
+                )
+                entry = (
+                    f"— если цена {market_leader} упадёт ниже {market_prob - 10:.0f}%\n"
+                    "— при появлении конкретного события меняющего расклад"
+                )
+                risk = f"— консенсус может сохраниться и {market_leader} продолжит расти"
 
         elif market_balance == "moderate_consensus":
-            insight = (
-                f"Умеренный перевес {leader_side} ({leader_prob:.1f}%). "
-                "Есть небольшое окно для входа — рынок не перегрет."
-            )
-            if delta >= 10:
-                strategy = "— рассмотреть вход при подтверждении триггера\n— размер позиции — умеренный"
-                entry = (
-                    f"— при удержании цены {leader_side} выше {leader_prob - 5:.0f}%\n"
-                    "— при выходе подтверждающей новости"
+            if model_higher:
+                insight = (
+                    f"Умеренный перевес {market_leader} ({market_prob:.1f}%), "
+                    f"модель подтверждает ({model_prob:.1f}%). "
+                    "Есть небольшое окно для входа — рынок не перегрет."
                 )
+                strategy = (
+                    f"— рассмотреть вход в {trade_side} при подтверждении\n"
+                    "— размер позиции умеренный"
+                )
+                entry = (
+                    f"— при удержании {market_leader} выше {market_prob - 5:.0f}%\n"
+                    "— при выходе подтверждающего события"
+                )
+                risk = "— смена сентимента может быстро развернуть рынок"
             else:
-                strategy = "— ждать более чёткого сигнала\n— наблюдать за новостным фоном"
-                entry = (
-                    f"— если цена {leader_side} вырастет выше {leader_prob + 3:.0f}%\n"
-                    "— при появлении конкретного катализатора"
+                insight = (
+                    f"Рынок переоценивает {market_leader} ({market_prob:.1f}%), "
+                    f"модель видит {model_prob:.1f}%. "
+                    f"Расхождение {delta:.1f}% — потенциал в {trade_side}."
                 )
-            risk = "— смена сентимента или неожиданные данные могут быстро развернуть рынок"
+                strategy = (
+                    f"— ждать сигнала для входа в {trade_side}\n"
+                    "— не входить без подтверждающего триггера"
+                )
+                entry = (
+                    f"— если {market_leader} начнёт падать ниже {market_prob - 5:.0f}%\n"
+                    "— при появлении новости меняющей расклад"
+                )
+                risk = f"— {market_leader} может продолжить рост если триггера не будет"
 
         elif market_balance in ("balanced", "slight_lean"):
             insight = (
-                f"Рынок нестабилен (~{leader_prob:.1f}% за {leader_side}). "
+                f"Рынок нестабилен ({market_leader}: {market_prob:.1f}% vs {opposite}: {alt_prob}%). "
                 "Входить сейчас — высокий риск без чёткого сигнала."
             )
-            strategy = "— не входить до появления триггера\n— следить за первыми значимыми новостями"
-            entry = (
-                "— при пробое выше 60% в любую сторону\n"
-                "— при официальном заявлении или новом событии"
-            )
+            if model_higher:
+                strategy = (
+                    f"— наблюдать за {market_leader}\n"
+                    "— входить только при пробое и закреплении выше 60%"
+                )
+                entry = (
+                    f"— если {market_leader} пробьёт отметку 60% и удержится\n"
+                    "— при официальном заявлении или событии в пользу исхода"
+                )
+            else:
+                strategy = (
+                    f"— наблюдать за {trade_side}\n"
+                    "— входить только при чётком сигнале разворота"
+                )
+                entry = (
+                    f"— если {opposite} пробьёт 60% и {market_leader} начнёт падать\n"
+                    "— при появлении события против текущего лидера"
+                )
             risk = "— рынок может резко пойти в любую сторону без предупреждения"
 
         else:
+            # lean_against
             insight = (
-                f"Рынок против основного исхода ({leader_prob:.1f}%). "
-                "Входить в противоположную сторону слишком рискованно без катализатора."
+                f"Рынок против основного исхода ({market_leader}: {market_prob:.1f}%). "
+                "Высокий риск входа без катализатора."
             )
-            strategy = "— игнорировать рынок до появления разворотного события\n— наблюдать"
+            if model_higher:
+                strategy = (
+                    f"— осторожно наблюдать за {trade_side}\n"
+                    "— входить только при явном подтверждении"
+                )
+            else:
+                strategy = (
+                    f"— игнорировать до разворотного события\n"
+                    "— наблюдать"
+                )
             entry = (
-                "— при появлении подтверждённого позитивного/негативного события\n"
-                f"— при смене лидера выше {100 - leader_prob + 5:.0f}%"
+                "— при появлении подтверждённого события меняющего расклад\n"
+                f"— при пробое {market_leader} ниже {market_prob - 10:.0f}%"
             )
-            risk = "— рынок может продолжить движение в текущем направлении"
+            risk = f"— {market_leader} может продолжить движение в текущем направлении"
 
         return (
             "📊 Trade Insight:\n"
@@ -427,65 +503,114 @@ def build_trade_insight(
 
     else:
         if market_balance == "strong_consensus":
-            insight = (
-                f"Market strongly skewed toward {leader_side} ({leader_prob:.1f}%). "
-                "No direct value for fading — consensus is too strong."
-            )
-            strategy = "— do not fade the market\n— wait for pullback or news trigger"
-            if leader_prob >= 85:
-                entry = (
-                    f"— if {leader_side} price pulls back to {leader_prob - 10:.0f}–{leader_prob - 7:.0f}%\n"
-                    "— on confirmation of new negative/positive event"
+            if model_higher:
+                insight = (
+                    f"Market and model agree on {market_leader} ({market_prob:.1f}%). "
+                    "Strong consensus — no reason to fade. "
+                    f"Position in {trade_side} justified only on pullback."
                 )
+                strategy = (
+                    f"— hold or add {trade_side} on dips\n"
+                    "— avoid entering at probability peak"
+                )
+                entry = (
+                    f"— if {trade_side} pulls back to {market_prob - 8:.0f}–{market_prob - 5:.0f}%\n"
+                    "— on confirmation of new supporting event"
+                )
+                risk = f"— reversal trigger could quickly push market to {alt_prob}%"
             else:
-                entry = (
-                    f"— on pullback to {leader_prob - 8:.0f}–{leader_prob - 5:.0f}%\n"
-                    "— if confirming data emerges"
+                insight = (
+                    f"Market overpricing {market_leader} ({market_prob:.1f}%), "
+                    f"model sees {model_prob:.1f}%. "
+                    f"Potential opportunity in {trade_side}, but consensus is strong — high risk."
                 )
-            risk = f"— reversal trigger could quickly push market to {alt_prob:.1f}%"
+                strategy = (
+                    f"— do not enter {trade_side} without strong trigger\n"
+                    "— wait for reversal confirmation"
+                )
+                entry = (
+                    f"— if {market_leader} drops below {market_prob - 10:.0f}%\n"
+                    "— on specific event changing the setup"
+                )
+                risk = f"— consensus may hold and {market_leader} continues rising"
 
         elif market_balance == "moderate_consensus":
-            insight = (
-                f"Moderate {leader_side} edge ({leader_prob:.1f}%). "
-                "Small entry window — market is not overheated."
-            )
-            if delta >= 10:
-                strategy = "— consider entry on trigger confirmation\n— moderate position size"
-                entry = (
-                    f"— if {leader_side} holds above {leader_prob - 5:.0f}%\n"
-                    "— on confirming news"
+            if model_higher:
+                insight = (
+                    f"Moderate {market_leader} edge ({market_prob:.1f}%), "
+                    f"model confirms ({model_prob:.1f}%). "
+                    "Small entry window — market not overheated."
                 )
+                strategy = (
+                    f"— consider entry in {trade_side} on confirmation\n"
+                    "— moderate position size"
+                )
+                entry = (
+                    f"— if {market_leader} holds above {market_prob - 5:.0f}%\n"
+                    "— on confirming event"
+                )
+                risk = "— sentiment shift could reverse market quickly"
             else:
-                strategy = "— wait for clearer signal\n— watch news flow"
-                entry = (
-                    f"— if {leader_side} rises above {leader_prob + 3:.0f}%\n"
-                    "— on specific catalyst"
+                insight = (
+                    f"Market overpricing {market_leader} ({market_prob:.1f}%), "
+                    f"model sees {model_prob:.1f}%. "
+                    f"{delta:.1f}% divergence — potential in {trade_side}."
                 )
-            risk = "— sentiment shift or surprise data could reverse market quickly"
+                strategy = (
+                    f"— wait for entry signal in {trade_side}\n"
+                    "— don't enter without confirming trigger"
+                )
+                entry = (
+                    f"— if {market_leader} starts falling below {market_prob - 5:.0f}%\n"
+                    "— on news changing the setup"
+                )
+                risk = f"— {market_leader} may continue rising without trigger"
 
         elif market_balance in ("balanced", "slight_lean"):
             insight = (
-                f"Market unstable (~{leader_prob:.1f}% for {leader_side}). "
-                "Entering now is high risk without clear signal."
+                f"Market unstable ({market_leader}: {market_prob:.1f}% vs {opposite}: {alt_prob}%). "
+                "High risk without clear signal."
             )
-            strategy = "— do not enter until trigger appears\n— watch for first significant news"
-            entry = (
-                "— on break above 60% in either direction\n"
-                "— on official statement or new event"
-            )
+            if model_higher:
+                strategy = (
+                    f"— watch {market_leader}\n"
+                    "— enter only on break and hold above 60%"
+                )
+                entry = (
+                    f"— if {market_leader} breaks 60% and holds\n"
+                    "— on official statement or supporting event"
+                )
+            else:
+                strategy = (
+                    f"— watch {trade_side}\n"
+                    "— enter only on clear reversal signal"
+                )
+                entry = (
+                    f"— if {opposite} breaks 60% and {market_leader} starts falling\n"
+                    "— on event going against current leader"
+                )
             risk = "— market can move sharply in either direction without warning"
 
         else:
             insight = (
-                f"Market against main outcome ({leader_prob:.1f}%). "
-                "Fading without catalyst is too risky."
+                f"Market against main outcome ({market_leader}: {market_prob:.1f}%). "
+                "High risk entering without catalyst."
             )
-            strategy = "— ignore until reversal event appears\n— observe only"
+            if model_higher:
+                strategy = (
+                    f"— carefully watch {trade_side}\n"
+                    "— enter only on clear confirmation"
+                )
+            else:
+                strategy = (
+                    "— ignore until reversal event\n"
+                    "— observe only"
+                )
             entry = (
-                "— on confirmed positive/negative event\n"
-                f"— on leader flip above {100 - leader_prob + 5:.0f}%"
+                "— on confirmed event changing the setup\n"
+                f"— on {market_leader} break below {market_prob - 10:.0f}%"
             )
-            risk = "— market may continue in current direction"
+            risk = f"— {market_leader} may continue in current direction"
 
         return (
             "📊 Trade Insight:\n"
