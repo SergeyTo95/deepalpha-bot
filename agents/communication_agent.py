@@ -1241,6 +1241,7 @@ class CommunicationAgent:
                 )
 
     def _build_conclusion(
+    def _build_conclusion(
         self,
         clean_conclusion: str,
         display_prediction: str,
@@ -1265,57 +1266,104 @@ class CommunicationAgent:
                     result = re.sub(r'\bNo\b', semantic_text, result)
                 else:
                     result = re.sub(r'\bYes\b', semantic_text, result)
-                if len(result) > 20 and not self._is_truncated(result):
+
+                bad_conclusions = [
+                    "следуем рынку", "следуем рыночной", "following market",
+                    "следуем рыночной оценке",
+                ]
+                is_bad = any(p in result.lower() for p in bad_conclusions)
+
+                if len(result) > 20 and not self._is_truncated(result) and not is_bad:
                     return result
 
-        has_alpha = "alpha" in alpha_label.lower() or "альфа" in alpha_label.lower()
+        # Определяем есть ли альфа
+        has_alpha = (
+            "alpha" in alpha_label.lower()
+            or "альфа" in alpha_label.lower()
+            or "потенциал" in alpha_label.lower()
+            or "weak" in alpha_label.lower()
+            or "слабый" in alpha_label.lower()
+        )
+        has_strong_alpha = (
+            "🔥" in alpha_label
+            or "strong" in alpha_label.lower()
+            or "сильн" in alpha_label.lower()
+        )
+        is_balanced = market_balance in ("balanced", "slight_lean")
+        is_consensus = market_balance == "strong_consensus"
 
         if lang == "ru":
-            if market_balance == "strong_consensus":
+            if is_balanced:
+                return (
+                    f"Рынок неопределён — нет чёткого перевеса. "
+                    f"Прогноз: {display_prediction}. "
+                    f"Ждать триггера — не входить без сигнала."
+                )
+            elif is_consensus:
                 if has_alpha:
                     return (
-                        f"Базовый сценарий: {display_prediction}. "
-                        f"Риск — экстраординарное событие. "
-                        f"Alpha — расхождение модели с рынком требует проверки."
+                        f"Сильный консенсус: {display_prediction}. "
+                        f"Есть расхождение с моделью — "
+                        f"следи за триггерами для точки входа."
                     )
-                return (
-                    f"Базовый сценарий: {display_prediction}. "
-                    f"Высокий консенсус. Ставить против — высокий риск."
-                )
-            elif market_balance in ("slight_lean", "balanced"):
-                return (
-                    f"Небольшой перевес: {display_prediction}. "
-                    f"Риск — любой новый катализатор. "
-                    f"Alpha — первым отреагировать на изменения."
-                )
+                else:
+                    return (
+                        f"Сильный консенсус подтверждает: {display_prediction}. "
+                        f"Альфы нет — стратегия ожидания и мониторинг триггеров."
+                    )
             else:
-                return (
-                    f"Следуем перевесу рынка: {display_prediction}. "
-                    f"Мониторь триггеры для пересмотра позиции."
-                )
+                if has_strong_alpha:
+                    return (
+                        f"Значительное расхождение модели и рынка. "
+                        f"Прогноз: {display_prediction}. "
+                        f"Высокий риск — проверить источники перед входом."
+                    )
+                elif has_alpha:
+                    return (
+                        f"Умеренное расхождение — прогноз: {display_prediction}. "
+                        f"Возможность появится при подтверждении триггером."
+                    )
+                else:
+                    return (
+                        f"Прогноз: {display_prediction}. "
+                        f"Расхождения с рынком нет — ждать новых данных."
+                    )
         else:
-            if market_balance == "strong_consensus":
+            if is_balanced:
+                return (
+                    f"Market uncertain — no clear edge. "
+                    f"Forecast: {display_prediction}. "
+                    f"Wait for trigger — do not enter without signal."
+                )
+            elif is_consensus:
                 if has_alpha:
                     return (
-                        f"Base case: {display_prediction}. "
-                        f"Risk — extraordinary event. "
-                        f"Alpha — model divergence needs verification."
+                        f"Strong consensus: {display_prediction}. "
+                        f"Model diverges from market — "
+                        f"watch triggers for entry point."
                     )
-                return (
-                    f"Base case: {display_prediction}. "
-                    f"High consensus. Fading carries high risk."
-                )
-            elif market_balance in ("slight_lean", "balanced"):
-                return (
-                    f"Slight edge: {display_prediction}. "
-                    f"Risk — any new catalyst. "
-                    f"Alpha — react first to new data."
-                )
+                else:
+                    return (
+                        f"Strong consensus confirms: {display_prediction}. "
+                        f"No alpha — waiting strategy, monitor triggers."
+                    )
             else:
-                return (
-                    f"Following market edge: {display_prediction}. "
-                    f"Monitor triggers for position reassessment."
-                )
+                if has_strong_alpha:
+                    return (
+                        f"Significant model-market divergence. "
+                        f"Forecast: {display_prediction}. "
+                        f"High risk — verify sources before entry."
+                    )
+                elif has_alpha:
+                    return (
+                        f"Moderate divergence — forecast: {display_prediction}. "
+                        f"Opportunity appears on trigger confirmation."
+                    )
+                else:
+                    return (
+                        f"Forecast: {display_prediction}. "
+                        f"No divergence from market — wait for new data."
+                    )
 
     # ═══════════════════════════════════════════
     # ALPHA DETECTION
