@@ -550,20 +550,32 @@ def _get_communication_data(result: dict, lang: str = "ru") -> dict:
         print(f"CommunicationAgent error: {e}")
         return {}
 def _build_extra_blocks(result: dict, lang: str) -> str:
-    """
-    Собирает дополнительные аналитические блоки из результата анализа.
-    Блоки генерируются в CommunicationAgent и хранятся в result.
-    """
     parts = []
 
-    time_shift_block = result.get("time_shift_block", "")
-    mispricing_block = result.get("mispricing_block", "")
-    trigger_block = result.get("trigger_block", "")
-    psychology_block = result.get("psychology_block", "")
-    alpha_note_block = result.get("alpha_note_block", "")
+    # Сначала берём то что LLM сгенерировал сам
+    trigger_watch_raw = result.get("trigger_watch_raw", "")
+    mispricing_raw = result.get("mispricing_raw", "")
+    market_psychology_raw = result.get("market_psychology_raw", "")
+    alpha_note_raw = result.get("alpha_note_raw", "")
 
-    # Если блоки не пришли из агента — пробуем сгенерировать на лету
-    if not any([time_shift_block, mispricing_block, trigger_block]):
+    # Если LLM дал данные — используем их
+    if trigger_watch_raw:
+        events = [e.strip() for e in trigger_watch_raw.split("|") if e.strip()]
+        if events:
+            lines = "\n".join(f"— {e}" for e in events[:5])
+            parts.append(f"📡 Trigger Watch:\n{lines}")
+
+    if mispricing_raw:
+        parts.append(f"💣 Mispricing Signal:\n{mispricing_raw}")
+
+    if market_psychology_raw:
+        parts.append(f"🧠 Market Psychology:\n{market_psychology_raw}")
+
+    if alpha_note_raw:
+        parts.append(f"🟡 Alpha Note:\n{alpha_note_raw}")
+
+    # Fallback — если LLM не дал блоки, генерируем через агентов
+    if not parts:
         try:
             from agents.alpha_layer import (
                 build_mispricing_block,
@@ -572,86 +584,54 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
             )
             from agents.trigger_layer import build_trigger_watch
             from agents.time_shift_layer import build_time_shift_block
+            import re as _re
 
-            # Time shift
             sub_markets = result.get("sub_markets", [])
             if sub_markets:
-                time_shift_block = build_time_shift_block(
-                    time_series=sub_markets, lang=lang
-                )
+                ts_block = build_time_shift_block(time_series=sub_markets, lang=lang)
+                if ts_block:
+                    parts.append(ts_block)
 
-            # Вероятности
             market_prob_str = str(result.get("market_probability", ""))
-            probability_str = str(result.get("probability", ""))
-
-            import re
             market_prob = 50.0
-            yes_m = re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
-            no_m = re.search(r'No:\s*([\d.]+)%', market_prob_str)
+            yes_m = _re.search(r'Yes:\s*([\d.]+)%', market_prob_str)
+            no_m = _re.search(r'No:\s*([\d.]+)%', market_prob_str)
             if yes_m and no_m:
                 market_prob = max(float(yes_m.group(1)), float(no_m.group(1)))
-            else:
-                m = re.search(r'([\d.]+)%', market_prob_str)
-                if m:
-                    market_prob = float(m.group(1))
 
-            model_prob = market_prob
-            prob_m = re.search(r'([\d.]+)%', probability_str)
-            if prob_m:
-                model_prob = float(prob_m.group(1))
+            prob_m = _re.search(r'([\d.]+)%', str(result.get("probability", "")))
+            model_prob = float(prob_m.group(1)) if prob_m else market_prob
 
             if market_prob > 0:
-                mispricing_block = build_mispricing_block(
-                    model_prob=model_prob,
-                    market_prob=market_prob,
-                    lang=lang,
-                )
-                psychology_block = build_market_psychology(
-                    probability=market_prob,
-                    lang=lang,
-                )
-
                 if market_prob >= 85:
-                    market_balance = "strong_consensus"
+                    mb = "strong_consensus"
                 elif market_prob >= 65:
-                    market_balance = "moderate_consensus"
+                    mb = "moderate_consensus"
                 elif market_prob >= 55:
-                    market_balance = "slight_lean"
+                    mb = "slight_lean"
                 elif market_prob >= 45:
-                    market_balance = "balanced"
+                    mb = "balanced"
                 else:
-                    market_balance = "lean_against"
+                    mb = "lean_against"
 
-                alpha_note_block = build_alpha_note(
-                    model_prob=model_prob,
-                    market_prob=market_prob,
-                    market_balance=market_balance,
-                    lang=lang,
-                )
+                parts.append(build_mispricing_block(model_prob, market_prob, lang))
+                parts.append(build_market_psychology(market_prob, lang=lang))
+                parts.append(build_alpha_note(model_prob, market_prob, mb, lang))
 
-            trigger_block = build_trigger_watch(
+            tw = build_trigger_watch(
                 question=result.get("question", ""),
                 category=result.get("category", ""),
                 key_signals=result.get("key_signals", []),
                 lang=lang,
             )
+            if tw:
+                parts.append(tw)
 
         except Exception as e:
             print(f"_build_extra_blocks fallback error: {e}")
 
-    # Собираем в нужном порядке
-    if time_shift_block:
-        parts.append(_escape(time_shift_block))
-    if mispricing_block:
-        parts.append(_escape(mispricing_block))
-    if trigger_block:
-        parts.append(_escape(trigger_block))
-    if psychology_block:
-        parts.append(_escape(psychology_block))
-    if alpha_note_block:
-        parts.append(_escape(alpha_note_block))
-
-    return "\n\n".join(parts)
+    # Escape и соединяем
+    return "\n\n".join(_escape(p) for p in parts if p)
 
 def _format_analysis(result: dict, uid: int) -> str:
     lang = get_user_lang(uid)
