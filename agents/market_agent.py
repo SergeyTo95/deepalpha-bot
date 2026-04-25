@@ -1,5 +1,5 @@
-
-from typing import Dict, List, Any, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from services.polymarket_service import (
     extract_slug_from_url,
@@ -7,6 +7,7 @@ from services.polymarket_service import (
     get_primary_market_from_url,
     normalize_market_data,
     normalize_related_markets,
+    list_events,
 )
 
 
@@ -44,6 +45,8 @@ class MarketAgent:
             main_question=question,
         )
 
+        sub_markets = self._get_sub_markets(slug, question)
+
         return {
             "url": url,
             "slug": slug,
@@ -61,7 +64,170 @@ class MarketAgent:
             "primary_token_id": normalized.get("primary_token_id", ""),
             "price_history": normalized.get("price_history", {"24h": [], "7d": []}),
             "raw_market_data": normalized.get("raw_market_data", {}),
+            "sub_markets": sub_markets,
         }
+
+    def _get_sub_markets(self, slug: str, main_question: str) -> List[Dict[str, Any]]:
+        """
+        Получает все sub-рынки события для time shift анализа.
+        Возвращает список: [{"date": "May 31", "yes_prob": 33.5}, ...]
+        отсортированный по дате (ближайший первым).
+        """
+        if not slug:
+            return []
+
+        try:
+            events = list_events(limit=5)
+            event = None
+
+            for e in events:
+                if e.get("slug", "") == slug:
+                    event = e
+                    break
+
+            if not event:
+                import requests
+                try:
+                    resp = requests.get(
+                        "https://gamma-api.polymarket.com/events",
+                        params={"slug": slug, "limit": 3},
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        events_list = data if isinstance(data, list) else data.get("data", [])
+                        if events_list:
+                            event = events_list[0]
+                except Exception:
+                    pass
+
+            if not event:
+                return []
+
+            markets = event.get("markets", [])
+            if len(markets) < 2:
+                return []
+
+            result = []
+            for m in markets:
+                if m.get("closed"):
+                    continue
+                if not m.get("active", True):
+                    continue
+
+                question = m.get("question", "") or m.get("groupItemTitle", "")
+                end_date = (
+                    m.get("endDate")
+                    or m.get("endDateIso")
+                    or m.get("end_date")
+                    or ""
+                )
+
+                date_label = self._format_date_label(end_date, question)
+                if not date_label:
+                    continue
+
+                yes_prob = self._extract_yes_prob(m)
+                if yes_prob is None:
+                    continue
+
+                result.append({
+                    "date": date_label,
+                    "yes_prob": yes_prob,
+                    "end_date_raw": end_date,
+                })
+
+            result.sort(key=lambda x: x.get("end_date_raw", ""))
+
+            return [
+                {"date": r["date"], "yes_prob": r["yes_prob"]}
+                for r in result
+            ]
+
+        except Exception as e:
+            print(f"MarketAgent._get_sub_markets error: {e}")
+            return []
+
+    def _format_date_label(self, end_date: str, question: str) -> str:
+        """Форматирует метку даты для отображения в time shift."""
+        months = {
+            "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
+            "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
+            "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec",
+        }
+
+        if end_date:
+            try:
+                parts = end_date[:10].split("-")
+                if len(parts) == 3:
+                    month = months.get(parts[1], parts[1])
+                    day = parts[2].lstrip("0") or parts[2]
+                    return f"{month} {day}"
+            except Exception:
+                pass
+
+        date_patterns = [
+            r'by\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})',
+            r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})',
+        ]
+        short_months = {
+            "January": "Jan", "February": "Feb", "March": "Mar",
+            "April": "Apr", "May": "May", "June": "Jun",
+            "July": "Jul", "August": "Aug", "September": "Sep",
+            "October": "Oct", "November": "Nov", "December": "Dec",
+        }
+
+        for pattern in date_patterns:
+            m = re.search(pattern, question, re.IGNORECASE)
+            if m:
+                month_name = m.group(1).capitalize()
+                day = m.group(2)
+                short = short_months.get(month_name, month_name[:3])
+                return f"{short} {day}"
+
+        return ""
+
+    def _extract_yes_prob(self, market: Dict[str, Any]) -> Optional[float]:
+        """Извлекает вероятность Yes из рынка."""
+        try:
+            outcome_prices = market.get("outcomePrices", "")
+            outcomes = market.get("outcomes", "")
+
+            if isinstance(outcome_prices, str):
+                cleaned = outcome_prices.strip("[]")
+                prices = [
+                    float(p.strip().strip('"'))
+                    for p in cleaned.split(",")
+                    if p.strip()
+                ]
+            elif isinstance(outcome_prices, list):
+                prices = [float(p) for p in outcome_prices]
+            else:
+                return None
+
+            if isinstance(outcomes, str):
+                outcome_list = [
+                    o.strip().strip('"').strip("'")
+                    for o in outcomes.strip("[]").split(",")
+                    if o.strip()
+                ]
+            elif isinstance(outcomes, list):
+                outcome_list = [str(o) for o in outcomes]
+            else:
+                outcome_list = []
+
+            if outcome_list and prices:
+                for i, opt in enumerate(outcome_list):
+                    if opt.strip().lower() == "yes" and i < len(prices):
+                        return round(prices[i] * 100, 2)
+
+            if prices:
+                return round(prices[0] * 100, 2)
+
+            return None
+
+        except Exception:
+            return None
 
     def _build_market_probability(
         self,
@@ -90,10 +256,12 @@ class MarketAgent:
             if market_type == "binary":
                 if len(prices) >= 2 and len(options) >= 2:
                     yes_idx = next(
-                        (i for i, o in enumerate(options) if o.strip().lower() == "yes"), 0
+                        (i for i, o in enumerate(options) if o.strip().lower() == "yes"),
+                        0,
                     )
                     no_idx = next(
-                        (i for i, o in enumerate(options) if o.strip().lower() == "no"), 1
+                        (i for i, o in enumerate(options) if o.strip().lower() == "no"),
+                        1,
                     )
                     yes_pct = round(prices[yes_idx] * 100, 2) if yes_idx < len(prices) else 0
                     no_pct = round(prices[no_idx] * 100, 2) if no_idx < len(prices) else 0
@@ -108,7 +276,10 @@ class MarketAgent:
                     key=lambda x: x[1],
                     reverse=True,
                 )
-                parts = [f"{opt}: {round(price * 100, 2)}%" for opt, price in paired]
+                parts = [
+                    f"{opt}: {round(price * 100, 2)}%"
+                    for opt, price in paired
+                ]
                 return " | ".join(parts)
 
         except Exception as e:
@@ -153,4 +324,5 @@ class MarketAgent:
             "primary_token_id": "",
             "price_history": {"24h": [], "7d": []},
             "raw_market_data": {},
+            "sub_markets": [],
         }
