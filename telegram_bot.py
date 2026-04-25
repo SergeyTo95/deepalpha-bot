@@ -788,6 +788,11 @@ def _format_analysis(result: dict, uid: int) -> str:
 
         if alpha_label and alpha_message:
             text += f"\n{alpha_label}:\n{alpha_message}\n"
+
+        decision_block = result.get("decision_block", "")
+        if decision_block:
+            text += f"\n{decision_block}\n"
+
         text += f"\n{'─' * 30}\n"
         text += f"📝 Вывод: {semantic_conclusion}"
     else:
@@ -815,6 +820,11 @@ def _format_analysis(result: dict, uid: int) -> str:
 
         if alpha_label and alpha_message:
             text += f"\n{alpha_label}:\n{alpha_message}\n"
+
+        decision_block = result.get("decision_block", "")
+        if decision_block:
+            text += f"\n{decision_block}\n"
+
         text += f"\n{'─' * 30}\n"
         text += f"📝 Conclusion: {semantic_conclusion}"
 
