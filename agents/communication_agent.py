@@ -7,14 +7,16 @@ class CommunicationAgent:
         pass
 
     def run(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
-        probability = decision_data.get("probability", "").strip()
-        market_probability = str(decision_data.get("market_probability", "")).strip()
-        reasoning = decision_data.get("reasoning", "").strip()
-        conclusion = decision_data.get("conclusion", "").strip()
         question = decision_data.get("question", "").strip()
-        market_type = decision_data.get("market_type", "binary")
+        market_probability = str(decision_data.get("market_probability", "")).strip()
+        probability = decision_data.get("probability", "").strip()
+        confidence_raw = decision_data.get("confidence", "").strip()
+        reasoning = decision_data.get("reasoning", "").strip()
         main_scenario = decision_data.get("main_scenario", "").strip()
         alt_scenario = decision_data.get("alt_scenario", "").strip()
+        conclusion = decision_data.get("conclusion", "").strip()
+        market_type = decision_data.get("market_type", "binary")
+        options_breakdown = decision_data.get("options_breakdown", "").strip()
         lang = decision_data.get("lang", "ru")
 
         raw_outcome, prob_val = self._split_probability(probability)
@@ -27,7 +29,6 @@ class CommunicationAgent:
 
         if market_type == "multiple_choice":
             if raw_outcome.lower() in ("yes", "no"):
-                options_breakdown = decision_data.get("options_breakdown", "")
                 if options_breakdown and len(options_breakdown) > 5:
                     semantic_text = options_breakdown.split("|")[0].strip()
                 else:
@@ -42,7 +43,7 @@ class CommunicationAgent:
         else:
             semantic_text = raw_outcome
 
-        prob_str = f"{prob_val:.1f}%" if prob_val else ""
+        prob_str = f"{prob_val:.1f}%" if prob_val is not None else ""
         display_prediction = (
             f"{semantic_text} — {prob_str}" if prob_str else semantic_text
         )
@@ -52,6 +53,7 @@ class CommunicationAgent:
         delta = abs(model_prob - market_prob) if model_prob else None
         market_balance = self._classify_balance(market_prob)
 
+        confidence = self._build_confidence(prob_val, confidence_raw, lang)
         alpha_label, alpha_message = self._detect_alpha(
             delta, model_prob, market_prob, market_balance, lang
         )
@@ -78,7 +80,17 @@ class CommunicationAgent:
             is_negated, market_balance, lang
         )
 
+        short_signal = self._build_short_signal(
+            question, raw_outcome, prob_val, confidence, alpha_message, lang
+        )
+        full_analysis = self._build_full_analysis(
+            question, market_probability, display_prediction, confidence,
+            final_reasoning, final_scenario, final_alt, final_conclusion, lang
+        )
+
         return {
+            "short_signal": short_signal,
+            "full_analysis": full_analysis,
             "display_prediction": display_prediction,
             "semantic_outcome": semantic_text,
             "is_negated": is_negated,
@@ -86,9 +98,126 @@ class CommunicationAgent:
             "main_scenario": final_scenario,
             "alt_scenario": final_alt,
             "conclusion": final_conclusion,
+            "confidence": confidence,
             "alpha_label": alpha_label,
             "alpha_message": alpha_message,
         }
+
+    # ═══════════════════════════════════════════
+    # OUTPUT BUILDERS
+    # ═══════════════════════════════════════════
+
+    def _build_short_signal(
+        self,
+        question: str,
+        raw_outcome: str,
+        prob_val: Optional[float],
+        confidence: str,
+        alpha_message: str,
+        lang: str,
+    ) -> str:
+        short_q = question[:60] + "..." if len(question) > 60 else question
+        prob_str = f"{prob_val:.1f}%" if prob_val is not None else "—"
+
+        outcome_upper = raw_outcome.upper() if raw_outcome else "—"
+        if raw_outcome.lower() == "yes":
+            outcome_icon = "✅"
+        elif raw_outcome.lower() == "no":
+            outcome_icon = "❌"
+        else:
+            outcome_icon = "📌"
+
+        if lang == "ru":
+            return (
+                f"📢 DeepAlpha Сигнал\n\n"
+                f"🧠 {short_q}\n"
+                f"{outcome_icon} Исход: {outcome_upper}\n"
+                f"📊 Вероятность: {prob_str}\n"
+                f"⚖️ Уверенность: {confidence}\n\n"
+                f"💡 {alpha_message}"
+            )
+        else:
+            return (
+                f"📢 DeepAlpha Signal\n\n"
+                f"🧠 {short_q}\n"
+                f"{outcome_icon} Outcome: {outcome_upper}\n"
+                f"📊 Probability: {prob_str}\n"
+                f"⚖️ Confidence: {confidence}\n\n"
+                f"💡 {alpha_message}"
+            )
+
+    def _build_full_analysis(
+        self,
+        question: str,
+        market_probability: str,
+        display_prediction: str,
+        confidence: str,
+        reasoning: str,
+        main_scenario: str,
+        alt_scenario: str,
+        conclusion: str,
+        lang: str,
+    ) -> str:
+        if lang == "ru":
+            return (
+                f"📊 DeepAlpha Анализ\n\n"
+                f"🧠 Вопрос:\n{question}\n\n"
+                f"📈 Рынок:\n{market_probability}\n\n"
+                f"🎯 Прогноз:\n{display_prediction}\n\n"
+                f"⚖️ Уверенность:\n{confidence}\n\n"
+                f"🔎 Логика:\n{reasoning}\n\n"
+                f"🧩 Основной сценарий:\n{main_scenario}\n\n"
+                f"⚠️ Альтернативный сценарий:\n{alt_scenario}\n\n"
+                f"📌 Вывод:\n{conclusion}"
+            )
+        else:
+            return (
+                f"📊 DeepAlpha Analysis\n\n"
+                f"🧠 Question:\n{question}\n\n"
+                f"📈 Market:\n{market_probability}\n\n"
+                f"🎯 Forecast:\n{display_prediction}\n\n"
+                f"⚖️ Confidence:\n{confidence}\n\n"
+                f"🔎 Reasoning:\n{reasoning}\n\n"
+                f"🧩 Main Scenario:\n{main_scenario}\n\n"
+                f"⚠️ Alternative Scenario:\n{alt_scenario}\n\n"
+                f"📌 Conclusion:\n{conclusion}"
+            )
+
+    # ═══════════════════════════════════════════
+    # CONFIDENCE
+    # ═══════════════════════════════════════════
+
+    def _build_confidence(
+        self,
+        prob_val: Optional[float],
+        confidence_raw: str,
+        lang: str,
+    ) -> str:
+        conf_lower = confidence_raw.lower()
+        if "high" in conf_lower or "высок" in conf_lower:
+            level = "high"
+        elif "medium" in conf_lower or "средн" in conf_lower:
+            level = "medium"
+        elif "low" in conf_lower or "низк" in conf_lower:
+            level = "low"
+        elif prob_val is not None:
+            if prob_val >= 75:
+                level = "high"
+            elif prob_val >= 60:
+                level = "medium"
+            else:
+                level = "low"
+        else:
+            level = "low"
+
+        if lang == "ru":
+            return {"high": "Высокая", "medium": "Средняя", "low": "Низкая"}.get(
+                level, "Низкая"
+            )
+        else:
+            return {"high": "High", "medium": "Moderate", "low": "Weak"}.get(
+                level, "Weak"
+            )
 
     # ═══════════════════════════════════════════
     # SPLIT / PARSE
@@ -149,6 +278,8 @@ class CommunicationAgent:
             return False
         cyrillic = len(re.findall(r'[а-яёА-ЯЁ]', text))
         total = len(text.strip())
+        if total == 0:
+            return False
         cyrillic_ratio = cyrillic / total
         if lang == "en" and cyrillic_ratio > 0.1:
             return True
@@ -170,10 +301,10 @@ class CommunicationAgent:
         if last_char not in ending_chars:
             return True
 
-        last_word = ""
-        words = stripped.rstrip('.!?%"\')')  .split()
-        if words:
-            last_word = words[-1].lower()
+        words = stripped.rstrip('.!?%"\')').split()
+        if not words:
+            return False
+        last_word = words[-1].lower()
 
         incomplete_ru = {
             "для", "на", "в", "с", "по", "от", "за", "при",
@@ -201,8 +332,8 @@ class CommunicationAgent:
             if market_type == "binary":
                 yes_m = re.search(r'Yes:\s*([\d.]+)%', market_probability)
                 no_m = re.search(r'No:\s*([\d.]+)%', market_probability)
-                yes_p = float(yes_m.group(1)) if yes_m else 0
-                no_p = float(no_m.group(1)) if no_m else 0
+                yes_p = float(yes_m.group(1)) if yes_m else 0.0
+                no_p = float(no_m.group(1)) if no_m else 0.0
                 return max(yes_p, no_p)
             else:
                 matches = re.findall(r'[\d.]+%', market_probability)
@@ -733,15 +864,13 @@ class CommunicationAgent:
                 neg_word = "НЕ произойдёт" if is_negated else "произойдёт"
                 if len(q_clean) <= 60:
                     return f"{q_clean} — {neg_word}"
-                words = q_clean.split()
-                short = " ".join(words[:6])
+                short = " ".join(q_clean.split()[:6])
                 return f"{short}... — {neg_word}"
             else:
                 neg_word = "will not happen" if is_negated else "will happen"
                 if len(q_clean) <= 60:
                     return f"{q_clean} — {neg_word}"
-                words = q_clean.split()
-                short = " ".join(words[:6])
+                short = " ".join(q_clean.split()[:6])
                 return f"{short}... — {neg_word}"
 
         return ""
@@ -817,45 +946,44 @@ class CommunicationAgent:
                 if len(result) > 30:
                     return result
 
-        prob = market_prob or model_prob or 50
+        prob = market_prob or model_prob or 50.0
 
         if lang == "ru":
             if market_balance == "strong_consensus":
                 return (
-                    f"Подавляющий консенсус ({prob:.1f}%) говорит о том, что участники рынка "
-                    f"уже учли доступную информацию в цене. "
-                    f"Любое отклонение требует экстраординарных доказательств."
+                    f"Подавляющий консенсус ({prob:.1f}%) — участники рынка "
+                    f"уже учли доступную информацию. "
+                    f"Отклонение требует экстраординарных доказательств."
                 )
             elif market_balance == "moderate_consensus":
                 return (
                     f"Умеренный консенсус ({prob:.1f}%) указывает на устойчивый перевес. "
-                    f"Ключевые факторы складываются в пользу текущего лидера."
+                    f"Ключевые факторы на стороне текущего лидера."
                 )
             elif market_balance == "slight_lean":
                 return (
                     f"Небольшой перевес ({prob:.1f}%) — рынок склоняется к одному исходу, "
-                    f"но ситуация остаётся открытой для новых данных."
+                    f"но ситуация остаётся открытой."
                 )
             elif market_balance == "balanced":
                 return (
-                    f"Рынок в состоянии неопределённости — вероятность около {prob:.1f}%. "
-                    f"Ни один из факторов не доминирует однозначно."
+                    f"Рынок неопределён — вероятность около {prob:.1f}%. "
+                    f"Ни один фактор не доминирует."
                 )
             else:
                 return (
-                    f"Текущие условия не благоприятствуют основному сценарию ({prob:.1f}%)."
+                    f"Условия не благоприятствуют основному сценарию ({prob:.1f}%)."
                 )
         else:
             if market_balance == "strong_consensus":
                 return (
-                    f"Overwhelming consensus ({prob:.1f}%) indicates that market participants "
-                    f"have already priced in available information. "
-                    f"Any deviation requires extraordinary evidence."
+                    f"Overwhelming consensus ({prob:.1f}%) — market has fully priced "
+                    f"available information. Deviation requires extraordinary evidence."
                 )
             elif market_balance == "moderate_consensus":
                 return (
-                    f"Moderate consensus ({prob:.1f}%) points to a solid lead. "
-                    f"Key factors favour the current leader."
+                    f"Moderate consensus ({prob:.1f}%) — solid lead for the current favourite. "
+                    f"Key factors support this outcome."
                 )
             elif market_balance == "slight_lean":
                 return (
@@ -864,11 +992,13 @@ class CommunicationAgent:
                 )
             elif market_balance == "balanced":
                 return (
-                    f"Market is uncertain — probability around {prob:.1f}%. "
-                    f"No single factor dominates decisively."
+                    f"Uncertain market — probability around {prob:.1f}%. "
+                    f"No single factor dominates."
                 )
             else:
-                return f"Current conditions do not favour the main scenario ({prob:.1f}%)."
+                return (
+                    f"Conditions do not favour the main scenario ({prob:.1f}%)."
+                )
 
     def _build_scenario(
         self,
@@ -899,29 +1029,25 @@ class CommunicationAgent:
                 return "Сценарий реализуется при сохранении текущих условий. Тренд устойчив."
             elif market_balance == "moderate_consensus":
                 return (
-                    "Сценарий реализуется если текущая динамика сохранится "
-                    "без резких изменений."
+                    "Сценарий реализуется если динамика сохранится без резких изменений."
                 )
             elif market_balance == "slight_lean":
                 return (
-                    "Небольшое преимущество сохраняется при текущем балансе. "
+                    "Небольшое преимущество держится при текущем балансе. "
                     "Новый катализатор может усилить или обнулить перевес."
                 )
             elif market_balance == "balanced":
                 return (
-                    "Сценарий реализуется при сохранении текущего баланса. "
-                    "Любой катализатор может изменить расклад."
+                    "Сценарий реализуется при появлении катализатора. "
+                    "Любое значимое событие может сдвинуть вероятность."
                 )
             else:
-                return "Умеренная вероятность — требуется подтверждение дополнительных факторов."
+                return "Умеренная вероятность — нужно подтверждение дополнительных факторов."
         else:
             if market_balance == "strong_consensus":
                 return "Scenario plays out if current conditions hold. Trend is stable."
             elif market_balance == "moderate_consensus":
-                return (
-                    "Scenario materialises if current dynamics continue "
-                    "without sharp reversals."
-                )
+                return "Scenario materialises if dynamics continue without sharp reversals."
             elif market_balance == "slight_lean":
                 return (
                     "Slight edge holds under current balance. "
@@ -929,8 +1055,8 @@ class CommunicationAgent:
                 )
             elif market_balance == "balanced":
                 return (
-                    "Scenario plays out if balance holds. "
-                    "Any catalyst could shift the outcome."
+                    "Scenario plays out if a catalyst emerges. "
+                    "Any significant event could shift the probability."
                 )
             else:
                 return "Moderate probability — additional confirmation required."
@@ -953,19 +1079,19 @@ class CommunicationAgent:
                 if not any(p in clean_alt.lower() for p in bad):
                     return clean_alt
 
-        alt_prob = 100 - market_prob
+        alt_prob = 100.0 - market_prob
 
         if lang == "ru":
             if market_balance == "strong_consensus":
                 return (
-                    f"Маловероятный сценарий ({alt_prob:.1f}%): резкое изменение политики, "
-                    f"неожиданное геополитическое событие или макроэкономический шок. "
+                    f"Маловероятный сценарий ({alt_prob:.1f}%): резкая смена политики, "
+                    f"геополитический шок или форс-мажор. "
                     f"Рынок практически исключает этот вариант."
                 )
             elif market_balance == "moderate_consensus":
                 return (
                     f"Альтернативный сценарий ({alt_prob:.1f}%): смена ключевых факторов, "
-                    f"неожиданные данные или разворот сентимента могут переломить тренд."
+                    f"неожиданные данные или разворот сентимента."
                 )
             elif market_balance == "slight_lean":
                 return (
@@ -975,7 +1101,7 @@ class CommunicationAgent:
             elif market_balance == "balanced":
                 return (
                     f"Альтернативный исход ({alt_prob:.1f}%) практически равновероятен. "
-                    f"Триггером может стать выход важной статистики или неожиданное событие."
+                    f"Новые данные или внешний шок могут стать триггером."
                 )
             else:
                 return (
@@ -986,8 +1112,7 @@ class CommunicationAgent:
             if market_balance == "strong_consensus":
                 return (
                     f"Unlikely scenario ({alt_prob:.1f}%): sharp policy reversal, "
-                    f"unexpected geopolitical event or macroeconomic shock. "
-                    f"Market nearly rules this out."
+                    f"geopolitical shock or black swan event. Market nearly rules this out."
                 )
             elif market_balance == "moderate_consensus":
                 return (
@@ -1001,8 +1126,8 @@ class CommunicationAgent:
                 )
             elif market_balance == "balanced":
                 return (
-                    f"Alternative outcome ({alt_prob:.1f}%) is nearly equally likely. "
-                    f"Key data release or unexpected event could be the trigger."
+                    f"Alternative outcome ({alt_prob:.1f}%) nearly equally likely. "
+                    f"Key data or unexpected event could be the trigger."
                 )
             else:
                 return (
@@ -1040,7 +1165,7 @@ class CommunicationAgent:
         if lang == "ru":
             if market_balance in ("balanced", "slight_lean"):
                 return (
-                    f"Сбалансированный рынок. Небольшой перевес: {display_prediction}. "
+                    f"Небольшой перевес: {display_prediction}. "
                     f"Следи за новыми данными."
                 )
             elif market_balance == "strong_consensus":
@@ -1050,8 +1175,7 @@ class CommunicationAgent:
         else:
             if market_balance in ("balanced", "slight_lean"):
                 return (
-                    f"Balanced market. Slight edge: {display_prediction}. "
-                    f"Watch for new data."
+                    f"Slight edge: {display_prediction}. Watch for new data."
                 )
             elif market_balance == "strong_consensus":
                 return f"High consensus confirms: {display_prediction}."
@@ -1079,7 +1203,7 @@ class CommunicationAgent:
             if lang == "ru":
                 return (
                     "🟡 Сигнал: сбалансированный рынок",
-                    f"Вероятность около {market_prob:.1f}% — явного консенсуса нет. "
+                    f"Вероятность около {market_prob:.1f}% — нет явного консенсуса. "
                     f"Возможна альфа при появлении новых данных.",
                 )
             return (
@@ -1093,13 +1217,13 @@ class CommunicationAgent:
                 if lang == "ru":
                     return (
                         "✅ Консенсус с рынком",
-                        f"При вероятности {market_prob:.1f}% рынок уже учёл всю информацию. "
-                        f"Такие позиции редко дают альфу — используй как подтверждение тренда.",
+                        f"При вероятности {market_prob:.1f}% рынок учёл всю информацию. "
+                        f"Используй как подтверждение тренда.",
                     )
                 return (
                     "✅ Market Consensus",
-                    f"At {market_prob:.1f}% the market has priced in all available information. "
-                    f"Positions like this rarely offer alpha — use as trend confirmation.",
+                    f"At {market_prob:.1f}% the market has fully priced in information. "
+                    f"Use as trend confirmation.",
                 )
             if lang == "ru":
                 return (
@@ -1120,12 +1244,12 @@ class CommunicationAgent:
             if lang == "ru":
                 return (
                     "⚠️ Слабый сигнал",
-                    f"Модель оценивает на {delta:.1f}% {direction} рыночной. "
+                    f"Модель на {delta:.1f}% {direction} рыночной оценки. "
                     f"Возможна небольшая неэффективность.",
                 )
             return (
                 "⚠️ Weak Signal",
-                f"Model estimates {delta:.1f}% {direction} market. "
+                f"Model is {delta:.1f}% {direction} market. "
                 f"Possible minor inefficiency.",
             )
 
@@ -1143,6 +1267,6 @@ class CommunicationAgent:
                 )
             return (
                 "🔥 Potential Alpha",
-                f"Divergence of {delta:.1f}% {direction} market estimate. "
+                f"Divergence {delta:.1f}% {direction} market estimate. "
                 f"High risk — verify carefully.",
             )
