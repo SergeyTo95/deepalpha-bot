@@ -450,6 +450,20 @@ def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
 
+def _trim_conclusion(text: str, max_len: int = 200) -> str:
+    if not text or len(text) <= max_len:
+        return text
+    chunk = text[:max_len]
+    for punct in (".", "!", "?"):
+        idx = chunk.rfind(punct)
+        if idx > max_len // 2:
+            return chunk[:idx + 1].strip()
+    idx = chunk.rfind(" ")
+    if idx > 0:
+        return chunk[:idx].strip() + "."
+    return chunk.strip() + "."
+
+
 def _register_user(message: types.Message, referred_by: int = None):
     ensure_user(
         user_id=message.from_user.id,
@@ -871,7 +885,7 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
             f"⚡ Скор: {score} {score_bar}"
             f"{cache_label}\n\n"
             f"{'─' * 30}\n"
-            f"📝 Вывод: {conclusion}"
+            f"📝 Вывод: {_trim_conclusion(conclusion)}"
             f"{news_block}"
         )
     else:
@@ -886,7 +900,7 @@ def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
             f"⚡ Score: {score} {score_bar}"
             f"{cache_label}\n\n"
             f"{'─' * 30}\n"
-            f"📝 Conclusion: {conclusion}"
+            f"📝 Conclusion: {_trim_conclusion(conclusion)}"
             f"{news_block}"
         )
 
