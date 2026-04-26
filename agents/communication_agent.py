@@ -256,10 +256,7 @@ class CommunicationAgent:
                 reason = "market unstable — wait for clear signal"
         elif delta >= 5 and market_balance in ("moderate_consensus", "lean_against"):
             verdict = "TRADE"
-            if lang == "ru":
-                reason = "есть расхождение — вход при откате с подтверждением"
-            else:
-                reason = "divergence present — entry on pullback with confirmation"
+            return f"📊 Decision: {verdict}"
         else:
             verdict = "WAIT"
             if lang == "ru":
