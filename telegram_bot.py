@@ -11,6 +11,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
+from texts.analysis_guide import get_analysis_guide
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
@@ -180,6 +181,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
+        kb.add(KeyboardButton("📘 Как читать анализ"))
         kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
@@ -195,6 +197,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
+        kb.add(KeyboardButton("📘 How to read the analysis"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
         if user_is_author:
@@ -1573,6 +1576,13 @@ async def watchlist_command(message: types.Message):
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
     await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+@dp.message_handler(lambda m: m.text == "📘 Как читать анализ")
+async def analysis_guide_handler(message: types.Message):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    text = get_analysis_guide(lang)
+    await message.answer(text)
 
 
 @dp.message_handler(commands=["authors"])
