@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class CryptoCommunicationAgent:
@@ -47,7 +47,7 @@ class CryptoCommunicationAgent:
             rsi, macd, ma, fib, sr, elliott, lang
         )
         news_block = self._build_news_block(
-            sentiment, key_events, news_items, lang
+            sentiment, key_events, news_items, lang, news_data=news_data
         )
         conclusion = self._build_conclusion(decision, symbol, lang)
 
@@ -55,14 +55,17 @@ class CryptoCommunicationAgent:
 
         if lang == "ru":
             trend_map = {
-                "Bullish": "📈 Бычий", "Bearish": "📉 Медвежий",
+                "Bullish": "📈 Бычий",
+                "Bearish": "📉 Медвежий",
                 "Moderately Bullish": "↗️ Умеренно бычий",
                 "Moderately Bearish": "↘️ Умеренно медвежий",
                 "Unknown": "➡️ Неизвестен",
             }
             trend_str = trend_map.get(trend, trend)
             sent_map = {
-                "bullish": "🟢 Позитивный", "bearish": "🔴 Негативный", "neutral": "⚪ Нейтральный"
+                "bullish": "🟢 Позитивный",
+                "bearish": "🔴 Негативный",
+                "neutral": "⚪ Нейтральный",
             }
             sent_str = sent_map.get(sentiment, sentiment)
             src_note = f"\n📡 Источник данных: {source}" if source else ""
@@ -93,7 +96,9 @@ class CryptoCommunicationAgent:
         else:
             trend_str = trend
             sent_map = {
-                "bullish": "🟢 Bullish", "bearish": "🔴 Bearish", "neutral": "⚪ Neutral"
+                "bullish": "🟢 Bullish",
+                "bearish": "🔴 Bearish",
+                "neutral": "⚪ Neutral",
             }
             sent_str = sent_map.get(sentiment, sentiment)
             src_note = f"\n📡 Data source: {source}" if source else ""
@@ -121,6 +126,10 @@ class CryptoCommunicationAgent:
                 f"{sep}\n"
                 f"📝 Conclusion: {conclusion}"
             )
+
+    # ═══════════════════════════════════════════
+    # TA BLOCK
+    # ═══════════════════════════════════════════
 
     def _build_ta_block(
         self, rsi, macd, ma, fib, sr, elliott, lang
@@ -153,7 +162,10 @@ class CryptoCommunicationAgent:
                 lines.append(f"— MACD: {trend}{cross_str} (hist: {hist:.6f})")
 
         if ma:
-            ma_summary = ma.get("ma_summary_ru") if lang == "ru" else ma.get("ma_summary_en", "")
+            ma_summary = (
+                ma.get("ma_summary_ru") if lang == "ru"
+                else ma.get("ma_summary_en", "")
+            )
             parts = []
             for p in [20, 50, 200]:
                 v = ma.get(f"ma{p}")
@@ -171,20 +183,14 @@ class CryptoCommunicationAgent:
                 lines.append(f"— MA: {ma_summary}")
             elif ma_levels:
                 lines.append(f"— MA: {ma_levels}")
+
         if fib and fib.get("levels"):
             levels = fib["levels"]
-            if lang == "ru":
-                lines.append(
-                    f"— Fibonacci: 0.382={levels.get('0.382', 0):.4f} | "
-                    f"0.5={levels.get('0.5', 0):.4f} | "
-                    f"0.618={levels.get('0.618', 0):.4f}"
-                )
-            else:
-                lines.append(
-                    f"— Fibonacci: 0.382={levels.get('0.382', 0):.4f} | "
-                    f"0.5={levels.get('0.5', 0):.4f} | "
-                    f"0.618={levels.get('0.618', 0):.4f}"
-                )
+            lines.append(
+                f"— Fibonacci: 0.382={levels.get('0.382', 0):.4f} | "
+                f"0.5={levels.get('0.5', 0):.4f} | "
+                f"0.618={levels.get('0.618', 0):.4f}"
+            )
 
         if sr:
             if lang == "ru":
@@ -204,14 +210,53 @@ class CryptoCommunicationAgent:
             else:
                 lines.append(f"— Elliott (hypothesis): {elliott}")
 
-        return "\n".join(lines) if lines else ("Данные TA недоступны" if lang == "ru" else "TA data unavailable")
+        if not lines:
+            return (
+                "Данные TA недоступны" if lang == "ru"
+                else "TA data unavailable"
+            )
+
+        return "\n".join(lines)
+
+    # ═══════════════════════════════════════════
+    # NEWS BLOCK
+    # ═══════════════════════════════════════════
 
     def _build_news_block(
-        self, sentiment, key_events, news_items, lang
+        self,
+        sentiment,
+        key_events,
+        news_items,
+        lang,
+        news_data: Optional[Dict] = None,
     ) -> str:
+        news_quality = (news_data or {}).get("news_quality", "none")
+        base = (news_data or {}).get("base", "")
+
         if not key_events and not news_items:
-            return "— нет данных" if lang == "ru" else "— no data"
+            if lang == "ru":
+                return (
+                    f"— значимых новостей по {base} в открытых источниках не найдено\n"
+                    "— новостной фон считается нейтральным"
+                )
+            else:
+                return (
+                    f"— no significant {base} news found in open sources\n"
+                    "— news background is treated as neutral"
+                )
+
         lines = []
+
+        if news_quality == "limited" and not key_events:
+            if lang == "ru":
+                lines.append(
+                    f"— специфических новостей по {base} не найдено, общий фон:"
+                )
+            else:
+                lines.append(
+                    f"— no specific {base} news, general market context:"
+                )
+
         if key_events:
             for event in key_events[:3]:
                 lines.append(f"— {event}")
@@ -220,7 +265,24 @@ class CryptoCommunicationAgent:
                 title = (item.get("title") or "")[:100]
                 if title:
                     lines.append(f"— {title}")
-        return "\n".join(lines) if lines else ("— нет событий" if lang == "ru" else "— no events")
+
+        if news_quality == "none" and lines:
+            if lang == "ru":
+                lines.append(
+                    "— прямых новостей по активу нет, сигнал основан на TA"
+                )
+            else:
+                lines.append(
+                    "— no direct asset news, signal based primarily on TA"
+                )
+
+        return "\n".join(lines) if lines else (
+            "— нет данных" if lang == "ru" else "— no data"
+        )
+
+    # ═══════════════════════════════════════════
+    # TRIGGERS
+    # ═══════════════════════════════════════════
 
     def _build_triggers(
         self, market_data, ta_data, news_data, lang
@@ -230,9 +292,8 @@ class CryptoCommunicationAgent:
         macd = ta_data.get("macd") or {}
         sr = ta_data.get("support_resistance") or {}
         fib = ta_data.get("fibonacci") or {}
-        volume_signal = ta_data.get("volume_signal", "unknown")
         decision = ta_data.get("signal", "WAIT")
-        news_quality = news_data.get("news_quality", "none")
+        news_quality = (news_data or {}).get("news_quality", "none")
 
         support = sr.get("nearest_support", 0)
         resistance = sr.get("nearest_resistance", 0)
@@ -247,18 +308,17 @@ class CryptoCommunicationAgent:
         fib_618_str = f"{fib_618:.4f}" if fib_618 else "н/д"
         fib_382_str = f"{fib_382:.4f}" if fib_382 else "н/д"
 
-        macd_trend = macd.get("trend", "")
         macd_crossover = macd.get("crossover", "")
 
         if lang == "ru":
             if "LONG" in decision or "TRADE" in decision:
                 high = [
-                    f"удержание цены выше MA20 с подтверждением объёма",
+                    "удержание цены выше MA20 с подтверждением объёма",
                     f"пробой сопротивления {resistance_str} на повышенном объёме",
                 ]
                 medium = [
-                    f"RSI держится выше 50 без перегрева",
-                    f"MACD продолжает бычий импульс",
+                    "RSI держится выше 50 без перегрева",
+                    "MACD продолжает бычий импульс",
                 ]
                 if fib_618:
                     medium.append(f"удержание выше Fib 0.618: {fib_618_str}")
@@ -266,21 +326,25 @@ class CryptoCommunicationAgent:
                     "позитивные новости без немедленной реакции цены",
                     "рост интереса в соцсетях без on-chain подтверждения",
                 ]
+
             elif "SHORT" in decision:
                 high = [
                     f"закрепление ниже поддержки {support_str}",
-                    f"рост объёма на падении",
+                    "рост объёма на падении",
                 ]
                 medium = [
                     "MACD усиливает медвежий histogram",
                     f"потеря уровня Fib 0.382: {fib_382_str}",
                 ]
                 if rsi and rsi < 35:
-                    medium.append(f"RSI {rsi:.0f} — близко к перепроданности, осторожно шортить")
+                    medium.append(
+                        f"RSI {rsi:.0f} — близко к перепроданности, осторожно шортить"
+                    )
                 low = [
                     "медвежьи публикации без on-chain подтверждения",
                     "общий негативный фон без специфики по активу",
                 ]
+
             else:
                 # WAIT
                 high = [
@@ -320,7 +384,7 @@ class CryptoCommunicationAgent:
         else:
             if "LONG" in decision or "TRADE" in decision:
                 high = [
-                    f"price holds above MA20 with volume confirmation",
+                    "price holds above MA20 with volume confirmation",
                     f"breakout above resistance {resistance_str} on high volume",
                 ]
                 medium = [
@@ -333,22 +397,27 @@ class CryptoCommunicationAgent:
                     "positive news without immediate price reaction",
                     "social media interest without on-chain confirmation",
                 ]
+
             elif "SHORT" in decision:
                 high = [
                     f"close below support {support_str}",
-                    f"volume surge on down move",
+                    "volume surge on down move",
                 ]
                 medium = [
                     "MACD strengthens bearish histogram",
                     f"loss of Fib 0.382: {fib_382_str}",
                 ]
                 if rsi and rsi < 35:
-                    medium.append(f"RSI {rsi:.0f} — near oversold, careful shorting")
+                    medium.append(
+                        f"RSI {rsi:.0f} — near oversold, careful shorting"
+                    )
                 low = [
                     "bearish publications without on-chain confirmation",
                     "general negative sentiment without asset specifics",
                 ]
+
             else:
+                # WAIT
                 high = [
                     f"breakout and close above resistance {resistance_str}",
                     f"loss of support {support_str} on high volume",
@@ -384,6 +453,10 @@ class CryptoCommunicationAgent:
             result += "\n".join(f"— {t}" for t in low[:2])
 
         return result
+
+    # ═══════════════════════════════════════════
+    # CONCLUSION
+    # ═══════════════════════════════════════════
 
     def _build_conclusion(self, decision: str, symbol: str, lang: str) -> str:
         if lang == "ru":
