@@ -27,7 +27,7 @@ class CryptoDecisionAgent:
         entry_logic = self._build_entry_logic(
             decision, ta_data, market_data, lang
         )
-        risk = self._build_risk(decision, ta_data, market_data, lang)
+        risk = self._build_risk(decision, ta_data, market_data, lang, news_data=news_data)
         market_logic = self._build_market_logic(
             ta_signal, sentiment, rsi, macd, ma, lang
         )
@@ -156,39 +156,130 @@ class CryptoDecisionAgent:
         ta_data: Dict,
         market_data: Dict,
         lang: str,
+        news_data: Dict = None,
     ) -> str:
         rsi = ta_data.get("rsi")
         volatility = market_data.get("volatility")
         macd = ta_data.get("macd") or {}
+        ma = ta_data.get("ma") or {}
+        sr = ta_data.get("support_resistance") or {}
+        news_quality = (news_data or {}).get("news_quality", "none")
+
+        support = sr.get("nearest_support", 0)
+        resistance = sr.get("nearest_resistance", 0)
+        price = market_data.get("price", 0)
+        ma20 = ma.get("ma20", 0)
+        ma50 = ma.get("ma50", 0)
 
         risks = []
+
         if lang == "ru":
-            if volatility and volatility > 5:
-                risks.append(f"высокая волатильность ({volatility:.1f}%) — широкие стопы")
-            if rsi and rsi > 70:
-                risks.append(f"RSI перегрет ({rsi:.0f}) — возможен откат")
-            if rsi and rsi < 30:
-                risks.append(f"RSI перепродан ({rsi:.0f}) — возможен отскок")
+            if support and price and abs(price - support) / price < 0.03:
+                risks.append(
+                    f"цена рядом с поддержкой {support:.4f} — "
+                    "возможен резкий отскок или пробой"
+                )
+            if resistance and price and abs(price - resistance) / price < 0.03:
+                risks.append(
+                    f"цена рядом с сопротивлением {resistance:.4f} — "
+                    "возможна реакция продавцов"
+                )
+            if rsi and rsi < 35:
+                risks.append(
+                    f"RSI {rsi:.0f} близко к перепроданности — "
+                    "шортить поздно без подтверждения"
+                )
+            elif rsi and rsi > 70:
+                risks.append(
+                    f"RSI {rsi:.0f} перекупленность — "
+                    "лонговать поздно без отката"
+                )
+            if ma20 and ma50 and price:
+                if price < ma20 and price < ma50:
+                    risks.append(
+                        f"цена ниже MA20/MA50 — риск продолжения снижения"
+                    )
+                elif price > ma20 and price > ma50 and ma20 < ma50:
+                    risks.append(
+                        "цена выше MA20/MA50 но тренд медвежий — "
+                        "риск ложного пробоя"
+                    )
             if macd.get("crossover") == "death_cross":
-                risks.append("MACD пересечение вниз — медвежий сигнал")
+                risks.append("MACD пересечение смерти — усиление медвежьего давления")
+            if volatility and volatility > 5:
+                risks.append(
+                    f"высокая волатильность ({volatility:.1f}%) — "
+                    "использовать широкие стопы"
+                )
+            if news_quality == "none":
+                risks.append(
+                    "новостные данные отсутствуют — "
+                    "сигнал основан в основном на TA"
+                )
+            elif news_quality == "limited":
+                risks.append(
+                    "новостные данные ограничены — "
+                    "возможны незамеченные катализаторы"
+                )
             if not risks:
                 risks.append("стандартные рыночные риски — использовать стоп-лосс")
-            risks.append("это не финансовая рекомендация — решения принимаешь сам")
+            risks.append(
+                "это не финансовая рекомендация — решения принимаешь сам"
+            )
         else:
-            if volatility and volatility > 5:
-                risks.append(f"high volatility ({volatility:.1f}%) — use wider stops")
-            if rsi and rsi > 70:
-                risks.append(f"RSI overbought ({rsi:.0f}) — pullback possible")
-            if rsi and rsi < 30:
-                risks.append(f"RSI oversold ({rsi:.0f}) — bounce possible")
+            if support and price and abs(price - support) / price < 0.03:
+                risks.append(
+                    f"price near support {support:.4f} — "
+                    "sharp bounce or breakdown possible"
+                )
+            if resistance and price and abs(price - resistance) / price < 0.03:
+                risks.append(
+                    f"price near resistance {resistance:.4f} — "
+                    "seller reaction likely"
+                )
+            if rsi and rsi < 35:
+                risks.append(
+                    f"RSI {rsi:.0f} near oversold — "
+                    "late to short without confirmation"
+                )
+            elif rsi and rsi > 70:
+                risks.append(
+                    f"RSI {rsi:.0f} overbought — "
+                    "late to long without pullback"
+                )
+            if ma20 and ma50 and price:
+                if price < ma20 and price < ma50:
+                    risks.append(
+                        "price below MA20/MA50 — risk of continued decline"
+                    )
+                elif price > ma20 and price > ma50 and ma20 < ma50:
+                    risks.append(
+                        "price above MA20/MA50 but trend is bearish — "
+                        "risk of false breakout"
+                    )
             if macd.get("crossover") == "death_cross":
-                risks.append("MACD death cross — bearish signal")
+                risks.append("MACD death cross — increasing bearish pressure")
+            if volatility and volatility > 5:
+                risks.append(
+                    f"high volatility ({volatility:.1f}%) — use wider stops"
+                )
+            if news_quality == "none":
+                risks.append(
+                    "no news data available — "
+                    "signal based primarily on TA"
+                )
+            elif news_quality == "limited":
+                risks.append(
+                    "limited news data — "
+                    "untracked catalysts possible"
+                )
             if not risks:
                 risks.append("standard market risks — always use stop-loss")
-            risks.append("not financial advice — you make your own decisions")
+            risks.append(
+                "not financial advice — you make your own decisions"
+            )
 
         return "\n".join(f"— {r}" for r in risks)
-
     def _build_market_logic(
         self,
         ta_signal: str,
