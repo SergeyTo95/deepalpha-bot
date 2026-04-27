@@ -32,7 +32,7 @@ class CryptoTAAgent:
         ma_data = self._calc_mas(closes)
         sr_data = self._calc_support_resistance(highs, lows, closes)
         fib_data = self._calc_fibonacci(highs, lows)
-        elliott = self._elliott_hypothesis(closes)
+        elliott = self._elliott_hypothesis(closes, lang=lang)
         volume_signal = self._volume_analysis(volumes, closes)
         signal = self._determine_signal(rsi, macd_data, ma_data, volume_signal)
 
@@ -238,9 +238,13 @@ class CryptoTAAgent:
     # ELLIOTT WAVE HYPOTHESIS
     # ═══════════════════════════════════════════
 
-    def _elliott_hypothesis(self, closes: List[float]) -> str:
+    def _elliott_hypothesis(self, closes: List[float], lang: str = "en") -> str:
         if len(closes) < 30:
-            return "Insufficient data for Elliott Wave hypothesis."
+            return (
+                "Недостаточно данных для волновой гипотезы."
+                if lang == "ru"
+                else "Insufficient data for Elliott Wave hypothesis."
+            )
 
         recent = closes[-30:]
         pivots = []
@@ -251,18 +255,28 @@ class CryptoTAAgent:
                 pivots.append(("low", i, recent[i]))
 
         if len(pivots) < 5:
-            return "Wave structure unclear — not enough pivot points detected."
+            return (
+                "Волновая структура неясна — недостаточно pivot-точек."
+                if lang == "ru"
+                else "Wave structure unclear — not enough pivot points detected."
+            )
 
         first_type = pivots[0][0]
         if first_type == "low":
             return (
-                "Hypothesis: possible impulse wave up — "
+                "Гипотеза: возможная импульсная структура вверх. "
+                "Использовать только как дополнительный сигнал."
+                if lang == "ru"
+                else "Hypothesis: possible impulse wave up — "
                 "low → high → low → high → low pattern detected. "
                 "Treat as hypothesis only."
             )
         else:
             return (
-                "Hypothesis: possible corrective wave — "
+                "Гипотеза: возможная коррекционная структура вниз. "
+                "Использовать только как дополнительный сигнал."
+                if lang == "ru"
+                else "Hypothesis: possible corrective wave — "
                 "high → low → high → low → high pattern detected. "
                 "Treat as hypothesis only."
             )
