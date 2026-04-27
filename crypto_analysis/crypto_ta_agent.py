@@ -143,13 +143,64 @@ class CryptoTAAgent:
                     "above" if current > ma else "below"
                 )
 
-        if "ma20" in result and "ma50" in result:
-            if result["ma20"] > result["ma50"]:
+        ma20 = result.get("ma20")
+        ma50 = result.get("ma50")
+
+        if ma20 and ma50:
+            long_bullish = ma20 > ma50
+            price_above_ma20 = current > ma20
+            price_above_ma50 = current > ma50
+
+            if long_bullish and not price_above_ma20 and not price_above_ma50:
                 result["trend"] = "bullish"
+                result["ma_summary_ru"] = (
+                    "MA структура долгосрочно бычья, но цена ниже MA20/MA50 — "
+                    "краткосрочная слабость."
+                )
+                result["ma_summary_en"] = (
+                    "MA structure is longer-term bullish, but price is below "
+                    "MA20/MA50 — short-term weakness."
+                )
+            elif not long_bullish and price_above_ma20 and price_above_ma50:
+                result["trend"] = "bearish"
+                result["ma_summary_ru"] = (
+                    "MA структура медвежья, но цена выше MA20/MA50 — "
+                    "возможная попытка разворота."
+                )
+                result["ma_summary_en"] = (
+                    "MA structure is bearish, but price is above MA20/MA50 — "
+                    "possible reversal attempt."
+                )
+            elif long_bullish and price_above_ma20 and price_above_ma50:
+                result["trend"] = "bullish"
+                result["ma_summary_ru"] = "MA структура бычья, цена подтверждает силу."
+                result["ma_summary_en"] = "MA structure bullish, price confirms strength."
+            elif not long_bullish and not price_above_ma20 and not price_above_ma50:
+                result["trend"] = "bearish"
+                result["ma_summary_ru"] = "MA структура медвежья, цена подтверждает слабость."
+                result["ma_summary_en"] = "MA structure bearish, price confirms weakness."
+            elif long_bullish:
+                result["trend"] = "bullish"
+                result["ma_summary_ru"] = "MA структура бычья, цена в переходной зоне."
+                result["ma_summary_en"] = "MA structure bullish, price in transition zone."
             else:
                 result["trend"] = "bearish"
+                result["ma_summary_ru"] = "MA структура медвежья, цена в переходной зоне."
+                result["ma_summary_en"] = "MA structure bearish, price in transition zone."
+        elif ma20:
+            price_above = current > ma20
+            if price_above:
+                result["trend"] = "bullish"
+                result["ma_summary_ru"] = "Цена выше MA20 — краткосрочный бычий сигнал."
+                result["ma_summary_en"] = "Price above MA20 — short-term bullish signal."
+            else:
+                result["trend"] = "bearish"
+                result["ma_summary_ru"] = "Цена ниже MA20 — краткосрочный медвежий сигнал."
+                result["ma_summary_en"] = "Price below MA20 — short-term bearish signal."
         else:
             result["trend"] = "unknown"
+            result["ma_summary_ru"] = "Недостаточно данных для MA анализа."
+            result["ma_summary_en"] = "Insufficient data for MA analysis."
 
         return result
 
