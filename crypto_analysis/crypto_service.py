@@ -44,7 +44,7 @@ def analyze_crypto(
                 )
 
         ta_agent = CryptoTAAgent()
-        ta_data = ta_agent.run(market_data)
+        ta_data = ta_agent.run(market_data, lang=lang)
 
         news_agent = CryptoNewsAgent(cryptopanic_api_key=cryptopanic_api_key)
         news_data = news_agent.run(symbol_info["base"], lang=lang)
