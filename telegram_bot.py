@@ -11,6 +11,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 
 from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
+from crypto_analysis.crypto_service import analyze_crypto
 from texts.analysis_guide import get_analysis_guide
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
@@ -181,7 +182,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
-        kb.add(KeyboardButton("📘 Как читать анализ"))
+        kb.add(KeyboardButton("🪙 Крипто анализ"), KeyboardButton("📘 Как читать анализ"))
         kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
@@ -197,7 +198,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     else:
         kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
-        kb.add(KeyboardButton("📘 How to read the analysis"))
+        kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
         if user_is_author:
