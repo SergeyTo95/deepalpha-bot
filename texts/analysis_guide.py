@@ -23,8 +23,6 @@ def get_analysis_guide(lang: str = "ru") -> str:
             "Есть ли реальное преимущество\n\n"
             "📊 Trade Insight:\n"
             "Что делать сейчас\n\n"
-            "⚠️ Важно:\n"
-            "Это не финансовая рекомендация. Решения принимаешь сам."
         )
     else:
         return (
@@ -50,6 +48,4 @@ def get_analysis_guide(lang: str = "ru") -> str:
             "Indicates if real edge exists\n\n"
             "📊 Trade Insight:\n"
             "What to do now\n\n"
-            "⚠️ Note:\n"
-            "Not financial advice. You make your own decisions."
         )
