@@ -2477,3 +2477,157 @@ def register_admin(dp: Dispatcher):
             )
 
 
+
+    # === CRYPTO ===
+    @dp.callback_query_handler(lambda c: c.data == "admin_crypto", state="*")
+    async def crypto_admin_menu(callback: types.CallbackQuery, state: FSMContext):
+        await state.finish()
+        if not is_admin(callback.from_user.id):
+            return
+        await callback.message.edit_text(
+            crypto_admin_text(),
+            reply_markup=crypto_admin_kb(),
+        )
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_toggle", state="*")
+    async def crypto_admin_toggle(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_enabled", "on")
+        set_setting("crypto_enabled", "off" if current == "on" else "on")
+        await callback.message.edit_text(
+            crypto_admin_text(),
+            reply_markup=crypto_admin_kb(),
+        )
+        await callback.answer("✅ Статус изменён")
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_price", state="*")
+    async def crypto_admin_price_ask(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_price_tokens", "5")
+        await CryptoStates.waiting_price.set()
+        await callback.message.answer(
+            f"💰 Текущая цена: {current} токенов\nВведите новую цену (целое число ≥ 0):"
+        )
+        await callback.answer()
+
+    @dp.message_handler(state=CryptoStates.waiting_price)
+    async def crypto_admin_price_set(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+        try:
+            value = int(message.text.strip())
+            if value < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите целое число ≥ 0")
+            return
+        set_setting("crypto_price_tokens", str(value))
+        await state.finish()
+        await message.answer(f"✅ Цена установлена: {value} токенов", reply_markup=crypto_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_free_per_day", state="*")
+    async def crypto_admin_free_ask(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_free_per_day", "1")
+        await CryptoStates.waiting_free_per_day.set()
+        await callback.message.answer(
+            f"🆓 Сейчас: {current} бесплатных в день\nВведите новое значение:"
+        )
+        await callback.answer()
+
+    @dp.message_handler(state=CryptoStates.waiting_free_per_day)
+    async def crypto_admin_free_set(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+        try:
+            value = int(message.text.strip())
+            if value < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите целое число ≥ 0")
+            return
+        set_setting("crypto_free_per_day", str(value))
+        await state.finish()
+        await message.answer(f"✅ Бесплатных в день: {value}", reply_markup=crypto_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_sub_per_day", state="*")
+    async def crypto_admin_sub_ask(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_sub_per_day", "10")
+        await CryptoStates.waiting_sub_per_day.set()
+        await callback.message.answer(
+            f"🔔 Сейчас: {current} для подписчиков в день\nВведите новое значение:"
+        )
+        await callback.answer()
+
+    @dp.message_handler(state=CryptoStates.waiting_sub_per_day)
+    async def crypto_admin_sub_set(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+        try:
+            value = int(message.text.strip())
+            if value < 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ Введите целое число ≥ 0")
+            return
+        set_setting("crypto_sub_per_day", str(value))
+        await state.finish()
+        await message.answer(f"✅ Для подписчиков в день: {value}", reply_markup=crypto_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_quote", state="*")
+    async def crypto_admin_quote_ask(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_default_quote", "USDT")
+        await CryptoStates.waiting_default_quote.set()
+        await callback.message.answer(
+            f"💱 Сейчас: {current}\nВведите валюту (USDT, USDC, BTC, ETH):"
+        )
+        await callback.answer()
+
+    @dp.message_handler(state=CryptoStates.waiting_default_quote)
+    async def crypto_admin_quote_set(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+        value = message.text.strip().upper()
+        if value not in {"USDT", "USDC", "BTC", "ETH", "BNB"}:
+            await message.answer("❌ Допустимые: USDT, USDC, BTC, ETH, BNB")
+            return
+        set_setting("crypto_default_quote", value)
+        await state.finish()
+        await message.answer(f"✅ Котировочная валюта: {value}", reply_markup=crypto_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "crypto_admin_timeframe", state="*")
+    async def crypto_admin_tf_ask(callback: types.CallbackQuery, state: FSMContext):
+        if not is_admin(callback.from_user.id):
+            return
+        current = get_setting("crypto_default_timeframe", "4h")
+        await CryptoStates.waiting_default_timeframe.set()
+        await callback.message.answer(
+            f"⏱ Сейчас: {current}\nВведите таймфрейм (15m, 1h, 4h, 1d):"
+        )
+        await callback.answer()
+
+    @dp.message_handler(state=CryptoStates.waiting_default_timeframe)
+    async def crypto_admin_tf_set(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+        value = message.text.strip().lower()
+        if value not in {"15m", "1h", "4h", "1d"}:
+            await message.answer("❌ Допустимые: 15m, 1h, 4h, 1d")
+            return
+        set_setting("crypto_default_timeframe", value)
+        await state.finish()
+        await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
+
