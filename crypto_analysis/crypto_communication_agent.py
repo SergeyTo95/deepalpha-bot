@@ -153,25 +153,24 @@ class CryptoCommunicationAgent:
                 lines.append(f"— MACD: {trend}{cross_str} (hist: {hist:.6f})")
 
         if ma:
-            if lang == "ru":
-                trend_str = "бычий" if ma.get("trend") == "bullish" else "медвежий"
-                parts = []
-                for p in [20, 50, 200]:
-                    v = ma.get(f"ma{p}")
-                    sig = ma.get(f"ma{p}_signal")
-                    if v:
+            ma_summary = ma.get("ma_summary_ru") if lang == "ru" else ma.get("ma_summary_en", "")
+            parts = []
+            for p in [20, 50, 200]:
+                v = ma.get(f"ma{p}")
+                sig = ma.get(f"ma{p}_signal")
+                if v:
+                    if lang == "ru":
                         sign_str = "выше" if sig == "above" else "ниже"
                         parts.append(f"MA{p}: {v:.4f} ({sign_str})")
-                lines.append(f"— MA тренд: {trend_str} | " + " | ".join(parts))
-            else:
-                parts = []
-                for p in [20, 50, 200]:
-                    v = ma.get(f"ma{p}")
-                    sig = ma.get(f"ma{p}_signal")
-                    if v:
+                    else:
                         parts.append(f"MA{p}: {v:.4f} ({sig})")
-                lines.append(f"— MA trend: {ma.get('trend', 'N/A')} | " + " | ".join(parts))
-
+            ma_levels = " | ".join(parts) if parts else ""
+            if ma_summary and ma_levels:
+                lines.append(f"— MA: {ma_summary} | {ma_levels}")
+            elif ma_summary:
+                lines.append(f"— MA: {ma_summary}")
+            elif ma_levels:
+                lines.append(f"— MA: {ma_levels}")
         if fib and fib.get("levels"):
             levels = fib["levels"]
             if lang == "ru":
@@ -229,52 +228,158 @@ class CryptoCommunicationAgent:
         base = market_data.get("base", "")
         rsi = ta_data.get("rsi")
         macd = ta_data.get("macd") or {}
-        sentiment = news_data.get("sentiment", "neutral")
+        sr = ta_data.get("support_resistance") or {}
+        fib = ta_data.get("fibonacci") or {}
+        volume_signal = ta_data.get("volume_signal", "unknown")
+        decision = ta_data.get("signal", "WAIT")
+        news_quality = news_data.get("news_quality", "none")
+
+        support = sr.get("nearest_support", 0)
+        resistance = sr.get("nearest_resistance", 0)
+        fib_levels = fib.get("levels") or {}
+        fib_50 = fib_levels.get("0.5", 0)
+        fib_618 = fib_levels.get("0.618", 0)
+        fib_382 = fib_levels.get("0.382", 0)
+
+        support_str = f"{support:.4f}" if support else "н/д"
+        resistance_str = f"{resistance:.4f}" if resistance else "н/д"
+        fib_50_str = f"{fib_50:.4f}" if fib_50 else "н/д"
+        fib_618_str = f"{fib_618:.4f}" if fib_618 else "н/д"
+        fib_382_str = f"{fib_382:.4f}" if fib_382 else "н/д"
+
+        macd_trend = macd.get("trend", "")
+        macd_crossover = macd.get("crossover", "")
 
         if lang == "ru":
-            high = []
-            medium = []
-            low = []
-            high.append("решение регулятора по активу или сектору")
-            high.append("крупная ликвидация или whale-движение")
-            if macd.get("crossover") == "golden_cross":
-                high.append("подтверждение золотого пересечения MACD на старшем ТФ")
-            elif macd.get("crossover") == "death_cross":
-                high.append("подтверждение пересечения смерти MACD на старшем ТФ")
-            medium.append("пробой ключевого уровня сопротивления с объёмом")
-            medium.append("изменение риторики крупных держателей")
-            if rsi and (rsi > 70 or rsi < 30):
-                medium.append(f"RSI достигает экстремума (сейчас {rsi:.0f})")
-            low.append("медийные публикации без on-chain подтверждения")
-            low.append("заявления инфлюенсеров без фактических данных")
+            if "LONG" in decision or "TRADE" in decision:
+                high = [
+                    f"удержание цены выше MA20 с подтверждением объёма",
+                    f"пробой сопротивления {resistance_str} на повышенном объёме",
+                ]
+                medium = [
+                    f"RSI держится выше 50 без перегрева",
+                    f"MACD продолжает бычий импульс",
+                ]
+                if fib_618:
+                    medium.append(f"удержание выше Fib 0.618: {fib_618_str}")
+                low = [
+                    "позитивные новости без немедленной реакции цены",
+                    "рост интереса в соцсетях без on-chain подтверждения",
+                ]
+            elif "SHORT" in decision:
+                high = [
+                    f"закрепление ниже поддержки {support_str}",
+                    f"рост объёма на падении",
+                ]
+                medium = [
+                    "MACD усиливает медвежий histogram",
+                    f"потеря уровня Fib 0.382: {fib_382_str}",
+                ]
+                if rsi and rsi < 35:
+                    medium.append(f"RSI {rsi:.0f} — близко к перепроданности, осторожно шортить")
+                low = [
+                    "медвежьи публикации без on-chain подтверждения",
+                    "общий негативный фон без специфики по активу",
+                ]
+            else:
+                # WAIT
+                high = [
+                    f"пробой и закрепление выше сопротивления {resistance_str}",
+                    f"потеря поддержки {support_str} с высоким объёмом",
+                ]
+                medium = []
+                if fib_50:
+                    medium.append(f"возврат выше Fib 0.5: {fib_50_str}")
+                if rsi:
+                    if rsi < 40:
+                        medium.append(f"RSI выходит выше 40–45 (сейчас {rsi:.0f})")
+                    elif rsi > 60:
+                        medium.append(f"RSI опускается ниже 60 (сейчас {rsi:.0f})")
+                    else:
+                        medium.append(f"RSI {rsi:.0f} — нейтральная зона")
+                if macd_crossover == "golden_cross":
+                    medium.append("подтверждение золотого пересечения MACD")
+                elif macd_crossover == "death_cross":
+                    medium.append("подтверждение пересечения смерти MACD")
+                else:
+                    medium.append("MACD начинает разворот в нужную сторону")
+                low = [
+                    "нейтральные новости без реакции цены",
+                    "слабые публикации в соцсетях без объёма",
+                ]
+                if news_quality == "none":
+                    low.append(f"появление значимых новостей по {base}")
 
             result = "🔴 High impact:\n"
             result += "\n".join(f"— {t}" for t in high[:2])
             result += "\n\n🟡 Medium:\n"
-            result += "\n".join(f"— {t}" for t in medium[:2])
+            result += "\n".join(f"— {t}" for t in medium[:3])
             result += "\n\n🟢 Low:\n"
             result += "\n".join(f"— {t}" for t in low[:2])
+
         else:
-            high = []
-            medium = []
-            low = []
-            high.append("regulatory decision on asset or sector")
-            high.append("large liquidation or whale movement")
-            if macd.get("crossover") == "golden_cross":
-                high.append("MACD golden cross confirmation on higher timeframe")
-            elif macd.get("crossover") == "death_cross":
-                high.append("MACD death cross confirmation on higher timeframe")
-            medium.append("resistance level breakout with volume confirmation")
-            medium.append("shift in major holder rhetoric")
-            if rsi and (rsi > 70 or rsi < 30):
-                medium.append(f"RSI reaching extreme (currently {rsi:.0f})")
-            low.append("media publications without on-chain confirmation")
-            low.append("influencer statements without factual data")
+            if "LONG" in decision or "TRADE" in decision:
+                high = [
+                    f"price holds above MA20 with volume confirmation",
+                    f"breakout above resistance {resistance_str} on high volume",
+                ]
+                medium = [
+                    "RSI stays above 50 without overheating",
+                    "MACD continues bullish momentum",
+                ]
+                if fib_618:
+                    medium.append(f"hold above Fib 0.618: {fib_618_str}")
+                low = [
+                    "positive news without immediate price reaction",
+                    "social media interest without on-chain confirmation",
+                ]
+            elif "SHORT" in decision:
+                high = [
+                    f"close below support {support_str}",
+                    f"volume surge on down move",
+                ]
+                medium = [
+                    "MACD strengthens bearish histogram",
+                    f"loss of Fib 0.382: {fib_382_str}",
+                ]
+                if rsi and rsi < 35:
+                    medium.append(f"RSI {rsi:.0f} — near oversold, careful shorting")
+                low = [
+                    "bearish publications without on-chain confirmation",
+                    "general negative sentiment without asset specifics",
+                ]
+            else:
+                high = [
+                    f"breakout and close above resistance {resistance_str}",
+                    f"loss of support {support_str} on high volume",
+                ]
+                medium = []
+                if fib_50:
+                    medium.append(f"recovery above Fib 0.5: {fib_50_str}")
+                if rsi:
+                    if rsi < 40:
+                        medium.append(f"RSI breaks above 40–45 (now {rsi:.0f})")
+                    elif rsi > 60:
+                        medium.append(f"RSI drops below 60 (now {rsi:.0f})")
+                    else:
+                        medium.append(f"RSI {rsi:.0f} — neutral zone")
+                if macd_crossover == "golden_cross":
+                    medium.append("MACD golden cross confirmation")
+                elif macd_crossover == "death_cross":
+                    medium.append("MACD death cross confirmation")
+                else:
+                    medium.append("MACD starts reversing in expected direction")
+                low = [
+                    "neutral news without price reaction",
+                    "weak social media posts without volume",
+                ]
+                if news_quality == "none":
+                    low.append(f"significant {base} news appearing")
 
             result = "🔴 High impact:\n"
             result += "\n".join(f"— {t}" for t in high[:2])
             result += "\n\n🟡 Medium:\n"
-            result += "\n".join(f"— {t}" for t in medium[:2])
+            result += "\n".join(f"— {t}" for t in medium[:3])
             result += "\n\n🟢 Low:\n"
             result += "\n".join(f"— {t}" for t in low[:2])
 
