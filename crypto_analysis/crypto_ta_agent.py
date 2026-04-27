@@ -6,7 +6,7 @@ class CryptoTAAgent:
     def __init__(self) -> None:
         pass
 
-    def run(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
         ohlcv = market_data.get("ohlcv", [])
 
         if not ohlcv or len(ohlcv) < 14:
