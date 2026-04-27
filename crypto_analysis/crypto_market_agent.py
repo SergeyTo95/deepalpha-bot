@@ -7,10 +7,11 @@ from crypto_analysis.crypto_sources import (
     binance_get_klines,
     bybit_get_ticker,
     bybit_get_klines,
+    coingecko_search,
 )
+
 from crypto_analysis.crypto_utils import (
     get_coingecko_id,
-    coingecko_search,
     format_price,
     format_change,
     format_volume,
