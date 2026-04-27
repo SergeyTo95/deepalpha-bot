@@ -708,6 +708,64 @@ def watchlist_admin_text() -> str:
         f"Настройки ↓"
     )
 
+def crypto_admin_kb() -> InlineKeyboardMarkup:
+    enabled = get_setting("crypto_enabled", "on")
+    price = get_setting("crypto_price_tokens", "5")
+    free_per_day = get_setting("crypto_free_per_day", "1")
+    sub_per_day = get_setting("crypto_sub_per_day", "10")
+    quote = get_setting("crypto_default_quote", "USDT")
+    timeframe = get_setting("crypto_default_timeframe", "4h")
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton(
+            f"{'✅' if enabled == 'on' else '❌'} Crypto Analysis: {'ON' if enabled == 'on' else 'OFF'}",
+            callback_data="crypto_admin_toggle",
+        ),
+        InlineKeyboardButton(
+            f"💰 Цена: {price} токенов",
+            callback_data="crypto_admin_price",
+        ),
+        InlineKeyboardButton(
+            f"🆓 Бесплатных в день: {free_per_day}",
+            callback_data="crypto_admin_free_per_day",
+        ),
+        InlineKeyboardButton(
+            f"🔔 Для подписчиков в день: {sub_per_day}",
+            callback_data="crypto_admin_sub_per_day",
+        ),
+        InlineKeyboardButton(
+            f"💱 Котировочная валюта: {quote}",
+            callback_data="crypto_admin_quote",
+        ),
+        InlineKeyboardButton(
+            f"⏱ Таймфрейм: {timeframe}",
+            callback_data="crypto_admin_timeframe",
+        ),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
+    return kb
+
+
+def crypto_admin_text() -> str:
+    enabled = get_setting("crypto_enabled", "on")
+    price = get_setting("crypto_price_tokens", "5")
+    free_per_day = get_setting("crypto_free_per_day", "1")
+    sub_per_day = get_setting("crypto_sub_per_day", "10")
+    quote = get_setting("crypto_default_quote", "USDT")
+    timeframe = get_setting("crypto_default_timeframe", "4h")
+
+    return (
+        f"🪙 Crypto Analysis Settings\n\n"
+        f"Статус: {'🟢 ON' if enabled == 'on' else '🔴 OFF'}\n"
+        f"Цена: {price} токенов\n"
+        f"Бесплатных в день: {free_per_day}\n"
+        f"Для подписчиков в день: {sub_per_day}\n"
+        f"Котировочная валюта: {quote}\n"
+        f"Таймфрейм по умолчанию: {timeframe}\n\n"
+        f"Нажми кнопку для изменения ↓"
+    )
+
 
 def watchlist_stats_text() -> str:
     stats = get_watchlist_stats()
