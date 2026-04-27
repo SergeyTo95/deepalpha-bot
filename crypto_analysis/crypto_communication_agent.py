@@ -314,4 +314,4 @@ class CryptoCommunicationAgent:
                 return (
                     f"Insufficient data or low liquidity for {symbol}. "
                     "Stay out of position."
-          )
+                )
