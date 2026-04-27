@@ -106,6 +106,13 @@ class AuthorAdminStates(StatesGroup):
     waiting_withdrawal_tx = State()
     waiting_withdrawal_reject = State()
 
+class CryptoStates(StatesGroup):
+    waiting_price = State()
+    waiting_free_per_day = State()
+    waiting_sub_per_day = State()
+    waiting_default_quote = State()
+    waiting_default_timeframe = State()
+
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -122,6 +129,7 @@ def admin_main_kb():
         InlineKeyboardButton("🎯 Tracking Accuracy", callback_data="admin_tracking"),
         InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
         InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
+        InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
