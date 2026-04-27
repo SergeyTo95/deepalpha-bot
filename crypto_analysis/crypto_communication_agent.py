@@ -291,7 +291,7 @@ class CryptoCommunicationAgent:
             elif decision == "WAIT":
                 return (
                     f"Конфликт сигналов или рынок у ключевого уровня. "
-                    "Ждать подтверждения перед входом в {symbol}."
+                    f"Ждать подтверждения перед входом в {symbol}."
                 )
             else:
                 return (
