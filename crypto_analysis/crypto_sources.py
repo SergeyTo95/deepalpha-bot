@@ -221,3 +221,132 @@ def rss_get_crypto_news(base: str, limit: int = 5) -> List[Dict]:
             print(f"RSS error {feed_url}: {e}")
             continue
     return results
+
+# ═══════════════════════════════════════════
+# EXTENDED RSS SOURCES
+# ═══════════════════════════════════════════
+
+RSS_FEEDS = [
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("Cointelegraph", "https://cointelegraph.com/rss"),
+    ("Decrypt", "https://decrypt.co/feed"),
+    ("The Block", "https://www.theblock.co/rss.xml"),
+    ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
+]
+
+
+def rss_get_crypto_news_extended(base: str, limit: int = 6) -> List[Dict]:
+    """
+    Расширенный RSS поиск по нескольким источникам.
+    Возвращает новости релевантные для base.
+    """
+    results = []
+    base_upper = base.upper()
+    base_lower = base.lower()
+
+    # Синонимы для популярных активов
+    synonyms = {
+        "BTC": ["bitcoin", "btc"],
+        "ETH": ["ethereum", "eth", "ether"],
+        "SOL": ["solana", "sol"],
+        "TON": ["ton", "toncoin", "telegram"],
+        "BNB": ["bnb", "binance coin", "binancecoin"],
+        "XRP": ["xrp", "ripple"],
+        "DOGE": ["dogecoin", "doge"],
+        "SHIB": ["shiba", "shib"],
+        "ADA": ["cardano", "ada"],
+        "AVAX": ["avalanche", "avax"],
+        "MATIC": ["polygon", "matic"],
+        "LINK": ["chainlink", "link"],
+        "DOT": ["polkadot", "dot"],
+        "NEAR": ["near protocol", "near"],
+        "ARB": ["arbitrum", "arb"],
+        "OP": ["optimism", " op "],
+    }
+    search_terms = synonyms.get(base_upper, [base_lower, base_upper.lower()])
+
+    for source_name, feed_url in RSS_FEEDS:
+        if len(results) >= limit:
+            break
+        try:
+            resp = _session.get(feed_url, timeout=8)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+
+            # Парсим заголовки и ссылки из RSS
+            import re as _re
+            raw_titles = _re.findall(
+                r'<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>',
+                html,
+                _re.DOTALL,
+            )
+            raw_links = _re.findall(
+                r'<link>(?:<!\[CDATA\[)?(https?://[^<]+?)(?:\]\]>)?</link>',
+                html,
+            )
+
+            titles = [t.strip() for t in raw_titles if len(t.strip()) > 10]
+            links = [l.strip() for l in raw_links]
+
+            for i, title in enumerate(titles[:30]):
+                title_lower = title.lower()
+                if any(term in title_lower for term in search_terms):
+                    link = links[i] if i < len(links) else feed_url
+                    results.append({
+                        "title": title[:200],
+                        "url": link,
+                        "source": source_name,
+                        "positive": 0,
+                        "negative": 0,
+                    })
+                    if len(results) >= limit:
+                        break
+
+        except Exception as e:
+            print(f"RSS {source_name} error: {e}")
+            continue
+
+    return results
+
+
+def rss_get_general_crypto_news(limit: int = 4) -> List[Dict]:
+    """
+    Общие крипто новости если по конкретной монете ничего нет.
+    """
+    results = []
+    for source_name, feed_url in RSS_FEEDS[:3]:
+        if len(results) >= limit:
+            break
+        try:
+            resp = _session.get(feed_url, timeout=8)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+            import re as _re
+            raw_titles = _re.findall(
+                r'<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>',
+                html,
+                _re.DOTALL,
+            )
+            raw_links = _re.findall(
+                r'<link>(?:<!\[CDATA\[)?(https?://[^<]+?)(?:\]\]>)?</link>',
+                html,
+            )
+            titles = [t.strip() for t in raw_titles[1:] if len(t.strip()) > 10]
+            links = [l.strip() for l in raw_links]
+            for i, title in enumerate(titles[:4]):
+                link = links[i] if i < len(links) else feed_url
+                results.append({
+                    "title": title[:200],
+                    "url": link,
+                    "source": f"{source_name} (общий)",
+                    "positive": 0,
+                    "negative": 0,
+                })
+                if len(results) >= limit:
+                    break
+        except Exception as e:
+            print(f"General RSS {source_name} error: {e}")
+            continue
+    return results
