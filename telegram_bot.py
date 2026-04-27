@@ -71,6 +71,10 @@ class AuthorStates(StatesGroup):
     waiting_donation_amount = State()
 
 
+class CryptoStates(StatesGroup):
+    waiting_for_ticker = State()
+
+
 CATEGORY_LABELS = {
     "ru": {
         "Politics": "🌍 Политика",
@@ -1584,6 +1588,70 @@ async def analysis_guide_handler(message: types.Message):
     lang = get_user_lang(uid)
     text = get_analysis_guide(lang)
     await message.answer(text)
+
+@dp.message_handler(
+    lambda m: m.text in ["🪙 Крипто анализ", "🪙 Crypto Analysis"],
+    state="*",
+)
+async def crypto_analysis_start(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    await CryptoStates.waiting_for_ticker.set()
+    if lang == "ru":
+        await message.answer(
+            "🪙 Введите тикер или торговую пару:\n\n"
+            "Примеры: BTC, ETH, TON/USDT, SOL, PEPE"
+        )
+    else:
+        await message.answer(
+            "🪙 Enter ticker or trading pair:\n\n"
+            "Examples: BTC, ETH, TON/USDT, SOL, PEPE"
+        )
+
+
+@dp.message_handler(state=CryptoStates.waiting_for_ticker)
+async def crypto_analysis_run(message: types.Message, state: FSMContext):
+    await state.finish()
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    user_input = message.text.strip()
+
+    if lang == "ru":
+        wait_msg = await message.answer(f"🔍 Анализирую {user_input}...")
+    else:
+        wait_msg = await message.answer(f"🔍 Analysing {user_input}...")
+
+    try:
+        import os
+        cryptopanic_key = os.getenv("CRYPTOPANIC_API_KEY")
+        default_quote = os.getenv("CRYPTO_DEFAULT_QUOTE", "USDT")
+        default_timeframe = os.getenv("CRYPTO_DEFAULT_TIMEFRAME", "4h")
+
+        result = analyze_crypto(
+            user_input=user_input,
+            lang=lang,
+            timeframe=default_timeframe,
+            default_quote=default_quote,
+            cryptopanic_api_key=cryptopanic_key,
+        )
+
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+
+        await message.answer(result)
+
+    except Exception as e:
+        print(f"crypto_analysis_run error: {e}")
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        if lang == "ru":
+            await message.answer("❌ Ошибка анализа. Попробуйте другой тикер.")
+        else:
+            await message.answer("❌ Analysis error. Try another ticker.")
 
 
 @dp.message_handler(commands=["authors"])
