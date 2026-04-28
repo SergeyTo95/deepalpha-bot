@@ -54,6 +54,20 @@ def analyze_crypto(
             market_data, ta_data, news_data, lang=lang
         )
 
+        # LLM refinement layer
+        try:
+            from crypto_analysis.crypto_llm_agent import CryptoLLMAgent
+            llm_agent = CryptoLLMAgent()
+            decision_data = llm_agent.refine_decision(
+                market_data=market_data,
+                ta_data=ta_data,
+                news_data=news_data,
+                decision_data=decision_data,
+                lang=lang,
+            )
+        except Exception as e:
+            print(f"Crypto LLM refinement skipped: {e}")
+
         comm_agent = CryptoCommunicationAgent()
         result_text = comm_agent.run(
             market_data, ta_data, news_data, decision_data, lang=lang
