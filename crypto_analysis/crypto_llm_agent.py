@@ -201,27 +201,67 @@ class CryptoLLMAgent:
 
         text = raw.strip()
 
-        # Убираем markdown ```json ... ```
-        text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s*```$', '', text)
-        text = text.strip()
-
-        # Пробуем прямой парсинг
+        # 1. Прямой парсинг без изменений
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             pass
 
-        # Извлекаем JSON между первой { и последней }
+        # 2. Убираем markdown-обёртки: ```json ... ``` или ``` ... ```
+        cleaned = re.sub(
+            r'^```(?:json)?\s*\n?', '', text, flags=re.IGNORECASE
+        )
+        cleaned = re.sub(r'\n?\s*```\s*$', '', cleaned)
+        cleaned = cleaned.strip()
+
+        try:
+            return json.loads(cleaned)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 3. Извлекаем JSON между первой { и последней }
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
+            candidate = text[start:end + 1]
             try:
-                return json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                pass
+                return json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                # 4. Пробуем починить trailing comma и control chars
+                fixed = re.sub(r',\s*([}\]])', r'\1', candidate)
+                fixed = re.sub(r'[\x00-\x1f\x7f]', ' ', fixed)
+                try:
+                    return json.loads(fixed)
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-        print(f"CryptoLLMAgent: failed to parse JSON from response: {text[:200]}")
+        # 5. Пробуем построчно найти JSON-блок
+        lines = text.splitlines()
+        buffer = []
+        depth = 0
+        in_block = False
+        for line in lines:
+            for ch in line:
+                if ch == '{':
+                    depth += 1
+                    in_block = True
+                elif ch == '}':
+                    depth -= 1
+            if in_block:
+                buffer.append(line)
+            if in_block and depth == 0:
+                candidate = "\n".join(buffer)
+                try:
+                    return json.loads(candidate)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                buffer = []
+                in_block = False
+
+        print(
+            f"CryptoLLMAgent: failed to parse JSON from response: "
+            f"{text[:300]!r}"
+        )
         return None
 
     # ═══════════════════════════════════════════
