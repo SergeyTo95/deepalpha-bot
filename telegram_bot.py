@@ -3256,9 +3256,8 @@ async def referrals_handler(message: types.Message, state: FSMContext):
                 name = r.get("username") or r.get("first_name") or str(r["user_id"])
                 text += f"• @{name} — {r['total_analyses']} analyses\n"
 
-    await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
-
-
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    
 @dp.message_handler(lambda m: m.text in ["📊 История", "📊 History"])
 async def history_handler(message: types.Message):
     _register_user(message)
