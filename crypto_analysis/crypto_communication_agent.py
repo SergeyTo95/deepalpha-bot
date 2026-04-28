@@ -82,7 +82,7 @@ class CryptoCommunicationAgent:
                 f"📈 Тренд: {trend_str}\n"
                 f"⚡ Волатильность: {vol_str}\n"
                 f"📦 Объём 24h: {volume}\n\n"
-                f"📊 Decision: {decision}\n\n"
+                f"{self._format_decision_label(decision, lang, llm_refined, llm_confidence)}\n\n"
                 f"{sep}\n\n"
                 f"💭 Логика рынка:\n{market_logic}\n\n"
                 f"📐 Технический анализ:\n{ta_block}\n\n"
@@ -115,7 +115,7 @@ class CryptoCommunicationAgent:
                 f"📈 Trend: {trend_str}\n"
                 f"⚡ Volatility: {vol_str}\n"
                 f"📦 Volume 24h: {volume}\n\n"
-                f"📊 Decision: {decision}\n\n"
+                f"{self._format_decision_label(decision, lang, llm_refined, llm_confidence)}\n\n"
                 f"{sep}\n\n"
                 f"💭 Market Logic:\n{market_logic}\n\n"
                 f"📐 Technical Picture:\n{ta_block}\n\n"
@@ -128,6 +128,37 @@ class CryptoCommunicationAgent:
                 f"{sep}\n"
                 f"📝 Conclusion: {conclusion}"
             )
+
+    def _format_decision_label(
+        self, decision: str, lang: str, llm_refined: bool, llm_confidence: Optional[str]
+    ) -> str:
+        if lang == "ru":
+            label_map = {
+                "TRADE": "TRADE / Вход",
+                "CONDITIONAL TRADE": "CONDITIONAL TRADE / Условный вход",
+                "WAIT": "WAIT / Ожидание",
+                "NO TRADE": "NO TRADE / Вне позиции",
+            }
+        else:
+            label_map = {
+                "TRADE": "TRADE",
+                "CONDITIONAL TRADE": "CONDITIONAL TRADE",
+                "WAIT": "WAIT",
+                "NO TRADE": "NO TRADE",
+            }
+
+        label = label_map.get(decision, decision)
+        decision_line = f"📊 Decision: {label}"
+
+        if llm_refined:
+            conf_str = llm_confidence or "medium"
+            if lang == "ru":
+                refinement_line = f"🧠 Gemini: ✅ refined | Уверенность: {conf_str}"
+            else:
+                refinement_line = f"🧠 Gemini: ✅ refined | Confidence: {conf_str}"
+            return f"{decision_line}\n{refinement_line}"
+
+        return decision_line
 
     # ═══════════════════════════════════════════
     # TA BLOCK
