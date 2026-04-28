@@ -1582,12 +1582,16 @@ async def watchlist_command(message: types.Message):
     text = _format_watchlist_list(uid)
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
-@dp.message_handler(lambda m: m.text == "📘 How to read the analysis")
-async def analysis_guide_handler(message: types.Message):
+@dp.message_handler(
+    lambda m: m.text in ["📘 Как читать анализ", "📘 How to read the analysis"],
+    state="*",
+)
+async def analysis_guide_handler(message: types.Message, state: FSMContext):
+    await state.finish()
     uid = message.from_user.id
     lang = get_user_lang(uid)
     text = get_analysis_guide(lang)
-    await message.answer(text)
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 @dp.message_handler(
     lambda m: m.text in ["🪙 Крипто анализ", "🪙 Crypto Analysis"],
@@ -2171,13 +2175,6 @@ async def watchlist_button_handler(message: types.Message):
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
     await message.answer(text, reply_markup=get_main_keyboard(uid))
-
-@dp.message_handler(lambda m: m.text == "📘 Как читать анализ")
-async def analysis_guide_handler(message: types.Message):
-    uid = message.from_user.id
-    lang = get_user_lang(uid)
-    text = get_analysis_guide(lang)
-    await message.answer(text)
 
 
 @dp.message_handler(lambda m: m.text in ["📢 Авторы", "📢 Authors"])
@@ -3218,8 +3215,12 @@ async def subscription_handler(message: types.Message):
     await message.answer(text, reply_markup=get_subscribe_keyboard(lang))
 
 
-@dp.message_handler(lambda m: m.text in ["👥 Рефералы", "👥 Referrals"])
-async def referrals_handler(message: types.Message):
+@dp.message_handler(
+    lambda m: m.text in ["👥 Рефералы", "👥 Referrals"],
+    state="*",
+)
+async def referrals_handler(message: types.Message, state: FSMContext):
+    await state.finish()
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
