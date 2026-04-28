@@ -28,6 +28,8 @@ class CryptoCommunicationAgent:
         market_logic = decision_data.get("market_logic", "")
         entry_logic = decision_data.get("entry_logic", "")
         risk = decision_data.get("risk", "")
+        llm_refined = decision_data.get("llm_refined", False)
+        llm_confidence = decision_data.get("llm_confidence")
 
         rsi = ta_data.get("rsi")
         macd = ta_data.get("macd") or {}
