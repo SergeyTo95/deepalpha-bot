@@ -454,6 +454,37 @@ def get_subscription_item_keyboard(subscriber_id: int, author_id: int, notificat
 # HELPERS
 # ═══════════════════════════════════════════
 
+def extract_polymarket_url_and_context(text: str) -> tuple:
+    """
+    Извлекает первый Polymarket URL и опциональный user context из сообщения.
+    Работает для форматов:
+    - только URL
+    - URL + текст
+    - текст + URL
+    """
+    import re
+    if not text:
+        return "", ""
+
+    url_pattern = r'https?://(?:www\.)?polymarket\.com\S+'
+    match = re.search(url_pattern, text)
+
+    if not match:
+        cleaned = re.sub(r'\s+', ' ', text).strip()
+        return "", cleaned[:1000]
+
+    url = match.group(0).rstrip(".,;)\"'")
+    before = text[:match.start()].strip()
+    after = text[match.end():].strip()
+
+    parts = [p for p in [before, after] if p]
+    user_context = " ".join(parts)
+    user_context = re.sub(r'\s+', ' ', user_context).strip()
+    user_context = user_context[:1000]
+
+    return url, user_context
+
+
 def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
@@ -3339,12 +3370,34 @@ async def analyze_url_handler(message: types.Message):
     if use_free:
         await message.answer(t(uid, "free_trial_analysis"))
 
-    await message.answer(t(uid, "analyzing"))
+    url, user_context = extract_polymarket_url_and_context(message.text)
+
+    if not url:
+        if lang == "ru":
+            await message.answer("❌ Не удалось найти Polymarket ссылку.", reply_markup=get_main_keyboard(uid))
+        else:
+            await message.answer("❌ Could not find a Polymarket link.", reply_markup=get_main_keyboard(uid))
+        return
+
+    if user_context:
+        wait_text = (
+            "🔍 Анализирую рынок с учётом твоего уточнения..."
+            if lang == "ru"
+            else "🔍 Analyzing market with your added context..."
+        )
+    else:
+        wait_text = t(uid, "analyzing")
+
+    await message.answer(wait_text)
 
     try:
-        url = message.text.strip()
         agent = ChiefAgent()
-        result = agent.run(url, lang=lang, user_id=uid)
+        result = agent.run(
+            url=url,
+            lang=lang,
+            user_id=uid,
+            user_context=user_context,
+        )
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
