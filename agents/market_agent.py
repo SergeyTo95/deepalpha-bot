@@ -46,6 +46,11 @@ class MarketAgent:
         )
 
         sub_markets = self._get_sub_markets(slug, question)
+        market_microstructure = self._build_microstructure(
+            volume=normalized.get("volume", "Unknown"),
+            liquidity=normalized.get("liquidity", "Unknown"),
+            price_history=normalized.get("price_history", {}),
+        )
 
         return {
             "url": url,
@@ -65,6 +70,117 @@ class MarketAgent:
             "price_history": normalized.get("price_history", {"24h": [], "7d": []}),
             "raw_market_data": normalized.get("raw_market_data", {}),
             "sub_markets": sub_markets,
+            "market_microstructure": market_microstructure,
+        }
+
+    def _build_microstructure(
+        self,
+        volume: str,
+        liquidity: str,
+        price_history: dict,
+    ) -> dict:
+        def _parse_value(raw: str) -> float:
+            if not raw or raw == "Unknown":
+                return 0.0
+            s = str(raw).strip().replace(",", "")
+            m = re.search(r'([\d.]+)\s*([KkMmBb]?)', s)
+            if not m:
+                return 0.0
+            try:
+                num = float(m.group(1))
+                suffix = m.group(2).upper()
+                if suffix == "K":
+                    num *= 1_000
+                elif suffix == "M":
+                    num *= 1_000_000
+                elif suffix == "B":
+                    num *= 1_000_000_000
+                return num
+            except ValueError:
+                return 0.0
+
+        def _classify(value: float) -> str:
+            if value <= 0:
+                return "unknown"
+            if value > 1_000_000:
+                return "high"
+            if value > 100_000:
+                return "medium"
+            return "low"
+
+        liquidity_score = _classify(_parse_value(liquidity))
+        volume_score = _classify(_parse_value(volume))
+
+        def _pct_change(prices: list) -> str:
+            if not prices or len(prices) < 2:
+                return "unknown"
+            try:
+                def _get_price(p):
+                    if isinstance(p, (int, float)):
+                        return float(p)
+                    if isinstance(p, dict):
+                        return float(p.get("price", 0) or p.get("close", 0))
+                    return float(p)
+
+                first = _get_price(prices[0])
+                last = _get_price(prices[-1])
+                if first == 0:
+                    return "unknown"
+                pct = (last - first) / first * 100
+                return f"{pct:+.1f}%"
+            except Exception:
+                return "unknown"
+
+        prices_24h = price_history.get("24h", []) if price_history else []
+        prices_7d = price_history.get("7d", []) if price_history else []
+
+        price_movement_24h = _pct_change(prices_24h)
+        price_movement_7d = _pct_change(prices_7d)
+
+        volatility_score = "unknown"
+        if prices_24h and len(prices_24h) >= 3:
+            try:
+                def _get_price(p):
+                    if isinstance(p, (int, float)):
+                        return float(p)
+                    if isinstance(p, dict):
+                        return float(p.get("price", 0) or p.get("close", 0))
+                    return float(p)
+
+                vals = [_get_price(p) for p in prices_24h]
+                vals = [v for v in vals if v > 0]
+                if len(vals) >= 3:
+                    hi = max(vals)
+                    lo = min(vals)
+                    avg = sum(vals) / len(vals)
+                    if avg > 0:
+                        spread = (hi - lo) / avg * 100
+                        if spread > 15:
+                            volatility_score = "high"
+                        elif spread > 5:
+                            volatility_score = "medium"
+                        else:
+                            volatility_score = "low"
+            except Exception:
+                pass
+
+        warnings = []
+        if liquidity_score == "low":
+            warnings.append("low liquidity")
+        if volatility_score == "high":
+            warnings.append("high volatility")
+        if volume_score == "low":
+            warnings.append("low volume")
+
+        microstructure_warning = ", ".join(warnings) if warnings else ""
+
+        return {
+            "liquidity_score": liquidity_score,
+            "volume_score": volume_score,
+            "price_movement_24h": price_movement_24h,
+            "price_movement_7d": price_movement_7d,
+            "volatility_score": volatility_score,
+            "microstructure_warning": microstructure_warning,
         }
 
     def _get_sub_markets(self, slug: str, main_question: str) -> List[Dict[str, Any]]:
@@ -325,4 +441,12 @@ class MarketAgent:
             "price_history": {"24h": [], "7d": []},
             "raw_market_data": {},
             "sub_markets": [],
+            "market_microstructure": {
+                "liquidity_score": "unknown",
+                "volume_score": "unknown",
+                "price_movement_24h": "unknown",
+                "price_movement_7d": "unknown",
+                "volatility_score": "unknown",
+                "microstructure_warning": "",
+            },
         }
