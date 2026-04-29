@@ -12,13 +12,7 @@ class ChiefAgent:
     def __init__(self) -> None:
         pass
 
-    def run(
-        self,
-        url: str,
-        lang: str = "en",
-        user_id: int = 0,
-        user_context: str = "",
-    ) -> Dict[str, Any]:
+    def run(self, url: str, lang: str = "en", user_id: int = 0) -> Dict[str, Any]:
         logger.info(f"ChiefAgent: starting analysis for {url[:50]}")
 
         market_data = self._run_market_agent(url)
@@ -28,23 +22,14 @@ class ChiefAgent:
             f"sub_markets={len(market_data.get('sub_markets', []))}"
         )
 
-        news_data = self._run_news_agent(
-            market_data,
-            lang=lang,
-            user_context=user_context,
-        )
+        news_data = self._run_news_agent(market_data, lang=lang)
         logger.info(
             f"ChiefAgent: news_data done, "
             f"sentiment={news_data.get('sentiment', 'N/A')}, "
             f"key_signals={len(news_data.get('key_signals', []))}"
         )
 
-        decision_data = self._run_decision_agent(
-            market_data,
-            news_data,
-            lang=lang,
-            user_context=user_context,
-        )
+        decision_data = self._run_decision_agent(market_data, news_data, lang=lang)
         logger.info(
             f"ChiefAgent: decision_data done, "
             f"probability={decision_data.get('probability', 'N/A')}"
@@ -107,13 +92,13 @@ class ChiefAgent:
             "full_analysis": comm.get("full_analysis", ""),
             "time_shift": comm.get("time_shift"),
             "decision_block": comm.get("decision_block", ""),
+            "full_analysis": comm.get("full_analysis", ""),
+            "time_shift": comm.get("time_shift"),
 
             # Meta
             "url": url,
             "mode": "analysis",
             "lang": lang,
-            "user_context": user_context,
-            "user_context_used": bool(user_context),
             "related_markets": market_data.get("related_markets", []),
             "sub_markets": market_data.get("sub_markets", []),
             "news_sources": news_sources,
@@ -292,16 +277,13 @@ class ChiefAgent:
             return self._market_fallback(url)
 
     def _run_news_agent(
-        self,
-        market_data: Dict[str, Any],
-        lang: str = "en",
-        user_context: str = "",
+        self, market_data: Dict[str, Any], lang: str = "en"
     ) -> Dict[str, Any]:
         try:
             logger.info("NewsAgent: starting")
             from agents.news_agent import NewsAgent
             agent = NewsAgent()
-            result = agent.run(market_data, lang=lang, user_context=user_context)
+            result = agent.run(market_data, lang=lang)
             logger.info(
                 f"NewsAgent: done, "
                 f"sources={len(result.get('sources', []))}, "
@@ -319,18 +301,12 @@ class ChiefAgent:
         market_data: Dict[str, Any],
         news_data: Dict[str, Any],
         lang: str = "en",
-        user_context: str = "",
     ) -> Dict[str, Any]:
         try:
             logger.info("DecisionAgent: starting")
             from agents.decision_agent import DecisionAgent
             agent = DecisionAgent()
-            result = agent.run(
-                market_data,
-                news_data,
-                lang=lang,
-                user_context=user_context,
-            )
+            result = agent.run(market_data, news_data, lang=lang)
             logger.info(
                 f"DecisionAgent: done, "
                 f"probability={result.get('probability', 'N/A')}"
