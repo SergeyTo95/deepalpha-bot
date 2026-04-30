@@ -27,6 +27,12 @@ class CommunicationAgent:
     def run(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
         question = decision_data.get("question", "").strip()
         market_probability = str(decision_data.get("market_probability", "")).strip()
+        market_structure = (
+            decision_data.get("market_structure")
+            or decision_data.get("market_data", {}).get("market_structure", {})
+            or decision_data.get("market", {}).get("market_structure", {})
+            or {}
+        )
         probability = decision_data.get("probability", "").strip()
         confidence_raw = decision_data.get("confidence", "").strip()
         reasoning = decision_data.get("reasoning", "").strip()
@@ -195,6 +201,7 @@ class CommunicationAgent:
             alpha_note_block=alpha_note_block,
             sources=sources,
             lang=lang,
+            market_structure=market_structure,
         )
 
         return {
@@ -269,13 +276,87 @@ class CommunicationAgent:
         else:
             return f"📊 Decision: {verdict}\n— {reason}"
 
+
+    def _build_resolution_block(
+        self,
+        market_structure: dict,
+        lang: str,
+    ) -> str:
+        """
+        Compact user-facing block for Outcome Map / Resolution Logic.
+        Shows only when market structure adds real value.
+        """
+        ms = market_structure or {}
+        if not ms:
+            return "" 
+        subtype = ms.get("subtype", "")
+        market_format = ms.get("market_format", "binary")
+        rl = ms.get("resolution_logic") or {}
+        outcomes = ms.get("outcomes") or []
+        risk_flags = ms.get("risk_flags") or []
+
+        show_for = {
+            "football_match",
+            "football_not_lose",
+            "football_futures",
+            "football_three_way",
+            "cs2_map_pool",
+            "central_bank_rates",
+            "crypto_etf",
+            "crypto_price",
+            "multiple_choice",
+            "three_way",
+            "futures",
+            "match_winner",
+            "threshold",
+        }
+
+        should_show = (
+            subtype in show_for
+            or market_format in show_for
+            or "draw_possible" in risk_flags
+            or "ambiguous_resolution" in risk_flags
+            or rl.get("ambiguity_risk") in ("medium", "high")
+        )
+        if not should_show:
+            return ""
+
+        lines = []
+
+        if market_format in ("multiple_choice", "three_way") and len(outcomes) > 2:
+            lines.append("📊 Карта исходов:" if lang == "ru" else "📊 Outcome Map:")
+            for o in outcomes[:6]:
+                name = o.get("name", "")
+                prob = o.get("market_prob", 0)
+                if name:
+                    lines.append(f"— {name}: {prob:.1f}%")
+
+        yes_means = rl.get("yes_means", "")
+        no_means = rl.get("no_means", "")
+        draw_handling = rl.get("draw_handling", "")
+        workshop_note = rl.get("workshop_note", "")
+
+        if yes_means or no_means:
+            lines.append("📌 Логика разрешения:" if lang == "ru" else "📌 Resolution Logic:")
+            if yes_means:
+                lines.append(f"YES = {yes_means}")
+            if no_means:
+                lines.append(f"NO = {no_means}")
+            if draw_handling and "not applicable" not in draw_handling.lower():
+                label = "Ничья" if lang == "ru" else "Draw"
+                lines.append(f"{label}: {draw_handling}")
+            if workshop_note:
+                lines.append(f"⚠️ {workshop_note}")
+
+        return "\n".join(lines).strip()
+
     # ═══════════════════════════════════════════
     # FULL ANALYSIS BUILDER
     # ═══════════════════════════════════════════
-
-    def _build_full_analysis(
-        self,
-        question: str,
+                           
+    def _build_full_analysis( 
+        self,               
+        question: str, 
         market_probability: str,
         display_prediction: str,
         confidence: str,
@@ -293,6 +374,7 @@ class CommunicationAgent:
         alpha_note_block: str,
         sources: List[Dict],
         lang: str,
+        market_structure: dict = None,
     ) -> str:
         sep = "──────────────────────────────"
 
@@ -319,12 +401,21 @@ class CommunicationAgent:
 
         decision_section = f"\n{decision_block}\n" if decision_block else ""
 
+        resolution_block = self._build_resolution_block(
+            market_structure or {},
+            lang,
+        )
+        resolution_section = (
+            f"{resolution_block}\n\n" if resolution_block else ""
+        )
+
         if lang == "ru":
             return (
                 f"🔍 DeepAlpha Analysis\n"
                 f"{sep}\n\n"
                 f"📌 {question}\n\n"
                 f"📊 Рынок: {market_probability}\n"
+                f"{resolution_section}"
                 f"🎯 Прогноз: {display_prediction}\n"
                 f"⚖️ Уверенность: {confidence}\n\n"
                 f"{sep}\n\n"
@@ -347,6 +438,7 @@ class CommunicationAgent:
                 f"{sep}\n\n"
                 f"📌 {question}\n\n"
                 f"📊 Market: {market_probability}\n"
+                f"{resolution_section}"
                 f"🎯 Forecast: {display_prediction}\n"
                 f"⚖️ Confidence: {confidence}\n\n"
                 f"{sep}\n\n"
