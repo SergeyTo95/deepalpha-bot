@@ -55,11 +55,12 @@ class ChiefAgent:
         )
 
         decision_data = self._run_decision_agent(
-            market_data,
-            news_data,
-            lang=lang,
-            user_context=user_context,
+            market_data, news_data, lang=lang, user_context=user_context
         )
+
+        # Ensure CommunicationAgent receives market_structure even if it only reads decision_data
+        if isinstance(decision_data, dict):
+            decision_data["market_structure"] = market_data.get("market_structure", {})
         logger.info(
             f"ChiefAgent: decision_data done, "
             f"probability={decision_data.get('probability', 'N/A')}"
