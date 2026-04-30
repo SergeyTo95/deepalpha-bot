@@ -345,6 +345,131 @@ def enrich_news_item(
 # MULTI-QUERY BUILDER
 # ═══════════════════════════════════════════
 
+def _extract_football_teams_and_date(question: str) -> dict:
+    """
+    Извлекает команды и дату из football match вопроса.
+    Работает не только под конкретный клуб, а универсально.
+    """
+    import re
+
+    q = (question or "").lower()
+    result = {"team1": "", "team2": "", "date": "", "competition": ""}
+
+    vs_patterns = [
+        r'will\s+(.+?)\s+(?:beat|defeat)\s+(.+?)(?:\s+(?:on|in|at|by|to)\s|$|\?)',
+        r'will\s+(.+?)\s+win\s+(?:against|vs\.?|versus)\s+(.+?)(?:\s+(?:on|in|at|by|to)\s|$|\?)',
+        r'(.+?)\s+(?:vs\.?|versus|against|v\.)\s+(.+?)(?:\s+(?:on|in|at|by|to)\s|$|\?)',
+    ]
+
+    for pattern in vs_patterns:
+        m = re.search(pattern, q, re.IGNORECASE)
+        if m:
+            result["team1"] = m.group(1).strip().rstrip(" ,")
+            result["team2"] = m.group(2).strip().rstrip(" ,?")
+            break
+
+    if not result["team1"]:
+        win_m = re.search(
+            r'will\s+(.+?)\s+(?:win|qualify|advance|progress|score)',
+            q,
+            re.IGNORECASE,
+        )
+        if win_m:
+            candidate = win_m.group(1).strip().rstrip(" ,")
+            if len(candidate) > 3 and candidate not in ("the", "a", "an", "they"):
+                result["team1"] = candidate
+
+    date_patterns = [
+        r'(\d{4}-\d{2}-\d{2})',
+        r'(?:on|by|at)\s+(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s+\d{4})?)',
+        r'(?:on|by|at)\s+((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:,?\s+\d{4})?)',
+    ]
+    for dp in date_patterns:
+        dm = re.search(dp, q, re.IGNORECASE)
+        if dm:
+            result["date"] = dm.group(1).strip()
+            break
+
+    competitions = {
+        "champions league": "Champions League",
+        "europa league": "Europa League",
+        "conference league": "Conference League",
+        "premier league": "Premier League",
+        "la liga": "La Liga",
+        "serie a": "Serie A",
+        "bundesliga": "Bundesliga",
+        "ligue 1": "Ligue 1",
+        "fa cup": "FA Cup",
+        "copa del rey": "Copa del Rey",
+        "world cup": "World Cup",
+        "euros": "European Championship",
+        "euro 2024": "Euro 2024",
+        "copa america": "Copa America",
+        "nations league": "Nations League",
+        "mls": "MLS",
+        "eredivisie": "Eredivisie",
+        "liga nos": "Liga Portugal",
+        "super lig": "Super Lig",
+        "süper lig": "Süper Lig",
+    }
+    for kw, name in competitions.items():
+        if kw in q:
+            result["competition"] = name
+            break
+
+    return result
+
+
+def _normalize_team_name(raw: str) -> str:
+    """
+    Нормализует название команды для поиска.
+    """
+    if not raw:
+        return ""
+
+    raw = raw.strip()
+    normalized = raw.lower()
+
+    abbrev_map = {
+        "atlético madrid": "Atletico Madrid",
+        "atletico madrid": "Atletico Madrid",
+        "club atlético de madrid": "Atletico Madrid",
+        "club atletico de madrid": "Atletico Madrid",
+        "paris saint-germain": "PSG",
+        "paris saint germain": "PSG",
+        "manchester united": "Manchester United",
+        "manchester city": "Manchester City",
+        "inter milan": "Inter Milan",
+        "internazionale": "Inter Milan",
+        "ac milan": "AC Milan",
+        "bayer leverkusen": "Leverkusen",
+        "borussia dortmund": "Dortmund",
+        "rb leipzig": "Leipzig",
+        "tottenham hotspur": "Tottenham",
+        "west ham united": "West Ham",
+        "newcastle united": "Newcastle",
+        "aston villa": "Aston Villa",
+        "galatasaray": "Galatasaray",
+        "fenerbahçe": "Fenerbahce",
+        "fenerbache": "Fenerbahce",
+        "besiktas": "Besiktas",
+        "beşiktaş": "Besiktas",
+        "ajax amsterdam": "Ajax",
+        "club brugge": "Club Brugge",
+    }
+
+    for long_name, short_name in abbrev_map.items():
+        if long_name in normalized:
+            return short_name
+
+    noise_prefixes = ["club ", "fc ", "cf "]
+    for prefix in noise_prefixes:
+        if normalized.startswith(prefix):
+            raw = raw[len(prefix):].strip()
+            break
+
+    return raw.title()
+
 def build_news_queries(
     question: str,
     category: str = "",
@@ -352,6 +477,7 @@ def build_news_queries(
     user_context: str = "",
 ) -> list:
     cat = (category or "").lower()
+    q = (question or "").lower()
     core_words = extract_keywords(question)
     core = " ".join(core_words[:5])
 
@@ -361,50 +487,178 @@ def build_news_queries(
         uc_short = user_context.strip()[:100]
         queries.append(f"{core} {uc_short}")
 
-    queries.append(core)
+    # ── Central Bank / Economy / Rates ──
+    if "economy" in cat:
+        bank_name = ""
 
-    if "politics" in cat:
-        queries += [
-            f"{core} official statement",
-            f"{core} Reuters AP Bloomberg",
-            f"{core} latest talks negotiations",
-            f"{core} deadline",
-        ]
-    elif "sports" in cat:
-        queries += [
-            f"{core} injuries lineup",
-            f"{core} match preview",
-            f"{core} recent form",
-            f"{core} odds",
-        ]
+        if "banxico" in q or "bank of mexico" in q:
+            bank_name = "Banxico Bank of Mexico"
+        elif "bank of england" in q or "boe" in q:
+            bank_name = "Bank of England"
+        elif "bank of japan" in q or "boj" in q:
+            bank_name = "Bank of Japan"
+        elif "ecb" in q or "european central bank" in q:
+            bank_name = "ECB European Central Bank"
+        elif "federal reserve" in q or "fed" in q or "fomc" in q:
+            bank_name = "Federal Reserve Fed FOMC"
+        elif "central bank" in q:
+            bank_name = core
+
+        if bank_name:
+            queries += [
+                f"{bank_name} rate decision meeting",
+                f"{bank_name} monetary policy statement",
+                f"{bank_name} interest rate cut hold hike",
+                f"{bank_name} inflation CPI data",
+                f"{bank_name} Reuters Bloomberg economist poll",
+            ]
+
+            if "bank of mexico" in q or "banxico" in q:
+                queries += [
+                    "Banxico May meeting rate decision",
+                    "Bank of Mexico monetary policy statement",
+                    "Mexico inflation CPI Banxico",
+                    "Reuters poll Bank of Mexico rate cut",
+                    "Bloomberg survey Banxico rate decision",
+                ]
+        else:
+            queries += [
+                f"{core} central bank rate decision",
+                f"{core} monetary policy statement",
+                f"{core} Reuters Bloomberg",
+                f"{core} CPI inflation jobs",
+                f"{core} official data release",
+            ]
+
+    # ── Gaming / Esports ──
+    elif "gaming" in cat or "esports" in cat:
+        if "cache" in q or "map pool" in q or "active duty" in q:
+            queries += [
+                "CS2 Cache map pool Active Duty update",
+                "Valve CS2 patch notes map pool change",
+                "FMPONE Cache CS2 update workshop",
+                "Counter-Strike Active Duty map pool 2026",
+                "CS2 official blog Steam announcement Cache",
+            ]
+        elif "cs2" in q or "counter-strike" in q or "counter strike" in q:
+            queries += [
+                f"{core} CS2 official update patch notes",
+                f"{core} Counter-Strike Steam announcement",
+                f"{core} CS2 tournament insider report",
+            ]
+        elif "valve" in q or "steam" in q:
+            queries += [
+                f"{core} Valve official update",
+                f"{core} Steam announcement",
+                f"{core} official blog",
+            ]
+        elif "dota" in q:
+            queries += [
+                f"{core} Dota 2 Valve official update",
+                f"{core} Dota 2 tournament announcement",
+            ]
+        elif "valorant" in q:
+            queries += [
+                f"{core} Valorant Riot Games official update",
+                f"{core} Valorant esports tournament announcement",
+            ]
+        else:
+            queries += [
+                f"{core} official update patch notes",
+                f"{core} esports tournament announcement",
+                f"{core} gaming official announcement",
+            ]
+
+    # ── Sports / Football ──
+    elif "sports" in cat or "football" in cat or "soccer" in cat:
+        match_info = _extract_football_teams_and_date(question)
+        team1_raw = match_info["team1"]
+        team2_raw = match_info["team2"]
+        date_str = match_info["date"]
+        competition = match_info["competition"]
+
+        team1 = _normalize_team_name(team1_raw)
+        team2 = _normalize_team_name(team2_raw)
+
+        if team1 and team2:
+            comp_suffix = f" {competition}" if competition else ""
+            queries += [
+                f"{team1} vs {team2} match preview{comp_suffix}",
+                f"{team1} vs {team2} lineups injuries",
+                f"{team1} vs {team2} odds prediction",
+                f"{team1} vs {team2} result",
+            ]
+            if competition:
+                queries.append(f"{team1} {team2} {competition}")
+            if date_str:
+                queries.append(f"{team1} vs {team2} {date_str}")
+
+        elif team1:
+            comp_suffix = f" {competition}" if competition else ""
+            queries += [
+                f"{team1} match preview{comp_suffix}",
+                f"{team1} lineups injuries form",
+            ]
+            if date_str:
+                queries += [
+                    f"{team1} match {date_str}",
+                    f"{team1} fixture {date_str}",
+                ]
+            queries += [
+                f"{team1} odds result",
+                f"{team1} {competition}".strip(),
+            ]
+
+        else:
+            queries += [
+                f"{core} match preview",
+                f"{core} lineups injuries",
+                f"{core} recent form",
+                f"{core} odds",
+            ]
+
+    # ── Crypto ──
     elif "crypto" in cat:
         queries += [
             f"{core} SEC ETF exchange",
             f"{core} official announcement",
             f"{core} CoinDesk The Block",
+            f"{core} on-chain whale listing",
         ]
-    elif "economy" in cat:
+
+    # ── Politics / Geopolitics ──
+    elif "politics" in cat or "geopolit" in cat:
         queries += [
-            f"{core} Reuters Bloomberg",
-            f"{core} Fed CPI inflation jobs",
-            f"{core} official data release",
+            f"{core} official statement",
+            f"{core} Reuters AP Bloomberg",
+            f"{core} negotiations deadline",
+            f"{core} sanctions ceasefire diplomatic",
         ]
+
+    # ── Tech ──
     elif "tech" in cat:
         queries += [
             f"{core} official announcement",
-            f"{core} earnings Reuters CNBC",
+            f"{core} earnings guidance Reuters CNBC",
+            f"{core} product launch regulation",
         ]
+
+    # ── Other / fallback ──
     else:
         queries += [
+            core,
             f"{core} latest",
             f"{core} official",
             f"{core} Reuters",
         ]
 
+    if core and core not in queries:
+        queries.insert(1 if queries else 0, core)
+
     seen = set()
     result = []
-    for q in queries:
-        q_clean = q.strip()
+    for q_item in queries:
+        q_clean = q_item.strip()
         if q_clean and q_clean not in seen:
             seen.add(q_clean)
             result.append(q_clean)
