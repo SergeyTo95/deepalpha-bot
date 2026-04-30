@@ -262,7 +262,7 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     market_prob = analysis_result.get("market_probability", "")
     category = analysis_result.get("category", "")
     url = analysis_result.get("url", "")
-        
+
     if lang == "ru":
         share_text = (
             f"🔍 DeepAlpha анализ:\n\n"
@@ -454,37 +454,6 @@ def get_subscription_item_keyboard(subscriber_id: int, author_id: int, notificat
 # HELPERS
 # ═══════════════════════════════════════════
 
-def extract_polymarket_url_and_context(text: str) -> tuple:
-    """
-    Извлекает первый Polymarket URL и опциональный user context из сообщения.
-    Работает для форматов:
-    - только URL
-    - URL + текст
-    - текст + URL
-    """
-    import re
-    if not text:
-        return "", ""
-
-    url_pattern = r'https?://(?:www\.)?polymarket\.com\S+'
-    match = re.search(url_pattern, text)
-
-    if not match:
-        cleaned = re.sub(r'\s+', ' ', text).strip()
-        return "", cleaned[:1000]
-
-    url = match.group(0).rstrip(".,;)\"'")
-    before = text[:match.start()].strip()
-    after = text[match.end():].strip()
-
-    parts = [p for p in [before, after] if p]
-    user_context = " ".join(parts)
-    user_context = re.sub(r'\s+', ' ', user_context).strip()
-    user_context = user_context[:1000]
-
-    return url, user_context
-
-
 def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
@@ -573,80 +542,6 @@ def _translate_alpha_label(label: str, lang: str) -> str:
         return ru_to_en.get(label, label)
     return label
 
-def _build_resolution_logic_block(result: dict, lang: str) -> str:
-    market_structure = (
-        result.get("market_structure")
-        or result.get("decision_data", {}).get("market_structure", {})
-        or result.get("market_data", {}).get("market_structure", {})
-        or result.get("market", {}).get("market_structure", {})
-        or {}
-    )
-    if not market_structure:
-        return ""
-
-    subtype = market_structure.get("subtype", "")
-    market_format = market_structure.get("market_format", "binary")
-    rl = market_structure.get("resolution_logic") or {}
-    outcomes = market_structure.get("outcomes") or []
-    risk_flags = market_structure.get("risk_flags") or []
-
-    show_for = {
-        "football_match",
-        "football_not_lose",
-        "football_futures",
-        "football_three_way",
-        "cs2_map_pool",
-        "central_bank_rates",
-        "crypto_etf",
-        "crypto_price",
-        "multiple_choice",
-        "three_way",
-        "futures",
-        "match_winner",
-        "threshold",
-    }
-
-    should_show = (
-        subtype in show_for
-        or market_format in show_for
-        or "draw_possible" in risk_flags
-        or "ambiguous_resolution" in risk_flags
-        or rl.get("ambiguity_risk") in ("medium", "high")
-    )
-    if not should_show:
-        return ""
-
-    lines = []
-
-    if market_format in ("multiple_choice", "three_way") and len(outcomes) > 2:
-        lines.append("📊 Карта исходов:" if lang == "ru" else "📊 Outcome Map:")
-        for o in outcomes[:6]:
-            name = o.get("name", "")
-            prob = o.get("market_prob", 0)
-            if name:
-                lines.append(f"— {name}: {prob:.1f}%")
-
-    yes_means = rl.get("yes_means", "")
-    no_means = rl.get("no_means", "")
-    draw_handling = rl.get("draw_handling", "")
-    workshop_note = rl.get("workshop_note", "")
-
-    if yes_means or no_means:
-        lines.append("📌 Логика разрешения:" if lang == "ru" else "📌 Resolution Logic:")
-        if yes_means:
-            lines.append(f"YES = {yes_means}")
-        if no_means:
-            lines.append(f"NO = {no_means}")
-        if draw_handling and "not applicable" not in draw_handling.lower():
-            label = "Ничья" if lang == "ru" else "Draw"
-            lines.append(f"{label}: {draw_handling}")
-        if workshop_note:
-            lines.append(f"⚠️ {workshop_note}")
-
-    if not lines:
-        return ""
-
-    return "\n".join(lines).strip() + "\n\n"
 
 def _build_news_block(sources: list, lang: str) -> str:
     if not sources:
@@ -884,40 +779,30 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
-     
+
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
         label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
         breakdown_block = f"\n\n{label}\n{options_breakdown}"
 
-    if not result.get("market_structure"):
-        result["market_structure"] = (
-            result.get("decision_data", {}).get("market_structure")
-            or result.get("market_data", {}).get("market_structure")
-            or result.get("market", {}).get("market_structure")
-            or {}
-        )
-       
-    resolution_section = _build_resolution_logic_block(result, lang)
     if lang == "ru":
         text = (
-                f"🔍 DeepAlpha Analysis\n"
-                f"{'─' * 30}\n\n"
-                f"📌 {q}\n\n"
-                f"🏷 Категория: {cat}\n"
-                f"📊 Рынок: {market_prob}\n"
-                f"{resolution_section}"
-                f"{conf_emoji} Уверенность: {confidence}"
-                f"{breakdown_block}\n\n"
-                f"🎯 Прогноз: {display_prediction}\n"
+            f"🔍 DeepAlpha Analysis\n"
+            f"{'─' * 30}\n\n"
+            f"📌 {q}\n\n"
+            f"🏷 Категория: {cat}\n"
+            f"📊 Рынок: {market_prob}\n"
+            f"{conf_emoji} Уверенность: {confidence}"
+            f"{breakdown_block}\n\n"
+            f"🎯 Прогноз: {display_prediction}\n"
         )
-    if semantic_reasoning:
-        text += f"\n💭 Логика:\n{semantic_reasoning}\n"
-    if semantic_scenario:
-        text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
-    if semantic_alt:
-        text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
-                 
+        if semantic_reasoning:
+            text += f"\n💭 Логика:\n{semantic_reasoning}\n"
+        if semantic_scenario:
+            text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
+        if semantic_alt:
+            text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
+
         # ═══ NEW ANALYTICAL BLOCKS ═══
         extra_blocks = _build_extra_blocks(result, lang)
         if extra_blocks:
@@ -932,7 +817,6 @@ def _format_analysis(result: dict, uid: int) -> str:
 
         text += f"\n{'─' * 30}\n"
         text += f"📝 Вывод: {semantic_conclusion}"
-
     else:
         text = (
             f"🔍 DeepAlpha Analysis\n"
@@ -940,32 +824,31 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"📌 {q}\n\n"
             f"🏷 Category: {cat}\n"
             f"📊 Market: {market_prob}\n"
-            f"{resolution_section}"
             f"{conf_emoji} Confidence: {confidence}"
             f"{breakdown_block}\n\n"
             f"🎯 Forecast: {display_prediction}\n"
         )
-    if semantic_reasoning:
-        text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
-    if semantic_scenario:
-        text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
-    if semantic_alt:
-        text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
+        if semantic_reasoning:
+            text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
+        if semantic_scenario:
+            text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
+        if semantic_alt:
+            text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
 
-    # ═══ NEW ANALYTICAL BLOCKS ═══
-    extra_blocks = _build_extra_blocks(result, lang)
-    if extra_blocks:
-        text += f"\n{extra_blocks}\n"
+        # ═══ NEW ANALYTICAL BLOCKS ═══
+        extra_blocks = _build_extra_blocks(result, lang)
+        if extra_blocks:
+            text += f"\n{extra_blocks}\n"
 
-    if alpha_label and alpha_message:
-        text += f"\n{alpha_label}:\n{alpha_message}\n"
+        if alpha_label and alpha_message:
+            text += f"\n{alpha_label}:\n{alpha_message}\n"
 
-    decision_block = result.get("decision_block", "")
-    if decision_block:
-        text += f"\n{decision_block}\n"
+        decision_block = result.get("decision_block", "")
+        if decision_block:
+            text += f"\n{decision_block}\n"
 
-    text += f"\n{'─' * 30}\n"
-    text += f"📝 Conclusion: {semantic_conclusion}"
+        text += f"\n{'─' * 30}\n"
+        text += f"📝 Conclusion: {semantic_conclusion}"
 
     return text + news_block
 
@@ -3456,34 +3339,12 @@ async def analyze_url_handler(message: types.Message):
     if use_free:
         await message.answer(t(uid, "free_trial_analysis"))
 
-    url, user_context = extract_polymarket_url_and_context(message.text)
-
-    if not url:
-        if lang == "ru":
-            await message.answer("❌ Не удалось найти Polymarket ссылку.", reply_markup=get_main_keyboard(uid))
-        else:
-            await message.answer("❌ Could not find a Polymarket link.", reply_markup=get_main_keyboard(uid))
-        return
-
-    if user_context:
-        wait_text = (
-            "🔍 Анализирую рынок с учётом твоего уточнения..."
-            if lang == "ru"
-            else "🔍 Analyzing market with your added context..."
-        )
-    else:
-        wait_text = t(uid, "analyzing")
-
-    await message.answer(wait_text)
+    await message.answer(t(uid, "analyzing"))
 
     try:
+        url = message.text.strip()
         agent = ChiefAgent()
-        result = agent.run(
-            url=url,
-            lang=lang,
-            user_id=uid,
-            user_context=user_context,
-        )
+        result = agent.run(url, lang=lang, user_id=uid)
         if not result:
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
@@ -3504,12 +3365,7 @@ async def analyze_url_handler(message: types.Message):
 
         text = _format_analysis(result, uid)
         share_kb = get_share_analysis_keyboard(uid, result)
-        await _send_long_message(
-            message,
-            text,
-            reply_markup=share_kb,
-            parse_mode="HTML",
-        )
+        await message.answer(text, reply_markup=share_kb, parse_mode="HTML")
         await message.answer(t(uid, "fallback"), reply_markup=get_main_keyboard(uid))
 
     except Exception as e:
