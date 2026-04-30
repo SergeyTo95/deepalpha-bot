@@ -40,90 +40,127 @@ def build_trigger_watch(
 
 def _get_triggers_ru(cat: str, question: str) -> Tuple[List[str], List[str], List[str]]:
     """
-    Возвращает триггеры — только будущие события, никаких новостей.
-    Формат: конкретное действие которое может произойти.
+    Category-aware Trigger Watch.
+    Возвращает только будущие события/триггеры, без generic регулятор/аудит для всех категорий.
     """
-    if "politics" in cat or _is_politics(question):
+    q = (question or "").lower()
+    cat = (cat or "").lower()
+
+    # ── Gaming / Esports / CS2 ──
+    if "gaming" in cat or "esports" in cat or _is_gaming(q):
         high = [
-            "официальное объявление прямых переговоров на уровне глав государств",
-            "подписание соглашения о прекращении огня или мирного договора",
-            "введение нового пакета санкций или их официальная отмена",
+            "официальный CS2 update / patch notes от Valve",
+            "изменение Active Duty map pool",
+            "официальный анонс Counter-Strike / Steam",
         ]
         medium = [
-            "встреча министров иностранных дел с повесткой по урегулированию",
-            "официальное заявление стороны о смене позиции по переговорам",
-            "голосование в парламенте или конгрессе по ключевому решению",
+            "обновление от FMPONE / автора карты",
+            "активность в workshop / release candidate",
+            "изменение map pool в турнирах BLAST / ESL / IEM",
         ]
         low = [
-            "публикация совместного коммюнике без конкретных обязательств",
-            "заявление пресс-секретаря без официального подтверждения",
+            "Reddit / X / Discord спекуляции без подтверждения",
+            "YouTube и блог-слухи без официального источника",
         ]
 
-    elif "crypto" in cat or _is_crypto(question):
+    # ── Politics / Geopolitics ──
+    elif "politics" in cat or _is_politics(q):
         high = [
-            "вынесение решения SEC или CFTC по ETF или ключевому активу",
-            "официальный листинг или делистинг актива на Binance или Coinbase",
-            "принятие закона о регулировании криптовалют в США или ЕС",
+            "официальное заявление правительства или ключевого участника события",
+            "подписание соглашения / результат голосования / судебное решение",
+            "военное действие, перемирие или наступление официального дедлайна",
         ]
         medium = [
-            "публикация квартального отчёта крупного институционального держателя",
-            "анонс крупного партнёрства или интеграции блокчейна",
-            "публичное заявление регулятора о намерении изменить политику",
+            "сообщения Reuters / AP / Bloomberg со ссылкой на источники",
+            "дипломатические переговоры или встреча сторон",
+            "подтверждённая смена позиции одной из сторон",
         ]
         low = [
-            "выход аналитического отчёта без новых данных",
-            "публикация прогноза без официального подтверждения",
+            "партийные комментарии без обязательных последствий",
+            "социальные сети и неподтверждённые слухи",
         ]
 
-    elif "economy" in cat or _is_economy(question):
+    # ── Crypto ──
+    elif "crypto" in cat or _is_crypto(q):
         high = [
-            "объявление решения ФРС или ЕЦБ по процентной ставке",
-            "публикация данных CPI или NFP значительно отклонившихся от прогноза",
-            "официальное подтверждение рецессии или её завершения",
+            "официальное решение SEC / ETF / биржи / протокола",
+            "on-chain эксплойт, ликвидация или разблокировка токенов",
+            "листинг или делистинг на крупной бирже",
         ]
         medium = [
-            "выход протоколов заседания ФРС с изменением риторики",
-            "публикация ВВП с существенным пересмотром предыдущих данных",
-            "официальное изменение прогноза крупного центробанка",
+            "подтверждение от CoinDesk / The Block / крупного крипто-медиа",
+            "whale / on-chain активность с подтверждением",
+            "изменение funding rate / open interest",
         ]
         low = [
-            "выход предварительных данных без финального подтверждения",
-            "публикация мнений членов ФРС без голосования",
+            "слухи в X / Telegram без подтверждения",
+            "посты инфлюенсеров без первоисточника",
         ]
 
-    elif "sports" in cat or _is_sports(question):
+    # ── Economy / Central Bank / Rates ──
+    elif "economy" in cat or _is_economy(q):
+        bank_name = "центробанка"
+        if "banxico" in q or "bank of mexico" in q:
+            bank_name = "Banxico / Bank of Mexico"
+        elif "bank of england" in q or "boe" in q:
+            bank_name = "Bank of England"
+        elif "bank of japan" in q or "boj" in q:
+            bank_name = "Bank of Japan"
+        elif "ecb" in q or "european central bank" in q:
+            bank_name = "ЕЦБ"
+        elif "federal reserve" in q or "fed " in q or "fomc" in q:
+            bank_name = "ФРС"
+
         high = [
-            "официальное подтверждение травмы ключевого игрока перед матчем",
-            "объявление дисквалификации или замены в стартовом составе",
-            "отмена или перенос события по решению организатора",
+            f"официальное решение {bank_name} по ставке",
+            "monetary policy statement / заявление о денежно-кредитной политике",
+            "данные CPI / инфляции перед заседанием",
         ]
         medium = [
-            "публикация официального стартового состава команды",
-            "объявление тактических изменений тренером перед игрой",
-            "результат предыдущего матча влияющий на мотивацию",
+            "опрос экономистов Reuters / Bloomberg",
+            "комментарии членов совета / изменение forward guidance",
+            "реакция валюты и доходности облигаций",
         ]
         low = [
-            "предматчевая пресс-конференция без неожиданных заявлений",
-            "тренировочный отчёт без подтверждённых изменений состава",
+            "старые статьи о прошлых заседаниях",
+            "общие комментарии аналитиков без новых данных",
         ]
 
-    elif "tech" in cat or _is_tech(question):
+    # ── Sports / Football ──
+    elif "sports" in cat or _is_sports(q):
         high = [
-            "официальный анонс продукта или модели на презентации компании",
-            "вынесение решения антимонопольного регулятора по ключевому делу",
-            "публикация квартальных финансовых результатов компании",
+            "подтверждённые стартовые составы",
+            "травма или дисквалификация ключевого игрока",
+            "официальный результат матча / красная карточка / перенос события",
         ]
         medium = [
-            "официальное подтверждение сделки по слиянию или поглощению",
-            "заявление CEO о стратегии на следующий год",
-            "получение или отзыв патента по ключевой технологии",
+            "недавняя форма команд и плотность расписания",
+            "движение коэффициентов перед матчем",
+            "комментарии тренера / xG / удары / владение мячом",
         ]
         low = [
-            "публикация аналитического обзора без официальных данных",
+            "фанатские прогнозы и социальные сети",
+            "старые бизнес-новости клуба или нерелевантные transfer/ownership новости",
+        ]
+
+    # ── Tech ──
+    elif "tech" in cat or _is_tech(q):
+        high = [
+            "официальный анонс компании или запуск продукта",
+            "отчёт о прибыли / guidance / регуляторная подача",
+            "подтверждение сделки, релиза модели или ключевого технологического события",
+        ]
+        medium = [
+            "авторитетный медиа-репортаж со ссылкой на источники",
+            "аналитические записки или данные цепочки поставок",
+            "заявление CEO о стратегии или сроках",
+        ]
+        low = [
+            "слухи / форум-спекуляции",
             "утечка без официального подтверждения",
         ]
 
-    elif _is_celebrity(question):
+    elif _is_celebrity(q):
         high = [
             "официальное заявление через представителя или пресс-службу",
             "подача юридического документа или иска в суд",
@@ -139,107 +176,140 @@ def _get_triggers_ru(cat: str, question: str) -> Tuple[List[str], List[str], Lis
             "реакция окружения без официального подтверждения",
         ]
 
+    # ── Neutral Other fallback ──
     else:
         high = [
-            "официальное решение или постановление ключевого регулятора",
-            "публичное заявление главного участника события",
-            "наступление дедлайна с обязательным публичным итогом",
+            "официальное публичное заявление ключевого участника события",
+            "наступление обязательного дедлайна с публичным итогом",
+            "подтверждённое действие от первоисточника",
         ]
         medium = [
-            "публикация официального отчёта или аудита",
-            "промежуточный результат влияющий на финальный исход",
-            "официальная смена позиции одной из сторон",
+            "авторитетные медиа-репортажи с источниками",
+            "подтверждённые данные от участников события",
+            "заметное изменение рыночных ожиданий",
         ]
         low = [
-            "выход комментария без обязательных последствий",
-            "неофициальный источник без подтверждения",
+            "соцсети и неподтверждённые слухи",
+            "публикации без первоисточников",
         ]
 
     return high, medium, low
 
 
 def _get_triggers_en(cat: str, question: str) -> Tuple[List[str], List[str], List[str]]:
-    if "politics" in cat or _is_politics(question):
+    q = (question or "").lower()
+    cat = (cat or "").lower()
+
+    # ── Gaming / Esports / CS2 ──
+    if "gaming" in cat or "esports" in cat or _is_gaming(q):
         high = [
-            "official announcement of direct negotiations at head-of-state level",
-            "signing of ceasefire agreement or peace treaty",
-            "introduction or formal lifting of sanctions package",
+            "official Valve CS2 update / patch notes",
+            "Active Duty map pool change",
+            "official Counter-Strike / Steam announcement",
         ]
         medium = [
-            "foreign ministers meeting with settlement agenda",
-            "official statement by either party indicating position change",
-            "parliamentary or congressional vote on key resolution",
+            "FMPONE / map creator update",
+            "workshop / release candidate activity",
+            "BLAST / ESL / IEM tournament map pool changes",
         ]
         low = [
-            "joint communiqué without binding commitments",
-            "spokesperson statement without official confirmation",
+            "Reddit / X / Discord speculation without confirmation",
+            "YouTube or blog rumors without official source",
         ]
 
-    elif "crypto" in cat or _is_crypto(question):
+    elif "politics" in cat or _is_politics(q):
         high = [
-            "SEC or CFTC ruling on ETF or key asset",
-            "official listing or delisting on Binance or Coinbase",
-            "enactment of crypto regulation law in US or EU",
+            "official government statement or key participant announcement",
+            "signed agreement / vote result / court decision",
+            "military action, ceasefire confirmation, or official deadline outcome",
         ]
         medium = [
-            "quarterly report from major institutional holder",
-            "official partnership or blockchain integration announcement",
-            "regulator public statement of intent to change policy",
+            "Reuters / AP / Bloomberg reports with sourced information",
+            "diplomatic talks or meeting between parties",
+            "confirmed position change by one side",
         ]
         low = [
-            "analyst report without new official data",
-            "forecast publication without official confirmation",
+            "partisan commentary without binding consequences",
+            "social media and unconfirmed rumors",
         ]
 
-    elif "economy" in cat or _is_economy(question):
+    elif "crypto" in cat or _is_crypto(q):
         high = [
-            "Fed or ECB interest rate decision announcement",
-            "CPI or NFP data release significantly deviating from forecast",
-            "official recession confirmation or official end of recession",
+            "official SEC / ETF / exchange / protocol announcement",
+            "on-chain exploit, liquidation, or token unlock",
+            "major exchange listing or delisting",
         ]
         medium = [
-            "Fed meeting minutes release with rhetoric change",
-            "GDP publication with material revision of prior data",
-            "official forecast change by major central bank",
+            "confirmation from CoinDesk / The Block / major crypto media",
+            "verified whale / on-chain activity",
+            "funding rate / open interest shift",
         ]
         low = [
-            "preliminary data release pending final confirmation",
-            "Fed member commentary without formal vote",
+            "X / Telegram rumors without confirmation",
+            "influencer posts without primary source",
         ]
 
-    elif "sports" in cat or _is_sports(question):
+    elif "economy" in cat or _is_economy(q):
+        bank_name = "central bank"
+        if "banxico" in q or "bank of mexico" in q:
+            bank_name = "Banxico / Bank of Mexico"
+        elif "bank of england" in q or "boe" in q:
+            bank_name = "Bank of England"
+        elif "bank of japan" in q or "boj" in q:
+            bank_name = "Bank of Japan"
+        elif "ecb" in q or "european central bank" in q:
+            bank_name = "ECB"
+        elif "federal reserve" in q or "fed " in q or "fomc" in q:
+            bank_name = "Federal Reserve"
+
         high = [
-            "official injury confirmation for key player before game",
-            "disqualification or starting lineup change announcement",
-            "event cancellation or postponement by organiser",
+            f"official {bank_name} rate decision",
+            "monetary policy statement",
+            "CPI / inflation data before the meeting",
         ]
         medium = [
-            "official starting lineup publication",
-            "tactical change announcement by coach before game",
-            "prior match result affecting team motivation",
+            "Reuters / Bloomberg economist poll",
+            "board member comments / forward guidance shift",
+            "currency and bond yields reaction",
         ]
         low = [
-            "pre-match press conference without surprise statements",
-            "training report without confirmed roster changes",
+            "old articles about past meetings",
+            "generic analyst commentary without new data",
         ]
 
-    elif "tech" in cat or _is_tech(question):
+    elif "sports" in cat or _is_sports(q):
         high = [
-            "official product or model announcement at company event",
-            "antitrust regulator ruling on key case",
-            "quarterly earnings report publication",
+            "confirmed starting lineups",
+            "key player injury or suspension",
+            "official match result / red card / event postponement",
         ]
         medium = [
-            "official M&A deal confirmation",
-            "CEO strategy statement for upcoming period",
-            "key technology patent grant or revocation",
+            "recent form and fixture congestion",
+            "pre-match odds movement",
+            "coach comments / xG / shots / possession trend",
         ]
         low = [
-            "analyst review without official data",
+            "fan speculation and social media",
+            "old club business or unrelated transfer/ownership news",
+        ]
+
+    elif "tech" in cat or _is_tech(q):
+        high = [
+            "company official announcement or product launch",
+            "earnings report / guidance / regulatory filing",
+            "confirmed deal, model release, or key technology event",
+        ]
+        medium = [
+            "credible media report with sourced information",
+            "analyst notes or supply chain data",
+            "CEO statement about strategy or timeline",
+        ]
+        low = [
+            "rumors / forum speculation",
             "leak without official confirmation",
         ]
 
-    elif _is_celebrity(question):
+    elif _is_celebrity(q):
         high = [
             "official statement through representative or press office",
             "legal document filing or court submission",
@@ -257,21 +327,32 @@ def _get_triggers_en(cat: str, question: str) -> Tuple[List[str], List[str], Lis
 
     else:
         high = [
-            "official decision or ruling by key regulator",
-            "public statement by main event participant",
-            "deadline arrival with mandatory public outcome",
+            "official public statement from key event participant",
+            "mandatory deadline with public outcome",
+            "confirmed action from primary source",
         ]
         medium = [
-            "official report or audit publication",
-            "intermediate result affecting the final outcome",
-            "official position change by one of the parties",
+            "authoritative sourced media reports",
+            "confirmed data from event participants",
+            "material shift in market expectations",
         ]
         low = [
-            "commentary without binding consequences",
-            "unofficial source without confirmation",
+            "social media and unconfirmed rumors",
+            "publications without primary sources",
         ]
 
     return high, medium, low
+
+
+def _is_gaming(q: str) -> bool:
+    kw = [
+        "valve", "steam", "counter-strike", "counter strike", "cs2",
+        "csgo", "cache", "map pool", "active duty", "fmpone",
+        "workshop", "patch notes", "game update", "esports", "esport",
+        "blast", "esl", "iem", "dota", "valorant", "league of legends",
+        "riot games", "epic games", "gaming",
+    ]
+    return any(k in q for k in kw)
 
 
 def _is_politics(q: str) -> bool:
@@ -297,6 +378,11 @@ def _is_sports(q: str) -> bool:
         "nba", "nfl", "ufc", "fifa", "championship", "playoff",
         "finals", "match", "tournament", "win the", "score",
         "super bowl", "world cup", "olympics", "formula 1",
+        "football", "soccer", "champions league", "premier league",
+        "la liga", "serie a", "bundesliga", "uefa", "lineup",
+        "injury", "red card", "arsenal", "atletico", "atlético",
+        "real madrid", "barcelona", "bayern", "psg", "liverpool",
+        "manchester", "chelsea",
     ]
     return any(k in q for k in kw)
 
@@ -305,6 +391,9 @@ def _is_economy(q: str) -> bool:
     kw = [
         "inflation", "fed", "rate", "recession", "gdp", "cpi",
         "unemployment", "treasury", "bond", "dollar", "tariff",
+        "bank of mexico", "banxico", "central bank", "interest rate",
+        "rate cut", "rate decision", "monetary policy", "policy rate",
+        "fomc", "ecb", "bank of england", "bank of japan",
     ]
     return any(k in q for k in kw)
 
