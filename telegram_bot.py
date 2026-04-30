@@ -453,6 +453,59 @@ def get_subscription_item_keyboard(subscriber_id: int, author_id: int, notificat
 # ═══════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════
+async def _send_long_message(
+    message: types.Message,
+    text: str,
+    reply_markup=None,
+    parse_mode: str = "HTML",
+    max_len: int = 3800,
+):
+    """
+    Telegram limit is 4096 chars.
+    Sends long text in safe chunks and attaches reply_markup only to the last chunk.
+    """
+    if not text:
+        return
+
+    parts = []
+    current = ""
+
+    for block in text.split("\n\n"):
+        piece = block + "\n\n"
+        if len(current) + len(piece) <= max_len:
+            current += piece
+        else:
+            if current.strip():
+                parts.append(current.strip())
+            current = piece
+
+    if current.strip():
+        parts.append(current.strip())
+
+    final_parts = []
+    for part in parts:
+        if len(part) <= max_len:
+            final_parts.append(part)
+        else:
+            for i in range(0, len(part), max_len):
+                final_parts.append(part[i:i + max_len])
+
+    for i, part in enumerate(final_parts):
+        is_last = i == len(final_parts) - 1
+        try:
+            await message.answer(
+                part,
+                reply_markup=reply_markup if is_last else None,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await message.answer(
+                part,
+                reply_markup=reply_markup if is_last else None,
+                disable_web_page_preview=True,
+            )
+
 
 def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
