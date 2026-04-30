@@ -29,6 +29,7 @@ class DecisionAgent:
 
         news_summary = news_data.get("news_summary", "")
         sentiment = news_data.get("sentiment", "Unknown")
+        source_summary = news_data.get("source_summary", {}) or {}
 
         market_prob_value, market_leader = self._parse_market_probability(
             market_probability, options, market_type
@@ -81,6 +82,11 @@ class DecisionAgent:
                 days_to_event=days_to_event,
                 market_balance=market_balance,
             )
+            wrapped = self._apply_source_quality_cap(
+                wrapped=wrapped,
+                source_summary=source_summary,
+                lang=lang,
+            )
 
             if not wrapped.get("main_scenario") or not wrapped.get("conclusion"):
                 from agents.summary_agent import SummaryAgent
@@ -116,6 +122,69 @@ class DecisionAgent:
             trend_summary=trend_summary,
             lang=lang,
         )
+
+    def _apply_source_quality_cap(
+        self,
+        wrapped: Dict[str, Any],
+        source_summary: Dict[str, Any],
+        lang: str = "ru",
+    ) -> Dict[str, Any]:
+        """
+        Safety cap: stale/weak sources cannot produce High confidence.
+        This is post-LLM protection so final user output cannot overstate confidence
+        when NewsAgent found only outdated/background sources.
+        """
+        if not isinstance(wrapped, dict):
+            return wrapped
+
+        ss = source_summary or {}
+        fresh = int(ss.get("fresh", 0) or 0)
+        usable = int(ss.get("usable", 0) or 0)
+        stale = int(ss.get("stale", 0) or 0)
+        tier1 = int(ss.get("tier1", 0) or 0)
+        tier2 = int(ss.get("tier2", 0) or 0)
+
+        # Если свежих/usable источников нет, а stale есть — это background, не hard evidence.
+        stale_only = fresh == 0 and usable == 0 and stale > 0
+
+        # Если вообще нет сильных источников — тоже не даём High.
+        weak_sources = fresh == 0 and tier1 == 0 and tier2 == 0 and stale > 0
+
+        if not (stale_only or weak_sources):
+            return wrapped
+
+        confidence = (wrapped.get("confidence") or "").strip()
+        confidence_lower = confidence.lower()
+
+        if (
+            "high" in confidence_lower
+            or "высок" in confidence_lower
+            or confidence in ("High", "Высокая")
+        ):
+            wrapped["confidence"] = "Средняя" if lang == "ru" else "Medium"
+
+        if lang == "ru":
+            note = (
+                "Свежих источников недостаточно; текущая оценка в основном отражает "
+                "рыночный консенсус, а не подтверждённую новостную альфу."
+            )
+        else:
+            note = (
+                "Fresh sources are insufficient; the current assessment mostly reflects "
+                "market consensus rather than confirmed news alpha."
+            )
+
+        # Добавляем предупреждение туда, где оно точно дойдёт до CommunicationAgent.
+        for key in ("alpha_note_raw", "trade_risk", "reasoning"):
+            current = (wrapped.get(key) or "").strip()
+            if note not in current:
+                wrapped[key] = (current + " " + note).strip() if current else note
+                break
+
+        wrapped["source_quality_warning"] = note
+        wrapped["source_confidence_capped"] = True
+        return wrapped
+
 
     def _classify_semantic_type(self, question: str, market_type: str) -> str:
         if market_type == "multiple_choice":
@@ -385,6 +454,9 @@ class DecisionAgent:
                 f"{news_block}\n\n"
                 "──────────────────────────────\n\n"
                 + uc_block + "\n" + em_block + "\n" + sq_block + "\n" + mm_block + "\n"
+                + "FRESHNESS RULE:\n"
+                + "Если свежих источников нет, а доступны только устаревшие/background источники, НЕ ставь Высокую уверенность. "
+                + "Максимум Средняя. В Alpha Note укажи, что свежих источников недостаточно.\n\n"
                 + "──────────────────────────────\n\n"
                 "Сгенерируй ответ СТРОГО в следующем формате. Заполни каждый блок.\n\n"
                 "Вероятность системы: [Yes или No — X.X%]\n"
@@ -438,6 +510,9 @@ class DecisionAgent:
             f"{news_block}\n\n"
             "──────────────────────────────\n\n"
             + uc_block + "\n" + em_block + "\n" + sq_block + "\n" + mm_block + "\n"
+            + "FRESHNESS RULE:\n"
+            + "If fresh sources are missing and only stale/background sources are available, do NOT assign High confidence. "
+            + "Maximum confidence is Medium. In Alpha Note, state that fresh sources are insufficient.\n\n"
             + "──────────────────────────────\n\n"
             "Generate response STRICTLY in this format:\n\n"
             "System Probability: [Yes or No — X.X%]\n"
