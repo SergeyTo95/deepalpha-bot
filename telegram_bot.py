@@ -573,6 +573,80 @@ def _translate_alpha_label(label: str, lang: str) -> str:
         return ru_to_en.get(label, label)
     return label
 
+def _build_resolution_logic_block(result: dict, lang: str) -> str:
+    market_structure = (
+        result.get("market_structure")
+        or result.get("decision_data", {}).get("market_structure", {})
+        or result.get("market_data", {}).get("market_structure", {})
+        or result.get("market", {}).get("market_structure", {})
+        or {}
+    )
+    if not market_structure:
+        return ""
+
+    subtype = market_structure.get("subtype", "")
+    market_format = market_structure.get("market_format", "binary")
+    rl = market_structure.get("resolution_logic") or {}
+    outcomes = market_structure.get("outcomes") or []
+    risk_flags = market_structure.get("risk_flags") or []
+
+    show_for = {
+        "football_match",
+        "football_not_lose",
+        "football_futures",
+        "football_three_way",
+        "cs2_map_pool",
+        "central_bank_rates",
+        "crypto_etf",
+        "crypto_price",
+        "multiple_choice",
+        "three_way",
+        "futures",
+        "match_winner",
+        "threshold",
+    }
+
+    should_show = (
+        subtype in show_for
+        or market_format in show_for
+        or "draw_possible" in risk_flags
+        or "ambiguous_resolution" in risk_flags
+        or rl.get("ambiguity_risk") in ("medium", "high")
+    )
+    if not should_show:
+        return ""
+
+    lines = []
+
+    if market_format in ("multiple_choice", "three_way") and len(outcomes) > 2:
+        lines.append("📊 Карта исходов:" if lang == "ru" else "📊 Outcome Map:")
+        for o in outcomes[:6]:
+            name = o.get("name", "")
+            prob = o.get("market_prob", 0)
+            if name:
+                lines.append(f"— {name}: {prob:.1f}%")
+
+    yes_means = rl.get("yes_means", "")
+    no_means = rl.get("no_means", "")
+    draw_handling = rl.get("draw_handling", "")
+    workshop_note = rl.get("workshop_note", "")
+
+    if yes_means or no_means:
+        lines.append("📌 Логика разрешения:" if lang == "ru" else "📌 Resolution Logic:")
+        if yes_means:
+            lines.append(f"YES = {yes_means}")
+        if no_means:
+            lines.append(f"NO = {no_means}")
+        if draw_handling and "not applicable" not in draw_handling.lower():
+            label = "Ничья" if lang == "ru" else "Draw"
+            lines.append(f"{label}: {draw_handling}")
+        if workshop_note:
+            lines.append(f"⚠️ {workshop_note}")
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines).strip() + "\n\n"
 
 def _build_news_block(sources: list, lang: str) -> str:
     if not sources:
@@ -815,14 +889,17 @@ def _format_analysis(result: dict, uid: int) -> str:
     if market_type == "multiple_choice" and options_breakdown:
         label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
         breakdown_block = f"\n\n{label}\n{options_breakdown}"
-
+ 
     if lang == "ru":
+        resolution_section = _build_resolution_logic_block(result, lang)
+ 
         text = (
             f"🔍 DeepAlpha Analysis\n"
             f"{'─' * 30}\n\n"
-            f"📌 {q}\n\n"
+                  f"📌 {q}\n\n"
             f"🏷 Категория: {cat}\n"
             f"📊 Рынок: {market_prob}\n"
+            f"{resolution_section}"
             f"{conf_emoji} Уверенность: {confidence}"
             f"{breakdown_block}\n\n"
             f"🎯 Прогноз: {display_prediction}\n"
@@ -845,7 +922,7 @@ def _format_analysis(result: dict, uid: int) -> str:
         decision_block = result.get("decision_block", "")
         if decision_block:
             text += f"\n{decision_block}\n"
-
+ 
         text += f"\n{'─' * 30}\n"
         text += f"📝 Вывод: {semantic_conclusion}"
     else:
@@ -855,6 +932,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"📌 {q}\n\n"
             f"🏷 Category: {cat}\n"
             f"📊 Market: {market_prob}\n"
+            f"{resolution_section}"
             f"{conf_emoji} Confidence: {confidence}"
             f"{breakdown_block}\n\n"
             f"🎯 Forecast: {display_prediction}\n"
