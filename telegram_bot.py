@@ -262,9 +262,9 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     market_prob = analysis_result.get("market_probability", "")
     category = analysis_result.get("category", "")
     url = analysis_result.get("url", "")
-
+        
     if lang == "ru":
-        text = (
+        share_text = (
             f"🔍 DeepAlpha анализ:\n\n"
             f"📌 {question}\n\n"
             f"🎯 Прогноз: {display_pred}\n"
