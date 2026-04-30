@@ -61,7 +61,8 @@ class DecisionAgent:
             evidence_matrix=news_data.get("evidence_matrix", ""),
             source_summary=news_data.get("source_summary", {}),
             market_microstructure=market_data.get("market_microstructure", {}),
-        )
+            market_structure=market_data.get("market_structure", {}),
+            )
 
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
         raw_response = generate_decision_text(prompt)
@@ -322,7 +323,8 @@ class DecisionAgent:
         evidence_matrix: str = "",
         source_summary: dict = None,
         market_microstructure: dict = None,
-    ) -> str:
+        market_structure: dict = None, 
+   ) -> str:
         news_block = news_summary[:800] if news_summary else (
             "Нет данных" if lang == "ru" else "No data"
         )
@@ -428,6 +430,59 @@ class DecisionAgent:
                 + f"Warning: {mm_warning if mm_warning else 'none'}\n"
                 + "Rules: Low liquidity/high volatility reduces confidence. Do not treat low-liquidity price as strong evidence.\n"
             )
+            # ── Market Structure compact block ──
+        ms = market_structure or {}
+        ms_block = ""
+        if ms:
+            rl = ms.get("resolution_logic") or {}
+            outcomes = ms.get("outcomes") or []
+            analysis_rules = ms.get("analysis_rules") or []
+            risk_flags = ms.get("risk_flags") or []
+            market_fmt = ms.get("market_format", "")
+            subtype_ms = ms.get("subtype", "")
+
+            outcome_lines = "\n".join(
+                f"  — {o.get('name','')}: {o.get('market_prob',0):.1f}%"
+                for o in outcomes[:5]
+            )
+            rules_lines = "\n".join(
+                f"  — {r}" for r in analysis_rules[:4]
+            )
+
+            ms_block = (
+                "MARKET STRUCTURE:\n"
+                + f"  Format: {market_fmt}\n"
+                + f"  Subtype: {subtype_ms}\n"
+                + f"  Outcome Map:\n{outcome_lines}\n"
+                + f"  YES means: {rl.get('yes_means','')}\n"
+                + f"  NO means: {rl.get('no_means','')}\n"
+                + f"  Draw handling: {rl.get('draw_handling','Not applicable')}\n"
+                + f"  Ambiguity risk: {rl.get('ambiguity_risk','low')}\n"
+            )
+
+            if analysis_rules:
+                ms_block += f"  Analysis rules:\n{rules_lines}\n"
+
+            if risk_flags:
+                ms_block += f"  Risk flags: {', '.join(risk_flags)}\n"
+
+            ms_block += (
+                "FOLLOW THESE RULES:\n"
+                "  — football win market: draw = NO\n"
+                "  — football not-lose market: draw = YES\n"
+                "  — football futures: NO = any other team wins\n"
+                "  — CS2 map pool: workshop/casual ≠ official map pool\n"
+                "  — multiple-choice: show Outcome Map, not generic YES/NO\n"
+                "  — threshold markets: respect the exact threshold and deadline\n"
+                "  — stale sources: cap confidence at Medium\n"
+            )
+
+            if market_fmt == "multiple_choice":
+                ms_block += (
+                    f"  MULTIPLE CHOICE: forecast must name leading option "
+                    f"'{ms.get('leader','')}' ({ms.get('leader_prob',0):.1f}%), "
+                    f"not write generic YES.\n"
+                )
 
         if lang == "ru":
             return (
@@ -454,10 +509,10 @@ class DecisionAgent:
                 f"{news_block}\n\n"
                 "──────────────────────────────\n\n"
                 + uc_block + "\n" + em_block + "\n" + sq_block + "\n" + mm_block + "\n"
+                + ms_block + "\n"
                 + "FRESHNESS RULE:\n"
                 + "Если свежих источников нет, а доступны только устаревшие/background источники, НЕ ставь Высокую уверенность. "
-                + "Максимум Средняя. В Alpha Note укажи, что свежих источников недостаточно.\n\n"
-                + "──────────────────────────────\n\n"
+                + "Максимум Средняя. В Alpha Note укажи, что свежих источников недостаточно.\n\n"                    + "──────────────────────────────\n"               
                 "Сгенерируй ответ СТРОГО в следующем формате. Заполни каждый блок.\n\n"
                 "Вероятность системы: [Yes или No — X.X%]\n"
                 "Уверенность: [Высокая/Средняя/Низкая]\n"
@@ -510,6 +565,7 @@ class DecisionAgent:
             f"{news_block}\n\n"
             "──────────────────────────────\n\n"
             + uc_block + "\n" + em_block + "\n" + sq_block + "\n" + mm_block + "\n"
+            + ms_block + "\n" 
             + "FRESHNESS RULE:\n"
             + "If fresh sources are missing and only stale/background sources are available, do NOT assign High confidence. "
             + "Maximum confidence is Medium. In Alpha Note, state that fresh sources are insufficient.\n\n"
