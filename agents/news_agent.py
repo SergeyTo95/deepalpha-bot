@@ -103,25 +103,216 @@ WEATHER_KEYWORDS = [
 
 
 def detect_category_from_text(text: str) -> str:
+    """
+    Определяет категорию рынка по тексту вопроса.
+    Порядок проверки: от специфичного к общему.
+    """
     if not text:
         return "Other"
-    s = " " + text.lower() + " "
-    if any(kw in s for kw in POLITICS_KEYWORDS):
-        return "Politics"
-    if any(kw in s for kw in SPORTS_KEYWORDS):
-        return "Sports"
-    if any(kw in s for kw in CRYPTO_KEYWORDS):
-        return "Crypto"
-    if any(kw in s for kw in ECONOMY_KEYWORDS):
-        return "Economy"
-    if any(kw in s for kw in TECH_KEYWORDS):
-        return "Tech"
-    if any(kw in s for kw in CULTURE_KEYWORDS):
-        return "Culture"
-    if any(kw in s for kw in WEATHER_KEYWORDS):
-        return "Weather"
-    return "Other"
 
+    t = text.lower()
+    s = " " + t + " "
+
+    # ── 1. Central Bank / Rates / Economy ──
+    central_bank_exact = {
+        "bank of mexico", "banxico", "bank of england", "bank of japan",
+        "european central bank", "federal reserve", "reserve bank",
+        "central bank", "fomc",
+    }
+    central_bank_phrases = {
+        "interest rate", "rate cut", "rate decrease", "rate decision",
+        "rate hold", "rate hike", "rate meeting", "monetary policy",
+        "policy rate", "monetary policy statement", "basis points",
+        "decrease at the meeting", "bps", "fed rate", "boe", "boj", "ecb",
+        "inflation", "cpi", "disinflation", "economists poll",
+        "reuters poll", "bloomberg survey", "board decision",
+    }
+    if any(kw in t for kw in central_bank_exact):
+        return "Economy"
+    if any(kw in t for kw in central_bank_phrases):
+        return "Economy"
+    if ("peso" in t or "mxn" in t) and any(
+        w in t for w in ("rate", "bank", "inflation", "meeting", "cut", "hold")
+    ):
+        return "Economy"
+
+    # ── 2. Gaming / Esports ──
+    gaming_exact = {
+        "valve", "counter-strike", "counter strike", "cs2", "csgo",
+        "fmpone", "map pool", "active duty", "patch notes", "game update",
+        "esports", "esport", "dota 2", "league of legends", "valorant",
+        "overwatch", "fortnite", "riot games", "epic games", "activision",
+        "blizzard", "ubisoft", "release candidate", "video game",
+        "game developer", "game studio", "playstation", "xbox", "nintendo",
+    }
+    gaming_with_context = {
+        "major", "tournament", "blast", "esl", "iem",
+    }
+    if any(kw in t for kw in gaming_exact):
+        return "Gaming"
+    if "steam" in t and any(
+        kw in t for kw in ("valve", "game", "cs2", "counter", "dota", "update")
+    ):
+        return "Gaming"
+    if "cache" in t and any(
+        kw in t for kw in ("map pool", "cs2", "counter", "valve", "active duty")
+    ):
+        return "Gaming"
+    if any(kw in t for kw in gaming_with_context) and any(
+        ctx in t for ctx in (
+            "cs2", "counter", "esport", "dota", "valorant",
+            "valve", "blast", "esl", "iem", "gaming"
+        )
+    ):
+        return "Gaming"
+
+    # ── 3. Sports / Football ──
+    football_competitions = {
+        "champions league", "europa league", "conference league",
+        "premier league", "la liga", "serie a", "bundesliga", "ligue 1",
+        "uefa", "copa del rey", "fa cup", "carabao cup", "nations league",
+        "mls", "eredivisie", "liga portugal", "super lig", "süper lig",
+    }
+    football_match_kw = {
+        "fixture", "lineup", "starting xi", "red card", "yellow card",
+        "home win", "away win", "aggregate", "semi-final", "semifinal",
+        "quarter-final", "quarterfinal", "match preview", "match result",
+        "kick off", "kickoff", "full time", "half time", "xg",
+        "football", "soccer",
+    }
+    football_clubs = {
+        "atlético madrid", "atletico madrid", "club atlético de madrid",
+        "club atletico de madrid", "arsenal", "chelsea", "manchester united",
+        "manchester city", "liverpool", "tottenham", "newcastle", "aston villa",
+        "west ham", "brighton", "barcelona", "real madrid", "atletico",
+        "sevilla", "real sociedad", "villarreal", "athletic bilbao",
+        "bayern", "bayern munich", "dortmund", "borussia dortmund",
+        "rb leipzig", "bayer leverkusen", "juventus", "inter milan",
+        "ac milan", "napoli", "roma", "lazio", "fiorentina", "atalanta",
+        "psg", "paris saint-germain", "paris saint germain", "lyon",
+        "marseille", "monaco", "ajax", "psv", "feyenoord", "benfica",
+        "porto", "sporting cp", "galatasaray", "fenerbahce", "fenerbahçe",
+        "besiktas", "beşiktaş", "trabzonspor", "samsunspor",
+        "celtic", "rangers", "anderlecht", "club brugge",
+        "shakhtar", "dynamo kyiv", "red bull salzburg",
+        "zenit", "cska", "spartak",
+    }
+    national_teams = {
+        "france", "england", "germany", "spain", "italy", "portugal",
+        "argentina", "brazil", "netherlands", "belgium", "croatia",
+        "denmark", "switzerland", "austria", "poland", "czech republic",
+        "ukraine", "turkey", "scotland", "wales", "ireland",
+        "usa", "mexico", "colombia", "chile", "uruguay", "japan",
+        "south korea", "australia", "nigeria", "senegal", "morocco",
+    }
+    general_sports = {
+        "nba", "nfl", "mlb", "nhl", "tennis", "wimbledon", "us open",
+        "french open", "australian open", "grand slam", "formula 1",
+        "f1", "grand prix", "mma", "ufc", "boxing", "cricket",
+        "rugby", "golf", "pga", "olympics", "super bowl",
+        "copa america", "world cup", "euro 2024", "euro 2025",
+        "nba finals", "nba champion", "stanley cup",
+    }
+
+    if any(kw in t for kw in football_competitions):
+        return "Sports"
+    if any(kw in t for kw in football_match_kw):
+        return "Sports"
+    if any(club in t for club in football_clubs):
+        return "Sports"
+    if any(team in t for team in national_teams) and any(
+        ctx in t for ctx in (
+            "win", "beat", "match", "game", "qualify", "advance",
+            "world cup", "euro", "nations league", "final", "semifinal",
+            "champion", "score", "goal",
+        )
+    ):
+        return "Sports"
+    if any(kw in t for kw in general_sports):
+        return "Sports"
+
+    # ── 4. Crypto ──
+    crypto_exact = {
+        "bitcoin", "btc", "ethereum", "solana",
+        "crypto", "blockchain", "defi", "nft", "altcoin", "stablecoin",
+        "coinbase", "binance", "on-chain", "smart contract", "dao",
+        "web3", "mining", "staking", "airdrop", "token unlock",
+        "spot etf", "bitcoin etf", "crypto etf",
+    }
+    crypto_context = {
+        "token", "wallet", "protocol", "yield", "liquidity pool",
+        "listing", "delisting", "exchange",
+    }
+    if any(kw in t for kw in crypto_exact):
+        return "Crypto"
+    if "sec" in t and "etf" in t and any(
+        kw in t for kw in ("bitcoin", "crypto", "ethereum", "spot")
+    ):
+        return "Crypto"
+    if any(kw in t for kw in crypto_context) and any(
+        kw in t for kw in ("bitcoin", "crypto", "ethereum", "btc", "blockchain", "defi")
+    ):
+        return "Crypto"
+
+    # ── 5. Politics / Geopolitics ──
+    politics_kw = {
+        "president", "election", "vote", "congress", "senate", "parliament",
+        "government", "minister", "prime minister", "chancellor", "diplomat",
+        "treaty", "sanctions", "ceasefire", "war", "military", "invasion",
+        "nato", "united nations", " un ", "g7", "g20", "tariff", "trade war",
+        "geopolit", "coup", "referendum", "legislation", " bill ", "law",
+        "supreme court", "scotus", "impeach", "resign", "appoint",
+        "inaugur", "campaign", "approval rating", "peace deal", "peace treaty",
+    }
+    if any(kw in s for kw in politics_kw):
+        return "Politics"
+
+    # ── 6. Tech ──
+    tech_companies = {
+        "apple", "google", "microsoft", "amazon", "meta", "nvidia",
+        "openai", "anthropic", "tesla", "spacex", "samsung", "intel",
+        "amd", "qualcomm",
+    }
+    tech_kw = {
+        "iphone", "android", "ai model", "gpt", "llm",
+        "machine learning", "artificial intelligence", "product launch",
+        "acquisition", "merger", "layoffs", "market cap", "largest company",
+    }
+    if any(kw in t for kw in tech_companies):
+        return "Tech"
+    if any(kw in t for kw in tech_kw):
+        return "Tech"
+
+    # ── 7. Economy general ──
+    economy_kw = {
+        "gdp", "recession", "unemployment", "jobs report", "nonfarm",
+        "payroll", "trade deficit", "debt ceiling", "economic growth",
+        "imf", "world bank", "oecd", "wto", "oil price", "gold price",
+        "commodity", "housing market", "treasury yield", "bond yield",
+        "stock market", "s&p 500", "nasdaq", "dow jones",
+    }
+    if any(kw in t for kw in economy_kw):
+        return "Economy"
+
+    # ── 8. Culture ──
+    culture_kw = {
+        "oscar", "grammy", "emmy", "bafta", "award", "movie", "film",
+        "album", "song", "music", "artist", "celebrity", "actor",
+        "actress", "director", "billboard", "box office",
+    }
+    if any(kw in t for kw in culture_kw):
+        return "Culture"
+
+    # ── 9. Weather ──
+    weather_kw = {
+        "hurricane", "typhoon", "cyclone", "tornado", "earthquake",
+        "flood", "wildfire", "temperature record", "climate",
+        "snowfall", "blizzard", "drought",
+    }
+    if any(kw in t for kw in weather_kw):
+        return "Weather"
+
+    return "Other"
 
 # ═══════════════════════════════════════════
 # TWITTER SCRAPER
