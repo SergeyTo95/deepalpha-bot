@@ -3504,7 +3504,12 @@ async def analyze_url_handler(message: types.Message):
 
         text = _format_analysis(result, uid)
         share_kb = get_share_analysis_keyboard(uid, result)
-        await message.answer(text, reply_markup=share_kb, parse_mode="HTML")
+        await _send_long_message(
+            message,
+            text,
+            reply_markup=share_kb,
+            parse_mode="HTML",
+        )
         await message.answer(t(uid, "fallback"), reply_markup=get_main_keyboard(uid))
 
     except Exception as e:
