@@ -264,7 +264,7 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     url = analysis_result.get("url", "")
 
     if lang == "ru":
-        share_text = (
+        text = (
             f"🔍 DeepAlpha анализ:\n\n"
             f"📌 {question}\n\n"
             f"🎯 Прогноз: {display_pred}\n"
@@ -884,33 +884,40 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     sources = result.get("news_sources", []) or result.get("news_items", [])
     news_block = _build_news_block(sources, lang)
-
+     
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
         label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
         breakdown_block = f"\n\n{label}\n{options_breakdown}"
- 
-    if lang == "ru":
-        resolution_section = _build_resolution_logic_block(result, lang)
- 
-        text = (
-            f"🔍 DeepAlpha Analysis\n"
-            f"{'─' * 30}\n\n"
-                  f"📌 {q}\n\n"
-            f"🏷 Категория: {cat}\n"
-            f"📊 Рынок: {market_prob}\n"
-            f"{resolution_section}"
-            f"{conf_emoji} Уверенность: {confidence}"
-            f"{breakdown_block}\n\n"
-            f"🎯 Прогноз: {display_prediction}\n"
-        )
-        if semantic_reasoning:
-            text += f"\n💭 Логика:\n{semantic_reasoning}\n"
-        if semantic_scenario:
-            text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
-        if semantic_alt:
-            text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
 
+    if not result.get("market_structure"):
+        result["market_structure"] = (
+            result.get("decision_data", {}).get("market_structure")
+            or result.get("market_data", {}).get("market_structure")
+            or result.get("market", {}).get("market_structure")
+            or {}
+        )
+       
+    resolution_section = _build_resolution_logic_block(result, lang)
+    if lang == "ru":
+        text = (
+                f"🔍 DeepAlpha Analysis\n"
+                f"{'─' * 30}\n\n"
+                f"📌 {q}\n\n"
+                f"🏷 Категория: {cat}\n"
+                f"📊 Рынок: {market_prob}\n"
+                f"{resolution_section}"
+                f"{conf_emoji} Уверенность: {confidence}"
+                f"{breakdown_block}\n\n"
+                f"🎯 Прогноз: {display_prediction}\n"
+        )
+    if semantic_reasoning:
+        text += f"\n💭 Логика:\n{semantic_reasoning}\n"
+    if semantic_scenario:
+        text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
+    if semantic_alt:
+        text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
+                 
         # ═══ NEW ANALYTICAL BLOCKS ═══
         extra_blocks = _build_extra_blocks(result, lang)
         if extra_blocks:
@@ -922,9 +929,10 @@ def _format_analysis(result: dict, uid: int) -> str:
         decision_block = result.get("decision_block", "")
         if decision_block:
             text += f"\n{decision_block}\n"
- 
+
         text += f"\n{'─' * 30}\n"
         text += f"📝 Вывод: {semantic_conclusion}"
+
     else:
         text = (
             f"🔍 DeepAlpha Analysis\n"
@@ -937,27 +945,27 @@ def _format_analysis(result: dict, uid: int) -> str:
             f"{breakdown_block}\n\n"
             f"🎯 Forecast: {display_prediction}\n"
         )
-        if semantic_reasoning:
-            text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
-        if semantic_scenario:
-            text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
-        if semantic_alt:
-            text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
+    if semantic_reasoning:
+        text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
+    if semantic_scenario:
+        text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
+    if semantic_alt:
+        text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
 
-        # ═══ NEW ANALYTICAL BLOCKS ═══
-        extra_blocks = _build_extra_blocks(result, lang)
-        if extra_blocks:
-            text += f"\n{extra_blocks}\n"
+    # ═══ NEW ANALYTICAL BLOCKS ═══
+    extra_blocks = _build_extra_blocks(result, lang)
+    if extra_blocks:
+        text += f"\n{extra_blocks}\n"
 
-        if alpha_label and alpha_message:
-            text += f"\n{alpha_label}:\n{alpha_message}\n"
+    if alpha_label and alpha_message:
+        text += f"\n{alpha_label}:\n{alpha_message}\n"
 
-        decision_block = result.get("decision_block", "")
-        if decision_block:
-            text += f"\n{decision_block}\n"
+    decision_block = result.get("decision_block", "")
+    if decision_block:
+        text += f"\n{decision_block}\n"
 
-        text += f"\n{'─' * 30}\n"
-        text += f"📝 Conclusion: {semantic_conclusion}"
+    text += f"\n{'─' * 30}\n"
+    text += f"📝 Conclusion: {semantic_conclusion}"
 
     return text + news_block
 
