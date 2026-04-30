@@ -22,6 +22,21 @@ class ChiefAgent:
         logger.info(f"ChiefAgent: starting analysis for {url[:50]}")
 
         market_data = self._run_market_agent(url)
+        # MarketStructureAgent: market format, outcome map, resolution logic
+        try:
+            from agents.market_structure_agent import MarketStructureAgent
+
+            market_structure = MarketStructureAgent().run(market_data)
+            market_data["market_structure"] = market_structure
+
+            logger.info(
+                f"MarketStructureAgent: format={market_structure.get('market_format')}, "
+                f"domain={market_structure.get('domain')}, "
+                f"subtype={market_structure.get('subtype')}"
+            )
+        except Exception as e:
+            logger.error(f"MarketStructureAgent error: {e}")
+            market_data["market_structure"] = {}
         logger.info(
             f"ChiefAgent: market_data done, "
             f"question={market_data.get('question', '')[:50]}, "
@@ -68,6 +83,8 @@ class ChiefAgent:
                 decision_data.get("question")
                 or market_data.get("question", "Unknown market")
             ),
+            "market_structure": market_data.get("market_structure", {}),
+            
             "category": (
                 decision_data.get("category")
                 or market_data.get("category", "Unknown")
