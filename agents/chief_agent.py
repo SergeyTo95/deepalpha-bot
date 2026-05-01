@@ -43,6 +43,21 @@ class ChiefAgent:
             f"sub_markets={len(market_data.get('sub_markets', []))}"
         )
 
+        # ── ShortTermPriceAgent: early return for ultra-short BTC markets ──
+        try:
+            from agents.short_term_price_agent import ShortTermPriceAgent
+            _stp = ShortTermPriceAgent()
+            if _stp.is_short_term_price_market(market_data):
+                logger.info("ShortTermPriceAgent: turbo_short_term mode detected")
+                _turbo = _stp.run(market_data, lang=lang)
+                _turbo["url"] = url
+                _turbo["slug"] = market_data.get("slug", "")
+                _turbo["market_type"] = market_data.get("market_type", "binary")
+                return _turbo
+        except Exception as _e:
+            logger.error(f"ShortTermPriceAgent error: {_e}")
+            # Fall through to normal analysis
+
         news_data = self._run_news_agent(
             market_data,
             lang=lang,
