@@ -3509,7 +3509,10 @@ async def analyze_url_handler(message: types.Message):
         result["market_slug"] = _extract_slug_from_url(url)
         last_analysis_cache[uid] = result
 
-        text = _format_analysis(result, uid)
+        if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
+            text = result["full_analysis"]
+        else:
+            text = _format_analysis(result, uid, lang)
         share_kb = get_share_analysis_keyboard(uid, result)
         await _send_long_message(
             message,
