@@ -38,46 +38,79 @@ _LONG_TERM_SIGNALS = [
 
 def is_short_term_price_market(market_data: dict) -> bool:
     """
-    Returns True if market is an ultra-short BTC Up/Down price market.
-    Excludes long-term threshold markets like "Will BTC hit $100k by June?".
+    Returns True only if market is clearly an ultra-short BTC Up/Down price market.
+
+    Requires at least ONE of:
+      A) Explicit Up/Down outcomes
+      B) Rules containing "price at end" / "price at beginning" / Chainlink BTC
+
+    Plus BTC context.
+    Excludes long-term threshold markets ("hit $100k by June").
     """
     question    = (market_data.get("question") or "").lower()
     description = (market_data.get("description") or "").lower()
     rules       = (market_data.get("rules") or "").lower()
     outcomes    = [str(o).lower() for o in (market_data.get("outcomes") or [])]
-    category    = (market_data.get("category") or "").lower()
 
     text = f"{question} {description} {rules}"
 
-    # Exclude long-term markets first
-    for pat in _LONG_TERM_SIGNALS:
+    # ── Hard exclude: long-term markets ──────────────────────────────────────
+    long_term_signals = [
+        r'by june', r'by december', r'by january', r'by february',
+        r'by march', r'by april', r'by may', r'by july', r'by august',
+        r'by september', r'by october', r'by november',
+        r'\b202[5-9]\b', r'by end of year', r'by q[1-4]',
+        r'hit \$', r'reach \$', r'exceed \$', r'surpass \$',
+        r'above \$\d', r'below \$\d',
+    ]
+    for pat in long_term_signals:
         if re.search(pat, text, re.IGNORECASE):
             return False
 
-    # Must have BTC / Bitcoin signal
-    if not any(p in text for p in ("btc", "bitcoin", "биткоин")):
+    # ── Must have BTC context ─────────────────────────────────────────────────
+    has_btc = bool(re.search(r'\bbtc\b|\bbitcoin\b|биткоин', text, re.IGNORECASE))
+    if not has_btc:
         return False
 
-    # Check title patterns
-    title_hits = sum(1 for p in _SHORT_TITLE_PATTERNS if re.search(p, text, re.IGNORECASE))
-    rules_hits = sum(1 for p in _SHORT_RULES_PATTERNS if re.search(p, text, re.IGNORECASE))
+    # ── Signal A: explicit Up/Down outcomes ───────────────────────────────────
+    has_up_outcome   = any(re.search(r'^up$|^вверх$|^выше$', o) for o in outcomes)
+    has_down_outcome = any(re.search(r'^down$|^вниз$|^ниже$', o) for o in outcomes)
+    has_updown_outcomes = has_up_outcome and has_down_outcome
 
-    # Check Up/Down outcomes
-    has_updown_outcomes = (
-        any("up" in o or "вверх" in o for o in outcomes) and
-        any("down" in o or "вниз" in o for o in outcomes)
+    # ── Signal B: rules describe price-at-end vs price-at-beginning ──────────
+    rules_patterns = [
+        r'price at the end of the time range',
+        r'price at the beginning',
+        r'greater than or equal to the price at the',
+        r'resolve.*to.{0,15}up.{0,30}price',
+        r'resolve.*to.{0,15}down.{0,30}price',
+        r'chainlink\s+btc',
+        r'chainlink.*btc/usd',
+    ]
+    has_price_rules = any(
+        re.search(pat, text, re.IGNORECASE) for pat in rules_patterns
     )
 
-    # Check for explicit time horizon keywords
-    has_time_horizon = bool(re.search(
+    # ── Must satisfy A or B ───────────────────────────────────────────────────
+    if not has_updown_outcomes and not has_price_rules:
+        return False
+
+    # ── Optional: time horizon confirmation ───────────────────────────────────
+    has_short_horizon = bool(re.search(
         r'\b(5|15|30)\s*(m|min|minutes?|м|мин)\b|\b1\s*(h|hour|ч|час)\b',
         text, re.IGNORECASE
     ))
 
-    score = title_hits + rules_hits * 2 + (3 if has_updown_outcomes else 0)
+    # Satisfy A+B → certain, A or B alone → need short horizon hint
+    if has_updown_outcomes and has_price_rules:
+        return True
+    if (has_updown_outcomes or has_price_rules) and has_short_horizon:
+        return True
+    # B alone without time horizon still valid (rules are very specific)
+    if has_price_rules and has_btc:
+        return True
 
-    return score >= 3 or (has_updown_outcomes and has_time_horizon) or rules_hits >= 2
-
+    return False
 
 # ── Parser helpers ────────────────────────────────────────────────────────────
 
