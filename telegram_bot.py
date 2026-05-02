@@ -1287,23 +1287,120 @@ def _build_market_specific_reasoning(result: dict, lang: str) -> str:
     return ""
 
 
+def _clean_decision_raw(decision_raw: str) -> str:
+    """Strip duplicate prefix and return clean first-line decision."""
+    text = str(decision_raw or "").strip()
+    for prefix in ("📊 Decision:", "📊 Решение:", "Decision:", "Решение:"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    text = text.splitlines()[0].strip() if text else ""
+    return text
+
+
+def _build_risk_lines(result: dict, mtype: str, lang: str) -> list:
+    """Return generic market-type-specific risk lines. Never use key_signals as risks."""
+    if lang == "ru":
+        if mtype == "sports_moneyline":
+            return [
+                "риск ничьей — NO включает ничью и поражение",
+                "отсутствие подтверждённых составов и данных по травмам",
+                "линия может измениться перед матчем",
+            ]
+        if mtype == "crypto_threshold":
+            return [
+                "высокая волатильность около target в последние часы",
+                "риск резкого движения цены против позиции",
+                "данные могут быстро устареть до дедлайна",
+            ]
+        return [
+            "высокий рыночный шум и неопределённость",
+            "ограниченные или слабые источники данных",
+            "рынок может резко переоценить событие",
+        ]
+
+    if mtype == "sports_moneyline":
+        return [
+            "draw risk — NO includes draw and loss",
+            "no confirmed lineups or injury data",
+            "line may move before kickoff",
+        ]
+    if mtype == "crypto_threshold":
+        return [
+            "high volatility near target in final hours",
+            "risk of sharp price move against position",
+            "data may become stale before deadline",
+        ]
+    return [
+        "high market noise and uncertainty",
+        "limited or weak data sources",
+        "market may reprice event sharply",
+    ]
+
+
+def _extract_team_from_question(question: str) -> str:
+    """Extract team name from 'Will <Team> win...' style questions."""
+    m = _re_fmt.search(r'Will\s+(.+?)\s+win', str(question), _re_fmt.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    m2 = _re_fmt.search(
+        r'([A-Z][A-Za-zÀ-ÖØ-öø-ÿ\s\-\.]+?)\s+(?:win|vs|beat)',
+        str(question),
+    )
+    if m2:
+        return m2.group(1).strip()
+
+    return ""
+
+
+
 def _filter_and_score_sources(result: dict) -> dict:
-    question = (result.get("question") or "").lower()
+    """Filtered source block with improved sports relevance."""
+    question = result.get("question") or ""
     sources = result.get("news_sources") or result.get("news_items") or []
     if not sources:
-        return {"sources": [], "relevance_score": 0, "dropped_count": 0, "warning": "no sources"}
+        return {
+            "sources": [],
+            "relevance_score": 0,
+            "dropped_count": 0,
+            "warning": "no sources",
+        }
 
-    is_btc = "bitcoin" in question or " btc" in question
+    is_btc = bool(_re_fmt.search(r'\bbitcoin\b|\bbtc\b', question, _re_fmt.IGNORECASE))
     mtype = _detect_market_type_for_format(result)
+    team = _extract_team_from_question(question).lower()
+
+    is_women = bool(_re_fmt.search(r'\bwomen\b|\bw\b.*\bvs\b', question, _re_fmt.IGNORECASE))
+
     btc_drop = {"xrp", "ripple", "solana", "dogecoin", "cardano", "shiba", "doge"}
+    music_terms = {
+        "album", "review", "music", "song", "artist", "band",
+        "concert", "track", "single", "tour", "record",
+    }
 
     kept, dropped = [], 0
+
     for s in sources:
         title = str(s.get("title") or "").lower()
         snippet = str(s.get("snippet") or s.get("description") or "").lower()
         combined = title + " " + snippet
 
         if mtype == "sports_moneyline":
+            if not is_women and (" (w)" in title or " women" in combined or "women's" in combined):
+                dropped += 1
+                continue
+
+            if any(t in combined for t in music_terms):
+                dropped += 1
+                continue
+
+            if team and len(team) > 3:
+                team_norm = team.replace("-", "").replace(".", "").replace(" ", "")
+                title_norm = title.replace("-", "").replace(".", "").replace(" ", "")
+                if team_norm not in title_norm:
+                    dropped += 1
+                    continue
+
             kept.append(s)
             continue
 
@@ -1314,11 +1411,12 @@ def _filter_and_score_sources(result: dict) -> dict:
         kept.append(s)
 
     total = len(sources)
-    rel_score = int((len(kept) / total * 100)) if total > 0 else 0
+    rel_score = int(len(kept) / total * 100) if total > 0 else 0
+
     warning = ""
     if rel_score < 40:
-        warning = "low relevance — source quality weak"
-    elif dropped > 0:
+        warning = "low relevance"
+    elif dropped > 2:
         warning = f"{dropped} off-topic sources removed"
 
     return {
@@ -1327,7 +1425,6 @@ def _filter_and_score_sources(result: dict) -> dict:
         "dropped_count": dropped,
         "warning": warning,
     }
-
 
 def _is_clean_time_shift(sub_markets: list) -> bool:
     if not sub_markets or len(sub_markets) > 6:
@@ -1428,6 +1525,7 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     return f"\n\n{block}"
 
 
+
 def _format_analysis(result: dict, uid: int) -> str:
     # Turbo Signal: pass-through, do not reformat
     if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
@@ -1459,18 +1557,8 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     mp_val = _parse_prob_value(str(result.get("market_probability") or ""))
     model_val = _parse_prob_value(str(result.get("probability") or display_prediction or ""))
-    delta_val = edge.get("delta")
-    delta_str = f"{delta_val:.1f}%" if isinstance(delta_val, (int, float)) else "—"
 
     is_no_trade = "NO TRADE" in decision_raw.upper() or "NO_TRADE" in decision_raw.upper()
-    if is_no_trade or edge.get("edge_strength") == "none":
-        trade_conf = "низкая/средняя" if lang == "ru" else "low/medium"
-    elif edge.get("edge_strength") == "medium":
-        trade_conf = "средняя" if lang == "ru" else "medium"
-    elif edge.get("edge_strength") == "strong":
-        trade_conf = "средняя/высокая" if lang == "ru" else "medium/high"
-    else:
-        trade_conf = "низкая" if lang == "ru" else "low"
 
     if not result.get("market_structure"):
         result["market_structure"] = (
@@ -1506,7 +1594,9 @@ def _format_analysis(result: dict, uid: int) -> str:
     why_lines = "\n".join(f"— {r}" for r in udec["why"])
     entry_lines = "\n".join(f"— {c}" for c in udec["entry_conditions"])
 
-    dec_display = decision_raw.strip() or ("NO TRADE" if is_no_trade else display_prediction)
+    dec_display = _clean_decision_raw(decision_raw)
+    if not dec_display:
+        dec_display = "NO TRADE" if is_no_trade else (display_prediction or "—")
 
     if mtype == "sports_moneyline":
         header_emoji = "⚽ DeepAlpha Sports Signal"
@@ -1515,16 +1605,67 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     sep = "─" * 30
 
-    if lang == "ru":
-        text = (
-            f"{header_emoji}\n"
-            f"{sep}\n\n"
-            f"📌 {q}\n"
+    # Show category — override "Other" for detected sports
+    display_cat = cat
+    if mtype == "sports_moneyline" and cat.lower() in ("other", "другое", ""):
+        display_cat = "Спорт" if lang == "ru" else "Sports"
+    cat_line = f"🏷 Категория: {display_cat}\n" if lang == "ru" else f"🏷 Category: {display_cat}\n"
+
+    # Details block
+    is_no_edge = edge.get("edge_strength") in ("none", None) or is_no_trade
+
+    if is_no_edge:
+        model_line = "Модель: edge не найден" if lang == "ru" else "Model: no edge found"
+        market_line = f"Рынок: {market_prob_raw}" if lang == "ru" else f"Market: {market_prob_raw}"
+        delta_line = "Расхождение: 0.0%" if lang == "ru" else "Delta: 0.0%"
+        trade_conf = "низкая" if lang == "ru" else "low"
+    else:
+        side = edge.get("edge_direction", "?")
+        delta = edge.get("delta", 0.0) or 0.0
+        market_probs_parsed = _extract_market_probs(str(result.get("market_probability") or ""))
+        market_side_p = market_probs_parsed.get(side, mp_val)
+
+        model_line = (
+            f"Модель: {side} {model_val:.1f}%"
+            if lang == "ru"
+            else f"Model: {side} {model_val:.1f}%"
+        )
+        market_line = (
+            f"Рынок: {side} {market_side_p:.1f}%"
+            if lang == "ru"
+            else f"Market: {side} {market_side_p:.1f}%"
+        )
+        delta_line = (
+            f"Расхождение: {delta:.1f}%"
+            if lang == "ru"
+            else f"Delta: {delta:.1f}%"
         )
 
-        if cat:
-            text += f"🏷 Категория: {cat}\n"
+        strength = edge.get("edge_strength", "none")
+        if strength == "strong":
+            trade_conf = "средняя/высокая" if lang == "ru" else "medium/high"
+        elif strength == "medium":
+            trade_conf = "средняя" if lang == "ru" else "medium"
+        else:
+            trade_conf = "низкая" if lang == "ru" else "low"
 
+    conf_label = "Confidence сделки:" if lang == "ru" else "Trade confidence:"
+    details_header = "📊 Детали:" if lang == "ru" else "📊 Details:"
+    details_block = (
+        f"{details_header}\n"
+        f"{model_line}\n"
+        f"{market_line}\n"
+        f"{delta_line}\n"
+        f"{conf_label} {trade_conf}"
+    )
+
+    risk_lines = _build_risk_lines(result, mtype, lang)
+    risks_str = "\n".join(f"— {r}" for r in risk_lines)
+    risks_header = "⚠️ Риски:" if lang == "ru" else "⚠️ Risks:"
+
+    if lang == "ru":
+        text = f"{header_emoji}\n{sep}\n\n📌 {q}\n"
+        text += cat_line
         text += f"📊 Рынок: {market_prob}\n"
 
         if resolution_section:
@@ -1550,39 +1691,17 @@ def _format_analysis(result: dict, uid: int) -> str:
         if entry_lines:
             text += f"\n📍 Когда можно войти:\n{entry_lines}\n"
 
-        text += (
-            f"\n📊 Детали:\n"
-            f"Модель: {model_val:.1f}%\n"
-            f"Рынок: {mp_val:.1f}%\n"
-            f"Расхождение: {delta_str}\n"
-            f"Confidence сделки: {trade_conf}\n"
-        )
-
+        text += f"\n{details_block}\n"
         text += f"\n{triggers_block}\n"
-
-        risks = result.get("key_signals") or []
-        risk_lines = [f"— {r}" for r in risks[:3]] if risks else [
-            "— высокий рыночный шум",
-            "— ограниченные источники данных",
-            "— рынок может не отразить новую информацию мгновенно",
-        ]
-        text += "\n⚠️ Риски:\n" + "\n".join(risk_lines[:3]) + "\n"
-
+        text += f"\n{risks_header}\n{risks_str}\n"
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Вывод:\n{semantic_conclusion or edge.get('reason', '')}"
         text += "\n\n_Не является финансовой рекомендацией._"
 
     else:
-        text = (
-            f"{header_emoji}\n"
-            f"{sep}\n\n"
-            f"📌 {q}\n"
-        )
-
-        if cat:
-            text += f"🏷 Category: {cat}\n"
-
+        text = f"{header_emoji}\n{sep}\n\n📌 {q}\n"
+        text += cat_line
         text += f"📊 Market: {market_prob}\n"
 
         if resolution_section:
@@ -1608,24 +1727,9 @@ def _format_analysis(result: dict, uid: int) -> str:
         if entry_lines:
             text += f"\n📍 When to enter:\n{entry_lines}\n"
 
-        text += (
-            f"\n📊 Details:\n"
-            f"Model: {model_val:.1f}%\n"
-            f"Market: {mp_val:.1f}%\n"
-            f"Delta: {delta_str}\n"
-            f"Trade confidence: {trade_conf}\n"
-        )
-
+        text += f"\n{details_block}\n"
         text += f"\n{triggers_block}\n"
-
-        risks = result.get("key_signals") or []
-        risk_lines = [f"— {r}" for r in risks[:3]] if risks else [
-            "— high market noise",
-            "— limited data sources",
-            "— market may not price new info instantly",
-        ]
-        text += "\n⚠️ Risks:\n" + "\n".join(risk_lines[:3]) + "\n"
-
+        text += f"\n{risks_header}\n{risks_str}\n"
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
