@@ -881,123 +881,759 @@ def _build_extra_blocks(result: dict, lang: str) -> str:
             print(f"trade_insight error: {e}")
 
     return "\n\n".join(_escape(p) for p in parts if p)
+# ════════════════════════════════════════════════════════════
+# NEW FORMAT HELPERS
+# ════════════════════════════════════════════════════════════
+
+import re as _re_fmt
+
+def _parse_prob_value(text: str) -> float:
+    """Extract first float percentage from string."""
+    m = _re_fmt.search(r'([\d.]+)%', str(text))
+    return float(m.group(1)) if m else 0.0
+
+
+def _extract_market_probs(text: str) -> dict:
+    """
+    Parse market probability string into side→float dict.
+    Handles: "Yes: 40.5% | No: 59.5%", "YES 40.5% / NO 59.5%",
+             "Up: 52% | Down: 48%", "Вверх: 52% | Вниз: 48%"
+    """
+    result = {}
+    patterns = [
+        (r'yes[:\s]+([\d.]+)%',  "YES"),
+        (r'no[:\s]+([\d.]+)%',   "NO"),
+        (r'up[:\s]+([\d.]+)%',   "UP"),
+        (r'down[:\s]+([\d.]+)%', "DOWN"),
+        (r'вверх[:\s]+([\d.]+)%', "UP"),
+        (r'вниз[:\s]+([\d.]+)%',  "DOWN"),
+        (r'да[:\s]+([\d.]+)%',    "YES"),
+        (r'нет[:\s]+([\d.]+)%',   "NO"),
+    ]
+    text_l = str(text).lower()
+    for pat, side in patterns:
+        m = _re_fmt.search(pat, text_l)
+        if m:
+            result[side] = float(m.group(1))
+    return result
+
+
+def _extract_model_side_and_prob(result: dict) -> dict:
+    """
+    Determine which side the model predicts and at what probability.
+    Returns {"side": "YES"|"NO"|"UP"|"DOWN"|"unknown", "prob": float}
+    """
+    candidates = [
+        str(result.get("display_prediction") or ""),
+        str(result.get("probability") or ""),
+        str(result.get("conclusion") or ""),
+        str(result.get("reasoning") or "")[:200],
+    ]
+    text = " ".join(candidates).lower()
+
+    prob = 0.0
+    m = _re_fmt.search(r'([\d.]+)%', text)
+    if m:
+        prob = float(m.group(1))
+
+    no_signals = [
+        "не победит", "не произойдёт", "не достигнет", "не выиграет",
+        "не будет выше", "не будет ниже", " no ", " no:", "нет ", " нет:",
+        "down", "вниз", "below",
+    ]
+    yes_signals = [
+        "победит", "произойдёт", "достигнет", "выиграет",
+        "будет выше", "будет ниже", " yes ", " yes:", "да ", " да:",
+        "up", "вверх", "above",
+    ]
+
+    no_hits = sum(1 for s in no_signals if s in text)
+    yes_hits = sum(1 for s in yes_signals if s in text)
+
+    if "вверх" in text:
+        side = "UP"
+    elif "вниз" in text:
+        side = "DOWN"
+    elif " up " in f" {text} " and " down " not in f" {text} ":
+        side = "UP"
+    elif " down " in f" {text} " and " up " not in f" {text} ":
+        side = "DOWN"
+    elif no_hits > yes_hits:
+        side = "NO"
+    elif yes_hits > no_hits:
+        side = "YES"
+    else:
+        side = "unknown"
+
+    return {"side": side, "prob": prob}
+
+
+def min_strength(a: str, b: str) -> str:
+    order = ["none", "weak", "medium", "strong"]
+    return a if order.index(a) <= order.index(b) else b
+
+
+def _detect_market_type_for_format(result: dict) -> str:
+    """
+    Returns: 'sports_moneyline' | 'crypto_threshold' | 'general'
+    """
+    q = (result.get("question") or "").lower()
+    cat = (result.get("category") or "").lower()
+    ms = result.get("market_structure") or {}
+    domain = str(ms.get("domain") or "").lower()
+
+    sports_cats = (
+        "sports", "football", "soccer", "basketball", "baseball",
+        "hockey", "tennis", "esports", "mma", "boxing"
+    )
+    sports_kw = (
+        "win", "победит", "match", "game", "vs", "champion",
+        "league", "cup", "score", "goal", "tournament", "playoff"
+    )
+    is_sports = (
+        any(c in cat for c in sports_cats)
+        or domain in ("sports", "football", "soccer", "basketball")
+        or any(k in q for k in sports_kw)
+    )
+    if is_sports:
+        return "sports_moneyline"
+
+    crypto_kw = (
+        "bitcoin", "btc", "ethereum", "eth", "crypto", "above",
+        "below", "price", "reach", "hit", "цена", "выше", "ниже"
+    )
+    is_crypto = "crypto" in cat or any(k in q for k in crypto_kw)
+    if is_crypto:
+        return "crypto_threshold"
+
+    return "general"
+
+
+def _assess_independent_edge(result: dict) -> dict:
+    """
+    Compare model probability vs market probability for the SAME side.
+    """
+    mp_str = str(result.get("market_probability") or "")
+    decision = str(result.get("decision") or "").upper()
+    sources = result.get("news_sources") or result.get("news_items") or []
+
+    market_probs = _extract_market_probs(mp_str)
+    model_info = _extract_model_side_and_prob(result)
+
+    side = model_info["side"]
+    model_p = model_info["prob"]
+
+    if side == "unknown" or model_p == 0:
+        return {
+            "has_independent_edge": False,
+            "edge_direction": "unknown",
+            "edge_strength": "none",
+            "delta": None,
+            "reason": "Модель не нашла независимого преимущества против текущей цены.",
+        }
+
+    market_p_for_side = market_probs.get(side)
+
+    if market_p_for_side is None:
+        complement = {"YES": "NO", "NO": "YES", "UP": "DOWN", "DOWN": "UP"}.get(side)
+        complement_p = market_probs.get(complement)
+        if complement_p is not None:
+            market_p_for_side = 100.0 - complement_p
+
+    if market_p_for_side is None:
+        return {
+            "has_independent_edge": False,
+            "edge_direction": side,
+            "edge_strength": "none",
+            "delta": None,
+            "reason": "Недостаточно данных для сравнения модели и рынка.",
+        }
+
+    delta = abs(model_p - market_p_for_side)
+
+    has_sources = len(sources) > 0
+    is_no_trade = "NO TRADE" in decision or "NO_TRADE" in decision
+
+    if delta < 3:
+        strength = "none"
+    elif delta < 8:
+        strength = "weak"
+    elif delta < 18:
+        strength = "medium" if has_sources else "weak"
+    else:
+        strength = "medium" if not has_sources else "strong"
+
+    if is_no_trade and strength in ("medium", "strong"):
+        strength = "weak"
+
+    if strength == "none":
+        reason = "Модель не нашла независимого преимущества против текущей цены."
+    else:
+        direction_word = "выше" if model_p > market_p_for_side else "ниже"
+        reason = (
+            f"Модель оценивает {side} в {model_p:.1f}% против рыночных {market_p_for_side:.1f}% "
+            f"(delta {delta:.1f}%, модель {direction_word} рынка). "
+            + ("Источники поддерживают." if has_sources else "Источники слабые.")
+        )
+
+    return {
+        "has_independent_edge": strength in ("medium", "strong"),
+        "edge_direction": side,
+        "edge_strength": strength,
+        "delta": round(delta, 1),
+        "reason": reason,
+    }
+
+
+def _build_entry_conditions(result: dict, mtype: str, lang: str) -> list:
+    if lang == "ru":
+        if mtype == "sports_moneyline":
+            return [
+                "если составы/травмы явно против одной из команд",
+                "если линия даст более выгодную цену",
+                "если рынок переоценит одну сторону без причины",
+            ]
+        if mtype == "crypto_threshold":
+            return [
+                "если YES откатится к более выгодной цене",
+                "если актив уверенно удерживается выше/ниже target ближе к дедлайну",
+                "если появится сильный momentum или объём",
+            ]
+        return [
+            "если появится подтверждающий источник или событие",
+            "если рынок резко изменит цену",
+            "если дедлайн или триггер окажется ближе, чем ожидалось",
+        ]
+
+    if mtype == "sports_moneyline":
+        return [
+            "if lineups/injuries clearly favour one side",
+            "if line moves to better price",
+            "if market misprices one side without new info",
+        ]
+    if mtype == "crypto_threshold":
+        return [
+            "if YES price drops to better entry",
+            "if asset holds convincingly above/below target near deadline",
+            "if strong momentum or volume appears",
+        ]
+    return [
+        "if a confirming source or event appears",
+        "if market price shifts significantly",
+        "if deadline or trigger is closer than expected",
+    ]
+
+
+def _build_why_reasons(result: dict, mtype: str, edge: dict, lang: str) -> list:
+    reasons = []
+    mp_str = str(result.get("market_probability") or "")
+    decision = str(result.get("decision") or "").upper()
+    sources = result.get("news_sources") or result.get("news_items") or []
+
+    probs = _extract_market_probs(mp_str)
+    yes_p = probs.get("YES", probs.get("UP", 0.0))
+    no_p = probs.get("NO", probs.get("DOWN", 0.0))
+
+    if lang == "ru":
+        if mtype == "sports_moneyline":
+            if no_p > 0:
+                reasons.append("NO означает «ничья или поражение», а не гарантированную слабость команды")
+            if yes_p > 0 and yes_p < 55:
+                reasons.append(f"YES {yes_p:.1f}% — заметный шанс победы, не незначительный")
+            reasons.append("модель не нашла расхождения с рынком — independent edge отсутствует")
+            reasons.append("без данных по составам/форме/травмам вход рискован")
+        elif mtype == "crypto_threshold":
+            if yes_p > 0:
+                reasons.append(f"рынок уже даёт YES {yes_p:.1f}% — перевес частично заложен")
+            reasons.append("модель не нашла преимущества против текущей цены")
+            reasons.append("независимый price-анализ ограничен: нет live price / distance to target")
+            if not sources:
+                reasons.append("релевантные источники слабые или отсутствуют")
+        else:
+            reasons.append(edge.get("reason", "модель не нашла независимого преимущества"))
+            if not sources:
+                reasons.append("релевантных источников недостаточно")
+
+        if "NO TRADE" in decision:
+            reasons.append("Decision: NO TRADE — ставка не рекомендуется")
+    else:
+        if mtype == "sports_moneyline":
+            if no_p > 0:
+                reasons.append("NO means draw or loss — not guaranteed team weakness")
+            if yes_p > 0 and yes_p < 55:
+                reasons.append(f"YES {yes_p:.1f}% is a meaningful win probability")
+            reasons.append("model found no divergence from market — no independent edge")
+            reasons.append("no lineup/form/injury data to justify entry")
+        elif mtype == "crypto_threshold":
+            if yes_p > 0:
+                reasons.append(f"market already prices YES at {yes_p:.1f}% — edge baked in")
+            reasons.append("model found no advantage over current price")
+            reasons.append("independent price analysis limited: no live price / distance to target")
+            if not sources:
+                reasons.append("relevant sources weak or unavailable")
+        else:
+            reasons.append(edge.get("reason", "model found no independent edge"))
+            if not sources:
+                reasons.append("insufficient relevant sources")
+
+        if "NO TRADE" in decision:
+            reasons.append("Decision: NO TRADE — bet not recommended")
+
+    return reasons[:5]
+
+
+def _build_user_decision(result: dict, mtype: str, edge: dict, lang: str) -> dict:
+    decision_raw = str(result.get("decision") or "").upper()
+    confidence = str(result.get("confidence") or "").lower()
+
+    is_no_trade = (
+        "NO TRADE" in decision_raw
+        or "NO_TRADE" in decision_raw
+        or "нет" in decision_raw.lower()
+    )
+    is_wait = "WAIT" in decision_raw or "ЖДАТЬ" in decision_raw
+    has_edge = edge.get("has_independent_edge", False)
+    strength = edge.get("edge_strength", "none")
+
+    if lang == "ru":
+        if is_no_trade or (not has_edge and not is_wait):
+            action = "НЕ ВХОДИТЬ"
+            if mtype == "sports_moneyline":
+                direction = "рынок имеет склонность, но value не подтверждён"
+            elif mtype == "crypto_threshold":
+                direction = "направление рынка есть, но цена уже заложена"
+            else:
+                direction = "нет безопасной стороны с подтверждённым value"
+            stake = "не покупать YES и не покупать NO"
+            risk = "высокий" if "low" in confidence else "средний"
+        elif is_wait:
+            action = "ЖДАТЬ"
+            direction = f"{edge.get('edge_direction', '?')} выглядит логичнее, но цена невыгодная"
+            stake = "пока не входить"
+            risk = "средний"
+        else:
+            action = "МОЖНО РАССМОТРЕТЬ ВХОД"
+            direction = edge.get("edge_direction", "?")
+            stake = "только малым размером позиции"
+            risk = "средний" if strength == "strong" else "высокий"
+    else:
+        if is_no_trade or (not has_edge and not is_wait):
+            action = "DO NOT ENTER"
+            direction = "market has lean but value not confirmed"
+            stake = "do not buy YES or NO"
+            risk = "high" if "low" in confidence else "medium"
+        elif is_wait:
+            action = "WAIT"
+            direction = f"{edge.get('edge_direction', '?')} looks better but price unfavourable"
+            stake = "do not enter yet"
+            risk = "medium"
+        else:
+            action = "CONSIDER ENTRY"
+            direction = edge.get("edge_direction", "?")
+            stake = "small position size only"
+            risk = "medium" if strength == "strong" else "high"
+
+    return {
+        "action": action,
+        "direction": direction,
+        "stake": stake,
+        "risk": risk,
+        "why": _build_why_reasons(result, mtype, edge, lang),
+        "entry_conditions": _build_entry_conditions(result, mtype, lang),
+    }
+
+
+def _build_market_specific_reasoning(result: dict, lang: str) -> str:
+    mtype = _detect_market_type_for_format(result)
+    question = (result.get("question") or "").lower()
+    probs = _extract_market_probs(str(result.get("market_probability") or ""))
+    yes_p = probs.get("YES", probs.get("UP", 0.0))
+    no_p = probs.get("NO", probs.get("DOWN", 0.0))
+
+    if lang == "ru":
+        if mtype == "sports_moneyline":
+            fav = "YES" if yes_p >= no_p else "NO"
+            fav_p = max(yes_p, no_p)
+            return (
+                f"Спортивный рынок. Фаворит: {fav} {fav_p:.1f}%. "
+                "NO включает ничью и поражение — это не простая ставка против команды."
+            )
+        if mtype == "crypto_threshold":
+            asset = "BTC" if "bitcoin" in question or "btc" in question else "Crypto"
+            tgt_m = _re_fmt.search(r'\$([\d,]+)', question)
+            target_str = f"${tgt_m.group(1)}" if tgt_m else "target"
+            return (
+                f"Crypto threshold: {asset} vs {target_str}. "
+                f"YES {yes_p:.1f}% — рынок уже закладывает перевес. "
+                "Покупка YES без дополнительного edge = переплата."
+            )
+    else:
+        if mtype == "sports_moneyline":
+            fav = "YES" if yes_p >= no_p else "NO"
+            fav_p = max(yes_p, no_p)
+            return (
+                f"Sports market. Favourite: {fav} {fav_p:.1f}%. "
+                "NO includes draw and loss — not a simple bet against the team."
+            )
+        if mtype == "crypto_threshold":
+            asset = "BTC" if "bitcoin" in question or "btc" in question else "Crypto"
+            tgt_m = _re_fmt.search(r'\$([\d,]+)', question)
+            target_str = f"${tgt_m.group(1)}" if tgt_m else "target"
+            return (
+                f"Crypto threshold: {asset} vs {target_str}. "
+                f"YES {yes_p:.1f}% — market already prices in the lean. "
+                "Buying YES without edge = overpaying."
+            )
+    return ""
+
+
+def _filter_and_score_sources(result: dict) -> dict:
+    question = (result.get("question") or "").lower()
+    sources = result.get("news_sources") or result.get("news_items") or []
+    if not sources:
+        return {"sources": [], "relevance_score": 0, "dropped_count": 0, "warning": "no sources"}
+
+    is_btc = "bitcoin" in question or " btc" in question
+    mtype = _detect_market_type_for_format(result)
+    btc_drop = {"xrp", "ripple", "solana", "dogecoin", "cardano", "shiba", "doge"}
+
+    kept, dropped = [], 0
+    for s in sources:
+        title = str(s.get("title") or "").lower()
+        snippet = str(s.get("snippet") or s.get("description") or "").lower()
+        combined = title + " " + snippet
+
+        if mtype == "sports_moneyline":
+            kept.append(s)
+            continue
+
+        if is_btc and any(kw in combined for kw in btc_drop):
+            dropped += 1
+            continue
+
+        kept.append(s)
+
+    total = len(sources)
+    rel_score = int((len(kept) / total * 100)) if total > 0 else 0
+    warning = ""
+    if rel_score < 40:
+        warning = "low relevance — source quality weak"
+    elif dropped > 0:
+        warning = f"{dropped} off-topic sources removed"
+
+    return {
+        "sources": kept,
+        "relevance_score": rel_score,
+        "dropped_count": dropped,
+        "warning": warning,
+    }
+
+
+def _is_clean_time_shift(sub_markets: list) -> bool:
+    if not sub_markets or len(sub_markets) > 6:
+        return False
+
+    probs = []
+    for sm in sub_markets:
+        p_str = str(sm.get("probability") or sm.get("yes_price") or "")
+        p = _parse_prob_value(p_str)
+        if p > 0:
+            probs.append(p)
+
+    if len(probs) < 2:
+        return False
+
+    for i in range(1, len(probs)):
+        if abs(probs[i] - probs[i - 1]) > 60:
+            return False
+
+    return True
+
+
+def _build_compact_triggers(result: dict, mtype: str, lang: str) -> str:
+    if lang == "ru":
+        if mtype == "crypto_threshold":
+            lines = [
+                "резкое движение BTC/ETH и объёма",
+                "новости ETF / Fed / macro",
+                "изменение funding или open interest",
+            ]
+        elif mtype == "sports_moneyline":
+            lines = [
+                "стартовые составы и травмы",
+                "движение линии перед матчем",
+                "мотивация / турнирная ситуация",
+            ]
+        else:
+            lines = [
+                "официальный источник или объявление",
+                "дедлайн или результат события",
+                "заметное движение рынка",
+            ]
+        header = "📡 Что может изменить рынок:"
+    else:
+        if mtype == "crypto_threshold":
+            lines = [
+                "sharp BTC/ETH price or volume move",
+                "ETF / Fed / macro news",
+                "funding rate or open interest shift",
+            ]
+        elif mtype == "sports_moneyline":
+            lines = [
+                "starting lineups and injury news",
+                "line movement before kickoff",
+                "motivation / table situation",
+            ]
+        else:
+            lines = [
+                "official source or announcement",
+                "deadline or event result",
+                "notable market price movement",
+            ]
+        header = "📡 What could shift the market:"
+
+    return header + "\n" + "\n".join(f"— {l}" for l in lines)
+
+
+def _build_source_block_filtered(result: dict, lang: str) -> str:
+    filtered = _filter_and_score_sources(result)
+    sources = filtered["sources"]
+    warning = filtered["warning"]
+
+    if not sources:
+        no_src = "📰 Источники:\nРелевантные источники не найдены." if lang == "ru" else "📰 Sources:\nNo relevant sources found."
+        return f"\n\n{no_src}"
+
+    lines = []
+    for i, s in enumerate(sources[:5], 1):
+        title = s.get("title") or s.get("name") or "—"
+        link = s.get("url") or s.get("link") or ""
+        pub = s.get("published") or s.get("date") or ""
+        if link:
+            lines.append(f"{i}. <a href='{link}'>{_escape(title)}</a>{' — ' + pub if pub else ''}")
+        else:
+            lines.append(f"{i}. {_escape(title)}{' — ' + pub if pub else ''}")
+
+    header = "📰 Источники:" if lang == "ru" else "📰 Sources:"
+    block = header + "\n" + "\n".join(lines)
+
+    if warning and filtered["dropped_count"] > 0:
+        note = (
+            f"\n⚠️ {filtered['dropped_count']} нерелевантных источников скрыто"
+            if lang == "ru"
+            else f"\n⚠️ {filtered['dropped_count']} off-topic sources hidden"
+        )
+        block += note
+
+    return f"\n\n{block}"
+
+
 def _format_analysis(result: dict, uid: int) -> str:
+    # Turbo Signal: pass-through, do not reformat
+    if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
+        return result["full_analysis"]
+
     lang = get_user_lang(uid)
+    result_lang = result.get("lang") or result.get("language")
+    if result_lang:
+        lang = result_lang
+
     q = _escape(result.get("question", ""))
     cat = _escape(result.get("category", ""))
-    market_prob = _escape(result.get("market_probability", ""))
-    confidence_raw = result.get("confidence", "")
-    market_type = result.get("market_type", "binary")
-    options_breakdown = _escape(result.get("options_breakdown", ""))
+    market_prob_raw = result.get("market_probability", "")
+    market_prob = _escape(market_prob_raw)
+    decision_raw = str(result.get("decision") or result.get("decision_block") or "")
 
-    confidence = _translate_confidence(confidence_raw, lang)
-    conf_emoji = _confidence_emoji(confidence_raw)
-
-    if "display_prediction" in result and result["display_prediction"]:
-        display_prediction = _escape(result.get("display_prediction", ""))
-        semantic_reasoning = _escape(result.get("reasoning", ""))
-        semantic_scenario = _escape(result.get("main_scenario", ""))
-        semantic_alt = _escape(result.get("alt_scenario", ""))
+    if result.get("display_prediction") or result.get("reasoning"):
+        display_prediction = _escape(result.get("display_prediction") or result.get("probability", ""))
         semantic_conclusion = _escape(result.get("conclusion", ""))
-        alpha_label = _translate_alpha_label(result.get("alpha_label", ""), lang)
-        alpha_message = _escape(result.get("alpha_message", ""))
     else:
         comm = _get_communication_data(result, lang=lang)
         display_prediction = _escape(comm.get("display_prediction") or result.get("probability", ""))
-        semantic_reasoning = _escape(comm.get("reasoning") or result.get("reasoning", ""))
-        semantic_scenario = _escape(comm.get("main_scenario") or result.get("main_scenario", ""))
-        semantic_alt = _escape(comm.get("alt_scenario") or result.get("alt_scenario", ""))
         semantic_conclusion = _escape(comm.get("conclusion") or result.get("conclusion", ""))
-        alpha_label = _translate_alpha_label(comm.get("alpha_label", ""), lang)
-        alpha_message = _escape(comm.get("alpha_message", ""))
 
-    sources = result.get("news_sources", []) or result.get("news_items", [])
-    news_block = _build_news_block(sources, lang)
+    mtype = _detect_market_type_for_format(result)
+    edge = _assess_independent_edge(result)
+    udec = _build_user_decision(result, mtype, edge, lang)
+    market_note = _build_market_specific_reasoning(result, lang)
+
+    mp_val = _parse_prob_value(str(result.get("market_probability") or ""))
+    model_val = _parse_prob_value(str(result.get("probability") or display_prediction or ""))
+    delta_val = edge.get("delta")
+    delta_str = f"{delta_val:.1f}%" if isinstance(delta_val, (int, float)) else "—"
+
+    is_no_trade = "NO TRADE" in decision_raw.upper() or "NO_TRADE" in decision_raw.upper()
+    if is_no_trade or edge.get("edge_strength") == "none":
+        trade_conf = "низкая/средняя" if lang == "ru" else "low/medium"
+    elif edge.get("edge_strength") == "medium":
+        trade_conf = "средняя" if lang == "ru" else "medium"
+    elif edge.get("edge_strength") == "strong":
+        trade_conf = "средняя/высокая" if lang == "ru" else "medium/high"
+    else:
+        trade_conf = "низкая" if lang == "ru" else "low"
 
     if not result.get("market_structure"):
         result["market_structure"] = (
             result.get("decision_data", {}).get("market_structure")
             or result.get("market_data", {}).get("market_structure")
-            or result.get("market", {}).get("market_structure")
             or {}
         )
 
     resolution_section = _build_resolution_logic_block(result, lang)
 
+    market_type = result.get("market_type", "binary")
+    options_breakdown = result.get("options_breakdown", "")
     breakdown_block = ""
     if market_type == "multiple_choice" and options_breakdown:
         label = "📊 Расклад по вариантам:" if lang == "ru" else "📊 Options Breakdown:"
         breakdown_block = f"\n\n{label}\n{options_breakdown}"
 
+    triggers_block = _build_compact_triggers(result, mtype, lang)
+
+    time_shift_block = ""
+    sub_markets = result.get("sub_markets", [])
+    if sub_markets and _is_clean_time_shift(sub_markets):
+        try:
+            from agents.time_shift_layer import build_time_shift_block
+            ts = build_time_shift_block(time_series=sub_markets, lang=lang)
+            if ts:
+                time_shift_block = f"\n\n{ts}"
+        except Exception:
+            pass
+
+    source_block = _build_source_block_filtered(result, lang)
+
+    why_lines = "\n".join(f"— {r}" for r in udec["why"])
+    entry_lines = "\n".join(f"— {c}" for c in udec["entry_conditions"])
+
+    dec_display = decision_raw.strip() or ("NO TRADE" if is_no_trade else display_prediction)
+
+    if mtype == "sports_moneyline":
+        header_emoji = "⚽ DeepAlpha Sports Signal"
+    else:
+        header_emoji = "🔍 DeepAlpha Analysis"
+
+    sep = "─" * 30
+
     if lang == "ru":
         text = (
-            f"🔍 DeepAlpha Analysis\n"
-            f"{'─' * 30}\n\n"
-            f"📌 {q}\n\n"
-            f"🏷 Категория: {cat}\n"
-            f"📊 Рынок: {market_prob}\n"
-            f"{resolution_section}"
-            f"{conf_emoji} Уверенность: {confidence}"
-            f"{breakdown_block}\n\n"
-            f"🎯 Прогноз: {display_prediction}\n"
+            f"{header_emoji}\n"
+            f"{sep}\n\n"
+            f"📌 {q}\n"
         )
-        if semantic_reasoning:
-            text += f"\n💭 Логика:\n{semantic_reasoning}\n"
-        if semantic_scenario:
-            text += f"\n✅ Основной сценарий:\n{semantic_scenario}\n"
-        if semantic_alt:
-            text += f"\n⚠️ Альтернативный сценарий:\n{semantic_alt}\n"
 
-        # ═══ NEW ANALYTICAL BLOCKS ═══
-        extra_blocks = _build_extra_blocks(result, lang)
-        if extra_blocks:
-            text += f"\n{extra_blocks}\n"
+        if cat:
+            text += f"🏷 Категория: {cat}\n"
 
-        if alpha_label and alpha_message:
-            text += f"\n{alpha_label}:\n{alpha_message}\n"
+        text += f"📊 Рынок: {market_prob}\n"
 
-        decision_block = result.get("decision_block", "")
-        if decision_block:
-            text += f"\n{decision_block}\n"
+        if resolution_section:
+            text += resolution_section
 
-        text += f"\n{'─' * 30}\n"
-        text += f"📝 Вывод: {semantic_conclusion}"
+        if breakdown_block:
+            text += breakdown_block
+
+        if market_note:
+            text += f"\n💡 {market_note}\n"
+
+        text += (
+            f"\n🎯 Короткий вывод\n"
+            f"👉 Действие: {udec['action']}\n"
+            f"📌 Направление: {udec['direction']}\n"
+            f"💰 Ставка: {udec['stake']}\n"
+            f"⚠️ Риск: {udec['risk']}\n"
+        )
+
+        if why_lines:
+            text += f"\n🧠 Почему:\n{why_lines}\n"
+
+        if entry_lines:
+            text += f"\n📍 Когда можно войти:\n{entry_lines}\n"
+
+        text += (
+            f"\n📊 Детали:\n"
+            f"Модель: {model_val:.1f}%\n"
+            f"Рынок: {mp_val:.1f}%\n"
+            f"Расхождение: {delta_str}\n"
+            f"Confidence сделки: {trade_conf}\n"
+        )
+
+        text += f"\n{triggers_block}\n"
+
+        risks = result.get("key_signals") or []
+        risk_lines = [f"— {r}" for r in risks[:3]] if risks else [
+            "— высокий рыночный шум",
+            "— ограниченные источники данных",
+            "— рынок может не отразить новую информацию мгновенно",
+        ]
+        text += "\n⚠️ Риски:\n" + "\n".join(risk_lines[:3]) + "\n"
+
+        text += f"\n📊 Decision: {dec_display}\n"
+        text += f"\n{sep}\n"
+        text += f"📝 Вывод:\n{semantic_conclusion or edge.get('reason', '')}"
+        text += "\n\n_Не является финансовой рекомендацией._"
+
     else:
         text = (
-            f"🔍 DeepAlpha Analysis\n"
-            f"{'─' * 30}\n\n"
-            f"📌 {q}\n\n"
-            f"🏷 Category: {cat}\n"
-            f"📊 Market: {market_prob}\n"
-            f"{resolution_section}"
-            f"{conf_emoji} Confidence: {confidence}"
-            f"{breakdown_block}\n\n"
-            f"🎯 Forecast: {display_prediction}\n"
+            f"{header_emoji}\n"
+            f"{sep}\n\n"
+            f"📌 {q}\n"
         )
-        if semantic_reasoning:
-            text += f"\n💭 Reasoning:\n{semantic_reasoning}\n"
-        if semantic_scenario:
-            text += f"\n✅ Main Scenario:\n{semantic_scenario}\n"
-        if semantic_alt:
-            text += f"\n⚠️ Alternative Scenario:\n{semantic_alt}\n"
 
-        # ═══ NEW ANALYTICAL BLOCKS ═══
-        extra_blocks = _build_extra_blocks(result, lang)
-        if extra_blocks:
-            text += f"\n{extra_blocks}\n"
+        if cat:
+            text += f"🏷 Category: {cat}\n"
 
-        if alpha_label and alpha_message:
-            text += f"\n{alpha_label}:\n{alpha_message}\n"
+        text += f"📊 Market: {market_prob}\n"
 
-        decision_block = result.get("decision_block", "")
-        if decision_block:
-            text += f"\n{decision_block}\n"
+        if resolution_section:
+            text += resolution_section
 
-        text += f"\n{'─' * 30}\n"
-        text += f"📝 Conclusion: {semantic_conclusion}"
+        if breakdown_block:
+            text += breakdown_block
 
-    return text + news_block
+        if market_note:
+            text += f"\n💡 {market_note}\n"
 
+        text += (
+            f"\n🎯 Quick Summary\n"
+            f"👉 Action: {udec['action']}\n"
+            f"📌 Direction: {udec['direction']}\n"
+            f"💰 Stake: {udec['stake']}\n"
+            f"⚠️ Risk: {udec['risk']}\n"
+        )
+
+        if why_lines:
+            text += f"\n🧠 Why:\n{why_lines}\n"
+
+        if entry_lines:
+            text += f"\n📍 When to enter:\n{entry_lines}\n"
+
+        text += (
+            f"\n📊 Details:\n"
+            f"Model: {model_val:.1f}%\n"
+            f"Market: {mp_val:.1f}%\n"
+            f"Delta: {delta_str}\n"
+            f"Trade confidence: {trade_conf}\n"
+        )
+
+        text += f"\n{triggers_block}\n"
+
+        risks = result.get("key_signals") or []
+        risk_lines = [f"— {r}" for r in risks[:3]] if risks else [
+            "— high market noise",
+            "— limited data sources",
+            "— market may not price new info instantly",
+        ]
+        text += "\n⚠️ Risks:\n" + "\n".join(risk_lines[:3]) + "\n"
+
+        text += f"\n📊 Decision: {dec_display}\n"
+        text += f"\n{sep}\n"
+        text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
+        text += "\n\n_Not financial advice._"
+
+    text += time_shift_block
+    text += source_block
+    return text
 
 def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
     lang = get_user_lang(uid)
