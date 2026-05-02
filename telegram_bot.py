@@ -1504,12 +1504,22 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     lines = []
     for i, s in enumerate(sources[:5], 1):
         title = s.get("title") or s.get("name") or "—"
-        link = s.get("url") or s.get("link") or ""
+        link = (s.get("url") or s.get("link") or "").strip()
         pub = s.get("published") or s.get("date") or ""
+
+        safe_title = _escape(title)
+        safe_pub = _escape(pub) if pub else ""
+
+        safe_link = ""
         if link:
-            lines.append(f"{i}. <a href='{link}'>{_escape(title)}</a>{' — ' + pub if pub else ''}")
+            link_candidate = link.replace("'", "%27")
+            if link_candidate.startswith(("http://", "https://")):
+                safe_link = link_candidate
+
+        if safe_link:
+            lines.append(f"{i}. <a href='{safe_link}'>{safe_title}</a>{' — ' + safe_pub if safe_pub else ''}")
         else:
-            lines.append(f"{i}. {_escape(title)}{' — ' + pub if pub else ''}")
+            lines.append(f"{i}. {safe_title}{' — ' + safe_pub if safe_pub else ''}")
 
     header = "📰 Источники:" if lang == "ru" else "📰 Sources:"
     block = header + "\n" + "\n".join(lines)
