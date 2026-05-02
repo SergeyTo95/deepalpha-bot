@@ -4406,6 +4406,11 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/"))
 async def fallback_handler(message: types.Message):
+    # Polymarket URLs are handled by the dedicated polymarket.com handler above.
+    # Without this guard, one user URL can trigger both handlers and start analysis twice.
+    if message.text and "polymarket.com" in message.text.lower():
+        return
+
     _register_user(message)
     await message.answer(
         t(message.from_user.id, "fallback"),
