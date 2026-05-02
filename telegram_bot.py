@@ -4198,6 +4198,11 @@ async def top_handler(message: types.Message):
     await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
 
 
+# Lightweight in-memory dedup for Telegram duplicate updates / double handler hits.
+# Prevents the same user+Polymarket URL from starting analysis twice within a short window.
+_RECENT_ANALYSIS_REQUESTS = {}
+_ANALYSIS_DEDUP_TTL_SEC = 45
+
 # ═══════════════════════════════════════════
 # URL ANALYSIS
 # ═══════════════════════════════════════════
@@ -4209,6 +4214,22 @@ async def analyze_url_handler(message: types.Message):
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
+
+    # Telegram/web previews or overlapping handlers can deliver the same URL twice.
+    # Dedup before quota/token checks so users are not charged twice.
+    url_for_dedup = (message.text or "").strip()
+    dedup_key = f"{uid}:{url_for_dedup}"
+    now_ts = __import__("time").time()
+
+    # Remove expired dedup entries opportunistically.
+    for _k, _ts in list(_RECENT_ANALYSIS_REQUESTS.items()):
+        if now_ts - _ts > _ANALYSIS_DEDUP_TTL_SEC:
+            _RECENT_ANALYSIS_REQUESTS.pop(_k, None)
+
+    if dedup_key in _RECENT_ANALYSIS_REQUESTS:
+        return
+
+    _RECENT_ANALYSIS_REQUESTS[dedup_key] = now_ts
 
     subscribed = is_subscribed(uid)
     user = get_user(uid)
