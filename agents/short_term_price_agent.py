@@ -276,11 +276,10 @@ def is_short_term_price_market(market_data: dict) -> bool:
         return True
     if has_btc and has_updown_title and has_short_h:
         return True
-    if has_btc and has_updown_outcomes and has_price_rules:
-        return True
-    if has_btc and has_price_rules:
-        return True
-    if has_btc and has_updown_outcomes and (has_intraday or has_short_h):
+    has_updown_semantics = has_updown_title or has_updown_outcomes
+    has_short_context = has_intraday or has_short_h or has_price_rules
+
+    if has_btc and has_updown_semantics and has_short_context:
         return True
     return False
 
@@ -1076,8 +1075,20 @@ def _calculate_scores(
         and winning_mp <= 0.85
         and distance_pct > 0.1
     )
+    has_strong_atr_buffer = bool(atr and atr > 0 and (abs(distance) / atr) > 1.0)
+    has_strong_dist_buffer = distance_pct > 0.8
+    can_watch = (
+        edge_score >= 55
+        and risk_score <= 70
+        and current_price is not None
+        and target_price is not None
+        and (has_strong_atr_buffer or has_strong_dist_buffer)
+    )
+
     if can_micro:
         decision = "MICRO LONG UP" if up_winning else "MICRO LONG DOWN"
+    elif can_watch:
+        decision = "WATCH UP" if up_winning else "WATCH DOWN"
     elif (edge_score - risk_score) >= 5 and current_price is not None and target_price is not None:
         decision = "WAIT"
     else:
@@ -1230,6 +1241,8 @@ def _format_turbo_signal(
     d_icon = {
         "MICRO LONG UP":   "🟢",
         "MICRO LONG DOWN": "🔴",
+        "WATCH UP":        "🟠",
+        "WATCH DOWN":      "🟠",
         "WAIT":            "🟡",
         "NO TRADE":        "⚫",
     }.get(decision, "⚫")
@@ -1256,6 +1269,12 @@ def _format_turbo_signal(
             "MICRO LONG DOWN":
                 "Цена ниже target с достаточным буфером, времени мало. "
                 "Сигналы поддерживают DOWN.",
+            "WATCH UP":
+                "Направление вверх есть, но вход пока не подтверждён. "
+                "Нужен более точный момент ближе к экспирации.",
+            "WATCH DOWN":
+                "Направление вниз есть, но вход пока не подтверждён. "
+                "Нужен более точный момент ближе к экспирации.",
             "WAIT":
                 "Есть потенциальная позиция, но риск/время/буфер "
                 "недостаточно хороши для уверенного входа.",
@@ -1266,6 +1285,8 @@ def _format_turbo_signal(
         conclusion_map = {
             "MICRO LONG UP":   "Осторожный вход в UP при подтверждении. Строгий риск-менеджмент.",
             "MICRO LONG DOWN": "Осторожный вход в DOWN при подтверждении. Строгий риск-менеджмент.",
+            "WATCH UP":        "Направление есть, но это не автоматический вход. Вход только малым размером при подтверждении цены ближе к экспирации.",
+            "WATCH DOWN":      "Направление есть, но это не автоматический вход. Вход только малым размером при подтверждении цены ближе к экспирации.",
             "WAIT":            "Ждать улучшения условий. Буфер или время недостаточны.",
             "NO TRADE":        "Оставаться вне позиции. Нет подтверждённого edge.",
         }
@@ -1314,6 +1335,12 @@ def _format_turbo_signal(
             "MICRO LONG DOWN":
                 "Price below target with sufficient buffer, time is short. "
                 "Signals support DOWN.",
+            "WATCH UP":
+                "Direction is up, but entry is not confirmed yet. "
+                "Need better timing closer to expiry.",
+            "WATCH DOWN":
+                "Direction is down, but entry is not confirmed yet. "
+                "Need better timing closer to expiry.",
             "WAIT":
                 "Potential position exists but risk/time/buffer "
                 "not ideal for confident entry.",
@@ -1323,6 +1350,8 @@ def _format_turbo_signal(
         conclusion_map = {
             "MICRO LONG UP":   "Cautious UP entry on confirmation. Strict risk management.",
             "MICRO LONG DOWN": "Cautious DOWN entry on confirmation. Strict risk management.",
+            "WATCH UP":        "Direction exists, but this is not an automatic entry. Enter only with small size on confirmation closer to expiry.",
+            "WATCH DOWN":      "Direction exists, but this is not an automatic entry. Enter only with small size on confirmation closer to expiry.",
             "WAIT":            "Wait for better conditions. Buffer or time not sufficient.",
             "NO TRADE":        "Stay out. No confirmed edge.",
         }
