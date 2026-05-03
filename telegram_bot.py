@@ -1606,46 +1606,56 @@ def _format_analysis(result: dict, uid: int) -> str:
     if sports_context:
         stype = _escape(str(sports_context.get("sport_type", "unknown")))
         mkt = _escape(str(sports_context.get("market_type", "unknown")))
-        yes_line = _escape(str(sports_context.get("yes_means", "—")))
-        no_line = _escape(str(sports_context.get("no_means", "—")))
         dq_raw = str(sports_context.get("data_quality", "low"))
         missing = sports_context.get("missing_data") or []
-        y_factors = sports_context.get("key_factors_yes") or []
-        n_factors = sports_context.get("key_factors_no") or []
-        risks = sports_context.get("risk_factors") or []
+        recommended_raw = str(sports_context.get("recommended_action", "NO TRADE"))
+        value_raw = str(sports_context.get("value_assessment", "no_edge"))
 
-        miss_txt = _escape(", ".join(str(x) for x in missing[:2])) if missing else "—"
-        yes_f = _escape(", ".join(str(x) for x in y_factors[:2])) if y_factors else "—"
-        no_f = _escape(", ".join(str(x) for x in n_factors[:2])) if n_factors else "—"
-        risk_f = _escape(", ".join(str(x) for x in risks[:2])) if risks else "—"
+        miss_txt = _escape(", ".join(str(x) for x in missing[:3])) if missing else "—"
 
         if lang == "ru":
             dq_map = {"low": "низкое", "medium": "среднее", "high": "высокое"}
-            dq = dq_map.get(dq_raw, dq_raw)
-            caution = "\n— ⚠️ данных недостаточно для value-входа" if dq_raw == "low" else ""
+            value_map = {
+                "no_edge": "value не подтверждён",
+                "weak_edge": "слабый edge",
+                "possible_value": "возможный value",
+                "overpriced": "вероятно, цена уже дорогая",
+                "undervalued": "возможная недооценка",
+                "unknown": "неясно",
+            }
+            action_map = {
+                "NO TRADE": "не входить",
+                "WAIT": "ждать",
+                "WATCH YES": "наблюдать YES",
+                "WATCH NO": "наблюдать NO",
+                "CONSIDER YES": "рассмотреть YES только при подтверждении",
+                "CONSIDER NO": "рассмотреть NO только при подтверждении",
+            }
+
+            dq = _escape(dq_map.get(dq_raw, dq_raw))
+            val = _escape(value_map.get(value_raw, value_raw))
+            act = _escape(action_map.get(recommended_raw, recommended_raw))
+
             sports_block = (
-                f"\n\n📊 Спортивный контекст:\n"
+                "\n\n📊 Спортивный контекст:\n"
                 f"— Тип: {stype} / {mkt}\n"
-                f"— YES: {yes_line}\n"
-                f"— NO: {no_line}\n"
-                f"— Качество данных: {dq}\n"
-                f"— Не хватает: {miss_txt}\n"
-                f"— Факторы за YES: {yes_f}\n"
-                f"— Факторы за NO: {no_f}\n"
-                f"— Риски: {risk_f}{caution}"
+                "— NO включает ничью и поражение\n"
+                f"— Данные: {dq}; не хватает: {miss_txt}\n"
+                f"— Value: {val}\n"
+                f"— SportsAgent: {act}"
             )
         else:
-            caution = "\n— ⚠️ insufficient data for value entry" if dq_raw == "low" else ""
+            dq = _escape(dq_raw)
+            recommended = _escape(recommended_raw)
+            value = _escape(value_raw)
+
             sports_block = (
-                f"\n\n📊 Sports Context:\n"
+                "\n\n📊 Sports Context:\n"
                 f"— Type: {stype} / {mkt}\n"
-                f"— YES: {yes_line}\n"
-                f"— NO: {no_line}\n"
-                f"— Data quality: {_escape(dq_raw)}\n"
-                f"— Missing: {miss_txt}\n"
-                f"— YES factors: {yes_f}\n"
-                f"— NO factors: {no_f}\n"
-                f"— Risks: {risk_f}{caution}"
+                "— NO includes draw and loss\n"
+                f"— Data: {dq}; missing: {miss_txt}\n"
+                f"— Value: {value}\n"
+                f"— SportsAgent: {recommended}"
             )
 
     why_lines = "\n".join(f"— {r}" for r in udec["why"])
