@@ -1553,7 +1553,7 @@ def _build_trading_plan_block(result: dict, lang: str) -> str:
     if lang == "ru":
         edge_txt = "нет значимого расхождения" if abs(edge) < 3 else f"{edge:+.1f}%"
         return (
-            "\\n\\n📈 Торговый план:\\n"
+            "\n\n📈 Торговый план:\n"
             f"— Вероятнее: {likely}\\n"
             f"— Модель: {likely} {model_p:.1f}%\\n"
             f"— Рынок: {likely} {market_p:.1f}%\\n"
@@ -1565,7 +1565,7 @@ def _build_trading_plan_block(result: dict, lang: str) -> str:
 
     edge_txt = "no meaningful divergence" if abs(edge) < 3 else f"{edge:+.1f}%"
     return (
-        "\\n\\n📈 Trading Plan:\\n"
+        "\n\n📈 Trading Plan:\n"
         f"— Likely side: {likely}\\n"
         f"— Model: {likely} {model_p:.1f}%\\n"
         f"— Market: {likely} {market_p:.1f}%\\n"
@@ -1801,7 +1801,6 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n📍 Когда можно войти:\n{entry_lines}\n"
 
         text += f"\n{details_block}\n"
-        text += trading_plan_block
         text += trading_plan_block
         text += sports_block
         text += f"\n{triggers_block}\n"
