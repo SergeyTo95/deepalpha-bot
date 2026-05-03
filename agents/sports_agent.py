@@ -76,6 +76,15 @@ class SportsAgent:
                 sport_type = "football"
         market_type = self._detect_market_type(text)
         subject, opponent = self._extract_subject_opponent(market_data)
+
+        # Broader football/team fallback:
+        # Some Polymarket sports markets arrive as category=Other and without market_format.
+        # If it is a generic "Will <club> win" market and subject has common football club suffixes,
+        # treat it as football/team moneyline instead of unknown.
+        if sport_type == "unknown" and market_type == "moneyline" and subject:
+            if re.search(r"\b(sk|fk|jk|fc|cf|sc|club|united|city)\b", subject, re.IGNORECASE):
+                sport_type = "football"
+
         is_live = self._is_live_market(text)
         is_team_sport = sport_type in {"football", "basketball", "hockey", "esports"}
 
@@ -85,8 +94,18 @@ class SportsAgent:
         src_score, source_notes = self._score_sources(sources, subject, opponent, sport_type)
 
         missing_data = self._build_missing_data(is_team_sport, sport_type, is_live, source_notes)
+
+        if is_team_sport and not opponent:
+            missing_data.append("Opponent unavailable")
+
         data_quality = "low" if src_score < 40 else ("medium" if src_score < 85 else "high")
+
+        # Hard caps: without opponent or core sports context, do not allow medium/high.
         if not sources or "No news sources provided" in source_notes:
+            data_quality = "low"
+        if is_team_sport and not opponent:
+            data_quality = "low"
+        if is_team_sport and any(x in missing_data for x in ("Confirmed lineups", "Injuries/suspensions", "Recent form", "Standings context")):
             data_quality = "low"
 
         confidence_cap = "low" if data_quality == "low" else ("medium" if data_quality == "medium" else "high")
@@ -102,13 +121,13 @@ class SportsAgent:
         key_yes: List[str] = []
         key_no: List[str] = []
         risk_factors = [
-            "Market may already price obvious edge",
-            "Draw risk included in NO for team win markets" if market_type == "moneyline" and is_team_sport else "Limited verified pre-match context",
+            "Рынок мог уже заложить очевидное преимущество",
+            "Риск ничьей входит в NO для рынков на победу команды" if market_type == "moneyline" and is_team_sport else "Мало подтверждённого предматчевого контекста",
         ]
 
         if data_quality != "high":
-            key_yes.append("Insufficient high-relevance sources for strong value thesis")
-            key_no.append("No-trade bias under uncertainty")
+            key_yes.append("Недостаточно сильных релевантных источников для value-гипотезы")
+            key_no.append("При неопределённости базовый режим — не входить")
 
         summary = (
             "данных недостаточно для value-входа"
