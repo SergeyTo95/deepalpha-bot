@@ -23,6 +23,8 @@ class SportsAgent:
     def run(self, market_data: dict, news_data=None, lang: str = "ru") -> dict:
         text = self._combined_text(market_data)
         sport_type = self._detect_sport_type(text)
+        if sport_type == "unknown" and str((market_data or {}).get("category", "")).lower() == "sports" and re.search(r"\b(vs\.?|v)\b", text):
+            sport_type = "football"
         market_type = self._detect_market_type(text)
         subject, opponent = self._extract_subject_opponent(market_data)
         is_live = self._is_live_market(text)
@@ -100,6 +102,8 @@ class SportsAgent:
         for sport, words in self.SPORT_KEYWORDS.items():
             if any(w in text for w in words):
                 return "mma" if sport == "ufc" else sport
+        if re.search(r"\w+\s+(vs\.?|v)\s+\w+", text):
+            return "football"
         return "unknown"
 
     def _detect_market_type(self, text: str) -> str:
@@ -121,12 +125,34 @@ class SportsAgent:
 
     def _extract_subject_opponent(self, market_data: Dict[str, Any]) -> Tuple[str, str]:
         q = str((market_data or {}).get("question", ""))
+        desc = str((market_data or {}).get("description", ""))
+        title = str((market_data or {}).get("title", ""))
+        joined = " || ".join([q, desc, title])
+
         m = re.search(r"will\s+(.+?)\s+win", q, re.IGNORECASE)
         subject = m.group(1).strip() if m else ""
         opponent = ""
-        vs = re.search(r"\b(vs\.?|against|defeat)\b\s*([A-Za-z0-9 .\-']+)", q, re.IGNORECASE)
-        if vs:
-            opponent = vs.group(2).strip(" ?.")
+
+        # Unicode-safe matchup parsing for:
+        # "<subject> vs <opponent>" and "<opponent> vs <subject>"
+        vs_match = re.search(r"([^|]+?)\s+(?:vs\.?|v)\s+([^|]+)", joined, re.IGNORECASE)
+        if vs_match:
+            left = vs_match.group(1).strip(" ?.,;:")
+            right = vs_match.group(2).strip(" ?.,;:")
+            if subject:
+                if subject.casefold() in left.casefold():
+                    opponent = right
+                elif subject.casefold() in right.casefold():
+                    opponent = left
+                else:
+                    opponent = right
+            else:
+                subject, opponent = left, right
+
+        if not opponent:
+            ag = re.search(r"\b(?:against|defeat)\b\s*(.+)", q, re.IGNORECASE)
+            if ag:
+                opponent = ag.group(1).strip(" ?.,;:")
         return subject, opponent
 
     def _is_live_market(self, text: str) -> bool:
