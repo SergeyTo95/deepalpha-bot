@@ -16,15 +16,64 @@ class SportsAgent:
 
     def is_sports_market(self, market_data: dict) -> bool:
         text = self._combined_text(market_data)
-        if (market_data or {}).get("category", "").lower() == "sports":
+        md = market_data or {}
+
+        category = str(md.get("category", "")).lower()
+        market_format = str(
+            md.get("market_format")
+            or md.get("format")
+            or md.get("market_type")
+            or md.get("subtype")
+            or ""
+        ).lower()
+
+        # Explicit sports category.
+        if category == "sports":
             return True
-        return any(k in text for words in self.SPORT_KEYWORDS.values() for k in words)
+
+        # Polymarket / structure-derived sports formats.
+        if any(x in market_format for x in ("match_winner", "moneyline", "match winner")):
+            return True
+
+        # Explicit sport keywords.
+        if any(k in text for words in self.SPORT_KEYWORDS.values() for k in words):
+            return True
+
+        # Defensive generic team/player winner detection.
+        # Avoid obvious non-sports markets such as crypto price thresholds or political elections.
+        non_sports_noise = [
+            "bitcoin", "btc", "ethereum", "eth", "price", "$", "above", "below",
+            "election", "president", "trump", "biden", "senate", "congress",
+            "fed", "rate cut", "inflation",
+        ]
+        looks_like_winner_market = bool(re.search(r"\bwill\s+.+?\s+win\b", text, re.IGNORECASE))
+        has_team_hint = bool(re.search(r"\b(sk|fk|jk|fc|cf|sc|bc|united|city|club|team)\b", text, re.IGNORECASE))
+
+        if looks_like_winner_market and has_team_hint and not any(x in text for x in non_sports_noise):
+            return True
+
+        return False
 
     def run(self, market_data: dict, news_data=None, lang: str = "ru") -> dict:
         text = self._combined_text(market_data)
         sport_type = self._detect_sport_type(text)
-        if sport_type == "unknown" and str((market_data or {}).get("category", "")).lower() == "sports" and re.search(r"\b(vs\.?|v)\b", text):
+        md = market_data or {}
+        market_format = str(
+            md.get("market_format")
+            or md.get("format")
+            or md.get("market_type")
+            or md.get("subtype")
+            or ""
+        ).lower()
+
+        if sport_type == "unknown" and str(md.get("category", "")).lower() == "sports" and re.search(r"\b(vs\.?|v)\b", text):
             sport_type = "football"
+
+        # Many football club winner markets arrive from Polymarket as domain=Other
+        # and format=match_winner with team suffixes such as SK/FK/JK/FC.
+        if sport_type == "unknown" and any(x in market_format for x in ("match_winner", "moneyline", "match winner")):
+            if re.search(r"\b(sk|fk|jk|fc|cf|sc|club|united|city)\b", text, re.IGNORECASE):
+                sport_type = "football"
         market_type = self._detect_market_type(text)
         subject, opponent = self._extract_subject_opponent(market_data)
         is_live = self._is_live_market(text)
