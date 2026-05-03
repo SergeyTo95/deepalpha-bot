@@ -66,6 +66,18 @@ class ChiefAgent:
             lang=lang,
             user_context=user_context,
         )
+
+        sports_context = None
+        try:
+            from agents.sports_agent import SportsAgent
+
+            _sports_agent = SportsAgent()
+            if _sports_agent.is_sports_market(market_data):
+                sports_context = _sports_agent.run(market_data, news_data=news_data, lang=lang)
+        except Exception as _sports_e:
+            logger.error(f"SportsAgent error (non-blocking): {_sports_e}")
+            sports_context = {"is_sports": False, "error": str(_sports_e)}
+
         logger.info(
             f"ChiefAgent: news_data done, "
             f"sentiment={news_data.get('sentiment', 'N/A')}, "
@@ -161,6 +173,7 @@ class ChiefAgent:
             "market_data": market_data,
             "news_data": news_data,
             "decision_data": decision_data,
+            "sports_context": sports_context,
         }
 
         try:
