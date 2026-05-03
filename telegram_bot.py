@@ -1754,7 +1754,7 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Вывод:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Не является финансовой рекомендацией._"
+        text += "\n\n_Информационный анализ. Не является торговой, инвестиционной или betting-рекомендацией._"
 
     else:
         text = f"{header_emoji}\n{sep}\n\n📌 {q}\n"
@@ -1790,7 +1790,7 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Not financial advice._"
+        text += "\n\n_Informational analysis. Not trading, investment, or betting advice._"
 
     text += sports_block
     text += time_shift_block
