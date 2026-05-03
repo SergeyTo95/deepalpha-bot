@@ -1653,18 +1653,21 @@ def _format_analysis(result: dict, uid: int) -> str:
         recommended_raw = str(sports_context.get("recommended_action", "NO TRADE"))
         value_raw = str(sports_context.get("value_assessment", "no_edge"))
 
-        miss_txt = _escape(", ".join(str(x) for x in missing[:3])) if missing else "—"
+        if lang == "ru" and missing:
+            missing_map = {
+                "Confirmed lineups": "составов",
+                "Injuries/suspensions": "травм/дисквалификаций",
+                "Recent form": "формы",
+                "Standings context": "турнирного контекста",
+                "Opponent unavailable": "соперника",
+                "Independent source validation": "подтверждённых источников",
+            }
+            miss_txt = _escape(", ".join(missing_map.get(str(x), str(x)) for x in missing[:3]))
+        else:
+            miss_txt = _escape(", ".join(str(x) for x in missing[:3])) if missing else "—"
 
         if lang == "ru":
-            dq_map = {"low": "низкое", "medium": "среднее", "high": "высокое"}
-            value_map = {
-                "no_edge": "value не подтверждён",
-                "weak_edge": "слабый edge",
-                "possible_value": "возможный value",
-                "overpriced": "вероятно, цена уже дорогая",
-                "undervalued": "возможная недооценка",
-                "unknown": "неясно",
-            }
+            dq_map = {"low": "низкие", "medium": "средние", "high": "высокие"}
             action_map = {
                 "NO TRADE": "не входить",
                 "WAIT": "ждать",
@@ -1675,7 +1678,6 @@ def _format_analysis(result: dict, uid: int) -> str:
             }
 
             dq = _escape(dq_map.get(dq_raw, dq_raw))
-            val = _escape(value_map.get(value_raw, value_raw))
             act = _escape(action_map.get(recommended_raw, recommended_raw))
 
             sports_block = (
@@ -1683,8 +1685,7 @@ def _format_analysis(result: dict, uid: int) -> str:
                 f"— Тип: {stype} / {mkt}\n"
                 "— NO включает ничью и поражение\n"
                 f"— Данные: {dq}; не хватает: {miss_txt}\n"
-                f"— Value: {val}\n"
-                f"— SportsAgent: {act}"
+                f"— Режим: {act}"
             )
         else:
             dq = _escape(dq_raw)
