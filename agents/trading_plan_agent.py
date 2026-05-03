@@ -21,13 +21,18 @@ class TradingPlanAgent:
         )
 
         model_side, model_prob = self._extract_model_prediction(result)
-        likely_side, market_prob = self._pick_likely_side(market_probs)
+        market_leader_side, market_leader_prob = self._pick_likely_side(market_probs)
 
         if model_side not in market_probs:
-            model_side = likely_side
+            model_side = market_leader_side
 
-        model_prob = float(model_prob if model_prob is not None else market_prob)
-        market_prob_same_side = float(market_probs.get(model_side, market_prob or 0.0))
+        model_prob = float(model_prob if model_prob is not None else market_leader_prob)
+        market_prob_same_side = float(market_probs.get(model_side, market_leader_prob or 0.0))
+        likely_side = (
+            model_side
+            if model_side != "UNKNOWN" and model_prob > 0
+            else market_leader_side
+        )
 
         edge = round(model_prob - market_prob_same_side, 1)
         abs_edge = abs(edge)
@@ -49,7 +54,14 @@ class TradingPlanAgent:
             value_assessment=value_assessment,
         )
 
-        entry_zone, avoid_zone = self._entry_zone(model_side, market_prob_same_side, model_prob, lang)
+        entry_zone, avoid_zone = self._entry_zone(
+            side=model_side,
+            market_prob=market_prob_same_side,
+            model_prob=model_prob,
+            value_assessment=value_assessment,
+            action=recommended_action,
+            lang=lang,
+        )
 
         confirmation_triggers = self._confirmation_triggers(result, market_type, lang)
         invalidation_triggers = self._invalidation_triggers(model_side, lang)
@@ -181,18 +193,47 @@ class TradingPlanAgent:
         if abs_edge < 8:
             return (f"WATCH {model_side}", "NONE")
         if abs_edge < 15:
-            return (f"WATCH {model_side}" if confidence == "medium" else f"CONSIDER {model_side}", model_side if confidence == "high" else "NONE")
+            return (f"WATCH {model_side}" if confidence == "medium" else f"CONSIDER {model_side}", model_side if confidence in ("medium", "high") else "NONE")
         return (f"CONSIDER {model_side}", model_side)
 
-    def _entry_zone(self, side: str, market_prob: float, model_prob: float, lang: str) -> Tuple[str, str]:
+    def _entry_zone(
+        self,
+        side: str,
+        market_prob: float,
+        model_prob: float,
+        value_assessment: str,
+        action: str,
+        lang: str,
+    ) -> Tuple[str, str]:
         dec = 6 if 50 <= market_prob <= 65 else (10 if market_prob > 65 else 5)
         low = max(1, round(market_prob - dec - 2, 1))
         high = max(1, round(market_prob - dec + 1, 1))
-        entry = f"{side} ≤{low}–{high}% or strong confirmation trigger"
-        avoid = f"Avoid chasing {side} above {round(market_prob + 3,1)}% without new data"
+        chase_low = round(market_prob + 6, 1)
+        chase_high = round(market_prob + 8, 1)
+
+        if value_assessment in ("fair_price", "no_edge") or action in ("WAIT", "NO TRADE"):
+            entry = f"{side} ≤{low}–{high}% or strong confirmation trigger"
+            avoid = f"Avoid chasing {side} above {round(market_prob + 3,1)}% without new data"
+            if lang == "ru":
+                entry = f"{side} интересен только ≤{low}–{high}% или при сильном подтверждении"
+                avoid = f"Избегать входа в {side} выше {round(market_prob + 3,1)}% без новых данных"
+            return entry, avoid
+
+        if value_assessment == "possible_value":
+            entry = (
+                f"{side} is watchable with small sizing; better on pullback or fresh confirmation"
+            )
+            avoid = f"Do not chase above {chase_low:.0f}–{chase_high:.0f}% without new confirmation"
+            if lang == "ru":
+                entry = f"{side} можно наблюдать/рассмотреть малым размером; лучше входить на откате или при подтверждении"
+                avoid = f"Не догонять выше {chase_low:.0f}–{chase_high:.0f}% без нового подтверждения"
+            return entry, avoid
+
+        entry = f"{side} can be considered at current price; avoid chasing above {chase_low:.0f}–{chase_high:.0f}% without confirmation"
+        avoid = f"Do not add above {chase_low:.0f}–{chase_high:.0f}% without new data"
         if lang == "ru":
-            entry = f"{side} интересен только ≤{low}–{high}% или при сильном подтверждении"
-            avoid = f"Избегать входа в {side} выше {round(market_prob + 3,1)}% без новых данных"
+            entry = f"{side} можно рассмотреть по текущей цене; не догонять выше {chase_low:.0f}–{chase_high:.0f}% без нового подтверждения"
+            avoid = f"Не добирать выше {chase_low:.0f}–{chase_high:.0f}% без новых данных"
         return entry, avoid
 
     def _confirmation_triggers(self, result: Dict[str, Any], market_type: str, lang: str) -> List[str]:
@@ -231,5 +272,9 @@ class TradingPlanAgent:
 
     def _summary(self, side: str, value: str, action: str, entry: str, lang: str) -> str:
         if lang == "ru":
-            return f"{side} вероятнее, но статус цены: {value}. Действие: {action}. План входа: {entry}."
-        return f"{side} is more likely, but pricing status is {value}. Action: {action}. Entry plan: {entry}."
+            if action.startswith("CONSIDER") or action.startswith("WATCH"):
+                return f"{side} вероятнее и есть value ({value}). Действие: {action}. План: {entry}."
+            return f"{side} вероятнее, но цена уже близка к fair value ({value}). Действие: {action}. План: {entry}."
+        if action.startswith("CONSIDER") or action.startswith("WATCH"):
+            return f"{side} is more likely and has value ({value}). Action: {action}. Plan: {entry}."
+        return f"{side} is more likely, but price is near fair value ({value}). Action: {action}. Plan: {entry}."
