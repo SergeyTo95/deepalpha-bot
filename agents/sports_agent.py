@@ -85,7 +85,9 @@ class SportsAgent:
         src_score, source_notes = self._score_sources(sources, subject, opponent, sport_type)
 
         missing_data = self._build_missing_data(is_team_sport, sport_type, is_live, source_notes)
-        data_quality = "low" if src_score < 30 else ("medium" if src_score < 65 else "high")
+        data_quality = "low" if src_score < 40 else ("medium" if src_score < 85 else "high")
+        if not sources or "No news sources provided" in source_notes:
+            data_quality = "low"
 
         confidence_cap = "low" if data_quality == "low" else ("medium" if data_quality == "medium" else "high")
         decision_adjustment = "force_no_trade" if data_quality == "low" else ("watch_only" if data_quality == "medium" else "no_change")
@@ -235,26 +237,73 @@ class SportsAgent:
         return out
 
     def _score_sources(self, sources: List[str], subject: str, opponent: str, sport_type: str) -> Tuple[int, List[str]]:
+        """
+        Conservative source relevance scoring.
+
+        Important:
+        - Generic sources must not create high data_quality.
+        - Sources must mention subject/opponent or strong sports evidence terms.
+        - If all sources are irrelevant, score stays 0.
+        """
         if not sources:
             return 0, ["No news sources provided"]
-        bad_kw = ["music", "album", "song", "band", "concert", "artist", "review"]
+
+        bad_kw = [
+            "music", "album", "song", "band", "concert", "artist", "review",
+            "playlist", "track", "single", "tour", "record",
+        ]
+        evidence_kw = [
+            "injury", "injuries", "lineup", "lineups", "squad", "suspension",
+            "standings", "table", "form", "odds", "live", "score", "h2h",
+            "head to head", "preview", "prediction", "match", "goal",
+            "weigh-in", "weigh in", "fighter", "record",
+        ]
+
         notes: List[str] = []
-        score = 0
+        total_score = 0
+        relevant_count = 0
+
+        subject_cf = (subject or "").casefold()
+        opponent_cf = (opponent or "").casefold()
+
         for s in sources:
-            if any(b in s for b in bad_kw):
+            s_cf = str(s or "").casefold()
+
+            if any(b in s_cf for b in bad_kw):
                 notes.append("Filtered irrelevant non-sports source")
                 continue
-            local = 10
-            if subject and subject.lower() in s:
-                local += 15
-            if opponent and opponent.lower() in s:
-                local += 15
-            if sport_type != "unknown" and sport_type in s:
+
+            has_subject = bool(subject_cf and subject_cf in s_cf)
+            has_opponent = bool(opponent_cf and opponent_cf in s_cf)
+            has_sport = bool(sport_type != "unknown" and sport_type in s_cf)
+            has_evidence = any(k in s_cf for k in evidence_kw)
+
+            # Do not give score to generic sources that do not mention the event/entity
+            # and do not contain sports-specific evidence terms.
+            if not (has_subject or has_opponent or has_evidence):
+                notes.append("Dropped generic low-relevance source")
+                continue
+
+            relevant_count += 1
+            local = 0
+
+            if has_subject:
+                local += 30
+            if has_opponent:
+                local += 25
+            if has_sport:
                 local += 10
-            if any(k in s for k in ["injury", "lineup", "standings", "form", "odds", "live"]):
-                local += 10
-            score += min(local, 50)
-        return min(score, 100), notes or ["Sources parsed with conservative relevance weighting"]
+            if has_evidence:
+                local += 20
+
+            total_score += min(local, 60)
+
+        if relevant_count == 0:
+            return 0, notes or ["No relevant sports sources"]
+
+        score = min(total_score, 100)
+        return score, notes or ["Sources parsed with conservative relevance weighting"]
+
 
     def _build_missing_data(self, is_team_sport: bool, sport_type: str, is_live: bool, source_notes: List[str]) -> List[str]:
         missing = []

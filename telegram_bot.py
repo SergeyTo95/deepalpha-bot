@@ -1749,6 +1749,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n📍 Когда можно войти:\n{entry_lines}\n"
 
         text += f"\n{details_block}\n"
+        text += sports_block
         text += f"\n{triggers_block}\n"
         text += f"\n{risks_header}\n{risks_str}\n"
         text += f"\n📊 Decision: {dec_display}\n"
@@ -1785,6 +1786,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n📍 When to enter:\n{entry_lines}\n"
 
         text += f"\n{details_block}\n"
+        text += sports_block
         text += f"\n{triggers_block}\n"
         text += f"\n{risks_header}\n{risks_str}\n"
         text += f"\n📊 Decision: {dec_display}\n"
@@ -1792,7 +1794,6 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
         text += "\n\n_Informational analysis. Not trading, investment, or betting advice._"
 
-    text += sports_block
     text += time_shift_block
     text += source_block
     return text
