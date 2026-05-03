@@ -1536,6 +1536,46 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
 
 
 
+
+
+def _build_trading_plan_block(result: dict, lang: str) -> str:
+    tp = result.get("trading_plan") if isinstance(result.get("trading_plan"), dict) else {}
+    if not tp:
+        return ""
+    likely = tp.get("likely_side", "UNKNOWN")
+    model_p = float(tp.get("model_probability", 0) or 0)
+    market_p = float(tp.get("market_probability", 0) or 0)
+    edge = float(tp.get("edge", 0) or 0)
+    action = tp.get("recommended_action", "WAIT")
+    entry = tp.get("entry_zone", "")
+    summary = tp.get("summary", "")
+
+    if lang == "ru":
+        edge_txt = "нет значимого расхождения" if abs(edge) < 3 else f"{edge:+.1f}%"
+        return (
+            "\\n\\n📈 Торговый план:\\n"
+            f"— Вероятнее: {likely}\\n"
+            f"— Модель: {likely} {model_p:.1f}%\\n"
+            f"— Рынок: {likely} {market_p:.1f}%\\n"
+            f"— Edge: {edge_txt}\\n"
+            f"— Действие: {action}\\n"
+            f"— Вход: {entry}\\n"
+            f"— Почему: {summary}"
+        )
+
+    edge_txt = "no meaningful divergence" if abs(edge) < 3 else f"{edge:+.1f}%"
+    return (
+        "\\n\\n📈 Trading Plan:\\n"
+        f"— Likely side: {likely}\\n"
+        f"— Model: {likely} {model_p:.1f}%\\n"
+        f"— Market: {likely} {market_p:.1f}%\\n"
+        f"— Edge: {edge_txt}\\n"
+        f"— Action: {action}\\n"
+        f"— Entry: {entry}\\n"
+        f"— Why: {summary}"
+    )
+
+
 def _format_analysis(result: dict, uid: int) -> str:
     # Turbo Signal: pass-through, do not reformat
     if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
@@ -1600,6 +1640,8 @@ def _format_analysis(result: dict, uid: int) -> str:
             pass
 
     source_block = _build_source_block_filtered(result, lang)
+
+    trading_plan_block = _build_trading_plan_block(result, lang)
 
     sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
     sports_block = ""
@@ -1759,6 +1801,8 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n📍 Когда можно войти:\n{entry_lines}\n"
 
         text += f"\n{details_block}\n"
+        text += trading_plan_block
+        text += trading_plan_block
         text += sports_block
         text += f"\n{triggers_block}\n"
         text += f"\n{risks_header}\n{risks_str}\n"
@@ -1796,6 +1840,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             text += f"\n📍 When to enter:\n{entry_lines}\n"
 
         text += f"\n{details_block}\n"
+        text += trading_plan_block
         text += sports_block
         text += f"\n{triggers_block}\n"
         text += f"\n{risks_header}\n{risks_str}\n"
