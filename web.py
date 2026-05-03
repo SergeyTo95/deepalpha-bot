@@ -1,11 +1,13 @@
 import os
 import json
 from aiohttp import web
+from admin_routes import setup_admin_routes
+from services.payment_service import get_pricing_payload
 from db.database import (
     get_user, get_setting, is_subscribed,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post,
-    is_author, create_donation, add_pending,
+    is_author, create_donation, add_pending
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -415,6 +417,20 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 
+async def handle_api_health(request):
+    return _json_response({
+        "status": "ok",
+        "service": "deepalpha",
+        "webapp_enabled": get_setting("webapp_enabled", "on"),
+        "maintenance_mode": get_setting("maintenance_mode", "off"),
+        "telegram_channel": "active",
+    })
+
+
+async def handle_api_pricing(request):
+    return _json_response(get_pricing_payload())
+
+
 app = web.Application()
 
 app.router.add_get("/", handle_index)
@@ -437,6 +453,10 @@ app.router.add_post("/api/watchlist/buy_slots", handle_buy_slots)
 app.router.add_route("OPTIONS", "/api/watchlist/buy_slots", handle_options)
 
 app.router.add_get("/health", handle_health)
+app.router.add_get("/api/health", handle_api_health)
+app.router.add_get("/api/pricing", handle_api_pricing)
+
+setup_admin_routes(app)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=PORT)
