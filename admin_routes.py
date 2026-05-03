@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta
 from html import escape
 import json
+import re
 from aiohttp import web
 
 from db.database import (
@@ -26,6 +27,7 @@ SECTIONS = [
     ("Revenue", "/admin/revenue"),
     ("Tokens", "/admin/tokens"),
     ("Settings", "/admin/settings"),
+    ("Content", "/admin/content"),
     ("Analyses", "/admin/analyses"),
     ("Quality", "/admin/quality"),
     ("Signals", "/admin/signals"),
@@ -91,8 +93,14 @@ th,td{{padding:7px;border-bottom:1px solid #1f2937;vertical-align:top}} .badge{{
 .ok{{color:#34d399}} .warn{{color:#fbbf24}} .muted{{color:#94a3b8}} input,button,textarea,select{{background:#0b1220;border:1px solid #334155;color:#e5e7eb;padding:6px;border-radius:8px}}
 .flash{{background:#14532d;padding:8px;border-radius:8px;margin:10px 0}}
 .danger{{background:#7f1d1d}} .btn-danger{{border-color:#7f1d1d}} .right{{text-align:right}}
+.table-scroll{{overflow:auto}}.mobile-card-list{{display:none}}.truncate{{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}}
+@media (max-width:720px){{.desktop-table{{display:none}}.mobile-card-list{{display:block}}.wrap{{padding:8px}}th,td{{padding:6px;font-size:12px}}}}
 </style></head><body><div class='wrap'><div class='top'><h2 style='margin:0'>DeepAlpha Admin v1</h2><div class='navs'>{''.join(nav)}</div></div>{flash_html}{body}</div></body></html>"""
 
+
+
+SAFE_SETTING_KEYS = {"paid_mode","token_price_ton","analysis_price_tokens","subscription_price_ton","announcement_text","webapp_enabled","web_payments_enabled","web_ton_enabled","web_tron_usdt_enabled","web_evm_usdt_enabled","web_card_payments_enabled"}
+PROTECTED_KEYS = {"paid_mode","token_price_ton","analysis_price_tokens","subscription_price_ton"}
 
 def _is_on(value: str) -> bool:
     return str(value).strip().lower() in {"1", "on", "true", "yes", "enabled"}

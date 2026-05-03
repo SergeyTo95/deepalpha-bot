@@ -1,4 +1,5 @@
 import json
+import re
 from collections import Counter
 
 
@@ -25,21 +26,51 @@ def extract_sports_context(row):
 
 def extract_decision(row):
     tp = extract_trading_plan(row) or {}
-    return tp.get("decision") or row.get("conclusion")
+    text = str(tp.get("decision") or row.get("conclusion") or row.get("reasoning") or "")
+    t = text.lower()
+    no_trade_markers = ["no trade", "не входить", "оставаться вне позиции", "нет преимущества", "расхождения нет", "no edge", "fair value", "рынок эффективен"]
+    wait_markers = ["wait", "ждать", "ждать откат", "ждать подтверждение", "при подтверждении"]
+    watch_markers = ["watch yes", "watch no", "наблюдать"]
+    consider_markers = ["consider yes", "consider no", "рассмотреть"]
+    if any(m in t for m in no_trade_markers):
+        return "NO TRADE"
+    if any(m in t for m in wait_markers):
+        return "WAIT"
+    if any(m in t for m in watch_markers):
+        return "WATCH"
+    if any(m in t for m in consider_markers):
+        return "CONSIDER"
+    return text
 
 
 def extract_source_count(row):
     data = safe_json_loads(row.get("reasoning"))
+    if "Релевантные источники не найдены" in str(row.get("reasoning", "")):
+        return 0
     sources = data.get("sources") if isinstance(data, dict) else None
-    return len(sources) if isinstance(sources, list) else 0
+    if isinstance(sources, list):
+        return len(sources)
+    for k in ("news_sources", "news_items"):
+        v = data.get(k) if isinstance(data, dict) else None
+        if isinstance(v, list):
+            return len(v)
+    return None
 
 
 def extract_edge(row):
     tp = extract_trading_plan(row) or {}
     try:
-        return float(tp.get("edge", 0) or 0)
+        if tp.get("edge") is not None:
+            return float(tp.get("edge"))
     except Exception:
+        pass
+    text = " ".join([str(row.get("conclusion", "")), str(row.get("reasoning", ""))])
+    m = re.search(r"(?:edge|расхождение)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)\%?", text, re.I)
+    if m:
+        return float(m.group(1))
+    if is_model_repeated_market(row):
         return 0.0
+    return None
 
 
 def extract_recommended_action(row):
