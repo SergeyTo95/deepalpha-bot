@@ -1601,6 +1601,53 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     source_block = _build_source_block_filtered(result, lang)
 
+    sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
+    sports_block = ""
+    if sports_context:
+        stype = _escape(str(sports_context.get("sport_type", "unknown")))
+        mkt = _escape(str(sports_context.get("market_type", "unknown")))
+        yes_line = _escape(str(sports_context.get("yes_means", "—")))
+        no_line = _escape(str(sports_context.get("no_means", "—")))
+        dq_raw = str(sports_context.get("data_quality", "low"))
+        missing = sports_context.get("missing_data") or []
+        y_factors = sports_context.get("key_factors_yes") or []
+        n_factors = sports_context.get("key_factors_no") or []
+        risks = sports_context.get("risk_factors") or []
+
+        miss_txt = _escape(", ".join(str(x) for x in missing[:2])) if missing else "—"
+        yes_f = _escape(", ".join(str(x) for x in y_factors[:2])) if y_factors else "—"
+        no_f = _escape(", ".join(str(x) for x in n_factors[:2])) if n_factors else "—"
+        risk_f = _escape(", ".join(str(x) for x in risks[:2])) if risks else "—"
+
+        if lang == "ru":
+            dq_map = {"low": "низкое", "medium": "среднее", "high": "высокое"}
+            dq = dq_map.get(dq_raw, dq_raw)
+            caution = "\n— ⚠️ данных недостаточно для value-входа" if dq_raw == "low" else ""
+            sports_block = (
+                f"\n\n📊 Спортивный контекст:\n"
+                f"— Тип: {stype} / {mkt}\n"
+                f"— YES: {yes_line}\n"
+                f"— NO: {no_line}\n"
+                f"— Качество данных: {dq}\n"
+                f"— Не хватает: {miss_txt}\n"
+                f"— Факторы за YES: {yes_f}\n"
+                f"— Факторы за NO: {no_f}\n"
+                f"— Риски: {risk_f}{caution}"
+            )
+        else:
+            caution = "\n— ⚠️ insufficient data for value entry" if dq_raw == "low" else ""
+            sports_block = (
+                f"\n\n📊 Sports Context:\n"
+                f"— Type: {stype} / {mkt}\n"
+                f"— YES: {yes_line}\n"
+                f"— NO: {no_line}\n"
+                f"— Data quality: {_escape(dq_raw)}\n"
+                f"— Missing: {miss_txt}\n"
+                f"— YES factors: {yes_f}\n"
+                f"— NO factors: {no_f}\n"
+                f"— Risks: {risk_f}{caution}"
+            )
+
     why_lines = "\n".join(f"— {r}" for r in udec["why"])
     entry_lines = "\n".join(f"— {c}" for c in udec["entry_conditions"])
 
@@ -1745,6 +1792,7 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
         text += "\n\n_Not financial advice._"
 
+    text += sports_block
     text += time_shift_block
     text += source_block
     return text
