@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from html import escape
+import json
 from aiohttp import web
 
 from db.database import (
@@ -12,6 +13,9 @@ from db.database import (
     set_user_vip,
     set_user_ban,
 )
+from services.payment_service import get_pricing_payload
+from services.admin_metrics_service import summarize_users
+from services.admin_analysis_service import summarize_quality, extract_edge, extract_decision, extract_source_count
 
 
 # TODO: Replace ADMIN_SECRET_KEY auth with Telegram initData validation + ADMIN_TELEGRAM_IDS.
@@ -19,9 +23,12 @@ from db.database import (
 SECTIONS = [
     ("Dashboard", "/admin"),
     ("Users", "/admin/users"),
+    ("Revenue", "/admin/revenue"),
+    ("Tokens", "/admin/tokens"),
     ("Settings", "/admin/settings"),
     ("Analyses", "/admin/analyses"),
     ("Quality", "/admin/quality"),
+    ("Signals", "/admin/signals"),
     ("Payments", "/admin/payments"),
     ("WebApp", "/admin/webapp"),
     ("Audit", "/admin/audit"),
@@ -109,20 +116,18 @@ async def admin_dashboard(request: web.Request):
     seven = (now - timedelta(days=7)).date().isoformat()
     today_count = sum(1 for a in analyses if str(a.get("created_at", "")).startswith(today))
     seven_count = sum(1 for a in analyses if str(a.get("created_at", ""))[:10] >= seven)
-    total_tokens = sum(int(u.get("token_balance", 0) or 0) for u in users)
-    vip_count = sum(1 for u in users if u.get("is_vip"))
-    banned_count = sum(1 for u in users if u.get("is_banned"))
-    author_count = sum(1 for u in users if u.get("is_author"))
-    total_opps = sum(int(u.get("total_opportunities", 0) or 0) for u in users)
+    um = summarize_users(users)
+    qm = summarize_quality(analyses[:1000])
     latest_users_rows = "".join([f"<tr><td>{u.get('user_id')}</td><td>{escape(str(u.get('username','')))}</td><td>{escape(str(u.get('first_name','')))}</td><td>{escape(str(u.get('created_at','')))}</td></tr>" for u in users[:10]])
     latest_analyses_rows = "".join([f"<tr><td>{escape(str(a.get('created_at','')))}</td><td>{a.get('user_id',0)}</td><td>{escape(str(a.get('question',''))[:90])}</td><td>{escape(str(a.get('category','')))}</td></tr>" for a in analyses[:10]])
     body = f"""
     <div class='grid'>
-      <div class='card'>Total users<br><b>{len(users)}</b></div><div class='card'>Total token balance<br><b>{total_tokens}</b></div>
-      <div class='card'>Total analyses<br><b>{len(analyses)}</b></div><div class='card'>Total opportunities<br><b>{total_opps}</b></div>
+      <div class='card'>Total users<br><b>{um['total_users']}</b></div><div class='card'>New users today<br><b>{um['new_today']}</b></div>
+      <div class='card'>New users 7d<br><b>{um['new_7d']}</b></div><div class='card'>Active users 7d<br><b>{um['active_7d']}</b></div>
+      <div class='card'>Total token balance<br><b>{um['token_sum']}</b></div><div class='card'>Total analyses<br><b>{len(analyses)}</b></div><div class='card'>Total opportunities<br><b>{um['opportunities']}</b></div>
       <div class='card'>Analyses today<br><b>{today_count}</b></div><div class='card'>Analyses 7d<br><b>{seven_count}</b></div>
-      <div class='card'>VIP users<br><b>{vip_count}</b></div><div class='card'>Banned users<br><b>{banned_count}</b></div>
-      <div class='card'>Authors<br><b>{author_count}</b></div><div class='card'>Paid mode<br><b>{escape(get_setting('paid_mode','off'))}</b></div>
+      <div class='card'>VIP users<br><b>{um['vip']}</b></div><div class='card'>Banned users<br><b>{um['banned']}</b></div>
+      <div class='card'>Authors<br><b>{um['authors']}</b></div><div class='card'>Paid mode<br><b>{escape(get_setting('paid_mode','off'))}</b></div>
       <div class='card'>Token price TON<br><b>{escape(get_setting('token_price_ton','0.1'))}</b></div><div class='card'>Analysis price tokens<br><b>{escape(get_setting('analysis_price_tokens','10'))}</b></div>
       <div class='card'>Sub price TON<br><b>{escape(get_setting('subscription_price_ton','1'))}</b></div><div class='card'>WebApp enabled<br><b>{_badge_bool(_is_on(get_setting('webapp_enabled','on')))}</b></div>
     </div>
@@ -131,6 +136,7 @@ async def admin_dashboard(request: web.Request):
     <div class='card'><b>Quick links:</b> <a href='/admin/users?key={escape(key)}'>Users</a> · <a href='/admin/settings?key={escape(key)}'>Settings</a> · <a href='/admin/analyses?key={escape(key)}'>Analyses</a> · <a href='/admin/payments?key={escape(key)}'>Payments</a> · <a href='/admin/quality?key={escape(key)}'>Quality</a></div>
     <div class='card'><h3>Latest users</h3><table><tr><th>user_id</th><th>username</th><th>first_name</th><th>created</th></tr>{latest_users_rows or '<tr><td colspan=4>not available yet</td></tr>'}</table></div>
     <div class='card'><h3>Latest analyses</h3><table><tr><th>time</th><th>user_id</th><th>question</th><th>category</th></tr>{latest_analyses_rows or '<tr><td colspan=4>not available yet</td></tr>'}</table></div>
+    <div class='card'>Quality snapshot: no_sources={qm.get('no_sources','n/a')}, low_conf={qm.get('low_confidence','n/a')}, edge_zero={qm.get('edge_zero','n/a')}, NO TRADE={qm.get('decisions',{}).get('NO TRADE',0)}, WAIT={qm.get('decisions',{}).get('WAIT',0)}</div>
     """
     return web.Response(text=_layout("Dashboard", "Dashboard", key, body), content_type="text/html")
 
@@ -164,6 +170,23 @@ async def admin_users(request: web.Request):
     rows = rows[:limit]
     body = f"<div class='card'><form><input type='hidden' name='key' value='{escape(key)}'><input name='q' value='{escape(q)}' placeholder='search user_id/username/name'><input name='limit' value='{limit}' size='4'><button>Search</button></form></div><div class='card'><table><tr><th>user_id</th><th>username</th><th>first_name</th><th>lang</th><th>tokens</th><th>status</th><th>analyses</th><th>opps</th><th>created</th><th>last_seen</th><th>actions</th></tr>{''.join(rows) or '<tr><td colspan=11>not available yet</td></tr>'}</table></div>"
     return web.Response(text=_layout("Users", "Users", key, body, request.query.get("msg", "")), content_type="text/html")
+
+
+async def admin_user_detail(request: web.Request):
+    denied = await _require_admin(request)
+    if denied:
+        return denied
+    key = _admin_key(request)
+    uid = int(request.match_info.get("user_id", "0") or 0)
+    users = get_all_users(limit=50000)
+    user = next((u for u in users if int(u.get("user_id", 0) or 0) == uid), None)
+    analyses = [a for a in get_recent_analyses(limit=500) if int(a.get("user_id", 0) or 0) == uid][:20]
+    if not user:
+        body = "<div class='card'>User not found.</div>"
+    else:
+        rows = "".join([f"<tr><td>{escape(str(a.get('created_at','')))}</td><td>{escape(str(a.get('question','')))}</td><td>{escape(str(a.get('category','')))}</td></tr>" for a in analyses])
+        body = f"<div class='card'><h3>User {uid}</h3><pre>{escape(str(user))}</pre></div><div class='card'><h3>Recent analyses</h3><div class='table-scroll'><table><tr><th>time</th><th>question</th><th>category</th></tr>{rows or '<tr><td colspan=3>not available yet</td></tr>'}</table></div></div>"
+    return web.Response(text=_layout("User detail", "Users", key, body), content_type="text/html")
 
 
 async def admin_user_action(request: web.Request):
@@ -223,12 +246,14 @@ async def admin_analyses(request: web.Request):
     if denied:
         return denied
     key = _admin_key(request)
-    analyses = get_recent_analyses(limit=100)
+    limit_raw = request.query.get("limit", "50")
+    limit = min(max(int(limit_raw) if limit_raw.isdigit() else 50, 1), 300)
+    analyses = get_recent_analyses(limit=limit)
     if not analyses:
         body = "<div class='card muted'>Structured analysis history is not available yet. Stage 2 will add analysis history storage/API.</div>"
     else:
-        rows = "".join([f"<tr><td>{escape(str(a.get('id','')))}</td><td>{escape(str(a.get('created_at','')))}</td><td>{a.get('user_id',0)}</td><td>{escape(str(a.get('question','')))}</td><td>{escape(str(a.get('category','')))}</td><td>{escape(str(a.get('market_probability','')))}</td><td>{escape(str(a.get('system_probability','')))}</td><td>{escape(str(a.get('conclusion','')))}</td><td class='muted'>n/a</td><td class='muted'>n/a</td><td class='muted'>telegram</td><td>{escape(str(a.get('url','')))}</td><td><a href='/admin/analyses/{a.get('id')}?key={escape(key)}'>view</a></td></tr>" for a in analyses])
-        body = f"<div class='card'><table><tr><th>id</th><th>timestamp</th><th>user_id</th><th>question</th><th>category</th><th>market_probability</th><th>model</th><th>decision</th><th>trading_plan</th><th>sports</th><th>channel</th><th>url</th><th>detail</th></tr>{rows}</table></div>"
+        rows = "".join([f"<tr><td>{escape(str(a.get('id','')))}</td><td>{escape(str(a.get('created_at','')))}</td><td>{a.get('user_id',0)}</td><td>{escape(str(a.get('question',''))[:100])}</td><td>{escape(str(a.get('category','')))}</td><td>{escape(str(a.get('market_probability','')))}</td><td>{escape(str(a.get('system_probability','')))}</td><td>{escape(str(extract_decision(a) or ''))}</td><td>{extract_edge(a)}</td><td>{extract_source_count(a)}</td><td>{escape(str(a.get('url','')))}</td><td><a href='/admin/analyses/{a.get('id')}?key={escape(key)}'>view</a></td></tr>" for a in analyses])
+        body = f"<div class='card'><form><input type='hidden' name='key' value='{escape(key)}'><input name='limit' value='{limit}' size='4'><button>Apply</button></form><div class='table-scroll'><table><tr><th>id</th><th>timestamp</th><th>user_id</th><th>question</th><th>category</th><th>market_probability</th><th>model</th><th>decision</th><th>edge</th><th>sources</th><th>url</th><th>detail</th></tr>{rows}</table></div></div>"
     return web.Response(text=_layout("Analyses", "Analyses", key, body), content_type="text/html")
 
 
@@ -266,6 +291,7 @@ async def admin_payments(request: web.Request):
     if denied:
         return denied
     key = _admin_key(request)
+    pricing_preview = escape(json.dumps(get_pricing_payload(), ensure_ascii=False, indent=2))
     body = f"""
     <div class='card'><h3>Telegram Payments</h3>
       TON enabled: <span class='ok'>{escape(get_setting('telegram_ton_payments_enabled','on'))}</span><br>
@@ -283,6 +309,7 @@ async def admin_payments(request: web.Request):
       <tr><td>EVM USDT/USDC</td><td>Web</td><td>{escape(get_setting('web_evm_usdt_enabled','off'))}</td><td>placeholder</td><td>Stage 2/3</td></tr>
       <tr><td>Card</td><td>Web</td><td>{escape(get_setting('web_card_payments_enabled','off'))}</td><td>placeholder</td><td>future provider</td></tr>
     </table></div>
+    <div class='card'><h3>/api/pricing preview</h3><pre>{pricing_preview}</pre></div>
     """
     return web.Response(text=_layout("Payments", "Payments", key, body), content_type="text/html")
 
@@ -305,15 +332,58 @@ async def admin_audit(request: web.Request):
     return web.Response(text=_layout("Audit", "Audit", key, body), content_type="text/html")
 
 
+async def admin_revenue(request: web.Request):
+    denied = await _require_admin(request)
+    if denied:
+        return denied
+    key = _admin_key(request)
+    users = get_all_users(limit=50000)
+    token_sum = sum(int(u.get("token_balance", 0) or 0) for u in users)
+    price = float(get_setting("token_price_ton", "0.1") or 0)
+    est = round(token_sum * price, 4)
+    body = f"<div class='grid'><div class='card'>Total token balance<br><b>{token_sum}</b></div><div class='card'>token_price_ton<br><b>{price}</b></div><div class='card'>Estimated token value TON<br><b>{est}</b></div><div class='card'>subscription_price_ton<br><b>{escape(get_setting('subscription_price_ton','1'))}</b></div><div class='card'>author_status_price_ton<br><b>{escape(get_setting('author_status_price_ton','5'))}</b></div><div class='card'>platform_fee_percent<br><b>{escape(get_setting('platform_fee_percent','20'))}</b></div></div><div class='card muted'>Pending/completed payment event storage is not available yet — needs payment event storage.</div>"
+    return web.Response(text=_layout("Revenue", "Revenue", key, body), content_type="text/html")
+
+
+async def admin_tokens(request: web.Request):
+    denied = await _require_admin(request)
+    if denied:
+        return denied
+    key = _admin_key(request)
+    users = get_all_users(limit=50000)
+    total = sum(int(u.get("token_balance", 0) or 0) for u in users)
+    zero = sum(1 for u in users if int(u.get("token_balance", 0) or 0) <= 0)
+    high = [u for u in users if int(u.get("token_balance", 0) or 0) >= 1000][:20]
+    avg = round(total / len(users), 2) if users else 0
+    rows = "".join([f"<tr><td>{u.get('user_id')}</td><td>{escape(str(u.get('username','')))}</td><td>{u.get('token_balance',0)}</td></tr>" for u in sorted(users, key=lambda x: int(x.get('token_balance',0) or 0), reverse=True)[:10]])
+    body = f"<div class='grid'><div class='card'>Total balance<br><b>{total}</b></div><div class='card'>Average balance<br><b>{avg}</b></div><div class='card'>Zero-balance users<br><b>{zero}</b></div><div class='card'>High-balance users (>=1000)<br><b>{len(high)}</b></div></div><div class='card'>analysis_price_tokens={escape(get_setting('analysis_price_tokens','10'))}, cached_signal_price_tokens={escape(get_setting('cached_signal_price_tokens','5'))}, opportunity_price_tokens={escape(get_setting('opportunity_price_tokens','20'))}, watchlist_extra_slots_price={escape(get_setting('watchlist_extra_slots_price','20'))}</div><div class='card'><h3>Top balances</h3><div class='table-scroll'><table><tr><th>user_id</th><th>username</th><th>balance</th></tr>{rows}</table></div></div><div class='card muted'>Bulk grant is disabled in v1 for safety.</div>"
+    return web.Response(text=_layout("Tokens", "Tokens", key, body), content_type="text/html")
+
+
+async def admin_signals(request: web.Request):
+    denied = await _require_admin(request)
+    if denied:
+        return denied
+    key = _admin_key(request)
+    rows = get_recent_analyses(limit=300)
+    qm = summarize_quality(rows)
+    body = f"<div class='grid'><div class='card'>Actionable (CONSIDER/WATCH)<br><b>{qm.get('decisions',{}).get('CONSIDER',0)+qm.get('decisions',{}).get('WATCH',0)}</b></div><div class='card'>NO TRADE<br><b>{qm.get('decisions',{}).get('NO TRADE',0)}</b></div><div class='card'>WAIT<br><b>{qm.get('decisions',{}).get('WAIT',0)}</b></div><div class='card'>Average edge<br><b>{qm.get('avg_edge','n/a')}</b></div></div><div class='card muted'>Signals dashboard is based on currently available analysis rows. Structured signal history will improve this in Stage 2.</div>"
+    return web.Response(text=_layout("Signals", "Signals", key, body), content_type="text/html")
+
+
 def setup_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin", admin_dashboard)
     app.router.add_get("/admin/users", admin_users)
+    app.router.add_get("/admin/users/{user_id}", admin_user_detail)
     app.router.add_post("/admin/users/{user_id}/{action:.+}", admin_user_action)
+    app.router.add_get("/admin/revenue", admin_revenue)
+    app.router.add_get("/admin/tokens", admin_tokens)
     app.router.add_get("/admin/settings", admin_settings)
     app.router.add_post("/admin/settings", admin_settings)
     app.router.add_get("/admin/analyses", admin_analyses)
     app.router.add_get("/admin/analyses/{id}", admin_analysis_detail)
     app.router.add_get("/admin/quality", admin_quality)
+    app.router.add_get("/admin/signals", admin_signals)
     app.router.add_get("/admin/payments", admin_payments)
     app.router.add_get("/admin/webapp", admin_webapp)
     app.router.add_get("/admin/audit", admin_audit)
