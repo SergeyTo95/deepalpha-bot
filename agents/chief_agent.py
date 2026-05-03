@@ -96,6 +96,20 @@ class ChiefAgent:
             f"probability={decision_data.get('probability', 'N/A')}"
         )
 
+
+        trading_plan = None
+        try:
+            from agents.trading_plan_agent import TradingPlanAgent
+
+            trading_plan = TradingPlanAgent().run(
+                result=decision_data,
+                market_data=market_data,
+                news_data=news_data,
+                lang=lang,
+            )
+        except Exception as _tp_e:
+            logger.error(f"TradingPlanAgent error (non-blocking): {_tp_e}")
+
         comm = self._run_communication_agent(
             decision_data=decision_data,
             news_data=news_data,
@@ -174,6 +188,7 @@ class ChiefAgent:
             "news_data": news_data,
             "decision_data": decision_data,
             "sports_context": sports_context,
+            "trading_plan": trading_plan,
         }
 
         try:
