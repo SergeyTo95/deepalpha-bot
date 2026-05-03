@@ -1554,24 +1554,24 @@ def _build_trading_plan_block(result: dict, lang: str) -> str:
         edge_txt = "нет значимого расхождения" if abs(edge) < 3 else f"{edge:+.1f}%"
         return (
             "\n\n📈 Торговый план:\n"
-            f"— Вероятнее: {likely}\\n"
-            f"— Модель: {likely} {model_p:.1f}%\\n"
-            f"— Рынок: {likely} {market_p:.1f}%\\n"
-            f"— Edge: {edge_txt}\\n"
-            f"— Действие: {action}\\n"
-            f"— Вход: {entry}\\n"
+            f"— Вероятнее: {likely}\n"
+            f"— Модель: {likely} {model_p:.1f}%\n"
+            f"— Рынок: {likely} {market_p:.1f}%\n"
+            f"— Edge: {edge_txt}\n"
+            f"— Действие: {action}\n"
+            f"— Вход: {entry}\n"
             f"— Почему: {summary}"
         )
 
     edge_txt = "no meaningful divergence" if abs(edge) < 3 else f"{edge:+.1f}%"
     return (
         "\n\n📈 Trading Plan:\n"
-        f"— Likely side: {likely}\\n"
-        f"— Model: {likely} {model_p:.1f}%\\n"
-        f"— Market: {likely} {market_p:.1f}%\\n"
-        f"— Edge: {edge_txt}\\n"
-        f"— Action: {action}\\n"
-        f"— Entry: {entry}\\n"
+        f"— Likely side: {likely}\n"
+        f"— Model: {likely} {model_p:.1f}%\n"
+        f"— Market: {likely} {market_p:.1f}%\n"
+        f"— Edge: {edge_txt}\n"
+        f"— Action: {action}\n"
+        f"— Entry: {entry}\n"
         f"— Why: {summary}"
     )
 
