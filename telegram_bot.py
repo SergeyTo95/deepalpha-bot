@@ -1886,6 +1886,7 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
     tennis_market_type = str((sports_context or {}).get("market_type", "")).lower()
+    tennis_market_type = {"headtohead":"head_to_head","h2h":"head_to_head","over_under":"totals"}.get(tennis_market_type, tennis_market_type)
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
@@ -1895,13 +1896,13 @@ def _format_analysis(result: dict, uid: int) -> str:
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and tennis_market_type in {"head_to_head", "headtohead", "h2h"}
+        and tennis_market_type in {"head_to_head", "match_winner"}
     ):
         return _format_tennis_h2h_sports_answer(result, lang)
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and tennis_market_type in {"set_handicap", "spread"}
+        and tennis_market_type in {"set_handicap", "spread", "handicap"}
     ):
         return _format_tennis_h2h_sports_answer(result, lang)
     is_tennis_totals = bool(
@@ -2095,7 +2096,6 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Вывод:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Информационный анализ. Не является торговой, инвестиционной или betting-рекомендацией._"
 
     else:
         text = f"{header_emoji}\n{sep}\n\n📌 {q}\n"
@@ -2133,7 +2133,6 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Informational analysis. Not trading, investment, or betting advice._"
 
     text += time_shift_block
     text += source_block

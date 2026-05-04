@@ -417,6 +417,49 @@ def _extract_key_signals(llm_text: str, news_items: List[Dict]) -> List[str]:
     return signals[:5]
 
 
+
+
+def build_targeted_news_queries(category_type: str, subcategory: str, entities: List[str], market_type: str, question: str, deadline: str = "") -> List[str]:
+    e1 = entities[0] if entities else ""
+    e2 = entities[1] if len(entities) > 1 else ""
+    q=[]
+    if category_type == "sports" and subcategory == "tennis" and market_type in {"head_to_head","match_winner"} and e1 and e2:
+        q=[f"{e1} {e2} prediction form injury surface", f"{e1} {e2} H2H recent form", f"{e1} recent form injury fitness"]
+    elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
+        q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
+    elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
+        q=[f"{e1} vs {e2} prediction preview", f"{e1} vs {e2} injuries lineup report", f"{e1} {e2} latest news"]
+    elif category_type in {"war_conflict","geopolitics"}:
+        q=[f"{question} latest battlefield update", "ceasefire negotiations latest", "military aid sanctions escalation latest"]
+    elif category_type in {"election","politics"}:
+        q=[f"{question} latest polls", f"{question} campaign endorsements", "approval rating latest"]
+    elif category_type == "crypto":
+        q=[f"{question} ETF regulation latest", f"{question} on-chain liquidity inflows", "macro liquidity rate cuts crypto"]
+    elif category_type == "legal_regulatory":
+        q=[f"{question} court ruling latest", f"{question} SEC CFTC DOJ latest", "hearing date ruling"]
+    elif category_type == "company_tech":
+        q=[f"{question} product launch release date", f"{question} earnings guidance latest", f"{question} AI model release latest"]
+    elif category_type == "macro":
+        q=["Fed rate decision latest CPI jobs report", "CPI forecast latest economists", "GDP recession probability latest"]
+    if not q:
+        q=[question]
+    return list(dict.fromkeys([x for x in q if x]))[:4]
+
+
+def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> float:
+    title = str(item.get("title") or "").lower()
+    snippet = str(item.get("snippet") or "").lower()
+    link = str(item.get("link") or "").lower()
+    text = f"{title} {snippet}"
+    score = 0.0
+    if any(e.lower() in text for e in entities if e): score += 2.0
+    if len(entities) > 1 and all(e.lower() in text for e in entities[:2] if e): score += 2.0
+    if any(x in link for x in ["livescore","sofascore","flashscore","player profile"]): score -= 3.0
+    fr = classify_freshness(str(item.get("published") or ""))
+    score += 2.0 if fr in {"very_fresh","fresh"} else (1.0 if fr == "acceptable" else (-1.0 if fr == "stale" else 0.0))
+    item["freshness"] = fr
+    item["source_relevance_score"] = round(score,2)
+    return score
 # ═══════════════════════════════════════════
 # NEWS AGENT
 # ═══════════════════════════════════════════
@@ -443,7 +486,12 @@ class NewsAgent:
         base_query = ""
 
         try:
-            queries = build_news_queries(question, category, date_context, user_context)
+            plan = (result.get("trading_plan") if isinstance(result, dict) else {}) if False else {}
+            category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other")
+            subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown")
+            entities = (market_data.get("trading_plan") or {}).get("detected_entities") or []
+            market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "")
+            queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
             focused_query = queries[0] if queries else question
             base_query = queries[1] if len(queries) > 1 else question
 
@@ -460,6 +508,8 @@ class NewsAgent:
                 ),
                 reverse=True,
             )
+            enriched = [x for x in enriched if _score_source(x, entities, question) >= 1.0]
+            enriched.sort(key=lambda x: (x.get("source_relevance_score",0), x.get("source_score",0), x.get("freshness_score",0)), reverse=True)
             news_items = enriched[:8]
         except Exception as e:
             print(f"NewsAgent multi-query error: {e}")
