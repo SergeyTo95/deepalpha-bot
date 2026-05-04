@@ -1199,11 +1199,11 @@ def _build_user_decision(result: dict, mtype: str, edge: dict, lang: str) -> dic
         if is_no_trade or (not has_edge and not is_wait):
             action = "НЕ ВХОДИТЬ"
             if mtype == "sports_moneyline":
-                direction = "рынок имеет склонность, но value не подтверждён"
+                direction = "рынок имеет склонность, но подтверждённой недооценки нет"
             elif mtype == "crypto_threshold":
                 direction = "направление рынка есть, но цена уже заложена"
             else:
-                direction = "нет безопасной стороны с подтверждённым value"
+                direction = "нет безопасной стороны с подтверждённой недооценкой"
             stake = "не покупать YES и не покупать NO"
             risk = "высокий" if "low" in confidence else "средний"
         elif is_wait:
@@ -1256,7 +1256,7 @@ def _build_market_specific_reasoning(result: dict, lang: str) -> str:
             fav_p = max(yes_p, no_p)
             return (
                 f"Спортивный рынок. Фаворит: {fav} {fav_p:.1f}%. "
-                "NO включает ничью и поражение — это не простая ставка против команды."
+                "NO означает, что команда не победит по правилам рынка."
             )
         if mtype == "crypto_threshold":
             asset = "BTC" if "bitcoin" in question or "btc" in question else "Crypto"
@@ -1265,7 +1265,7 @@ def _build_market_specific_reasoning(result: dict, lang: str) -> str:
             return (
                 f"Crypto threshold: {asset} vs {target_str}. "
                 f"YES {yes_p:.1f}% — рынок уже закладывает перевес. "
-                "Покупка YES без дополнительного edge = переплата."
+                "Покупка YES без подтверждённого преимущества по цене = переплата."
             )
     else:
         if mtype == "sports_moneyline":
@@ -1302,7 +1302,7 @@ def _build_risk_lines(result: dict, mtype: str, lang: str) -> list:
     if lang == "ru":
         if mtype == "sports_moneyline":
             return [
-                "риск ничьей — NO включает ничью и поражение",
+                "для футбола: NO включает ничью и поражение",
                 "отсутствие подтверждённых составов и данных по травмам",
                 "линия может измениться перед матчем",
             ]
@@ -1457,7 +1457,7 @@ def _build_compact_triggers(result: dict, mtype: str, lang: str) -> str:
             ]
         elif mtype == "sports_moneyline":
             lines = [
-                "стартовые составы и травмы",
+                "составы/травмы (для командных видов спорта)",
                 "движение линии перед матчем",
                 "мотивация / турнирная ситуация",
             ]
@@ -1683,7 +1683,7 @@ def _format_analysis(result: dict, uid: int) -> str:
             sports_block = (
                 "\n\n📊 Спортивный контекст:\n"
                 f"— Тип: {stype} / {mkt}\n"
-                "— NO включает ничью и поражение\n"
+                ""
                 f"— Данные: {dq}; не хватает: {miss_txt}\n"
                 f"— Режим: {act}"
             )
@@ -1697,7 +1697,7 @@ def _format_analysis(result: dict, uid: int) -> str:
                 f"— Type: {stype} / {mkt}\n"
                 "— NO includes draw and loss\n"
                 f"— Data: {dq}; missing: {miss_txt}\n"
-                f"— Value: {value}\n"
+                f""
                 f"— SportsAgent: {recommended}"
             )
 
