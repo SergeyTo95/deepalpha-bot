@@ -1250,6 +1250,20 @@ def _build_market_specific_reasoning(result: dict, lang: str) -> str:
     yes_p = probs.get("YES", probs.get("UP", 0.0))
     no_p = probs.get("NO", probs.get("DOWN", 0.0))
 
+    sports_ctx = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else {}
+    if sports_ctx.get("sport_type") == "tennis" and sports_ctx.get("market_type") == "totals":
+        if lang == "ru":
+            return (
+                "Рынок тотала в теннисе (не рынок победителя матча). "
+                "Больше 8.5 проходит при 9+ геймах в 1-м сете; "
+                "Меньше 8.5 проходит при 8 или менее геймах."
+            )
+        return (
+            "Tennis totals market (not a match-winner market). "
+            "Over 8.5 wins if Set 1 has 9+ games; "
+            "Under 8.5 wins if Set 1 has 8 or fewer games."
+        )
+
     if lang == "ru":
         if mtype == "sports_moneyline":
             fav = "YES" if yes_p >= no_p else "NO"
@@ -1299,6 +1313,22 @@ def _clean_decision_raw(decision_raw: str) -> str:
 
 def _build_risk_lines(result: dict, mtype: str, lang: str) -> list:
     """Return generic market-type-specific risk lines. Never use key_signals as risks."""
+    sports_ctx = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else {}
+    if sports_ctx.get("sport_type") == "tennis" and sports_ctx.get("market_type") == "totals":
+        if lang == "ru":
+            return [
+                "качество первой подачи и приёма в начале матча",
+                "вероятность раннего брейка в 1-м сете",
+                "влияние покрытия и усталости на темп геймов",
+                "высокая волатильность первого сета",
+            ]
+        return [
+            "serve and return quality early in the match",
+            "early-break probability in Set 1",
+            "surface and fatigue impact on game pace",
+            "high first-set volatility",
+        ]
+
     if lang == "ru":
         if mtype == "sports_moneyline":
             return [
@@ -1498,7 +1528,7 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     warning = filtered["warning"]
 
     if not sources:
-        no_src = "📰 Источники:\nРелевантные источники не найдены." if lang == "ru" else "📰 Sources:\nNo relevant sources found."
+        no_src = "📰 Источники:\nРелевантные свежие источники не найдены." if lang == "ru" else "📰 Sources:\nNo fresh relevant sources found."
         return f"\n\n{no_src}"
 
     lines = []
@@ -1576,6 +1606,217 @@ def _build_trading_plan_block(result: dict, lang: str) -> str:
     )
 
 
+def _extract_totals_line(result: dict) -> str:
+    source = " ".join([
+        str(result.get("question") or ""),
+        str(result.get("market_probability") or ""),
+        str((result.get("sports_context") or {}).get("market_line") or ""),
+    ])
+    m = re.search(r"(?:o/u|over/under|total(?:s)?)\s*([0-9]+(?:\.[0-9]+)?)", source, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m2 = re.search(r"\b([0-9]+(?:\.[0-9]+)?)\b", source)
+    return m2.group(1) if m2 else ""
+
+
+def _localize_ru_tennis_totals_text(text: str, result: dict) -> str:
+    line = _extract_totals_line(result)
+    over_ru = f"Больше {line}" if line else "Больше"
+    under_ru = f"Меньше {line}" if line else "Меньше"
+    out = text
+    out = re.sub(r"\bWATCH\s*:?\s*Over\b", f"НАБЛЮДАТЬ: {over_ru}", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bWATCH\s*:?\s*Under\b", f"НАБЛЮДАТЬ: {under_ru}", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bCONSIDER\s*:?\s*Over\b", f"РАССМОТРЕТЬ: {over_ru}", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bCONSIDER\s*:?\s*Under\b", f"РАССМОТРЕТЬ: {under_ru}", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bWAIT\b", "ЖДАТЬ", out)
+    out = re.sub(r"\bNO TRADE\b", "НЕ ВХОДИТЬ", out)
+    out = re.sub(r"\bOver\b", over_ru, out)
+    out = re.sub(r"\bUnder\b", under_ru, out)
+    return out
+
+
+def _format_tennis_totals_sports_answer(result: dict, lang: str) -> str:
+    q = _escape(result.get("question", ""))
+    line = _extract_totals_line(result) or "0.0"
+    tp = result.get("trading_plan") if isinstance(result.get("trading_plan"), dict) else {}
+    market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else _extract_market_probs(str(result.get("market_probability") or ""))
+    model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
+    diffs = tp.get("option_differences") if isinstance(tp.get("option_differences"), dict) else {}
+    action_raw = str(tp.get("recommended_action") or result.get("decision") or "WAIT")
+    has_independent_model = bool(model_opts and any(k.lower() in ("over", "under") for k in model_opts.keys()))
+
+    over_key = next((k for k in market_opts.keys() if str(k).lower() == "over"), "Over")
+    under_key = next((k for k in market_opts.keys() if str(k).lower() == "under"), "Under")
+    over_m = float(market_opts.get(over_key, 0.0) or 0.0)
+    under_m = float(market_opts.get(under_key, 0.0) or 0.0)
+    over_label_ru, under_label_ru = f"Больше {line}", f"Меньше {line}"
+    over_label_en, under_label_en = f"Over {line}", f"Under {line}"
+
+    if not has_independent_model:
+        best_ru, best_en = "Явно недооценённого варианта нет", "No clearly underpriced option"
+        likely_ru, likely_en = "явного преимущества нет", "no clear likely side"
+        action_raw = "WAIT" if "NO TRADE" not in action_raw.upper() else "NO TRADE"
+    else:
+        likely = str(tp.get("most_likely_outcome") or "UNKNOWN")
+        best = str(tp.get("best_priced_option") or "NONE")
+        likely_ru = over_label_ru if likely.lower() == "over" else (under_label_ru if likely.lower() == "under" else "явного преимущества нет")
+        likely_en = over_label_en if likely.lower() == "over" else (under_label_en if likely.lower() == "under" else "no clear likely side")
+        best_ru = over_label_ru if best.lower() == "over" else (under_label_ru if best.lower() == "under" else "Явно недооценённого варианта нет")
+        best_en = over_label_en if best.lower() == "over" else (under_label_en if best.lower() == "under" else "No clearly underpriced option")
+
+    action_ru = "ЖДАТЬ" if "WAIT" in action_raw.upper() else ("НЕ ВХОДИТЬ" if "NO TRADE" in action_raw.upper() else action_raw)
+    source_block = _build_source_block_filtered(result, lang)
+    over_d = diffs.get(over_key)
+    under_d = diffs.get(under_key)
+    diff_ru = f"{over_label_ru}: {over_d:+.1f}% | {under_label_ru}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Разница с рынком: данных модели недостаточно."
+    diff_en = f"{over_label_en}: {over_d:+.1f}% | {under_label_en}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Model vs market delta: model data is insufficient."
+
+    is_set1 = "set 1" in str(result.get("question", "")).lower() or "1st set" in str(result.get("question", "")).lower()
+    if lang == "ru":
+        rules = (
+            f"— {over_label_ru} проходит, если в первом сете будет 9+ геймов.\n"
+            f"— {under_label_ru} проходит, если в первом сете будет 8 или меньше геймов."
+            if is_set1 else
+            f"— {over_label_ru} проходит, если в матче будет 23+ гейма.\n"
+            f"— {under_label_ru} проходит, если в матче будет 22 или меньше геймов."
+        )
+        model_note = "Модель не дала отдельной вероятности по тоталу, поэтому вход сейчас не подтверждён." if not has_independent_model else "Ориентир по тоталу берём из модели и сравнения с рынком."
+        return (
+            "🎾 DeepAlpha Sports Signal\n\n"
+            f"📌 {q}\n"
+            "🏷 Категория: Теннис / Тотал\n"
+            f"📊 Линия рынка: {over_label_ru} {over_m:.1f}% | {under_label_ru} {under_m:.1f}%\n"
+            "📌 Рынок тотала в теннисе\n"
+            "— Это не рынок победителя матча.\n"
+            f"{rules}\n\n"
+            f"🎯 Короткий вывод:\n👉 Стоит ли входить сейчас: {action_ru}\n"
+            f"📌 Самый вероятный исход: {likely_ru}\n"
+            f"💰 Наиболее выгодная ставка: {best_ru}\n"
+            f"📊 Разница с рынком: {diff_ru}\n"
+            f"📍 Условия для входа: {model_note}\n"
+            "📡 Что может изменить рынок: качество подачи, качество приёма, вероятность раннего брейка, покрытие, усталость, волатильность матча.\n"
+            "⚠️ Риски: ранний брейк ломает тотал; тай-брейк резко повышает тотал; нестабильная подача; матч может пойти в два коротких сета или затянуться.\n"
+            f"{source_block}"
+        )
+
+    rules = (
+        f"— {over_label_en} wins if the first set has 9+ games.\n"
+        f"— {under_label_en} wins if the first set has 8 or fewer games."
+        if is_set1 else
+        f"— {over_label_en} wins if the match has 23+ games.\n"
+        f"— {under_label_en} wins if the match has 22 or fewer games."
+    )
+    model_note = "The model did not provide separate totals probabilities, so entry is not confirmed now." if not has_independent_model else "Use model totals and compare against market price."
+    action_en = "WAIT" if "WAIT" in action_raw.upper() else ("NO TRADE" if "NO TRADE" in action_raw.upper() else action_raw)
+    return (
+        "🎾 DeepAlpha Sports Signal\n\n"
+        f"📌 {q}\n"
+        "🏷 Category: Tennis / Totals\n"
+        f"📊 Market line: {over_label_en} {over_m:.1f}% | {under_label_en} {under_m:.1f}%\n"
+        "📌 Tennis totals market\n"
+        "— This is not a match-winner market.\n"
+        f"{rules}\n\n"
+        f"🎯 Quick summary:\n👉 Should enter now: {action_en}\n"
+        f"📌 Most likely outcome: {likely_en}\n"
+        f"💰 Best priced side: {best_en}\n"
+        f"📊 Model vs market: {diff_en}\n"
+        f"📍 Entry conditions: {model_note}\n"
+        "📡 What can move market: serve quality, return quality, early break probability, surface, fatigue, match volatility.\n"
+        "⚠️ Risks: an early break can break totals logic; tie-break can spike totals; unstable serving; match can finish quickly in two short sets or stretch long.\n"
+        f"{source_block}"
+    )
+
+
+def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
+    q = _escape(result.get("question", ""))
+    tp = result.get("trading_plan") if isinstance(result.get("trading_plan"), dict) else {}
+    market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else _extract_market_probs(str(result.get("market_probability") or ""))
+    model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
+    diffs = tp.get("option_differences") if isinstance(tp.get("option_differences"), dict) else {}
+    action_raw = str(tp.get("recommended_action") or result.get("decision") or "WAIT").upper()
+    source_block = _build_source_block_filtered(result, lang)
+
+    items = list(market_opts.items())[:2]
+    p1, p2 = (items[0][0], float(items[0][1])) if len(items) > 0 else ("Игрок 1" if lang == "ru" else "Player 1", 0.0), (items[1][0], float(items[1][1])) if len(items) > 1 else ("Игрок 2" if lang == "ru" else "Player 2", 0.0)
+    if isinstance(p1, tuple):  # defensive for mypy-like unpack edge
+        p1, p2 = p1, p2
+    else:
+        p1 = p1
+    p1n, p1m = p1
+    p2n, p2m = p2
+
+    has_independent_model = bool(model_opts.get(p1n) is not None and model_opts.get(p2n) is not None)
+    if not has_independent_model:
+        best_ru, best_en = "Явно недооценённого варианта нет", "No clearly underpriced option"
+        likely_ru, likely_en = "явного преимущества нет", "no clear likely side"
+        model_note_ru = "Модель не дала отдельной независимой вероятности по каждому игроку, поэтому вход сейчас не подтверждён."
+        model_note_en = "The model did not provide independent probabilities for each player, so entry is not confirmed."
+        diff_ru = "данных модели недостаточно"
+        diff_en = "model data is insufficient"
+        action_ru = "НЕ ВХОДИТЬ" if "NO TRADE" in action_raw else "ЖДАТЬ"
+        action_en = "NO TRADE" if "NO TRADE" in action_raw else "WAIT"
+    else:
+        p1_model = float(model_opts.get(p1n, 0.0))
+        p2_model = float(model_opts.get(p2n, 0.0))
+        p1_diff = float(diffs.get(p1n, p1_model - p1m))
+        p2_diff = float(diffs.get(p2n, p2_model - p2m))
+        likely = str(tp.get("most_likely_outcome") or "UNKNOWN")
+        best = str(tp.get("best_priced_option") or "NONE")
+        likely_ru = likely if likely in (p1n, p2n) else "явного преимущества нет"
+        likely_en = likely if likely in (p1n, p2n) else "no clear likely side"
+        best_ru = best if best in (p1n, p2n) else "Явно недооценённого варианта нет"
+        best_en = best if best in (p1n, p2n) else "No clearly underpriced option"
+        diff_ru = f"{p1n}: модель {p1_model:.1f}% / рынок {p1m:.1f}% / разница {p1_diff:+.1f}% | {p2n}: модель {p2_model:.1f}% / рынок {p2m:.1f}% / разница {p2_diff:+.1f}%"
+        diff_en = f"{p1n}: model {p1_model:.1f}% / market {p1m:.1f}% / delta {p1_diff:+.1f}% | {p2n}: model {p2_model:.1f}% / market {p2m:.1f}% / delta {p2_diff:+.1f}%"
+        action_ru = f"НАБЛЮДАТЬ: {best}" if action_raw.startswith("WATCH ") and best in (p1n, p2n) else (f"РАССМОТРЕТЬ: {best}" if action_raw.startswith("CONSIDER ") and best in (p1n, p2n) else ("НЕ ВХОДИТЬ" if "NO TRADE" in action_raw else "ЖДАТЬ"))
+        action_en = f"WATCH {best}" if action_raw.startswith("WATCH ") and best in (p1n, p2n) else (f"CONSIDER {best}" if action_raw.startswith("CONSIDER ") and best in (p1n, p2n) else ("NO TRADE" if "NO TRADE" in action_raw else "WAIT"))
+        model_note_ru = "Ориентир берём из сравнения модели и рынка по каждому игроку."
+        model_note_en = "Decision is based on player-by-player model versus market comparison."
+
+    if lang == "ru":
+        return (
+            "🎾 DeepAlpha Sports Signal\n\n"
+            f"📌 {q}\n"
+            "🏷 Категория: Теннис / победитель матча\n"
+            "📊 Линия рынка:\n"
+            f"— {p1n}: {p1m:.1f}%\n"
+            f"— {p2n}: {p2m:.1f}%\n"
+            "📌 Как считается рынок:\n"
+            "— Побеждает один из двух теннисистов.\n"
+            "— Ничьей в теннисе нет.\n"
+            "— Это рынок победителя матча, а не футбольный рынок с ничьей.\n\n"
+            f"🎯 Короткий вывод:\n👉 Стоит ли входить сейчас: {action_ru}\n"
+            f"📌 Самый вероятный исход: {likely_ru}\n"
+            f"💰 Наиболее выгодная ставка: {best_ru}\n"
+            f"📊 Разница с рынком: {diff_ru}\n"
+            f"📍 Условия для входа: {model_note_ru}\n"
+            "📡 Что может изменить рынок: форма игрока, покрытие, качество подачи, качество приёма, физическое состояние, усталость и плотность календаря, личные встречи, недавние матчи.\n"
+            "⚠️ Риски: слабые или отсутствующие свежие данные; нестабильная подача; быстрый ранний брейк может изменить матч; квалификация часто менее предсказуема; движение линии перед матчем.\n"
+            f"{source_block}"
+        )
+
+    return (
+        "🎾 DeepAlpha Sports Signal\n\n"
+        f"📌 {q}\n"
+        "🏷 Category: Tennis / match winner\n"
+        "📊 Market line:\n"
+        f"— {p1n}: {p1m:.1f}%\n"
+        f"— {p2n}: {p2m:.1f}%\n"
+        "📌 Market rules:\n"
+        "— One of two players wins the match.\n"
+        "— There is no draw in tennis.\n"
+        "— This is a match-winner market.\n\n"
+        f"🎯 Quick summary:\n👉 Should enter now: {action_en}\n"
+        f"📌 Most likely outcome: {likely_en}\n"
+        f"💰 Best priced side: {best_en}\n"
+        f"📊 Model vs market: {diff_en}\n"
+        f"📍 Entry conditions: {model_note_en}\n"
+        "📡 What can move market: player form, surface, serve quality, return quality, physical condition, fatigue and schedule density, H2H, recent matches.\n"
+        "⚠️ Risks: weak or missing fresh data; unstable serving; early break can change match shape; qualifiers are often less predictable; pre-match line movement.\n"
+        f"{source_block}"
+    )
+
+
 def _format_analysis(result: dict, uid: int) -> str:
     # Turbo Signal: pass-through, do not reformat
     if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
@@ -1644,6 +1885,30 @@ def _format_analysis(result: dict, uid: int) -> str:
     trading_plan_block = _build_trading_plan_block(result, lang)
 
     sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
+    tennis_market_type = str((sports_context or {}).get("market_type", "")).lower()
+    if (
+        sports_context
+        and str(sports_context.get("sport_type", "")).lower() == "tennis"
+        and str(sports_context.get("market_type", "")).lower() == "totals"
+    ):
+        return _format_tennis_totals_sports_answer(result, lang)
+    if (
+        sports_context
+        and str(sports_context.get("sport_type", "")).lower() == "tennis"
+        and tennis_market_type in {"head_to_head", "headtohead", "h2h"}
+    ):
+        return _format_tennis_h2h_sports_answer(result, lang)
+    if (
+        sports_context
+        and str(sports_context.get("sport_type", "")).lower() == "tennis"
+        and tennis_market_type in {"set_handicap", "spread"}
+    ):
+        return _format_tennis_h2h_sports_answer(result, lang)
+    is_tennis_totals = bool(
+        sports_context
+        and str(sports_context.get("sport_type", "")).lower() == "tennis"
+        and str(sports_context.get("market_type", "")).lower() == "totals"
+    )
     sports_block = ""
     if sports_context:
         stype = _escape(str(sports_context.get("sport_type", "unknown")))
@@ -1691,11 +1956,17 @@ def _format_analysis(result: dict, uid: int) -> str:
             dq = _escape(dq_raw)
             recommended = _escape(recommended_raw)
             value = _escape(value_raw)
+            no_draw_line = ""
+            if not (
+                str(sports_context.get("sport_type", "")).lower() == "tennis"
+                and str(sports_context.get("market_type", "")).lower() == "totals"
+            ):
+                no_draw_line = "— NO includes draw and loss\n"
 
             sports_block = (
                 "\n\n📊 Sports Context:\n"
                 f"— Type: {stype} / {mkt}\n"
-                "— NO includes draw and loss\n"
+                f"{no_draw_line}"
                 f"— Data: {dq}; missing: {miss_txt}\n"
                 f""
                 f"— SportsAgent: {recommended}"
@@ -1708,7 +1979,9 @@ def _format_analysis(result: dict, uid: int) -> str:
     if not dec_display:
         dec_display = "NO TRADE" if is_no_trade else (display_prediction or "—")
 
-    if mtype == "sports_moneyline":
+    if is_tennis_totals:
+        header_emoji = "🎾 DeepAlpha Sports Signal"
+    elif mtype == "sports_moneyline":
         header_emoji = "⚽ DeepAlpha Sports Signal"
     else:
         header_emoji = "🔍 DeepAlpha Analysis"
@@ -1724,7 +1997,20 @@ def _format_analysis(result: dict, uid: int) -> str:
     # Details block
     is_no_edge = edge.get("edge_strength") in ("none", None) or is_no_trade
 
-    if is_no_edge:
+    if is_tennis_totals:
+        model_line = "Модель: явного преимущества нет" if lang == "ru" else "Model: no clear model advantage"
+        market_line = "Рынок: Больше 8.5 / Меньше 8.5" if lang == "ru" else "Market: Over 8.5 / Under 8.5"
+        delta_line = "Разница: 0.0%" if lang == "ru" else "Delta: 0.0%"
+        trade_conf = "низкая" if lang == "ru" else "low"
+        udec["action"] = "ЖДАТЬ" if lang == "ru" else "WAIT"
+        udec["direction"] = (
+            "Это тотал 1-го сета, не рынок победителя матча."
+            if lang == "ru" else
+            "This is a Set 1 totals market, not a match-winner market."
+        )
+        udec["stake"] = "не входить до появления перевеса" if lang == "ru" else "no entry until a clear pricing advantage appears"
+        udec["risk"] = "средний" if lang == "ru" else "medium"
+    elif is_no_edge:
         model_line = "Модель: edge не найден" if lang == "ru" else "Model: no edge found"
         market_line = f"Рынок: {market_prob_raw}" if lang == "ru" else f"Market: {market_prob_raw}"
         delta_line = "Расхождение: 0.0%" if lang == "ru" else "Delta: 0.0%"
@@ -1851,6 +2137,8 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     text += time_shift_block
     text += source_block
+    if lang == "ru" and is_tennis_totals:
+        text = _localize_ru_tennis_totals_text(text, result)
     return text
 
 def _format_opportunity(result: dict, uid: int, cached: bool = False) -> str:
