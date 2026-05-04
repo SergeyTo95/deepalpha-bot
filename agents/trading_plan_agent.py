@@ -12,9 +12,11 @@ class TradingPlanAgent:
 
         text = " ".join(str(x or "") for x in [result.get("question"), result.get("title"), market_data.get("question"), market_data.get("title")]).strip()
         sport_type = self._detect_sport_type(text, market_data, sports_context)
+        category_type, subcategory = self._detect_category_and_subcategory(text, result, market_data, sport_type)
         market_probs = self._extract_market_probs(str(result.get("market_probability") or market_data.get("market_probability") or ""), result.get("options_breakdown") or market_data.get("options_breakdown") or "")
         market_type = self._detect_market_type(text, sport_type, market_probs, sports_context)
-        model_options = self._extract_model_options(result, market_probs)
+        entities = self._extract_entities(text, market_probs)
+        model_options = self._extract_model_options(result, market_probs, sport_type=sport_type, market_type=market_type)
 
         option_diffs = {k: round(float(model_options.get(k, 0.0)) - float(v), 1) for k, v in market_probs.items() if k in model_options}
         most_likely = max(model_options, key=lambda k: model_options[k]) if model_options else (max(market_probs, key=lambda k: market_probs[k]) if market_probs else "UNKNOWN")
@@ -40,8 +42,15 @@ class TradingPlanAgent:
         entry_zone, avoid_zone = self._entry_zone(best_opt, best_diff, market_probs, model_options, lang)
 
         return {
+            "category_type": category_type,
+            "subcategory": subcategory,
             "sport_type": sport_type,
             "market_type": market_type,
+            "detected_entities": entities,
+            "primary_entity": entities[0] if entities else "",
+            "opposing_entities": entities[1:] if len(entities) > 1 else [],
+            "event_target": self._extract_event_target(text),
+            "event_deadline": self._extract_deadline(text),
             "market_options": market_probs,
             "model_options": model_options,
             "option_differences": option_diffs,
@@ -85,7 +94,7 @@ class TradingPlanAgent:
             out[key] = float(m.group(2))
         return out
 
-    def _extract_model_options(self, result: Dict[str, Any], market_options: Dict[str, float]) -> Dict[str, float]:
+    def _extract_model_options(self, result: Dict[str, Any], market_options: Dict[str, float], sport_type: str = "unknown", market_type: str = "unknown") -> Dict[str, float]:
         out: Dict[str, float] = {}
         provided = result.get("model_options")
         if isinstance(provided, dict) and provided:
@@ -123,10 +132,52 @@ class TradingPlanAgent:
             # For 3+ option markets (e.g. 1X2) keep provided model options as-is;
             # do not overwrite with market probabilities.
             return out
+        if not out and sport_type == "tennis" and market_type in {"head_to_head", "headtohead", "h2h", "totals", "set_handicap", "spread"}:
+            return {}
 
         for k,v in market_options.items():
             out.setdefault(k, float(v))
         return out
+
+    def _detect_category_and_subcategory(self, text: str, result: Dict[str, Any], market_data: Dict[str, Any], sport_type: str) -> Tuple[str, str]:
+        t = (text + " " + str(result.get("category") or "") + " " + str(market_data.get("category") or "")).lower()
+        if sport_type != "unknown":
+            return "sports", sport_type
+        if any(k in t for k in ["election", "candidate", "poll", "president", "senate"]):
+            return ("election", "presidential_election") if "president" in t else ("politics", "polling")
+        if any(k in t for k in ["russia", "ukraine", "ceasefire", "capture", "sanctions", "war"]):
+            return "war_conflict", "escalation"
+        if any(k in t for k in ["bitcoin", "btc", "ethereum", "etf", "token", "crypto"]):
+            return "crypto", "token_price"
+        if any(k in t for k in ["fed", "cpi", "inflation", "gdp", "jobs report", "recession"]):
+            return "macro", "fed_rate"
+        if any(k in t for k in ["sec", "court", "lawsuit", "doj", "cftc", "ruling"]):
+            return "legal_regulatory", "court_ruling"
+        if any(k in t for k in ["openai", "gpt", "earnings", "ceo", "product launch", "acquisition"]):
+            return "company_tech", "ai model release"
+        if any(k in t for k in ["oscar", "grammy", "eurovision", "box office"]):
+            return "culture_awards", "Oscar"
+        if any(k in t for k in ["hurricane", "temperature", "rainfall", "earthquake", "wildfire"]):
+            return "weather", "hurricane"
+        return "other", "unknown"
+
+    def _extract_entities(self, text: str, market_options: Dict[str, float]) -> List[str]:
+        opts = [k for k in market_options.keys() if k.upper() not in {"YES", "NO", "UP", "DOWN"}]
+        if opts:
+            return opts
+        m = re.search(r"(.+?)\s+(?:vs|v\\.?|against)\\s+(.+)", text, re.IGNORECASE)
+        if m:
+            return [m.group(1).strip(" ?.,;:"), m.group(2).strip(" ?.,;:")]
+        w = re.search(r"will\\s+(.+?)\\s+(?:win|capture|approve|release)", text, re.IGNORECASE)
+        return [w.group(1).strip()] if w else []
+
+    def _extract_event_target(self, text: str) -> str:
+        m = re.search(r"(?:capture|approve|release|hit)\\s+(.+?)(?:\\s+by\\s+|\\?|$)", text, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    def _extract_deadline(self, text: str) -> str:
+        m = re.search(r"\\bby\\s+([A-Za-z]+\\s+\\d{1,2}|[A-Za-z]+|\\d{4}-\\d{2}-\\d{2})", text, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
 
     def _detect_sport_type(self, text: str, market_data: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         st = str((ctx or {}).get("sport_type") or "").lower()
