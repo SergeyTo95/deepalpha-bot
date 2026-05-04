@@ -3,278 +3,186 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 class TradingPlanAgent:
-    def run(
-        self,
-        result: dict,
-        market_data: dict = None,
-        news_data: dict = None,
-        lang: str = "ru",
-    ) -> dict:
+    SUPPORTED_SPORTS = {"football","tennis","basketball","hockey","baseball","mma","boxing","esports","cricket","american_football","unknown"}
+
+    def run(self, result: dict, market_data: dict = None, news_data: dict = None, lang: str = "ru") -> dict:
         result = result or {}
         market_data = market_data or {}
-        news_data = news_data or {}
+        sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else {}
 
-        market_type = self._classify_market_type(result, market_data)
-        market_probs = self._extract_market_probs(
-            str(result.get("market_probability") or market_data.get("market_probability") or ""),
-            result.get("options_breakdown") or market_data.get("options_breakdown") or "",
-        )
+        text = " ".join(str(x or "") for x in [result.get("question"), result.get("title"), market_data.get("question"), market_data.get("title")]).strip()
+        sport_type = self._detect_sport_type(text, market_data, sports_context)
+        market_probs = self._extract_market_probs(str(result.get("market_probability") or market_data.get("market_probability") or ""), result.get("options_breakdown") or market_data.get("options_breakdown") or "")
+        market_type = self._detect_market_type(text, sport_type, market_probs, sports_context)
+        model_options = self._extract_model_options(result, market_probs)
 
-        model_side, model_prob = self._extract_model_prediction(result)
-        market_leader_side, market_leader_prob = self._pick_likely_side(market_probs)
-
-        if model_side not in market_probs:
-            model_side = market_leader_side
-
-        model_prob = float(model_prob if model_prob is not None else market_leader_prob)
-        market_prob_same_side = float(market_probs.get(model_side, market_leader_prob or 0.0))
-        likely_side = (
-            model_side
-            if model_side != "UNKNOWN" and model_prob > 0
-            else market_leader_side
-        )
-
-        edge = round(model_prob - market_prob_same_side, 1)
-        abs_edge = abs(edge)
+        option_diffs = {k: round(float(model_options.get(k, 0.0)) - float(v), 1) for k, v in market_probs.items() if k in model_options}
+        most_likely = max(model_options, key=lambda k: model_options[k]) if model_options else (max(market_probs, key=lambda k: market_probs[k]) if market_probs else "UNKNOWN")
+        best_opt, best_diff = "NONE", -999.0
+        for k, d in option_diffs.items():
+            if d > best_diff:
+                best_opt, best_diff = k, d
+        if best_diff < 3:
+            best_opt = "NONE"
 
         confidence = self._normalize_confidence(str(result.get("confidence") or ""))
-        sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
-        if sports_context and sports_context.get("data_quality") == "low":
-            confidence = "low"
+        data_quality = str((sports_context or {}).get("data_quality") or "low").lower()
+        if data_quality not in ("low", "medium", "high"):
+            data_quality = "low"
 
-        if model_prob <= 0 or abs(model_prob - market_prob_same_side) < 0.2:
-            edge = 0.0
-            abs_edge = 0.0
+        action = self._build_action(best_opt, best_diff, confidence, data_quality)
+        likely_side = most_likely
+        bet_side = best_opt if best_opt != "NONE" and action.startswith(("WATCH","CONSIDER")) else "NONE"
+        edge = round(option_diffs.get(bet_side, 0.0), 1) if bet_side != "NONE" else 0.0
 
-        value_assessment = self._value_assessment(abs_edge, edge)
-        recommended_action, bet_side = self._recommend_action(
-            model_side=model_side,
-            abs_edge=abs_edge,
-            confidence=confidence,
-            value_assessment=value_assessment,
-        )
-
-        entry_zone, avoid_zone = self._entry_zone(
-            side=model_side,
-            market_prob=market_prob_same_side,
-            model_prob=model_prob,
-            value_assessment=value_assessment,
-            action=recommended_action,
-            lang=lang,
-        )
-
-        confirmation_triggers = self._confirmation_triggers(result, market_type, lang)
-        invalidation_triggers = self._invalidation_triggers(model_side, lang)
-
-        if confidence == "low" and recommended_action.startswith("CONSIDER"):
-            recommended_action = "WAIT"
-            bet_side = "NONE"
-
-        if confidence == "low" and abs_edge < 15:
-            recommended_action = "NO TRADE"
-            bet_side = "NONE"
-
-        missing_data = self._missing_data(result, sports_context)
-        key_reasons = self._key_reasons(model_side, model_prob, market_prob_same_side, edge, lang)
-        risk_reasons = self._risk_reasons(confidence, missing_data, lang)
-
-        summary = self._summary(model_side, value_assessment, recommended_action, entry_zone, lang)
+        summary = self._summary_ru(most_likely, best_opt, action) if lang == "ru" else f"Most likely: {most_likely}; best priced: {best_opt}; action: {action}."
+        market_expl = self._market_explanation(sport_type, market_type, market_probs)
+        entry_zone, avoid_zone = self._entry_zone(best_opt, best_diff, market_probs, model_options, lang)
 
         return {
+            "sport_type": sport_type,
             "market_type": market_type,
+            "market_options": market_probs,
+            "model_options": model_options,
+            "option_differences": option_diffs,
+            "most_likely_outcome": most_likely,
+            "best_priced_option": best_opt,
+            "recommended_action": action,
+            "confidence": confidence,
+            "data_quality": data_quality,
+            "market_explanation": market_expl,
+            "entry_conditions": [entry_zone],
+            "risk_factors": [avoid_zone],
+            "news_quality": data_quality,
+            "relevant_sources": (news_data or {}).get("sources", []) if isinstance(news_data, dict) else [],
+            "summary": summary,
+            # backward compatibility
             "likely_side": likely_side,
             "bet_side": bet_side,
-            "model_probability": round(model_prob, 1),
-            "market_probability": round(market_prob_same_side, 1),
-            "edge": round(edge, 1),
-            "edge_side": model_side if abs_edge >= 3 else "NONE",
-            "value_assessment": value_assessment,
-            "recommended_action": recommended_action,
-            "confidence": confidence,
+            "model_probability": round(float(model_options.get(likely_side, 0.0)), 1),
+            "market_probability": round(float(market_probs.get(likely_side, 0.0)), 1),
+            "edge": edge,
+            "edge_side": bet_side if bet_side != "NONE" else "NONE",
+            "value_assessment": "possible_value" if best_diff >= 7 else ("no_edge" if best_diff >= 3 else "fair_price"),
             "entry_zone": entry_zone,
             "avoid_zone": avoid_zone,
-            "invalidation_triggers": invalidation_triggers,
-            "confirmation_triggers": confirmation_triggers,
-            "key_reasons": key_reasons,
-            "risk_reasons": risk_reasons,
-            "missing_data": missing_data,
-            "summary": summary,
-            "debug": {
-                "market_probs": market_probs,
-                "model_side": model_side,
-                "sports_data_quality": (sports_context or {}).get("data_quality"),
-            },
+            "invalidation_triggers": [],
+            "confirmation_triggers": [],
+            "key_reasons": [],
+            "risk_reasons": [],
+            "missing_data": (sports_context or {}).get("missing_data", []),
+            "debug": {"market_probs": market_probs, "sports_data_quality": data_quality},
         }
 
     def _extract_market_probs(self, text: str, options_breakdown: str = "") -> Dict[str, float]:
         out: Dict[str, float] = {}
-        raw = f"{text} | {options_breakdown}".lower()
-        for label, key in (("yes", "YES"), ("no", "NO"), ("up", "UP"), ("down", "DOWN"), ("да", "YES"), ("нет", "NO")):
-            m = re.search(rf"{re.escape(label)}\s*[:\-]?\s*([\d.]+)%", raw)
-            if m:
-                out[key] = float(m.group(1))
-
-        for m in re.finditer(r"([^|:,/]+)\s*[:\-]\s*([\d.]+)%", f"{text} | {options_breakdown}"):
+        raw = f"{text} | {options_breakdown}"
+        for m in re.finditer(r"([^|:,]+?)\s*[:\-]\s*([\d.]+)%", raw, re.IGNORECASE):
             k = m.group(1).strip()
-            v = float(m.group(2))
-            if k and k.upper() not in out:
-                out[k] = v
-
+            if not k:
+                continue
+            key = {"yes":"YES","no":"NO","да":"YES","нет":"NO"}.get(k.lower(), k)
+            out[key] = float(m.group(2))
         return out
 
-    def _extract_model_prediction(self, result: Dict[str, Any]) -> Tuple[str, Optional[float]]:
-        primary = str(result.get("probability") or result.get("display_prediction") or "")
-        prob_text = " ".join([primary, str(result.get("conclusion") or "")])
-        m = re.search(r"([\d.]+)%", prob_text)
-        prob = float(m.group(1)) if m else None
+    def _extract_model_options(self, result: Dict[str, Any], market_options: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        p = str(result.get("probability") or result.get("display_prediction") or "")
+        m = re.search(r"([^\d%]+?)\s*([\d.]+)%", p)
+        if m:
+            side = m.group(1).strip().rstrip(':')
+            side = {"yes":"YES","no":"NO","да":"YES","нет":"NO"}.get(side.lower(), side)
+            out[side] = float(m.group(2))
+        if not out and len(market_options)==2:
+            # pick leader textless fallback
+            mm = re.search(r"([\d.]+)%", p)
+            if mm:
+                first = list(market_options.keys())[0]
+                out[first]=float(mm.group(1))
+        if len(market_options)==2 and len(out)==1:
+            k=list(out.keys())[0]; v=out[k]
+            other=[x for x in market_options if x!=k][0]
+            out[other]=round(100.0-v,1)
+        for k,v in market_options.items():
+            out.setdefault(k, float(v))
+        return out
 
-        low = prob_text.lower()
-        explicit = re.search(r"\b(yes|no|up|down|да|нет|вверх|вниз)\b", low)
-        if explicit:
-            map_side = {
-                "yes": "YES", "да": "YES",
-                "no": "NO", "нет": "NO",
-                "up": "UP", "вверх": "UP",
-                "down": "DOWN", "вниз": "DOWN",
-            }
-            return map_side.get(explicit.group(1), "UNKNOWN"), prob
-        if any(x in low for x in [" no ", "no:", " нет", "не "]):
-            return "NO", prob
-        if any(x in low for x in [" yes ", "yes:", " да", "будет", "win"]):
-            return "YES", prob
-        if "down" in low or "вниз" in low:
-            return "DOWN", prob
-        if "up" in low or "вверх" in low:
-            return "UP", prob
-        return "UNKNOWN", prob
+    def _detect_sport_type(self, text: str, market_data: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+        st = str((ctx or {}).get("sport_type") or "").lower()
+        if st in self.SUPPORTED_SPORTS:
+            return st
+        t = (text + " " + str(market_data.get("category") or "") + " " + str(market_data.get("url") or "")).lower()
+        mapping = {
+            "football":["uefa","ucl","champions league","epl","premier league","la liga","serie a","bundesliga","soccer"],
+            "basketball":["nba"], "hockey":["nhl"], "baseball":["mlb"], "mma":["ufc","mma"],
+            "tennis":["wta","atp","tennis"], "esports":["cs2","dota","lol","valorant"], "american_football":["nfl"], "cricket":["cricket"], "boxing":["boxing"]
+        }
+        for s, kws in mapping.items():
+            if any(k in t for k in kws):
+                return s
+        return "unknown"
 
-    def _pick_likely_side(self, market_probs: Dict[str, float]) -> Tuple[str, float]:
-        if not market_probs:
-            return "UNKNOWN", 50.0
-        k = max(market_probs, key=lambda x: market_probs[x])
-        return k, float(market_probs[k])
-
-    def _classify_market_type(self, result: Dict[str, Any], market_data: Dict[str, Any]) -> str:
-        q = str(result.get("question") or market_data.get("question") or "").lower()
-        if result.get("options_breakdown"):
+    def _detect_market_type(self, text: str, sport_type: str, market_options: Dict[str, float], ctx: Dict[str, Any]) -> str:
+        mt = str((ctx or {}).get("market_type") or "").lower()
+        if mt:
+            return mt
+        keys=[k.lower() for k in market_options.keys()]
+        t=text.lower()
+        if len(keys)==2 and set(keys)=={"yes","no"}:
+            return "binary_team_win"
+        if len(keys)==3 and any("draw"==k for k in keys):
+            return "sports_1x2"
+        if any(x in t for x in ["set handicap","-1.5","+1.5","handicap"]) and sport_type=="tennis":
+            return "set_handicap"
+        if any(x in t for x in ["spread","handicap","-","+"]) and sport_type in {"basketball","american_football"}:
+            return "spread"
+        if sport_type=="hockey" and ("-1.5" in t or "+1.5" in t):
+            return "puck_line"
+        if sport_type=="baseball" and ("-1.5" in t or "+1.5" in t):
+            return "run_line"
+        if any(x in t for x in ["over/under","total"," o/u ","over ","under "]):
+            return "totals"
+        if len(keys)==2 and "draw" not in keys:
+            return "head_to_head"
+        if len(keys)>3:
             return "multiple_choice"
-        if any(x in q for x in ["bitcoin", "btc", "above $", "below $"]):
-            return "crypto_threshold"
-        if any(x in q for x in ["win", "vs", "match", "league"]):
-            return "sports"
-        if any(x in q for x in ["election", "president", "senate"]):
-            return "politics"
-        if any(x in q for x in ["fed", "inflation", "rate"]):
-            return "macro"
-        return "binary"
+        return "unknown"
 
     def _normalize_confidence(self, conf: str) -> str:
-        c = conf.lower()
-        if "high" in c or "высок" in c:
-            return "high"
-        if "medium" in c or "сред" in c:
-            return "medium"
+        c=conf.lower()
+        if "high" in c or "высок" in c:return "high"
+        if "medium" in c or "сред" in c:return "medium"
         return "low"
 
-    def _value_assessment(self, abs_edge: float, edge: float) -> str:
-        if abs_edge < 3:
-            return "fair_price"
-        if abs_edge < 8:
-            return "no_edge"
-        if abs_edge < 15:
-            return "possible_value"
-        return "strong_value"
+    def _build_action(self, best_opt: str, diff: float, confidence: str, data_quality: str) -> str:
+        if best_opt == "NONE":
+            return "WAIT"
+        if diff < 3:
+            return "WAIT"
+        if data_quality == "low" or confidence == "low":
+            return f"WATCH {best_opt}"
+        if diff < 7:
+            return f"WATCH {best_opt}"
+        return f"CONSIDER {best_opt}" if diff >= 7 else "WAIT"
 
-    def _recommend_action(self, model_side: str, abs_edge: float, confidence: str, value_assessment: str) -> Tuple[str, str]:
-        if confidence == "low":
-            return "NO TRADE", "NONE"
-        if abs_edge < 3:
-            return "WAIT", "NONE"
-        if abs_edge < 8:
-            return (f"WATCH {model_side}", "NONE")
-        if abs_edge < 15:
-            return (f"WATCH {model_side}" if confidence == "medium" else f"CONSIDER {model_side}", model_side if confidence in ("medium", "high") else "NONE")
-        return (f"CONSIDER {model_side}", model_side)
+    def _summary_ru(self, likely: str, best: str, action: str) -> str:
+        best_txt = best if best != "NONE" else "явно недооценённого варианта нет"
+        return f"Самый вероятный исход: {likely}. Наиболее выгодная ставка: {best_txt}. Действие: {action}."
 
-    def _entry_zone(
-        self,
-        side: str,
-        market_prob: float,
-        model_prob: float,
-        value_assessment: str,
-        action: str,
-        lang: str,
-    ) -> Tuple[str, str]:
-        dec = 6 if 50 <= market_prob <= 65 else (10 if market_prob > 65 else 5)
-        low = max(1, round(market_prob - dec - 2, 1))
-        high = max(1, round(market_prob - dec + 1, 1))
-        chase_low = round(market_prob + 6, 1)
-        chase_high = round(market_prob + 8, 1)
+    def _market_explanation(self, sport_type: str, market_type: str, market_options: Dict[str, float]) -> str:
+        if sport_type == "tennis" and market_type == "head_to_head":
+            return "Побеждает один из двух игроков. Ничьей в теннисе нет."
+        if sport_type == "tennis" and market_type == "set_handicap":
+            return "Фора по сетам: -1.5 требует победу 2:0; +1.5 проходит при хотя бы одном выигранном сете."
+        if market_type == "sports_1x2":
+            return "Три исхода: победа первой команды, ничья, победа второй команды."
+        if market_type == "binary_team_win":
+            return "YES = выбранная команда победит; NO = не победит."
+        return "См. правила рынка для точного расчёта исхода."
 
-        if value_assessment in ("fair_price", "no_edge") or action in ("WAIT", "NO TRADE"):
-            entry = f"{side} ≤{low}–{high}% or strong confirmation trigger"
-            avoid = f"Avoid chasing {side} above {round(market_prob + 3,1)}% without new data"
-            if lang == "ru":
-                entry = f"{side} интересен только ≤{low}–{high}% или при сильном подтверждении"
-                avoid = f"Избегать входа в {side} выше {round(market_prob + 3,1)}% без новых данных"
-            return entry, avoid
-
-        if value_assessment == "possible_value":
-            entry = (
-                f"{side} is watchable with small sizing; better on pullback or fresh confirmation"
-            )
-            avoid = f"Do not chase above {chase_low:.0f}–{chase_high:.0f}% without new confirmation"
-            if lang == "ru":
-                entry = f"{side} можно наблюдать/рассмотреть малым размером; лучше входить на откате или при подтверждении"
-                avoid = f"Не догонять выше {chase_low:.0f}–{chase_high:.0f}% без нового подтверждения"
-            return entry, avoid
-
-        entry = f"{side} can be considered at current price; avoid chasing above {chase_low:.0f}–{chase_high:.0f}% without confirmation"
-        avoid = f"Do not add above {chase_low:.0f}–{chase_high:.0f}% without new data"
-        if lang == "ru":
-            entry = f"{side} можно рассмотреть по текущей цене; не догонять выше {chase_low:.0f}–{chase_high:.0f}% без нового подтверждения"
-            avoid = f"Не добирать выше {chase_low:.0f}–{chase_high:.0f}% без новых данных"
-        return entry, avoid
-
-    def _confirmation_triggers(self, result: Dict[str, Any], market_type: str, lang: str) -> List[str]:
-        base = ["new credible source", "sharp market repricing"] if lang == "en" else ["новый надёжный источник", "резкий ценовой сдвиг рынка"]
-        return base
-
-    def _invalidation_triggers(self, side: str, lang: str) -> List[str]:
-        return [f"Price moves materially against {side}", "Contradicting official evidence"] if lang == "en" else [f"Цена существенно уходит против {side}", "Официальные данные против тезиса"]
-
-    def _missing_data(self, result: Dict[str, Any], sports_context: Optional[Dict[str, Any]]) -> List[str]:
-        miss = []
-        if sports_context:
-            miss.extend(sports_context.get("missing_data") or [])
-        if not (result.get("news_sources") or result.get("news_items")):
-            miss.append("limited fresh sources")
-        return miss[:5]
-
-    def _key_reasons(self, side: str, model: float, market: float, edge: float, lang: str) -> List[str]:
-        if lang == "ru":
-            return [
-                f"{side} вероятнее по модели: {model:.1f}%",
-                f"Рынок по этой же стороне: {market:.1f}%",
-                "Вероятность и value оцениваются отдельно",
-            ]
-        return [
-            f"{side} is more likely by model: {model:.1f}%",
-            f"Market on same side: {market:.1f}%",
-            "Probability and value are evaluated separately",
-        ]
-
-    def _risk_reasons(self, confidence: str, missing_data: List[str], lang: str) -> List[str]:
-        risks = ["low confidence regime" if lang == "en" else "режим пониженной уверенности"] if confidence == "low" else []
-        if missing_data:
-            risks.append("data gaps remain" if lang == "en" else "есть пробелы в данных")
-        return risks
-
-    def _summary(self, side: str, value: str, action: str, entry: str, lang: str) -> str:
-        if lang == "ru":
-            if action.startswith("CONSIDER") or action.startswith("WATCH"):
-                return f"{side} вероятнее и есть value ({value}). Действие: {action}. План: {entry}."
-            return f"{side} вероятнее, но цена уже близка к fair value ({value}). Действие: {action}. План: {entry}."
-        if action.startswith("CONSIDER") or action.startswith("WATCH"):
-            return f"{side} is more likely and has value ({value}). Action: {action}. Plan: {entry}."
-        return f"{side} is more likely, but price is near fair value ({value}). Action: {action}. Plan: {entry}."
+    def _entry_zone(self, best_opt: str, diff: float, market: Dict[str, float], model: Dict[str, float], lang: str) -> Tuple[str, str]:
+        if best_opt == "NONE":
+            return ("ЖДАТЬ: явного ценового преимущества нет." if lang=="ru" else "WAIT: no clear pricing advantage."), ("Не входить без улучшения цены/новостей." if lang=="ru" else "No entry without better price/news.")
+        m = market.get(best_opt, 50.0)
+        target = max(1.0, round(m - 2.0,1))
+        return (f"{best_opt}: интереснее при цене около {target}% или ниже." if lang=="ru" else f"{best_opt}: better near {target}% or lower."), (f"Не брать {best_opt}, если разница с моделью уходит в минус." if lang=="ru" else f"Avoid {best_opt} if model gap turns negative.")
