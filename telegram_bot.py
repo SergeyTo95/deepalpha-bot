@@ -1890,7 +1890,7 @@ def _format_analysis(result: dict, uid: int) -> str:
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and str(sports_context.get("market_type", "")).lower() == "totals"
+        and tennis_market_type == "totals"
     ):
         return _format_tennis_totals_sports_answer(result, lang)
     if (
@@ -1908,7 +1908,7 @@ def _format_analysis(result: dict, uid: int) -> str:
     is_tennis_totals = bool(
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and str(sports_context.get("market_type", "")).lower() == "totals"
+        and tennis_market_type == "totals"
     )
     sports_block = ""
     if sports_context:
