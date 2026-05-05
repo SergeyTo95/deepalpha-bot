@@ -1889,10 +1889,17 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
     keys_lower = {str(k).lower() for k in options.keys()}
     is_football = ("football" in c) or ("football" in s)
     if is_football and keys_upper == {"YES", "NO"}:
+<<<<<<< HEAD
         team = _extract_team_from_question(title) or "команда"
         if is_ru:
             return f"— YES проходит, если {team} выигрывает матч.\n— NO проходит, если матч заканчивается ничьей или {team} проигрывает.\n— Ничья здесь считается как NO."
         return f"— YES resolves if {team} wins.\n— NO resolves if match ends draw or {team} loses.\n— Draw counts as NO."
+=======
+        team = _extract_binary_team_win_name(title) or _extract_team_from_question(title) or "team"
+        if is_ru:
+            return f"— YES проходит, если {team} выиграет матч.\n— NO проходит, если будет ничья или {team} не выиграет.\n— Ничья считается как NO."
+        return f"— YES wins if {team} wins the match.\n— NO wins if the match is a draw or {team} does not win.\n— Draw resolves to NO."
+>>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
     if is_football and ("draw" in keys_lower or "ничья" in keys_lower):
         return "— Победа первой команды, ничья и победа второй команды считаются отдельными исходами.\n— Draw / Ничья — отдельный вариант." if is_ru else "— Home win, draw, away win are separate outcomes.\n— Draw is a separate option."
     mapping_ru = {
@@ -1907,6 +1914,25 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
     return "— Рынок считается по правилам Polymarket.\n— Если правила недостаточно извлечены, вход должен быть осторожным." if is_ru else "— Market resolves under Polymarket rules.\n— If rules extraction is incomplete, entry should be cautious."
 
 
+<<<<<<< HEAD
+=======
+def _extract_binary_team_win_name(title: str) -> str:
+    txt = str(title or "").strip()
+    m = re.search(r"^\s*Will\s+(.+?)\s+(?:win|beat|defeat)\b", txt, re.IGNORECASE)
+    if not m:
+        return ""
+    team = m.group(1).strip()
+    team = re.sub(r"\s+(?:on|by)\b.*$", "", team, flags=re.IGNORECASE).strip(" ?")
+    return team if team else ""
+
+
+def _is_binary_yes_no_options(options: dict) -> bool:
+    if not isinstance(options, dict) or not options:
+        return False
+    return {str(k).upper() for k in options.keys()} == {"YES", "NO"}
+
+
+>>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
 def _format_clean_market_signal(result: dict, uid: int) -> str:
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     is_ru = lang == "ru"
@@ -1923,6 +1949,19 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
     if not model_opts and isinstance(result.get("model_options"), dict):
         model_opts = result.get("model_options")
+<<<<<<< HEAD
+=======
+    title_q = str(result.get("question") or result.get("title") or "")
+    team_name = _extract_binary_team_win_name(title_q)
+    inferred_binary_team_win = bool(team_name) and _is_binary_yes_no_options(market_opts)
+    if inferred_binary_team_win:
+        if not category or category.lower() in ("other", "unknown"):
+            category = "sports"
+        if not sub:
+            sub = "football"
+        if not market_type:
+            market_type = "binary_team_win"
+>>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
     lines = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
     has_model = bool(model_opts)
     diffs = {}
@@ -1968,8 +2007,16 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             f"— {'Рынок' if is_ru else 'Market'}: " + " / ".join([f"{k} {float(v):.1f}%" for k, v in market_opts.items()][:3]),
             "— Поэтому вход сейчас не подтверждён." if is_ru else "— Entry is not confirmed now.",
         ]
+<<<<<<< HEAD
     header = "DeepAlpha Signal"
     text = f"🔎 {header}\n\n{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category + (' / ' + sub if sub else ''))}\n\n"
+=======
+    display_category = category + (' / ' + sub if sub else '')
+    if inferred_binary_team_win and ("sports" in category.lower() or "football" in sub.lower()):
+        display_category = "Футбол / победа команды" if is_ru else "Football / team win"
+    header = "DeepAlpha Signal"
+    text = f"🔎 {header}\n\n{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(display_category)}\n\n"
+>>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
     text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(lines) + "\n\n"
     text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + res_logic + "\n\n"
     text += ("🎯 Короткий вывод:\n" if is_ru else "🎯 Short view:\n") + "\n".join(short) + "\n\n"
