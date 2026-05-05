@@ -1870,69 +1870,99 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
     )
 
 
-def _build_resolution_logic(category_type: str, subcategory: str, market_type: str, title: str, options: dict, lang: str) -> str:
-    c = (category_type or "").lower()
-    s = (subcategory or "").lower()
-    m = (market_type or "").lower()
-    t = (title or "").lower()
+def _build_resolution_logic(category_type: str, subcategory: str, market_type: str, title: str, options: dict, lang: str, team_name: str = "") -> str:
     is_ru = lang == "ru"
-    if ("tennis" in c or "tennis" in s) and ("total" in s or "over" in t or "under" in t):
-        line_m = re.search(r"(\d+(?:\.\d+)?)", title or "")
-        line = float(line_m.group(1)) if line_m else 9.5
-        floor_line = int(line // 1)
-        if is_ru:
-            return f"— Больше {line:.1f} проходит, если будет {floor_line + 1}+.\n— Меньше {line:.1f} проходит, если будет {floor_line} или меньше."
-        return f"— Over {line:.1f} wins at {floor_line + 1}+.\n— Under {line:.1f} wins at {floor_line} or fewer."
-    if "tennis" in c or "tennis" in s:
-        return "— Побеждает один из двух теннисистов.\n— Ничьей в теннисе нет.\n— Это рынок победителя матча." if is_ru else "— One of two players wins.\n— No draw in tennis.\n— This is a match-winner market."
-    keys_upper = {str(k).upper() for k in options.keys()}
-    keys_lower = {str(k).lower() for k in options.keys()}
+    c = str(category_type or "").lower()
+    s = str(subcategory or "").lower()
+    m = str(market_type or "").lower()
+
+    keys_upper = {str(k).upper() for k in (options or {}).keys()}
+    keys_lower = {str(k).lower() for k in (options or {}).keys()}
     is_football = ("football" in c) or ("football" in s)
-    if is_football and keys_upper == {"YES", "NO"}:
-<<<<<<< HEAD
-        team = _extract_team_from_question(title) or "команда"
-        if is_ru:
-            return f"— YES проходит, если {team} выигрывает матч.\n— NO проходит, если матч заканчивается ничьей или {team} проигрывает.\n— Ничья здесь считается как NO."
-        return f"— YES resolves if {team} wins.\n— NO resolves if match ends draw or {team} loses.\n— Draw counts as NO."
-=======
-        team = _extract_binary_team_win_name(title) or _extract_team_from_question(title) or "team"
-        if is_ru:
-            return f"— YES проходит, если {team} выиграет матч.\n— NO проходит, если будет ничья или {team} не выиграет.\n— Ничья считается как NO."
-        return f"— YES wins if {team} wins the match.\n— NO wins if the match is a draw or {team} does not win.\n— Draw resolves to NO."
->>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
+
+    if (m in {"binary_team_win", "team_win", "match_winner"} or is_football) and keys_upper == {"YES", "NO"}:
+        team = team_name or _extract_binary_team_win_name(title)
+        if team:
+            if is_ru:
+                return (
+                    f"— YES проходит, если {team} выиграет матч.\n"
+                    f"— NO проходит, если будет ничья или {team} не выиграет.\n"
+                    "— Ничья считается как NO."
+                )
+            return (
+                f"— YES wins if {team} wins the match.\n"
+                f"— NO wins if the match is a draw or {team} does not win.\n"
+                "— Draw resolves to NO."
+            )
+
     if is_football and ("draw" in keys_lower or "ничья" in keys_lower):
-        return "— Победа первой команды, ничья и победа второй команды считаются отдельными исходами.\n— Draw / Ничья — отдельный вариант." if is_ru else "— Home win, draw, away win are separate outcomes.\n— Draw is a separate option."
-    mapping_ru = {
-        "ufc": "— Побеждает один из бойцов.\n— Ничьей в обычной логике рынка нет, если правила рынка не указывают иное.",
-        "mma": "— Побеждает один из бойцов.\n— Ничьей в обычной логике рынка нет, если правила рынка не указывают иное.",
-        "boxing": "— Побеждает один из бойцов.\n— Ничьей в обычной логике рынка нет, если правила рынка не указывают иное.",
-        "crypto": "— Рынок зависит от того, достигнет ли актив заданного уровня до дедлайна/момента разрешения.\n— Важны цена, ликвидность, ETF/регуляторика, макро и волатильность.",
-    }
-    for k, v in mapping_ru.items():
-        if k in c or k in s:
-            return v if is_ru else "— Market resolves by explicit event rules."
-    return "— Рынок считается по правилам Polymarket.\n— Если правила недостаточно извлечены, вход должен быть осторожным." if is_ru else "— Market resolves under Polymarket rules.\n— If rules extraction is incomplete, entry should be cautious."
+        if is_ru:
+            return (
+                "— Это футбольный рынок с отдельной ничьей.\n"
+                "— Победа команды, ничья и победа соперника считаются отдельными исходами."
+            )
+        return (
+            "— This is a football market with draw as a separate outcome.\n"
+            "— Team win, draw, and opponent win resolve as separate outcomes."
+        )
+
+    if "tennis" in c or "tennis" in s:
+        if m in {"head_to_head", "headtohead", "h2h", "match_winner"}:
+            if is_ru:
+                return (
+                    "— Побеждает один из двух теннисистов.\n"
+                    "— Ничьей в теннисе нет.\n"
+                    "— Это рынок победителя матча."
+                )
+            return (
+                "— One of the two tennis players wins.\n"
+                "— There is no draw in tennis.\n"
+                "— This is a match-winner market."
+            )
+        if m in {"totals", "over_under"}:
+            if is_ru:
+                return (
+                    "— Это рынок тотала геймов.\n"
+                    "— Больше/Меньше считается по указанной линии тотала."
+                )
+            return (
+                "— This is a total-games market.\n"
+                "— Over/Under resolves against the listed total line."
+            )
+
+    if any(x in c or x in s for x in ("ufc", "mma", "boxing")):
+        if is_ru:
+            return (
+                "— Побеждает один из бойцов.\n"
+                "— Ничьей обычно нет, если правила рынка не указывают обратное."
+            )
+        return (
+            "— One fighter wins.\n"
+            "— Draw is usually not the target outcome unless market rules say otherwise."
+        )
+
+    if "crypto" in c or "crypto" in s:
+        if is_ru:
+            return (
+                "— Рынок считается по достижению указанного крипто-события или ценового уровня.\n"
+                "— Важно учитывать дедлайн и точные правила разрешения."
+            )
+        return (
+            "— The market resolves based on the specified crypto event or price threshold.\n"
+            "— Deadline and exact resolution rules matter."
+        )
+
+    if is_ru:
+        return (
+            "— Рынок считается по правилам Polymarket.\n"
+            "— Если правила недостаточно извлечены, вход должен быть осторожным."
+        )
+    return (
+        "— The market resolves according to Polymarket rules.\n"
+        "— If exact rules are not fully extracted, entry should be cautious."
+    )
 
 
-<<<<<<< HEAD
-=======
-def _extract_binary_team_win_name(title: str) -> str:
-    txt = str(title or "").strip()
-    m = re.search(r"^\s*Will\s+(.+?)\s+(?:win|beat|defeat)\b", txt, re.IGNORECASE)
-    if not m:
-        return ""
-    team = m.group(1).strip()
-    team = re.sub(r"\s+(?:on|by)\b.*$", "", team, flags=re.IGNORECASE).strip(" ?")
-    return team if team else ""
-
-
-def _is_binary_yes_no_options(options: dict) -> bool:
-    if not isinstance(options, dict) or not options:
-        return False
-    return {str(k).upper() for k in options.keys()} == {"YES", "NO"}
-
-
->>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
 def _format_clean_market_signal(result: dict, uid: int) -> str:
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     is_ru = lang == "ru"
@@ -1949,8 +1979,6 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
     if not model_opts and isinstance(result.get("model_options"), dict):
         model_opts = result.get("model_options")
-<<<<<<< HEAD
-=======
     title_q = str(result.get("question") or result.get("title") or "")
     team_name = _extract_binary_team_win_name(title_q)
     inferred_binary_team_win = bool(team_name) and _is_binary_yes_no_options(market_opts)
@@ -1961,7 +1989,6 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             sub = "football"
         if not market_type:
             market_type = "binary_team_win"
->>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
     lines = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
     has_model = bool(model_opts)
     diffs = {}
@@ -1993,7 +2020,7 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             f"💰 Best priced side: {best if has_model and best_diff > 0 else 'not confirmed'}",
             f"📊 Reason: {'model vs market divergence' if has_model else 'independent estimate missing'}",
         ]
-    res_logic = _build_resolution_logic(category, sub, market_type, title, market_opts, lang)
+    res_logic = _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
     mvm = []
     if has_model and diffs:
         for k in diffs:
@@ -2007,16 +2034,11 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             f"— {'Рынок' if is_ru else 'Market'}: " + " / ".join([f"{k} {float(v):.1f}%" for k, v in market_opts.items()][:3]),
             "— Поэтому вход сейчас не подтверждён." if is_ru else "— Entry is not confirmed now.",
         ]
-<<<<<<< HEAD
-    header = "DeepAlpha Signal"
-    text = f"🔎 {header}\n\n{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category + (' / ' + sub if sub else ''))}\n\n"
-=======
     display_category = category + (' / ' + sub if sub else '')
     if inferred_binary_team_win and ("sports" in category.lower() or "football" in sub.lower()):
         display_category = "Футбол / победа команды" if is_ru else "Football / team win"
     header = "DeepAlpha Signal"
     text = f"🔎 {header}\n\n{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(display_category)}\n\n"
->>>>>>> origin/codex/create-universal-clean-formatter-for-telegram-output-ip6hwk
     text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(lines) + "\n\n"
     text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + res_logic + "\n\n"
     text += ("🎯 Короткий вывод:\n" if is_ru else "🎯 Short view:\n") + "\n".join(short) + "\n\n"
