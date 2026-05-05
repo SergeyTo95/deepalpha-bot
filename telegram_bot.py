@@ -1526,10 +1526,40 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     filtered = _filter_and_score_sources(result)
     sources = filtered["sources"]
     warning = filtered["warning"]
+    raw_sources_count = int(result.get("raw_sources_count") or 0)
+    relevant_sources_count = int(result.get("relevant_sources_count") or len(sources) or 0)
+    queries = result.get("news_queries_used") if isinstance(result.get("news_queries_used"), list) else []
+    reasons = result.get("source_filter_reasons") if isinstance(result.get("source_filter_reasons"), list) else []
 
     if not sources:
-        no_src = "📰 Источники:\nРелевантные свежие источники не найдены." if lang == "ru" else "📰 Sources:\nNo fresh relevant sources found."
-        return f"\n\n{no_src}"
+        header = "📰 Источники:" if lang == "ru" else "📰 Sources:"
+        if raw_sources_count > 0 and relevant_sources_count == 0:
+            msg = (
+                "Источники найдены, но свежих релевантных после фильтрации недостаточно."
+                if lang == "ru"
+                else "Sources were found, but not enough fresh relevant sources after filtering."
+            )
+            qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+            out = [header, msg]
+            if queries:
+                out.append(qh)
+                out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+            if reasons:
+                rh = "Почему скрыто:" if lang == "ru" else "Why hidden:"
+                out.append(rh)
+                for r in reasons[:3]:
+                    rs = ", ".join(r.get("reasons", [])[:2]) if isinstance(r, dict) else ""
+                    if rs:
+                        out.append(f"— {_escape(rs)}")
+            return "\n\n" + "\n".join(out)
+
+        msg = "Релевантные свежие источники не найдены." if lang == "ru" else "No fresh relevant sources found."
+        qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+        out = [header, msg]
+        if queries:
+            out.append(qh)
+            out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+        return "\n\n" + "\n".join(out)
 
     lines = []
     for i, s in enumerate(sources[:5], 1):
