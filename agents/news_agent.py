@@ -446,14 +446,30 @@ def _extract_options_entities(market_probability: str) -> List[str]:
         if k.lower() not in {"yes","no","да","нет","over","under"}:
             out.append(k)
     return out
+
+
+def _tennis_search_alias(name: str) -> str:
+    n = " ".join(str(name or "").strip().split())
+    if not n:
+        return ""
+    parts = n.split()
+    if len(parts) >= 3:
+        return " ".join(parts[1:])
+    if len(parts) == 2:
+        return parts[1]
+    return parts[0]
+
+
 def build_targeted_news_queries(category_type: str, subcategory: str, entities: List[str], market_type: str, question: str, deadline: str = "") -> List[str]:
     e1 = entities[0] if entities else ""
     e2 = entities[1] if len(entities) > 1 else ""
     q=[]
     if category_type == "sports" and subcategory == "tennis" and market_type in {"head_to_head","match_winner"} and e1 and e2:
-        q=[f"{e1} {e2} prediction", f"{e1.split()[-1]} {e2.split()[-1]} prediction", f"{e1} {e2} recent form", f"{e1} {e2} H2H surface"]
+        full_pair = f"{e1} {e2}"
+        alias_pair = f"{_tennis_search_alias(e1)} {_tennis_search_alias(e2)}".strip()
+        q=[f"{full_pair} prediction", f"{alias_pair} prediction", f"{full_pair} recent form", f"{full_pair} H2H surface"]
         if "ital" in question.lower() or "bnl" in question.lower() or "internazionali" in question.lower():
-            q.append(f"Italian Open qualification {e1.split()[-1]} {e2.split()[-1]} preview")
+            q.append(f"Italian Open qualification {alias_pair} preview")
     elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
         q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
     elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
