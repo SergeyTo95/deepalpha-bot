@@ -424,7 +424,9 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
     e2 = entities[1] if len(entities) > 1 else ""
     q=[]
     if category_type == "sports" and subcategory == "tennis" and market_type in {"head_to_head","match_winner"} and e1 and e2:
-        q=[f"{e1} {e2} prediction form injury surface", f"{e1} {e2} H2H recent form", f"{e1} recent form injury fitness"]
+        q=[f"{e1} {e2} prediction", f"{e1.split()[-1]} {e2.split()[-1]} prediction", f"{e1} {e2} recent form", f"{e1} {e2} H2H surface"]
+        if "ital" in question.lower() or "bnl" in question.lower() or "internazionali" in question.lower():
+            q.append(f"Italian Open qualification {e1.split()[-1]} {e2.split()[-1]} preview")
     elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
         q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
     elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
@@ -447,18 +449,25 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
 
 
 def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> float:
+    reasons=[]
     title = str(item.get("title") or "").lower()
     snippet = str(item.get("snippet") or "").lower()
     link = str(item.get("link") or "").lower()
     text = f"{title} {snippet}"
     score = 0.0
-    if any(e.lower() in text for e in entities if e): score += 2.0
-    if len(entities) > 1 and all(e.lower() in text for e in entities[:2] if e): score += 2.0
-    if any(x in link for x in ["livescore","sofascore","flashscore","player profile"]): score -= 3.0
+    if any(e.lower() in text for e in entities if e):
+        score += 2.0; reasons.append("mentions entity")
+    if len(entities) > 1 and all(e.lower() in text for e in entities[:2] if e):
+        score += 2.0; reasons.append("mentions both entities")
+    if any(x in link for x in ["livescore","sofascore","flashscore","player profile","atp-tour.com/en/players"]):
+        score -= 3.0; reasons.append("generic/live score/profile")
     fr = classify_freshness(str(item.get("published") or ""))
     score += 2.0 if fr in {"very_fresh","fresh"} else (1.0 if fr == "acceptable" else (-1.0 if fr == "stale" else 0.0))
     item["freshness"] = fr
+    if any(k in text for k in ["prediction","preview","form","h2h","surface","tennis"]):
+        score += 1.0; reasons.append("tennis context")
     item["source_relevance_score"] = round(score,2)
+    item["source_filter_reasons"]=reasons
     return score
 # ═══════════════════════════════════════════
 # NEWS AGENT
@@ -486,7 +495,6 @@ class NewsAgent:
         base_query = ""
 
         try:
-            plan = (result.get("trading_plan") if isinstance(result, dict) else {}) if False else {}
             category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other")
             subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown")
             entities = (market_data.get("trading_plan") or {}).get("detected_entities") or []
@@ -496,6 +504,7 @@ class NewsAgent:
             base_query = queries[1] if len(queries) > 1 else question
 
             all_items = search_google_news_multi(queries, limit=10)
+            raw_sources_count = len(all_items)
             enriched = [
                 enrich_news_item(item, question, user_context)
                 for item in all_items
@@ -508,14 +517,31 @@ class NewsAgent:
                 ),
                 reverse=True,
             )
-            enriched = [x for x in enriched if _score_source(x, entities, question) >= 1.0]
+            score_threshold = 0.5 if (subcategory=="tennis") else 1.0
+            scored=[]
+            filter_reasons=[]
+            for x in enriched:
+                sc=_score_source(x, entities, question)
+                if sc >= score_threshold:
+                    scored.append(x)
+                else:
+                    filter_reasons.append({"title":x.get("title",""),"score":sc,"reasons":x.get("source_filter_reasons",[])})
+            enriched = scored
             enriched.sort(key=lambda x: (x.get("source_relevance_score",0), x.get("source_score",0), x.get("freshness_score",0)), reverse=True)
             news_items = enriched[:8]
+            relevant_sources_count = len(news_items)
+            sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
         except Exception as e:
             print(f"NewsAgent multi-query error: {e}")
             focused_query = build_news_query(question, category, date_context)
             base_query = focused_query
             news_items = search_google_news(focused_query, limit=7)
+            raw_sources_count = len(news_items)
+            relevant_sources_count = len(news_items)
+            sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
+            queries = [focused_query]
+            sources_found_but_filtered = False
+            filter_reasons=[]
 
         twitter_items = _fetch_twitter_signals(focused_query, limit=4)
         if not twitter_items:
@@ -547,6 +573,11 @@ class NewsAgent:
             lang=lang,
             user_context=user_context,
             source_summary=source_summary,
+                news_queries_used=queries,
+                raw_sources_count=raw_sources_count,
+                relevant_sources_count=relevant_sources_count,
+                sources_found_but_filtered=sources_found_but_filtered,
+                source_filter_reasons=filter_reasons,
         )
 
         llm_result = generate_news_text(prompt)
@@ -568,6 +599,11 @@ class NewsAgent:
                 base_query=base_query,
                 evidence_matrix=evidence_matrix,
                 source_summary=source_summary,
+                news_queries_used=queries,
+                raw_sources_count=raw_sources_count,
+                relevant_sources_count=relevant_sources_count,
+                sources_found_but_filtered=sources_found_but_filtered,
+                source_filter_reasons=filter_reasons,
             )
 
         key_signals = _extract_key_signals("", all_items_final)
@@ -583,6 +619,11 @@ class NewsAgent:
             user_context=user_context,
             focused_query=focused_query,
             base_query=base_query,
+            news_queries_used=queries if "queries" in locals() else [focused_query],
+            raw_sources_count=raw_sources_count if "raw_sources_count" in locals() else len(news_items),
+            relevant_sources_count=relevant_sources_count if "relevant_sources_count" in locals() else len(news_items),
+            sources_found_but_filtered=sources_found_but_filtered if "sources_found_but_filtered" in locals() else False,
+            source_filter_reasons=filter_reasons if "filter_reasons" in locals() else [],
         )
 
     def _build_prompt(
@@ -596,6 +637,11 @@ class NewsAgent:
         lang: str = "en",
         user_context: str = "",
         source_summary: dict = None,
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
     ) -> str:
         related_lines = []
         for item in related_markets[:6]:
@@ -784,6 +830,11 @@ class NewsAgent:
         base_query: str = "",
         evidence_matrix: str = "",
         source_summary: dict = None,
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return {
             "question": question,
@@ -801,6 +852,11 @@ class NewsAgent:
             "base_query": base_query,
             "evidence_matrix": evidence_matrix,
             "source_summary": source_summary or {},
+            "news_queries_used": news_queries_used or [],
+            "raw_sources_count": raw_sources_count,
+            "relevant_sources_count": relevant_sources_count,
+            "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
+            "source_filter_reasons": source_filter_reasons or [],
         }
 
     def _fallback_news(
@@ -816,6 +872,11 @@ class NewsAgent:
         user_context: str = "",
         focused_query: str = "",
         base_query: str = "",
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         summary_parts = [
             f"News analysis for: {question}.",
@@ -847,6 +908,11 @@ class NewsAgent:
             "base_query": base_query,
             "evidence_matrix": "",
             "source_summary": self._build_source_summary(news_items),
+            "news_queries_used": news_queries_used or [],
+            "raw_sources_count": raw_sources_count,
+            "relevant_sources_count": relevant_sources_count,
+            "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
+            "source_filter_reasons": source_filter_reasons or [],
         }
 
     def _build_source_summary(self, items: list) -> dict:

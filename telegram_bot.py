@@ -1527,10 +1527,40 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     filtered = _filter_and_score_sources(result)
     sources = filtered["sources"]
     warning = filtered["warning"]
+    raw_sources_count = int(result.get("raw_sources_count") or 0)
+    relevant_sources_count = int(result.get("relevant_sources_count") or len(sources) or 0)
+    queries = result.get("news_queries_used") if isinstance(result.get("news_queries_used"), list) else []
+    reasons = result.get("source_filter_reasons") if isinstance(result.get("source_filter_reasons"), list) else []
 
     if not sources:
-        no_src = "📰 Источники:\nРелевантные свежие источники не найдены." if lang == "ru" else "📰 Sources:\nNo fresh relevant sources found."
-        return f"\n\n{no_src}"
+        header = "📰 Источники:" if lang == "ru" else "📰 Sources:"
+        if raw_sources_count > 0 and relevant_sources_count == 0:
+            msg = (
+                "Источники найдены, но свежих релевантных после фильтрации недостаточно."
+                if lang == "ru"
+                else "Sources were found, but not enough fresh relevant sources after filtering."
+            )
+            qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+            out = [header, msg]
+            if queries:
+                out.append(qh)
+                out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+            if reasons:
+                rh = "Почему скрыто:" if lang == "ru" else "Why hidden:"
+                out.append(rh)
+                for r in reasons[:3]:
+                    rs = ", ".join(r.get("reasons", [])[:2]) if isinstance(r, dict) else ""
+                    if rs:
+                        out.append(f"— {_escape(rs)}")
+            return "\n\n" + "\n".join(out)
+
+        msg = "Релевантные свежие источники не найдены." if lang == "ru" else "No fresh relevant sources found."
+        qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+        out = [header, msg]
+        if queries:
+            out.append(qh)
+            out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+        return "\n\n" + "\n".join(out)
 
     lines = []
     for i, s in enumerate(sources[:5], 1):
@@ -1669,17 +1699,23 @@ def _format_tennis_totals_sports_answer(result: dict, lang: str) -> str:
     source_block = _build_source_block_filtered(result, lang)
     over_d = diffs.get(over_key)
     under_d = diffs.get(under_key)
-    diff_ru = f"{over_label_ru}: {over_d:+.1f}% | {under_label_ru}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Разница с рынком: данных модели недостаточно."
+    diff_ru = f"{over_label_ru}: {over_d:+.1f}% | {under_label_ru}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "данных модели недостаточно."
     diff_en = f"{over_label_en}: {over_d:+.1f}% | {under_label_en}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Model vs market delta: model data is insufficient."
 
     is_set1 = "set 1" in str(result.get("question", "")).lower() or "1st set" in str(result.get("question", "")).lower()
+    try:
+        line_val = float(line)
+    except Exception:
+        line_val = 0.0
+    over_thr = int(line_val) + 1
+    under_thr = int(line_val)
     if lang == "ru":
         rules = (
-            f"— {over_label_ru} проходит, если в первом сете будет 9+ геймов.\n"
-            f"— {under_label_ru} проходит, если в первом сете будет 8 или меньше геймов."
+            f"— {over_label_ru} проходит, если в первом сете будет {over_thr}+ геймов.\n"
+            f"— {under_label_ru} проходит, если в первом сете будет {under_thr} или меньше геймов."
             if is_set1 else
-            f"— {over_label_ru} проходит, если в матче будет 23+ гейма.\n"
-            f"— {under_label_ru} проходит, если в матче будет 22 или меньше геймов."
+            f"— {over_label_ru} проходит, если в матче будет {over_thr}+ геймов.\n"
+            f"— {under_label_ru} проходит, если в матче будет {under_thr} или меньше геймов."
         )
         model_note = "Модель не дала отдельной вероятности по тоталу, поэтому вход сейчас не подтверждён." if not has_independent_model else "Ориентир по тоталу берём из модели и сравнения с рынком."
         return (
@@ -1701,11 +1737,11 @@ def _format_tennis_totals_sports_answer(result: dict, lang: str) -> str:
         )
 
     rules = (
-        f"— {over_label_en} wins if the first set has 9+ games.\n"
-        f"— {under_label_en} wins if the first set has 8 or fewer games."
+        f"— {over_label_en} wins if the first set has {over_thr}+ games.\n"
+        f"— {under_label_en} wins if the first set has {under_thr} or fewer games."
         if is_set1 else
-        f"— {over_label_en} wins if the match has 23+ games.\n"
-        f"— {under_label_en} wins if the match has 22 or fewer games."
+        f"— {over_label_en} wins if the match has {over_thr}+ games.\n"
+        f"— {under_label_en} wins if the match has {under_thr} or fewer games."
     )
     model_note = "The model did not provide separate totals probabilities, so entry is not confirmed now." if not has_independent_model else "Use model totals and compare against market price."
     action_en = "WAIT" if "WAIT" in action_raw.upper() else ("NO TRADE" if "NO TRADE" in action_raw.upper() else action_raw)
