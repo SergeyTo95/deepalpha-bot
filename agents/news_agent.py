@@ -512,6 +512,41 @@ def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> f
     item["source_relevance_score"] = round(score,2)
     item["source_filter_reasons"]=reasons
     return score
+
+
+def _build_tennis_news_evidence(entities: List[str], sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    a = entities[0] if len(entities) > 0 else "Player A"
+    b = entities[1] if len(entities) > 1 else "Player B"
+    out = {
+        "supports": {a: [], b: []},
+        "against": {a: [], b: []},
+        "neutral_context": [],
+        "evidence_strength": "low",
+        "evidence_notes": [],
+    }
+    exact = 0
+    detailed = 0
+    for s in (sources or [])[:8]:
+        title = str(s.get("title") or "")
+        snip = str(s.get("snippet") or s.get("description") or "")
+        text = (title + " " + snip).lower()
+        has_a, has_b = a.lower() in text, b.lower() in text
+        has_pred = any(k in text for k in ["prediction", "picks", "best bets", "preview", "form", "injury", "surface", "h2h", "qualification"])
+        if has_a and has_b:
+            exact += 1
+            note = "Найден прогнозный/preview источник по точному матчу." if has_pred else "Найден источник с упоминанием обоих игроков."
+            out["neutral_context"].append(note)
+            if has_pred:
+                out["supports"][a].append("Есть внешний прогнозный контекст по этому матчу.")
+                out["supports"][b].append("Есть внешний прогнозный контекст по этому матчу.")
+        if has_pred and any(k in text for k in ["form", "injury", "surface", "h2h"]):
+            detailed += 1
+        if has_pred and not any(k in text for k in ["form", "injury", "surface", "h2h"]):
+            out["evidence_notes"].append("Источник релевантен матчу, но в snippet мало деталей по форме/травмам/покрытию.")
+    out["evidence_strength"] = "high" if detailed >= 2 else ("medium" if exact >= 1 else "low")
+    if not out["evidence_notes"]:
+        out["evidence_notes"].append("Подтвержденных детальных факторов в snippets ограниченно.")
+    return out
 # ═══════════════════════════════════════════
 # NEWS AGENT
 # ═══════════════════════════════════════════
@@ -620,6 +655,9 @@ class NewsAgent:
         all_items_final = news_items + unique_twitter
         live_news_summary = summarize_news_items(all_items_final[:8])
         source_summary = self._build_source_summary(all_items_final)
+        news_evidence = {}
+        if subcategory == "tennis" and len(entities) >= 2:
+            news_evidence = _build_tennis_news_evidence(entities, all_items_final)
 
         prompt = self._build_prompt(
             question=question,
@@ -662,6 +700,7 @@ class NewsAgent:
                 relevant_sources_count=relevant_sources_count,
                 sources_found_but_filtered=sources_found_but_filtered,
                 source_filter_reasons=filter_reasons,
+                news_evidence=news_evidence,
             )
 
         key_signals = _extract_key_signals("", all_items_final)
@@ -682,6 +721,7 @@ class NewsAgent:
             relevant_sources_count=relevant_sources_count if "relevant_sources_count" in locals() else len(news_items),
             sources_found_but_filtered=sources_found_but_filtered if "sources_found_but_filtered" in locals() else False,
             source_filter_reasons=filter_reasons if "filter_reasons" in locals() else [],
+            news_evidence=news_evidence if "news_evidence" in locals() else {},
         )
 
     def _build_prompt(
@@ -893,6 +933,7 @@ class NewsAgent:
         relevant_sources_count: int = 0,
         sources_found_but_filtered: bool = False,
         source_filter_reasons: List[Dict[str, Any]] = None,
+        news_evidence: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         return {
             "question": question,
@@ -915,6 +956,10 @@ class NewsAgent:
             "relevant_sources_count": relevant_sources_count,
             "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
             "source_filter_reasons": source_filter_reasons or [],
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
         }
 
     def _fallback_news(
@@ -935,6 +980,7 @@ class NewsAgent:
         relevant_sources_count: int = 0,
         sources_found_but_filtered: bool = False,
         source_filter_reasons: List[Dict[str, Any]] = None,
+        news_evidence: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         summary_parts = [
             f"News analysis for: {question}.",
@@ -971,6 +1017,8 @@ class NewsAgent:
             "relevant_sources_count": relevant_sources_count,
             "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
             "source_filter_reasons": source_filter_reasons or [],
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
         }
 
     def _build_source_summary(self, items: list) -> dict:

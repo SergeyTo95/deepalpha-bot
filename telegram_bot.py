@@ -1770,6 +1770,9 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
     market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else _extract_market_probs(str(result.get("market_probability") or ""))
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
     diffs = tp.get("option_differences") if isinstance(tp.get("option_differences"), dict) else {}
+    side_analysis = tp.get("side_analysis") if isinstance(tp.get("side_analysis"), dict) else {}
+    ev_strength = str(tp.get("evidence_strength") or result.get("evidence_strength") or "low")
+    limitations = str(tp.get("data_limitations") or "Источник релевантен, но данных ограниченно.")
     action_raw = str(tp.get("recommended_action") or result.get("decision") or "WAIT").upper()
     source_block = _build_source_block_filtered(result, lang)
 
@@ -1811,6 +1814,18 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
         model_note_en = "Decision is based on player-by-player model versus market comparison."
 
     if lang == "ru":
+        p1a = side_analysis.get(p1n, {}) if isinstance(side_analysis.get(p1n, {}), dict) else {}
+        p2a = side_analysis.get(p2n, {}) if isinstance(side_analysis.get(p2n, {}), dict) else {}
+        def _line(v): return "; ".join(v[:2]) if isinstance(v, list) and v else "недостаточно данных"
+        analysis_block = (
+            "🧠 Анализ игроков:\n"
+            f"— {p1n}:\n  • Что за него: {_line(p1a.get('strengths'))}\n  • Что против: {_line(p1a.get('weaknesses'))}\n  • Новости/контекст: {_line(p1a.get('key_news'))}\n"
+            f"— {p2n}:\n  • Что за него: {_line(p2a.get('strengths'))}\n  • Что против: {_line(p2a.get('weaknesses'))}\n  • Новости/контекст: {_line(p2a.get('key_news'))}\n"
+            "🧾 Качество данных:\n"
+            f"— Сила доказательств: {ev_strength}\n"
+            f"— Найдено релевантных источников: {len(result.get('news_sources') or result.get('news_items') or [])}\n"
+            f"— Ограничение: {limitations}\n"
+        )
         return (
             "🎾 DeepAlpha Sports Signal\n\n"
             f"📌 {q}\n"
@@ -1827,6 +1842,7 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
             f"💰 Наиболее выгодная ставка: {best_ru}\n"
             f"📊 Разница с рынком: {diff_ru}\n"
             f"📍 Условия для входа: {model_note_ru}\n"
+            f"{analysis_block}"
             "📡 Что может изменить рынок: форма игрока, покрытие, качество подачи, качество приёма, физическое состояние, усталость и плотность календаря, личные встречи, недавние матчи.\n"
             "⚠️ Риски: слабые или отсутствующие свежие данные; нестабильная подача; быстрый ранний брейк может изменить матч; квалификация часто менее предсказуема; движение линии перед матчем.\n"
             f"{source_block}"

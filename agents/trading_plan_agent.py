@@ -19,6 +19,8 @@ class TradingPlanAgent:
 
         model_options = self._extract_model_options(result, market_probs)
         sources = (news_data or {}).get("sources", []) if isinstance(news_data, dict) else []
+        news_evidence = (news_data or {}).get("news_evidence", {}) if isinstance(news_data, dict) else {}
+        evidence_strength = str(news_evidence.get("evidence_strength", "low")).lower()
         if not model_options and sport_type == "tennis" and market_type == "head_to_head" and len(entities) >= 2 and sources:
             a,b=entities[0],entities[1]
             sa=sb=0
@@ -30,8 +32,12 @@ class TradingPlanAgent:
                     if a.lower() in t: sa += 1
                     if b.lower() in t: sb += 1
             total=sa+sb
-            if total >= 4:
-                pa=round(100.0*sa/total,1); pb=round(100.0-pa,1)
+            if total >= 2:
+                base = 55.0 if evidence_strength == "low" else (58.0 if evidence_strength == "medium" else 62.0)
+                leader_a = sa >= sb
+                pa = base if leader_a else (100.0 - base)
+                pb = round(100.0 - pa, 1)
+                pa = round(pa, 1)
                 model_options={a:pa,b:pb}
         option_diffs = {k: round(float(model_options.get(k, 0.0)) - float(v), 1) for k, v in market_probs.items() if k in model_options}
         most_likely = max(model_options, key=model_options.get) if model_options else (max(market_probs, key=market_probs.get) if market_probs else "UNKNOWN")
@@ -48,6 +54,11 @@ class TradingPlanAgent:
             data_quality = news_quality
 
         action = self._build_action(best_opt, best_diff, data_quality)
+        why_selected_side = "Независимая модель не подтверждена: нужен дополнительный релевантный новостной контекст."
+        if best_opt != "NONE":
+            why_selected_side = f"Рынок близок к 50/50, а внешний новостной контекст предварительно смещает оценку в сторону {best_opt}."
+        counterarguments = "Из snippets может не хватать деталей по форме, физике, покрытию и H2H; сигнал может быть шумным."
+        data_limitations = "База источников узкая — перед крупным входом нужна проверка дополнительных preview/form/injury источников."
         return {
             "category_type": category_type, "subcategory": subcategory,
             "sport_type": sport_type, "market_type": market_type,
@@ -64,6 +75,11 @@ class TradingPlanAgent:
             "news_quality": news_quality, "relevant_sources": sources,
             "side_analysis": side_analysis, "market_moving_triggers": self._triggers(category_type),
             "source_relevance_score": src_score,
+            "why_selected_side": why_selected_side,
+            "evidence_strength": evidence_strength,
+            "evidence_summary": news_evidence,
+            "counterarguments": counterarguments,
+            "data_limitations": data_limitations,
             "summary": self._summary_ru(most_likely, best_opt, action) if lang == "ru" else f"Likely: {most_likely}; best priced: {best_opt}; action: {action}",
             "likely_side": most_likely, "bet_side": best_opt if best_opt != "NONE" else "NONE",
             "model_probability": round(float(model_options.get(most_likely, 0.0)), 1) if model_options else 0.0,
