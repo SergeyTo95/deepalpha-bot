@@ -1870,6 +1870,41 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
     )
 
 
+
+def _extract_binary_team_win_name(title: str) -> str:
+    """Extract team/entity name from binary team-win questions like:
+    'Will FC Bayern München win on 2026-05-06?'
+    'Will Real Madrid beat Barcelona by 2 goals?'
+    """
+    import re
+
+    t = " ".join(str(title or "").strip().split())
+    if not t:
+        return ""
+
+    m = re.search(
+        r"^\s*will\s+(.+?)\s+(?:win|beat|defeat)\b",
+        t,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return ""
+
+    team = m.group(1).strip(" ,.;:-?")
+
+    # Extra safety: remove trailing timing clauses if they slipped into capture.
+    team = re.sub(r"\s+(?:on|by)\s+.*$", "", team, flags=re.IGNORECASE).strip(" ,.;:-?")
+
+    return team
+
+
+def _is_binary_yes_no_options(options: dict) -> bool:
+    if not isinstance(options, dict) or not options:
+        return False
+    keys_upper = {str(k).strip().upper() for k in options.keys()}
+    return keys_upper == {"YES", "NO"}
+
+
 def _build_resolution_logic(category_type: str, subcategory: str, market_type: str, title: str, options: dict, lang: str, team_name: str = "") -> str:
     is_ru = lang == "ru"
     c = str(category_type or "").lower()
