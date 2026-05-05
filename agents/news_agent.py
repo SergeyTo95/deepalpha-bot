@@ -417,6 +417,136 @@ def _extract_key_signals(llm_text: str, news_items: List[Dict]) -> List[str]:
     return signals[:5]
 
 
+
+
+
+
+def _pick_question(market_data: Dict[str, Any]) -> str:
+    for k in ("question","title","market","name","event_title"):
+        v=market_data.get(k)
+        if isinstance(v,str) and v.strip():
+            return v.strip()
+    return "Unknown market"
+
+
+def _extract_vs_entities(text: str) -> List[str]:
+    if not text:
+        return []
+    base = text.split(":")[-1].strip() if ":" in text else text
+    m = re.search(r"(.+?)\s+(?:vs|v\.?|against)\s+(.+)", base, re.IGNORECASE)
+    if not m:
+        return []
+    return [m.group(1).strip(" ,.;:"), m.group(2).strip(" ,.;:")]
+
+
+def _extract_options_entities(market_probability: str) -> List[str]:
+    out=[]
+    for m in re.finditer(r"([^|:,]+?)\s*[:\-]\s*([\d.]+)%", str(market_probability or ""), re.IGNORECASE):
+        k=m.group(1).strip()
+        if k.lower() not in {"yes","no","да","нет","over","under"}:
+            out.append(k)
+    return out
+
+
+def _tennis_search_alias(name: str) -> str:
+    n = " ".join(str(name or "").strip().split())
+    if not n:
+        return ""
+    parts = n.split()
+    if len(parts) >= 3:
+        return " ".join(parts[1:])
+    if len(parts) == 2:
+        return parts[1]
+    return parts[0]
+
+
+def build_targeted_news_queries(category_type: str, subcategory: str, entities: List[str], market_type: str, question: str, deadline: str = "") -> List[str]:
+    e1 = entities[0] if entities else ""
+    e2 = entities[1] if len(entities) > 1 else ""
+    q=[]
+    if category_type == "sports" and subcategory == "tennis" and market_type in {"head_to_head","match_winner"} and e1 and e2:
+        full_pair = f"{e1} {e2}"
+        alias_pair = f"{_tennis_search_alias(e1)} {_tennis_search_alias(e2)}".strip()
+        q=[f"{full_pair} prediction", f"{alias_pair} prediction", f"{full_pair} recent form", f"{full_pair} H2H surface"]
+        if "ital" in question.lower() or "bnl" in question.lower() or "internazionali" in question.lower():
+            q.append(f"Italian Open qualification {alias_pair} preview")
+    elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
+        q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
+    elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
+        q=[f"{e1} vs {e2} prediction preview", f"{e1} vs {e2} injuries lineup report", f"{e1} {e2} latest news"]
+    elif category_type in {"war_conflict","geopolitics"}:
+        q=[f"{question} latest battlefield update", "ceasefire negotiations latest", "military aid sanctions escalation latest"]
+    elif category_type in {"election","politics"}:
+        q=[f"{question} latest polls", f"{question} campaign endorsements", "approval rating latest"]
+    elif category_type == "crypto":
+        q=[f"{question} ETF regulation latest", f"{question} on-chain liquidity inflows", "macro liquidity rate cuts crypto"]
+    elif category_type == "legal_regulatory":
+        q=[f"{question} court ruling latest", f"{question} SEC CFTC DOJ latest", "hearing date ruling"]
+    elif category_type == "company_tech":
+        q=[f"{question} product launch release date", f"{question} earnings guidance latest", f"{question} AI model release latest"]
+    elif category_type == "macro":
+        q=["Fed rate decision latest CPI jobs report", "CPI forecast latest economists", "GDP recession probability latest"]
+    if not q:
+        q=[question]
+    return list(dict.fromkeys([x for x in q if x]))[:5]
+
+
+def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> float:
+    reasons=[]
+    title = str(item.get("title") or "").lower()
+    snippet = str(item.get("snippet") or "").lower()
+    link = str(item.get("link") or "").lower()
+    text = f"{title} {snippet}"
+    score = 0.0
+    if any(e.lower() in text for e in entities if e):
+        score += 2.0; reasons.append("mentions entity")
+    if len(entities) > 1 and all(e.lower() in text for e in entities[:2] if e):
+        score += 2.0; reasons.append("mentions both entities")
+    if any(x in link for x in ["livescore","sofascore","flashscore","player profile","atp-tour.com/en/players"]):
+        score -= 3.0; reasons.append("generic/live score/profile")
+    fr = classify_freshness(str(item.get("published") or ""))
+    score += 2.0 if fr in {"very_fresh","fresh"} else (1.0 if fr == "acceptable" else (-1.0 if fr == "stale" else 0.0))
+    item["freshness"] = fr
+    if any(k in text for k in ["prediction","preview","form","h2h","surface","tennis"]):
+        score += 1.0; reasons.append("tennis context")
+    item["source_relevance_score"] = round(score,2)
+    item["source_filter_reasons"]=reasons
+    return score
+
+
+def _build_tennis_news_evidence(entities: List[str], sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    a = entities[0] if len(entities) > 0 else "Player A"
+    b = entities[1] if len(entities) > 1 else "Player B"
+    out = {
+        "supports": {a: [], b: []},
+        "against": {a: [], b: []},
+        "neutral_context": [],
+        "evidence_strength": "low",
+        "evidence_notes": [],
+    }
+    exact = 0
+    detailed = 0
+    for s in (sources or [])[:8]:
+        title = str(s.get("title") or "")
+        snip = str(s.get("snippet") or s.get("description") or "")
+        text = (title + " " + snip).lower()
+        has_a, has_b = a.lower() in text, b.lower() in text
+        has_pred = any(k in text for k in ["prediction", "picks", "best bets", "preview", "form", "injury", "surface", "h2h", "qualification"])
+        if has_a and has_b:
+            exact += 1
+            note = "Найден прогнозный/preview источник по точному матчу." if has_pred else "Найден источник с упоминанием обоих игроков."
+            out["neutral_context"].append(note)
+            if has_pred:
+                out["supports"][a].append("Есть внешний прогнозный контекст по этому матчу.")
+                out["supports"][b].append("Есть внешний прогнозный контекст по этому матчу.")
+        if has_pred and any(k in text for k in ["form", "injury", "surface", "h2h"]):
+            detailed += 1
+        if has_pred and not any(k in text for k in ["form", "injury", "surface", "h2h"]):
+            out["evidence_notes"].append("Источник релевантен матчу, но в snippet мало деталей по форме/травмам/покрытию.")
+    out["evidence_strength"] = "high" if detailed >= 2 else ("medium" if exact >= 1 else "low")
+    if not out["evidence_notes"]:
+        out["evidence_notes"].append("Подтвержденных детальных факторов в snippets ограниченно.")
+    return out
 # ═══════════════════════════════════════════
 # NEWS AGENT
 # ═══════════════════════════════════════════
@@ -434,8 +564,9 @@ class NewsAgent:
         lang: str = "en",
         user_context: str = "",
     ) -> Dict[str, Any]:
-        question = market_data.get("question", "Unknown market")
+        question = _pick_question(market_data)
         category = market_data.get("category", "Unknown")
+        market_probability = market_data.get("market_probability") or market_data.get("probabilities") or market_data.get("market_probs") or ""
         date_context = market_data.get("date_context", "Unknown")
         related_markets = market_data.get("related_markets", [])
 
@@ -443,11 +574,30 @@ class NewsAgent:
         base_query = ""
 
         try:
-            queries = build_news_queries(question, category, date_context, user_context)
+            category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other").lower()
+            cat_raw = str(market_data.get("category") or "").lower()
+            if category_type in {"other","unknown"}:
+                if "sport" in cat_raw: category_type="sports"
+                elif "crypto" in cat_raw or "bitcoin" in cat_raw: category_type="crypto"
+                elif "polit" in cat_raw or "elect" in cat_raw: category_type="politics"
+            subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown").lower()
+            entities = (market_data.get("trading_plan") or {}).get("detected_entities") or []
+            market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "").lower()
+            if not entities:
+                entities = _extract_options_entities(market_probability) or _extract_vs_entities(question)
+            tennis_ctx = any(k in question.lower() for k in ["tennis","atp","wta","bnl","internazionali","italian open","roland garros","wimbledon","us open","australian open","qualification"])
+            if len(entities) == 2 and (_extract_vs_entities(question) or _extract_vs_entities(str(market_data.get("title") or ""))) and tennis_ctx:
+                category_type, subcategory, market_type = "sports", "tennis", "head_to_head"
+            if category_type == "sports" and subcategory == "unknown" and tennis_ctx and len(entities)==2:
+                subcategory="tennis"; market_type=market_type or "head_to_head"
+            queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
+            if len(entities)==2 and category_type=="sports" and subcategory=="tennis" and market_type=="head_to_head" and len(queries)<=1:
+                queries = build_targeted_news_queries("sports","tennis",entities,"head_to_head",question,date_context)
             focused_query = queries[0] if queries else question
             base_query = queries[1] if len(queries) > 1 else question
 
             all_items = search_google_news_multi(queries, limit=10)
+            raw_sources_count = len(all_items)
             enriched = [
                 enrich_news_item(item, question, user_context)
                 for item in all_items
@@ -460,12 +610,31 @@ class NewsAgent:
                 ),
                 reverse=True,
             )
+            score_threshold = 0.5 if (subcategory=="tennis") else 1.0
+            scored=[]
+            filter_reasons=[]
+            for x in enriched:
+                sc=_score_source(x, entities, question)
+                if sc >= score_threshold:
+                    scored.append(x)
+                else:
+                    filter_reasons.append({"title":x.get("title",""),"score":sc,"reasons":x.get("source_filter_reasons",[])})
+            enriched = scored
+            enriched.sort(key=lambda x: (x.get("source_relevance_score",0), x.get("source_score",0), x.get("freshness_score",0)), reverse=True)
             news_items = enriched[:8]
+            relevant_sources_count = len(news_items)
+            sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
         except Exception as e:
             print(f"NewsAgent multi-query error: {e}")
             focused_query = build_news_query(question, category, date_context)
             base_query = focused_query
             news_items = search_google_news(focused_query, limit=7)
+            raw_sources_count = len(news_items)
+            relevant_sources_count = len(news_items)
+            sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
+            queries = [focused_query]
+            sources_found_but_filtered = False
+            filter_reasons=[]
 
         twitter_items = _fetch_twitter_signals(focused_query, limit=4)
         if not twitter_items:
@@ -486,6 +655,9 @@ class NewsAgent:
         all_items_final = news_items + unique_twitter
         live_news_summary = summarize_news_items(all_items_final[:8])
         source_summary = self._build_source_summary(all_items_final)
+        news_evidence = {}
+        if subcategory == "tennis" and len(entities) >= 2:
+            news_evidence = _build_tennis_news_evidence(entities, all_items_final)
 
         prompt = self._build_prompt(
             question=question,
@@ -497,6 +669,11 @@ class NewsAgent:
             lang=lang,
             user_context=user_context,
             source_summary=source_summary,
+                news_queries_used=queries,
+                raw_sources_count=raw_sources_count,
+                relevant_sources_count=relevant_sources_count,
+                sources_found_but_filtered=sources_found_but_filtered,
+                source_filter_reasons=filter_reasons,
         )
 
         llm_result = generate_news_text(prompt)
@@ -518,6 +695,12 @@ class NewsAgent:
                 base_query=base_query,
                 evidence_matrix=evidence_matrix,
                 source_summary=source_summary,
+                news_queries_used=queries,
+                raw_sources_count=raw_sources_count,
+                relevant_sources_count=relevant_sources_count,
+                sources_found_but_filtered=sources_found_but_filtered,
+                source_filter_reasons=filter_reasons,
+                news_evidence=news_evidence,
             )
 
         key_signals = _extract_key_signals("", all_items_final)
@@ -533,6 +716,12 @@ class NewsAgent:
             user_context=user_context,
             focused_query=focused_query,
             base_query=base_query,
+            news_queries_used=queries if "queries" in locals() else [focused_query],
+            raw_sources_count=raw_sources_count if "raw_sources_count" in locals() else len(news_items),
+            relevant_sources_count=relevant_sources_count if "relevant_sources_count" in locals() else len(news_items),
+            sources_found_but_filtered=sources_found_but_filtered if "sources_found_but_filtered" in locals() else False,
+            source_filter_reasons=filter_reasons if "filter_reasons" in locals() else [],
+            news_evidence=news_evidence if "news_evidence" in locals() else {},
         )
 
     def _build_prompt(
@@ -546,6 +735,11 @@ class NewsAgent:
         lang: str = "en",
         user_context: str = "",
         source_summary: dict = None,
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
     ) -> str:
         related_lines = []
         for item in related_markets[:6]:
@@ -734,6 +928,12 @@ class NewsAgent:
         base_query: str = "",
         evidence_matrix: str = "",
         source_summary: dict = None,
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
+        news_evidence: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         return {
             "question": question,
@@ -751,6 +951,15 @@ class NewsAgent:
             "base_query": base_query,
             "evidence_matrix": evidence_matrix,
             "source_summary": source_summary or {},
+            "news_queries_used": news_queries_used or [],
+            "raw_sources_count": raw_sources_count,
+            "relevant_sources_count": relevant_sources_count,
+            "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
+            "source_filter_reasons": source_filter_reasons or [],
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
         }
 
     def _fallback_news(
@@ -766,6 +975,12 @@ class NewsAgent:
         user_context: str = "",
         focused_query: str = "",
         base_query: str = "",
+        news_queries_used: List[str] = None,
+        raw_sources_count: int = 0,
+        relevant_sources_count: int = 0,
+        sources_found_but_filtered: bool = False,
+        source_filter_reasons: List[Dict[str, Any]] = None,
+        news_evidence: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         summary_parts = [
             f"News analysis for: {question}.",
@@ -797,6 +1012,13 @@ class NewsAgent:
             "base_query": base_query,
             "evidence_matrix": "",
             "source_summary": self._build_source_summary(news_items),
+            "news_queries_used": news_queries_used or [],
+            "raw_sources_count": raw_sources_count,
+            "relevant_sources_count": relevant_sources_count,
+            "sources_found_but_filtered": sources_found_but_filtered or bool(raw_sources_count and relevant_sources_count < raw_sources_count),
+            "source_filter_reasons": source_filter_reasons or [],
+            "news_evidence": news_evidence or {},
+            "evidence_strength": (news_evidence or {}).get("evidence_strength", "low"),
         }
 
     def _build_source_summary(self, items: list) -> dict:

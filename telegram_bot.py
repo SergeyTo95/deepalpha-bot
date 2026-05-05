@@ -1526,10 +1526,40 @@ def _build_source_block_filtered(result: dict, lang: str) -> str:
     filtered = _filter_and_score_sources(result)
     sources = filtered["sources"]
     warning = filtered["warning"]
+    raw_sources_count = int(result.get("raw_sources_count") or 0)
+    relevant_sources_count = int(result.get("relevant_sources_count") or len(sources) or 0)
+    queries = result.get("news_queries_used") if isinstance(result.get("news_queries_used"), list) else []
+    reasons = result.get("source_filter_reasons") if isinstance(result.get("source_filter_reasons"), list) else []
 
     if not sources:
-        no_src = "📰 Источники:\nРелевантные свежие источники не найдены." if lang == "ru" else "📰 Sources:\nNo fresh relevant sources found."
-        return f"\n\n{no_src}"
+        header = "📰 Источники:" if lang == "ru" else "📰 Sources:"
+        if raw_sources_count > 0 and relevant_sources_count == 0:
+            msg = (
+                "Источники найдены, но свежих релевантных после фильтрации недостаточно."
+                if lang == "ru"
+                else "Sources were found, but not enough fresh relevant sources after filtering."
+            )
+            qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+            out = [header, msg]
+            if queries:
+                out.append(qh)
+                out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+            if reasons:
+                rh = "Почему скрыто:" if lang == "ru" else "Why hidden:"
+                out.append(rh)
+                for r in reasons[:3]:
+                    rs = ", ".join(r.get("reasons", [])[:2]) if isinstance(r, dict) else ""
+                    if rs:
+                        out.append(f"— {_escape(rs)}")
+            return "\n\n" + "\n".join(out)
+
+        msg = "Релевантные свежие источники не найдены." if lang == "ru" else "No fresh relevant sources found."
+        qh = "Искали по запросам:" if lang == "ru" else "Searched queries:"
+        out = [header, msg]
+        if queries:
+            out.append(qh)
+            out.extend([f"— {_escape(str(q))}" for q in queries[:4]])
+        return "\n\n" + "\n".join(out)
 
     lines = []
     for i, s in enumerate(sources[:5], 1):
@@ -1668,17 +1698,23 @@ def _format_tennis_totals_sports_answer(result: dict, lang: str) -> str:
     source_block = _build_source_block_filtered(result, lang)
     over_d = diffs.get(over_key)
     under_d = diffs.get(under_key)
-    diff_ru = f"{over_label_ru}: {over_d:+.1f}% | {under_label_ru}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Разница с рынком: данных модели недостаточно."
+    diff_ru = f"{over_label_ru}: {over_d:+.1f}% | {under_label_ru}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "данных модели недостаточно."
     diff_en = f"{over_label_en}: {over_d:+.1f}% | {under_label_en}: {under_d:+.1f}%" if over_d is not None and under_d is not None else "Model vs market delta: model data is insufficient."
 
     is_set1 = "set 1" in str(result.get("question", "")).lower() or "1st set" in str(result.get("question", "")).lower()
+    try:
+        line_val = float(line)
+    except Exception:
+        line_val = 0.0
+    over_thr = int(line_val) + 1
+    under_thr = int(line_val)
     if lang == "ru":
         rules = (
-            f"— {over_label_ru} проходит, если в первом сете будет 9+ геймов.\n"
-            f"— {under_label_ru} проходит, если в первом сете будет 8 или меньше геймов."
+            f"— {over_label_ru} проходит, если в первом сете будет {over_thr}+ геймов.\n"
+            f"— {under_label_ru} проходит, если в первом сете будет {under_thr} или меньше геймов."
             if is_set1 else
-            f"— {over_label_ru} проходит, если в матче будет 23+ гейма.\n"
-            f"— {under_label_ru} проходит, если в матче будет 22 или меньше геймов."
+            f"— {over_label_ru} проходит, если в матче будет {over_thr}+ геймов.\n"
+            f"— {under_label_ru} проходит, если в матче будет {under_thr} или меньше геймов."
         )
         model_note = "Модель не дала отдельной вероятности по тоталу, поэтому вход сейчас не подтверждён." if not has_independent_model else "Ориентир по тоталу берём из модели и сравнения с рынком."
         return (
@@ -1700,11 +1736,11 @@ def _format_tennis_totals_sports_answer(result: dict, lang: str) -> str:
         )
 
     rules = (
-        f"— {over_label_en} wins if the first set has 9+ games.\n"
-        f"— {under_label_en} wins if the first set has 8 or fewer games."
+        f"— {over_label_en} wins if the first set has {over_thr}+ games.\n"
+        f"— {under_label_en} wins if the first set has {under_thr} or fewer games."
         if is_set1 else
-        f"— {over_label_en} wins if the match has 23+ games.\n"
-        f"— {under_label_en} wins if the match has 22 or fewer games."
+        f"— {over_label_en} wins if the match has {over_thr}+ games.\n"
+        f"— {under_label_en} wins if the match has {under_thr} or fewer games."
     )
     model_note = "The model did not provide separate totals probabilities, so entry is not confirmed now." if not has_independent_model else "Use model totals and compare against market price."
     action_en = "WAIT" if "WAIT" in action_raw.upper() else ("NO TRADE" if "NO TRADE" in action_raw.upper() else action_raw)
@@ -1733,6 +1769,9 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
     market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else _extract_market_probs(str(result.get("market_probability") or ""))
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
     diffs = tp.get("option_differences") if isinstance(tp.get("option_differences"), dict) else {}
+    side_analysis = tp.get("side_analysis") if isinstance(tp.get("side_analysis"), dict) else {}
+    ev_strength = str(tp.get("evidence_strength") or result.get("evidence_strength") or "low")
+    limitations = str(tp.get("data_limitations") or "Источник релевантен, но данных ограниченно.")
     action_raw = str(tp.get("recommended_action") or result.get("decision") or "WAIT").upper()
     source_block = _build_source_block_filtered(result, lang)
 
@@ -1774,6 +1813,18 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
         model_note_en = "Decision is based on player-by-player model versus market comparison."
 
     if lang == "ru":
+        p1a = side_analysis.get(p1n, {}) if isinstance(side_analysis.get(p1n, {}), dict) else {}
+        p2a = side_analysis.get(p2n, {}) if isinstance(side_analysis.get(p2n, {}), dict) else {}
+        def _line(v): return "; ".join(v[:2]) if isinstance(v, list) and v else "недостаточно данных"
+        analysis_block = (
+            "🧠 Анализ игроков:\n"
+            f"— {p1n}:\n  • Что за него: {_line(p1a.get('strengths'))}\n  • Что против: {_line(p1a.get('weaknesses'))}\n  • Новости/контекст: {_line(p1a.get('key_news'))}\n"
+            f"— {p2n}:\n  • Что за него: {_line(p2a.get('strengths'))}\n  • Что против: {_line(p2a.get('weaknesses'))}\n  • Новости/контекст: {_line(p2a.get('key_news'))}\n"
+            "🧾 Качество данных:\n"
+            f"— Сила доказательств: {ev_strength}\n"
+            f"— Найдено релевантных источников: {len(result.get('news_sources') or result.get('news_items') or [])}\n"
+            f"— Ограничение: {limitations}\n"
+        )
         return (
             "🎾 DeepAlpha Sports Signal\n\n"
             f"📌 {q}\n"
@@ -1790,6 +1841,7 @@ def _format_tennis_h2h_sports_answer(result: dict, lang: str) -> str:
             f"💰 Наиболее выгодная ставка: {best_ru}\n"
             f"📊 Разница с рынком: {diff_ru}\n"
             f"📍 Условия для входа: {model_note_ru}\n"
+            f"{analysis_block}"
             "📡 Что может изменить рынок: форма игрока, покрытие, качество подачи, качество приёма, физическое состояние, усталость и плотность календаря, личные встречи, недавние матчи.\n"
             "⚠️ Риски: слабые или отсутствующие свежие данные; нестабильная подача; быстрый ранний брейк может изменить матч; квалификация часто менее предсказуема; движение линии перед матчем.\n"
             f"{source_block}"
@@ -1886,6 +1938,7 @@ def _format_analysis(result: dict, uid: int) -> str:
 
     sports_context = result.get("sports_context") if isinstance(result.get("sports_context"), dict) else None
     tennis_market_type = str((sports_context or {}).get("market_type", "")).lower()
+    tennis_market_type = {"headtohead":"head_to_head","h2h":"head_to_head","over_under":"totals"}.get(tennis_market_type, tennis_market_type)
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
@@ -1895,13 +1948,13 @@ def _format_analysis(result: dict, uid: int) -> str:
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and tennis_market_type in {"head_to_head", "headtohead", "h2h"}
+        and tennis_market_type in {"head_to_head", "match_winner"}
     ):
         return _format_tennis_h2h_sports_answer(result, lang)
     if (
         sports_context
         and str(sports_context.get("sport_type", "")).lower() == "tennis"
-        and tennis_market_type in {"set_handicap", "spread"}
+        and tennis_market_type in {"set_handicap", "spread", "handicap"}
     ):
         return _format_tennis_h2h_sports_answer(result, lang)
     is_tennis_totals = bool(
@@ -2095,7 +2148,6 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Вывод:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Информационный анализ. Не является торговой, инвестиционной или betting-рекомендацией._"
 
     else:
         text = f"{header_emoji}\n{sep}\n\n📌 {q}\n"
@@ -2133,7 +2185,6 @@ def _format_analysis(result: dict, uid: int) -> str:
         text += f"\n📊 Decision: {dec_display}\n"
         text += f"\n{sep}\n"
         text += f"📝 Conclusion:\n{semantic_conclusion or edge.get('reason', '')}"
-        text += "\n\n_Informational analysis. Not trading, investment, or betting advice._"
 
     text += time_shift_block
     text += source_block
