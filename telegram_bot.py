@@ -1885,12 +1885,15 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
         return f"— Over {line:.1f} wins at {floor_line + 1}+.\n— Under {line:.1f} wins at {floor_line} or fewer."
     if "tennis" in c or "tennis" in s:
         return "— Побеждает один из двух теннисистов.\n— Ничьей в теннисе нет.\n— Это рынок победителя матча." if is_ru else "— One of two players wins.\n— No draw in tennis.\n— This is a match-winner market."
-    if "football" in c and set(options.keys()) == {"YES", "NO"}:
+    keys_upper = {str(k).upper() for k in options.keys()}
+    keys_lower = {str(k).lower() for k in options.keys()}
+    is_football = ("football" in c) or ("football" in s)
+    if is_football and keys_upper == {"YES", "NO"}:
         team = _extract_team_from_question(title) or "команда"
         if is_ru:
             return f"— YES проходит, если {team} выигрывает матч.\n— NO проходит, если матч заканчивается ничьей или {team} проигрывает.\n— Ничья здесь считается как NO."
         return f"— YES resolves if {team} wins.\n— NO resolves if match ends draw or {team} loses.\n— Draw counts as NO."
-    if "football" in c and ("draw" in options or "ничья" in options):
+    if is_football and ("draw" in keys_lower or "ничья" in keys_lower):
         return "— Победа первой команды, ничья и победа второй команды считаются отдельными исходами.\n— Draw / Ничья — отдельный вариант." if is_ru else "— Home win, draw, away win are separate outcomes.\n— Draw is a separate option."
     mapping_ru = {
         "ufc": "— Побеждает один из бойцов.\n— Ничьей в обычной логике рынка нет, если правила рынка не указывают иное.",
@@ -1913,9 +1916,13 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     sub = str(result.get("subcategory") or "")
     market_type = str(result.get("market_type") or result.get("market_format") or "")
     market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else {}
+    if not market_opts and isinstance(result.get("market_options"), dict):
+        market_opts = result.get("market_options")
     if not market_opts:
         market_opts = _extract_market_probs(str(result.get("market_probability") or ""))
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
+    if not model_opts and isinstance(result.get("model_options"), dict):
+        model_opts = result.get("model_options")
     lines = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
     has_model = bool(model_opts)
     diffs = {}
@@ -1966,7 +1973,39 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(lines) + "\n\n"
     text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + res_logic + "\n\n"
     text += ("🎯 Короткий вывод:\n" if is_ru else "🎯 Short view:\n") + "\n".join(short) + "\n\n"
-    text += ("🧠 Анализ сторон:\n— Данных по стороне недостаточно.\n— Нужны свежие источники по форме/новостям/правилам разрешения.\n\n" if is_ru else "🧠 Side analysis:\n— Side-level data is limited.\n— Need fresher sources on form/news/resolution rules.\n\n")
+    side_analysis = result.get("side_analysis") if isinstance(result.get("side_analysis"), dict) else {}
+    news_evidence = result.get("news_evidence") if isinstance(result.get("news_evidence"), dict) else {}
+    sport_label = "🧠 Анализ сторон"
+    cat_l = category.lower()
+    sub_l = sub.lower()
+    if "tennis" in cat_l or "tennis" in sub_l:
+        sport_label = "🧠 Анализ игроков"
+    elif "football" in cat_l or "basketball" in cat_l or "hockey" in cat_l or "football" in sub_l:
+        sport_label = "🧠 Анализ команд"
+    elif any(x in cat_l or x in sub_l for x in ("ufc", "mma", "boxing")):
+        sport_label = "🧠 Анализ бойцов"
+
+    def _norm_list(v):
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).strip()][:2]
+        if isinstance(v, str) and v.strip():
+            return [v.strip()]
+        return []
+    side_block_lines = []
+    merged_keys = list(dict.fromkeys(list(side_analysis.keys()) + list(news_evidence.keys())))
+    for name in merged_keys[:3]:
+        sa = side_analysis.get(name) if isinstance(side_analysis.get(name), dict) else {}
+        ne = news_evidence.get(name) if isinstance(news_evidence.get(name), dict) else {}
+        supports = _norm_list(sa.get("strengths") or sa.get("supports") or ne.get("supports"))
+        against = _norm_list(sa.get("weaknesses") or sa.get("against") or ne.get("against"))
+        ctxt = _norm_list(sa.get("key_news") or sa.get("neutral_context") or ne.get("neutral_context"))
+        if is_ru:
+            side_block_lines.append(f"— {name}:\n  • Что за: {'; '.join(supports) if supports else 'недостаточно данных'}\n  • Что против: {'; '.join(against) if against else 'недостаточно данных'}\n  • Новости/контекст: {'; '.join(ctxt) if ctxt else 'недостаточно данных'}")
+        else:
+            side_block_lines.append(f"— {name}:\n  • Supports: {'; '.join(supports) if supports else 'limited data'}\n  • Against: {'; '.join(against) if against else 'limited data'}\n  • News/context: {'; '.join(ctxt) if ctxt else 'limited data'}")
+    if not side_block_lines:
+        side_block_lines = ["— Данных по стороне недостаточно.\n— Нужны свежие источники по форме/новостям/правилам разрешения." if is_ru else "— Side-level data is limited.\n— Need fresher sources on form/news/resolution rules."]
+    text += (f"{sport_label}:\n" if is_ru else "🧠 Side analysis:\n") + "\n".join(side_block_lines) + "\n\n"
     text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n") + "\n".join(mvm) + "\n\n"
     text += ("🧾 Качество данных:\n" if is_ru else "🧾 Data quality:\n")
     text += (f"— {'Сила доказательств' if is_ru else 'Evidence strength'}: {evidence}\n— {'Новостное качество' if is_ru else 'News quality'}: {news_q}\n— {'Релевантных источников' if is_ru else 'Relevant sources'}: {rel_cnt}\n")
