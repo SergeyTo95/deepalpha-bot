@@ -2046,7 +2046,7 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             f"👉 Стоит ли входить сейчас: {action_map.get(action, 'ЖДАТЬ')}",
             f"📌 Самый вероятный исход: {max(market_opts, key=market_opts.get) if market_opts else '—'}",
             f"💰 Наиболее выгодная ставка: {best if has_model and best_diff > 0 else 'не подтверждена'}",
-            f"📊 Причина: {'есть расхождение модели и рынка' if has_model else 'независимая оценка не получена'}",
+            f"📊 Причина: {(tp.get('analyst_view',{}) or {}).get('why','есть расхождение модели и рынка' if has_model else 'независимая оценка не получена')}",
         ]
     else:
         short = [
@@ -2066,6 +2066,7 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     else:
         mvm = [
             "— Независимая оценка по исходам не получена." if is_ru else "— Independent per-outcome estimate was not produced.",
+            f"— {'Причина' if is_ru else 'Reason'}: " + str((tp.get("analyst_view",{}) or {}).get("data_limitations", ["нужны подтвержденные свежие данные"])[0]),
             f"— {'Рынок' if is_ru else 'Market'}: " + " / ".join([f"{k} {float(v):.1f}%" for k, v in market_opts.items()][:3]),
             "— Поэтому вход сейчас не подтверждён." if is_ru else "— Entry is not confirmed now.",
         ]
@@ -2108,14 +2109,16 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
         else:
             side_block_lines.append(f"— {name}:\n  • Supports: {'; '.join(supports) if supports else 'limited data'}\n  • Against: {'; '.join(against) if against else 'limited data'}\n  • News/context: {'; '.join(ctxt) if ctxt else 'limited data'}")
     if not side_block_lines:
-        side_block_lines = ["— Данных по стороне недостаточно.\n— Нужны свежие источники по форме/новостям/правилам разрешения." if is_ru else "— Side-level data is limited.\n— Need fresher sources on form/news/resolution rules."]
+        side_block_lines = ["— Нет достаточных подтверждений по ключевым факторам конкретного рынка.\n— Перед входом проверьте состав/травмы/форму или эквивалентные факторы по категории." if is_ru else "— Key market-specific factors are not confirmed.\n— Check lineups/injuries/form or category-equivalent factors before entry."]
     text += (f"{sport_label}:\n" if is_ru else "🧠 Side analysis:\n") + "\n".join(side_block_lines) + "\n\n"
     text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n") + "\n".join(mvm) + "\n\n"
     text += ("🧾 Качество данных:\n" if is_ru else "🧾 Data quality:\n")
     text += (f"— {'Сила доказательств' if is_ru else 'Evidence strength'}: {evidence}\n— {'Новостное качество' if is_ru else 'News quality'}: {news_q}\n— {'Релевантных источников' if is_ru else 'Relevant sources'}: {rel_cnt}\n")
     text += (f"— {'Ограничение' if is_ru else 'Limitation'}: {result.get('limitation') or 'limited fresh evidence'}\n\n")
-    text += ("📍 Условия для входа:\n— Ждать улучшения цены и подтверждения новостей.\n\n" if is_ru else "📍 Entry conditions:\n— Wait for better pricing and source confirmation.\n\n")
-    text += ("📡 Что может изменить рынок:\n— Новости и официальные подтверждения.\n\n" if is_ru else "📡 What can move the market:\n— News flow and official confirmations.\n\n")
+    entry_tr = ((tp.get('analyst_view',{}) or {}).get('market_moving_triggers') or result.get('market_moving_triggers') or ['Ждать улучшения цены и подтверждения ключевых данных'])
+    text += (("📍 Условия для входа:\n" if is_ru else "📍 Entry conditions:\n") + "\n".join([f"— {x}" for x in entry_tr[:3]]) + "\n\n")
+    mv = ((tp.get('analyst_view',{}) or {}).get('market_moving_triggers') or result.get('market_moving_triggers') or ['Официальные обновления'])
+    text += (("📡 Что может изменить рынок:\n" if is_ru else "📡 What can move the market:\n") + "\n".join([f"— {x}" for x in mv[:4]]) + "\n\n")
     text += ("⚠️ Риски:\n— Волатильность и неполные данные." if is_ru else "⚠️ Risks:\n— Volatility and incomplete data.")
     text += _build_source_block_filtered(result, lang)
     return text
