@@ -419,14 +419,57 @@ def _extract_key_signals(llm_text: str, news_items: List[Dict]) -> List[str]:
 
 
 
+
+
+def _pick_question(market_data: Dict[str, Any]) -> str:
+    for k in ("question","title","market","name","event_title"):
+        v=market_data.get(k)
+        if isinstance(v,str) and v.strip():
+            return v.strip()
+    return "Unknown market"
+
+
+def _extract_vs_entities(text: str) -> List[str]:
+    if not text:
+        return []
+    base = text.split(":")[-1].strip() if ":" in text else text
+    m = re.search(r"(.+?)\s+(?:vs|v\.?|against)\s+(.+)", base, re.IGNORECASE)
+    if not m:
+        return []
+    return [m.group(1).strip(" ,.;:"), m.group(2).strip(" ,.;:")]
+
+
+def _extract_options_entities(market_probability: str) -> List[str]:
+    out=[]
+    for m in re.finditer(r"([^|:,]+?)\s*[:\-]\s*([\d.]+)%", str(market_probability or ""), re.IGNORECASE):
+        k=m.group(1).strip()
+        if k.lower() not in {"yes","no","да","нет","over","under"}:
+            out.append(k)
+    return out
+
+
+def _tennis_search_alias(name: str) -> str:
+    n = " ".join(str(name or "").strip().split())
+    if not n:
+        return ""
+    parts = n.split()
+    if len(parts) >= 3:
+        return " ".join(parts[1:])
+    if len(parts) == 2:
+        return parts[1]
+    return parts[0]
+
+
 def build_targeted_news_queries(category_type: str, subcategory: str, entities: List[str], market_type: str, question: str, deadline: str = "") -> List[str]:
     e1 = entities[0] if entities else ""
     e2 = entities[1] if len(entities) > 1 else ""
     q=[]
     if category_type == "sports" and subcategory == "tennis" and market_type in {"head_to_head","match_winner"} and e1 and e2:
-        q=[f"{e1} {e2} prediction", f"{e1.split()[-1]} {e2.split()[-1]} prediction", f"{e1} {e2} recent form", f"{e1} {e2} H2H surface"]
+        full_pair = f"{e1} {e2}"
+        alias_pair = f"{_tennis_search_alias(e1)} {_tennis_search_alias(e2)}".strip()
+        q=[f"{full_pair} prediction", f"{alias_pair} prediction", f"{full_pair} recent form", f"{full_pair} H2H surface"]
         if "ital" in question.lower() or "bnl" in question.lower() or "internazionali" in question.lower():
-            q.append(f"Italian Open qualification {e1.split()[-1]} {e2.split()[-1]} preview")
+            q.append(f"Italian Open qualification {alias_pair} preview")
     elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
         q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
     elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
@@ -445,7 +488,7 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
         q=["Fed rate decision latest CPI jobs report", "CPI forecast latest economists", "GDP recession probability latest"]
     if not q:
         q=[question]
-    return list(dict.fromkeys([x for x in q if x]))[:4]
+    return list(dict.fromkeys([x for x in q if x]))[:5]
 
 
 def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> float:
@@ -486,8 +529,9 @@ class NewsAgent:
         lang: str = "en",
         user_context: str = "",
     ) -> Dict[str, Any]:
-        question = market_data.get("question", "Unknown market")
+        question = _pick_question(market_data)
         category = market_data.get("category", "Unknown")
+        market_probability = market_data.get("market_probability") or market_data.get("probabilities") or market_data.get("market_probs") or ""
         date_context = market_data.get("date_context", "Unknown")
         related_markets = market_data.get("related_markets", [])
 
@@ -495,11 +539,25 @@ class NewsAgent:
         base_query = ""
 
         try:
-            category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other")
-            subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown")
+            category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other").lower()
+            cat_raw = str(market_data.get("category") or "").lower()
+            if category_type in {"other","unknown"}:
+                if "sport" in cat_raw: category_type="sports"
+                elif "crypto" in cat_raw or "bitcoin" in cat_raw: category_type="crypto"
+                elif "polit" in cat_raw or "elect" in cat_raw: category_type="politics"
+            subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown").lower()
             entities = (market_data.get("trading_plan") or {}).get("detected_entities") or []
-            market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "")
+            market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "").lower()
+            if not entities:
+                entities = _extract_options_entities(market_probability) or _extract_vs_entities(question)
+            tennis_ctx = any(k in question.lower() for k in ["tennis","atp","wta","bnl","internazionali","italian open","roland garros","wimbledon","us open","australian open","qualification"])
+            if len(entities) == 2 and (_extract_vs_entities(question) or _extract_vs_entities(str(market_data.get("title") or ""))) and tennis_ctx:
+                category_type, subcategory, market_type = "sports", "tennis", "head_to_head"
+            if category_type == "sports" and subcategory == "unknown" and tennis_ctx and len(entities)==2:
+                subcategory="tennis"; market_type=market_type or "head_to_head"
             queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
+            if len(entities)==2 and category_type=="sports" and subcategory=="tennis" and market_type=="head_to_head" and len(queries)<=1:
+                queries = build_targeted_news_queries("sports","tennis",entities,"head_to_head",question,date_context)
             focused_query = queries[0] if queries else question
             base_query = queries[1] if len(queries) > 1 else question
 
