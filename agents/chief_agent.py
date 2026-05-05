@@ -191,6 +191,46 @@ class ChiefAgent:
             "trading_plan": trading_plan,
         }
 
+        # Propagate NewsAgent diagnostics to top-level result for Telegram formatter.
+        # telegram_bot.py reads these fields directly from final_result.
+        if isinstance(news_data, dict):
+            final_result.setdefault(
+                "news_queries_used",
+                news_data.get("news_queries_used", []),
+            )
+            final_result.setdefault(
+                "raw_sources_count",
+                news_data.get("raw_sources_count", 0),
+            )
+            final_result.setdefault(
+                "relevant_sources_count",
+                news_data.get("relevant_sources_count", 0),
+            )
+            final_result.setdefault(
+                "sources_found_but_filtered",
+                news_data.get("sources_found_but_filtered", False),
+            )
+            final_result.setdefault(
+                "source_filter_reasons",
+                news_data.get("source_filter_reasons", []),
+            )
+            final_result.setdefault(
+                "side_analysis",
+                news_data.get("side_analysis", {}),
+            )
+            final_result.setdefault(
+                "news_quality",
+                news_data.get("news_quality", "low"),
+            )
+            final_result.setdefault(
+                "source_relevance_score",
+                news_data.get("source_relevance_score", 0.0),
+            )
+            final_result.setdefault(
+                "relevant_sources",
+                news_data.get("relevant_sources", news_data.get("sources", [])),
+            )
+
         try:
             save_analysis(final_result, user_id=user_id)
         except Exception as e:
