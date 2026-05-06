@@ -448,6 +448,18 @@ def _extract_options_entities(market_probability: str) -> List[str]:
     return out
 
 
+def _extract_binary_team_win_name(title: str) -> str:
+    if not isinstance(title, str) or not title.strip():
+        return ""
+    m = re.search(r"^\s*Will\s+(.+?)\s+(?:win|beat|defeat)\b", title.strip(), re.IGNORECASE | re.UNICODE)
+    if not m:
+        return ""
+    team = m.group(1).strip(" ,.;:-?")
+    team = re.sub(r"\s+(?:on|by)\s+\d{4}-\d{2}-\d{2}\b.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+    team = re.sub(r"\s+by\s+.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+    return team.strip(" ,.;:-? ")
+
+
 def _tennis_search_alias(name: str) -> str:
     n = " ".join(str(name or "").strip().split())
     if not n:
@@ -472,6 +484,19 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
             q.append(f"Italian Open qualification {alias_pair} preview")
     elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
         q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
+    elif category_type == "sports" and subcategory == "football" and market_type == "binary_team_win" and e1:
+        d = deadline if re.search(r"\d{4}-\d{2}-\d{2}", str(deadline or "")) else ""
+        d_human = ""
+        if d:
+            y, mo, da = d.split("-")
+            d_human = f"May {int(da)} {y}" if mo == "05" else d
+        q = [
+            f"{e1} match {d} opponent".strip(),
+            f"{e1} team news injuries {d}".strip(),
+            f"{e1} predicted lineup {d}".strip(),
+            f"{e1} next match preview {d_human or d}".strip(),
+            f"{e1} recent form motivation",
+        ]
     elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
         q=[f"{e1} vs {e2} prediction preview", f"{e1} vs {e2} injuries lineup report", f"{e1} {e2} latest news"]
     elif category_type in {"war_conflict","geopolitics"}:
@@ -550,6 +575,21 @@ def _score_source(item: Dict[str, Any], entities: List[str], question: str, dead
     item["freshness"] = fr
     if any(k in text for k in ["prediction","preview","form","h2h","surface","tennis"]):
         score += 1.0; reasons.append("tennis context")
+    target_team = _extract_binary_team_win_name(question)
+    if target_team:
+        team_l = target_team.lower()
+        if team_l in text:
+            score += 1.0; reasons.append("target team mention")
+        opp_m = re.search(r"\b(?:vs|v\.?|against)\s+([a-z0-9À-ÖØ-öø-ÿ\-\s]+)", text, re.IGNORECASE)
+        if opp_m and team_l in text:
+            opp = opp_m.group(1).strip().lower()
+            q_opp = re.search(r"\b(?:vs|v\.?|against)\s+([a-z0-9À-ÖØ-öø-ÿ\-\s]+)", question.lower(), re.IGNORECASE)
+            if q_opp and q_opp.group(1).strip() not in opp:
+                score -= 2.5; reasons.append("wrong opponent")
+        if "preview" in text and not dl:
+            score -= 0.8; reasons.append("generic preview only")
+        if dl and dl not in text and "next match" not in text and "team news" not in text and "injur" not in text and "form" not in text:
+            score -= 1.5; reasons.append("missing event/date/driver match")
     item["source_relevance_score"] = round(score,2)
     item["source_filter_reasons"]=reasons
     return score
@@ -626,6 +666,10 @@ class NewsAgent:
             market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "").lower()
             if not entities:
                 entities = _extract_options_entities(market_probability) or _extract_vs_entities(question)
+            if market_type == "binary_team_win" and not entities:
+                tname = _extract_binary_team_win_name(question)
+                if tname:
+                    entities = [tname]
             tennis_ctx = any(k in question.lower() for k in ["tennis","atp","wta","bnl","internazionali","italian open","roland garros","wimbledon","us open","australian open","qualification"])
             if len(entities) == 2 and (_extract_vs_entities(question) or _extract_vs_entities(str(market_data.get("title") or ""))) and tennis_ctx:
                 category_type, subcategory, market_type = "sports", "tennis", "head_to_head"
