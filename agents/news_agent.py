@@ -491,21 +491,62 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
     return list(dict.fromkeys([x for x in q if x]))[:5]
 
 
-def _score_source(item: Dict[str, Any], entities: List[str], question: str) -> float:
+def _extract_event_drivers(market_data: Dict[str, Any]) -> Dict[str, Any]:
+    direct = market_data.get("event_drivers")
+    nested = (market_data.get("trading_plan") or {}).get("event_drivers")
+    drivers = direct if isinstance(direct, dict) else nested
+    return drivers if isinstance(drivers, dict) else {}
+
+
+def _build_driver_queries(event_drivers: Dict[str, Any], entities: List[str], question: str) -> List[str]:
+    must_find = event_drivers.get("must_find") if isinstance(event_drivers, dict) else None
+    if not isinstance(must_find, list):
+        return []
+    entity_hint = " ".join([e for e in (entities or [])[:2] if e]).strip()
+    out = []
+    for driver in must_find:
+        if not isinstance(driver, str):
+            continue
+        d = " ".join(driver.split()).strip()
+        if not d:
+            continue
+        out.append(f"{question} {d}")
+        if entity_hint:
+            out.append(f"{entity_hint} {d} latest")
+    return [x for x in out if x]
+
+
+def _score_source(item: Dict[str, Any], entities: List[str], question: str, deadline: str = "", event_drivers: Optional[Dict[str, Any]] = None) -> float:
     reasons=[]
     title = str(item.get("title") or "").lower()
     snippet = str(item.get("snippet") or "").lower()
     link = str(item.get("link") or "").lower()
     text = f"{title} {snippet}"
     score = 0.0
+    ql = (question or "").lower()
+    dl = (deadline or "").lower()
+    must_find = (event_drivers or {}).get("must_find") if isinstance(event_drivers, dict) else []
+    drivers = [str(x).lower() for x in must_find if isinstance(x, str) and x.strip()]
     if any(e.lower() in text for e in entities if e):
         score += 2.0; reasons.append("mentions entity")
     if len(entities) > 1 and all(e.lower() in text for e in entities[:2] if e):
         score += 2.0; reasons.append("mentions both entities")
-    if any(x in link for x in ["livescore","sofascore","flashscore","player profile","atp-tour.com/en/players"]):
-        score -= 3.0; reasons.append("generic/live score/profile")
+    if drivers and any(d in text for d in drivers):
+        score += 2.0; reasons.append("driver match")
+    if dl and any(tok in text for tok in dl.split() if len(tok) > 3):
+        score += 1.0; reasons.append("deadline mention")
+    if any(k in text for k in ["likely", "odds", "forecast", "outlook", "approval", "poll", "injury", "lineup", "suspension", "ruling", "decision", "etf", "sec", "ban", "ceasefire", "sanctions"]):
+        score += 1.5; reasons.append("market-moving keywords")
+    if any(k in ql for k in ["will", "before", "by ", "until"]) and any(k in text for k in ["before", "by ", "deadline", "expected on", "scheduled for"]):
+        score += 1.0; reasons.append("timing relevance")
+    if any(x in link for x in ["livescore","sofascore","flashscore","player profile","atp-tour.com/en/players","/profile/","/stats/","/rankings/"]):
+        score -= 3.5; reasons.append("generic/live score/profile")
+    if any(x in link for x in ["tag/", "/tags/", "/search?", "utm_", "amp.", "pinterest.", "facebook.com/sharer"]):
+        score -= 2.0; reasons.append("seo/junk page")
     fr = classify_freshness(str(item.get("published") or ""))
     score += 2.0 if fr in {"very_fresh","fresh"} else (1.0 if fr == "acceptable" else (-1.0 if fr == "stale" else 0.0))
+    if fr in {"very_fresh", "fresh"}:
+        reasons.append("fresh source")
     item["freshness"] = fr
     if any(k in text for k in ["prediction","preview","form","h2h","surface","tennis"]):
         score += 1.0; reasons.append("tennis context")
@@ -590,7 +631,15 @@ class NewsAgent:
                 category_type, subcategory, market_type = "sports", "tennis", "head_to_head"
             if category_type == "sports" and subcategory == "unknown" and tennis_ctx and len(entities)==2:
                 subcategory="tennis"; market_type=market_type or "head_to_head"
-            queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
+            category_queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
+            event_drivers = _extract_event_drivers(market_data)
+            driver_queries = _build_driver_queries(event_drivers, entities, question)
+            merged_queries = []
+            for q in driver_queries + category_queries:
+                qq = " ".join(str(q or "").split()).strip()
+                if qq and qq not in merged_queries:
+                    merged_queries.append(qq)
+            queries = merged_queries[:6]
             if len(entities)==2 and category_type=="sports" and subcategory=="tennis" and market_type=="head_to_head" and len(queries)<=1:
                 queries = build_targeted_news_queries("sports","tennis",entities,"head_to_head",question,date_context)
             focused_query = queries[0] if queries else question
@@ -614,7 +663,7 @@ class NewsAgent:
             scored=[]
             filter_reasons=[]
             for x in enriched:
-                sc=_score_source(x, entities, question)
+                sc=_score_source(x, entities, question, date_context, event_drivers)
                 if sc >= score_threshold:
                     scored.append(x)
                 else:
