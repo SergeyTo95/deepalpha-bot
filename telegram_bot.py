@@ -2063,14 +2063,20 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
 
     line_items = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
     team_name = _extract_binary_team_win_name(title)
-    res_logic = str(event_drivers.get("resolution_condition") or "").strip() or _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
+    localized_res_logic = _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
+    existing_resolution = str(event_drivers.get("resolution_condition") or "").strip()
+    is_football_binary = (str(sub).lower() == "football" and str(market_type).lower() == "binary_team_win" and {str(k).upper() for k in market_opts.keys()} == {"YES", "NO"})
+    res_logic = localized_res_logic if is_football_binary else (existing_resolution or localized_res_logic)
 
     most_likely = max(market_opts, key=market_opts.get) if market_opts else "—"
     best_value = best if has_model and best != "NONE" and best_diff > 0 else ("явной недооценки не найдено" if is_ru else "No clear underpricing found.")
 
     text = "🔎 DeepAlpha Signal\n\n"
     text += f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n"
-    text += f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category + (' / ' + sub if sub else ''))}\n\n"
+    category_display = category + (' / ' + sub if sub else '')
+    if is_football_binary:
+        category_display = "Футбол / победа команды" if is_ru else "Football / team win"
+    text += f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}\n\n"
     text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(line_items) + "\n\n"
     text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + _escape(res_logic) + "\n\n"
 

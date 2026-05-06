@@ -448,6 +448,18 @@ def _extract_options_entities(market_probability: str) -> List[str]:
     return out
 
 
+def _extract_binary_team_win_name(title: str) -> str:
+    if not isinstance(title, str) or not title.strip():
+        return ""
+    m = re.search(r"^\s*Will\s+(.+?)\s+(?:win|beat|defeat)\b", title.strip(), re.IGNORECASE | re.UNICODE)
+    if not m:
+        return ""
+    team = m.group(1).strip(" ,.;:-?")
+    team = re.sub(r"\s+(?:on|by)\s+\d{4}-\d{2}-\d{2}\b.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+    team = re.sub(r"\s+by\s+.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+    return team.strip(" ,.;:-? ")
+
+
 def _tennis_search_alias(name: str) -> str:
     n = " ".join(str(name or "").strip().split())
     if not n:
@@ -472,6 +484,19 @@ def build_targeted_news_queries(category_type: str, subcategory: str, entities: 
             q.append(f"Italian Open qualification {alias_pair} preview")
     elif category_type == "sports" and subcategory == "tennis" and market_type in {"totals","over_under"} and e1 and e2:
         q=[f"{e1} {e2} total games prediction", f"{e1} {e2} serve return stats surface", f"{e1} {e2} first set over under prediction"]
+    elif category_type == "sports" and subcategory == "football" and market_type == "binary_team_win" and e1:
+        d = deadline if re.search(r"\d{4}-\d{2}-\d{2}", str(deadline or "")) else ""
+        d_human = ""
+        if d:
+            y, mo, da = d.split("-")
+            d_human = f"May {int(da)} {y}" if mo == "05" else d
+        q = [
+            f"{e1} match {d} opponent".strip(),
+            f"{e1} team news injuries {d}".strip(),
+            f"{e1} predicted lineup {d}".strip(),
+            f"{e1} next match preview {d_human or d}".strip(),
+            f"{e1} recent form motivation",
+        ]
     elif category_type == "sports" and subcategory in {"football","basketball","hockey","mma"} and e1 and e2:
         q=[f"{e1} vs {e2} prediction preview", f"{e1} vs {e2} injuries lineup report", f"{e1} {e2} latest news"]
     elif category_type in {"war_conflict","geopolitics"}:
@@ -496,6 +521,13 @@ def _extract_event_drivers(market_data: Dict[str, Any]) -> Dict[str, Any]:
     nested = (market_data.get("trading_plan") or {}).get("event_drivers")
     drivers = direct if isinstance(direct, dict) else nested
     return drivers if isinstance(drivers, dict) else {}
+
+
+def _extract_question_date(question: str) -> str:
+    if not isinstance(question, str):
+        return ""
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", question)
+    return m.group(1) if m else ""
 
 
 def _build_driver_queries(event_drivers: Dict[str, Any], entities: List[str], question: str) -> List[str]:
@@ -550,6 +582,21 @@ def _score_source(item: Dict[str, Any], entities: List[str], question: str, dead
     item["freshness"] = fr
     if any(k in text for k in ["prediction","preview","form","h2h","surface","tennis"]):
         score += 1.0; reasons.append("tennis context")
+    target_team = _extract_binary_team_win_name(question)
+    if target_team:
+        team_l = target_team.lower()
+        if team_l in text:
+            score += 1.0; reasons.append("target team mention")
+        opp_m = re.search(r"\b(?:vs|v\.?|against)\s+([a-z0-9À-ÖØ-öø-ÿ\-\s]+)", text, re.IGNORECASE)
+        if opp_m and team_l in text:
+            opp = opp_m.group(1).strip().lower()
+            q_opp = re.search(r"\b(?:vs|v\.?|against)\s+([a-z0-9À-ÖØ-öø-ÿ\-\s]+)", question.lower(), re.IGNORECASE)
+            if q_opp and q_opp.group(1).strip() not in opp:
+                score -= 2.5; reasons.append("wrong opponent")
+        if "preview" in text and not dl:
+            score -= 0.8; reasons.append("generic preview only")
+        if dl and dl not in text and "next match" not in text and "team news" not in text and "injur" not in text and "form" not in text:
+            score -= 1.5; reasons.append("missing event/date/driver match")
     item["source_relevance_score"] = round(score,2)
     item["source_filter_reasons"]=reasons
     return score
@@ -609,11 +656,24 @@ class NewsAgent:
         category = market_data.get("category", "Unknown")
         market_probability = market_data.get("market_probability") or market_data.get("probabilities") or market_data.get("market_probs") or ""
         date_context = market_data.get("date_context", "Unknown")
-        related_markets = market_data.get("related_markets", [])
+        related_markets = market_data.get("related_markets") or []
+        if not isinstance(related_markets, list):
+            related_markets = []
 
         focused_query = ""
         base_query = ""
 
+        category_type = "other"
+        subcategory = "unknown"
+        market_type = ""
+        entities: List[str] = []
+        event_drivers: Dict[str, Any] = {}
+        queries: List[str] = []
+        filter_reasons: List[Dict[str, Any]] = []
+        news_items: List[Dict[str, Any]] = []
+        raw_sources_count = 0
+        relevant_sources_count = 0
+        sources_found_but_filtered = False
         try:
             category_type = str((market_data.get("trading_plan") or {}).get("category_type") or market_data.get("category_type") or "other").lower()
             cat_raw = str(market_data.get("category") or "").lower()
@@ -623,19 +683,34 @@ class NewsAgent:
                 elif "polit" in cat_raw or "elect" in cat_raw: category_type="politics"
             subcategory = str((market_data.get("trading_plan") or {}).get("subcategory") or market_data.get("subcategory") or "unknown").lower()
             entities = (market_data.get("trading_plan") or {}).get("detected_entities") or []
+            if not isinstance(entities, list):
+                entities = []
             market_type = str((market_data.get("trading_plan") or {}).get("market_type") or market_data.get("market_type") or "").lower()
+            mp_l = str(market_probability or "").lower()
+            has_yes_no = ("yes" in mp_l and "no" in mp_l and "%" in mp_l)
+            team_name = _extract_binary_team_win_name(question)
+            q_date = _extract_question_date(question)
+            if team_name and has_yes_no and (" win" in question.lower() or " beat " in question.lower() or " defeat " in question.lower()):
+                category_type, subcategory, market_type = "sports", "football", "binary_team_win"
+                entities = [team_name]
+                if q_date:
+                    date_context = q_date
             if not entities:
                 entities = _extract_options_entities(market_probability) or _extract_vs_entities(question)
+            if market_type == "binary_team_win" and not entities:
+                tname = _extract_binary_team_win_name(question)
+                if tname:
+                    entities = [tname]
             tennis_ctx = any(k in question.lower() for k in ["tennis","atp","wta","bnl","internazionali","italian open","roland garros","wimbledon","us open","australian open","qualification"])
             if len(entities) == 2 and (_extract_vs_entities(question) or _extract_vs_entities(str(market_data.get("title") or ""))) and tennis_ctx:
                 category_type, subcategory, market_type = "sports", "tennis", "head_to_head"
             if category_type == "sports" and subcategory == "unknown" and tennis_ctx and len(entities)==2:
                 subcategory="tennis"; market_type=market_type or "head_to_head"
-            category_queries = build_targeted_news_queries(category_type, subcategory, entities, market_type, question, date_context)
+            category_queries = build_targeted_news_queries(category_type, subcategory, entities or [], market_type, question, date_context) or []
             event_drivers = _extract_event_drivers(market_data)
-            driver_queries = _build_driver_queries(event_drivers, entities, question)
+            driver_queries = _build_driver_queries(event_drivers or {}, entities or [], question) or []
             merged_queries = []
-            for q in driver_queries + category_queries:
+            for q in (driver_queries or []) + (category_queries or []):
                 qq = " ".join(str(q or "").split()).strip()
                 if qq and qq not in merged_queries:
                     merged_queries.append(qq)
@@ -644,12 +719,13 @@ class NewsAgent:
                 queries = build_targeted_news_queries("sports","tennis",entities,"head_to_head",question,date_context)
             focused_query = queries[0] if queries else question
             base_query = queries[1] if len(queries) > 1 else question
+            print(f"NewsAgent debug: category_type={category_type}, subcategory={subcategory}, market_type={market_type}, entities={entities}, queries={queries}")
 
-            all_items = search_google_news_multi(queries, limit=10)
+            all_items = search_google_news_multi(queries or [question], limit=10) or []
             raw_sources_count = len(all_items)
             enriched = [
                 enrich_news_item(item, question, user_context)
-                for item in all_items
+                for item in (all_items or [])
             ]
             enriched.sort(
                 key=lambda x: (
@@ -662,7 +738,7 @@ class NewsAgent:
             score_threshold = 0.5 if (subcategory=="tennis") else 1.0
             scored=[]
             filter_reasons=[]
-            for x in enriched:
+            for x in (enriched or []):
                 sc=_score_source(x, entities, question, date_context, event_drivers)
                 if sc >= score_threshold:
                     scored.append(x)
@@ -675,15 +751,18 @@ class NewsAgent:
             sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
         except Exception as e:
             print(f"NewsAgent multi-query error: {e}")
-            focused_query = build_news_query(question, category, date_context)
-            base_query = focused_query
-            news_items = search_google_news(focused_query, limit=7)
+            safe_entities = entities if isinstance(entities, list) else []
+            safe_queries = build_targeted_news_queries(category_type, subcategory, safe_entities, market_type, question, date_context) or [question]
+            queries = safe_queries[:5]
+            focused_query = queries[0]
+            base_query = queries[1] if len(queries) > 1 else focused_query
+            news_items = search_google_news(focused_query, limit=7) or []
             raw_sources_count = len(news_items)
             relevant_sources_count = len(news_items)
             sources_found_but_filtered = bool(raw_sources_count > relevant_sources_count)
-            queries = [focused_query]
             sources_found_but_filtered = False
-            filter_reasons=[]
+            filter_reasons = []
+            print(f"NewsAgent debug fallback: category_type={category_type}, subcategory={subcategory}, market_type={market_type}, entities={safe_entities}, queries={queries}")
 
         twitter_items = _fetch_twitter_signals(focused_query, limit=4)
         if not twitter_items:
