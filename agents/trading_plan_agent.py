@@ -27,9 +27,11 @@ class TradingPlanAgent:
         relevant_sources_count = int(news_data.get("relevant_sources_count") or len(rel_sources))
         news_quality = str(news_data.get("news_quality") or "low").lower()
 
-        evidence = self._build_evidence(market_options, rel_sources, category_type, subcategory)
-        evidence_strength = self._estimate_evidence_strength(relevant_sources_count, evidence, news_quality)
-        model_options = self._conservative_model(market_options, evidence_strength, evidence)
+        event_drivers = self._build_event_drivers(text, market_type, market_options, category_type, subcategory, entities)
+        forecast_evidence = self._build_forecast_evidence(market_options, rel_sources, side_meanings)
+
+        evidence_strength = self._estimate_evidence_strength(relevant_sources_count, forecast_evidence, news_quality)
+        model_options = self._driver_based_model(market_options, forecast_evidence, evidence_strength)
         option_diffs = {k: round(model_options[k] - market_options[k], 1) for k in model_options if k in market_options}
 
         best_opt = "NONE"
@@ -54,9 +56,9 @@ class TradingPlanAgent:
             "evidence_strength": evidence_strength,
             "news_quality": news_quality,
             "data_limitations": limitations,
-            "counterarguments": ["Текущая картина может резко измениться после официальных подтверждений/lineup/filings."],
+            "counterarguments": forecast_evidence.get("counterarguments") or ["Текущая картина может резко измениться после официальных подтверждений/lineup/filings."],
             "market_moving_triggers": triggers,
-            "risk_factors": ["Рыночная цена может уже включать общедоступный консенсус."]
+            "risk_factors": ["Рыночная цена может уже включать общедоступный консенсус."],
         }
 
         deep = {
@@ -72,6 +74,8 @@ class TradingPlanAgent:
             "event_target": self._extract_target(text),
             "event_deadline": self._extract_deadline(text),
             "side_meanings": side_meanings,
+            "event_drivers": event_drivers,
+            "forecast_evidence": forecast_evidence,
             "source_summary": {
                 "news_queries_used": queries,
                 "raw_sources_count": raw_sources_count,
@@ -80,7 +84,6 @@ class TradingPlanAgent:
                 "source_filter_reasons": news_data.get("source_filter_reasons") or [],
                 "relevant_sources": rel_sources[:5],
             },
-            "evidence": evidence,
             "category_context": {"uncertainties": limitations},
             "analyst_view": analyst_view,
             "model_options": model_options,
@@ -158,38 +161,95 @@ class TradingPlanAgent:
             return {"YES": "BTC reaches at/above threshold by deadline", "NO": "BTC does not reach threshold by deadline"}
         return {k: f"{k} resolves by market rules" for k in opts}
 
-    def _build_evidence(self, opts, sources, category, sub):
-        out = {k: {"supports": [], "against": [], "neutral_context": [], "source_notes": []} for k in (opts or {"Option A":0,"Option B":0})}
-        for src in sources[:8]:
-            title = str(src.get("title", "")); snip = str(src.get("snippet", "")); tx = (title + " " + snip).lower()
-            for k in out:
+    def _build_event_drivers(self, text, market_type, opts, category, sub, entities):
+        t = text.lower()
+        yes_drivers = ["Confirmed positive catalyst", "Trend momentum supports target outcome"]
+        no_drivers = ["Negative shock or contradictory official update", "Time decay toward deadline without confirmation"]
+        if category == "sports":
+            yes_drivers = ["Lineup/injury edge supports side", "Recent form and matchup advantage"]
+            no_drivers = ["Key injuries/suspensions", "Adverse tactical matchup"]
+        if category == "crypto":
+            yes_drivers = ["Risk-on regime and strong inflows", "Breakout above key technical levels"]
+            no_drivers = ["Risk-off macro move", "Regulatory or exchange-specific негатив"]
+        must_find = ["Official confirmation from primary source", "Timestamped evidence close to deadline"]
+        return {
+            "resolution_condition": self._resolution_summary(category, sub, market_type),
+            "yes_drivers": yes_drivers,
+            "no_drivers": no_drivers,
+            "outcome_drivers": {k: [f"Evidence directly mentioning {k}"] for k in (opts or {"YES": 0, "NO": 0})},
+            "must_find": must_find,
+            "high_impact_keywords": [k for k in ["official", "confirmed", "injury", "approval", "ban", "deadline", "lineup", "inflow"] if k in t or category in {"sports", "crypto"}],
+            "deadline_sensitivity": "high" if self._extract_deadline(text) else "medium",
+            "market_structure_notes": ["EV depends on model-vs-market gap, not only most likely side."],
+        }
+
+    def _build_forecast_evidence(self, opts, sources, side_meanings):
+        out = {
+            "for_yes": [],
+            "against_yes": [],
+            "for_no": [],
+            "against_no": [],
+            "by_option": {},
+            "market_moving_facts": [],
+            "counterarguments": [],
+            "missing_critical_data": [],
+            "evidence_quality_notes": [],
+        }
+        option_keys = list(opts.keys()) if opts else ["YES", "NO"]
+        for k in option_keys:
+            out["by_option"][k] = {"supporting_facts": [], "negative_facts": [], "uncertainties": []}
+
+        neg_words = ["injury", "lawsuit", "delay", "risk", "fatigue", "decline", "out", "doubt"]
+        pos_words = ["win", "ahead", "approval", "momentum", "support", "inflow", "confirmed", "beat"]
+
+        for src in sources[:10]:
+            title = str(src.get("title", ""))
+            snip = str(src.get("snippet", ""))
+            tx = (title + " " + snip).lower()
+            if any(w in tx for w in ["official", "confirmed", "filing", "lineup", "inflow"]):
+                out["market_moving_facts"].append(title[:180] or snip[:180])
+            for k in option_keys:
                 lk = k.lower()
-                if lk in tx:
-                    out[k]["neutral_context"].append(title[:140])
-                if any(w in tx for w in ["injury", "lawsuit", "delay", "risk", "fatigue", "decline"]):
-                    out[k]["against"].append(snip[:140])
-                if any(w in tx for w in ["win", "ahead", "approval", "momentum", "support", "inflow"]):
-                    out[k]["supports"].append(snip[:140])
-                out[k]["source_notes"].append("snippet-level evidence")
+                if lk in tx or lk in str(side_meanings.get(k, "")).lower():
+                    if any(w in tx for w in pos_words):
+                        out["by_option"][k]["supporting_facts"].append(snip[:180])
+                    if any(w in tx for w in neg_words):
+                        out["by_option"][k]["negative_facts"].append(snip[:180])
+                if "yes" == lk:
+                    if any(w in tx for w in pos_words): out["for_yes"].append(snip[:180])
+                    if any(w in tx for w in neg_words): out["against_yes"].append(snip[:180])
+                if "no" == lk:
+                    if any(w in tx for w in pos_words): out["for_no"].append(snip[:180])
+                    if any(w in tx for w in neg_words): out["against_no"].append(snip[:180])
+
+        out["counterarguments"] = ["Headline sentiment may be stale versus current market pricing."]
+        out["missing_critical_data"] = ["Need primary-source confirmation near resolution deadline."]
+        out["evidence_quality_notes"] = ["Snippet-based extraction; verify with full articles/official documents."]
         return out
 
-    def _estimate_evidence_strength(self, rel_count, evidence, news_quality):
-        facts = sum(len(v.get("supports", [])) + len(v.get("against", [])) for v in evidence.values())
+    def _estimate_evidence_strength(self, rel_count, forecast_evidence, news_quality):
+        facts = len(forecast_evidence.get("market_moving_facts", []))
+        facts += sum(len(v.get("supporting_facts", [])) + len(v.get("negative_facts", [])) for v in forecast_evidence.get("by_option", {}).values())
         if rel_count >= 4 and facts >= 4 and news_quality in {"medium", "high"}: return "medium"
         return "low"
 
-    def _conservative_model(self, market, evidence_strength, evidence):
+    def _driver_based_model(self, market, forecast_evidence, evidence_strength):
         if evidence_strength == "low" or len(market) < 2:
             return {}
-        keys = list(market.keys())
-        if len(keys) == 2:
-            a,b = keys[0], keys[1]
-            sa = len(evidence[a]["supports"]) - len(evidence[a]["against"])
-            sb = len(evidence[b]["supports"]) - len(evidence[b]["against"])
-            if sa == sb: return {}
-            leader = a if sa > sb else b
-            return {leader: 55.0, (b if leader == a else a): 45.0}
-        return {}
+        scores = {}
+        for k in market:
+            bucket = forecast_evidence.get("by_option", {}).get(k, {})
+            scores[k] = len(bucket.get("supporting_facts", [])) - len(bucket.get("negative_facts", []))
+        if not scores or len(set(scores.values())) == 1:
+            return {}
+        leader = max(scores, key=scores.get)
+        lagger = min(scores, key=scores.get)
+        if len(market) == 2:
+            return {leader: 55.0, lagger: 45.0}
+        model = {k: float(v) for k, v in market.items()}
+        model[leader] = min(70.0, model.get(leader, 0.0) + 7.0)
+        total = sum(model.values())
+        return {k: round((v / total) * 100.0, 1) for k, v in model.items()}
 
     def _build_action(self, diff, strength):
         if strength == "low": return "WAIT"
@@ -199,8 +259,8 @@ class TradingPlanAgent:
 
     def _build_why(self, likely, best, strength, mt, cat, market, model):
         if not model:
-            return "Есть контекст по рынку, но подтверждённых специфических сигналов недостаточно для независимой вероятности; лучше ждать подтверждения ключевых факторов и более выгодной цены."
-        return f"Наиболее вероятен {likely}, но вход имеет смысл только при положительной разнице модели и рынка; лучшая сторона сейчас: {best}."
+            return "Есть контекст по рынку, но подтверждённых направленных сигналов недостаточно для независимой вероятности; лучше ждать подтверждения ключевых факторов и более выгодной цены."
+        return f"Независимая оценка драйверов даёт перевес стороне {likely}; EV-подход указывает на сторону {best} при положительном расхождении модели и рынка."
 
     def _build_limitations(self, cat, sub, mt):
         base = ["Сниппеты источников тонкие: нужны подтверждённые факты, а не только preview/odds."]
