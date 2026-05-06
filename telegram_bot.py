@@ -2070,6 +2070,9 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
 
     most_likely = max(market_opts, key=market_opts.get) if market_opts else "—"
     best_value = best if has_model and best != "NONE" and best_diff > 0 else ("явной недооценки не найдено" if is_ru else "No clear underpricing found.")
+    no_model_data = tp.get("no_model_analysis") if isinstance(tp.get("no_model_analysis"), dict) else {}
+    if not no_model_data and isinstance(result.get("no_model_analysis"), dict):
+        no_model_data = result.get("no_model_analysis")
 
     text = "🔎 DeepAlpha Signal\n\n"
     text += f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n"
@@ -2084,8 +2087,8 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     text += f"👉 {'Решение' if is_ru else 'Action'}: {action_display}\n"
     text += f"📌 {'Самый вероятный исход' if is_ru else 'Most likely outcome'}: {_escape(str(most_likely))}\n"
     text += f"💰 {'Лучшее value' if is_ru else 'Best value'}: {_escape(str(best_value))}\n"
-    text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n")
-
+    if has_model:
+        text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n")
     if diffs and has_model:
         rows = []
         for opt, diff in diffs.items():
@@ -2093,7 +2096,7 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
             mdl = float(model_opts.get(opt, mkt + diff))
             rows.append(f"— {opt}: {'модель' if is_ru else 'model'} {mdl:.1f}% / {'рынок' if is_ru else 'market'} {mkt:.1f}% / {'разница' if is_ru else 'difference'} {diff:+.1f}%")
         text += "\n".join(rows) + "\n\n"
-    else:
+    elif has_model:
         reason = (analyst_view.get("model_unavailable_reason") or deep.get("model_unavailable_reason") or result.get("limitation") or ("модель не была рассчитана" if is_ru else "model output was not produced"))
         text += f"— {_escape(str(reason))}\n\n"
 
@@ -2113,14 +2116,15 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     ev += _take(forecast.get("for_yes"), 1)
     ev += _take(forecast.get("for_no"), 1)
     ev = ev[:4]
-    text += ("🧠 Почему модель так считает:\n" if is_ru else "🧠 Why the model sees it this way:\n")
-    text += "\n".join([f"— {_escape(x)}" for x in ev]) + ("\n\n" if ev else ("— недостаточно подтвержденных факторов\n\n" if is_ru else "— not enough confirmed drivers\n\n"))
+    if has_model:
+        text += ("🧠 Почему модель так считает:\n" if is_ru else "🧠 Why the model sees it this way:\n")
+        text += "\n".join([f"— {_escape(x)}" for x in ev]) + ("\n\n" if ev else ("— недостаточно подтвержденных факторов\n\n" if is_ru else "— not enough confirmed drivers\n\n"))
 
-    text += ("⚖️ Что рынок может недооценивать:\n" if is_ru else "⚖️ What the market may be underpricing:\n")
-    if best != "NONE" and best_diff > 0:
-        text += f"— {_escape(best)}: {'есть положительная разница модели и рынка' if is_ru else 'positive model-vs-market difference is present'} ({best_diff:+.1f}%).\n\n"
-    else:
-        text += ("— явной недооценки не найдено\n\n" if is_ru else "— No clear underpricing found.\n\n")
+        text += ("⚖️ Что рынок может недооценивать:\n" if is_ru else "⚖️ What the market may be underpricing:\n")
+        if best != "NONE" and best_diff > 0:
+            text += f"— {_escape(best)}: {'есть положительная разница модели и рынка' if is_ru else 'positive model-vs-market difference is present'} ({best_diff:+.1f}%).\n\n"
+        else:
+            text += ("— явной недооценки не найдено\n\n" if is_ru else "— No clear underpricing found.\n\n")
 
     risks = []
     risks += _take(analyst_view.get("risk_factors"), 2)
@@ -2132,15 +2136,32 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
 
     triggers = _take(analyst_view.get("market_moving_triggers") or result.get("market_moving_triggers"), 3)
     text += ("📍 Когда входить:\n" if is_ru else "📍 When to enter:\n")
-    if best_diff > 0:
-        text += ("— Вход имеет смысл только если цена даст положительную разницу модели и рынка.\n" if is_ru else "— Entry only makes sense if price creates positive model-vs-market difference.\n")
+    if has_model:
+        if best_diff > 0:
+            text += ("— Вход имеет смысл только если цена даст положительную разницу модели и рынка.\n" if is_ru else "— Entry only makes sense if price creates positive model-vs-market difference.\n")
+        else:
+            text += ("— До появления положительной разницы модели и рынка вход не подтвержден.\n" if is_ru else "— Entry is not confirmed until model-vs-market difference turns positive.\n")
+        if triggers:
+            lead = "— Если появятся подтверждения по ключевым драйверам: " if is_ru else "— Watch for confirmation on key drivers: "
+            text += lead + "; ".join([_escape(x) for x in triggers]) + "\n\n"
+        else:
+            text += ("— Следите за официальными обновлениями по условиям исхода.\n\n" if is_ru else "— Monitor official updates tied to resolution conditions.\n\n")
     else:
-        text += ("— До появления положительной разницы модели и рынка вход не подтвержден.\n" if is_ru else "— Entry is not confirmed until model-vs-market difference turns positive.\n")
-    if triggers:
-        lead = "— Если появятся подтверждения по ключевым драйверам: " if is_ru else "— Watch for confirmation on key drivers: "
-        text += lead + "; ".join([_escape(x) for x in triggers]) + "\n\n"
-    else:
-        text += ("— Следите за официальными обновлениями по условиям исхода.\n\n" if is_ru else "— Monitor official updates tied to resolution conditions.\n\n")
+        why = no_model_data.get("why_no_model") if isinstance(no_model_data.get("why_no_model"), list) else []
+        changes = no_model_data.get("what_changes_for_entry") if isinstance(no_model_data.get("what_changes_for_entry"), list) else []
+        zone = no_model_data.get("price_value_watch_zone") if isinstance(no_model_data.get("price_value_watch_zone"), list) else []
+        interp = str(no_model_data.get("market_interpretation") or "")
+        checks = no_model_data.get("next_check_checklist") if isinstance(no_model_data.get("next_check_checklist"), list) else []
+        text += ("📊 Почему модели нет:\n" if is_ru else "📊 Why no model:\n")
+        text += "\n".join([f"— {_escape(x)}" for x in why[:5]]) + "\n\n"
+        text += ("🧭 Что должно измениться для входа:\n" if is_ru else "🧭 What would change for entry:\n")
+        text += "\n".join([f"— {_escape(x)}" for x in changes[:5]]) + "\n\n"
+        text += ("📍 Зона интереса:\n" if is_ru else "📍 Price/value watch zone:\n")
+        if interp:
+            text += f"— {'Рынок сейчас оценивает' if is_ru else 'Market currently implies'}: {_escape(interp)}\n"
+        text += "\n".join([f"— {_escape(x)}" for x in zone[:3]]) + "\n\n"
+        text += ("✅ Что проверить перед входом:\n" if is_ru else "✅ Next-check checklist:\n")
+        text += "\n".join([f"— {_escape(x)}" for x in checks[:6]]) + "\n\n"
 
     text += _build_source_block_filtered(result, lang)
     return text
