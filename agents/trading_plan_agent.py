@@ -29,6 +29,8 @@ class TradingPlanAgent:
 
         event_drivers = self._build_event_drivers(text, market_type, market_options, category_type, subcategory, entities)
         forecast_evidence = self._build_forecast_evidence(market_options, rel_sources, side_meanings)
+        if relevant_sources_count == 0:
+            forecast_evidence = self._build_no_relevant_evidence()
 
         evidence_strength = self._estimate_evidence_strength(relevant_sources_count, forecast_evidence, news_quality)
         model_options = self._driver_based_model(market_options, forecast_evidence, evidence_strength)
@@ -124,7 +126,7 @@ class TradingPlanAgent:
         t = text.lower()
         if any(x in t for x in ["ufc", "mma"]): return "sports", "mma"
         if "tennis" in t or "wawrinka" in t or "busta" in t: return "sports", "tennis"
-        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc "]): return "sports", "football"
+        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc ", "real madrid", "chelsea", "paris saint germain"]): return "sports", "football"
         if any(x in t for x in ["btc", "bitcoin", "$100k", "ethereum"]): return "crypto", "crypto"
         if any(x in t for x in ["capture", "kupyansk", "ceasefire"]): return "war_conflict", "territorial_control"
         if any(x in t for x in ["candidate", "election", "poll"]): return "election", "election"
@@ -146,8 +148,26 @@ class TradingPlanAgent:
         if named: return named
         m = re.search(r"(.+?)\s+(?:vs|v\.?)\s+(.+?)(?:$|:)", text, re.IGNORECASE)
         if m: return [m.group(1).strip(" ?.,;:"), m.group(2).strip(" ?.,;:")]
-        w = re.search(r"will\s+(.+?)\s+(win|capture|approve|release|hit)", text, re.IGNORECASE)
-        return [w.group(1).strip()] if w else (["Bitcoin"] if category == "crypto" else [])
+        w = self._extract_binary_team_win_name(text)
+        if w:
+            return [w]
+        return (["Bitcoin"] if category == "crypto" else [])
+
+    def _extract_binary_team_win_name(self, title: str) -> str:
+        if not isinstance(title, str) or not title.strip():
+            return ""
+        s = title.strip()
+        m = re.search(
+            r"^\s*Will\s+(.+?)\s+(?:win|beat|defeat)\b",
+            s,
+            flags=re.IGNORECASE | re.UNICODE,
+        )
+        if not m:
+            return ""
+        team = m.group(1).strip(" ,.;:-?")
+        team = re.sub(r"\s+(?:on|by)\s+\d{4}-\d{2}-\d{2}\b.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+        team = re.sub(r"\s+by\s+.*$", "", team, flags=re.IGNORECASE | re.UNICODE)
+        return team.strip(" ,.;:-? ")
 
     def _build_side_meanings(self, text, market_type, opts, entities, category, sub):
         if market_type == "binary_team_win" and entities:
@@ -227,6 +247,19 @@ class TradingPlanAgent:
         out["evidence_quality_notes"] = ["Snippet-based extraction; verify with full articles/official documents."]
         return out
 
+    def _build_no_relevant_evidence(self):
+        return {
+            "for_yes": [],
+            "against_yes": [],
+            "for_no": [],
+            "against_no": [],
+            "by_option": {"YES": {"supporting_facts": [], "negative_facts": [], "uncertainties": []}, "NO": {"supporting_facts": [], "negative_facts": [], "uncertainties": []}},
+            "market_moving_facts": [],
+            "counterarguments": ["Filtered previews are not valid evidence for this exact match."],
+            "missing_critical_data": ["No relevant sources for target fixture/date/opponent."],
+            "evidence_quality_notes": ["Model disabled: no verifiable outcome drivers found."],
+        }
+
     def _estimate_evidence_strength(self, rel_count, forecast_evidence, news_quality):
         facts = len(forecast_evidence.get("market_moving_facts", []))
         facts += sum(len(v.get("supporting_facts", [])) + len(v.get("negative_facts", [])) for v in forecast_evidence.get("by_option", {}).values())
@@ -277,7 +310,7 @@ class TradingPlanAgent:
         return ["Новые официальные подтверждения", "Публикация свежих проверяемых данных"]
 
     def _resolution_summary(self, cat, sub, mt):
-        if mt == "binary_team_win": return "YES wins only if target team wins; draw/loss resolves NO."
+        if mt == "binary_team_win": return "YES wins if target team wins the match; NO wins on draw or if target team does not win."
         if mt == "match_result_1x2": return "Three-way market: home win, draw, away win are separate outcomes."
         return "Outcome resolves per market rules and deadline."
 
