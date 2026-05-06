@@ -2001,125 +2001,141 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
 def _format_clean_market_signal(result: dict, uid: int) -> str:
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     is_ru = lang == "ru"
+
     tp = result.get("trading_plan") if isinstance(result.get("trading_plan"), dict) else {}
+    deep = result.get("deep_analysis") if isinstance(result.get("deep_analysis"), dict) else {}
+    analyst_view = tp.get("analyst_view") if isinstance(tp.get("analyst_view"), dict) else {}
+    if not analyst_view and isinstance(result.get("analyst_view"), dict):
+        analyst_view = result.get("analyst_view")
+    forecast = tp.get("forecast_evidence") if isinstance(tp.get("forecast_evidence"), dict) else {}
+    if not forecast and isinstance(result.get("forecast_evidence"), dict):
+        forecast = result.get("forecast_evidence")
+    event_drivers = tp.get("event_drivers") if isinstance(tp.get("event_drivers"), dict) else {}
+    if not event_drivers and isinstance(result.get("event_drivers"), dict):
+        event_drivers = result.get("event_drivers")
+
     title = str(result.get("question") or result.get("title") or "—")
     category = str(result.get("category_type") or result.get("category") or "other")
     sub = str(result.get("subcategory") or "")
     market_type = str(result.get("market_type") or result.get("market_format") or "")
+
     market_opts = tp.get("market_options") if isinstance(tp.get("market_options"), dict) else {}
     if not market_opts and isinstance(result.get("market_options"), dict):
         market_opts = result.get("market_options")
     if not market_opts:
         market_opts = _extract_market_probs(str(result.get("market_probability") or ""))
+
     model_opts = tp.get("model_options") if isinstance(tp.get("model_options"), dict) else {}
     if not model_opts and isinstance(result.get("model_options"), dict):
         model_opts = result.get("model_options")
-    title_q = str(result.get("question") or result.get("title") or "")
-    team_name = _extract_binary_team_win_name(title_q)
-    inferred_binary_team_win = bool(team_name) and _is_binary_yes_no_options(market_opts)
-    if inferred_binary_team_win:
-        if not category or category.lower() in ("other", "unknown"):
-            category = "sports"
-        if not sub:
-            sub = "football"
-        if not market_type:
-            market_type = "binary_team_win"
-    lines = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
-    has_model = bool(model_opts)
+
+    option_diffs = tp.get("option_differences") if isinstance(tp.get("option_differences"), dict) else {}
+    if not option_diffs and isinstance(result.get("option_differences"), dict):
+        option_diffs = result.get("option_differences")
+
     diffs = {}
     for k, mv in model_opts.items():
         if k in market_opts:
             diffs[k] = float(mv) - float(market_opts[k])
-    evidence = str(result.get("evidence_strength") or "low")
-    news_q = str(result.get("news_quality") or "low")
-    rel_cnt = int(result.get("relevant_sources_count") or 0)
-    best = max(diffs, key=lambda x: diffs[x]) if diffs else "NONE"
-    best_diff = diffs.get(best, 0.0)
-    action = "WAIT"
-    if has_model and best_diff >= 3:
-        action = "WATCH" if best_diff < 7 else "CONSIDER"
-    if not has_model:
-        action = "WAIT"
-    if is_ru:
-        action_map = {"WAIT": "ЖДАТЬ", "WATCH": "НАБЛЮДАТЬ", "CONSIDER": "РАССМОТРЕТЬ"}
-        short = [
-            f"👉 Стоит ли входить сейчас: {action_map.get(action, 'ЖДАТЬ')}",
-            f"📌 Самый вероятный исход: {max(market_opts, key=market_opts.get) if market_opts else '—'}",
-            f"💰 Наиболее выгодная ставка: {best if has_model and best_diff > 0 else 'не подтверждена'}",
-            f"📊 Причина: {(tp.get('analyst_view',{}) or {}).get('why','есть расхождение модели и рынка' if has_model else 'независимая оценка не получена')}",
-        ]
-    else:
-        short = [
-            f"👉 Enter now: {action}",
-            f"📌 Most likely outcome: {max(market_opts, key=market_opts.get) if market_opts else '—'}",
-            f"💰 Best priced side: {best if has_model and best_diff > 0 else 'not confirmed'}",
-            f"📊 Reason: {'model vs market divergence' if has_model else 'independent estimate missing'}",
-        ]
-    res_logic = _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
-    mvm = []
-    if has_model and diffs:
-        for k in diffs:
-            if is_ru:
-                mvm.append(f"— {k}: модель {float(model_opts[k]):.1f}% / рынок {float(market_opts[k]):.1f}% / разница {float(diffs[k]):+.1f}%")
-            else:
-                mvm.append(f"— {k}: model {float(model_opts[k]):.1f}% / market {float(market_opts[k]):.1f}% / difference {float(diffs[k]):+.1f}%")
-    else:
-        mvm = [
-            "— Независимая оценка по исходам не получена." if is_ru else "— Independent per-outcome estimate was not produced.",
-            f"— {'Причина' if is_ru else 'Reason'}: " + str((tp.get("analyst_view",{}) or {}).get("data_limitations", ["нужны подтвержденные свежие данные"])[0]),
-            f"— {'Рынок' if is_ru else 'Market'}: " + " / ".join([f"{k} {float(v):.1f}%" for k, v in market_opts.items()][:3]),
-            "— Поэтому вход сейчас не подтверждён." if is_ru else "— Entry is not confirmed now.",
-        ]
-    display_category = category + (' / ' + sub if sub else '')
-    if inferred_binary_team_win and ("sports" in category.lower() or "football" in sub.lower()):
-        display_category = "Футбол / победа команды" if is_ru else "Football / team win"
-    header = "DeepAlpha Signal"
-    text = f"🔎 {header}\n\n{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(display_category)}\n\n"
-    text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(lines) + "\n\n"
-    text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + res_logic + "\n\n"
-    text += ("🎯 Короткий вывод:\n" if is_ru else "🎯 Short view:\n") + "\n".join(short) + "\n\n"
-    side_analysis = result.get("side_analysis") if isinstance(result.get("side_analysis"), dict) else {}
-    news_evidence = result.get("news_evidence") if isinstance(result.get("news_evidence"), dict) else {}
-    sport_label = "🧠 Анализ сторон"
-    cat_l = category.lower()
-    sub_l = sub.lower()
-    if "tennis" in cat_l or "tennis" in sub_l:
-        sport_label = "🧠 Анализ игроков"
-    elif "football" in cat_l or "basketball" in cat_l or "hockey" in cat_l or "football" in sub_l:
-        sport_label = "🧠 Анализ команд"
-    elif any(x in cat_l or x in sub_l for x in ("ufc", "mma", "boxing")):
-        sport_label = "🧠 Анализ бойцов"
+    for k, dv in option_diffs.items():
+        if k not in diffs:
+            try:
+                diffs[k] = float(dv)
+            except Exception:
+                pass
 
-    def _norm_list(v):
+    best = max(diffs, key=lambda x: diffs[x]) if diffs else "NONE"
+    best_diff = float(diffs.get(best, 0.0))
+    has_model = bool(model_opts)
+
+    action_raw = str((analyst_view.get("action") or deep.get("action") or "")).upper().strip()
+    if action_raw not in {"CONSIDER", "WATCH", "WAIT", "NO TRADE"}:
+        if has_model and best_diff >= 7:
+            action_raw = "CONSIDER"
+        elif has_model and best_diff >= 3:
+            action_raw = "WATCH"
+        elif has_model:
+            action_raw = "WAIT"
+        else:
+            action_raw = "NO TRADE" if (result.get("limitation") or analyst_view.get("data_limitations")) else "WAIT"
+
+    action_display = {"CONSIDER": "РАССМОТРЕТЬ", "WATCH": "НАБЛЮДАТЬ", "WAIT": "ЖДАТЬ", "NO TRADE": "НЕ ВХОДИТЬ"}.get(action_raw, "ЖДАТЬ") if is_ru else action_raw
+
+    line_items = [f"— {k}: {float(v):.1f}%" for k, v in market_opts.items()] or ["— N/A"]
+    team_name = _extract_binary_team_win_name(title)
+    res_logic = str(event_drivers.get("resolution_condition") or "").strip() or _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
+
+    most_likely = max(market_opts, key=market_opts.get) if market_opts else "—"
+    best_value = best if has_model and best != "NONE" and best_diff > 0 else ("явной недооценки не найдено" if is_ru else "No clear underpricing found.")
+
+    text = "🔎 DeepAlpha Signal\n\n"
+    text += f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n"
+    text += f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category + (' / ' + sub if sub else ''))}\n\n"
+    text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(line_items) + "\n\n"
+    text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + _escape(res_logic) + "\n\n"
+
+    text += ("🎯 Прогноз DeepAlpha:\n" if is_ru else "🎯 DeepAlpha Forecast:\n")
+    text += f"👉 {'Решение' if is_ru else 'Action'}: {action_display}\n"
+    text += f"📌 {'Самый вероятный исход' if is_ru else 'Most likely outcome'}: {_escape(str(most_likely))}\n"
+    text += f"💰 {'Лучшее value' if is_ru else 'Best value'}: {_escape(str(best_value))}\n"
+    text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n")
+
+    if diffs and has_model:
+        rows = []
+        for opt, diff in diffs.items():
+            mkt = float(market_opts.get(opt, 0.0))
+            mdl = float(model_opts.get(opt, mkt + diff))
+            rows.append(f"— {opt}: {'модель' if is_ru else 'model'} {mdl:.1f}% / {'рынок' if is_ru else 'market'} {mkt:.1f}% / {'разница' if is_ru else 'difference'} {diff:+.1f}%")
+        text += "\n".join(rows) + "\n\n"
+    else:
+        reason = (analyst_view.get("model_unavailable_reason") or deep.get("model_unavailable_reason") or result.get("limitation") or ("модель не была рассчитана" if is_ru else "model output was not produced"))
+        text += f"— {_escape(str(reason))}\n\n"
+
+    def _take(v, n=2):
         if isinstance(v, list):
-            return [str(x) for x in v if str(x).strip()][:2]
+            return [str(x).strip() for x in v if str(x).strip()][:n]
         if isinstance(v, str) and v.strip():
             return [v.strip()]
         return []
-    side_block_lines = []
-    merged_keys = list(dict.fromkeys(list(side_analysis.keys()) + list(news_evidence.keys())))
-    for name in merged_keys[:3]:
-        sa = side_analysis.get(name) if isinstance(side_analysis.get(name), dict) else {}
-        ne = news_evidence.get(name) if isinstance(news_evidence.get(name), dict) else {}
-        supports = _norm_list(sa.get("strengths") or sa.get("supports") or ne.get("supports"))
-        against = _norm_list(sa.get("weaknesses") or sa.get("against") or ne.get("against"))
-        ctxt = _norm_list(sa.get("key_news") or sa.get("neutral_context") or ne.get("neutral_context"))
-        if is_ru:
-            side_block_lines.append(f"— {name}:\n  • Что за: {'; '.join(supports) if supports else 'недостаточно данных'}\n  • Что против: {'; '.join(against) if against else 'недостаточно данных'}\n  • Новости/контекст: {'; '.join(ctxt) if ctxt else 'недостаточно данных'}")
-        else:
-            side_block_lines.append(f"— {name}:\n  • Supports: {'; '.join(supports) if supports else 'limited data'}\n  • Against: {'; '.join(against) if against else 'limited data'}\n  • News/context: {'; '.join(ctxt) if ctxt else 'limited data'}")
-    if not side_block_lines:
-        side_block_lines = ["— Нет достаточных подтверждений по ключевым факторам конкретного рынка.\n— Перед входом проверьте состав/травмы/форму или эквивалентные факторы по категории." if is_ru else "— Key market-specific factors are not confirmed.\n— Check lineups/injuries/form or category-equivalent factors before entry."]
-    text += (f"{sport_label}:\n" if is_ru else "🧠 Side analysis:\n") + "\n".join(side_block_lines) + "\n\n"
-    text += ("📊 Модель против рынка:\n" if is_ru else "📊 Model vs market:\n") + "\n".join(mvm) + "\n\n"
-    text += ("🧾 Качество данных:\n" if is_ru else "🧾 Data quality:\n")
-    text += (f"— {'Сила доказательств' if is_ru else 'Evidence strength'}: {evidence}\n— {'Новостное качество' if is_ru else 'News quality'}: {news_q}\n— {'Релевантных источников' if is_ru else 'Relevant sources'}: {rel_cnt}\n")
-    text += (f"— {'Ограничение' if is_ru else 'Limitation'}: {result.get('limitation') or 'limited fresh evidence'}\n\n")
-    entry_tr = ((tp.get('analyst_view',{}) or {}).get('market_moving_triggers') or result.get('market_moving_triggers') or ['Ждать улучшения цены и подтверждения ключевых данных'])
-    text += (("📍 Условия для входа:\n" if is_ru else "📍 Entry conditions:\n") + "\n".join([f"— {x}" for x in entry_tr[:3]]) + "\n\n")
-    mv = ((tp.get('analyst_view',{}) or {}).get('market_moving_triggers') or result.get('market_moving_triggers') or ['Официальные обновления'])
-    text += (("📡 Что может изменить рынок:\n" if is_ru else "📡 What can move the market:\n") + "\n".join([f"— {x}" for x in mv[:4]]) + "\n\n")
-    text += ("⚠️ Риски:\n— Волатильность и неполные данные." if is_ru else "⚠️ Risks:\n— Volatility and incomplete data.")
+
+    ev = []
+    ev += _take(forecast.get("market_moving_facts"), 2)
+    bo = forecast.get("by_option") if isinstance(forecast.get("by_option"), dict) else {}
+    if best in bo and isinstance(bo.get(best), dict):
+        ev += _take(bo[best].get("supporting_facts"), 1)
+        ev += _take(bo[best].get("negative_facts"), 1)
+    ev += _take(forecast.get("for_yes"), 1)
+    ev += _take(forecast.get("for_no"), 1)
+    ev = ev[:4]
+    text += ("🧠 Почему модель так считает:\n" if is_ru else "🧠 Why the model sees it this way:\n")
+    text += "\n".join([f"— {_escape(x)}" for x in ev]) + ("\n\n" if ev else ("— недостаточно подтвержденных факторов\n\n" if is_ru else "— not enough confirmed drivers\n\n"))
+
+    text += ("⚖️ Что рынок может недооценивать:\n" if is_ru else "⚖️ What the market may be underpricing:\n")
+    if best != "NONE" and best_diff > 0:
+        text += f"— {_escape(best)}: {'есть положительная разница модели и рынка' if is_ru else 'positive model-vs-market difference is present'} ({best_diff:+.1f}%).\n\n"
+    else:
+        text += ("— явной недооценки не найдено\n\n" if is_ru else "— No clear underpricing found.\n\n")
+
+    risks = []
+    risks += _take(analyst_view.get("risk_factors"), 2)
+    risks += _take(forecast.get("counterarguments"), 2)
+    risks += _take(analyst_view.get("missing_critical_data") or result.get("missing_critical_data"), 2)
+    risks = risks[:4]
+    text += ("🚨 Главные риски прогноза:\n" if is_ru else "🚨 Main forecast risks:\n")
+    text += "\n".join([f"— {_escape(x)}" for x in risks]) + ("\n\n" if risks else ("— подтвержденные риск-факторы не выделены\n\n" if is_ru else "— no explicit risk factors were provided\n\n"))
+
+    triggers = _take(analyst_view.get("market_moving_triggers") or result.get("market_moving_triggers"), 3)
+    text += ("📍 Когда входить:\n" if is_ru else "📍 When to enter:\n")
+    if best_diff > 0:
+        text += ("— Вход имеет смысл только если цена даст положительную разницу модели и рынка.\n" if is_ru else "— Entry only makes sense if price creates positive model-vs-market difference.\n")
+    else:
+        text += ("— До появления положительной разницы модели и рынка вход не подтвержден.\n" if is_ru else "— Entry is not confirmed until model-vs-market difference turns positive.\n")
+    if triggers:
+        lead = "— Если появятся подтверждения по ключевым драйверам: " if is_ru else "— Watch for confirmation on key drivers: "
+        text += lead + "; ".join([_escape(x) for x in triggers]) + "\n\n"
+    else:
+        text += ("— Следите за официальными обновлениями по условиям исхода.\n\n" if is_ru else "— Monitor official updates tied to resolution conditions.\n\n")
+
     text += _build_source_block_filtered(result, lang)
     return text
 
