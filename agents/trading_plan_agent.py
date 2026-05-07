@@ -62,6 +62,14 @@ class TradingPlanAgent:
             "market_moving_triggers": triggers,
             "risk_factors": ["Рыночная цена может уже включать общедоступный консенсус."],
         }
+        no_model_analysis = self._build_no_model_analysis(
+            category_type=category_type,
+            subcategory=subcategory,
+            market_type=market_type,
+            market_options=market_options,
+            model_options=model_options,
+            event_drivers=event_drivers,
+        )
 
         deep = {
             "category_type": category_type,
@@ -90,6 +98,7 @@ class TradingPlanAgent:
             "analyst_view": analyst_view,
             "model_options": model_options,
             "option_differences": option_diffs,
+            "no_model_analysis": no_model_analysis,
             "no_fake_model": True,
         }
 
@@ -113,7 +122,93 @@ class TradingPlanAgent:
             "relevant_sources_count": relevant_sources_count,
             "news_quality": news_quality,
             "evidence_strength": evidence_strength,
+            "no_model_analysis": no_model_analysis,
         }
+
+    def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
+        if model_options:
+            return {}
+        why_no_model = [
+            "Missing verified outcome drivers close to resolution deadline.",
+            "Weak source relevance to this exact market conditions.",
+            "Unclear resolution mapping between evidence and market rules.",
+            "No directional evidence strong enough for independent pricing.",
+            "Context is stale or preview-only without primary confirmation.",
+        ]
+        watch_drivers = event_drivers.get("must_find") if isinstance(event_drivers, dict) else []
+        what_changes = (watch_drivers[:3] if isinstance(watch_drivers, list) and watch_drivers else []) + [
+            "Need primary source/event confirmations that directly affect resolution.",
+            "Need price dislocation where independent probability can exceed market by at least +5–7%.",
+        ]
+        if category_type == "sports" and subcategory == "football" and market_type == "tournament_advancement":
+            what_changes = [
+                "Confirmation of expected lineup and no key absences.",
+                "Clarity on opponent/tie format/current tie score.",
+                "New information that shifts independent advancement probability at least +5–7% above market price.",
+                "Line movement that creates value without worsening fundamental conditions.",
+            ]
+        price_zone = self._build_price_watch_zone(market_type, market_options)
+        market_interpretation = self._build_market_interpretation(market_type, market_options)
+        checklist = self._build_next_check_checklist(category_type, subcategory, market_type)
+        return {
+            "why_no_model": why_no_model,
+            "what_changes_for_entry": what_changes[:5],
+            "price_value_watch_zone": price_zone,
+            "market_interpretation": market_interpretation,
+            "next_check_checklist": checklist,
+        }
+
+    def _build_price_watch_zone(self, market_type: str, market_options: Dict[str, float]) -> List[str]:
+        options_count = len(market_options or {})
+        if options_count == 2 and {str(k).upper() for k in market_options.keys()} == {"YES", "NO"}:
+            favorite = max(market_options, key=market_options.get)
+            fav_price = float(market_options.get(favorite, 0.0))
+            lines = []
+            if fav_price > 60:
+                lines.append(f"Market favorite is {favorite} at {fav_price:.1f}%: chasing favorite is poor risk/reward unless independent probability is materially higher.")
+            lines.append("Do not recommend underdog/no side without independent directional evidence.")
+            lines.append("Entry becomes interesting only if model can justify at least +5–7% edge over market.")
+            return lines
+        return [
+            "For multi-option markets, compare value only on the same option (model option vs market option).",
+            "No value claim is valid without independent model probability for that option.",
+            "Entry becomes interesting only if model can justify at least +5–7% edge over market.",
+        ]
+
+    def _build_market_interpretation(self, market_type: str, market_options: Dict[str, float]) -> str:
+        if not market_options:
+            return "Current price implies uncertainty remains high; avoid directional entry without stronger evidence."
+        lead = max(market_options, key=market_options.get)
+        lead_price = float(market_options.get(lead, 0.0))
+        if market_type == "tournament_advancement" and {str(k).upper() for k in market_options.keys()} == {"YES", "NO"}:
+            yes_p = float(market_options.get("YES", 0.0))
+            no_p = float(market_options.get("NO", 0.0))
+            spread = abs(yes_p - no_p)
+            if spread <= 8:
+                return "Market prices advancement close to 50/50 with no clear skew; price alone is not an edge without independent probability."
+            if lead_price > 60:
+                return f"Market already prices {lead} as a notable favorite; buying favorite without independent edge worsens risk/reward."
+            return f"{lead} at {lead_price:.1f}% implies moderate edge but still requires independent confirmation."
+        if market_type == "binary_team_win" and lead.upper() == "YES":
+            return f"YES at {lead_price:.1f}% implies market sees the team as moderate favorite, not near-certainty."
+        return f"{lead} at {lead_price:.1f}% implies this side is favored by market, but price is not a standalone signal without independent edge."
+
+    def _build_next_check_checklist(self, category_type: str, subcategory: str, market_type: str = "") -> List[str]:
+        if category_type == "sports" and subcategory == "football" and market_type == "tournament_advancement":
+            return ["Current tournament stage and path to the final", "Opponent and tie format", "First-leg score / tie state if two-legged", "Injuries and suspensions of key players", "Rotation and club motivation", "Home/away factor", "Advancement rules: aggregate, extra time, penalties", "Market line movement before kickoff"]
+        if category_type == "sports" and subcategory == "football":
+            return ["Confirmed opponent and match context", "Starting lineups", "Injuries/suspensions", "Motivation/rotation", "Draw risk", "Odds movement before kickoff"]
+        if category_type == "sports" and subcategory == "tennis":
+            return ["Surface fit", "Recent form", "Injury/fatigue", "H2H relevance", "Serve/return matchup", "Withdrawal risk"]
+        if category_type == "crypto":
+            return ["Deadline distance", "Spot price distance to threshold", "Volatility/liquidity", "ETF/regulatory/macro catalyst", "Resistance/support levels"]
+        if category_type == "war_conflict":
+            return ["Verified sources", "Geolocation/official confirmation", "Deadline proximity", "Fog-of-war risk"]
+        if category_type == "election":
+            return ["Latest polling quality", "Turnout/endorsement shifts", "Court/legal changes", "Official resolution source"]
+        if category_type == "legal_regulatory":
+            return ["Filing status", "Hearing/deadline", "Regulator statements", "Relevant precedent"]
+        return ["Resolution rule clarity", "Primary-source confirmation", "Deadline proximity", "Catalyst verification"]
 
     def _extract_market_probs(self, text: str) -> Dict[str, float]:
         out = {}
@@ -126,7 +221,7 @@ class TradingPlanAgent:
         t = text.lower()
         if any(x in t for x in ["ufc", "mma"]): return "sports", "mma"
         if "tennis" in t or "wawrinka" in t or "busta" in t: return "sports", "tennis"
-        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc ", "real madrid", "chelsea", "paris saint germain"]): return "sports", "football"
+        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc ", "real madrid", "chelsea", "paris saint germain", "uefa", "europa league", "champions league", "reach the", "qualify for", "advance to", "make the final", "semi-final", "quarter-final"]): return "sports", "football"
         if any(x in t for x in ["btc", "bitcoin", "$100k", "ethereum"]): return "crypto", "crypto"
         if any(x in t for x in ["capture", "kupyansk", "ceasefire"]): return "war_conflict", "territorial_control"
         if any(x in t for x in ["candidate", "election", "poll"]): return "election", "election"
@@ -136,6 +231,9 @@ class TradingPlanAgent:
 
     def _detect_market_type(self, text, opts, category, sub):
         t = text.lower(); keys = [k.lower() for k in opts]
+        if len(keys) == 2 and set(keys) == {"yes", "no"} and sub == "football":
+            if any(x in t for x in ["reach the", "qualify for", "advance to", "make the final", "semi-final", "semifinal", "quarter-final", "quarterfinal", "final"]):
+                return "tournament_advancement"
         if len(keys) == 3 and "draw" in keys: return "match_result_1x2"
         if any(x in t for x in ["o/u", "over/under", "set 1 games"]): return "totals"
         if len(keys) == 2 and set(keys) == {"yes", "no"} and sub == "football": return "binary_team_win"
