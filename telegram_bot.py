@@ -1977,6 +1977,16 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
         )
 
     if "crypto" in c or "crypto" in s:
+        if m in {"threshold", "price_threshold", "binary"} and _is_binary_yes_no_options(options):
+            if is_ru:
+                return (
+                    "— YES проходит, если ценовое условие выполнено до дедлайна по правилам рынка.\n"
+                    "— NO проходит, если ценовое условие не выполнено."
+                )
+            return (
+                "— YES wins if the price condition is met before the deadline under market rules.\n"
+                "— NO wins if the price condition is not met."
+            )
         if is_ru:
             return (
                 "— Рынок считается по достижению указанного крипто-события или ценового уровня.\n"
@@ -1990,12 +2000,98 @@ def _build_resolution_logic(category_type: str, subcategory: str, market_type: s
     if is_ru:
         return (
             "— Рынок считается по правилам Polymarket.\n"
-            "— Если правила недостаточно извлечены, вход должен быть осторожным."
+            "— Перед входом важно проверить точные правила разрешения."
         )
     return (
         "— The market resolves according to Polymarket rules.\n"
-        "— If exact rules are not fully extracted, entry should be cautious."
+        "— Exact resolution rules should be checked before entry."
     )
+
+
+def _build_display_category(category_type: str, subcategory: str, market_type: str, title: str, market_opts: dict, lang: str) -> str:
+    is_ru = lang == "ru"
+    c = str(category_type or "").lower()
+    s = str(subcategory or "").lower()
+    m = str(market_type or "").lower()
+    if _extract_binary_team_win_name(title) and _is_binary_yes_no_options(market_opts):
+        c, s, m = "sports", "football", "binary_team_win"
+    if c == "sports" and s == "football" and m == "binary_team_win":
+        return "Футбол / победа команды" if is_ru else "Football / team win"
+    if c == "sports" and s == "tennis" and m in {"head_to_head", "headtohead", "h2h", "match_winner"}:
+        return "Теннис / победитель матча" if is_ru else "Tennis / match winner"
+    if c == "sports" and s == "tennis" and m in {"totals", "over_under"}:
+        return "Теннис / тотал" if is_ru else "Tennis / total"
+    if c == "sports" and s in {"mma", "boxing"}:
+        return "Бои / победитель" if is_ru else "Combat sports / winner"
+    if c == "crypto" and m in {"threshold", "price_threshold"}:
+        return "Крипто / ценовой порог" if is_ru else "Crypto / price threshold"
+    if c in {"war_conflict", "geopolitics"}:
+        return "Геополитика / событие" if is_ru else "Geopolitics / event"
+    if c in {"election", "politics"}:
+        return "Политика / выборы" if is_ru else "Politics / election"
+    if c == "legal_regulatory":
+        return "Регуляторика / решение" if is_ru else "Legal / regulatory decision"
+    if c == "company_tech":
+        return "Компании и технологии" if is_ru else "Companies & technology"
+    if _is_binary_yes_no_options(market_opts):
+        return "Бинарный рынок" if is_ru else "Binary market"
+    if isinstance(market_opts, dict) and len(market_opts) > 2:
+        return "Мульти-исход" if is_ru else "Multi-outcome market"
+    return f"{category_type}{(' / ' + subcategory) if subcategory else ''}"
+
+
+def _localize_no_model_item(text: str, lang: str) -> str:
+    tx = str(text or "").strip()
+    if not tx:
+        return ""
+    if lang != "ru":
+        return tx
+    ru_map = {
+        "Missing verified outcome drivers close to resolution deadline.": "Нет подтверждённых драйверов исхода ближе к дедлайну.",
+        "Weak source relevance to this exact market conditions.": "Источники слабо связаны с условиями именно этого рынка.",
+        "Unclear resolution mapping between evidence and market rules.": "Недостаточно ясно, как найденные факты влияют на правила расчёта рынка.",
+        "No directional evidence strong enough for independent pricing.": "Нет достаточно сильных направленных фактов для независимой оценки вероятности.",
+        "Context is stale or preview-only without primary confirmation.": "Контекст устаревший или preview-level без первичного подтверждения.",
+        "Official confirmation from primary source": "Официальное подтверждение из первичного источника",
+        "Timestamped evidence close to deadline": "Свежие подтверждения ближе к дедлайну",
+        "Need primary source/event confirmations that directly affect resolution.": "Нужны первичные подтверждения событий, напрямую влияющих на расчёт рынка.",
+        "Need price dislocation where independent probability can exceed market by at least +5–7%.": "Нужна ценовая неэффективность, где независимая вероятность выше рынка минимум на +5–7%.",
+        "Confirmed opponent and match context": "Подтверждённый соперник и контекст матча",
+        "Starting lineups": "Стартовые составы",
+        "Injuries/suspensions": "Травмы и дисквалификации",
+        "Motivation/rotation": "Мотивация и ротация",
+        "Draw risk": "Риск ничьей",
+        "Odds movement before kickoff": "Движение линии перед стартом",
+        "Surface fit": "Покрытие",
+        "Surface": "Покрытие",
+        "Recent form": "Текущая форма",
+        "Injury/fatigue": "Травмы и усталость",
+        "H2H relevance": "Релевантность личных встреч",
+        "Serve/return matchup": "Соотношение подачи и приёма",
+        "Withdrawal risk": "Риск снятия с матча",
+        "Deadline distance": "Расстояние до дедлайна",
+        "Spot price distance to threshold": "Расстояние текущей цены до целевого уровня",
+        "Volatility/liquidity": "Волатильность и ликвидность",
+        "ETF/regulatory/macro catalyst": "ETF, регуляторные и макро-катализаторы",
+        "Resistance/support levels": "Уровни сопротивления и поддержки",
+        "Verified sources": "Проверенные источники",
+        "Geolocation/official confirmation": "Геолокация или официальное подтверждение",
+        "Deadline proximity": "Дедлайн",
+        "Fog-of-war risk": "Риск тумана войны",
+        "Latest polling quality": "Качество свежих опросов",
+        "Turnout/endorsement shifts": "Явка, endorsements, судебные/правовые изменения",
+        "Court/legal changes": "Явка, endorsements, судебные/правовые изменения",
+        "Official resolution source": "Официальный источник расчёта результата",
+        "Filing status": "Статус filings/заявок",
+        "Hearing/deadline": "Слушание или дедлайн",
+        "Regulator statements": "Заявления регулятора",
+        "Relevant precedent": "Прецеденты",
+    }
+    if tx in ru_map:
+        return ru_map[tx]
+    if re.search(r"[А-Яа-яЁё]", tx):
+        return tx
+    return "Требуется дополнительная проверка подтверждающих факторов по рынку."
 
 
 def _format_clean_market_signal(result: dict, uid: int) -> str:
@@ -2066,7 +2162,8 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     localized_res_logic = _build_resolution_logic(category, sub, market_type, title, market_opts, lang, team_name=team_name)
     existing_resolution = str(event_drivers.get("resolution_condition") or "").strip()
     is_football_binary = (str(sub).lower() == "football" and str(market_type).lower() == "binary_team_win" and {str(k).upper() for k in market_opts.keys()} == {"YES", "NO"})
-    res_logic = localized_res_logic if is_football_binary else (existing_resolution or localized_res_logic)
+    use_existing_resolution = bool(existing_resolution) and not (is_ru and re.search(r"[A-Za-z]", existing_resolution))
+    res_logic = localized_res_logic if is_football_binary else (existing_resolution if use_existing_resolution else localized_res_logic)
 
     most_likely = max(market_opts, key=market_opts.get) if market_opts else "—"
     best_value = best if has_model and best != "NONE" and best_diff > 0 else ("явной недооценки не найдено" if is_ru else "No clear underpricing found.")
@@ -2076,9 +2173,7 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
 
     text = "🔎 DeepAlpha Signal\n\n"
     text += f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(title)}\n"
-    category_display = category + (' / ' + sub if sub else '')
-    if is_football_binary:
-        category_display = "Футбол / победа команды" if is_ru else "Football / team win"
+    category_display = _build_display_category(category, sub, market_type, title, market_opts, lang)
     text += f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}\n\n"
     text += ("📊 Линия рынка:\n" if is_ru else "📊 Market line:\n") + "\n".join(line_items) + "\n\n"
     text += ("📌 Как считается рынок:\n" if is_ru else "📌 Resolution logic:\n") + _escape(res_logic) + "\n\n"
@@ -2153,15 +2248,29 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
         interp = str(no_model_data.get("market_interpretation") or "")
         checks = no_model_data.get("next_check_checklist") if isinstance(no_model_data.get("next_check_checklist"), list) else []
         text += ("📊 Почему модели нет:\n" if is_ru else "📊 Why no model:\n")
-        text += "\n".join([f"— {_escape(x)}" for x in why[:5]]) + "\n\n"
+        text += "\n".join([f"— {_escape(_localize_no_model_item(x, lang))}" for x in why[:5]]) + "\n\n"
         text += ("🧭 Что должно измениться для входа:\n" if is_ru else "🧭 What would change for entry:\n")
-        text += "\n".join([f"— {_escape(x)}" for x in changes[:5]]) + "\n\n"
+        text += "\n".join([f"— {_escape(_localize_no_model_item(x, lang))}" for x in changes[:5]]) + "\n\n"
         text += ("📍 Зона интереса:\n" if is_ru else "📍 Price/value watch zone:\n")
         if interp:
-            text += f"— {'Рынок сейчас оценивает' if is_ru else 'Market currently implies'}: {_escape(interp)}\n"
-        text += "\n".join([f"— {_escape(x)}" for x in zone[:3]]) + "\n\n"
+            text += f"— {'Рынок сейчас оценивает' if is_ru else 'Market currently implies'}: {_escape(_localize_no_model_item(interp, lang))}\n"
+        if _is_binary_yes_no_options(market_opts):
+            favorite = max(market_opts, key=market_opts.get)
+            fav_price = float(market_opts.get(favorite, 0.0))
+            if is_ru:
+                text += f"— Рынок сейчас оценивает {favorite} как фаворита с вероятностью {fav_price:.1f}%.\n"
+                text += "— Сам по себе статус фаворита не является сигналом для входа.\n"
+                text += "— Вход становится интересным только если независимая оценка даёт минимум +5–7% преимущества к цене рынка.\n"
+                text += "— Без направленного подтверждения не стоит покупать ни фаворита, ни андердога.\n\n"
+            else:
+                text += f"— Market prices {favorite} as the favorite at {fav_price:.1f}%.\n"
+                text += "— Favorite status alone is not a trade signal.\n"
+                text += "— Entry becomes interesting only if the independent estimate creates at least +5–7% edge over market.\n"
+                text += "— Without directional confirmation, neither favorite nor underdog should be chased.\n\n"
+        else:
+            text += "\n".join([f"— {_escape(_localize_no_model_item(x, lang))}" for x in zone[:3]]) + "\n\n"
         text += ("✅ Что проверить перед входом:\n" if is_ru else "✅ Next-check checklist:\n")
-        text += "\n".join([f"— {_escape(x)}" for x in checks[:6]]) + "\n\n"
+        text += "\n".join([f"— {_escape(_localize_no_model_item(x, lang))}" for x in checks[:6]]) + "\n\n"
 
     text += _build_source_block_filtered(result, lang)
     return text
