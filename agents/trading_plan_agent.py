@@ -62,6 +62,14 @@ class TradingPlanAgent:
             "market_moving_triggers": triggers,
             "risk_factors": ["Рыночная цена может уже включать общедоступный консенсус."],
         }
+        no_model_analysis = self._build_no_model_analysis(
+            category_type=category_type,
+            subcategory=subcategory,
+            market_type=market_type,
+            market_options=market_options,
+            model_options=model_options,
+            event_drivers=event_drivers,
+        )
 
         deep = {
             "category_type": category_type,
@@ -90,6 +98,7 @@ class TradingPlanAgent:
             "analyst_view": analyst_view,
             "model_options": model_options,
             "option_differences": option_diffs,
+            "no_model_analysis": no_model_analysis,
             "no_fake_model": True,
         }
 
@@ -113,7 +122,75 @@ class TradingPlanAgent:
             "relevant_sources_count": relevant_sources_count,
             "news_quality": news_quality,
             "evidence_strength": evidence_strength,
+            "no_model_analysis": no_model_analysis,
         }
+
+    def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
+        if model_options:
+            return {}
+        why_no_model = [
+            "Missing verified outcome drivers close to resolution deadline.",
+            "Weak source relevance to this exact market conditions.",
+            "Unclear resolution mapping between evidence and market rules.",
+            "No directional evidence strong enough for independent pricing.",
+            "Context is stale or preview-only without primary confirmation.",
+        ]
+        watch_drivers = event_drivers.get("must_find") if isinstance(event_drivers, dict) else []
+        what_changes = (watch_drivers[:3] if isinstance(watch_drivers, list) and watch_drivers else []) + [
+            "Need primary source/event confirmations that directly affect resolution.",
+            "Need price dislocation where independent probability can exceed market by at least +5–7%.",
+        ]
+        price_zone = self._build_price_watch_zone(market_type, market_options)
+        market_interpretation = self._build_market_interpretation(market_type, market_options)
+        checklist = self._build_next_check_checklist(category_type, subcategory)
+        return {
+            "why_no_model": why_no_model,
+            "what_changes_for_entry": what_changes[:5],
+            "price_value_watch_zone": price_zone,
+            "market_interpretation": market_interpretation,
+            "next_check_checklist": checklist,
+        }
+
+    def _build_price_watch_zone(self, market_type: str, market_options: Dict[str, float]) -> List[str]:
+        options_count = len(market_options or {})
+        if options_count == 2 and {str(k).upper() for k in market_options.keys()} == {"YES", "NO"}:
+            favorite = max(market_options, key=market_options.get)
+            fav_price = float(market_options.get(favorite, 0.0))
+            lines = []
+            if fav_price > 60:
+                lines.append(f"Market favorite is {favorite} at {fav_price:.1f}%: chasing favorite is poor risk/reward unless independent probability is materially higher.")
+            lines.append("Do not recommend underdog/no side without independent directional evidence.")
+            lines.append("Entry becomes interesting only if model can justify at least +5–7% edge over market.")
+            return lines
+        return [
+            "For multi-option markets, compare value only on the same option (model option vs market option).",
+            "No value claim is valid without independent model probability for that option.",
+            "Entry becomes interesting only if model can justify at least +5–7% edge over market.",
+        ]
+
+    def _build_market_interpretation(self, market_type: str, market_options: Dict[str, float]) -> str:
+        if not market_options:
+            return "Current price implies uncertainty remains high; avoid directional entry without stronger evidence."
+        lead = max(market_options, key=market_options.get)
+        lead_price = float(market_options.get(lead, 0.0))
+        if market_type == "binary_team_win" and lead.upper() == "YES":
+            return f"YES at {lead_price:.1f}% implies market sees the team as moderate favorite, not near-certainty."
+        return f"{lead} at {lead_price:.1f}% implies this side is favored by market, but price is not a standalone signal without independent edge."
+
+    def _build_next_check_checklist(self, category_type: str, subcategory: str) -> List[str]:
+        if category_type == "sports" and subcategory == "football":
+            return ["Confirmed opponent and match context", "Starting lineups", "Injuries/suspensions", "Motivation/rotation", "Draw risk", "Odds movement before kickoff"]
+        if category_type == "sports" and subcategory == "tennis":
+            return ["Surface fit", "Recent form", "Injury/fatigue", "H2H relevance", "Serve/return matchup", "Withdrawal risk"]
+        if category_type == "crypto":
+            return ["Deadline distance", "Spot price distance to threshold", "Volatility/liquidity", "ETF/regulatory/macro catalyst", "Resistance/support levels"]
+        if category_type == "war_conflict":
+            return ["Verified sources", "Geolocation/official confirmation", "Deadline proximity", "Fog-of-war risk"]
+        if category_type == "election":
+            return ["Latest polling quality", "Turnout/endorsement shifts", "Court/legal changes", "Official resolution source"]
+        if category_type == "legal_regulatory":
+            return ["Filing status", "Hearing/deadline", "Regulator statements", "Relevant precedent"]
+        return ["Resolution rule clarity", "Primary-source confirmation", "Deadline proximity", "Catalyst verification"]
 
     def _extract_market_probs(self, text: str) -> Dict[str, float]:
         out = {}
