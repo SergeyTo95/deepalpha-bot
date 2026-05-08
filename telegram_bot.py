@@ -2238,6 +2238,20 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
             "strongest non-group competitors": "Сильнейшие конкуренты вне целевой группы",
             "injury/form status of target-group teams": "Травмы и форма команд целевой группы",
             "current stage and remaining fixtures": "Текущая стадия и оставшиеся матчи",
+            "Group Teams Remaining": "Сколько команд целевой группы осталось в турнире",
+            "Combined Outright Odds": "Суммарные odds команд целевой группы на победу",
+            "Bracket Path": "Сетка турнира и путь до финала",
+            "Team Strength Depth": "Глубина и сила состава",
+            "Injuries Form": "Травмы и текущая форма",
+            "Favorable Draw": "Благоприятная сетка",
+            "Strong Non Group Favorites": "Сильные фавориты вне целевой группы",
+            "Group Teams Eliminate Each Other": "Риск, что команды целевой группы выбьют друг друга",
+            "Hard Bracket": "Тяжёлая турнирная сетка",
+            "Key Injuries": "Ключевые травмы",
+            "Low Number Of Group Teams Remaining": "Мало команд целевой группы осталось в турнире",
+            "Weak Outright Odds": "Слабые outright odds",
+            "No usable evidence and zero coverage; independent probability not produced.": "Нет пригодных данных и покрытия ключевых драйверов; независимая вероятность не построена.",
+            "No independent probability was produced because high-impact drivers are missing or evidence is insufficient.": "Независимая вероятность не построена: не хватает важных драйверов или подтверждённых данных.",
         }
         return ru_map.get(t, t)
 
@@ -2275,6 +2289,25 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
                     t = it
                 evidence.append(t)
     evidence=_dedupe_localized(evidence, limit=5)
+
+    tp_data = result.get("trading_plan") if isinstance(result.get("trading_plan"), dict) else {}
+    source_summary = tp_data.get("source_summary") if isinstance(tp_data.get("source_summary"), dict) else {}
+    if not source_summary and isinstance(result.get("source_summary"), dict):
+        source_summary = result.get("source_summary")
+    structured_evidence = tp_data.get("structured_evidence") if isinstance(tp_data.get("structured_evidence"), dict) else {}
+    if not structured_evidence and isinstance(result.get("structured_evidence"), dict):
+        structured_evidence = result.get("structured_evidence")
+    source_quality = structured_evidence.get("source_quality") if isinstance(structured_evidence.get("source_quality"), dict) else {}
+    usable_sources_count = int(source_quality.get("usable_sources_count") or 0)
+    coverage_score = float(source_quality.get("coverage_score") or 0)
+    relevant_sources_count = int(result.get("relevant_sources_count") or source_summary.get("relevant_sources_count") or 0)
+    sources_found_but_filtered = bool(result.get("sources_found_but_filtered") if result.get("sources_found_but_filtered") is not None else source_summary.get("sources_found_but_filtered"))
+    weak_evidence = (
+        usable_sources_count == 0
+        or coverage_score == 0
+        or relevant_sources_count == 0
+        or sources_found_but_filtered
+    )
 
     nxt=[]
     for key in ("what_would_change",):
@@ -2322,7 +2355,7 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
     lines.extend([f"— {_escape(x)}" for x in drivers] or (["— Ключевые драйверы пока не заполнены."] if is_ru else ["— Key drivers are not populated yet."]))
     lines.append("")
     lines.append("🧾 Что найдено в данных:" if is_ru else "🧾 Evidence found:")
-    if evidence:
+    if evidence and not weak_evidence:
         lines.extend([f"— {_escape(x)}" for x in evidence])
     else:
         lines.append("— Проверяемых фактов по ключевым драйверам пока недостаточно." if is_ru else "— Not enough verified facts for the key drivers yet.")
@@ -2346,6 +2379,7 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
         if isinstance(src,list): risks.extend([str(x).strip() for x in src if str(x).strip()])
         elif isinstance(src,str) and src.strip(): risks.append(src.strip())
     risks=list(dict.fromkeys(risks))[:4]
+    risks=_dedupe_localized(risks, limit=4)
     lines.extend([f"— {_escape(x)}" for x in risks] or ["— —"])
 
     lines.append("")
