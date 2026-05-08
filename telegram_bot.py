@@ -2660,47 +2660,72 @@ def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
     if lang != "ru":
         return text
 
-    replacements = {
-        "team from England": "Англии",
-        "English team": "Англии",
-        "Premier League team": "Англии",
-        "победитель 2026 Champions League будет из Англии": "команда из Англии выиграет 2026 Champions League",
-        "победитель Champions League 2026 будет из Англии": "команда из Англии выиграет Champions League 2026",
+    # Не делаем глобальную замену team from England по всему тексту:
+    # она ломает market title, search query и source titles.
+    # Меняем только outcome/probability labels.
+    outcome_replacements = {
+        "победитель 2026 Champions League будет не из team from England": "победитель 2026 Champions League будет не из Англии",
+        "победитель Champions League 2026 будет не из team from England": "победитель Champions League 2026 будет не из Англии",
+        "победитель 2026 Champions League будет из team from England": "команда из Англии выиграет 2026 Champions League",
+        "победитель Champions League 2026 будет из team from England": "команда из Англии выиграет Champions League 2026",
+    }
+
+    for src, dst in outcome_replacements.items():
+        text = text.replace(src, dst)
+
+    # Более общий fallback для competition, если порядок/название турнира отличается.
+    text = _re.sub(
+        r"победитель ([^\n]+?) будет не из team from England",
+        r"победитель \1 будет не из Англии",
+        text,
+    )
+    text = _re.sub(
+        r"победитель ([^\n]+?) будет из team from England",
+        r"команда из Англии выиграет \1",
+        text,
+    )
+
+    # Убираем неудачные следы старой глобальной замены, если они уже появились в тексте.
+    text = text.replace("Англииs", "Premier League teams")
+
+    text = _re.sub(
+        r"— выше вероятность сценария: (победитель [^\n]+ будет не из Англии)",
+        lambda m: "— DeepAlpha считает, что " + m.group(1) + ", но прогноз требует подтверждения по ключевым данным.",
+        text,
+    )
+
+    # Если решение НЕ ВХОДИТЬ или confidence низкая — не показываем слабый edge как сигнал.
+    if "👉 Решение: НЕ ВХОДИТЬ" in text or "🧠 Confidence: низкая" in text:
+        text = _re.sub(
+            r"💰 Edge:\n(?:— .+\n)+",
+            "💰 Edge: не подтверждён\n",
+            text,
+        )
+
+    # Если source block говорит, что свежих релевантных источников нет,
+    # не показываем заголовки как подтверждённые факты.
+    if "Релевантные свежие источники не найдены." in text:
+        text = _re.sub(
+            r"🧾 Что найдено в данных:\n.*?\n\n📍 Цена для входа:",
+            "🧾 Что найдено в данных:\n— Проверяемых фактов по ключевым драйверам пока недостаточно.\n\n📍 Цена для входа:",
+            text,
+            flags=_re.S,
+        )
+
+    # Маппинг внутренних driver-debug строк, если они остались.
+    internal_replacements = {
         "Driver groupteamsremaining impacts resolution.": "Список команд целевой группы, оставшихся в турнире",
         "Driver combinedoutrightodds impacts resolution.": "Индивидуальные odds клубов на победу в турнире",
         "Driver bracketpath impacts resolution.": "Сетка турнира и путь до финала",
         "Driver strongnongroupfavorites impacts resolution.": "Сильнейшие конкуренты вне целевой группы",
         "Driver groupteamseliminateeachother impacts resolution.": "Риск, что команды целевой группы выбьют друг друга",
     }
-
-    for src, dst in replacements.items():
+    for src, dst in internal_replacements.items():
         text = text.replace(src, dst)
 
-    text = _re.sub(
-        r"— выше вероятность сценария: (победитель [^\\n]+ будет не из Англии)",
-        lambda m: "— DeepAlpha считает, что " + m.group(1) + ", но прогноз требует подтверждения по ключевым данным.",
-        text,
-    )
+    text = _re.sub(r"— Driver [^\n]* impacts resolution\.\n?", "", text)
 
-    if "👉 Решение: НЕ ВХОДИТЬ" in text or "🧠 Confidence: низкая" in text:
-        text = _re.sub(
-            r"💰 Edge:\\n(?:— .+\\n)+",
-            "💰 Edge: не подтверждён\\n",
-            text,
-        )
-
-    if "Релевантные свежие источники не найдены." in text:
-        text = _re.sub(
-            r"🧾 Что найдено в данных:\\n.*?\\n\\n📍 Цена для входа:",
-            "🧾 Что найдено в данных:\\n— Проверяемых фактов по ключевым драйверам пока недостаточно.\\n\\n📍 Цена для входа:",
-            text,
-            flags=_re.S,
-        )
-
-    text = _re.sub(r"— Driver [^\\n]* impacts resolution\\.\\n?", "", text)
-
-    # Возвращаем оригинальный вопрос рынка и поисковый запрос,
-    # если глобальная нормализация зацепила title/query.
+    # Возвращаем оригинальный market title/search query, если старые замены их зацепили.
     text = text.replace("Will a Англии be the", "Will a team from England be the")
     text = text.replace("Will an Англии be the", "Will an English team be the")
     text = text.replace("Will Англии be the", "Will a team from England be the")
