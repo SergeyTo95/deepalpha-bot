@@ -2094,6 +2094,205 @@ def _localize_no_model_item(text: str, lang: str) -> str:
     return "Требуется дополнительная проверка подтверждающих факторов по рынку."
 
 
+
+
+def _format_forecast_card_signal(result: dict, uid: int) -> str:
+    lang = result.get("lang") or result.get("language") or get_user_lang(uid)
+    is_ru = lang == "ru"
+    fallback = _format_clean_market_signal(result, uid)
+
+    fc = result.get("forecast_card") if isinstance(result.get("forecast_card"), dict) else {}
+    if not fc or str(fc.get("version") or "") != "1.0":
+        return fallback
+    market = fc.get("market") if isinstance(fc.get("market"), dict) else {}
+    market_price = market.get("market_price") if isinstance(market.get("market_price"), dict) else {}
+    if not market_price:
+        return fallback
+    try:
+        yes_price = float(market_price.get("YES")) if market_price.get("YES") is not None else None
+        no_price = float(market_price.get("NO")) if market_price.get("NO") is not None else None
+    except Exception:
+        return fallback
+    if yes_price is None or no_price is None:
+        return fallback
+
+    ep = fc.get("event_profile") if isinstance(fc.get("event_profile"), dict) else {}
+    event_type = str(ep.get("event_type") or result.get("event_type") or result.get("market_type") or "generic_binary_event").lower()
+    question = str(result.get("question") or result.get("title") or fc.get("question") or "—")
+
+    cat_map = {
+        "football_team_win": ("Футбол / победа команды", "Football / team win"),
+        "football_tournament_advancement": ("Футбол / турнирный проход", "Football / tournament advancement"),
+        "football_tournament_winner_group": ("Футбол / победитель турнира по группе", "Football / tournament winner group"),
+        "crypto_price_threshold": ("Крипто / ценовой порог", "Crypto / price threshold"),
+        "tennis_head_to_head": ("Теннис / победитель матча", "Tennis / match winner"),
+        "company_product_release": ("Компании и технологии / релиз продукта", "Companies & technology / product release"),
+        "legal_regulatory_approval": ("Регуляторика / решение", "Legal / regulatory decision"),
+        "generic_binary_event": ("Бинарный рынок", "Binary market"),
+        "generic_multi_outcome": ("Мульти-исход", "Multi-outcome market"),
+    }
+    category_display = cat_map.get(event_type, cat_map["generic_binary_event"])[0 if is_ru else 1]
+
+    decision_raw = str((fc.get("decision") or "NO TRADE")).upper().strip()
+    dec_ru = {"CONSIDER":"РАССМОТРЕТЬ","WATCH":"НАБЛЮДАТЬ","WAIT":"ЖДАТЬ","NO TRADE":"НЕ ВХОДИТЬ"}
+    decision = dec_ru.get(decision_raw, "НЕ ВХОДИТЬ") if is_ru else (decision_raw if decision_raw in dec_ru else "NO TRADE")
+
+    conf_raw = str((fc.get("model") or {}).get("confidence") or "none").lower().strip()
+    conf_map = {"none":("нет модели","none"),"low":("низкая","low"),"medium":("средняя","medium"),"high":("высокая","high")}
+    confidence = conf_map.get(conf_raw, conf_map["none"])[0 if is_ru else 1]
+
+    yes_cond = str(ep.get("yes_condition") or "").strip()
+    no_cond = str(ep.get("no_condition") or "").strip()
+    if is_ru:
+        ru_res = {
+            "football_team_win": "— YES проходит, если команда выигрывает матч.\n— NO проходит, если команда не выигрывает матч, включая ничью/поражение по правилам рынка.",
+            "football_tournament_advancement": "— YES проходит, если команда выходит в указанную стадию турнира.\n— NO проходит, если команда не выходит в указанную стадию.",
+            "football_tournament_winner_group": "— YES проходит, если команда из указанной группы выигрывает турнир.\n— NO проходит, если победитель турнира не относится к указанной группе.",
+            "crypto_price_threshold": "— YES проходит, если ценовое условие выполнено до дедлайна по правилам рынка.\n— NO проходит, если ценовое условие не выполнено.",
+            "tennis_head_to_head": "— YES проходит, если указанный игрок выигрывает матч.\n— NO проходит, если указанный игрок не выигрывает матч.",
+            "company_product_release": "— YES проходит, если продукт официально выпущен/анонсирован по правилам рынка.\n— NO проходит, если событие не произошло до дедлайна.",
+            "legal_regulatory_approval": "— YES проходит, если регуляторное/правовое действие произошло по правилам рынка.\n— NO проходит, если оно не произошло.",
+        }
+        res_text = ru_res.get(event_type, "— Рынок рассчитывается по правилам Polymarket.\n— Перед входом важно проверить точные правила разрешения.")
+    else:
+        if yes_cond or no_cond:
+            chunks=[]
+            if yes_cond: chunks.append(f"— YES: {yes_cond}")
+            if no_cond: chunks.append(f"— NO: {no_cond}")
+            res_text="\n".join(chunks)
+        else:
+            res_text = "— YES wins if the event occurs under market rules.\n— NO wins if it does not."
+
+    model = fc.get("model") if isinstance(fc.get("model"), dict) else {}
+    model_level = int(model.get("model_level") or 0)
+    point = model.get("point_estimate") if isinstance(model.get("point_estimate"), dict) else {}
+    prange = model.get("probability_range") if isinstance(model.get("probability_range"), dict) else {}
+
+    def fmt_est(side):
+        r = prange.get(side)
+        if isinstance(r, (list, tuple)) and len(r) >= 2:
+            return f"{float(r[0]):.1f}–{float(r[1]):.1f}%"
+        if isinstance(r, dict) and r.get("low") is not None and r.get("high") is not None:
+            return f"{float(r.get('low')):.1f}–{float(r.get('high')):.1f}%"
+        v = point.get(side)
+        return f"{float(v):.1f}%" if v is not None else ""
+
+    yes_est, no_est = fmt_est("YES"), fmt_est("NO")
+
+    value = fc.get("value") if isinstance(fc.get("value"), dict) else {}
+    edge = value.get("edge") if isinstance(value.get("edge"), dict) else {}
+    edge_range = value.get("edge_range") if isinstance(value.get("edge_range"), dict) else {}
+    entry = value.get("entry_price") if isinstance(value.get("entry_price"), dict) else {}
+
+    edge_line = ""
+    pos_side = None
+    for side in ("YES", "NO"):
+        ev = edge.get(side)
+        if ev is not None:
+            try:
+                if float(ev) > 0:
+                    pos_side = side
+                    edge_line = f"— {side}: +{float(ev):.1f}%"
+                    break
+            except Exception:
+                pass
+        er = edge_range.get(side)
+        if isinstance(er, dict) and er.get("low") is not None:
+            try:
+                if float(er.get("low")) > 0:
+                    pos_side = side
+                    edge_line = f"— {side}: +{float(er.get('low')):.1f}%"
+                    break
+            except Exception:
+                pass
+
+    drivers=[]
+    drv = fc.get("drivers") if isinstance(fc.get("drivers"), dict) else {}
+    for k in ("yes","no","neutral"):
+        v=drv.get(k)
+        if isinstance(v,list): drivers.extend([str(x).strip() for x in v if str(x).strip()])
+    drivers=list(dict.fromkeys(drivers))[:5]
+
+    evidence=[]
+    evd = fc.get("evidence") if isinstance(fc.get("evidence"), dict) else {}
+    for k in ("for_yes","for_no","missing_data","contradictions"):
+        arr = evd.get(k)
+        if isinstance(arr,list):
+            for it in arr:
+                if isinstance(it,dict):
+                    t = str(it.get("claim") or it.get("driver_label") or it.get("description") or "").strip()
+                else:
+                    t = str(it).strip()
+                if t: evidence.append(t)
+    evidence=list(dict.fromkeys(evidence))[:5]
+
+    nxt=[]
+    for key in ("what_would_change","data_requirements","next_queries"):
+        arr=fc.get(key)
+        if isinstance(arr,list):
+            for it in arr:
+                if isinstance(it,dict):
+                    t=str(it.get("description") or it.get("query") or "").strip()
+                else:
+                    t=str(it).strip()
+                if t and t.lower() not in {"n/a","none","null"}: nxt.append(t)
+        if nxt: break
+    nxt=list(dict.fromkeys(nxt))[:6]
+
+    lines=["🔎 DeepAlpha Signal","",f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(question)}",f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}","",f"{'📊 Линия рынка' if is_ru else '📊 Market line'}:",f"— YES: {yes_price:.1f}%",f"— NO: {no_price:.1f}%","",f"{'📌 Как считается рынок' if is_ru else '📌 Resolution'}:",_escape(res_text),"",f"{'🎯 Прогноз DeepAlpha' if is_ru else '🎯 DeepAlpha Forecast'}:",f"👉 {'Решение' if is_ru else 'Decision'}: {decision}"]
+
+    if model_level == 0 or (not yes_est and not no_est):
+        lines.append(f"📌 {'Оценка DeepAlpha: модель не построена' if is_ru else 'DeepAlpha estimate: no model built'}")
+    else:
+        lines.append(f"📌 {'Оценка DeepAlpha' if is_ru else 'DeepAlpha estimate'}:")
+        if yes_est: lines.append(f"— YES: {yes_est}")
+        if no_est: lines.append(f"— NO: {no_est}")
+
+    lines.append(f"📊 {'Рынок' if is_ru else 'Market'}: YES {yes_price:.1f}% / NO {no_price:.1f}%")
+    if edge_line:
+        lines.append("💰 Edge:")
+        lines.append(edge_line)
+    else:
+        lines.append("💰 Edge: не подтверждён" if is_ru else "💰 Edge: not confirmed")
+    lines.append(f"🧠 Confidence: {confidence}")
+    lines.append("")
+    lines.append("🧩 Что реально двигает рынок:" if is_ru else "🧩 What drives this market:")
+    lines.extend([f"— {_escape(x)}" for x in drivers] or ["— —"])
+    lines.append("")
+    lines.append("🧾 Что найдено в данных:" if is_ru else "🧾 Evidence found:")
+    if evidence:
+        lines.extend([f"— {_escape(x)}" for x in evidence])
+    else:
+        lines.append("— Проверяемых фактов по ключевым драйверам пока недостаточно." if is_ru else "— Not enough verified facts for the key drivers yet.")
+
+    lines.append("")
+    lines.append("📍 Цена для входа:" if is_ru else "📍 Entry price:")
+    if isinstance(entry, dict) and entry:
+        side = str(entry.get("side") or pos_side or "YES").upper()
+        below = entry.get("below") if entry.get("below") is not None else entry.get("price")
+        if below is not None:
+            lines.append(f"— {side} {'интересен ниже' if is_ru else 'interesting below'} {float(below):.1f}%")
+        else:
+            lines.append("— Вход не подтверждён: независимая вероятность не даёт достаточного перевеса к цене рынка." if is_ru else "— Entry is not confirmed because independent probability does not show enough edge versus market.")
+    else:
+        lines.append("— Вход не подтверждён: независимая вероятность не даёт достаточного перевеса к цене рынка." if is_ru else "— Entry is not confirmed because independent probability does not show enough edge versus market.")
+
+    lines.append("")
+    lines.append("⚠️ Риски / ограничения:" if is_ru else "⚠️ Risks / limitations:")
+    risks=[]
+    for src in [model.get("limitations"), value.get("risk_flags"), fc.get("risks")]:
+        if isinstance(src,list): risks.extend([str(x).strip() for x in src if str(x).strip()])
+        elif isinstance(src,str) and src.strip(): risks.append(src.strip())
+    risks=list(dict.fromkeys(risks))[:4]
+    lines.extend([f"— {_escape(x)}" for x in risks] or ["— —"])
+
+    lines.append("")
+    lines.append("✅ Что проверить дальше:" if is_ru else "✅ What to check next:")
+    lines.extend([f"— {_escape(x)}" for x in nxt] or ["— —"])
+    lines.append("")
+    lines.append(_build_source_block_filtered(result, lang))
+    return "\n".join(lines)
+
 def _format_clean_market_signal(result: dict, uid: int) -> str:
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     is_ru = lang == "ru"
@@ -2285,6 +2484,10 @@ def _format_analysis(result: dict, uid: int) -> str:
     result_lang = result.get("lang") or result.get("language")
     if result_lang:
         lang = result_lang
+    fc = result.get("forecast_card") if isinstance(result.get("forecast_card"), dict) else None
+    if fc and str(fc.get("version") or "") == "1.0":
+        return _format_forecast_card_signal(result, uid)
+
     if (
         result.get("category_type")
         or result.get("subcategory")
