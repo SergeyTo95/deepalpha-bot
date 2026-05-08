@@ -5,6 +5,7 @@ from agents.forecast_card_agent import ForecastCardAgent
 from agents.event_parser_agent import EventParserAgent
 from agents.driver_map_agent import DriverMapAgent
 from agents.data_requirement_agent import DataRequirementAgent
+from agents.evidence_extractor_agent import EvidenceExtractorAgent
 
 
 class TradingPlanAgent:
@@ -61,6 +62,14 @@ class TradingPlanAgent:
 
         driver_map = DriverMapAgent().build(event_profile)
         data_plan = DataRequirementAgent().build(event_profile, driver_map)
+        structured_evidence = EvidenceExtractorAgent().extract(
+            event_profile=event_profile,
+            driver_map=driver_map,
+            data_plan=data_plan,
+            news_data=news_data or {},
+            market_data=market_data or {},
+            context={"result": result},
+        )
         event_drivers = self._build_event_drivers(text, market_type, market_options, category_type, subcategory, entities)
         forecast_evidence = self._build_forecast_evidence(market_options, rel_sources, side_meanings)
         if relevant_sources_count == 0:
@@ -123,6 +132,7 @@ class TradingPlanAgent:
             "driver_map": driver_map,
             "data_plan": data_plan,
             "forecast_evidence": forecast_evidence,
+            "structured_evidence": structured_evidence,
             "source_summary": {
                 "news_queries_used": queries,
                 "raw_sources_count": raw_sources_count,
@@ -142,6 +152,11 @@ class TradingPlanAgent:
         forecast_card = ForecastCardAgent().build(deep)
         if isinstance(forecast_card, dict):
             forecast_card["event_profile"] = event_profile
+            if isinstance(forecast_card.get("evidence"), dict):
+                forecast_card["evidence"]["for_yes"] = structured_evidence.get("for_yes") or forecast_card["evidence"].get("for_yes") or []
+                forecast_card["evidence"]["for_no"] = structured_evidence.get("for_no") or forecast_card["evidence"].get("for_no") or []
+                forecast_card["evidence"]["missing_data"] = structured_evidence.get("missing_driver_data") or forecast_card["evidence"].get("missing_data") or []
+                forecast_card["evidence"]["contradictions"] = structured_evidence.get("contradictions") or forecast_card["evidence"].get("contradictions") or []
         deep["forecast_card"] = forecast_card
 
         return {
@@ -149,7 +164,7 @@ class TradingPlanAgent:
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "structured_evidence": structured_evidence},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -167,6 +182,7 @@ class TradingPlanAgent:
             "no_model_analysis": no_model_analysis,
             "forecast_card": forecast_card,
             "event_profile": event_profile,
+            "structured_evidence": structured_evidence,
         }
 
     def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
