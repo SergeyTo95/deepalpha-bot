@@ -2485,8 +2485,14 @@ def _format_analysis(result: dict, uid: int) -> str:
     if result_lang:
         lang = result_lang
     fc = result.get("forecast_card") if isinstance(result.get("forecast_card"), dict) else None
+    if not fc and isinstance(result.get("trading_plan"), dict):
+        fc = result["trading_plan"].get("forecast_card") if isinstance(result["trading_plan"].get("forecast_card"), dict) else None
+    if not fc and isinstance(result.get("deep_analysis"), dict):
+        fc = result["deep_analysis"].get("forecast_card") if isinstance(result["deep_analysis"].get("forecast_card"), dict) else None
     if fc and str(fc.get("version") or "") == "1.0":
-        return _format_forecast_card_signal(result, uid)
+        render_result = dict(result)
+        render_result["forecast_card"] = fc
+        return _format_forecast_card_signal(render_result, uid)
 
     if (
         result.get("category_type")
