@@ -3,6 +3,8 @@ from typing import Any, Dict, List
 
 from agents.forecast_card_agent import ForecastCardAgent
 from agents.event_parser_agent import EventParserAgent
+from agents.driver_map_agent import DriverMapAgent
+from agents.data_requirement_agent import DataRequirementAgent
 
 
 class TradingPlanAgent:
@@ -57,6 +59,8 @@ class TradingPlanAgent:
         relevant_sources_count = int(news_data.get("relevant_sources_count") or len(rel_sources))
         news_quality = str(news_data.get("news_quality") or "low").lower()
 
+        driver_map = DriverMapAgent().build(event_profile)
+        data_plan = DataRequirementAgent().build(event_profile, driver_map)
         event_drivers = self._build_event_drivers(text, market_type, market_options, category_type, subcategory, entities)
         forecast_evidence = self._build_forecast_evidence(market_options, rel_sources, side_meanings)
         if relevant_sources_count == 0:
@@ -116,6 +120,8 @@ class TradingPlanAgent:
             "event_profile": event_profile,
             "side_meanings": side_meanings,
             "event_drivers": event_drivers,
+            "driver_map": driver_map,
+            "data_plan": data_plan,
             "forecast_evidence": forecast_evidence,
             "source_summary": {
                 "news_queries_used": queries,
@@ -143,7 +149,7 @@ class TradingPlanAgent:
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
