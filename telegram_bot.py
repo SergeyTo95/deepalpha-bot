@@ -2652,6 +2652,61 @@ def _format_clean_market_signal(result: dict, uid: int) -> str:
     return text
 
 
+
+def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
+    import re as _re
+
+    lang = result.get("lang") or result.get("language") or get_user_lang(uid)
+    if lang != "ru":
+        return text
+
+    replacements = {
+        "team from England": "Англии",
+        "English team": "Англии",
+        "Premier League team": "Англии",
+
+        "победитель 2026 Champions League будет из Англии": "команда из Англии выиграет 2026 Champions League",
+        "победитель Champions League 2026 будет из Англии": "команда из Англии выиграет Champions League 2026",
+
+        "Driver groupteamsremaining impacts resolution.": "Список команд целевой группы, оставшихся в турнире",
+        "Driver combinedoutrightodds impacts resolution.": "Индивидуальные odds клубов на победу в турнире",
+        "Driver bracketpath impacts resolution.": "Сетка турнира и путь до финала",
+        "Driver strongnongroupfavorites impacts resolution.": "Сильнейшие конкуренты вне целевой группы",
+        "Driver groupteamseliminateeachother impacts resolution.": "Риск, что команды целевой группы выбьют друг друга",
+    }
+
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+
+    text = _re.sub(
+        r"— выше вероятность сценария: (победитель [^\n]+ будет не из Англии)",
+        r"— DeepAlpha считает, что \1, но прогноз требует подтверждения по ключевым данным.",
+        text,
+    )
+
+    # Если решение НЕ ВХОДИТЬ или confidence низкая — не показываем слабый edge как сигнал.
+    if "👉 Решение: НЕ ВХОДИТЬ" in text or "🧠 Confidence: низкая" in text:
+        text = _re.sub(
+            r"💰 Edge:\n(?:— .+\n)+",
+            "💰 Edge: не подтверждён\n",
+            text,
+        )
+
+    # Если source block говорит, что свежих релевантных источников нет,
+    # не показываем заголовки как подтверждённые факты.
+    if "Релевантные свежие источники не найдены." in text:
+        text = _re.sub(
+            r"🧾 Что найдено в данных:\n.*?\n\n📍 Цена для входа:",
+            "🧾 Что найдено в данных:\n— Проверяемых фактов по ключевым драйверам пока недостаточно.\n\n📍 Цена для входа:",
+            text,
+            flags=_re.S,
+        )
+
+    # Убираем оставшиеся внутренние driver-debug строки.
+    text = _re.sub(r"— Driver [^\n]* impacts resolution\.\n?", "", text)
+
+    return text
+
 def _format_analysis(result: dict, uid: int) -> str:
     # Turbo Signal: pass-through, do not reformat
     if result.get("analysis_mode") == "turbo_short_term" and result.get("full_analysis"):
@@ -2669,7 +2724,7 @@ def _format_analysis(result: dict, uid: int) -> str:
     if fc and str(fc.get("version") or "") == "1.0":
         render_result = dict(result)
         render_result["forecast_card"] = fc
-        return _format_forecast_card_signal(render_result, uid)
+        return _postprocess_forecast_card_output(_format_forecast_card_signal(render_result, uid), render_result, uid)
 
     if (
         result.get("category_type")
