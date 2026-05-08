@@ -2658,7 +2658,12 @@ def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
 
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     if lang != "ru":
-        return text
+        # Keep original market question/search query readable.
+    text = text.replace("Will a Англии be the", "Will a team from England be the")
+    text = text.replace("Will an Англии be the", "Will an English team be the")
+    text = text.replace("Will Англии be the", "Will a team from England be the")
+
+    return text
 
     replacements = {
         "team from England": "Англии",
