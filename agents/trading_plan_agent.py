@@ -2,6 +2,7 @@ import re
 from typing import Any, Dict, List
 
 from agents.forecast_card_agent import ForecastCardAgent
+from agents.event_parser_agent import EventParserAgent
 
 
 class TradingPlanAgent:
@@ -34,6 +35,21 @@ class TradingPlanAgent:
         market_type = self._detect_market_type(text, market_options, category_type, subcategory)
         entities = self._extract_entities(text, market_options, category_type)
         side_meanings = self._build_side_meanings(text, market_type, market_options, entities, category_type, subcategory)
+
+        event_profile = EventParserAgent().parse(
+            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            market_options=market_options,
+            category_type=category_type,
+            subcategory=subcategory,
+            market_type=market_type,
+        )
+
+        if event_profile.get("category_type") and event_profile.get("category_type") != "other":
+            category_type = event_profile.get("category_type")
+        if event_profile.get("subcategory") and event_profile.get("subcategory") != "unknown":
+            subcategory = event_profile.get("subcategory")
+        if event_profile.get("market_type") and event_profile.get("market_type") != "binary_event":
+            market_type = event_profile.get("market_type")
 
         rel_sources = news_data.get("relevant_sources") or news_data.get("sources") or []
         queries = news_data.get("news_queries_used") or []
@@ -97,6 +113,7 @@ class TradingPlanAgent:
             "opposing_entities": entities[1:] if len(entities) > 1 else [],
             "event_target": self._extract_target(text),
             "event_deadline": self._extract_deadline(text),
+            "event_profile": event_profile,
             "side_meanings": side_meanings,
             "event_drivers": event_drivers,
             "forecast_evidence": forecast_evidence,
@@ -117,6 +134,8 @@ class TradingPlanAgent:
         }
 
         forecast_card = ForecastCardAgent().build(deep)
+        if isinstance(forecast_card, dict):
+            forecast_card["event_profile"] = event_profile
         deep["forecast_card"] = forecast_card
 
         return {
@@ -124,7 +143,7 @@ class TradingPlanAgent:
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -141,6 +160,7 @@ class TradingPlanAgent:
             "evidence_strength": evidence_strength,
             "no_model_analysis": no_model_analysis,
             "forecast_card": forecast_card,
+            "event_profile": event_profile,
         }
 
     def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
