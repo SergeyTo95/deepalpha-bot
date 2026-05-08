@@ -2186,11 +2186,12 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
 
     edge_line = ""
     pos_side = None
+    edge_threshold = 2.0
     for side in ("YES", "NO"):
         ev = edge.get(side)
         if ev is not None:
             try:
-                if float(ev) > 0:
+                if float(ev) >= edge_threshold:
                     pos_side = side
                     edge_line = f"— {side}: +{float(ev):.1f}%"
                     break
@@ -2199,45 +2200,106 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
         er = edge_range.get(side)
         if isinstance(er, dict) and er.get("low") is not None:
             try:
-                if float(er.get("low")) > 0:
+                if float(er.get("low")) >= edge_threshold:
                     pos_side = side
                     edge_line = f"— {side}: +{float(er.get('low')):.1f}%"
                     break
             except Exception:
                 pass
 
+    def _valid_render_item(v):
+        if v is None:
+            return None
+        if isinstance(v, (list, dict)) and not v:
+            return None
+        t = str(v).strip()
+        if not t or t.lower() in {"none", "null", "n/a"} or t in {"-", "—", "— —"}:
+            return None
+        return t
+
+    def _localize_fc_text(tx):
+        t = _valid_render_item(tx)
+        if not t:
+            return None
+        if not is_ru:
+            return t
+        ru_map = {
+            "Official confirmation from primary source": "Официальное подтверждение из первичного источника",
+            "Timestamped evidence close to deadline": "Свежие подтверждения ближе к дедлайну",
+            "Need primary source/event confirmations that directly affect resolution.": "Нужны первичные подтверждения событий, напрямую влияющих на расчёт рынка.",
+            "Need price dislocation where independent probability can exceed market by at least +5–7%.": "Нужна ценовая неэффективность, где независимая вероятность выше рынка минимум на +5–7%.",
+            "Headline sentiment may be stale versus current market pricing.": "Заголовки могут быть устаревшими относительно текущей цены рынка.",
+            "Market price may already include public consensus.": "Рыночная цена может уже включать общедоступный консенсус.",
+            "Market price may already include public consensus": "Рыночная цена может уже включать общедоступный консенсус.",
+            "list of target-group teams still in competition": "Список команд целевой группы, оставшихся в турнире",
+            "individual outright winner odds by club": "Индивидуальные odds клубов на победу в турнире",
+            "tournament bracket/path": "Сетка турнира и путь до финала",
+            "risk of target-group teams eliminating each other": "Риск, что команды целевой группы выбьют друг друга",
+            "strongest non-group competitors": "Сильнейшие конкуренты вне целевой группы",
+            "injury/form status of target-group teams": "Травмы и форма команд целевой группы",
+            "current stage and remaining fixtures": "Текущая стадия и оставшиеся матчи",
+        }
+        return ru_map.get(t, t)
+
+    def _dedupe_localized(items, limit=None):
+        out, seen = [], set()
+        for it in items:
+            t = _localize_fc_text(it)
+            if not t:
+                continue
+            k = _escape(t)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(t)
+            if limit and len(out) >= limit:
+                break
+        return out
+
     drivers=[]
     drv = fc.get("drivers") if isinstance(fc.get("drivers"), dict) else {}
     for k in ("yes","no","neutral"):
         v=drv.get(k)
-        if isinstance(v,list): drivers.extend([str(x).strip() for x in v if str(x).strip()])
-    drivers=list(dict.fromkeys(drivers))[:5]
+        if isinstance(v,list): drivers.extend(v)
+    drivers=_dedupe_localized(drivers, limit=5)
 
     evidence=[]
     evd = fc.get("evidence") if isinstance(fc.get("evidence"), dict) else {}
-    for k in ("for_yes","for_no","missing_data","contradictions"):
+    for k in ("for_yes","for_no","neutral"):
         arr = evd.get(k)
         if isinstance(arr,list):
             for it in arr:
                 if isinstance(it,dict):
-                    t = str(it.get("claim") or it.get("driver_label") or it.get("description") or "").strip()
+                    t = it.get("claim") or it.get("source_title") or it.get("driver_label")
                 else:
-                    t = str(it).strip()
-                if t: evidence.append(t)
-    evidence=list(dict.fromkeys(evidence))[:5]
+                    t = it
+                evidence.append(t)
+    evidence=_dedupe_localized(evidence, limit=5)
 
     nxt=[]
-    for key in ("what_would_change","data_requirements","next_queries"):
+    for key in ("what_would_change",):
         arr=fc.get(key)
         if isinstance(arr,list):
             for it in arr:
                 if isinstance(it,dict):
-                    t=str(it.get("description") or it.get("query") or "").strip()
+                    nxt.append(it.get("description") or it.get("query") or it.get("driver_label") or it.get("claim"))
                 else:
-                    t=str(it).strip()
-                if t and t.lower() not in {"n/a","none","null"}: nxt.append(t)
-        if nxt: break
-    nxt=list(dict.fromkeys(nxt))[:6]
+                    nxt.append(it)
+    missing = evd.get("missing_data") if isinstance(evd.get("missing_data"), list) else []
+    for it in missing:
+        if isinstance(it,dict):
+            nxt.append(it.get("description") or it.get("query") or it.get("driver_label") or it.get("claim"))
+        else:
+            nxt.append(it)
+    for key in ("data_requirements","next_queries"):
+        arr=fc.get(key)
+        if isinstance(arr,list):
+            for it in arr:
+                if isinstance(it,dict):
+                    nxt.append(it.get("description") or it.get("query") or it.get("driver_label") or it.get("claim"))
+                else:
+                    nxt.append(it)
+    nxt=_dedupe_localized(nxt, limit=6)
 
     lines=["🔎 DeepAlpha Signal","",f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(question)}",f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}","",f"{'📊 Линия рынка' if is_ru else '📊 Market line'}:",f"— YES: {yes_price:.1f}%",f"— NO: {no_price:.1f}%","",f"{'📌 Как считается рынок' if is_ru else '📌 Resolution'}:",_escape(res_text),"",f"{'🎯 Прогноз DeepAlpha' if is_ru else '🎯 DeepAlpha Forecast'}:",f"👉 {'Решение' if is_ru else 'Decision'}: {decision}"]
 
@@ -2257,7 +2319,7 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
     lines.append(f"🧠 Confidence: {confidence}")
     lines.append("")
     lines.append("🧩 Что реально двигает рынок:" if is_ru else "🧩 What drives this market:")
-    lines.extend([f"— {_escape(x)}" for x in drivers] or ["— —"])
+    lines.extend([f"— {_escape(x)}" for x in drivers] or (["— Ключевые драйверы пока не заполнены."] if is_ru else ["— Key drivers are not populated yet."]))
     lines.append("")
     lines.append("🧾 Что найдено в данных:" if is_ru else "🧾 Evidence found:")
     if evidence:
@@ -2288,7 +2350,7 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
 
     lines.append("")
     lines.append("✅ Что проверить дальше:" if is_ru else "✅ What to check next:")
-    lines.extend([f"— {_escape(x)}" for x in nxt] or ["— —"])
+    lines.extend([f"— {_escape(x)}" for x in nxt] or (["— Нет конкретных проверок на текущий момент."] if is_ru else ["— No specific follow-up checks at the moment."]))
     lines.append("")
     lines.append(_build_source_block_filtered(result, lang))
     return "\n".join(lines)
