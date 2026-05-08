@@ -2179,6 +2179,82 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
 
     yes_est, no_est = fmt_est("YES"), fmt_est("NO")
 
+    def _num_or_none(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    def _midpoint_or_none(r):
+        if isinstance(r, (list, tuple)) and len(r) >= 2:
+            low = _num_or_none(r[0])
+            high = _num_or_none(r[1])
+            if low is not None and high is not None:
+                return (low + high) / 2.0
+            return None
+        if isinstance(r, dict):
+            low = _num_or_none(r.get("low"))
+            high = _num_or_none(r.get("high"))
+            if low is not None and high is not None:
+                return (low + high) / 2.0
+            return None
+        return None
+
+    def _build_human_outcome_labels():
+        target_entity = str(ep.get("target_entity") or "").strip()
+        target_group = str(ep.get("target_group") or "").strip()
+        competition = str(ep.get("competition") or "").strip()
+        event_target = str(ep.get("event_target") or "").strip()
+        deadline = str(ep.get("deadline") or "").strip()
+        if event_type == "football_team_win" and target_entity:
+            return {
+                "yes_label": (f"{target_entity} выиграет матч" if is_ru else f"{target_entity} will win the match"),
+                "no_label": (f"{target_entity} не выиграет матч" if is_ru else f"{target_entity} will not win the match"),
+            }
+        if event_type == "football_tournament_winner_group" and target_group and competition:
+            return {
+                "yes_label": (f"победитель {competition} будет из {target_group}" if is_ru else f"the {competition} winner will be from {target_group}"),
+                "no_label": (f"победитель {competition} будет не из {target_group}" if is_ru else f"the {competition} winner will not be from {target_group}"),
+            }
+        if event_type == "crypto_price_threshold" and target_entity and event_target and deadline:
+            return {
+                "yes_label": (f"{target_entity} {event_target} до {deadline}" if is_ru else f"{target_entity} {event_target} by {deadline}"),
+                "no_label": (f"{target_entity} не {event_target} до {deadline}" if is_ru else f"{target_entity} will not {event_target} by {deadline}"),
+            }
+        return {
+            "yes_label": ("исход YES" if is_ru else "YES outcome"),
+            "no_label": ("исход NO" if is_ru else "NO outcome"),
+        }
+
+    labels = _build_human_outcome_labels()
+    yes_label = labels.get("yes_label", "YES")
+    no_label = labels.get("no_label", "NO")
+
+    likely_side = None
+    yes_point = _num_or_none(point.get("YES")) if isinstance(point, dict) else None
+    no_point = _num_or_none(point.get("NO")) if isinstance(point, dict) else None
+    if yes_point is not None and no_point is not None:
+        likely_side = "YES" if yes_point >= no_point else "NO"
+    else:
+        yes_mid = _midpoint_or_none(prange.get("YES"))
+        no_mid = _midpoint_or_none(prange.get("NO"))
+        if yes_mid is not None and no_mid is not None:
+            likely_side = "YES" if yes_mid >= no_mid else "NO"
+
+    if likely_side == "YES":
+        likely_outcome = yes_label
+    elif likely_side == "NO":
+        likely_outcome = no_label
+    else:
+        likely_outcome = "модель исхода не построена" if is_ru else "outcome model was not built"
+
+    plain = (
+        f"выше вероятность сценария: {likely_outcome}" if is_ru and likely_side
+        else ("нет достаточных данных для выбора более вероятного исхода" if is_ru else "not enough model data to identify the more likely outcome")
+    )
+    if not is_ru:
+        plain = f"higher probability scenario: {likely_outcome}" if likely_side else plain
+
     value = fc.get("value") if isinstance(fc.get("value"), dict) else {}
     edge = value.get("edge") if isinstance(value.get("edge"), dict) else {}
     edge_range = value.get("edge_range") if isinstance(value.get("edge_range"), dict) else {}
@@ -2334,14 +2410,19 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
                     nxt.append(it)
     nxt=_dedupe_localized(nxt, limit=6)
 
-    lines=["🔎 DeepAlpha Signal","",f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(question)}",f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}","",f"{'📊 Линия рынка' if is_ru else '📊 Market line'}:",f"— YES: {yes_price:.1f}%",f"— NO: {no_price:.1f}%","",f"{'📌 Как считается рынок' if is_ru else '📌 Resolution'}:",_escape(res_text),"",f"{'🎯 Прогноз DeepAlpha' if is_ru else '🎯 DeepAlpha Forecast'}:",f"👉 {'Решение' if is_ru else 'Decision'}: {decision}"]
+    lines=["🔎 DeepAlpha Signal","",f"{'📌 Рынок' if is_ru else '📌 Market'}: {_escape(question)}",f"{'🏷 Категория' if is_ru else '🏷 Category'}: {_escape(category_display)}","",f"{'📊 Линия рынка' if is_ru else '📊 Market line'}:",f"— YES: {yes_price:.1f}%",f"— NO: {no_price:.1f}%","",f"{'📌 Как считается рынок' if is_ru else '📌 Resolution'}:",_escape(res_text),"",("🎯 Прогноз исхода:" if is_ru else "🎯 Outcome forecast:"),f"👉 {'Наиболее вероятный исход' if is_ru else 'Most likely outcome'}: {_escape(likely_outcome)}"]
 
     if model_level == 0 or (not yes_est and not no_est):
         lines.append(f"📌 {'Оценка DeepAlpha: модель не построена' if is_ru else 'DeepAlpha estimate: no model built'}")
     else:
         lines.append(f"📌 {'Оценка DeepAlpha' if is_ru else 'DeepAlpha estimate'}:")
-        if yes_est: lines.append(f"— YES: {yes_est}")
-        if no_est: lines.append(f"— NO: {no_est}")
+        if yes_est: lines.append(f"— {_escape(yes_label)}: {yes_est}")
+        if no_est: lines.append(f"— {_escape(no_label)}: {no_est}")
+    lines.append("📌 Простыми словами:" if is_ru else "📌 Plain English:")
+    lines.append(f"— {_escape(plain)}")
+    lines.append("")
+    lines.append("💰 Value / вход:" if is_ru else "💰 Value / entry:")
+    lines.append(f"👉 {'Решение' if is_ru else 'Decision'}: {decision}")
 
     lines.append(f"📊 {'Рынок' if is_ru else 'Market'}: YES {yes_price:.1f}% / NO {no_price:.1f}%")
     if edge_line:
