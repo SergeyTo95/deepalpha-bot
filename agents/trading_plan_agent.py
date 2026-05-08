@@ -1,6 +1,8 @@
 import re
 from typing import Any, Dict, List
 
+from agents.forecast_card_agent import ForecastCardAgent
+
 
 class TradingPlanAgent:
     def _is_tournament_advancement_question(self, text: str) -> bool:
@@ -114,12 +116,15 @@ class TradingPlanAgent:
             "no_fake_model": True,
         }
 
+        forecast_card = ForecastCardAgent().build(deep)
+        deep["forecast_card"] = forecast_card
+
         return {
             **deep,
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": deep,
+            "trading_plan": {**deep, "forecast_card": forecast_card},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -135,6 +140,7 @@ class TradingPlanAgent:
             "news_quality": news_quality,
             "evidence_strength": evidence_strength,
             "no_model_analysis": no_model_analysis,
+            "forecast_card": forecast_card,
         }
 
     def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
