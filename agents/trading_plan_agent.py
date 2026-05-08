@@ -6,6 +6,8 @@ from agents.event_parser_agent import EventParserAgent
 from agents.driver_map_agent import DriverMapAgent
 from agents.data_requirement_agent import DataRequirementAgent
 from agents.evidence_extractor_agent import EvidenceExtractorAgent
+from agents.probability_estimator_agent import ProbabilityEstimatorAgent
+from agents.value_decision_agent import ValueDecisionAgent
 
 
 class TradingPlanAgent:
@@ -70,6 +72,20 @@ class TradingPlanAgent:
             market_data=market_data or {},
             context={"result": result},
         )
+        probability_estimate = ProbabilityEstimatorAgent().estimate(
+            event_profile=event_profile,
+            driver_map=driver_map,
+            data_plan=data_plan,
+            structured_evidence=structured_evidence,
+            market_options=market_options,
+            model_options=None,
+        )
+        value_decision = ValueDecisionAgent().decide(
+            probability_estimate=probability_estimate,
+            market_options=market_options,
+            event_profile=event_profile,
+            structured_evidence=structured_evidence,
+        )
         event_drivers = self._build_event_drivers(text, market_type, market_options, category_type, subcategory, entities)
         forecast_evidence = self._build_forecast_evidence(market_options, rel_sources, side_meanings)
         if relevant_sources_count == 0:
@@ -77,6 +93,20 @@ class TradingPlanAgent:
 
         evidence_strength = self._estimate_evidence_strength(relevant_sources_count, forecast_evidence, news_quality)
         model_options = self._driver_based_model(market_options, forecast_evidence, evidence_strength)
+        probability_estimate = ProbabilityEstimatorAgent().estimate(
+            event_profile=event_profile,
+            driver_map=driver_map,
+            data_plan=data_plan,
+            structured_evidence=structured_evidence,
+            market_options=market_options,
+            model_options=model_options,
+        )
+        value_decision = ValueDecisionAgent().decide(
+            probability_estimate=probability_estimate,
+            market_options=market_options,
+            event_profile=event_profile,
+            structured_evidence=structured_evidence,
+        )
         option_diffs = {k: round(model_options[k] - market_options[k], 1) for k in model_options if k in market_options}
 
         best_opt = "NONE"
@@ -133,6 +163,8 @@ class TradingPlanAgent:
             "data_plan": data_plan,
             "forecast_evidence": forecast_evidence,
             "structured_evidence": structured_evidence,
+            "probability_estimate": probability_estimate,
+            "value_decision": value_decision,
             "source_summary": {
                 "news_queries_used": queries,
                 "raw_sources_count": raw_sources_count,
@@ -147,6 +179,8 @@ class TradingPlanAgent:
             "option_differences": option_diffs,
             "no_model_analysis": no_model_analysis,
             "no_fake_model": True,
+            "probability_estimate": probability_estimate,
+            "value_decision": value_decision,
         }
 
         forecast_card = ForecastCardAgent().build(deep)
@@ -157,6 +191,18 @@ class TradingPlanAgent:
                 forecast_card["evidence"]["for_no"] = structured_evidence.get("for_no") or forecast_card["evidence"].get("for_no") or []
                 forecast_card["evidence"]["missing_data"] = structured_evidence.get("missing_driver_data") or forecast_card["evidence"].get("missing_data") or []
                 forecast_card["evidence"]["contradictions"] = structured_evidence.get("contradictions") or forecast_card["evidence"].get("contradictions") or []
+            forecast_card.setdefault("model", {})
+            forecast_card.setdefault("value", {})
+            forecast_card["model"]["model_level"] = probability_estimate.get("model_level")
+            forecast_card["model"]["probability_range"] = probability_estimate.get("probability_range")
+            forecast_card["model"]["point_estimate"] = probability_estimate.get("point_estimate")
+            forecast_card["model"]["confidence"] = probability_estimate.get("confidence")
+            forecast_card["model"]["why"] = probability_estimate.get("why")
+            forecast_card["value"]["market_price"] = value_decision.get("market_price")
+            forecast_card["value"]["edge"] = value_decision.get("edge")
+            forecast_card["value"]["decision"] = value_decision.get("decision")
+            forecast_card["value"]["best_side"] = value_decision.get("best_side")
+            forecast_card["value"]["entry_price"] = value_decision.get("entry_price")
         deep["forecast_card"] = forecast_card
 
         return {
@@ -164,7 +210,7 @@ class TradingPlanAgent:
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "structured_evidence": structured_evidence},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -183,6 +229,8 @@ class TradingPlanAgent:
             "forecast_card": forecast_card,
             "event_profile": event_profile,
             "structured_evidence": structured_evidence,
+            "probability_estimate": probability_estimate,
+            "value_decision": value_decision,
         }
 
     def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
