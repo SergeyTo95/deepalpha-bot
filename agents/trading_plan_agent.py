@@ -11,6 +11,40 @@ from agents.value_decision_agent import ValueDecisionAgent
 
 
 class TradingPlanAgent:
+
+    def _driver_item_to_label(self, item: Any) -> str:
+        if not isinstance(item, dict):
+            return ""
+        label = str(item.get("label") or "").strip()
+        if label:
+            return label
+        description = str(item.get("description") or "").strip()
+        if description:
+            return description
+        driver_id = str(item.get("id") or "").strip()
+        if driver_id:
+            return driver_id.replace("_", " ")
+        return ""
+
+    def _driver_map_to_forecast_drivers(self, driver_map: Dict[str, Any]) -> Dict[str, List[str]]:
+        out = {"yes": [], "no": [], "neutral": []}
+        src = {
+            "yes": driver_map.get("yes_drivers"),
+            "no": driver_map.get("no_drivers"),
+            "neutral": driver_map.get("neutral_drivers"),
+        }
+        for side, arr in src.items():
+            if not isinstance(arr, list):
+                continue
+            labels: List[str] = []
+            for item in arr:
+                label = self._driver_item_to_label(item)
+                if label and label not in labels:
+                    labels.append(label)
+                if len(labels) >= 6:
+                    break
+            out[side] = labels
+        return out
     def _is_tournament_advancement_question(self, text: str) -> bool:
         t = str(text or "").lower()
         patterns = [
@@ -203,6 +237,8 @@ class TradingPlanAgent:
             forecast_card["value"]["decision"] = value_decision.get("decision")
             forecast_card["value"]["best_side"] = value_decision.get("best_side")
             forecast_card["value"]["entry_price"] = value_decision.get("entry_price")
+            if isinstance(driver_map, dict):
+                forecast_card["drivers"] = self._driver_map_to_forecast_drivers(driver_map)
         deep["forecast_card"] = forecast_card
 
         return {
