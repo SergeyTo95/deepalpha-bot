@@ -2658,21 +2658,14 @@ def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
 
     lang = result.get("lang") or result.get("language") or get_user_lang(uid)
     if lang != "ru":
-        # Keep original market question/search query readable.
-    text = text.replace("Will a Англии be the", "Will a team from England be the")
-    text = text.replace("Will an Англии be the", "Will an English team be the")
-    text = text.replace("Will Англии be the", "Will a team from England be the")
-
-    return text
+        return text
 
     replacements = {
         "team from England": "Англии",
         "English team": "Англии",
         "Premier League team": "Англии",
-
         "победитель 2026 Champions League будет из Англии": "команда из Англии выиграет 2026 Champions League",
         "победитель Champions League 2026 будет из Англии": "команда из Англии выиграет Champions League 2026",
-
         "Driver groupteamsremaining impacts resolution.": "Список команд целевой группы, оставшихся в турнире",
         "Driver combinedoutrightodds impacts resolution.": "Индивидуальные odds клубов на победу в турнире",
         "Driver bracketpath impacts resolution.": "Сетка турнира и путь до финала",
@@ -2684,33 +2677,36 @@ def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
         text = text.replace(src, dst)
 
     text = _re.sub(
-        r"— выше вероятность сценария: (победитель [^\n]+ будет не из Англии)",
-        r"— DeepAlpha считает, что \1, но прогноз требует подтверждения по ключевым данным.",
+        r"— выше вероятность сценария: (победитель [^\\n]+ будет не из Англии)",
+        lambda m: "— DeepAlpha считает, что " + m.group(1) + ", но прогноз требует подтверждения по ключевым данным.",
         text,
     )
 
-    # Если решение НЕ ВХОДИТЬ или confidence низкая — не показываем слабый edge как сигнал.
     if "👉 Решение: НЕ ВХОДИТЬ" in text or "🧠 Confidence: низкая" in text:
         text = _re.sub(
-            r"💰 Edge:\n(?:— .+\n)+",
-            "💰 Edge: не подтверждён\n",
+            r"💰 Edge:\\n(?:— .+\\n)+",
+            "💰 Edge: не подтверждён\\n",
             text,
         )
 
-    # Если source block говорит, что свежих релевантных источников нет,
-    # не показываем заголовки как подтверждённые факты.
     if "Релевантные свежие источники не найдены." in text:
         text = _re.sub(
-            r"🧾 Что найдено в данных:\n.*?\n\n📍 Цена для входа:",
-            "🧾 Что найдено в данных:\n— Проверяемых фактов по ключевым драйверам пока недостаточно.\n\n📍 Цена для входа:",
+            r"🧾 Что найдено в данных:\\n.*?\\n\\n📍 Цена для входа:",
+            "🧾 Что найдено в данных:\\n— Проверяемых фактов по ключевым драйверам пока недостаточно.\\n\\n📍 Цена для входа:",
             text,
             flags=_re.S,
         )
 
-    # Убираем оставшиеся внутренние driver-debug строки.
-    text = _re.sub(r"— Driver [^\n]* impacts resolution\.\n?", "", text)
+    text = _re.sub(r"— Driver [^\\n]* impacts resolution\\.\\n?", "", text)
+
+    # Возвращаем оригинальный вопрос рынка и поисковый запрос,
+    # если глобальная нормализация зацепила title/query.
+    text = text.replace("Will a Англии be the", "Will a team from England be the")
+    text = text.replace("Will an Англии be the", "Will an English team be the")
+    text = text.replace("Will Англии be the", "Will a team from England be the")
 
     return text
+
 
 def _format_analysis(result: dict, uid: int) -> str:
     # Turbo Signal: pass-through, do not reformat
