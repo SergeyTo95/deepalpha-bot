@@ -3,6 +3,18 @@ from typing import Any, Dict, List
 
 
 class TradingPlanAgent:
+    def _is_tournament_advancement_question(self, text: str) -> bool:
+        t = str(text or "").lower()
+        patterns = [
+            r"\bwill\s+.+?\s+reach\s+the\s+.+?\s+final\b",
+            r"\bwill\s+.+?\s+qualify\s+for\s+the\s+final\b",
+            r"\bwill\s+.+?\s+advance\s+to\s+the\s+final\b",
+            r"\bwill\s+.+?\s+make\s+the\s+final\b",
+            r"\bwill\s+.+?\s+reach\s+the\s+(?:semi-?final|quarter-?final|final)\b",
+            r"\bwill\s+.+?\s+qualify\s+for\s+.+?(?:semi-?final|quarter-?final|final)\b",
+        ]
+        return any(re.search(p, t, re.IGNORECASE) for p in patterns)
+
     def run(self, result: dict, market_data: dict = None, news_data: dict = None, lang: str = "ru") -> dict:
         result = result or {}
         market_data = market_data or {}
@@ -221,7 +233,8 @@ class TradingPlanAgent:
         t = text.lower()
         if any(x in t for x in ["ufc", "mma"]): return "sports", "mma"
         if "tennis" in t or "wawrinka" in t or "busta" in t: return "sports", "tennis"
-        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc ", "real madrid", "chelsea", "paris saint germain", "uefa", "europa league", "champions league", "reach the", "qualify for", "advance to", "make the final", "semi-final", "quarter-final"]): return "sports", "football"
+        if self._is_tournament_advancement_question(t): return "sports", "football"
+        if any(x in t for x in ["arsenal", "bayern", "atletico", "draw", "football", "fc ", "real madrid", "chelsea", "paris saint germain", "uefa", "europa league", "champions league"]): return "sports", "football"
         if any(x in t for x in ["btc", "bitcoin", "$100k", "ethereum"]): return "crypto", "crypto"
         if any(x in t for x in ["capture", "kupyansk", "ceasefire"]): return "war_conflict", "territorial_control"
         if any(x in t for x in ["candidate", "election", "poll"]): return "election", "election"
@@ -232,7 +245,7 @@ class TradingPlanAgent:
     def _detect_market_type(self, text, opts, category, sub):
         t = text.lower(); keys = [k.lower() for k in opts]
         if len(keys) == 2 and set(keys) == {"yes", "no"} and sub == "football":
-            if any(x in t for x in ["reach the", "qualify for", "advance to", "make the final", "semi-final", "semifinal", "quarter-final", "quarterfinal", "final"]):
+            if self._is_tournament_advancement_question(t):
                 return "tournament_advancement"
         if len(keys) == 3 and "draw" in keys: return "match_result_1x2"
         if any(x in t for x in ["o/u", "over/under", "set 1 games"]): return "totals"
