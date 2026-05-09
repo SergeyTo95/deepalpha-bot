@@ -2133,10 +2133,6 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
     }
     category_display = cat_map.get(event_type, cat_map["generic_binary_event"])[0 if is_ru else 1]
 
-    decision_raw = str((fc.get("decision") or "NO TRADE")).upper().strip()
-    dec_ru = {"CONSIDER":"РАССМОТРЕТЬ","WATCH":"НАБЛЮДАТЬ","WAIT":"ЖДАТЬ","NO TRADE":"НЕ ВХОДИТЬ"}
-    decision = dec_ru.get(decision_raw, "НЕ ВХОДИТЬ") if is_ru else (decision_raw if decision_raw in dec_ru else "NO TRADE")
-
     conf_raw = str((fc.get("model") or {}).get("confidence") or "none").lower().strip()
     conf_map = {"none":("нет модели","none"),"low":("низкая","low"),"medium":("средняя","medium"),"high":("высокая","high")}
     confidence = conf_map.get(conf_raw, conf_map["none"])[0 if is_ru else 1]
@@ -2421,16 +2417,41 @@ def _format_forecast_card_signal(result: dict, uid: int) -> str:
     lines.append("📌 Простыми словами:" if is_ru else "📌 Plain English:")
     lines.append(f"— {_escape(plain)}")
     lines.append("")
-    lines.append("💰 Value / вход:" if is_ru else "💰 Value / entry:")
-    lines.append(f"👉 {'Решение' if is_ru else 'Decision'}: {decision}")
-
-    lines.append(f"📊 {'Рынок' if is_ru else 'Market'}: YES {yes_price:.1f}% / NO {no_price:.1f}%")
-    if edge_line:
-        lines.append("💰 Edge:")
-        lines.append(edge_line)
+    lines.append("💰 Value / цена рынка:" if is_ru else "💰 Value / market price:")
+    lines.append(f"— {'Рынок даёт' if is_ru else 'Market prices'} YES {yes_price:.1f}% / NO {no_price:.1f}%.")
+    if likely_side == "YES":
+        likely_side_h = yes_label
+    elif likely_side == "NO":
+        likely_side_h = no_label
     else:
-        lines.append("💰 Edge: не подтверждён" if is_ru else "💰 Edge: not confirmed")
-    lines.append(f"🧠 Confidence: {confidence}")
+        likely_side_h = "исход не определён" if is_ru else "no clear side"
+    lines.append((f"— DeepAlpha оценивает {_escape(likely_side_h)} как более вероятный сценарий." if is_ru else f"— DeepAlpha sees {_escape(likely_side_h)} as the more likely scenario."))
+
+    edge_yes = _num_or_none(edge.get("YES"))
+    edge_no = _num_or_none(edge.get("NO"))
+    max_edge = max([x for x in (edge_yes, edge_no) if x is not None], default=None)
+    has_edge = max_edge is not None
+    strong_edge = bool(has_edge and max_edge >= edge_threshold and conf_raw in {"medium", "high"})
+    weak_edge = bool(has_edge and not strong_edge)
+
+    if strong_edge and edge_line:
+        lines.append("💰 Разница с рынком:" if is_ru else "💰 Difference vs market:")
+        lines.append(edge_line)
+        lines.append("— Есть потенциальное преимущество по цене." if is_ru else "— Potential pricing advantage exists.")
+        lines.append("— Его нужно оценивать вместе с рисками и качеством данных." if is_ru else "— It should be considered together with risks and data quality.")
+    elif weak_edge:
+        lines.append("— Разница с рынком есть, но она недостаточна для сильного value-сигнала." if is_ru else "— A market difference exists, but it is not enough for a strong value signal.")
+        if conf_raw == "low":
+            lines.append("— Есть небольшой перекос относительно рынка, но confidence низкая." if is_ru else "— There is a small difference versus market pricing, but confidence is low.")
+            lines.append("— Для сильного value нужны подтверждения по ключевым данным." if is_ru else "— Strong value would require confirmation from key data.")
+        else:
+            lines.append("— Преимущество по цене слабое и требует подтверждения." if is_ru else "— The pricing advantage is weak and needs confirmation.")
+    else:
+        lines.append("— Текущая цена близка к оценке DeepAlpha." if is_ru else "— Current market price is close to DeepAlpha’s estimate.")
+        lines.append("— Явного преимущества по цене сейчас нет." if is_ru else "— No clear pricing advantage is confirmed right now.")
+        lines.append("— Прогноз исхода остаётся полезным, но цена не даёт отдельного value-сигнала." if is_ru else "— The outcome forecast is still useful, but price does not create a separate value signal.")
+
+    lines.append("— Это не отменяет прогноз исхода: прогноз и value — разные вещи." if is_ru else "— This does not cancel the outcome forecast: forecast and value are different things.")
     lines.append("")
     lines.append("🧩 Что реально двигает рынок:" if is_ru else "🧩 What drives this market:")
     lines.extend([f"— {_escape(x)}" for x in drivers] or (["— Ключевые драйверы пока не заполнены."] if is_ru else ["— Key drivers are not populated yet."]))
@@ -2694,13 +2715,6 @@ def _postprocess_forecast_card_output(text: str, result: dict, uid: int) -> str:
         text,
     )
 
-    # Если решение НЕ ВХОДИТЬ или confidence низкая — не показываем слабый edge как сигнал.
-    if "👉 Решение: НЕ ВХОДИТЬ" in text or "🧠 Confidence: низкая" in text:
-        text = _re.sub(
-            r"💰 Edge:\n(?:— .+\n)+",
-            "💰 Edge: не подтверждён\n",
-            text,
-        )
 
     # Если source block говорит, что свежих релевантных источников нет,
     # не показываем заголовки как подтверждённые факты.
