@@ -32,6 +32,7 @@ class ResearchPlanAgent:
             "category_type": category_type,
             "subcategory": subcategory,
             "event_type": event_type,
+            "market_subtype": str(event_profile.get("market_subtype") or ""),
         })
 
         outcomes = safe_outcomes(outcome_map)
@@ -39,7 +40,7 @@ class ResearchPlanAgent:
             outcomes = [{"id": str(k).lower(), "label": str(k)} for k in market_options.keys()]
 
         entities = self._extract_market_entities(plan["market"]["question"], outcome_map, event_profile, plan, market_options)
-        context = self._template_context(event_type, market_type, category_type, subcategory, plan["market"]["question"])
+        context = self._template_context(event_type, market_type, category_type, subcategory, plan["market"]["question"], event_profile)
 
         for outcome in outcomes:
             label = str(outcome.get("label") or "Unknown")
@@ -74,7 +75,7 @@ class ResearchPlanAgent:
             plan["warnings"].append("No parsed outcomes found; generated market-level research only.")
         return plan
 
-    def _template_context(self, event_type: str, market_type: str, category_type: str, subcategory: str, question: str) -> Dict[str, Any]:
+    def _template_context(self, event_type: str, market_type: str, category_type: str, subcategory: str, question: str, event_profile: Dict[str, Any] = None) -> Dict[str, Any]:
         key = event_type or ""
         if market_type == "date_range":
             key = "date_range"
@@ -137,6 +138,19 @@ class ResearchPlanAgent:
                 "shared_patterns": ["{base} official announcement", "{base} roadmap", "{base} launch event", "{base} credible leaks", "{base} historical release timing"],
             },
         }
+
+        subtype = str(event_profile.get("market_subtype") if isinstance(event_profile, dict) else "")
+        if subtype == "set_total_games":
+            base.update({
+                "required_facts": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "serve_strength", "return_strength", "surface_speed", "recent_first_set_lengths", "over_under_tendency", "early_match_volatility"],
+                "critical_drivers": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "surface_speed"],
+                "shared_patterns": ["{question} first set total games trend", "{question} hold break stats", "{question} tiebreak frequency"],
+                "domain_patterns_with_driver": [("site:tennisabstract.com {question}", "first_set_games_average"), ("site:ultimatetennisstatistics.com {question}", "hold_rate"), ("site:atptour.com {question}", "serve_strength"), ("site:sofascore.com {question}", "recent_first_set_lengths"), ("site:flashscore.com {question}", "recent_first_set_lengths")],
+            })
+        elif subtype == "price_target":
+            base.update({"critical_drivers": ["spot_price", "volatility", "liquidity", "timeframe", "macro_catalysts", "regulatory_catalysts" ]})
+        elif subtype == "election_winner":
+            base.update({"critical_drivers": ["polling_averages", "forecast_models", "fundraising", "turnout", "official_results"]})
         if key in templates:
             base.update(templates[key])
         elif market_type == "head_to_head":

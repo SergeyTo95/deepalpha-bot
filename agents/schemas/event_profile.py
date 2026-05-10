@@ -1,7 +1,7 @@
 from typing import List, TypedDict
 
 
-class EventProfile(TypedDict):
+class EventProfile(TypedDict, total=False):
     version: str
     event_type: str
     category_type: str
@@ -17,6 +17,15 @@ class EventProfile(TypedDict):
     resolution_notes: List[str]
     confidence: str
     parser: str
+
+    market_subtype: str
+    resolution_metric: str
+    threshold: str
+    period: str
+    set_number: int
+    side_semantics: List[str]
+    driver_family: List[str]
+    subtype_confidence: str
 
 
 def empty_event_profile() -> EventProfile:
@@ -36,4 +45,12 @@ def empty_event_profile() -> EventProfile:
         "resolution_notes": [],
         "confidence": "low",
         "parser": "event_parser_agent_v1",
+        "market_subtype": "generic_binary",
+        "resolution_metric": "",
+        "threshold": "",
+        "period": "",
+        "set_number": 0,
+        "side_semantics": [],
+        "driver_family": [],
+        "subtype_confidence": "low",
     }
