@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set, Tuple
 
@@ -66,6 +67,12 @@ class TargetedResearchAgent:
         tr["query_results"] = query_results
         tr["source_quality"]["matched_sources_count"] = len(matched_source_keys)
         tr["source_quality"]["claims_count"] = claims_count
+        tr["source_quality"]["high_relevance_sources_count"] = sum(
+            1 for r in query_results for m in safe_list(r.get("matched_sources")) if safe_str((m or {}).get("relevance")) == "high"
+        )
+        tr["source_quality"]["medium_relevance_sources_count"] = sum(
+            1 for r in query_results for m in safe_list(r.get("matched_sources")) if safe_str((m or {}).get("relevance")) == "medium"
+        )
 
         tr["outcome_coverage"] = self._outcome_coverage(outcome_research, query_results)
         tr["shared_coverage"] = self._shared_coverage(safe_list(research_plan.get("shared_research")), query_results)
@@ -78,7 +85,14 @@ class TargetedResearchAgent:
         min_total = int(policy.get("minimum_total_facts") or 0)
         min_per_outcome = int(policy.get("minimum_per_outcome") or 0)
         enough_per_outcome = all(int(o.get("facts_found") or 0) >= min_per_outcome for o in tr["outcome_coverage"]) if tr["outcome_coverage"] else False
-        tr["source_quality"]["can_build_forecast"] = bool(tr["source_quality"]["coverage_score"] >= 0.5 and claims_count >= min_total and enough_per_outcome)
+        can_build = bool(tr["source_quality"]["coverage_score"] >= 0.5 and claims_count >= min_total and enough_per_outcome)
+        if self._is_h2h_market(tr["market"]):
+            has_shared_context = int(tr["shared_coverage"].get("facts_found") or 0) > 0 or any(
+                d in {"h2h", "head_to_head", "surface", "tournament_context"} for d in safe_list(tr["shared_coverage"].get("covered_drivers"))
+            )
+            no_zero_drivers = all(len(safe_list(o.get("covered_drivers"))) > 0 for o in safe_list(tr.get("outcome_coverage")))
+            can_build = bool(can_build and has_shared_context and no_zero_drivers and len(matched_source_keys) >= 2)
+        tr["source_quality"]["can_build_forecast"] = can_build
 
         tr["notes"] = [
             "No external search was performed in this layer; only existing sources were matched.",
@@ -155,7 +169,7 @@ class TargetedResearchAgent:
         claims = []
         matched_keys: Set[str] = set()
         for src in sources:
-            rel = self._relevance(src.get("text", ""), tokens, outcome_label, driver)
+            rel = self._relevance(src.get("text", ""), tokens, outcome_label, driver, query, event_profile, outcome_specific)
             if rel is None:
                 continue
             freshness = self._freshness(src.get("published", ""))
@@ -187,10 +201,12 @@ class TargetedResearchAgent:
     def _tokens(self, text: str) -> List[str]:
         return [t for t in re.findall(r"[a-zA-Z0-9$]+", text.lower()) if len(t) >= 3]
 
-    def _relevance(self, text: str, tokens: List[str], outcome_label: str, driver: str) -> str:
+    def _relevance(self, text: str, tokens: List[str], outcome_label: str, driver: str, query: str, event_profile: Dict[str, Any], outcome_specific: bool) -> str:
         hay = (text or "").lower()
         if not hay:
             return None
+        if self._is_h2h_market(event_profile):
+            return self._h2h_relevance(hay, outcome_label, driver, query, outcome_specific)
         token_hits = sum(1 for t in set(tokens) if t and t in hay)
         outcome_hit = bool(outcome_label and any(t in hay for t in self._tokens(outcome_label)))
         driver_hit = bool(driver and any(t in hay for t in self._tokens(driver)))
@@ -201,6 +217,73 @@ class TargetedResearchAgent:
         if token_hits >= 2:
             return "low"
         return None
+
+    def _h2h_relevance(self, hay: str, outcome_label: str, driver: str, query: str, outcome_specific: bool) -> str:
+        names = self._extract_names(query)
+        if len(names) < 2:
+            names = self._extract_names(outcome_label)
+        outcome_aliases = self._aliases(outcome_label) if outcome_label else []
+        p1 = self._aliases(names[0]) if len(names) > 0 else outcome_aliases
+        p2 = self._aliases(names[1]) if len(names) > 1 else []
+        p1_hit, p2_hit = self._has_alias(hay, p1), (self._has_alias(hay, p2) if p2 else False)
+        if p1_hit and p2_hit:
+            return "high"
+        shared_q = (not outcome_specific) or driver in {"h2h", "head_to_head"}
+        if shared_q:
+            return None
+        if (p1_hit or p2_hit) and driver in self.H2H_DRIVERS:
+            return "medium"
+        return None
+
+    def _is_h2h_market(self, market: Dict[str, Any]) -> bool:
+        mt = safe_str(market.get("market_type")).lower()
+        et = safe_str(market.get("event_type")).lower()
+        return mt == "head_to_head" or et == "tennis_head_to_head"
+
+    def _extract_names(self, text: str) -> List[str]:
+        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
+
+    def _aliases(self, full_name: str) -> List[str]:
+        n = self._norm(full_name)
+        parts = n.split()
+        out = [n] if n else []
+        if parts:
+            s = parts[-1]
+            out.extend([s, s.replace("h", ""), s.replace("a", "e")])
+        return list(dict.fromkeys([x for x in out if x]))
+
+    def _has_alias(self, hay: str, aliases: List[str]) -> bool:
+        n = self._norm(hay)
+        toks = set(n.split())
+        for a in aliases:
+            if " " in a and a in n:
+                return True
+            if a in toks:
+                return True
+            if len(a) > 5 and any(self._ed1(a, t) for t in toks):
+                return True
+        return False
+
+    def _norm(self, value: str) -> str:
+        v = unicodedata.normalize("NFKD", safe_str(value)).encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", v.lower())).strip()
+
+    def _ed1(self, a: str, b: str) -> bool:
+        if abs(len(a) - len(b)) > 1:
+            return False
+        if a == b:
+            return True
+        i = j = d = 0
+        while i < len(a) and j < len(b):
+            if a[i] == b[j]:
+                i += 1; j += 1; continue
+            d += 1
+            if d > 1:
+                return False
+            if len(a) > len(b): i += 1
+            elif len(b) > len(a): j += 1
+            else: i += 1; j += 1
+        return True
 
     def _make_claim(self, source: Dict[str, str], relevance: str, supports_outcome: str, driver: str) -> Dict[str, str]:
         snippet = safe_str(source.get("snippet"))
@@ -289,3 +372,4 @@ class TargetedResearchAgent:
                 medium_low.append(item)
         out = high + medium_low[: max(0, 20 - len(high))]
         return out[:20]
+    H2H_DRIVERS = {"h2h", "head_to_head", "surface", "recent_form", "ranking", "injury", "withdrawal"}
