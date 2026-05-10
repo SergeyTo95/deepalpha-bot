@@ -19,7 +19,12 @@ class DriverMapAgent:
         self.dynamic_enabled = os.getenv("GEMINI_DYNAMIC_DRIVERS_ENABLED", "false").lower() == "true"
         self.dynamic_agent = DynamicDriverAgent()
 
-    def build(self, event_profile: Dict[str, Any]) -> DriverMap:
+    def build(
+        self,
+        event_profile: Dict[str, Any],
+        question: str = "",
+        market_options: Dict[str, float] = None,
+    ) -> DriverMap:
         event_type = str(event_profile.get("event_type") or "generic_binary_event")
         category_type = str(event_profile.get("category_type") or "other")
         market_type = str(event_profile.get("market_type") or "binary_event")
@@ -33,10 +38,14 @@ class DriverMapAgent:
         out["high_impact_keywords"] = ["official", "confirmed", "injury", "odds", "deadline", "approval", "lineup"]
 
         if self.dynamic_enabled:
+            resolved_question = str(question or event_profile.get("question") or "")
+            resolved_market_options = (
+                market_options if market_options is not None else event_profile.get("market_options") or []
+            )
             dynamic = self.dynamic_agent.build(
                 event_profile=event_profile,
-                question=str(event_profile.get("question") or ""),
-                market_options=event_profile.get("market_options") or [],
+                question=resolved_question,
+                market_options=resolved_market_options,
             )
             self._merge_dynamic_drivers(out, dynamic)
 
