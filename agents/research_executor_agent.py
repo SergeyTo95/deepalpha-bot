@@ -357,11 +357,27 @@ class ResearchExecutorAgent:
         p2_hit = self._has_name(text, p2_aliases)
 
         url = safe_str(source.get("url") or source.get("link"))
+        display_url = safe_str(source.get("display_url") or source.get("source_url"))
         trusted_domain = self._is_trusted_h2h_domain(url)
         has_h2h_context = any(x in text for x in ["h2h", "head to head", "head_to_head", "live score", "match"])
-        has_both_slug_tokens = self._url_has_player_pair(url, p1_aliases, p2_aliases)
+        has_both_slug_tokens = self._source_has_player_pair(source, p1_aliases, p2_aliases)
+        logger.debug(
+            "H2H gate domain=%s trusted=%s p1_hit=%s p2_hit=%s slug_pair=%s h2h_ctx=%s p1_aliases=%s p2_aliases=%s",
+            self._extract_domain(url),
+            trusted_domain,
+            p1_hit,
+            p2_hit,
+            has_both_slug_tokens,
+            has_h2h_context,
+            p1_aliases[:4],
+            p2_aliases[:4],
+        )
         if trusted_domain and p1_hit and p2_hit and (has_h2h_context or has_both_slug_tokens):
-            logger.debug("Accepted trusted H2H source domain=%s title=%s", self._extract_domain(url), safe_str(source.get("title"))[:120])
+            logger.debug(
+                "Accepted trusted H2H source domain=%s reason=both_players_and_context title=%s",
+                self._extract_domain(url),
+                safe_str(source.get("title"))[:120],
+            )
             return "high"
 
         driver = safe_str(query.get("driver")).lower()
@@ -370,13 +386,21 @@ class ResearchExecutorAgent:
         if p1_hit and p2_hit:
             return "high"
         if is_h2h_query:
-            logger.debug("Rejected H2H source (missing both participants) title=%s", safe_str(source.get("title"))[:120])
+            logger.debug(
+                "Rejected H2H source reason=missing_both_participants trusted=%s p1_hit=%s p2_hit=%s url=%s display_url=%s title=%s",
+                trusted_domain,
+                p1_hit,
+                p2_hit,
+                url[:120],
+                display_url[:120],
+                safe_str(source.get("title"))[:120],
+            )
             return "low"
         if (p1_hit or p2_hit) and (driver in self.H2H_DRIVERS or strong):
             return "medium"
         return "low"
 
-    def _normalize_player_aliases(self, text: str) -> str:
+    def _canonical_norm(self, text: str) -> str:
         norm = self._norm(text)
         return re.sub(r"\bkesharwani\b", "kesarwani", norm)
 
@@ -394,7 +418,7 @@ class ResearchExecutorAgent:
             url_tokens,
             display_tokens,
         ])
-        normalized = self._normalize_player_aliases(raw_text)
+        normalized = self._canonical_norm(raw_text)
         logger.debug("Relevance text preview=%s", normalized[:180])
         return normalized
 
@@ -410,15 +434,30 @@ class ResearchExecutorAgent:
         domain = self._extract_domain(url)
         return any(domain == d or domain.endswith(f".{d}") for d in self.TRUSTED_H2H_DOMAINS)
 
-    def _url_has_player_pair(self, url: str, p1_aliases: List[str], p2_aliases: List[str]) -> bool:
-        url_text = self._normalize_player_aliases(self._tokenize_url(url))
-        return self._has_name(url_text, p1_aliases) and self._has_name(url_text, p2_aliases)
+    def _source_has_player_pair(self, source: Dict[str, str], p1_aliases: List[str], p2_aliases: List[str]) -> bool:
+        url = safe_str(source.get("url") or source.get("link"))
+        display_url = safe_str(source.get("display_url") or source.get("source_url"))
+        slug_text = self._canonical_norm(" ".join([self._tokenize_url(url), self._tokenize_url(display_url)]))
+        return self._has_name(slug_text, p1_aliases) and self._has_name(slug_text, p2_aliases)
 
     def _extract_names(self, text: str) -> List[str]:
-        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
+        raw = safe_str(text)
+        if not raw:
+            return []
+        split = re.split(r"\b(?:vs\.?|v\.?|versus)\b", raw, maxsplit=1, flags=re.IGNORECASE)
+        if len(split) == 2:
+            names = []
+            for side in split:
+                cleaned = re.sub(r"\b(?:h2h|head\s*to\s*head|match|live\s*score|results?)\b", " ", side, flags=re.IGNORECASE)
+                tokens = re.findall(r"[A-Za-z]+", cleaned)
+                if len(tokens) >= 2:
+                    names.append(" ".join(tokens[:2]))
+            if len(names) == 2:
+                return names
+        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", raw)]
 
     def _aliases(self, full_name: str) -> List[str]:
-        norm = self._norm(full_name)
+        norm = self._canonical_norm(full_name)
         parts = [p for p in norm.split() if p]
         out = [norm] if norm else []
         if parts:
@@ -430,9 +469,10 @@ class ResearchExecutorAgent:
         return list(dict.fromkeys([x for x in out if x]))
 
     def _has_name(self, text: str, aliases: List[str]) -> bool:
-        norm_text = self._norm(text)
+        norm_text = self._canonical_norm(text)
         tokens = set(norm_text.split())
-        for alias in aliases:
+        canonical_aliases = [self._canonical_norm(alias) for alias in aliases if alias]
+        for alias in canonical_aliases:
             if " " in alias and alias in norm_text:
                 return True
             if alias in tokens:
