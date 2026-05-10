@@ -38,7 +38,12 @@ class DynamicDriverAgent:
             "Do NOT recommend trades.\n"
             "Do NOT invent facts.\n"
             "Only produce a research/driver plan.\n"
-            "Output JSON only. No markdown, no prose.\n\n"
+            "Output JSON only. No markdown, no prose.\n"
+            "Language rule: Use English for all internal planning fields.\n"
+            "English-only fields: market_subtype, driver ids, labels, descriptions, data_needed, suggested_queries, preferred_sources, evidence_criteria, must_find, high_impact_keywords, risk_flags.\n"
+            "Named entities must keep their official/original names (people, organizations, locations, competitions, assets), e.g. Celta Vigo, UEFA Europa League, Bitcoin, Ukraine, Russia, Brent crude.\n"
+            "Driver IDs must be English snake_case using only a-z, 0-9, and underscores.\n"
+            "Suggested queries should be English first. If local-language variants are useful, include them only after the English query.\n\n"
             "Return this exact schema:\n"
             "{\n"
             '  "market_subtype": str,\n'
