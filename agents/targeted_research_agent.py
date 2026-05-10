@@ -7,6 +7,7 @@ from agents.schemas.targeted_research import empty_targeted_research, safe_list,
 
 
 class TargetedResearchAgent:
+    AMBIGUOUS_TERMS = {"bengaluru", "texas", "june", "england", "open", "finals", "race", "market", "launch", "approval"}
     SOURCE_PATHS = [
         ("existing_sources",),
         ("news_data", "relevant_sources"),
@@ -170,7 +171,7 @@ class TargetedResearchAgent:
         matched_keys: Set[str] = set()
         for src in sources:
             rel = self._relevance(src.get("text", ""), tokens, outcome_label, driver, query, event_profile, outcome_specific)
-            if rel is None:
+            if rel is None or rel == "low":
                 continue
             freshness = self._freshness(src.get("published", ""))
             matched_sources.append({
@@ -207,9 +208,20 @@ class TargetedResearchAgent:
             return None
         if self._is_h2h_market(event_profile):
             return self._h2h_relevance(hay, outcome_label, driver, query, outcome_specific)
-        token_hits = sum(1 for t in set(tokens) if t and t in hay)
+        filtered_tokens = [t for t in set(tokens) if t and t not in self.AMBIGUOUS_TERMS]
+        token_hits = sum(1 for t in filtered_tokens if t in hay)
         outcome_hit = bool(outcome_label and any(t in hay for t in self._tokens(outcome_label)))
         driver_hit = bool(driver and any(t in hay for t in self._tokens(driver)))
+        market_cat = safe_str(event_profile.get("category_type")).lower()
+        if outcome_specific and outcome_label and not outcome_hit:
+            return None
+        if (not outcome_specific) and token_hits < 2:
+            return None
+        if "mention" in market_cat and "powell" in query.lower() and "recession" in query.lower():
+            if "powell" not in hay and "federal reserve" not in hay:
+                return None
+            if "recession" not in hay:
+                return None
         if token_hits >= 4 and (outcome_hit or driver_hit):
             return "high"
         if token_hits >= 2 and (outcome_hit or driver_hit):

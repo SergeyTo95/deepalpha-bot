@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List, Tuple
 
 from agents.schemas.research_plan import empty_research_plan, safe_outcomes
@@ -37,6 +38,7 @@ class ResearchPlanAgent:
         if not outcomes and isinstance(market_options, dict):
             outcomes = [{"id": str(k).lower(), "label": str(k)} for k in market_options.keys()]
 
+        entities = self._extract_market_entities(plan["market"]["question"], outcome_map, event_profile, plan, market_options)
         context = self._template_context(event_type, market_type, category_type, subcategory, plan["market"]["question"])
 
         for outcome in outcomes:
@@ -49,8 +51,8 @@ class ResearchPlanAgent:
                 "minimum_facts_needed": int(context["minimum_per_outcome"]),
             })
 
-        shared = self._shared_queries(plan["market"]["question"], outcomes, context)
-        shared.extend(self._domain_queries(plan["market"]["question"], context))
+        shared = self._shared_queries(plan["market"]["question"], outcomes, context, entities)
+        shared.extend(self._domain_queries(plan["market"]["question"], context, entities))
         plan["shared_research"] = shared
         plan["minimum_data_policy"] = {
             "minimum_total_facts": max(int(context["minimum_total_facts"]), len(outcomes) * int(context["minimum_per_outcome"])),
@@ -150,23 +152,50 @@ class ResearchPlanAgent:
             rows.append({"query": q, "driver": driver, "priority": "high" if driver in context.get("critical_drivers", []) else "medium", "source_type": "news_search", "why": f"Validate {driver} for outcome '{label}'."})
         return rows
 
-    def _shared_queries(self, question: str, outcomes: List[Dict[str, str]], context: Dict[str, Any]) -> List[Dict[str, str]]:
+    def _shared_queries(self, question: str, outcomes: List[Dict[str, str]], context: Dict[str, Any], entities: Dict[str, Any]) -> List[Dict[str, str]]:
         base = self._topic_base(question)
         a = outcomes[0]["label"] if len(outcomes) > 0 else "Outcome A"
         b = outcomes[1]["label"] if len(outcomes) > 1 else "Outcome B"
         res = []
         for raw in context.get("shared_patterns", []):
             q = raw.format(question=question, base=base, a=a, b=b)
+            if entities.get("event_type") == "tennis_head_to_head" or entities.get("market_type") == "head_to_head":
+                pair = " ".join(entities.get("primary_entities", [])[:2]).strip()
+                if pair:
+                    q = q.replace(question, pair)
             res.append({"query": q, "driver": "market_context", "priority": "high", "source_type": "news_search", "why": "Build shared market context before comparing outcomes."})
         return res
 
-    def _domain_queries(self, question: str, context: Dict[str, Any]) -> List[Dict[str, str]]:
+    def _domain_queries(self, question: str, context: Dict[str, Any], entities: Dict[str, Any]) -> List[Dict[str, str]]:
         rows: List[Dict[str, str]] = []
+        base_query = question
+        if entities.get("event_type") == "tennis_head_to_head" or entities.get("market_type") == "head_to_head":
+            pair = " ".join(entities.get("primary_entities", [])[:2]).strip()
+            if pair:
+                base_query = pair
         for raw, driver in context.get("domain_patterns_with_driver", []):
-            rows.append({"query": raw.format(question=question), "driver": driver, "priority": "high", "source_type": "news_search", "why": f"Target domain query for {driver}."})
+            rows.append({"query": raw.format(question=base_query), "driver": driver, "priority": "high", "source_type": "news_search", "why": f"Target domain query for {driver}."})
         for raw in context.get("domain_patterns", []):
-            rows.append({"query": raw.format(question=question), "driver": "primary_source", "priority": "medium", "source_type": "news_search", "why": "Target higher-quality domain or official source."})
+            rows.append({"query": raw.format(question=base_query), "driver": "primary_source", "priority": "medium", "source_type": "news_search", "why": "Target higher-quality domain or official source."})
         return rows
+    
+    def _extract_market_entities(self, question: str, outcome_map: Dict[str, Any], event_profile: Dict[str, Any], research_plan: Dict[str, Any], market_options: Dict[str, float] = None) -> Dict[str, Any]:
+        outcomes = safe_outcomes(outcome_map)
+        if not outcomes and isinstance(market_options, dict):
+            outcomes = [{"label": str(k)} for k in market_options.keys()]
+        outcome_entities = [str(o.get("label") or "").strip() for o in outcomes if str(o.get("label") or "").strip()]
+        primary_entities = list(outcome_entities)
+        for field in ["primary_entities", "target_entity", "event_target", "target_group", "competition"]:
+            val = event_profile.get(field)
+            if isinstance(val, list):
+                primary_entities.extend(str(x).strip() for x in val if str(x).strip())
+            elif str(val or "").strip():
+                primary_entities.append(str(val).strip())
+        vs = re.findall(r"([A-Za-z][A-Za-z .'-]{2,})\s+(?:vs|v|against)\s+([A-Za-z][A-Za-z .'-]{2,})", question or "", re.IGNORECASE)
+        if vs:
+            primary_entities.extend([vs[0][0].strip(), vs[0][1].strip()])
+        primary_entities = list(dict.fromkeys([x for x in primary_entities if x]))
+        return {"primary_entities": primary_entities, "outcome_entities": outcome_entities, "target_entity": str(event_profile.get("target_entity") or ""), "event_target": str(event_profile.get("event_target") or ""), "target_group": str(event_profile.get("target_group") or ""), "competition": str(event_profile.get("competition") or ""), "location_terms": [], "ambiguous_terms": ["bengaluru", "texas", "june", "england", "open", "finals", "race", "market", "launch", "approval"], "category_type": str((research_plan.get("market") or {}).get("category_type") or event_profile.get("category_type") or "other"), "subcategory": str((research_plan.get("market") or {}).get("subcategory") or event_profile.get("subcategory") or "unknown"), "market_type": str((research_plan.get("market") or {}).get("market_type") or event_profile.get("market_type") or "unknown"), "event_type": str((research_plan.get("market") or {}).get("event_type") or event_profile.get("event_type") or "unknown")}
 
     def _category_template(self, category_type: str, subcategory: str, question: str) -> Dict[str, Any]:
         c = f"{category_type} {subcategory} {question}".lower()
