@@ -90,6 +90,10 @@ class ForecastCardAgent:
             or "NONE"
         )
 
+        card["forecast"] = {"most_likely_outcome": str(analyst_view.get("best_priced_option") or data.get("bet_side") or ""), "probability_range": self._as_dict(data.get("probability_range")), "point_estimate": model_options, "confidence_level": str(analyst_view.get("confidence") or data.get("confidence") or "none"), "confidence_reason": "; ".join(self._as_list(analyst_view.get("why") or data.get("reasoning"))[:2]), "directional_lean_exists": bool(model_options)}
+
+        card["evidence"].update({"evidence_strength": str(data.get("evidence_strength") or ("weak" if not model_options else "moderate")), "usable_sources_count": int(source_summary.get("usable_sources_count") or 0), "high_quality_sources_count": int(source_summary.get("high_quality_sources_count") or 0), "weak_sources_count": int(source_summary.get("weak_sources_count") or 0), "limitations": self._as_list(data.get("limitations"))})
+
         card["value"] = {
             "market_price": market_options,
             "edge": option_differences,

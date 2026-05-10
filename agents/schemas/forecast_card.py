@@ -13,6 +13,7 @@ class ForecastCard(TypedDict):
     what_would_change: List[Any]
     risks: List[Any]
     next_queries: List[Any]
+    forecast: Dict[str, Any]
 
 
 def empty_forecast_card() -> ForecastCard:
@@ -49,11 +50,12 @@ def empty_forecast_card() -> ForecastCard:
         "value": {
             "market_price": {},
             "edge": {},
-            "decision": "NO TRADE",
+            "decision": "NO_TRADE",
             "best_side": "NONE",
             "entry_price": {},
         },
         "what_would_change": [],
         "risks": [],
         "next_queries": [],
+        "forecast": {"most_likely_outcome":"","probability_range":{},"point_estimate":{},"confidence_level":"none","confidence_reason":"","directional_lean_exists":False},
     }

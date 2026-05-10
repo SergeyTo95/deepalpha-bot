@@ -127,6 +127,7 @@ class ResearchExecutorAgent:
             })
 
         collected = self._deduplicate_sources([src for item in execution["executed_queries"] for src in item.get("results", [])])
+        collected = sorted(collected, key=lambda x: float(x.get("source_quality_score") or 0), reverse=True)
         execution["collected_sources"] = collected
         execution["coverage_attempt"]["queries_executed"] = sum(1 for item in execution["executed_queries"] if item.get("status") == "executed")
         execution["coverage_attempt"]["queries_with_results"] = sum(
@@ -195,10 +196,11 @@ class ResearchExecutorAgent:
                 "published": published,
             }
             relevance = self._relevance(query, source_row, event_profile)
-            if relevance is None or relevance == "low":
+            quality = self._source_quality_score(query, source_row, event_profile, relevance)
+            if relevance is None or relevance == "low" or quality < 0.25:
                 filtered_low += 1
                 continue
-            normalized.append({**source_row, "relevance": relevance or "low"})
+            normalized.append({**source_row, "relevance": relevance or "low", "source_quality_score": round(quality,3)})
         return self._deduplicate_sources(normalized), filtered_low
 
     def _flatten_planned_queries(self, research_plan: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -517,6 +519,25 @@ class ResearchExecutorAgent:
                 i += 1
                 j += 1
         return True
+
+
+    def _source_quality_score(self, query: Dict[str, str], source: Dict[str, str], event_profile: Dict[str, Any], relevance: str) -> float:
+        text = self._source_relevance_text(source)
+        domain = self._extract_domain(safe_str(source.get("url") or source.get("source")))
+        bad_patterns = ["horoscope", "comment", "forum", "youtube", "entertainment"]
+        noise_penalty = 0.35 if any(p in text for p in bad_patterns) else 0.0
+        entity_match = 0.0
+        names = self._extract_names(safe_str(query.get("query")))
+        if len(names) >= 2:
+            a1,a2=self._aliases(names[0]),self._aliases(names[1])
+            entity_match = 1.0 if self._has_name(text,a1) and self._has_name(text,a2) else 0.4 if (self._has_name(text,a1) or self._has_name(text,a2)) else 0.0
+        subtype = safe_str(event_profile.get("market_subtype")).lower()
+        subtype_terms = {"set_total_games":["set 1","first set","over","under","games"],"price_target":["price","target","by","before"],"election_winner":["poll","election","vote"]}.get(subtype,[])
+        subtype_match = 1.0 if subtype_terms and sum(1 for t in subtype_terms if t in text)>=2 else 0.5
+        trust = 1.0 if self._is_trusted_h2h_domain(domain) or any(d in domain for d in ["reuters","apnews","sec.gov","noaa.gov"]) else 0.45
+        freshness = 0.8 if safe_str(source.get("published")) else 0.5
+        rel = {"high":1.0,"medium":0.7,"low":0.3,None:0.0}.get(relevance,0.0)
+        return max(0.0, rel*0.25 + entity_match*0.2 + subtype_match*0.2 + trust*0.2 + freshness*0.15 - noise_penalty)
 
     def _deduplicate_sources(self, sources: List[Dict[str, str]]) -> List[Dict[str, str]]:
         seen_url = set()
