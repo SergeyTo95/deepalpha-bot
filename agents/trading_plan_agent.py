@@ -11,6 +11,7 @@ from agents.value_decision_agent import ValueDecisionAgent
 from agents.outcome_parser_agent import OutcomeParserAgent
 from agents.research_plan_agent import ResearchPlanAgent
 from agents.targeted_research_agent import TargetedResearchAgent
+from agents.analysis_quality_agent import AnalysisQualityAgent
 
 
 class TradingPlanAgent:
@@ -175,6 +176,18 @@ class TradingPlanAgent:
             event_profile=event_profile,
             structured_evidence=structured_evidence,
         )
+        analysis_quality = AnalysisQualityAgent().evaluate(
+            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            outcome_map=outcome_map,
+            research_plan=research_plan,
+            targeted_research=targeted_research,
+            event_profile=event_profile,
+            market_options=market_options,
+            model_options=model_options,
+            probability_estimate=probability_estimate,
+            value_decision=value_decision,
+            source_summary=(news_data.get("source_summary") if isinstance(news_data.get("source_summary"), dict) else {}) or {},
+        )
         option_diffs = {k: round(model_options[k] - market_options[k], 1) for k in model_options if k in market_options}
 
         best_opt = "NONE"
@@ -236,6 +249,7 @@ class TradingPlanAgent:
             "structured_evidence": structured_evidence,
             "probability_estimate": probability_estimate,
             "value_decision": value_decision,
+            "analysis_quality": analysis_quality,
             "source_summary": {
                 "news_queries_used": queries,
                 "raw_sources_count": raw_sources_count,
@@ -252,6 +266,7 @@ class TradingPlanAgent:
             "no_fake_model": True,
             "probability_estimate": probability_estimate,
             "value_decision": value_decision,
+            "analysis_quality": analysis_quality,
         }
 
         forecast_card = ForecastCardAgent().build(deep)
@@ -279,16 +294,18 @@ class TradingPlanAgent:
             forecast_card["value"]["entry_price"] = value_decision.get("entry_price")
             if isinstance(driver_map, dict):
                 forecast_card["drivers"] = self._driver_map_to_forecast_drivers(driver_map)
+            forecast_card["analysis_quality"] = analysis_quality
         deep["forecast_card"] = forecast_card
         deep["research_plan"] = research_plan
         deep["targeted_research"] = targeted_research
+        deep["analysis_quality"] = analysis_quality
 
         return {
             **deep,
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "research_plan": research_plan, "targeted_research": targeted_research, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "research_plan": research_plan, "targeted_research": targeted_research, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision, "analysis_quality": analysis_quality},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -311,6 +328,7 @@ class TradingPlanAgent:
             "structured_evidence": structured_evidence,
             "probability_estimate": probability_estimate,
             "value_decision": value_decision,
+            "analysis_quality": analysis_quality,
         }
 
     def _build_no_model_analysis(self, category_type: str, subcategory: str, market_type: str, market_options: Dict[str, float], model_options: Dict[str, float], event_drivers: Dict[str, Any]) -> Dict[str, Any]:
