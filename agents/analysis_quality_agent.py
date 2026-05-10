@@ -40,6 +40,8 @@ class AnalysisQualityAgent:
         sq = safe_dict(targeted_research.get("source_quality"))
         raw_sources_count = safe_int(sq.get("raw_sources_count"), safe_int(source_summary.get("raw_sources_count"), 0))
         matched_sources_count = safe_int(sq.get("matched_sources_count"), 0)
+        high_relevance_sources_count = safe_int(sq.get("high_relevance_sources_count"), 0)
+        medium_relevance_sources_count = safe_int(sq.get("medium_relevance_sources_count"), 0)
         claims_count = safe_int(sq.get("claims_count"), 0)
         coverage_score = max(0.0, min(1.0, safe_float(sq.get("coverage_score"), 0.0)))
         can_build_forecast = safe_bool(sq.get("can_build_forecast"), False)
@@ -50,6 +52,8 @@ class AnalysisQualityAgent:
             "claims_count": claims_count,
             "coverage_score": coverage_score,
             "can_build_forecast": can_build_forecast,
+            "high_relevance_sources_count": high_relevance_sources_count,
+            "medium_relevance_sources_count": medium_relevance_sources_count,
         }
 
         market_context = self._market_context(market_options, event_profile)
@@ -65,9 +69,20 @@ class AnalysisQualityAgent:
         should_select_side = False
         confidence = "none"
 
+        weak_relevance = (high_relevance_sources_count + medium_relevance_sources_count) < 2 and matched_sources_count > 0
+        shared_facts = safe_int(safe_dict(targeted_research.get("shared_coverage")).get("facts_found"), 0)
+        is_h2h = str(event_profile.get("market_type") or "").lower() == "head_to_head" or str(event_profile.get("event_type") or "").lower() == "tennis_head_to_head"
         if not can_build_forecast:
             status = "incomplete"
             confidence = "none" if claims_count == 0 else "low"
+        elif is_h2h and shared_facts == 0:
+            status = "weak"
+            can_show_forecast = True
+            confidence = "low"
+        elif weak_relevance:
+            status = "weak"
+            can_show_forecast = True
+            confidence = "low"
         elif coverage_score < 0.7:
             status = "weak"
             can_show_forecast = True

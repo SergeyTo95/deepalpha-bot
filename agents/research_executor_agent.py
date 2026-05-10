@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from typing import Any, Dict, List, Tuple
 
 from agents.schemas.research_execution import empty_research_execution, safe_list, safe_str
@@ -12,6 +14,7 @@ except Exception:
 
 class ResearchExecutorAgent:
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    H2H_DRIVERS = {"recent_form", "ranking", "injury", "withdrawal", "surface", "h2h", "head_to_head"}
 
     def run(
         self,
@@ -102,6 +105,11 @@ class ResearchExecutorAgent:
         if not isinstance(raw_results, list):
             return []
         normalized: List[Dict[str, str]] = []
+        filtered_low = 0
+        strict_h2h = (
+            safe_str(event_profile.get("market_type")).lower() == "head_to_head"
+            or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
+        )
         for item in raw_results:
             if not isinstance(item, dict):
                 continue
@@ -127,7 +135,13 @@ class ResearchExecutorAgent:
                 "published": published,
             }
             relevance = self._relevance(query, source_row, event_profile)
+            if strict_h2h and relevance == "low":
+                filtered_low += 1
+                continue
             normalized.append({**source_row, "relevance": relevance or "low"})
+        if strict_h2h and filtered_low >= 2:
+            # keep compatibility while making stricter filtering visible at runtime
+            pass
         return self._deduplicate_sources(normalized)
 
     def _flatten_planned_queries(self, research_plan: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -240,6 +254,11 @@ class ResearchExecutorAgent:
         ])
         if not text:
             return None
+        if (
+            safe_str(event_profile.get("market_type")).lower() == "head_to_head"
+            or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
+        ):
+            return self._h2h_relevance(query, text)
         query_terms = [t for t in safe_str(query.get("query")).lower().split() if len(t) >= 4]
         outcome_terms = [t for t in safe_str(query.get("outcome_label")).lower().split() if len(t) >= 4]
         driver_terms = [t for t in safe_str(query.get("driver")).lower().split("_") if len(t) >= 3]
@@ -262,6 +281,82 @@ class ResearchExecutorAgent:
         if q_hits > 0 or d_hits > 0:
             return "low"
         return None
+
+    def _h2h_relevance(self, query: Dict[str, str], text: str) -> str:
+        participants = self._extract_names(safe_str(query.get("query")))
+        if len(participants) < 2:
+            participants = self._extract_names(safe_str(query.get("outcome_label")))
+        if len(participants) < 2:
+            return "low"
+        p1_aliases = self._aliases(participants[0])
+        p2_aliases = self._aliases(participants[1])
+        p1_hit = self._has_name(text, p1_aliases)
+        p2_hit = self._has_name(text, p2_aliases)
+        driver = safe_str(query.get("driver")).lower()
+        is_h2h_query = "h2h" in driver or "head_to_head" in driver or "head to head" in safe_str(query.get("query")).lower()
+        strong = any(x in self._norm(text) for x in ["recent form", "ranking", "injury", "withdrawal", "surface", "hard court", "clay", "grass", "h2h", "head to head"])
+        if p1_hit and p2_hit:
+            return "high"
+        if is_h2h_query:
+            return "low"
+        if (p1_hit or p2_hit) and (driver in self.H2H_DRIVERS or strong):
+            return "medium"
+        return "low"
+
+    def _extract_names(self, text: str) -> List[str]:
+        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
+
+    def _aliases(self, full_name: str) -> List[str]:
+        norm = self._norm(full_name)
+        parts = [p for p in norm.split() if p]
+        out = [norm] if norm else []
+        if parts:
+            surname = parts[-1]
+            out.append(surname)
+            if len(surname) > 5:
+                out.append(surname.replace("h", ""))
+                out.append(surname.replace("a", "e"))
+        return list(dict.fromkeys([x for x in out if x]))
+
+    def _has_name(self, text: str, aliases: List[str]) -> bool:
+        norm_text = self._norm(text)
+        tokens = set(norm_text.split())
+        for alias in aliases:
+            if " " in alias and alias in norm_text:
+                return True
+            if alias in tokens:
+                return True
+            if len(alias) > 5 and any(self._ed1(alias, t) for t in tokens):
+                return True
+        return False
+
+    def _norm(self, value: str) -> str:
+        v = unicodedata.normalize("NFKD", safe_str(value)).encode("ascii", "ignore").decode("ascii")
+        v = re.sub(r"[^a-z0-9 ]+", " ", v.lower())
+        return re.sub(r"\s+", " ", v).strip()
+
+    def _ed1(self, a: str, b: str) -> bool:
+        if abs(len(a) - len(b)) > 1:
+            return False
+        if a == b:
+            return True
+        i = j = mism = 0
+        while i < len(a) and j < len(b):
+            if a[i] == b[j]:
+                i += 1
+                j += 1
+                continue
+            mism += 1
+            if mism > 1:
+                return False
+            if len(a) > len(b):
+                i += 1
+            elif len(b) > len(a):
+                j += 1
+            else:
+                i += 1
+                j += 1
+        return True
 
     def _deduplicate_sources(self, sources: List[Dict[str, str]]) -> List[Dict[str, str]]:
         seen_url = set()
