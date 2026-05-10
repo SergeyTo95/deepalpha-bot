@@ -43,7 +43,7 @@ class ValueDecisionAgent:
 
     def _decide(self, best_edge: float, confidence: str) -> str:
         if best_edge < 2:
-            return "NO TRADE"
+            return "NO_TRADE"
         if best_edge < 5:
             return "WAIT"
         if best_edge <= 8:

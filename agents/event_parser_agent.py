@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from agents.event_type_agent import EventTypeAgent
 from agents.schemas.event_profile import EventProfile, empty_event_profile
@@ -111,6 +111,9 @@ class EventParserAgent:
             if profile["market_type"] == "generic_multi_outcome":
                 profile["event_type"] = "generic_multi_outcome"
 
+        subtype = self._detect_market_subtype(text, event_type, profile)
+        profile.update(subtype)
+
         if category_type and profile["category_type"] == "other":
             profile["category_type"] = category_type
         if subcategory and profile["subcategory"] == "unknown":
@@ -169,6 +172,63 @@ class EventParserAgent:
     def _extract_target_phrase(self, text: str) -> str:
         m = re.search(r"\b(?:approve|sue|deny|reject)\s+(.+?)(?:\s+in\s+\d{4}|\?|$)", text, re.IGNORECASE)
         return m.group(1).strip() if m else ""
+
+
+    def _detect_market_subtype(self, text: str, event_type: str, profile: Dict[str, str]) -> Dict[str, Any]:
+        t = (text or "").lower()
+        if re.search(r"set\s*1|first set", t) and re.search(r"games", t) and re.search(r"o/u|over|under", t):
+            line = re.search(r"(\d+(?:\.\d+)?)", t)
+            return {
+                "market_subtype": "set_total_games",
+                "resolution_metric": "games",
+                "threshold": line.group(1) if line else "",
+                "period": "set_1",
+                "set_number": 1,
+                "side_semantics": ["OVER", "UNDER"],
+                "driver_family": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "serve_strength", "return_strength", "surface_speed", "recent_first_set_lengths", "over_under_tendency", "early_match_volatility"],
+                "subtype_confidence": "high",
+            }
+        out = {
+            "market_subtype": "generic_binary" if "multi" not in str(profile.get("market_type","")) else "generic_multi_outcome",
+            "resolution_metric": "",
+            "threshold": "",
+            "period": "",
+            "set_number": 0,
+            "side_semantics": ["YES", "NO"],
+            "driver_family": ["market_context", "primary_evidence"],
+            "subtype_confidence": "medium",
+        }
+        if event_type == "tennis_head_to_head" or "tennis" in str(profile.get("subcategory","")).lower() or (" vs " in t and any(k in t for k in ["set", "games", "winner", "over", "under"])):
+            out.update({"market_subtype": "match_winner", "resolution_metric": "match_result", "driver_family": ["ranking", "recent_form", "injury", "surface", "h2h", "fatigue"]})
+            if re.search(r"set\s*1\s*winner|first set winner", t):
+                out.update({"market_subtype": "first_set_winner", "resolution_metric": "set_result", "period": "set_1", "set_number": 1, "driver_family": ["first_set_form", "hold_rate", "break_rate", "surface_speed", "early_match_volatility"]})
+            m = re.search(r"(?:set\s*(\d+).{0,20}?games?.{0,20}?(?:o/u|over|under))|(?:first set total games)", t)
+            line = re.search(r"(?:o/u|over|under)\s*(\d+(?:\.\d+)?)|(?:\b(\d+(?:\.\d+)?)\b\s*games?)", t)
+            if m:
+                sn = int(m.group(1)) if m.group(1) else 1
+                out.update({"market_subtype": "set_total_games", "resolution_metric": "games", "period": f"set_{sn}", "set_number": sn, "threshold": ((line.group(1) or line.group(2)) if line else ""), "side_semantics": ["OVER", "UNDER"], "driver_family": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "serve_strength", "return_strength", "surface_speed", "recent_first_set_lengths", "over_under_tendency", "early_match_volatility"], "subtype_confidence": "high"})
+            if re.search(r"total games?\s*(?:o/u|over|under)|match games", t) and "set" not in t:
+                out.update({"market_subtype": "match_total_games", "resolution_metric": "games", "threshold": ((line.group(1) or line.group(2)) if line else ""), "side_semantics": ["OVER", "UNDER"], "driver_family": ["hold_rate", "break_rate", "set_length_profile", "surface_speed"]})
+            if re.search(r"[+-]\d+(?:\.\d+)?\s*games|handicap|spread", t):
+                out.update({"market_subtype": "handicap", "resolution_metric": "game_spread", "driver_family": ["game_differential_profile", "serve_dominance", "break_margin", "opponent_strength"]})
+            if re.search(r"total games over|total games under", t) and "vs" in t:
+                out.update({"market_subtype": "player_total_games", "resolution_metric": "player_games", "threshold": ((line.group(1) or line.group(2)) if line else "")})
+            if re.search(r"correct score|wins\s*\d-\d", t):
+                out.update({"market_subtype": "correct_score", "resolution_metric": "set_score", "driver_family": ["straight_sets_probability", "matchup_profile", "serve_hold_break"]})
+            return out
+        if any(k in t for k in ["btc", "bitcoin", "eth", "ethereum", "hit $", "reach $"]):
+            out.update({"market_subtype": "price_target", "resolution_metric": "price", "driver_family": ["spot_price", "timeframe", "volatility", "liquidity", "macro_catalysts", "regulatory_catalysts", "technical_trend"]})
+        elif "election" in t or "candidate" in t:
+            out.update({"market_subtype": "election_winner", "resolution_metric": "official_result", "driver_family": ["polling_averages", "forecast_models", "turnout", "fundraising", "demographic_shifts"]})
+        elif any(k in t for k in ["snow", "rain", "temperature", "hurricane", "storm"]):
+            out.update({"market_subtype": "deadline_threshold", "resolution_metric": "weather_measurement", "driver_family": ["official_forecast", "model_runs", "alerts", "climatology", "update_recency"]})
+        elif any(k in t for k in ["mention", "mentions"]):
+            out.update({"market_subtype": "mentions", "resolution_metric": "count", "driver_family": ["official_transcript", "keyword_matching", "measurement_rules"]})
+        elif any(k in t for k in ["approve", "approval", "regulatory"]):
+            out.update({"market_subtype": "approval_event", "resolution_metric": "official_action", "driver_family": ["official_filings", "agency_signals", "deadline"]})
+        elif len(re.findall(r"\b(yes|no)\b", t))>0:
+            out.update({"market_subtype": "yes_no_event"})
+        return out
 
     def _resolution_notes(self, market_options: Dict[str, float]) -> List[str]:
         notes = ["Interpretation is deterministic and based on explicit parsing patterns."]
