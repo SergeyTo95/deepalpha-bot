@@ -166,10 +166,6 @@ class ResearchExecutorAgent:
             return [], 0
         normalized: List[Dict[str, str]] = []
         filtered_low = 0
-        strict_h2h = (
-            safe_str(event_profile.get("market_type")).lower() == "head_to_head"
-            or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
-        )
         for item in raw_results:
             if not isinstance(item, dict):
                 continue
@@ -360,7 +356,7 @@ class ResearchExecutorAgent:
         trusted_domain = self._is_trusted_h2h_domain(url)
         has_h2h_context = any(x in text for x in ["h2h", "head to head", "head_to_head", "live score", "match"])
         has_both_slug_tokens = self._url_has_player_pair(url, p1_aliases, p2_aliases)
-        if trusted_domain and p1_hit and p2_hit and (has_h2h_context or has_both_slug_tokens):
+        if trusted_domain and (p1_hit and p2_hit or has_both_slug_tokens):
             logger.debug("Accepted trusted H2H source domain=%s title=%s", self._extract_domain(url), safe_str(source.get("title"))[:120])
             return "high"
 
@@ -382,17 +378,25 @@ class ResearchExecutorAgent:
 
     def _source_relevance_text(self, source: Dict[str, str]) -> str:
         url = safe_str(source.get("url") or source.get("link"))
-        display_url = safe_str(source.get("display_url") or source.get("source_url"))
+        link = safe_str(source.get("link"))
+        display_url = safe_str(source.get("display_url"))
+        source_url = safe_str(source.get("source_url"))
         url_tokens = self._tokenize_url(url)
+        link_tokens = self._tokenize_url(link)
         display_tokens = self._tokenize_url(display_url)
+        source_url_tokens = self._tokenize_url(source_url)
         raw_text = " ".join([
             safe_str(source.get("title")),
             safe_str(source.get("snippet")),
             safe_str(source.get("source")),
             url,
+            link,
             display_url,
+            source_url,
             url_tokens,
+            link_tokens,
             display_tokens,
+            source_url_tokens,
         ])
         normalized = self._normalize_player_aliases(raw_text)
         logger.debug("Relevance text preview=%s", normalized[:180])
@@ -415,7 +419,18 @@ class ResearchExecutorAgent:
         return self._has_name(url_text, p1_aliases) and self._has_name(url_text, p2_aliases)
 
     def _extract_names(self, text: str) -> List[str]:
-        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
+        raw = safe_str(text)
+        if not raw:
+            return []
+        parts = re.split(r"\b(?:vs|v)\b", raw, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) == 2:
+            left = " ".join(re.findall(r"[A-Za-z]+", parts[0])).strip()
+            right_tokens = [t for t in re.findall(r"[A-Za-z]+", parts[1]) if len(t) > 1 and t.lower() not in {"h2h", "head", "to", "match", "live", "score", "results", "stats", "prediction"}]
+            right = " ".join(right_tokens).strip()
+            parsed = [x for x in [left, right] if len(x.split()) >= 2]
+            if len(parsed) >= 2:
+                return parsed[:2]
+        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", raw)]
 
     def _aliases(self, full_name: str) -> List[str]:
         norm = self._norm(full_name)
