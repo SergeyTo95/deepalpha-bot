@@ -415,7 +415,28 @@ class ResearchExecutorAgent:
         return self._has_name(url_text, p1_aliases) and self._has_name(url_text, p2_aliases)
 
     def _extract_names(self, text: str) -> List[str]:
-        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
+        raw = safe_str(text)
+        if not raw:
+            return []
+
+        normalized = re.sub(r"\s+", " ", raw).strip()
+        stripped = re.sub(r"\bH2H\b", "", normalized, flags=re.IGNORECASE).strip()
+
+        vs_match = re.match(
+            r"^\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+(?:vs|v|versus)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s*$",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if vs_match:
+            return [vs_match.group(1).strip(), vs_match.group(2).strip()]
+
+        # Conservative fallback for no-vs H2H tennis queries:
+        # exactly four name-like tokens before trailing H2H marker.
+        m = re.match(r"^\s*([A-Za-z]+)\s+([A-Za-z]+)\s+([A-Za-z]+)\s+([A-Za-z]+)\s+H2H\s*$", normalized, flags=re.IGNORECASE)
+        if m:
+            return [f"{m.group(1)} {m.group(2)}", f"{m.group(3)} {m.group(4)}"]
+
+        return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", raw)]
 
     def _aliases(self, full_name: str) -> List[str]:
         norm = self._norm(full_name)
