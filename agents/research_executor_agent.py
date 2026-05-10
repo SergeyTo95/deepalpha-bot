@@ -15,6 +15,7 @@ except Exception:
 class ResearchExecutorAgent:
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     H2H_DRIVERS = {"recent_form", "ranking", "injury", "withdrawal", "surface", "h2h", "head_to_head"}
+    AMBIGUOUS_TERMS = {"bengaluru", "texas", "june", "england", "open", "finals", "race", "market", "launch", "approval"}
 
     def run(
         self,
@@ -52,6 +53,7 @@ class ResearchExecutorAgent:
             execution["notes"].append("No executable search provider was available in this layer.")
 
         had_failures = False
+        filtered_sources_count = 0
         for query in selected:
             matched = self._match_existing_sources(query, normalized_sources, event_profile)
             google_results: List[Dict[str, str]] = []
@@ -61,7 +63,8 @@ class ResearchExecutorAgent:
             if provider_available:
                 try:
                     raw_results = search_google_news(self._preserve_query_text(query.get("query")), limit=3)
-                    google_results = self._normalize_google_results(raw_results, query, question, event_profile)
+                    google_results, filtered = self._normalize_google_results(raw_results, query, question, event_profile)
+                    filtered_sources_count += filtered
                     status = "executed"
                 except Exception as exc:
                     status = "failed"
@@ -83,6 +86,7 @@ class ResearchExecutorAgent:
             1 for item in execution["executed_queries"] if item.get("status") == "executed" and item.get("results")
         )
         execution["coverage_attempt"]["sources_collected"] = len(collected)
+        execution["coverage_attempt"]["filtered_sources_count"] = filtered_sources_count
         execution["coverage_attempt"]["critical_queries_with_results"] = sum(
             1
             for item in execution["executed_queries"]
@@ -92,6 +96,9 @@ class ResearchExecutorAgent:
             execution["notes"].append("Some research queries failed but the pipeline continued safely.")
         if not collected:
             execution["notes"].append("No sources were collected from executed research queries.")
+        if filtered_sources_count:
+            execution["notes"].append("Some sources were filtered because they did not match market entities/outcomes.")
+            execution["notes"].append("Some sources matched only ambiguous terms and were ignored.")
         execution["parser"]["confidence"] = "high" if collected else ("medium" if selected else "low")
         return execution
 
@@ -101,9 +108,9 @@ class ResearchExecutorAgent:
         query: Dict[str, str],
         question: str,
         event_profile: Dict[str, Any],
-    ) -> List[Dict[str, str]]:
+    ) -> Tuple[List[Dict[str, str]], int]:
         if not isinstance(raw_results, list):
-            return []
+            return [], 0
         normalized: List[Dict[str, str]] = []
         filtered_low = 0
         strict_h2h = (
@@ -135,14 +142,11 @@ class ResearchExecutorAgent:
                 "published": published,
             }
             relevance = self._relevance(query, source_row, event_profile)
-            if strict_h2h and relevance == "low":
+            if relevance is None or relevance == "low":
                 filtered_low += 1
                 continue
             normalized.append({**source_row, "relevance": relevance or "low"})
-        if strict_h2h and filtered_low >= 2:
-            # keep compatibility while making stricter filtering visible at runtime
-            pass
-        return self._deduplicate_sources(normalized)
+        return self._deduplicate_sources(normalized), filtered_low
 
     def _flatten_planned_queries(self, research_plan: Dict[str, Any]) -> List[Dict[str, str]]:
         rows: List[Dict[str, str]] = []
@@ -237,7 +241,7 @@ class ResearchExecutorAgent:
         out = []
         for source in sources:
             relevance = self._relevance(query, source, event_profile)
-            if relevance is None:
+            if relevance is None or relevance == "low":
                 continue
             out.append({
                 "title": safe_str(source.get("title")),
@@ -264,7 +268,7 @@ class ResearchExecutorAgent:
             or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
         ):
             return self._h2h_relevance(query, text)
-        query_terms = [t for t in safe_str(query.get("query")).lower().split() if len(t) >= 4]
+        query_terms = [t for t in safe_str(query.get("query")).lower().split() if len(t) >= 4 and t not in self.AMBIGUOUS_TERMS]
         outcome_terms = [t for t in safe_str(query.get("outcome_label")).lower().split() if len(t) >= 4]
         driver_terms = [t for t in safe_str(query.get("driver")).lower().split("_") if len(t) >= 3]
         event_terms = [
@@ -279,12 +283,15 @@ class ResearchExecutorAgent:
         d_hits = sum(1 for t in driver_terms if t in text)
         e_hits = sum(1 for t in event_terms if t in text)
 
+        cat = safe_str(event_profile.get("category_type")).lower()
         if (o_hits > 0 and (d_hits > 0 or q_hits >= 2)) or (e_hits > 0 and d_hits > 0 and q_hits > 0):
             return "high"
+        if "crypto" in cat and o_hits == 0:
+            return None
+        if any(x in cat for x in ["politic", "econom", "weather", "legal", "tech"]) and (o_hits + e_hits) == 0:
+            return None
         if o_hits > 0 or q_hits >= 2 or (e_hits > 0 and q_hits > 0):
             return "medium"
-        if q_hits > 0 or d_hits > 0:
-            return "low"
         return None
 
     def _h2h_relevance(self, query: Dict[str, str], text: str) -> str:

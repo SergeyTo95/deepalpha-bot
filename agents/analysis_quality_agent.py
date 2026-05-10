@@ -42,6 +42,7 @@ class AnalysisQualityAgent:
         matched_sources_count = safe_int(sq.get("matched_sources_count"), 0)
         high_relevance_sources_count = safe_int(sq.get("high_relevance_sources_count"), 0)
         medium_relevance_sources_count = safe_int(sq.get("medium_relevance_sources_count"), 0)
+        filtered_sources_count = safe_int(sq.get("filtered_sources_count"), safe_int(safe_dict(targeted_research.get("coverage_attempt")).get("filtered_sources_count"), 0))
         claims_count = safe_int(sq.get("claims_count"), 0)
         coverage_score = max(0.0, min(1.0, safe_float(sq.get("coverage_score"), 0.0)))
         can_build_forecast = safe_bool(sq.get("can_build_forecast"), False)
@@ -54,6 +55,7 @@ class AnalysisQualityAgent:
             "can_build_forecast": can_build_forecast,
             "high_relevance_sources_count": high_relevance_sources_count,
             "medium_relevance_sources_count": medium_relevance_sources_count,
+            "filtered_sources_count": filtered_sources_count,
         }
 
         market_context = self._market_context(market_options, event_profile)
@@ -79,7 +81,7 @@ class AnalysisQualityAgent:
             status = "weak"
             can_show_forecast = True
             confidence = "low"
-        elif weak_relevance:
+        elif weak_relevance or (filtered_sources_count > matched_sources_count and matched_sources_count > 0):
             status = "weak"
             can_show_forecast = True
             confidence = "low"
@@ -90,7 +92,7 @@ class AnalysisQualityAgent:
             should_select_side = point_estimate_exists
             confidence = "low"
             can_show_value = point_estimate_exists and edge > 0 and self._value_confidence_ok(value_decision)
-        elif claims_count >= self.MIN_TOTAL_FACTS:
+        elif claims_count >= self.MIN_TOTAL_FACTS and (high_relevance_sources_count + medium_relevance_sources_count) >= 2 and filtered_sources_count <= max(2, matched_sources_count):
             status = "complete"
             can_show_forecast = True
             can_show_likely_outcome = True
