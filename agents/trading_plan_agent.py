@@ -71,6 +71,7 @@ class TradingPlanAgent:
             result.get("question"), result.get("title"), market_data.get("question"),
             market_data.get("title"), market_data.get("description"), market_data.get("resolution")
         ])
+        question_text = str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or "")
         market_options = self._extract_market_probs(str(result.get("market_probability") or market_data.get("market_probability") or ""))
         if not market_options and isinstance(result.get("market_options"), dict):
             market_options = {str(k): float(v) for k, v in result["market_options"].items()}
@@ -81,7 +82,7 @@ class TradingPlanAgent:
         side_meanings = self._build_side_meanings(text, market_type, market_options, entities, category_type, subcategory)
 
         event_profile = EventParserAgent().parse(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             market_options=market_options,
             category_type=category_type,
             subcategory=subcategory,
@@ -97,7 +98,7 @@ class TradingPlanAgent:
         resolution_summary = self._resolution_summary(category_type, subcategory, market_type)
         event_deadline = self._extract_deadline(text)
         outcome_map = OutcomeParserAgent().parse(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             market_options=market_options,
             event_profile=event_profile,
             category_type=category_type,
@@ -113,10 +114,14 @@ class TradingPlanAgent:
         relevant_sources_count = int(news_data.get("relevant_sources_count") or len(rel_sources))
         news_quality = str(news_data.get("news_quality") or "low").lower()
 
-        driver_map = DriverMapAgent().build(event_profile)
+        driver_map = DriverMapAgent().build(
+            event_profile=event_profile,
+            question=question_text,
+            market_options=market_options,
+        )
         data_plan = DataRequirementAgent().build(event_profile, driver_map)
         research_plan = ResearchPlanAgent().build(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             outcome_map=outcome_map,
             event_profile=event_profile,
             driver_map=driver_map,
@@ -124,7 +129,7 @@ class TradingPlanAgent:
             market_options=market_options,
         )
         research_execution = ResearchExecutorAgent().run(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             research_plan=research_plan,
             outcome_map=outcome_map,
             event_profile=event_profile,
@@ -133,7 +138,7 @@ class TradingPlanAgent:
         )
         enriched_sources = list(rel_sources or []) + list(research_execution.get("collected_sources") or [])
         targeted_research = TargetedResearchAgent().run(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             outcome_map=outcome_map,
             research_plan=research_plan,
             event_profile=event_profile,
@@ -187,7 +192,7 @@ class TradingPlanAgent:
             structured_evidence=structured_evidence,
         )
         analysis_quality = AnalysisQualityAgent().evaluate(
-            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            question=question_text,
             outcome_map=outcome_map,
             research_plan=research_plan,
             targeted_research=targeted_research,
