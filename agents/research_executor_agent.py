@@ -60,7 +60,7 @@ class ResearchExecutorAgent:
 
             if provider_available:
                 try:
-                    raw_results = search_google_news(safe_str(query.get("query")), limit=3)
+                    raw_results = search_google_news(self._preserve_query_text(query.get("query")), limit=3)
                     google_results = self._normalize_google_results(raw_results, query, question, event_profile)
                     status = "executed"
                 except Exception as exc:
@@ -165,13 +165,18 @@ class ResearchExecutorAgent:
         if priority not in self.PRIORITY_ORDER:
             priority = "medium"
         return {
-            "query": safe_str(query.get("query")),
+            "query": self._preserve_query_text(query.get("query")),
             "driver": safe_str(query.get("driver")),
             "outcome_id": outcome_id,
             "outcome_label": outcome_label,
             "priority": priority,
             "source_type": safe_str(query.get("source_type") or "news_search"),
         }
+
+    def _preserve_query_text(self, query: Any) -> str:
+        if isinstance(query, str):
+            return query.strip()
+        return safe_str(query)
 
     def _select_queries(self, planned: List[Dict[str, str]], max_queries: int) -> List[Dict[str, str]]:
         if max_queries <= 0:
