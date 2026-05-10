@@ -458,6 +458,8 @@ class ResearchExecutorAgent:
                 tokens = _clean_name_tokens(side)
                 if len(tokens) >= 2:
                     names.append(" ".join(tokens[:2]))
+                elif len(tokens) == 1:
+                    names.append(tokens[0])
             if len(names) == 2:
                 return names
 
@@ -523,19 +525,33 @@ class ResearchExecutorAgent:
 
     def _source_quality_score(self, query: Dict[str, str], source: Dict[str, str], event_profile: Dict[str, Any], relevance: str) -> float:
         text = self._source_relevance_text(source)
-        domain = self._extract_domain(safe_str(source.get("url") or source.get("source")))
-        bad_patterns = ["horoscope", "comment", "forum", "youtube", "entertainment"]
-        noise_penalty = 0.35 if any(p in text for p in bad_patterns) else 0.0
+        url = safe_str(source.get("url") or source.get("link"))
+        domain = self._extract_domain(safe_str(url or source.get("source")))
+        bad_patterns = ["horoscope", "rasi palan", "forum", "youtube", "entertainment"]
+        noise_penalty = 0.0
+        if any(p in text for p in bad_patterns):
+            noise_penalty += 0.45
+        if "tennistemple.com" in domain and any(x in text for x in ["comment", "/comment", "comments"]):
+            noise_penalty += 0.35
+
         entity_match = 0.0
         names = self._extract_names(safe_str(query.get("query")))
         if len(names) >= 2:
             a1,a2=self._aliases(names[0]),self._aliases(names[1])
             entity_match = 1.0 if self._has_name(text,a1) and self._has_name(text,a2) else 0.4 if (self._has_name(text,a1) or self._has_name(text,a2)) else 0.0
+            is_h2h_source = self._is_trusted_h2h_domain(url) or any(x in text for x in ["h2h", "head to head", "head_to_head"])
+            if is_h2h_source and entity_match < 1.0:
+                noise_penalty += 0.35
+
         subtype = safe_str(event_profile.get("market_subtype")).lower()
         subtype_terms = {"set_total_games":["set 1","first set","over","under","games"],"price_target":["price","target","by","before"],"election_winner":["poll","election","vote"]}.get(subtype,[])
         subtype_match = 1.0 if subtype_terms and sum(1 for t in subtype_terms if t in text)>=2 else 0.5
-        trust = 1.0 if self._is_trusted_h2h_domain(domain) or any(d in domain for d in ["reuters","apnews","sec.gov","noaa.gov"]) else 0.45
+        trust = 1.0 if self._is_trusted_h2h_domain(url) or any(d in domain for d in ["reuters","apnews","sec.gov","noaa.gov"]) else 0.45
+        if "tennisabstract.com" in domain:
+            trust = max(trust, 0.95)
         freshness = 0.8 if safe_str(source.get("published")) else 0.5
+        if any(x in text for x in ["2018", "2019", "2020", "2021"]) and any(x in text for x in ["preview", "draw", "match page"]):
+            noise_penalty += 0.25
         rel = {"high":1.0,"medium":0.7,"low":0.3,None:0.0}.get(relevance,0.0)
         return max(0.0, rel*0.25 + entity_match*0.2 + subtype_match*0.2 + trust*0.2 + freshness*0.15 - noise_penalty)
 
