@@ -4,8 +4,31 @@ def build_generic_driver_templates():
         "company_product_release": {"yes": [], "no": [], "required": ["official roadmap", "release window", "company statements"]},
         "legal_regulatory_approval": {"yes": [], "no": [], "required": ["regulator docket", "deadline", "official filings"]},
         "official_confirmation_event": {
-            "yes": ["definitive official confirmation matching market wording"],
-            "no": ["no definitive official confirmation by deadline", "explicit denial or non-confirmation language"],
+            "yes": [
+                {
+                    "id": "definitive_official_confirmation",
+                    "label": "Definitive Official Confirmation",
+                    "description": "Official actor definitively confirms the event/fact using wording that matches market resolution rules.",
+                    "impact": "very_high",
+                    "data_needed": ["official statement", "market wording match", "primary source"],
+                }
+            ],
+            "no": [
+                {
+                    "id": "no_definitive_confirmation_by_deadline",
+                    "label": "No Definitive Confirmation By Deadline",
+                    "description": "No qualifying official confirmation appears before the market deadline.",
+                    "impact": "very_high",
+                    "data_needed": ["deadline", "official statements", "absence of qualifying confirmation"],
+                },
+                {
+                    "id": "denial_or_nonconfirmation_language",
+                    "label": "Denial Or Non-Confirmation Language",
+                    "description": "Official reports/statements deny the claim or use ambiguous/non-confirming language.",
+                    "impact": "high",
+                    "data_needed": ["agency report language", "official denial", "ambiguous wording"],
+                },
+            ],
             "required": [
                 "official_statement",
                 "agency_report_language",
