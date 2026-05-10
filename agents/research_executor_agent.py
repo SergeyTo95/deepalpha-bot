@@ -1,3 +1,4 @@
+import os
 import re
 import unicodedata
 from typing import Any, Dict, List, Tuple
@@ -10,6 +11,11 @@ except Exception:
     search_google_news = None
     classify_freshness = None
     enrich_news_item = None
+
+try:
+    from services.web_search_service import search_web
+except Exception:
+    search_web = None
 
 
 class ResearchExecutorAgent:
@@ -54,6 +60,16 @@ class ResearchExecutorAgent:
 
         had_failures = False
         filtered_sources_count = 0
+        web_provider_name = safe_str(os.getenv("WEB_SEARCH_PROVIDER")).lower()
+        web_provider_key = safe_str(os.getenv("WEB_SEARCH_API_KEY"))
+        web_provider_configured = callable(search_web) and web_provider_name not in {"", "disabled"} and bool(web_provider_key)
+        web_used = False
+        web_empty = False
+        web_failed = False
+
+        if not web_provider_configured:
+            execution["notes"].append("Optional web search provider was not configured.")
+
         for query in selected:
             matched = self._match_existing_sources(query, normalized_sources, event_profile)
             google_results: List[Dict[str, str]] = []
@@ -71,11 +87,24 @@ class ResearchExecutorAgent:
                     error = safe_str(exc)
                     had_failures = True
 
-            merged_results = self._deduplicate_sources(matched + google_results)
+            query_results = self._deduplicate_sources(matched + google_results)
+
+            if len(query_results) < 1 and web_provider_configured:
+                web_used = True
+                try:
+                    web_raw = search_web(self._preserve_query_text(query.get("query")), limit=3)
+                    web_normalized, web_filtered = self._normalize_google_results(web_raw, query, question, event_profile)
+                    filtered_sources_count += web_filtered
+                    if not web_normalized:
+                        web_empty = True
+                    query_results = self._deduplicate_sources(query_results + web_normalized)
+                except Exception:
+                    web_failed = True
+
             execution["executed_queries"].append({
                 **query,
                 "status": status,
-                "results": merged_results,
+                "results": query_results,
                 "error": error,
             })
 
@@ -94,6 +123,12 @@ class ResearchExecutorAgent:
         )
         if had_failures:
             execution["notes"].append("Some research queries failed but the pipeline continued safely.")
+        if web_used:
+            execution["notes"].append("Optional web search provider was used for targeted research.")
+        if web_empty:
+            execution["notes"].append("Optional web search provider returned no relevant results.")
+        if web_failed:
+            execution["notes"].append("Optional web search provider failed for some queries but pipeline continued.")
         if not collected:
             execution["notes"].append("No sources were collected from executed research queries.")
         if filtered_sources_count:
@@ -263,9 +298,11 @@ class ResearchExecutorAgent:
         ])
         if not text:
             return None
+        query_text = safe_str(query.get("query"))
         if (
             safe_str(event_profile.get("market_type")).lower() == "head_to_head"
             or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
+            or (" vs " in query_text.lower() and len(self._extract_names(query_text)) >= 2)
         ):
             return self._h2h_relevance(query, text)
         query_terms = [t for t in safe_str(query.get("query")).lower().split() if len(t) >= 4 and t not in self.AMBIGUOUS_TERMS]
