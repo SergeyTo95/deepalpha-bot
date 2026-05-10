@@ -444,16 +444,25 @@ class ResearchExecutorAgent:
         raw = safe_str(text)
         if not raw:
             return []
+
+        def _clean_name_tokens(value: str) -> List[str]:
+            cleaned = re.sub(r"\b(?:h2h|head\s*to\s*head|match|live\s*score|results?)\b", " ", value, flags=re.IGNORECASE)
+            return re.findall(r"[A-Za-z]+", cleaned)
+
         split = re.split(r"\b(?:vs\.?|v\.?|versus)\b", raw, maxsplit=1, flags=re.IGNORECASE)
         if len(split) == 2:
             names = []
             for side in split:
-                cleaned = re.sub(r"\b(?:h2h|head\s*to\s*head|match|live\s*score|results?)\b", " ", side, flags=re.IGNORECASE)
-                tokens = re.findall(r"[A-Za-z]+", cleaned)
+                tokens = _clean_name_tokens(side)
                 if len(tokens) >= 2:
                     names.append(" ".join(tokens[:2]))
             if len(names) == 2:
                 return names
+
+        fallback_tokens = _clean_name_tokens(raw)
+        if len(fallback_tokens) == 4 and re.search(r"\bh2h\b", raw, flags=re.IGNORECASE):
+            return [" ".join(fallback_tokens[:2]), " ".join(fallback_tokens[2:])]
+
         return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", raw)]
 
     def _aliases(self, full_name: str) -> List[str]:
