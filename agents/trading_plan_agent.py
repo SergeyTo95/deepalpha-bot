@@ -9,6 +9,7 @@ from agents.evidence_extractor_agent import EvidenceExtractorAgent
 from agents.probability_estimator_agent import ProbabilityEstimatorAgent
 from agents.value_decision_agent import ValueDecisionAgent
 from agents.outcome_parser_agent import OutcomeParserAgent
+from agents.research_plan_agent import ResearchPlanAgent
 
 
 class TradingPlanAgent:
@@ -111,6 +112,14 @@ class TradingPlanAgent:
 
         driver_map = DriverMapAgent().build(event_profile)
         data_plan = DataRequirementAgent().build(event_profile, driver_map)
+        research_plan = ResearchPlanAgent().build(
+            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            outcome_map=outcome_map,
+            event_profile=event_profile,
+            driver_map=driver_map,
+            data_plan=data_plan,
+            market_options=market_options,
+        )
         structured_evidence = EvidenceExtractorAgent().extract(
             event_profile=event_profile,
             driver_map=driver_map,
@@ -209,6 +218,7 @@ class TradingPlanAgent:
             "event_drivers": event_drivers,
             "driver_map": driver_map,
             "data_plan": data_plan,
+            "research_plan": research_plan,
             "forecast_evidence": forecast_evidence,
             "structured_evidence": structured_evidence,
             "probability_estimate": probability_estimate,
@@ -235,6 +245,7 @@ class TradingPlanAgent:
         if isinstance(forecast_card, dict):
             forecast_card["outcome_map"] = outcome_map
             forecast_card["event_profile"] = event_profile
+            forecast_card["research_plan"] = research_plan
             if isinstance(forecast_card.get("evidence"), dict):
                 forecast_card["evidence"]["for_yes"] = structured_evidence.get("for_yes") or forecast_card["evidence"].get("for_yes") or []
                 forecast_card["evidence"]["for_no"] = structured_evidence.get("for_no") or forecast_card["evidence"].get("for_no") or []
@@ -255,13 +266,14 @@ class TradingPlanAgent:
             if isinstance(driver_map, dict):
                 forecast_card["drivers"] = self._driver_map_to_forecast_drivers(driver_map)
         deep["forecast_card"] = forecast_card
+        deep["research_plan"] = research_plan
 
         return {
             **deep,
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "research_plan": research_plan, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -278,6 +290,7 @@ class TradingPlanAgent:
             "evidence_strength": evidence_strength,
             "no_model_analysis": no_model_analysis,
             "forecast_card": forecast_card,
+            "research_plan": research_plan,
             "event_profile": event_profile,
             "structured_evidence": structured_evidence,
             "probability_estimate": probability_estimate,
