@@ -200,6 +200,9 @@ class EventParserAgent:
 
     def _detect_market_subtype(self, text: str, event_type: str, profile: Dict[str, str]) -> Dict[str, Any]:
         t = (text or "").lower()
+        official_confirmation = self._detect_official_confirmation_event(text)
+        if official_confirmation:
+            return official_confirmation
         if re.search(r"set\s*1|first set", t) and re.search(r"games", t) and re.search(r"o/u|over|under", t):
             threshold = self._extract_threshold(text)
             return {
@@ -253,6 +256,80 @@ class EventParserAgent:
         elif len(re.findall(r"\b(yes|no)\b", t))>0:
             out.update({"market_subtype": "yes_no_event"})
         return out
+
+    def _detect_official_confirmation_event(self, text: str) -> Dict[str, Any]:
+        raw = str(text or "")
+        t = raw.lower()
+        has_confirmation_verb = any(k in t for k in ["confirm", "confirmation", "disclose", "disclosure", "official statement"])
+        has_subject = any(k in t for k in ["government", "us ", "u.s.", "pentagon", "nasa", "white house", "agency"])
+        has_claim_target = any(k in t for k in ["alien", "extraterrestrial", "uap", "ufo", "technology", "exist"])
+        if not (has_confirmation_verb and has_subject):
+            return {}
+
+        target_entity = self._extract_official_entity(raw)
+        event_target = self._extract_confirmation_target(raw)
+        drivers = [
+            "official_statement",
+            "agency_report_language",
+            "white_house_or_cabinet_statement",
+            "congressional_hearings",
+            "declassified_documents",
+            "credible_reporting_consensus",
+            "wording_specificity",
+            "ambiguity_risk",
+            "deadline_sensitivity",
+            "denial_or_nonconfirmation",
+        ]
+        if has_claim_target:
+            drivers.extend([
+                "aaro_report_language",
+                "pentagon_uap_reports",
+                "congressional_uap_hearings",
+                "declassified_uap_files",
+                "extraterrestrial_wording_specificity",
+                "uap_vs_alien_ambiguity",
+            ])
+
+        return {
+            "category_type": "politics",
+            "subcategory": "official_disclosure",
+            "market_type": "binary_event",
+            "market_subtype": "official_confirmation_event",
+            "target_entity": target_entity,
+            "event_target": event_target,
+            "resolution_metric": "official_statement",
+            "deadline": self._extract_deadline(raw),
+            "side_semantics": ["YES", "NO"],
+            "driver_family": list(dict.fromkeys(drivers)),
+            "subtype_confidence": "high",
+        }
+
+    def _extract_official_entity(self, text: str) -> str:
+        patterns = [
+            (r"\bwhite house\b", "White House"),
+            (r"\bpentagon\b", "Pentagon"),
+            (r"\bnasa\b", "NASA"),
+            (r"\bu\.?s\.?\s+government\b", "US government"),
+            (r"\bus government\b", "US government"),
+            (r"\bthe us\b", "US government"),
+            (r"\bthe united states\b", "US government"),
+            (r"\bgovernment\b", "US government"),
+        ]
+        t = text.lower()
+        for p, label in patterns:
+            if re.search(p, t):
+                return label
+        m = re.search(r"\bwill\s+([A-Z][A-Za-z&. ]{2,50}?)\s+(?:confirm|disclose)\b", text, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    def _extract_confirmation_target(self, text: str) -> str:
+        m = re.search(r"\b(?:confirm|disclose)\s+(that\s+)?(.+?)(?:\s+(?:before|by|in|on)\b|\?|$)", text, re.IGNORECASE)
+        if m:
+            target = m.group(2).strip(" .,:;")
+            return target
+        if any(k in text.lower() for k in ["alien", "extraterrestrial"]):
+            return "confirmation of extraterrestrial life or alien technology"
+        return ""
 
     def _resolution_notes(self, market_options: Dict[str, float]) -> List[str]:
         notes = ["Interpretation is deterministic and based on explicit parsing patterns."]

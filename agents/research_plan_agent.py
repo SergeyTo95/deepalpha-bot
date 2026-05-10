@@ -151,6 +151,50 @@ class ResearchPlanAgent:
             base.update({"critical_drivers": ["spot_price", "volatility", "liquidity", "timeframe", "macro_catalysts", "regulatory_catalysts" ]})
         elif subtype == "election_winner":
             base.update({"critical_drivers": ["polling_averages", "forecast_models", "fundraising", "turnout", "official_results"]})
+        elif subtype == "official_confirmation_event":
+            target_entity = str((event_profile or {}).get("target_entity") or "government")
+            event_target = str((event_profile or {}).get("event_target") or "event/fact")
+            base.update({
+                "required_facts": [
+                    "official_statement",
+                    "agency_report_language",
+                    "white_house_or_cabinet_statement",
+                    "congressional_hearings",
+                    "declassified_documents",
+                    "credible_reporting_consensus",
+                    "wording_specificity",
+                    "ambiguity_risk",
+                    "deadline_sensitivity",
+                    "denial_or_nonconfirmation",
+                ],
+                "critical_drivers": [
+                    "official_statement",
+                    "agency_report_language",
+                    "congressional_hearings",
+                    "declassified_documents",
+                    "ambiguity_risk",
+                ],
+                "minimum_per_outcome": 2,
+                "minimum_total_facts": 5,
+                "shared_patterns": [
+                    f"{target_entity} official statement {event_target}",
+                    f"{event_target} official confirmation government",
+                    f"{target_entity} report {event_target}",
+                    f"{target_entity} congressional hearing {event_target}",
+                    f"{event_target} declassified documents official",
+                    f"{event_target} credible reporting official confirmation",
+                ],
+                "domain_patterns": [
+                    "AARO report extraterrestrial life alien technology",
+                    "Pentagon UAP report extraterrestrial confirmation",
+                    "White House aliens official statement",
+                    "site:whitehouse.gov extraterrestrial statement",
+                    "site:defense.gov UAP report",
+                    "site:aaro.mil UAP report",
+                    "site:nasa.gov extraterrestrial life statement",
+                    "site:congress.gov UAP hearing",
+                ],
+            })
         if key in templates:
             base.update(templates[key])
         elif market_type == "head_to_head":
