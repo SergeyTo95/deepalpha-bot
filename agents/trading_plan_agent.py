@@ -12,6 +12,7 @@ from agents.outcome_parser_agent import OutcomeParserAgent
 from agents.research_plan_agent import ResearchPlanAgent
 from agents.targeted_research_agent import TargetedResearchAgent
 from agents.analysis_quality_agent import AnalysisQualityAgent
+from agents.research_executor_agent import ResearchExecutorAgent
 
 
 class TradingPlanAgent:
@@ -122,6 +123,15 @@ class TradingPlanAgent:
             data_plan=data_plan,
             market_options=market_options,
         )
+        research_execution = ResearchExecutorAgent().run(
+            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            research_plan=research_plan,
+            outcome_map=outcome_map,
+            event_profile=event_profile,
+            existing_sources=rel_sources or [],
+            max_queries=12,
+        )
+        enriched_sources = list(rel_sources or []) + list(research_execution.get("collected_sources") or [])
         targeted_research = TargetedResearchAgent().run(
             question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
             outcome_map=outcome_map,
@@ -130,7 +140,7 @@ class TradingPlanAgent:
             news_data=news_data or {},
             market_data=market_data or {},
             source_summary=(news_data.get("source_summary") if isinstance(news_data.get("source_summary"), dict) else {}) or {},
-            existing_sources=rel_sources or [],
+            existing_sources=enriched_sources,
         )
 
         structured_evidence = EvidenceExtractorAgent().extract(
@@ -244,6 +254,7 @@ class TradingPlanAgent:
             "driver_map": driver_map,
             "data_plan": data_plan,
             "research_plan": research_plan,
+            "research_execution": research_execution,
             "targeted_research": targeted_research,
             "forecast_evidence": forecast_evidence,
             "structured_evidence": structured_evidence,
@@ -274,6 +285,7 @@ class TradingPlanAgent:
             forecast_card["outcome_map"] = outcome_map
             forecast_card["event_profile"] = event_profile
             forecast_card["research_plan"] = research_plan
+            forecast_card["research_execution"] = research_execution
             forecast_card["targeted_research"] = targeted_research
             if isinstance(forecast_card.get("evidence"), dict):
                 forecast_card["evidence"]["for_yes"] = structured_evidence.get("for_yes") or forecast_card["evidence"].get("for_yes") or []
@@ -297,6 +309,7 @@ class TradingPlanAgent:
             forecast_card["analysis_quality"] = analysis_quality
         deep["forecast_card"] = forecast_card
         deep["research_plan"] = research_plan
+        deep["research_execution"] = research_execution
         deep["targeted_research"] = targeted_research
         deep["analysis_quality"] = analysis_quality
 
@@ -305,7 +318,7 @@ class TradingPlanAgent:
             "deep_analysis": deep,
             "sport_type": subcategory if category_type == "sports" else "unknown",
             "sports_context": result.get("sports_context") or {},
-            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "research_plan": research_plan, "targeted_research": targeted_research, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision, "analysis_quality": analysis_quality},
+            "trading_plan": {**deep, "forecast_card": forecast_card, "event_profile": event_profile, "driver_map": driver_map, "data_plan": data_plan, "research_plan": research_plan, "research_execution": research_execution, "targeted_research": targeted_research, "structured_evidence": structured_evidence, "probability_estimate": probability_estimate, "value_decision": value_decision, "analysis_quality": analysis_quality},
             "probability": result.get("probability", ""),
             "confidence": analyst_view["confidence"],
             "reasoning": why,
@@ -323,6 +336,7 @@ class TradingPlanAgent:
             "no_model_analysis": no_model_analysis,
             "forecast_card": forecast_card,
             "research_plan": research_plan,
+            "research_execution": research_execution,
             "targeted_research": targeted_research,
             "event_profile": event_profile,
             "structured_evidence": structured_evidence,
