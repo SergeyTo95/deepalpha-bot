@@ -2,6 +2,13 @@ from typing import Any, Dict, List, Tuple
 
 from agents.schemas.research_execution import empty_research_execution, safe_list, safe_str
 
+try:
+    from services.news_service import search_google_news, classify_freshness, enrich_news_item
+except Exception:
+    search_google_news = None
+    classify_freshness = None
+    enrich_news_item = None
+
 
 class ResearchExecutorAgent:
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -35,32 +42,93 @@ class ResearchExecutorAgent:
         execution["coverage_attempt"]["critical_queries_total"] = sum(1 for q in selected if q["priority"] == "critical")
 
         normalized_sources = self._normalize_existing_sources(existing_sources)
-        provider_available = False
-        if not provider_available:
+        provider_available = callable(search_google_news)
+        if provider_available:
+            execution["notes"].append("Google News RSS provider was used for targeted research execution.")
+        else:
             execution["notes"].append("No executable search provider was available in this layer.")
 
+        had_failures = False
         for query in selected:
             matched = self._match_existing_sources(query, normalized_sources, event_profile)
+            google_results: List[Dict[str, str]] = []
             status = "not_available"
-            if matched:
-                status = "executed"
+            error = ""
+
+            if provider_available:
+                try:
+                    raw_results = search_google_news(safe_str(query.get("query")), limit=3)
+                    google_results = self._normalize_google_results(raw_results, query, question, event_profile)
+                    status = "executed"
+                except Exception as exc:
+                    status = "failed"
+                    error = safe_str(exc)
+                    had_failures = True
+
+            merged_results = self._deduplicate_sources(matched + google_results)
             execution["executed_queries"].append({
                 **query,
                 "status": status,
-                "results": matched,
-                "error": "",
+                "results": merged_results,
+                "error": error,
             })
 
         collected = self._deduplicate_sources([src for item in execution["executed_queries"] for src in item.get("results", [])])
         execution["collected_sources"] = collected
-        execution["coverage_attempt"]["queries_executed"] = len(selected)
-        execution["coverage_attempt"]["queries_with_results"] = sum(1 for item in execution["executed_queries"] if item.get("results"))
+        execution["coverage_attempt"]["queries_executed"] = sum(1 for item in execution["executed_queries"] if item.get("status") == "executed")
+        execution["coverage_attempt"]["queries_with_results"] = sum(
+            1 for item in execution["executed_queries"] if item.get("status") == "executed" and item.get("results")
+        )
         execution["coverage_attempt"]["sources_collected"] = len(collected)
         execution["coverage_attempt"]["critical_queries_with_results"] = sum(
-            1 for item in execution["executed_queries"] if item.get("priority") == "critical" and item.get("results")
+            1
+            for item in execution["executed_queries"]
+            if item.get("priority") == "critical" and item.get("status") == "executed" and item.get("results")
         )
+        if had_failures:
+            execution["notes"].append("Some research queries failed but the pipeline continued safely.")
+        if not collected:
+            execution["notes"].append("No sources were collected from executed research queries.")
         execution["parser"]["confidence"] = "high" if collected else ("medium" if selected else "low")
         return execution
+
+    def _normalize_google_results(
+        self,
+        raw_results: Any,
+        query: Dict[str, str],
+        question: str,
+        event_profile: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
+        if not isinstance(raw_results, list):
+            return []
+        normalized: List[Dict[str, str]] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            enriched = item
+            if callable(enrich_news_item):
+                try:
+                    enriched = enrich_news_item(item, question=question, user_context=safe_str(query.get("query"))) or item
+                except Exception:
+                    enriched = item
+            title = safe_str(enriched.get("title") or enriched.get("headline"))
+            snippet = safe_str(enriched.get("snippet") or enriched.get("summary"))
+            url = safe_str(enriched.get("url") or enriched.get("link"))
+            source = safe_str(enriched.get("source") or enriched.get("publisher"))
+            published = safe_str(enriched.get("published") or enriched.get("date"))
+            if not (title or snippet or url):
+                continue
+            source_row = {
+                "title": title,
+                "snippet": snippet,
+                "url": url,
+                "link": url,
+                "source": source,
+                "published": published,
+            }
+            relevance = self._relevance(query, source_row, event_profile)
+            normalized.append({**source_row, "relevance": relevance or "low"})
+        return self._deduplicate_sources(normalized)
 
     def _flatten_planned_queries(self, research_plan: Dict[str, Any]) -> List[Dict[str, str]]:
         rows: List[Dict[str, str]] = []
@@ -202,13 +270,14 @@ class ResearchExecutorAgent:
         for item in sources:
             url = safe_str(item.get("url")).lower()
             title = safe_str(item.get("title")).lower()
+            title_prefix = title[:80]
             if url and url in seen_url:
                 continue
-            if not url and title and title in seen_title:
+            if title_prefix and title_prefix in seen_title:
                 continue
             if url:
                 seen_url.add(url)
-            if title:
-                seen_title.add(title)
+            if title_prefix:
+                seen_title.add(title_prefix)
             out.append(item)
         return out
