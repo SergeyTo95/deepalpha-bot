@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from agents.schemas.research_plan import empty_research_plan, safe_outcomes
 
@@ -37,7 +37,7 @@ class ResearchPlanAgent:
         if not outcomes and isinstance(market_options, dict):
             outcomes = [{"id": str(k).lower(), "label": str(k)} for k in market_options.keys()]
 
-        context = self._template_context(event_type, market_type)
+        context = self._template_context(event_type, market_type, category_type, subcategory, plan["market"]["question"])
 
         for outcome in outcomes:
             label = str(outcome.get("label") or "Unknown")
@@ -50,6 +50,7 @@ class ResearchPlanAgent:
             })
 
         shared = self._shared_queries(plan["market"]["question"], outcomes, context)
+        shared.extend(self._domain_queries(plan["market"]["question"], context))
         plan["shared_research"] = shared
         plan["minimum_data_policy"] = {
             "minimum_total_facts": max(int(context["minimum_total_facts"]), len(outcomes) * int(context["minimum_per_outcome"])),
@@ -71,7 +72,7 @@ class ResearchPlanAgent:
             plan["warnings"].append("No parsed outcomes found; generated market-level research only.")
         return plan
 
-    def _template_context(self, event_type: str, market_type: str) -> Dict[str, Any]:
+    def _template_context(self, event_type: str, market_type: str, category_type: str, subcategory: str, question: str) -> Dict[str, Any]:
         key = event_type or ""
         if market_type == "date_range":
             key = "date_range"
@@ -88,6 +89,7 @@ class ResearchPlanAgent:
                 ("{label} risks", "outcome_specific_evidence"),
             ],
             "shared_patterns": ["{question} latest news", "{question} market context", "{question} primary source"],
+            "domain_patterns": ["{question} Reuters", "{question} AP News", "{question} official statement"],
         }
         templates = {
             "tennis_head_to_head": {
@@ -137,6 +139,7 @@ class ResearchPlanAgent:
             base.update(templates[key])
         elif market_type == "head_to_head":
             base.update(templates["tennis_head_to_head"])
+        base.update(self._category_template(category_type, subcategory, question))
         return base
 
     def _outcome_queries(self, label: str, question: str, context: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -156,6 +159,119 @@ class ResearchPlanAgent:
             q = raw.format(question=question, base=base, a=a, b=b)
             res.append({"query": q, "driver": "market_context", "priority": "high", "source_type": "news_search", "why": "Build shared market context before comparing outcomes."})
         return res
+
+    def _domain_queries(self, question: str, context: Dict[str, Any]) -> List[Dict[str, str]]:
+        rows: List[Dict[str, str]] = []
+        for raw, driver in context.get("domain_patterns_with_driver", []):
+            rows.append({"query": raw.format(question=question), "driver": driver, "priority": "high", "source_type": "news_search", "why": f"Target domain query for {driver}."})
+        for raw in context.get("domain_patterns", []):
+            rows.append({"query": raw.format(question=question), "driver": "primary_source", "priority": "medium", "source_type": "news_search", "why": "Target higher-quality domain or official source."})
+        return rows
+
+    def _category_template(self, category_type: str, subcategory: str, question: str) -> Dict[str, Any]:
+        c = f"{category_type} {subcategory} {question}".lower()
+        if any(k in c for k in ["tennis", "football", "nba", "esport", "sports", "match", "vs "]):
+            return {
+                "critical_drivers": ["recent_form", "injuries", "lineup", "h2h", "tournament_context"],
+                "domain_patterns_with_driver": [
+                    ("{question} recent form", "recent_form"),
+                    ("{question} H2H", "h2h"),
+                    ("{question} lineup injuries", "injuries"),
+                    ("{question} official schedule", "schedule"),
+                    ("site:tennisexplorer.com {question}", "ranking_level"),
+                    ("site:flashscore.com {question}", "recent_form"),
+                    ("site:atptour.com {question}", "ranking_level"),
+                    ("site:itftennis.com {question}", "ranking_level"),
+                ],
+            }
+        if any(k in c for k in ["politic", "election", "senate", "trump", "congress"]):
+            return {
+                "critical_drivers": ["polling_trend", "official_result", "court_ruling", "official_statement"],
+                "domain_patterns_with_driver": [
+                    ("{question} latest polls", "polling_trend"),
+                    ("{question} election commission results", "official_result"),
+                    ("{question} official statement", "official_statement"),
+                    ("{question} Reuters", "official_statement"),
+                    ("{question} AP News", "official_statement"),
+                    ("{question} Politico", "official_statement"),
+                    ("site:whitehouse.gov {question}", "official_statement"),
+                    ("site:congress.gov {question}", "legislative_vote"),
+                ],
+            }
+        if any(k in c for k in ["crypto", "bitcoin", "eth", "token", "etf"]):
+            return {
+                "critical_drivers": ["current_price_distance", "ETF_flows", "resistance_support", "official_announcement"],
+                "domain_patterns_with_driver": [
+                    ("{question} current price", "current_price_distance"),
+                    ("{question} ETF inflows", "ETF_flows"),
+                    ("{question} resistance support", "resistance_support"),
+                    ("{question} CoinDesk", "official_announcement"),
+                    ("{question} The Block", "official_announcement"),
+                    ("site:coindesk.com {question}", "official_announcement"),
+                    ("site:theblock.co {question}", "official_announcement"),
+                    ("site:sec.gov bitcoin ETF", "regulatory_deadline"),
+                ],
+            }
+        if any(k in c for k in ["mention", "transcript", "powell", "keyword", "statement"]):
+            return {
+                "critical_drivers": ["exact_keyword", "official_text", "source_of_resolution"],
+                "domain_patterns_with_driver": [
+                    ("{question} transcript", "official_text"),
+                    ("{question} exact phrase", "exact_keyword"),
+                    ("site:federalreserve.gov {question}", "source_of_resolution"),
+                    ("site:whitehouse.gov {question}", "source_of_resolution"),
+                ],
+            }
+        if any(k in c for k in ["fed", "cpi", "inflation", "gdp", "economy", "jobs", "rates"]):
+            return {
+                "critical_drivers": ["official_release", "consensus_forecast", "central_bank_statement"],
+                "domain_patterns_with_driver": [
+                    ("{question} Federal Reserve FOMC", "central_bank_statement"),
+                    ("{question} BLS CPI", "official_release"),
+                    ("{question} jobs report", "official_release"),
+                    ("{question} Reuters economists poll", "consensus_forecast"),
+                    ("{question} Bloomberg survey", "consensus_forecast"),
+                    ("site:federalreserve.gov {question}", "central_bank_statement"),
+                ],
+            }
+        if any(k in c for k in ["openai", "gpt", "spacex", "science", "tech", "ai model"]):
+            return {
+                "critical_drivers": ["official_statement", "launch_timeline", "delay_signal"],
+                "domain_patterns_with_driver": [
+                    ("{question} official announcement", "official_statement"),
+                    ("{question} roadmap", "launch_timeline"),
+                    ("{question} launch timeline", "launch_timeline"),
+                    ("site:openai.com {question}", "official_statement"),
+                ],
+            }
+        if any(k in c for k in ["hurricane", "weather", "noaa", "landfall", "earthquake", "wildfire"]):
+            return {
+                "critical_drivers": ["official_forecast", "observed_data", "landfall_track"],
+                "domain_patterns_with_driver": [
+                    ("{question} NOAA", "official_forecast"),
+                    ("{question} National Weather Service", "official_forecast"),
+                    ("site:weather.gov {question}", "official_forecast"),
+                    ("site:nhc.noaa.gov {question}", "landfall_track"),
+                ],
+            }
+        if any(k in c for k in ["gta", "movie", "music", "award", "culture", "entertainment"]):
+            return {
+                "critical_drivers": ["official_statement", "release_date", "social_momentum"],
+                "domain_patterns_with_driver": [
+                    ("{question} official release date", "release_date"),
+                    ("{question} trailer announcement", "social_momentum"),
+                    ("site:rockstargames.com GTA 6", "official_statement"),
+                ],
+            }
+        return {
+            "critical_drivers": ["primary_source", "latest_developments", "outcome_specific_evidence", "official_statement", "deadline"],
+            "domain_patterns_with_driver": [
+                ("{question} official source", "primary_source"),
+                ("{question} Reuters", "official_statement"),
+                ("{question} AP", "official_statement"),
+                ("{question} deadline", "deadline"),
+            ],
+        }
 
     def _topic_base(self, question: str) -> str:
         s = str(question or "").strip()
