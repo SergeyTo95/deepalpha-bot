@@ -8,6 +8,7 @@ from agents.data_requirement_agent import DataRequirementAgent
 from agents.evidence_extractor_agent import EvidenceExtractorAgent
 from agents.probability_estimator_agent import ProbabilityEstimatorAgent
 from agents.value_decision_agent import ValueDecisionAgent
+from agents.outcome_parser_agent import OutcomeParserAgent
 
 
 class TradingPlanAgent:
@@ -89,6 +90,18 @@ class TradingPlanAgent:
             subcategory = event_profile.get("subcategory")
         if event_profile.get("market_type") and event_profile.get("market_type") != "binary_event":
             market_type = event_profile.get("market_type")
+        resolution_summary = self._resolution_summary(category_type, subcategory, market_type)
+        event_deadline = self._extract_deadline(text)
+        outcome_map = OutcomeParserAgent().parse(
+            question=str(result.get("question") or market_data.get("question") or result.get("title") or market_data.get("title") or ""),
+            market_options=market_options,
+            event_profile=event_profile,
+            category_type=category_type,
+            subcategory=subcategory,
+            market_type=market_type,
+            deadline=event_deadline,
+            resolution_summary=resolution_summary,
+        )
 
         rel_sources = news_data.get("relevant_sources") or news_data.get("sources") or []
         queries = news_data.get("news_queries_used") or []
@@ -183,13 +196,14 @@ class TradingPlanAgent:
             "subcategory": subcategory,
             "market_type": market_type,
             "title": str(result.get("question") or market_data.get("question") or ""),
-            "resolution_summary": self._resolution_summary(category_type, subcategory, market_type),
+            "resolution_summary": resolution_summary,
             "market_options": market_options,
             "entities": entities,
             "primary_entity": entities[0] if entities else "",
             "opposing_entities": entities[1:] if len(entities) > 1 else [],
             "event_target": self._extract_target(text),
-            "event_deadline": self._extract_deadline(text),
+            "event_deadline": event_deadline,
+            "outcome_map": outcome_map,
             "event_profile": event_profile,
             "side_meanings": side_meanings,
             "event_drivers": event_drivers,
@@ -219,6 +233,7 @@ class TradingPlanAgent:
 
         forecast_card = ForecastCardAgent().build(deep)
         if isinstance(forecast_card, dict):
+            forecast_card["outcome_map"] = outcome_map
             forecast_card["event_profile"] = event_profile
             if isinstance(forecast_card.get("evidence"), dict):
                 forecast_card["evidence"]["for_yes"] = structured_evidence.get("for_yes") or forecast_card["evidence"].get("for_yes") or []
