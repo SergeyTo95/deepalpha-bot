@@ -1,6 +1,8 @@
+import logging
 import os
 import re
 import unicodedata
+from urllib.parse import urlparse, unquote
 from typing import Any, Dict, List, Tuple
 
 from agents.schemas.research_execution import empty_research_execution, safe_list, safe_str
@@ -18,10 +20,24 @@ except Exception:
     search_web = None
 
 
+logger = logging.getLogger(__name__)
+
+
 class ResearchExecutorAgent:
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     H2H_DRIVERS = {"recent_form", "ranking", "injury", "withdrawal", "surface", "h2h", "head_to_head"}
     AMBIGUOUS_TERMS = {"bengaluru", "texas", "june", "england", "open", "finals", "race", "market", "launch", "approval"}
+    TRUSTED_H2H_DOMAINS = {
+        "atptour.com",
+        "itftennis.com",
+        "sofascore.com",
+        "scores24.live",
+        "flashscore.com",
+        "tennisexplorer.com",
+        "aiscore.com",
+        "ultimatetennisstatistics.com",
+        "tennisabstract.com",
+    }
 
     def run(
         self,
@@ -71,6 +87,7 @@ class ResearchExecutorAgent:
             execution["notes"].append("Optional web search provider was not configured.")
 
         for query in selected:
+            logger.debug("ResearchExecutor query=%s", safe_str(query.get("query")))
             matched = self._match_existing_sources(query, normalized_sources, event_profile)
             google_results: List[Dict[str, str]] = []
             status = "not_available"
@@ -93,6 +110,7 @@ class ResearchExecutorAgent:
                 web_used = True
                 try:
                     web_raw = search_web(self._preserve_query_text(query.get("query")), limit=3)
+                    logger.debug("Web search raw_count=%s query=%s", len(web_raw) if isinstance(web_raw, list) else 0, safe_str(query.get("query")))
                     web_normalized, web_filtered = self._normalize_google_results(web_raw, query, question, event_profile)
                     filtered_sources_count += web_filtered
                     if not web_normalized:
@@ -291,11 +309,7 @@ class ResearchExecutorAgent:
         return out
 
     def _relevance(self, query: Dict[str, str], source: Dict[str, str], event_profile: Dict[str, Any]) -> str:
-        text = " ".join([
-            safe_str(source.get("title")).lower(),
-            safe_str(source.get("snippet")).lower(),
-            safe_str(source.get("source")).lower(),
-        ])
+        text = self._source_relevance_text(source)
         if not text:
             return None
         query_text = safe_str(query.get("query"))
@@ -304,7 +318,7 @@ class ResearchExecutorAgent:
             or safe_str(event_profile.get("event_type")).lower() == "tennis_head_to_head"
             or (" vs " in query_text.lower() and len(self._extract_names(query_text)) >= 2)
         ):
-            return self._h2h_relevance(query, text)
+            return self._h2h_relevance(query, source, text)
         query_terms = [t for t in safe_str(query.get("query")).lower().split() if len(t) >= 4 and t not in self.AMBIGUOUS_TERMS]
         outcome_terms = [t for t in safe_str(query.get("outcome_label")).lower().split() if len(t) >= 4]
         driver_terms = [t for t in safe_str(query.get("driver")).lower().split("_") if len(t) >= 3]
@@ -331,7 +345,7 @@ class ResearchExecutorAgent:
             return "medium"
         return None
 
-    def _h2h_relevance(self, query: Dict[str, str], text: str) -> str:
+    def _h2h_relevance(self, query: Dict[str, str], source: Dict[str, str], text: str) -> str:
         participants = self._extract_names(safe_str(query.get("query")))
         if len(participants) < 2:
             participants = self._extract_names(safe_str(query.get("outcome_label")))
@@ -341,16 +355,64 @@ class ResearchExecutorAgent:
         p2_aliases = self._aliases(participants[1])
         p1_hit = self._has_name(text, p1_aliases)
         p2_hit = self._has_name(text, p2_aliases)
+
+        url = safe_str(source.get("url") or source.get("link"))
+        trusted_domain = self._is_trusted_h2h_domain(url)
+        has_h2h_context = any(x in text for x in ["h2h", "head to head", "head_to_head", "live score", "match"])
+        has_both_slug_tokens = self._url_has_player_pair(url, p1_aliases, p2_aliases)
+        if trusted_domain and p1_hit and p2_hit and (has_h2h_context or has_both_slug_tokens):
+            logger.debug("Accepted trusted H2H source domain=%s title=%s", self._extract_domain(url), safe_str(source.get("title"))[:120])
+            return "high"
+
         driver = safe_str(query.get("driver")).lower()
         is_h2h_query = "h2h" in driver or "head_to_head" in driver or "head to head" in safe_str(query.get("query")).lower()
-        strong = any(x in self._norm(text) for x in ["recent form", "ranking", "injury", "withdrawal", "surface", "hard court", "clay", "grass", "h2h", "head to head"])
+        strong = any(x in text for x in ["recent form", "ranking", "injury", "withdrawal", "surface", "hard court", "clay", "grass", "h2h", "head to head"])
         if p1_hit and p2_hit:
             return "high"
         if is_h2h_query:
+            logger.debug("Rejected H2H source (missing both participants) title=%s", safe_str(source.get("title"))[:120])
             return "low"
         if (p1_hit or p2_hit) and (driver in self.H2H_DRIVERS or strong):
             return "medium"
         return "low"
+
+    def _normalize_player_aliases(self, text: str) -> str:
+        norm = self._norm(text)
+        return re.sub(r"\bkesharwani\b", "kesarwani", norm)
+
+    def _source_relevance_text(self, source: Dict[str, str]) -> str:
+        url = safe_str(source.get("url") or source.get("link"))
+        display_url = safe_str(source.get("display_url") or source.get("source_url"))
+        url_tokens = self._tokenize_url(url)
+        display_tokens = self._tokenize_url(display_url)
+        raw_text = " ".join([
+            safe_str(source.get("title")),
+            safe_str(source.get("snippet")),
+            safe_str(source.get("source")),
+            url,
+            display_url,
+            url_tokens,
+            display_tokens,
+        ])
+        normalized = self._normalize_player_aliases(raw_text)
+        logger.debug("Relevance text preview=%s", normalized[:180])
+        return normalized
+
+    def _tokenize_url(self, value: str) -> str:
+        decoded = unquote(safe_str(value)).lower()
+        return re.sub(r"[^a-z0-9]+", " ", decoded)
+
+    def _extract_domain(self, value: str) -> str:
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        return parsed.netloc.lower().lstrip("www.")
+
+    def _is_trusted_h2h_domain(self, url: str) -> bool:
+        domain = self._extract_domain(url)
+        return any(domain == d or domain.endswith(f".{d}") for d in self.TRUSTED_H2H_DOMAINS)
+
+    def _url_has_player_pair(self, url: str, p1_aliases: List[str], p2_aliases: List[str]) -> bool:
+        url_text = self._normalize_player_aliases(self._tokenize_url(url))
+        return self._has_name(url_text, p1_aliases) and self._has_name(url_text, p2_aliases)
 
     def _extract_names(self, text: str) -> List[str]:
         return [m.strip() for m in re.findall(r"[A-Za-z]+(?:\s+[A-Za-z]+)+", text or "")]
