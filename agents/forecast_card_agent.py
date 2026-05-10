@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List
 
 from agents.schemas.forecast_card import empty_forecast_card
@@ -90,7 +91,9 @@ class ForecastCardAgent:
             or "NONE"
         )
 
-        card["forecast"] = {"most_likely_outcome": str(analyst_view.get("best_priced_option") or data.get("bet_side") or ""), "probability_range": self._as_dict(data.get("probability_range")), "point_estimate": model_options, "confidence_level": str(analyst_view.get("confidence") or data.get("confidence") or "none"), "confidence_reason": "; ".join(self._as_list(analyst_view.get("why") or data.get("reasoning"))[:2]), "directional_lean_exists": bool(model_options)}
+        probability_range = self._as_dict(data.get("probability_range"))
+        most_likely = self._derive_most_likely_outcome(model_options, probability_range)
+        card["forecast"] = {"most_likely_outcome": most_likely, "probability_range": probability_range, "point_estimate": model_options, "confidence_level": str(analyst_view.get("confidence") or data.get("confidence") or "none"), "confidence_reason": "; ".join(self._as_list(analyst_view.get("why") or data.get("reasoning"))[:2]), "directional_lean_exists": bool(model_options)}
 
         card["evidence"].update({"evidence_strength": str(data.get("evidence_strength") or ("weak" if not model_options else "moderate")), "usable_sources_count": int(source_summary.get("usable_sources_count") or 0), "high_quality_sources_count": int(source_summary.get("high_quality_sources_count") or 0), "weak_sources_count": int(source_summary.get("weak_sources_count") or 0), "limitations": self._as_list(data.get("limitations"))})
 
@@ -123,3 +126,41 @@ class ForecastCardAgent:
 
     def _as_dict(self, value: Any) -> Dict[str, Any]:
         return value if isinstance(value, dict) else {}
+
+    def _derive_most_likely_outcome(self, point_estimate: Dict[str, Any], probability_range: Dict[str, Any]) -> str:
+        parsed_point = {str(k): self._to_float(v) for k, v in point_estimate.items()}
+        parsed_point = {k: v for k, v in parsed_point.items() if v is not None}
+        if parsed_point:
+            return max(parsed_point.items(), key=lambda kv: kv[1])[0]
+
+        midpoints: Dict[str, float] = {}
+        for key, val in probability_range.items():
+            midpoint = self._range_midpoint(val)
+            if midpoint is not None:
+                midpoints[str(key)] = midpoint
+        if midpoints:
+            return max(midpoints.items(), key=lambda kv: kv[1])[0]
+        return ""
+
+    def _to_float(self, value: Any) -> Any:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _range_midpoint(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            lo = self._to_float(value.get("low"))
+            hi = self._to_float(value.get("high"))
+            if lo is not None and hi is not None:
+                return (lo + hi) / 2.0
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            lo = self._to_float(value[0])
+            hi = self._to_float(value[1])
+            if lo is not None and hi is not None:
+                return (lo + hi) / 2.0
+        if isinstance(value, str):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", value)
+            if m:
+                return (float(m.group(1)) + float(m.group(2))) / 2.0
+        return None

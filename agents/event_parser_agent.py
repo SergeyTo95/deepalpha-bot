@@ -173,15 +173,39 @@ class EventParserAgent:
         m = re.search(r"\b(?:approve|sue|deny|reject)\s+(.+?)(?:\s+in\s+\d{4}|\?|$)", text, re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
+    def _extract_threshold(self, text: str) -> str:
+        raw = str(text or "")
+        patterns = [
+            r"(?:o/u)\s*(\d+(?:\.\d+)?)",
+            r"\bover\s*(\d+(?:\.\d+)?)",
+            r"\bunder\s*(\d+(?:\.\d+)?)",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, raw, re.IGNORECASE)
+            if m:
+                return m.group(1)
+
+        numerics = list(re.finditer(r"\b(\d+(?:\.\d+)?)\b", raw))
+        if not numerics:
+            return ""
+        if len(numerics) == 1:
+            return numerics[0].group(1)
+
+        last = numerics[-1].group(1)
+        if "." in last:
+            return last
+        if re.search(r"\b(?:set|game|games|match)\s+%s\b" % re.escape(last), raw, re.IGNORECASE):
+            return ""
+        return last
 
     def _detect_market_subtype(self, text: str, event_type: str, profile: Dict[str, str]) -> Dict[str, Any]:
         t = (text or "").lower()
         if re.search(r"set\s*1|first set", t) and re.search(r"games", t) and re.search(r"o/u|over|under", t):
-            line = re.search(r"(\d+(?:\.\d+)?)", t)
+            threshold = self._extract_threshold(text)
             return {
                 "market_subtype": "set_total_games",
                 "resolution_metric": "games",
-                "threshold": line.group(1) if line else "",
+                "threshold": threshold,
                 "period": "set_1",
                 "set_number": 1,
                 "side_semantics": ["OVER", "UNDER"],
@@ -203,16 +227,16 @@ class EventParserAgent:
             if re.search(r"set\s*1\s*winner|first set winner", t):
                 out.update({"market_subtype": "first_set_winner", "resolution_metric": "set_result", "period": "set_1", "set_number": 1, "driver_family": ["first_set_form", "hold_rate", "break_rate", "surface_speed", "early_match_volatility"]})
             m = re.search(r"(?:set\s*(\d+).{0,20}?games?.{0,20}?(?:o/u|over|under))|(?:first set total games)", t)
-            line = re.search(r"(?:o/u|over|under)\s*(\d+(?:\.\d+)?)|(?:\b(\d+(?:\.\d+)?)\b\s*games?)", t)
+            threshold = self._extract_threshold(text)
             if m:
                 sn = int(m.group(1)) if m.group(1) else 1
-                out.update({"market_subtype": "set_total_games", "resolution_metric": "games", "period": f"set_{sn}", "set_number": sn, "threshold": ((line.group(1) or line.group(2)) if line else ""), "side_semantics": ["OVER", "UNDER"], "driver_family": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "serve_strength", "return_strength", "surface_speed", "recent_first_set_lengths", "over_under_tendency", "early_match_volatility"], "subtype_confidence": "high"})
+                out.update({"market_subtype": "set_total_games", "resolution_metric": "games", "period": f"set_{sn}", "set_number": sn, "threshold": threshold, "side_semantics": ["OVER", "UNDER"], "driver_family": ["first_set_games_average", "hold_rate", "break_rate", "tiebreak_frequency", "serve_strength", "return_strength", "surface_speed", "recent_first_set_lengths", "over_under_tendency", "early_match_volatility"], "subtype_confidence": "high"})
             if re.search(r"total games?\s*(?:o/u|over|under)|match games", t) and "set" not in t:
-                out.update({"market_subtype": "match_total_games", "resolution_metric": "games", "threshold": ((line.group(1) or line.group(2)) if line else ""), "side_semantics": ["OVER", "UNDER"], "driver_family": ["hold_rate", "break_rate", "set_length_profile", "surface_speed"]})
+                out.update({"market_subtype": "match_total_games", "resolution_metric": "games", "threshold": threshold, "side_semantics": ["OVER", "UNDER"], "driver_family": ["hold_rate", "break_rate", "set_length_profile", "surface_speed"]})
             if re.search(r"[+-]\d+(?:\.\d+)?\s*games|handicap|spread", t):
                 out.update({"market_subtype": "handicap", "resolution_metric": "game_spread", "driver_family": ["game_differential_profile", "serve_dominance", "break_margin", "opponent_strength"]})
             if re.search(r"total games over|total games under", t) and "vs" in t:
-                out.update({"market_subtype": "player_total_games", "resolution_metric": "player_games", "threshold": ((line.group(1) or line.group(2)) if line else "")})
+                out.update({"market_subtype": "player_total_games", "resolution_metric": "player_games", "threshold": threshold})
             if re.search(r"correct score|wins\s*\d-\d", t):
                 out.update({"market_subtype": "correct_score", "resolution_metric": "set_score", "driver_family": ["straight_sets_probability", "matchup_profile", "serve_hold_break"]})
             return out
