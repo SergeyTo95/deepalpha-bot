@@ -309,6 +309,9 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     if url:
         kb.add(InlineKeyboardButton(open_label, url=url))
 
+    if _is_top_analysis_enabled():
+        kb.add(InlineKeyboardButton(_get_top_analysis_button_label(lang), callback_data=f"top_analysis_start:{user_id}"))
+
     return kb
 
 
@@ -560,6 +563,83 @@ def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
     if not user or user["is_vip"]:
         return
     add_tokens(user_id, -int(get_setting(price_key, default)))
+
+
+def _get_top_analysis_price() -> int:
+    raw_value = get_setting("top_analysis_price_tokens", "70")
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return 70
+
+
+def _is_top_analysis_enabled() -> bool:
+    return get_setting("top_analysis_enabled", "false").lower() == "true"
+
+
+def _top_analysis_preflight_ready() -> bool:
+    required_toggles = (
+        "top_analysis_research_enabled",
+        "top_analysis_chief_enabled",
+        "top_analysis_audit_enabled",
+        "top_analysis_social_enabled",
+    )
+    if any(get_setting(toggle, "true").lower() != "true" for toggle in required_toggles):
+        return False
+
+    from agents.top_analysis.provider_router import TopAnalysisProviderRouter
+
+    router = TopAnalysisProviderRouter()
+    return router.is_execution_ready()
+
+
+def _get_top_analysis_button_label(lang: str) -> str:
+    price = _get_top_analysis_price()
+    return f"🔥 Top Analysis — {price} токенов" if lang == "ru" else f"🔥 Top Analysis — {price} tokens"
+
+
+def _get_top_analysis_maintenance_message(lang: str, timeout_variant: bool = False) -> str:
+    if lang == "ru":
+        if timeout_variant:
+            return (
+                "🔧 Top Analysis временно недоступен.\n"
+                "Один из модулей расширенного анализа не ответил вовремя. Токены не списаны. Попробуй позже."
+            )
+        return (
+            "🔧 Top Analysis временно недоступен.\n"
+            "Идёт техническое обслуживание расширенного анализа. Попробуй позже."
+        )
+    if timeout_variant:
+        return (
+            "🔧 Top Analysis is temporarily unavailable.\n"
+            "One part of the extended analysis did not respond in time. No tokens were charged. Please try again later."
+        )
+    return (
+        "🔧 Top Analysis is temporarily unavailable.\n"
+        "Extended analysis is under maintenance. Please try again later."
+    )
+
+
+def _get_top_analysis_context_missing_message(lang: str) -> str:
+    return (
+        "⚠️ Не удалось восстановить данные рынка. Отправь ссылку на рынок ещё раз и запусти Top Analysis после обычного анализа."
+        if lang == "ru"
+        else "⚠️ Could not restore market data. Send the market link again and start Top Analysis after the normal analysis."
+    )
+
+
+def _get_top_analysis_balance_message(lang: str, price: int) -> str:
+    if lang == "ru":
+        return (
+            "💎 Недостаточно токенов для Top Analysis.\n"
+            f"Стоимость: {price} токенов.\n"
+            "Пополните баланс в кассе."
+        )
+    return (
+        "💎 Not enough tokens for Top Analysis.\n"
+        f"Price: {price} tokens.\n"
+        "Please top up your balance in the cashier."
+    )
 
 
 def _confidence_emoji(confidence: str) -> str:
@@ -4641,6 +4721,36 @@ async def watchlist_add_callback(callback: types.CallbackQuery):
 
     await callback.answer("✅", show_alert=False)
     await callback.message.answer(msg)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("top_analysis_start:"))
+async def top_analysis_start_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+
+    await callback.answer()
+
+    if not _is_top_analysis_enabled():
+        return
+
+    analysis = last_analysis_cache.get(uid)
+    required_keys = ("question", "options", "url")
+    if not analysis or not any(analysis.get(k) for k in required_keys):
+        await callback.message.answer(_get_top_analysis_context_missing_message(lang))
+        return
+
+    if not _top_analysis_preflight_ready():
+        await callback.message.answer(_get_top_analysis_maintenance_message(lang))
+        return
+
+    price = _get_top_analysis_price()
+    user = get_user(uid)
+    user_balance = (user or {}).get("token_balance", 0)
+    if user_balance < price:
+        await callback.message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+        return
+
+    await callback.message.answer(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
 
 
 @dp.callback_query_handler(lambda c: c.data == "wl_list")
