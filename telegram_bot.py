@@ -3910,20 +3910,11 @@ async def start_handler_any_state(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=["admin"], state="*")
 async def admin_handler_any_state(message: types.Message, state: FSMContext):
-    current = await state.get_state()
-    if current:
-        await state.finish()
-    uid = message.from_user.id
-    lang = get_user_lang(uid)
-    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
-        await message.answer("⛔️ Только для админа." if lang == "ru" else "⛔️ Admin only.", reply_markup=get_main_keyboard(uid))
+    await state.finish()
+    from bot.admin import is_admin, admin_main_kb
+    if not is_admin(message.from_user.id):
         return
-    await message.answer(
-        "🔧 Админ-меню: используй /admin без активного сценария."
-        if lang == "ru" else
-        "🔧 Admin menu: use /admin with no active flow.",
-        reply_markup=get_main_keyboard(uid),
-    )
+    await message.answer("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
 
 
 @dp.message_handler(commands=["profile"])
