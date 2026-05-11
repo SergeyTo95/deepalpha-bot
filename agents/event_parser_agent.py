@@ -291,6 +291,7 @@ class EventParserAgent:
             ])
 
         return {
+            "event_type": "official_confirmation_event",
             "category_type": "politics",
             "subcategory": "official_disclosure",
             "market_type": "binary_event",

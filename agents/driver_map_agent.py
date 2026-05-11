@@ -26,10 +26,16 @@ class DriverMapAgent:
         market_options: Dict[str, float] = None,
     ) -> DriverMap:
         event_type = str(event_profile.get("event_type") or "generic_binary_event")
+        market_subtype = str(event_profile.get("market_subtype") or "")
         category_type = str(event_profile.get("category_type") or "other")
         market_type = str(event_profile.get("market_type") or "binary_event")
         out = empty_driver_map(event_type=event_type, category_type=category_type, market_type=market_type)
-        tpl = self.templates.get(event_type, self.templates.get("generic_binary_event", {}))
+        template_key = event_type
+        if template_key not in self.templates and market_subtype in self.templates:
+            template_key = market_subtype
+        if template_key not in self.templates:
+            template_key = "generic_binary_event"
+        tpl = self.templates.get(template_key, {})
 
         out["yes_drivers"] = self._enrich_driver_data(tpl.get("yes", []), tpl.get("required", []))
         out["no_drivers"] = self._enrich_driver_data(tpl.get("no", []), tpl.get("required", []))
