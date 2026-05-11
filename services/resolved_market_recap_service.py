@@ -55,3 +55,8 @@ def render_resolved_market_recap(
         resolved_outcome=resolved_outcome.strip(),
         bot_username=bot_username.strip(),
     )
+
+
+def prepare_auto_market_recap_candidate() -> None:
+    # Placeholder only: auto polling/scheduling is intentionally not implemented in this PR.
+    return None

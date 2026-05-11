@@ -61,6 +61,7 @@ class PricingStates(StatesGroup):
     waiting_top_analysis_price = State()
     waiting_top_analysis_timeout = State()
     waiting_market_recap_times = State()
+    waiting_market_recap_auto_times = State()
     waiting_market_recap_min_volume = State()
     waiting_market_recap_categories = State()
 
@@ -221,7 +222,11 @@ def pricing_kb():
     free_analyses = get_setting("free_trial_analyses", "1")
     free_opp = get_setting("free_trial_opportunities", "1")
     recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_manual = get_setting("market_recap_manual_enabled", "true")
+    recap_auto = get_setting("market_recap_auto_enabled", "false")
+    recap_admin_approval = get_setting("market_recap_require_admin_approval", "true")
     recap_times = get_setting("market_recap_times_per_day", "2")
+    recap_auto_times = get_setting("market_recap_auto_times", "12:00,20:00")
     recap_min_volume = get_setting("market_recap_min_volume", "0")
     recap_all = get_setting("market_recap_send_to_all", "false")
     recap_active = get_setting("market_recap_send_to_active_users", "true")
@@ -246,7 +251,11 @@ def pricing_kb():
         InlineKeyboardButton(f"💡 Бесплатных сигналов: {free_opp}", callback_data="pricing_set_free_opp"),
         InlineKeyboardButton("─── 🏁 Market Recap ───", callback_data="pricing_noop"),
         InlineKeyboardButton(recap_enabled_label, callback_data="pricing_toggle_market_recap"),
+        InlineKeyboardButton(f"📤 Manual Recap: {'ON' if recap_manual == 'true' else 'OFF'}", callback_data="pricing_toggle_market_recap_manual"),
+        InlineKeyboardButton(f"🤖 Auto Recap: {'ON' if recap_auto == 'true' else 'OFF'}", callback_data="pricing_toggle_market_recap_auto"),
+        InlineKeyboardButton(f"🛡 Admin approval: {'ON' if recap_admin_approval == 'true' else 'OFF'}", callback_data="pricing_toggle_market_recap_admin_approval"),
         InlineKeyboardButton(f"📨 Sends per day: {recap_times}", callback_data="pricing_set_market_recap_times"),
+        InlineKeyboardButton(f"⏰ Auto times: {recap_auto_times}", callback_data="pricing_set_market_recap_auto_times"),
         InlineKeyboardButton(f"📊 Min market volume: {recap_min_volume}", callback_data="pricing_set_market_recap_min_volume"),
         InlineKeyboardButton(f"👥 Audience: {audience}", callback_data="pricing_toggle_market_recap_audience"),
         InlineKeyboardButton(f"🏷 Categories: {recap_categories}", callback_data="pricing_set_market_recap_categories"),
@@ -269,7 +278,11 @@ def pricing_text():
     free_analyses = get_setting("free_trial_analyses", "1")
     free_opp = get_setting("free_trial_opportunities", "1")
     recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_manual = get_setting("market_recap_manual_enabled", "true")
+    recap_auto = get_setting("market_recap_auto_enabled", "false")
+    recap_admin_approval = get_setting("market_recap_require_admin_approval", "true")
     recap_times = get_setting("market_recap_times_per_day", "2")
+    recap_auto_times = get_setting("market_recap_auto_times", "12:00,20:00")
     recap_language = get_setting("market_recap_language_mode", "user_language")
     recap_min_volume = get_setting("market_recap_min_volume", "0")
     recap_all = get_setting("market_recap_send_to_all", "false")
@@ -291,7 +304,11 @@ def pricing_text():
         f"Бесплатных сигналов: {free_opp}\n\n"
         f"—— 🏁 Market Recap ——\n\n"
         f"🏁 Market Recap: {'ON' if recap_enabled == 'true' else 'OFF'}\n"
+        f"📤 Manual Recap: {'ON' if recap_manual == 'true' else 'OFF'}\n"
+        f"🤖 Auto Recap: {'ON' if recap_auto == 'true' else 'OFF'}\n"
+        f"🛡 Admin approval: {'ON' if recap_admin_approval == 'true' else 'OFF'}\n"
         f"📨 Рассылок в день: {recap_times}\n"
+        f"⏰ Auto times: {recap_auto_times}\n"
         f"🌐 Язык: {'по языку пользователя' if recap_language == 'user_language' else recap_language}\n"
         f"📊 Мин. объём рынка: {recap_min_volume}\n"
         f"👥 Кому отправлять: {recap_audience}\n"
@@ -1347,6 +1364,30 @@ def register_admin(dp: Dispatcher):
         await callback.answer(f"Market Recap: {new_val.upper()}")
         await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
 
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap_manual")
+    async def pricing_toggle_market_recap_manual(callback: types.CallbackQuery):
+        current = get_setting("market_recap_manual_enabled", "true")
+        new_val = "false" if current == "true" else "true"
+        set_setting("market_recap_manual_enabled", new_val)
+        await callback.answer(f"Manual recap: {new_val.upper()}")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap_auto")
+    async def pricing_toggle_market_recap_auto(callback: types.CallbackQuery):
+        current = get_setting("market_recap_auto_enabled", "false")
+        new_val = "false" if current == "true" else "true"
+        set_setting("market_recap_auto_enabled", new_val)
+        await callback.answer(f"Auto recap: {new_val.upper()}")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap_admin_approval")
+    async def pricing_toggle_market_recap_admin_approval(callback: types.CallbackQuery):
+        current = get_setting("market_recap_require_admin_approval", "true")
+        new_val = "false" if current == "true" else "true"
+        set_setting("market_recap_require_admin_approval", new_val)
+        await callback.answer(f"Admin approval: {new_val.upper()}")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_times")
     async def pricing_set_market_recap_times(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_market_recap_times.set()
@@ -1365,6 +1406,30 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Sends per day: {value}")
         except ValueError:
             await message.answer("❌ Integer required")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_auto_times")
+    async def pricing_set_market_recap_auto_times(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_market_recap_auto_times.set()
+        current = get_setting("market_recap_auto_times", "12:00,20:00")
+        await callback.message.answer(
+            f"Current auto times: {current}\n\nEnter comma-separated HH:MM values (example: 12:00,20:00):"
+        )
+
+    @dp.message_handler(state=PricingStates.waiting_market_recap_auto_times)
+    async def pricing_save_market_recap_auto_times(message: types.Message, state: FSMContext):
+        value = message.text.strip()
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if not parts:
+            await message.answer("❌ Empty value")
+            return
+        valid = all(re.match(r"^(?:[01]\\d|2[0-3]):[0-5]\\d$", p) for p in parts)
+        if not valid:
+            await message.answer("❌ Invalid format. Use HH:MM,HH:MM")
+            return
+        normalized = ",".join(parts)
+        set_setting("market_recap_auto_times", normalized)
+        await state.finish()
+        await message.answer(f"✅ Auto times: {normalized}")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_min_volume")
     async def pricing_set_market_recap_min_volume(callback: types.CallbackQuery, state: FSMContext):
