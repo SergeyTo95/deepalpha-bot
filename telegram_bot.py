@@ -3958,8 +3958,8 @@ def _get_market_recap_recipients() -> List[int]:
     if send_all:
         return get_all_user_ids()
     if send_active:
-        # TODO: switch to a dedicated active-user selector when a reliable helper is available.
-        return get_all_user_ids()
+        # TODO: implement and use a reliable active-user selector helper.
+        return []
     return []
 
 
@@ -4048,7 +4048,22 @@ async def recap_send_confirm(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     market_title = data.get("market_title", "")
     resolved_outcome = data.get("resolved_outcome", "")
+
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_manual = get_setting("market_recap_manual_enabled", "true")
+    if recap_enabled != "true" or recap_manual != "true":
+        await state.finish()
+        await callback.message.answer("❌ Market Recap отправка отменена: функция выключена в админке.")
+        await callback.answer()
+        return
+
     recipients = _get_market_recap_recipients()
+    if not recipients:
+        await state.finish()
+        await callback.message.answer("⚠️ Нет получателей для Market Recap.")
+        await callback.answer()
+        return
+
     sent, failed = 0, 0
     username = f"@{BOT_USERNAME}"
 
