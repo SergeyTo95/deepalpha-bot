@@ -220,6 +220,14 @@ def pricing_kb():
     free_trial_label = "✅ Пробный период: ON" if free_trial == "on" else "❌ Пробный период: OFF"
     free_analyses = get_setting("free_trial_analyses", "1")
     free_opp = get_setting("free_trial_opportunities", "1")
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_times = get_setting("market_recap_times_per_day", "2")
+    recap_min_volume = get_setting("market_recap_min_volume", "0")
+    recap_all = get_setting("market_recap_send_to_all", "false")
+    recap_active = get_setting("market_recap_send_to_active_users", "true")
+    recap_categories = get_setting("market_recap_categories", "all")
+    recap_enabled_label = "🏁 Market Recap: ON" if recap_enabled == "true" else "🏁 Market Recap: OFF"
+    audience = "all users" if recap_all == "true" else ("active users" if recap_active == "true" else "none")
 
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
@@ -2904,11 +2912,3 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
-    recap_enabled = get_setting("market_recap_enabled", "false")
-    recap_times = get_setting("market_recap_times_per_day", "2")
-    recap_min_volume = get_setting("market_recap_min_volume", "0")
-    recap_all = get_setting("market_recap_send_to_all", "false")
-    recap_active = get_setting("market_recap_send_to_active_users", "true")
-    recap_categories = get_setting("market_recap_categories", "all")
-    recap_enabled_label = "🏁 Market Recap: ON" if recap_enabled == "true" else "🏁 Market Recap: OFF"
-    audience = "all users" if recap_all == "true" else ("active users" if recap_active == "true" else "none")
