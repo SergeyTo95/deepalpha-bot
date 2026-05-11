@@ -384,7 +384,12 @@ def init_db():
 
     market_recap_defaults = [
         ("market_recap_enabled", "false"),
+        ("market_recap_manual_enabled", "true"),
+        ("market_recap_auto_enabled", "false"),
+        ("market_recap_require_admin_approval", "true"),
         ("market_recap_times_per_day", "2"),
+        ("market_recap_auto_times", "12:00,20:00"),
+        ("market_recap_max_per_day", "2"),
         ("market_recap_language_mode", "user_language"),
         ("market_recap_min_volume", "0"),
         ("market_recap_send_to_all", "false"),
@@ -522,6 +527,19 @@ def get_all_users(limit: int = 1000) -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
     except Exception as e:
         print(f"get_all_users error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_all_user_ids() -> List[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT user_id FROM users ORDER BY created_at DESC")
+        return [int(row[0]) for row in cursor.fetchall() if row and row[0] is not None]
+    except Exception as e:
+        print(f"get_all_user_ids error: {e}")
         return []
     finally:
         conn.close()

@@ -1,8 +1,9 @@
 import re
+import asyncio
 import os
 import logging
 import json
-from typing import Dict
+from typing import Dict, List
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -37,6 +38,7 @@ from db.database import (
     is_subscribed_to_author, get_user_subscriptions,
     get_author_subscribers, toggle_subscription_notifications,
     get_subscription_feed, get_author_donations_list,
+    get_all_user_ids,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -80,6 +82,11 @@ class CryptoStates(StatesGroup):
 class AnalysisStates(StatesGroup):
     waiting_for_link = State()
     waiting_for_top_analysis_link = State()
+
+
+class MarketRecapStates(StatesGroup):
+    waiting_market_title = State()
+    waiting_market_outcome = State()
 
 
 CATEGORY_LABELS = {
@@ -3943,6 +3950,141 @@ async def recap_preview_handler(message: types.Message):
     )
     await message.answer(f"🇷🇺 RU preview:\n\n{ru_preview}")
     await message.answer(f"🇬🇧 EN preview:\n\n{en_preview}")
+
+
+def _get_market_recap_recipients() -> List[int]:
+    send_all = get_setting("market_recap_send_to_all", "false") == "true"
+    send_active = get_setting("market_recap_send_to_active_users", "true") == "true"
+    if send_all:
+        return get_all_user_ids()
+    if send_active:
+        # TODO: implement and use a reliable active-user selector helper.
+        return []
+    return []
+
+
+@dp.message_handler(commands=["recap_send"], state="*")
+async def recap_send_start(message: types.Message, state: FSMContext):
+    from bot.admin import is_admin
+
+    if not is_admin(message.from_user.id):
+        await message.answer("🔒 Команда только для администратора.")
+        return
+
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    if recap_enabled != "true":
+        await message.answer(
+            "🏁 Market Recap выключен в админке.\n"
+            "Включи его в Pricing settings перед рассылкой."
+        )
+        return
+
+    recap_manual = get_setting("market_recap_manual_enabled", "true")
+    if recap_manual != "true":
+        await message.answer("📤 Manual Market Recap выключен в админке.")
+        return
+
+    await state.finish()
+    await MarketRecapStates.waiting_market_title.set()
+    await message.answer("🏁 Market Recap\nОтправь название завершённого рынка.")
+
+
+@dp.message_handler(state=MarketRecapStates.waiting_market_title)
+async def recap_send_collect_title(message: types.Message, state: FSMContext):
+    await state.update_data(market_title=message.text.strip())
+    await MarketRecapStates.waiting_market_outcome.set()
+    await message.answer(
+        "Теперь отправь результат рынка.\n"
+        "Например: YES, NO, Over, Under, Candidate A."
+    )
+
+
+@dp.message_handler(state=MarketRecapStates.waiting_market_outcome)
+async def recap_send_collect_outcome(message: types.Message, state: FSMContext):
+    from bot.admin import is_admin
+    if not is_admin(message.from_user.id):
+        await state.finish()
+        return
+
+    data = await state.get_data()
+    market_title = data.get("market_title", "").strip()
+    resolved_outcome = message.text.strip()
+    recipients = _get_market_recap_recipients()
+    audience = "all users" if get_setting("market_recap_send_to_all", "false") == "true" else "active users"
+    username = f"@{BOT_USERNAME}"
+    ru_preview = render_resolved_market_recap("ru", market_title, resolved_outcome, bot_username=username)
+    en_preview = render_resolved_market_recap("en", market_title, resolved_outcome, bot_username=username)
+    await state.update_data(resolved_outcome=resolved_outcome)
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ Send Market Recap", callback_data="recap_send_confirm"),
+        InlineKeyboardButton("❌ Cancel", callback_data="recap_send_cancel"),
+    )
+    await message.answer(
+        f"🇷🇺 RU preview:\n\n{ru_preview}\n\n"
+        f"🇬🇧 EN preview:\n\n{en_preview}\n\n"
+        f"👥 Audience: {audience}\n"
+        f"👤 Estimated recipients: {len(recipients)}",
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == "recap_send_cancel", state=MarketRecapStates.waiting_market_outcome)
+async def recap_send_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await callback.message.answer("❌ Market Recap рассылка отменена.")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "recap_send_confirm", state=MarketRecapStates.waiting_market_outcome)
+async def recap_send_confirm(callback: types.CallbackQuery, state: FSMContext):
+    from bot.admin import is_admin
+    if not is_admin(callback.from_user.id):
+        await state.finish()
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    market_title = data.get("market_title", "")
+    resolved_outcome = data.get("resolved_outcome", "")
+
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_manual = get_setting("market_recap_manual_enabled", "true")
+    if recap_enabled != "true" or recap_manual != "true":
+        await state.finish()
+        await callback.message.answer("❌ Market Recap отправка отменена: функция выключена в админке.")
+        await callback.answer()
+        return
+
+    recipients = _get_market_recap_recipients()
+    if not recipients:
+        await state.finish()
+        await callback.message.answer("⚠️ Нет получателей для Market Recap.")
+        await callback.answer()
+        return
+
+    sent, failed = 0, 0
+    username = f"@{BOT_USERNAME}"
+
+    for idx, user_id in enumerate(recipients, start=1):
+        try:
+            lang = get_user_lang(user_id)
+            text = render_resolved_market_recap(lang, market_title, resolved_outcome, bot_username=username)
+            await bot.send_message(user_id, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        if idx % 20 == 0:
+            await asyncio.sleep(0.1)
+
+    await state.finish()
+    await callback.message.answer(
+        "✅ Market Recap отправлен.\n\n"
+        f"Отправлено: {sent}\n"
+        f"Ошибок: {failed}"
+    )
+    await callback.answer()
 
 
 @dp.message_handler(commands=["profile"])
