@@ -58,6 +58,8 @@ class PricingStates(StatesGroup):
     waiting_sub_daily_opportunities = State()
     waiting_free_trial_analyses = State()
     waiting_free_trial_opportunities = State()
+    waiting_top_analysis_price = State()
+    waiting_top_analysis_timeout = State()
 
 
 class PackageStates(StatesGroup):
@@ -137,12 +139,70 @@ def admin_main_kb():
 
 def ai_menu_kb():
     current = get_setting("active_model", "gemini-2.5-flash")
+    top_enabled = get_setting("top_analysis_enabled", "false")
+    top_price = get_setting("top_analysis_price_tokens", "70")
+    top_research = get_setting("top_analysis_research_enabled", "true")
+    top_chief = get_setting("top_analysis_chief_enabled", "true")
+    top_audit = get_setting("top_analysis_audit_enabled", "true")
+    top_social = get_setting("top_analysis_social_enabled", "true")
+    top_timeout = get_setting("top_analysis_timeout_sec", "120")
+
     kb = InlineKeyboardMarkup(row_width=1)
     for key, info in MODELS.items():
         label = f"✅ {info['name']}" if info["model"] == current else info["name"]
         kb.add(InlineKeyboardButton(label, callback_data=f"ai_set_{key}"))
+    kb.add(
+        InlineKeyboardButton("─── 🔥 Top Analysis ───", callback_data="ai_top_noop"),
+        InlineKeyboardButton(
+            f"🔥 Top Analysis: {'ON' if top_enabled == 'true' else 'OFF'}",
+            callback_data="ai_top_toggle_enabled"
+        ),
+        InlineKeyboardButton(f"💎 Top Analysis price: {top_price} tokens", callback_data="ai_top_set_price"),
+        InlineKeyboardButton(
+            f"🌐 Research model: {'ON' if top_research == 'true' else 'OFF'}",
+            callback_data="ai_top_toggle_research"
+        ),
+        InlineKeyboardButton(
+            f"🧠 Chief forecast: {'ON' if top_chief == 'true' else 'OFF'}",
+            callback_data="ai_top_toggle_chief"
+        ),
+        InlineKeyboardButton(
+            f"🛡 Risk audit: {'ON' if top_audit == 'true' else 'OFF'}",
+            callback_data="ai_top_toggle_audit"
+        ),
+        InlineKeyboardButton(
+            f"𝕏 Social signal: {'ON' if top_social == 'true' else 'OFF'}",
+            callback_data="ai_top_toggle_social"
+        ),
+        InlineKeyboardButton(f"⏱ Timeout: {top_timeout} sec", callback_data="ai_top_set_timeout"),
+    )
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
     return kb
+
+
+def ai_menu_text(current_model: str) -> str:
+    top_enabled = get_setting("top_analysis_enabled", "false")
+    top_price = get_setting("top_analysis_price_tokens", "70")
+    top_research = get_setting("top_analysis_research_enabled", "true")
+    top_chief = get_setting("top_analysis_chief_enabled", "true")
+    top_audit = get_setting("top_analysis_audit_enabled", "true")
+    top_social = get_setting("top_analysis_social_enabled", "true")
+    top_timeout = get_setting("top_analysis_timeout_sec", "120")
+    return (
+        f"🤖 AI Settings\n\n"
+        f"Глобальная модель: {current_model}\n"
+        f"Используется для обычного анализа, личного сигнала и сигнала часа.\n"
+        f"Global model: {current_model}\n"
+        f"Used for normal analysis, personal signal and signal of the hour.\n\n"
+        f"—— 🔥 Top Analysis ——\n\n"
+        f"🔥 Top Analysis: {'ON' if top_enabled == 'true' else 'OFF'}\n"
+        f"💎 Top Analysis price: {top_price} tokens\n\n"
+        f"🌐 Research model: {'ON' if top_research == 'true' else 'OFF'}\n"
+        f"🧠 Chief forecast: {'ON' if top_chief == 'true' else 'OFF'}\n"
+        f"🛡 Risk audit: {'ON' if top_audit == 'true' else 'OFF'}\n"
+        f"𝕏 Social signal: {'ON' if top_social == 'true' else 'OFF'}\n\n"
+        f"⏱ Timeout: {top_timeout} sec"
+    )
 
 
 def pricing_kb():
@@ -967,10 +1027,7 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
     async def ai_menu(callback: types.CallbackQuery):
         current = get_setting("active_model", "gemini-2.5-flash")
-        await callback.message.edit_text(
-            f"🤖 AI Settings\n\nТекущая модель: {current}",
-            reply_markup=ai_menu_kb()
-        )
+        await callback.message.edit_text(ai_menu_text(current), reply_markup=ai_menu_kb())
 
     @dp.callback_query_handler(lambda c: c.data.startswith("ai_set_"))
     async def ai_set(callback: types.CallbackQuery):
@@ -983,10 +1040,72 @@ def register_admin(dp: Dispatcher):
         set_setting("active_model_news", info["news"])
         set_setting("active_model_decision", info["decision"])
         await callback.answer(f"✅ {info['name']}")
-        await callback.message.edit_text(
-            f"🤖 AI Settings\n\nТекущая модель: {info['model']}",
-            reply_markup=ai_menu_kb()
-        )
+        await callback.message.edit_text(ai_menu_text(info["model"]), reply_markup=ai_menu_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "ai_top_noop")
+    async def ai_top_noop(callback: types.CallbackQuery):
+        await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "ai_top_toggle_enabled")
+    async def ai_top_toggle_enabled(callback: types.CallbackQuery):
+        current = get_setting("top_analysis_enabled", "false")
+        set_setting("top_analysis_enabled", "false" if current == "true" else "true")
+        model = get_setting("active_model", "gemini-2.5-flash")
+        await callback.message.edit_text(ai_menu_text(model), reply_markup=ai_menu_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "ai_top_set_price")
+    async def ai_top_set_price(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_top_analysis_price.set()
+        current = get_setting("top_analysis_price_tokens", "70")
+        await callback.message.answer(f"Текущая цена Top Analysis: {current}\n\nВведи новую цену в токенах:")
+
+    @dp.message_handler(state=PricingStates.waiting_top_analysis_price)
+    async def ai_top_set_price_save(message: types.Message, state: FSMContext):
+        try:
+            value = int(message.text.strip())
+            if value < 0 or value > 100000:
+                await message.answer("❌ 0-100000")
+                return
+            set_setting("top_analysis_price_tokens", str(value))
+            await state.finish()
+            await message.answer(f"✅ Top Analysis price: {value} tokens", reply_markup=ai_menu_kb())
+        except ValueError:
+            await message.answer("❌ Целое число")
+
+    @dp.callback_query_handler(lambda c: c.data in {
+        "ai_top_toggle_research", "ai_top_toggle_chief", "ai_top_toggle_audit", "ai_top_toggle_social"
+    })
+    async def ai_top_toggle_roles(callback: types.CallbackQuery):
+        mapping = {
+            "ai_top_toggle_research": "top_analysis_research_enabled",
+            "ai_top_toggle_chief": "top_analysis_chief_enabled",
+            "ai_top_toggle_audit": "top_analysis_audit_enabled",
+            "ai_top_toggle_social": "top_analysis_social_enabled",
+        }
+        key = mapping.get(callback.data)
+        current = get_setting(key, "true")
+        set_setting(key, "false" if current == "true" else "true")
+        model = get_setting("active_model", "gemini-2.5-flash")
+        await callback.message.edit_text(ai_menu_text(model), reply_markup=ai_menu_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "ai_top_set_timeout")
+    async def ai_top_set_timeout(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_top_analysis_timeout.set()
+        current = get_setting("top_analysis_timeout_sec", "120")
+        await callback.message.answer(f"Текущий timeout: {current} sec\n\nВведи новый timeout в секундах:")
+
+    @dp.message_handler(state=PricingStates.waiting_top_analysis_timeout)
+    async def ai_top_set_timeout_save(message: types.Message, state: FSMContext):
+        try:
+            value = int(message.text.strip())
+            if value < 10 or value > 600:
+                await message.answer("❌ 10-600")
+                return
+            set_setting("top_analysis_timeout_sec", str(value))
+            await state.finish()
+            await message.answer(f"✅ Top Analysis timeout: {value} sec", reply_markup=ai_menu_kb())
+        except ValueError:
+            await message.answer("❌ Целое число")
 
     # === PRICING ===
     @dp.callback_query_handler(lambda c: c.data == "admin_pricing")
@@ -2688,4 +2807,3 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
-
