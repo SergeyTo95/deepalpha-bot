@@ -60,6 +60,9 @@ class PricingStates(StatesGroup):
     waiting_free_trial_opportunities = State()
     waiting_top_analysis_price = State()
     waiting_top_analysis_timeout = State()
+    waiting_market_recap_times = State()
+    waiting_market_recap_min_volume = State()
+    waiting_market_recap_categories = State()
 
 
 class PackageStates(StatesGroup):
@@ -233,6 +236,12 @@ def pricing_kb():
         InlineKeyboardButton(free_trial_label, callback_data="pricing_toggle_free_trial"),
         InlineKeyboardButton(f"📊 Бесплатных анализов: {free_analyses}", callback_data="pricing_set_free_analyses"),
         InlineKeyboardButton(f"💡 Бесплатных сигналов: {free_opp}", callback_data="pricing_set_free_opp"),
+        InlineKeyboardButton("─── 🏁 Market Recap ───", callback_data="pricing_noop"),
+        InlineKeyboardButton(recap_enabled_label, callback_data="pricing_toggle_market_recap"),
+        InlineKeyboardButton(f"📨 Sends per day: {recap_times}", callback_data="pricing_set_market_recap_times"),
+        InlineKeyboardButton(f"📊 Min market volume: {recap_min_volume}", callback_data="pricing_set_market_recap_min_volume"),
+        InlineKeyboardButton(f"👥 Audience: {audience}", callback_data="pricing_toggle_market_recap_audience"),
+        InlineKeyboardButton(f"🏷 Categories: {recap_categories}", callback_data="pricing_set_market_recap_categories"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -251,6 +260,14 @@ def pricing_text():
     free_trial = get_setting("free_trial_enabled", "on")
     free_analyses = get_setting("free_trial_analyses", "1")
     free_opp = get_setting("free_trial_opportunities", "1")
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_times = get_setting("market_recap_times_per_day", "2")
+    recap_language = get_setting("market_recap_language_mode", "user_language")
+    recap_min_volume = get_setting("market_recap_min_volume", "0")
+    recap_all = get_setting("market_recap_send_to_all", "false")
+    recap_active = get_setting("market_recap_send_to_active_users", "true")
+    recap_categories = get_setting("market_recap_categories", "all")
+    recap_audience = "всем пользователям" if recap_all == "true" else ("активным пользователям" if recap_active == "true" else "никому")
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
@@ -263,7 +280,14 @@ def pricing_text():
         f"💡 Сигналов в день: {sub_opp}\n\n"
         f"🎁 Пробный период: {'ON' if free_trial == 'on' else 'OFF'}\n"
         f"Бесплатных анализов: {free_analyses}\n"
-        f"Бесплатных сигналов: {free_opp}"
+        f"Бесплатных сигналов: {free_opp}\n\n"
+        f"—— 🏁 Market Recap ——\n\n"
+        f"🏁 Market Recap: {'ON' if recap_enabled == 'true' else 'OFF'}\n"
+        f"📨 Рассылок в день: {recap_times}\n"
+        f"🌐 Язык: {'по языку пользователя' if recap_language == 'user_language' else recap_language}\n"
+        f"📊 Мин. объём рынка: {recap_min_volume}\n"
+        f"👥 Кому отправлять: {recap_audience}\n"
+        f"🏷 Категории: {recap_categories}"
     )
 
 
@@ -1306,6 +1330,79 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Лимит: {val}/день")
         except ValueError:
             await message.answer("❌ Целое число")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap")
+    async def pricing_toggle_market_recap(callback: types.CallbackQuery):
+        current = get_setting("market_recap_enabled", "false")
+        new_val = "false" if current == "true" else "true"
+        set_setting("market_recap_enabled", new_val)
+        await callback.answer(f"Market Recap: {new_val.upper()}")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_times")
+    async def pricing_set_market_recap_times(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_market_recap_times.set()
+        current = get_setting("market_recap_times_per_day", "2")
+        await callback.message.answer(f"Current sends per day: {current}\n\nEnter new value (1-5):")
+
+    @dp.message_handler(state=PricingStates.waiting_market_recap_times)
+    async def pricing_save_market_recap_times(message: types.Message, state: FSMContext):
+        try:
+            value = int(message.text.strip())
+            if value < 1 or value > 5:
+                await message.answer("❌ 1-5")
+                return
+            set_setting("market_recap_times_per_day", str(value))
+            await state.finish()
+            await message.answer(f"✅ Sends per day: {value}")
+        except ValueError:
+            await message.answer("❌ Integer required")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_min_volume")
+    async def pricing_set_market_recap_min_volume(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_market_recap_min_volume.set()
+        current = get_setting("market_recap_min_volume", "0")
+        await callback.message.answer(f"Current min market volume: {current}\n\nEnter new value (>=0):")
+
+    @dp.message_handler(state=PricingStates.waiting_market_recap_min_volume)
+    async def pricing_save_market_recap_min_volume(message: types.Message, state: FSMContext):
+        try:
+            value = float(message.text.strip())
+            if value < 0:
+                await message.answer("❌ Must be >= 0")
+                return
+            normalized = str(int(value)) if value.is_integer() else str(value)
+            set_setting("market_recap_min_volume", normalized)
+            await state.finish()
+            await message.answer(f"✅ Min market volume: {normalized}")
+        except ValueError:
+            await message.answer("❌ Number required")
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap_audience")
+    async def pricing_toggle_market_recap_audience(callback: types.CallbackQuery):
+        send_all = get_setting("market_recap_send_to_all", "false") == "true"
+        if send_all:
+            set_setting("market_recap_send_to_all", "false")
+            set_setting("market_recap_send_to_active_users", "true")
+            await callback.answer("Audience: ACTIVE USERS")
+        else:
+            set_setting("market_recap_send_to_all", "true")
+            set_setting("market_recap_send_to_active_users", "false")
+            await callback.answer("Audience: ALL USERS")
+        await callback.message.edit_text(pricing_text(), reply_markup=pricing_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_categories")
+    async def pricing_set_market_recap_categories(callback: types.CallbackQuery, state: FSMContext):
+        await PricingStates.waiting_market_recap_categories.set()
+        current = get_setting("market_recap_categories", "all")
+        await callback.message.answer(f"Current categories: {current}\n\nEnter categories (or 'all'):")
+
+    @dp.message_handler(state=PricingStates.waiting_market_recap_categories)
+    async def pricing_save_market_recap_categories(message: types.Message, state: FSMContext):
+        value = message.text.strip() or "all"
+        set_setting("market_recap_categories", value)
+        await state.finish()
+        await message.answer(f"✅ Categories: {value}")
 
     # === PACKAGES ===
     @dp.callback_query_handler(lambda c: c.data == "admin_packages")
@@ -2807,3 +2904,11 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
+    recap_enabled = get_setting("market_recap_enabled", "false")
+    recap_times = get_setting("market_recap_times_per_day", "2")
+    recap_min_volume = get_setting("market_recap_min_volume", "0")
+    recap_all = get_setting("market_recap_send_to_all", "false")
+    recap_active = get_setting("market_recap_send_to_active_users", "true")
+    recap_categories = get_setting("market_recap_categories", "all")
+    recap_enabled_label = "🏁 Market Recap: ON" if recap_enabled == "true" else "🏁 Market Recap: OFF"
+    audience = "all users" if recap_all == "true" else ("active users" if recap_active == "true" else "none")
