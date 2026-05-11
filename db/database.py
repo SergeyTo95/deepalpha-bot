@@ -382,6 +382,24 @@ def init_db():
             """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
 
+    top_analysis_defaults = [
+        ("top_analysis_enabled", "false"),
+        ("top_analysis_price_tokens", "70"),
+        ("top_analysis_research_enabled", "true"),
+        ("top_analysis_chief_enabled", "true"),
+        ("top_analysis_audit_enabled", "true"),
+        ("top_analysis_social_enabled", "true"),
+        ("top_analysis_timeout_sec", "120"),
+    ]
+    for key, value in top_analysis_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
     conn.close()
 
 
