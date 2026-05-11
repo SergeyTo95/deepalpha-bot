@@ -20,3 +20,8 @@ class TopAnalysisProviderRouter:
             "message": "Unknown provider key in skeleton router.",
             "payload_keys": sorted(payload.keys()),
         }
+
+
+    def is_execution_ready(self) -> bool:
+        """Return True only when real Top Analysis execution is wired and safe to run."""
+        return False
