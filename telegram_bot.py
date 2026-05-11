@@ -42,6 +42,7 @@ from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
     format_next_badge_hint, get_all_badges_info, BADGES,
 )
+from services.resolved_market_recap_service import render_resolved_market_recap
 
 logging.basicConfig(level=logging.INFO)
 
@@ -3915,6 +3916,33 @@ async def admin_handler_any_state(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await message.answer("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
+
+
+@dp.message_handler(commands=["recap_preview"], state="*")
+async def recap_preview_handler(message: types.Message):
+    from bot.admin import is_admin
+
+    if not is_admin(message.from_user.id):
+        return
+
+    sample_title = "Will Bitcoin hit $150k by December 31, 2026?"
+    sample_outcome = "NO"
+    username = f"@{BOT_USERNAME}"
+
+    ru_preview = render_resolved_market_recap(
+        "ru",
+        sample_title,
+        sample_outcome,
+        bot_username=username,
+    )
+    en_preview = render_resolved_market_recap(
+        "en",
+        sample_title,
+        sample_outcome,
+        bot_username=username,
+    )
+    await message.answer(f"🇷🇺 RU preview:\n\n{ru_preview}")
+    await message.answer(f"🇬🇧 EN preview:\n\n{en_preview}")
 
 
 @dp.message_handler(commands=["profile"])

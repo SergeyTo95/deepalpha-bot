@@ -382,6 +382,24 @@ def init_db():
             """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
 
+    market_recap_defaults = [
+        ("market_recap_enabled", "false"),
+        ("market_recap_times_per_day", "2"),
+        ("market_recap_language_mode", "user_language"),
+        ("market_recap_min_volume", "0"),
+        ("market_recap_send_to_all", "false"),
+        ("market_recap_send_to_active_users", "true"),
+        ("market_recap_categories", "all"),
+    ]
+    for key, value in market_recap_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
     top_analysis_defaults = [
         ("top_analysis_enabled", "false"),
         ("top_analysis_price_tokens", "70"),
