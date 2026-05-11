@@ -76,6 +76,11 @@ class CryptoStates(StatesGroup):
     waiting_for_ticker = State()
 
 
+class AnalysisStates(StatesGroup):
+    waiting_for_link = State()
+    waiting_for_top_analysis_link = State()
+
+
 CATEGORY_LABELS = {
     "ru": {
         "Politics": "🌍 Политика",
@@ -186,9 +191,20 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
-        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
-        kb.add(KeyboardButton("🪙 Крипто анализ"), KeyboardButton("📘 Как читать анализ"))
-        kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("🔥 Top Analysis"))
+        else:
+            kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("💡 Сигнал часа"), KeyboardButton("🪙 Крипто анализ"))
+        else:
+            kb.add(KeyboardButton("🪙 Крипто анализ"), KeyboardButton("📘 Как читать анализ"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("📘 Как читать анализ"), KeyboardButton("🔮 Личный сигнал"))
+        else:
+            kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
         if user_is_author:
@@ -201,9 +217,15 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         )
         kb.add(KeyboardButton("🌐 Язык"))
     else:
-        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
-        kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
-        kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("🔥 Top Analysis"))
+            kb.add(KeyboardButton("💡 Signal of the hour"), KeyboardButton("🔮 Personal signal"))
+            kb.add(KeyboardButton("🏆 Top"), KeyboardButton("🪙 Crypto Analysis"))
+            kb.add(KeyboardButton("📘 How to read the analysis"))
+        else:
+            kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
+            kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
+            kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
         kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
         if user_is_author:
@@ -308,9 +330,6 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
     kb.add(InlineKeyboardButton(share_label, url=share_url))
     if url:
         kb.add(InlineKeyboardButton(open_label, url=url))
-
-    if _is_top_analysis_enabled():
-        kb.add(InlineKeyboardButton(_get_top_analysis_button_label(lang), callback_data=f"top_analysis_start:{user_id}"))
 
     return kb
 
@@ -607,7 +626,7 @@ def _get_top_analysis_maintenance_message(lang: str, timeout_variant: bool = Fal
             )
         return (
             "🔧 Top Analysis временно недоступен.\n"
-            "Идёт техническое обслуживание расширенного анализа. Попробуй позже."
+            "Идёт техническое обслуживание расширенного анализа. Токены не списаны. Попробуй позже."
         )
     if timeout_variant:
         return (
@@ -616,7 +635,7 @@ def _get_top_analysis_maintenance_message(lang: str, timeout_variant: bool = Fal
         )
     return (
         "🔧 Top Analysis is temporarily unavailable.\n"
-        "Extended analysis is under maintenance. Please try again later."
+        "Extended analysis is under maintenance. No tokens were charged. Please try again later."
     )
 
 
@@ -5238,6 +5257,7 @@ def _parse_probability(prob_str: str) -> float:
 
 @dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"])
 async def analyze_prompt_handler(message: types.Message):
+    await AnalysisStates.waiting_for_link.set()
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
@@ -5247,6 +5267,34 @@ async def analyze_prompt_handler(message: types.Message):
         await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=get_main_keyboard(uid))
     else:
         await message.answer(t(uid, "send_link"), reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text == "🔥 Top Analysis")
+async def top_analysis_prompt_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+
+    if not _is_top_analysis_enabled():
+        text = "🔥 Top Analysis сейчас недоступен." if lang == "ru" else "🔥 Top Analysis is currently unavailable."
+        await message.answer(text, reply_markup=get_main_keyboard(uid))
+        return
+
+    await AnalysisStates.waiting_for_top_analysis_link.set()
+    price = _get_top_analysis_price()
+    if lang == "ru":
+        text = (
+            "🔥 Top Analysis\n"
+            "Отправь ссылку Polymarket для расширенного анализа.\n\n"
+            f"Стоимость: {price} токенов."
+        )
+    else:
+        text = (
+            "🔥 Top Analysis\n"
+            "Send a Polymarket link for extended analysis.\n\n"
+            f"Price: {price} tokens."
+        )
+    await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
 @dp.message_handler(lambda m: m.text in ["💡 Сигнал часа", "💡 Signal of the hour"])
@@ -5660,8 +5708,27 @@ _ANALYSIS_DEDUP_TTL_SEC = 45
 async def analyze_url_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
+    state = dp.current_state(user=uid, chat=message.chat.id)
+    current_state = await state.get_state()
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
+        return
+
+    if current_state == AnalysisStates.waiting_for_top_analysis_link.state:
+        lang = get_user_lang(uid)
+        if not _is_top_analysis_enabled() or not _top_analysis_preflight_ready():
+            await state.finish()
+            await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
+            return
+        price = _get_top_analysis_price()
+        user = get_user(uid)
+        user_balance = (user or {}).get("token_balance", 0)
+        if user_balance < price:
+            await state.finish()
+            await message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+            return
+        await state.finish()
+        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
         return
 
     # Telegram/web previews or overlapping handlers can deliver the same URL twice.
@@ -5882,6 +5949,16 @@ async def fallback_handler(message: types.Message):
         return
 
     _register_user(message)
+    state = dp.current_state(user=message.from_user.id, chat=message.chat.id)
+    if await state.get_state() == AnalysisStates.waiting_for_top_analysis_link.state:
+        lang = get_user_lang(message.from_user.id)
+        text = (
+            "Отправь ссылку Polymarket для Top Analysis."
+            if lang == "ru"
+            else "Send a Polymarket link for Top Analysis."
+        )
+        await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+        return
     await message.answer(
         t(message.from_user.id, "fallback"),
         reply_markup=get_main_keyboard(message.from_user.id),
