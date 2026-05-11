@@ -126,6 +126,7 @@ TEXTS = {
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки",
         "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
         "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
+        "action_cancelled": "✅ Действие отменено.",
     },
     "en": {
         "start": (
@@ -154,6 +155,7 @@ TEXTS = {
         "deep_signal_searching": "🧠 Searching personal signal...",
         "free_trial_analysis": "🎁 Using free trial analysis!",
         "free_trial_signal": "🎁 Using free trial signal!",
+        "action_cancelled": "✅ Action cancelled.",
     }
 }
 
@@ -3892,6 +3894,38 @@ async def start_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
+@dp.message_handler(commands=["cancel"], state="*")
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer(t(uid, "action_cancelled"), reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(commands=["start"], state="*")
+async def start_handler_any_state(message: types.Message, state: FSMContext):
+    await state.finish()
+    await start_handler(message)
+
+
+@dp.message_handler(commands=["admin"], state="*")
+async def admin_handler_any_state(message: types.Message, state: FSMContext):
+    current = await state.get_state()
+    if current:
+        await state.finish()
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
+        await message.answer("⛔️ Только для админа." if lang == "ru" else "⛔️ Admin only.", reply_markup=get_main_keyboard(uid))
+        return
+    await message.answer(
+        "🔧 Админ-меню: используй /admin без активного сценария."
+        if lang == "ru" else
+        "🔧 Admin menu: use /admin with no active flow.",
+        reply_markup=get_main_keyboard(uid),
+    )
+
+
 @dp.message_handler(commands=["profile"])
 async def profile_command(message: types.Message):
     _register_user(message)
@@ -5267,6 +5301,43 @@ async def analyze_prompt_handler(message: types.Message):
         await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=get_main_keyboard(uid))
     else:
         await message.answer(t(uid, "send_link"), reply_markup=get_main_keyboard(uid))
+
+
+_MAIN_MENU_BUTTONS = {
+    "🔍 Анализ", "🔍 Analyze",
+    "💡 Сигнал часа", "💡 Signal of the hour",
+    "🪙 Крипто анализ", "🪙 Crypto Analysis",
+    "📘 Как читать анализ", "📘 How to read the analysis",
+    "🔮 Личный сигнал", "🔮 Personal signal",
+    "🏆 Топ", "🏆 Top",
+    "👤 Профиль", "👤 Profile",
+    "📋 Watchlist",
+    "📰 Подписки", "📰 Subscriptions",
+    "📢 Авторы", "📢 Authors",
+    "✍️ Мои прогнозы", "✍️ My posts",
+    "💰 Баланс автора", "💰 Author balance",
+    "📊 История", "📊 History",
+    "💰 Баланс", "💰 Balance",
+    "💎 Купить токены", "💎 Buy tokens",
+    "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active",
+    "👥 Рефералы", "👥 Referrals",
+    "🌐 Язык", "Русский", "English",
+}
+
+
+@dp.message_handler(
+    lambda m: m.text in _MAIN_MENU_BUTTONS and m.text not in ["🔥 Top Analysis", "🔍 Анализ", "🔍 Analyze"],
+    state=AnalysisStates.waiting_for_top_analysis_link,
+)
+async def escape_top_analysis_menu_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await dp.process_update(types.Update(message=message))
+
+
+@dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"], state=AnalysisStates.waiting_for_top_analysis_link)
+async def escape_top_analysis_to_analysis_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await analyze_prompt_handler(message)
 
 
 @dp.message_handler(lambda m: m.text == "🔥 Top Analysis")
