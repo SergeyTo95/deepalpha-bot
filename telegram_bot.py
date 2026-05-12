@@ -5578,41 +5578,39 @@ _MAIN_MENU_BUTTONS = {
     "🌐 Язык", "Русский", "English",
 }
 
-_FSM_ESCAPE_STATES = {
-    AnalysisStates.waiting_for_link.state,
-    AnalysisStates.waiting_for_top_analysis_link.state,
-    CryptoStates.waiting_for_ticker.state,
-    AuthorStates.waiting_bio.state,
-    AuthorStates.waiting_wallet.state,
-    AuthorStates.waiting_post_comment.state,
-    AuthorStates.waiting_donation_amount.state,
-    MarketRecapStates.waiting_market_title.state,
-    MarketRecapStates.waiting_market_outcome.state,
-}
-
-
-def _should_escape_fsm_state(state_name: str, text: str) -> bool:
-    if not state_name or state_name not in _FSM_ESCAPE_STATES:
-        return False
-    if text not in _MAIN_MENU_BUTTONS:
-        return False
-    if state_name == AnalysisStates.waiting_for_link.state and text in ["🔍 Анализ", "🔍 Analyze"]:
-        return False
-    if state_name == AnalysisStates.waiting_for_top_analysis_link.state and text == "🔥 Top Analysis":
-        return False
-    return True
-
-
-@dp.message_handler(lambda m: m.text in _MAIN_MENU_BUTTONS, state="*")
-async def fsm_state_escape_main_menu_handler(message: types.Message, state: FSMContext):
+async def _escape_state_and_route_main_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     text = message.text or ""
-    if not _should_escape_fsm_state(current_state, text):
+
+    if current_state == AnalysisStates.waiting_for_link.state and text in ["🔍 Анализ", "🔍 Analyze"]:
+        await analyze_prompt_handler(message)
+        return
+
+    if current_state == AnalysisStates.waiting_for_top_analysis_link.state and text == "🔥 Top Analysis":
+        await top_analysis_prompt_handler(message)
         return
 
     logger.info("fsm_state_escape user_id=%s state=%s text=%s", message.from_user.id, current_state, text)
     await state.finish()
     await dp.process_update(types.Update(message=message))
+
+
+@dp.message_handler(
+    lambda m: m.text in _MAIN_MENU_BUTTONS,
+    state=[
+        AnalysisStates.waiting_for_link,
+        AnalysisStates.waiting_for_top_analysis_link,
+        CryptoStates.waiting_for_ticker,
+        AuthorStates.waiting_bio,
+        AuthorStates.waiting_wallet,
+        AuthorStates.waiting_post_comment,
+        AuthorStates.waiting_donation_amount,
+        MarketRecapStates.waiting_market_title,
+        MarketRecapStates.waiting_market_outcome,
+    ],
+)
+async def fsm_state_escape_main_menu_handler(message: types.Message, state: FSMContext):
+    await _escape_state_and_route_main_menu(message, state)
 
 
 
