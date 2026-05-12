@@ -15,6 +15,7 @@ from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
 from crypto_analysis.crypto_service import analyze_crypto
 from texts.analysis_guide import get_analysis_guide
+from agents.top_analysis.top_analysis_agent import TopAnalysisAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
@@ -669,6 +670,83 @@ def _get_top_analysis_balance_message(lang: str, price: int) -> str:
         f"Price: {price} tokens.\n"
         "Please top up your balance in the cashier."
     )
+
+
+
+
+def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
+    forbidden_terms = ["gpt", "claude", "grok", "gemini", "openai", "anthropic", "xai", "provider", "model failed", "agent failed", "multi-agent"]
+
+    def _scrub_text(value: str) -> str:
+        text = str(value or "")
+        lowered = text.lower()
+        if any(term in lowered for term in forbidden_terms):
+            return "Details hidden due to technical maintenance policy."
+        return text
+
+    chief = result.get("chief_forecast_result", {})
+    factors = [_scrub_text(x) for x in (chief.get("key_factors") or [])]
+    risks = [_scrub_text(x) for x in (chief.get("risks") or [])]
+    ftxt = "\n".join([f"— {x}" for x in factors[:5]]) or "— n/a"
+    rtxt = "\n".join([f"— {x}" for x in risks[:5]]) or "— n/a"
+    if lang == "ru":
+        return (
+            "🔥 DeepAlpha Top Analysis\n\n"
+            f"📌 Рынок:\n{question}\n\n"
+            f"🎯 Расширенный прогноз:\n{_scrub_text(chief.get('forecast_summary','Нет сильного прогноза.'))}\n\n"
+            f"📊 Вероятность:\n{chief.get('probability_range',{})}\n\n"
+            f"🧠 Уверенность:\n{chief.get('confidence','Низкая')}\n\n"
+            f"🧩 Ключевые факторы:\n{ftxt}\n\n"
+            f"⚠️ Риски:\n{rtxt}\n\n"
+            f"💰 Value:\n{_scrub_text(chief.get('value_summary','Нет явного value.'))}\n\n"
+            f"✅ Вывод:\n{_scrub_text(chief.get('final_conclusion','Нет ясного вывода.'))}"
+        )
+    return (
+        "🔥 DeepAlpha Top Analysis\n\n"
+        f"📌 Market:\n{question}\n\n"
+        f"🎯 Extended forecast:\n{_scrub_text(chief.get('forecast_summary','No strong forecast.'))}\n\n"
+        f"📊 Probability:\n{chief.get('probability_range',{})}\n\n"
+        f"🧠 Confidence:\n{chief.get('confidence','Low')}\n\n"
+        f"🧩 Key factors:\n{ftxt}\n\n"
+        f"⚠️ Risks:\n{rtxt}\n\n"
+        f"💰 Value:\n{_scrub_text(chief.get('value_summary','No clear value.'))}\n\n"
+        f"✅ Conclusion:\n{_scrub_text(chief.get('final_conclusion','No clear conclusion.'))}"
+    )
+
+
+async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respond_fn) -> None:
+    price = _get_top_analysis_price()
+    user = get_user(uid)
+    user_balance = (user or {}).get("token_balance", 0)
+    if user_balance < price:
+        await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+        return
+
+    try:
+        agent = TopAnalysisAgent()
+        input_data = {
+            "question": analysis.get("question", ""),
+            "market_options": analysis.get("options", {}),
+            "event_profile": analysis.get("event_profile", {}),
+            "base_analysis": analysis.get("analysis", {}),
+            "source_summary": analysis.get("source_summary", []),
+        }
+        result = agent.run(input_data)
+        if result.get("status") != "ok" or not result.get("final_available"):
+            await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
+            return
+        new_balance = add_tokens(uid, -price)
+        if new_balance == 0 and user_balance > 0:
+            await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+            return
+        await respond_fn(_format_top_analysis_output(lang, input_data.get("question", ""), result))
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "top_analysis_runtime_error uid=%s err_type=%s",
+            uid,
+            type(exc).__name__,
+        )
+        await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
 
 
 def _confidence_emoji(confidence: str) -> str:
@@ -4957,14 +5035,7 @@ async def top_analysis_start_callback(callback: types.CallbackQuery):
         await callback.message.answer(_get_top_analysis_maintenance_message(lang))
         return
 
-    price = _get_top_analysis_price()
-    user = get_user(uid)
-    user_balance = (user or {}).get("token_balance", 0)
-    if user_balance < price:
-        await callback.message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
-        return
-
-    await callback.message.answer(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
+    await _run_top_analysis_for_user(uid, lang, analysis, callback.message.answer)
 
 
 @dp.callback_query_handler(lambda c: c.data == "wl_list")
@@ -5952,15 +6023,11 @@ async def analyze_url_handler(message: types.Message):
             await state.finish()
             await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
             return
-        price = _get_top_analysis_price()
-        user = get_user(uid)
-        user_balance = (user or {}).get("token_balance", 0)
-        if user_balance < price:
-            await state.finish()
-            await message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
-            return
+        analysis = {"url": (message.text or "").strip(), "question": "", "options": {}, "analysis": {}, "source_summary": []}
+        cached = last_analysis_cache.get(uid) or {}
+        analysis.update(cached)
         await state.finish()
-        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
+        await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
         return
 
     # Telegram/web previews or overlapping handlers can deliver the same URL twice.
