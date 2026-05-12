@@ -1,8 +1,12 @@
+import logging
 from typing import Any, Dict
 
 from .base import TopAnalysisSpecialistBase
 from .prompts import CHIEF_FORECASTER_PROMPT
 from .provider_router import TopAnalysisProviderRouter
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChiefForecaster(TopAnalysisSpecialistBase):
@@ -19,7 +23,7 @@ class ChiefForecaster(TopAnalysisSpecialistBase):
             return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": response.get("error", "unavailable")}
         if not parsed:
             return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": "invalid_or_empty_json"}
-        return {
+        result = {
             "specialist_name": self.name,
             "status": "ok",
             "provider_key": self.provider_key,
@@ -32,4 +36,12 @@ class ChiefForecaster(TopAnalysisSpecialistBase):
             "key_factors": self.normalize_list(parsed.get("key_factors")),
             "risks": self.normalize_list(parsed.get("risks")),
             "raw_content": response.get("content", ""),
+            "parsed_keys": sorted(parsed.keys()),
         }
+        if not result["final_forecast_available"]:
+            logger.info(
+                "top_analysis_chief_final_unavailable keys=%s confidence=%s",
+                result.get("parsed_keys"),
+                result.get("confidence"),
+            )
+        return result
