@@ -15,6 +15,7 @@ from agents.chief_agent import ChiefAgent
 from agents.opportunity_agent import OpportunityAgent
 from crypto_analysis.crypto_service import analyze_crypto
 from texts.analysis_guide import get_analysis_guide
+from agents.top_analysis.top_analysis_agent import TopAnalysisAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
@@ -668,6 +669,39 @@ def _get_top_analysis_balance_message(lang: str, price: int) -> str:
         "💎 Not enough tokens for Top Analysis.\n"
         f"Price: {price} tokens.\n"
         "Please top up your balance in the cashier."
+    )
+
+
+
+
+def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
+    chief = result.get("chief_forecast_result", {})
+    factors = chief.get("key_factors") or []
+    risks = chief.get("risks") or []
+    ftxt = "\n".join([f"— {x}" for x in factors[:5]]) or "— n/a"
+    rtxt = "\n".join([f"— {x}" for x in risks[:5]]) or "— n/a"
+    if lang == "ru":
+        return (
+            "🔥 DeepAlpha Top Analysis\n\n"
+            f"📌 Рынок:\n{question}\n\n"
+            f"🎯 Расширенный прогноз:\n{chief.get('forecast_summary','Нет сильного прогноза.')}\n\n"
+            f"📊 Вероятность:\n{chief.get('probability_range',{})}\n\n"
+            f"🧠 Уверенность:\n{chief.get('confidence','Низкая')}\n\n"
+            f"🧩 Ключевые факторы:\n{ftxt}\n\n"
+            f"⚠️ Риски:\n{rtxt}\n\n"
+            f"💰 Value:\n{chief.get('value_summary','Нет явного value.')}\n\n"
+            f"✅ Вывод:\n{chief.get('final_conclusion','Нет ясного вывода.')}"
+        )
+    return (
+        "🔥 DeepAlpha Top Analysis\n\n"
+        f"📌 Market:\n{question}\n\n"
+        f"🎯 Extended forecast:\n{chief.get('forecast_summary','No strong forecast.')}\n\n"
+        f"📊 Probability:\n{chief.get('probability_range',{})}\n\n"
+        f"🧠 Confidence:\n{chief.get('confidence','Low')}\n\n"
+        f"🧩 Key factors:\n{ftxt}\n\n"
+        f"⚠️ Risks:\n{rtxt}\n\n"
+        f"💰 Value:\n{chief.get('value_summary','No clear value.')}\n\n"
+        f"✅ Conclusion:\n{chief.get('final_conclusion','No clear conclusion.')}"
     )
 
 
@@ -4964,7 +4998,25 @@ async def top_analysis_start_callback(callback: types.CallbackQuery):
         await callback.message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
         return
 
-    await callback.message.answer(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
+    agent = TopAnalysisAgent()
+    input_data = {
+        "question": analysis.get("question", ""),
+        "market_options": analysis.get("options", {}),
+        "event_profile": analysis.get("event_profile", {}),
+        "base_analysis": analysis.get("analysis", {}),
+        "source_summary": analysis.get("source_summary", []),
+    }
+    result = agent.run(input_data)
+    if result.get("status") != "ok" or not result.get("final_available"):
+        await callback.message.answer(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
+        return
+
+    new_balance = add_tokens(uid, -price)
+    if new_balance == 0 and user_balance > 0:
+        await callback.message.answer(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+        return
+
+    await callback.message.answer(_format_top_analysis_output(lang, input_data.get("question", ""), result))
 
 
 @dp.callback_query_handler(lambda c: c.data == "wl_list")

@@ -1,7 +1,8 @@
 from typing import Any, Dict
 
 from .base import TopAnalysisSpecialistBase
-from .schemas import ResearchSpecialistResult
+from .prompts import RESEARCH_SPECIALIST_PROMPT
+from .provider_router import TopAnalysisProviderRouter
 
 
 class ResearchSpecialist(TopAnalysisSpecialistBase):
@@ -10,17 +11,22 @@ class ResearchSpecialist(TopAnalysisSpecialistBase):
     provider_key = "research_llm"
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            result = ResearchSpecialistResult(
-                specialist_name=self.name,
-                status="placeholder",
-                provider_key=self.provider_key,
-                evidence_strength="unknown",
-                key_findings=[],
-                missing_data=[],
-                recommended_queries=[],
-                risk_flags=[],
-            )
-            return self.safe_result(result, fallback={"status": "placeholder", "specialist_name": self.name})
-        except Exception:
-            return {"status": "placeholder", "specialist_name": self.name}
+        router = TopAnalysisProviderRouter()
+        payload = {"prompt": f"{RESEARCH_SPECIALIST_PROMPT}\nINPUT:\n{input_data}"}
+        response = router.route(self.provider_key, payload)
+        parsed = response.get("json") or {}
+        if response.get("status") != "ok":
+            return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": response.get("error", "unavailable")}
+        return {
+            "specialist_name": self.name,
+            "status": "ok",
+            "provider_key": self.provider_key,
+            "evidence_strength": parsed.get("evidence_strength", "unknown"),
+            "key_findings": self.normalize_list(parsed.get("key_findings")),
+            "primary_evidence": self.normalize_list(parsed.get("primary_evidence")),
+            "secondary_evidence": self.normalize_list(parsed.get("secondary_evidence")),
+            "missing_data": self.normalize_list(parsed.get("missing_data")),
+            "driver_coverage": self.normalize_list(parsed.get("driver_coverage")),
+            "risk_flags": self.normalize_list(parsed.get("risk_flags")),
+            "raw_content": response.get("content", ""),
+        }
