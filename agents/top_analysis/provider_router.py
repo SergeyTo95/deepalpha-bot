@@ -137,6 +137,8 @@ class TopAnalysisProviderRouter:
             return self._safe_response(provider_key, "gemini", model, "error", error=f"http_{raw['status_code']}")
         data = json.loads(raw["text"] or "{}")
         text = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text", "")
+        if not (text or "").strip():
+            return self._safe_response(provider_key, "gemini", model, "error", error="empty_provider_response")
         return self._safe_response(provider_key, "gemini", model, "ok", content=text, parsed=self._extract_and_parse(text))
 
     def _call_openai(self, provider_key: str, model: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -146,6 +148,24 @@ class TopAnalysisProviderRouter:
             return self._safe_response(provider_key, "openai", model, "error", error=f"http_{raw['status_code']}")
         data = json.loads(raw["text"] or "{}")
         text = data.get("output_text", "")
+        if not text:
+            output = data.get("output") or []
+            for item in output:
+                for content_item in item.get("content", []):
+                    t = content_item.get("text") or content_item.get("content")
+                    if isinstance(t, str) and t.strip():
+                        text = t
+                        break
+                if text:
+                    break
+        if not text:
+            for key in ("text", "content", "message"):
+                t = data.get(key)
+                if isinstance(t, str) and t.strip():
+                    text = t
+                    break
+        if not (text or "").strip():
+            return self._safe_response(provider_key, "openai", model, "error", error="empty_provider_response")
         return self._safe_response(provider_key, "openai", model, "ok", content=text, parsed=self._extract_and_parse(text))
 
     def _call_anthropic(self, provider_key: str, model: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -157,6 +177,8 @@ class TopAnalysisProviderRouter:
         data = json.loads(raw["text"] or "{}")
         items = data.get("content") or []
         text = items[0].get("text", "") if items and isinstance(items[0], dict) else ""
+        if not (text or "").strip():
+            return self._safe_response(provider_key, "anthropic", model, "error", error="empty_provider_response")
         return self._safe_response(provider_key, "anthropic", model, "ok", content=text, parsed=self._extract_and_parse(text))
 
     def _call_xai(self, provider_key: str, model: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -168,4 +190,6 @@ class TopAnalysisProviderRouter:
         data = json.loads(raw["text"] or "{}")
         choices = data.get("choices") or []
         text = (((choices[0] or {}).get("message") or {}).get("content", "")) if choices else ""
+        if not (text or "").strip():
+            return self._safe_response(provider_key, "xai", model, "error", error="empty_provider_response")
         return self._safe_response(provider_key, "xai", model, "ok", content=text, parsed=self._extract_and_parse(text))

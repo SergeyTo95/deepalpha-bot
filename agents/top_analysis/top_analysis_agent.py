@@ -26,6 +26,8 @@ class TopAnalysisAgent:
         )
         if chief_forecast_result.get("status") != "ok":
             return {"status": "maintenance", "final_available": False, "error": "required_component_unavailable", "user_message_key": "top_analysis_maintenance"}
+        if not bool(chief_forecast_result.get("final_forecast_available")):
+            return {"status": "maintenance", "final_available": False, "error": "final_forecast_unavailable", "user_message_key": "top_analysis_maintenance"}
 
         return {
             "status": "ok",

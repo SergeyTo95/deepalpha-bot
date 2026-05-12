@@ -17,6 +17,8 @@ class ResearchSpecialist(TopAnalysisSpecialistBase):
         parsed = response.get("json") or {}
         if response.get("status") != "ok":
             return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": response.get("error", "unavailable")}
+        if not parsed:
+            return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": "invalid_or_empty_json"}
         return {
             "specialist_name": self.name,
             "status": "ok",
