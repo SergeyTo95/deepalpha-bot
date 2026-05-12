@@ -5578,6 +5578,44 @@ _MAIN_MENU_BUTTONS = {
     "🌐 Язык", "Русский", "English",
 }
 
+_FSM_ESCAPE_STATES = {
+    AnalysisStates.waiting_for_link.state,
+    AnalysisStates.waiting_for_top_analysis_link.state,
+    CryptoStates.waiting_for_ticker.state,
+    AuthorStates.waiting_bio.state,
+    AuthorStates.waiting_wallet.state,
+    AuthorStates.waiting_post_comment.state,
+    AuthorStates.waiting_donation_amount.state,
+    MarketRecapStates.waiting_market_title.state,
+    MarketRecapStates.waiting_market_outcome.state,
+}
+
+
+def _should_escape_fsm_state(state_name: str, text: str) -> bool:
+    if not state_name or state_name not in _FSM_ESCAPE_STATES:
+        return False
+    if text not in _MAIN_MENU_BUTTONS:
+        return False
+    if state_name == AnalysisStates.waiting_for_link.state and text in ["🔍 Анализ", "🔍 Analyze"]:
+        return False
+    if state_name == AnalysisStates.waiting_for_top_analysis_link.state and text == "🔥 Top Analysis":
+        return False
+    return True
+
+
+@dp.message_handler(lambda m: m.text in _MAIN_MENU_BUTTONS, state="*")
+async def fsm_state_escape_main_menu_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    text = message.text or ""
+    if not _should_escape_fsm_state(current_state, text):
+        return
+
+    logger.info("fsm_state_escape user_id=%s state=%s text=%s", message.from_user.id, current_state, text)
+    await state.finish()
+    await dp.process_update(types.Update(message=message))
+
+
+
 
 @dp.message_handler(
     lambda m: m.text in _MAIN_MENU_BUTTONS and m.text not in ["🔥 Top Analysis", "🔍 Анализ", "🔍 Analyze"],
@@ -6030,57 +6068,17 @@ _ANALYSIS_DEDUP_TTL_SEC = 45
 # URL ANALYSIS
 # ═══════════════════════════════════════════
 
-@dp.message_handler(
-    lambda m: m.text and "polymarket.com" in m.text.lower(),
-    state=AnalysisStates.waiting_for_top_analysis_link,
-)
-async def top_analysis_state_link_handler(message: types.Message, state: FSMContext):
-    _register_user(message)
-    uid = message.from_user.id
-    lang = get_user_lang(uid)
-    logger.info("top_analysis_link_received user_id=%s", uid)
-
-    ready = _is_top_analysis_enabled() and _top_analysis_preflight_ready()
-    logger.info("top_analysis_preflight user_id=%s ready=%s", uid, ready)
-
-    if not ready:
-        await state.finish()
-        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
-        return
-
-    analysis = {
-        "question": (message.text or "").strip(),
-        "url": (message.text or "").strip(),
-        "market_options": {},
-        "event_profile": {},
-        "analysis": {},
-        "source_summary": [],
-    }
-    logger.info("top_analysis_minimal_context_used user_id=%s", uid)
-
-    cached = last_analysis_cache.get(uid) or {}
-    if isinstance(cached, dict):
-        analysis.update(cached)
-
-    await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
-    await state.finish()
-
-
-@dp.message_handler(lambda m: m.text and "polymarket.com" in m.text.lower())
-async def analyze_url_handler(message: types.Message):
+async def _run_normal_polymarket_analysis(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
 
-    # Telegram/web previews or overlapping handlers can deliver the same URL twice.
-    # Dedup before quota/token checks so users are not charged twice.
     url_for_dedup = (message.text or "").strip()
     dedup_key = f"{uid}:{url_for_dedup}"
     now_ts = __import__("time").time()
 
-    # Remove expired dedup entries opportunistically.
     for _k, _ts in list(_RECENT_ANALYSIS_REQUESTS.items()):
         if now_ts - _ts > _ANALYSIS_DEDUP_TTL_SEC:
             _RECENT_ANALYSIS_REQUESTS.pop(_k, None)
@@ -6134,7 +6132,6 @@ async def analyze_url_handler(message: types.Message):
 
         increment_user_stat(uid, "total_analyses")
 
-        # Кешируем для кнопок Watchlist и Опубликовать
         result["url"] = url
         result["market_slug"] = _extract_slug_from_url(url)
         last_analysis_cache[uid] = result
@@ -6151,10 +6148,59 @@ async def analyze_url_handler(message: types.Message):
             parse_mode="HTML",
         )
         return
-        await message.answer(t(uid, "fallback"), reply_markup=get_main_keyboard(uid))
-
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(
+    lambda m: m.text and "polymarket.com" in m.text.lower(),
+    state=AnalysisStates.waiting_for_link,
+)
+async def analyze_url_waiting_state_handler(message: types.Message, state: FSMContext):
+    logger.info("normal_analysis_link_received user_id=%s state=waiting_for_link", message.from_user.id)
+    await _run_normal_polymarket_analysis(message)
+    await state.finish()
+
+
+@dp.message_handler(
+    lambda m: m.text and "polymarket.com" in m.text.lower(),
+    state=AnalysisStates.waiting_for_top_analysis_link,
+)
+async def top_analysis_state_link_handler(message: types.Message, state: FSMContext):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    logger.info("top_analysis_link_received user_id=%s", uid)
+
+    ready = _is_top_analysis_enabled() and _top_analysis_preflight_ready()
+    logger.info("top_analysis_preflight user_id=%s ready=%s", uid, ready)
+
+    if not ready:
+        await state.finish()
+        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
+        return
+
+    analysis = {
+        "question": (message.text or "").strip(),
+        "url": (message.text or "").strip(),
+        "market_options": {},
+        "event_profile": {},
+        "analysis": {},
+        "source_summary": [],
+    }
+    logger.info("top_analysis_minimal_context_used user_id=%s", uid)
+
+    cached = last_analysis_cache.get(uid) or {}
+    if isinstance(cached, dict):
+        analysis.update(cached)
+
+    await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
+    await state.finish()
+
+
+@dp.message_handler(lambda m: m.text and "polymarket.com" in m.text.lower())
+async def analyze_url_handler(message: types.Message):
+    await _run_normal_polymarket_analysis(message)
 
 
 # ═══════════════════════════════════════════
@@ -6283,6 +6329,20 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 # ═══════════════════════════════════════════
 # FALLBACK
 # ═══════════════════════════════════════════
+
+@dp.message_handler(
+    lambda m: m.text and "polymarket.com" not in m.text.lower(),
+    state=AnalysisStates.waiting_for_link,
+)
+async def analysis_state_non_polymarket_handler(message: types.Message):
+    lang = get_user_lang(message.from_user.id)
+    text = (
+        "Отправь ссылку Polymarket для анализа."
+        if lang == "ru"
+        else "Send a Polymarket link for analysis."
+    )
+    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+
 
 @dp.message_handler(
     lambda m: m.text and "polymarket.com" not in m.text.lower(),
