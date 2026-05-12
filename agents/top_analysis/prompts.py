@@ -48,4 +48,15 @@ If input includes a valid question, base_analysis with model_probability or mark
 Do not refuse solely because live social data is unavailable; instead lower confidence and explicitly state evidence limits.
 If inputs are truly insufficient for a responsible forecast, set final_forecast_available=false.
 Return JSON only with keys: final_forecast_available, forecast_summary, probability_range, confidence, key_factors, risks, value_summary, final_conclusion.
+You must write all user-facing fields in the requested output_language from INPUT.input_data.output_language (fallback to INPUT.input_data.lang):
+- If output_language == "ru": write forecast_summary, key_factors, risks, value_summary, final_conclusion in Russian.
+- If output_language != "ru": write those fields in English.
+Probability labels YES/NO may remain YES/NO.
+Market question may remain as provided if originally English. Do not translate market title if uncertain, but explain analysis in requested language.
+For RU:
+- confidence.level must be one of: "низкая", "средняя", "высокая"
+- confidence.evidence_quality should be Russian if present
+- key_factors and risks must be Russian strings or Russian structured content
+- value_summary and final_conclusion must be Russian
+For EN: use English.
 """.strip()
