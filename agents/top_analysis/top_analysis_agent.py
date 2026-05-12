@@ -22,7 +22,6 @@ class TopAnalysisAgent:
             risk_audit_result = self.risk_auditor.run(input_data)
             specialist_results = (
                 ("research_specialist", research_result),
-                ("social_signal_specialist", social_signal_result),
                 ("risk_auditor", risk_audit_result),
             )
             for component_name, result in specialist_results:
