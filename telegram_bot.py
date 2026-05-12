@@ -738,7 +738,7 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
         agent = TopAnalysisAgent()
         input_data = {
             "question": analysis.get("question", ""),
-            "market_options": analysis.get("options", {}),
+            "market_options": analysis.get("market_options", {}),
             "event_profile": analysis.get("event_profile", {}),
             "base_analysis": analysis.get("analysis", {}),
             "source_summary": analysis.get("source_summary", []),
@@ -746,13 +746,21 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
         logger.info("top_analysis_execution_start user_id=%s", uid)
         result = agent.run(input_data)
         logger.info(
-            "top_analysis_execution_done user_id=%s status=%s final_available=%s",
+            "top_analysis_execution_done user_id=%s status=%s final_available=%s failed_component=%s failed_component_status=%s",
             uid,
             result.get("status"),
             result.get("final_available"),
+            result.get("failed_component"),
+            result.get("failed_component_status"),
         )
         if result.get("status") != "ok" or not result.get("final_available"):
-            logger.info("top_analysis_maintenance user_id=%s reason=%s", uid, result.get("error", "unknown"))
+            logger.info(
+                "top_analysis_maintenance user_id=%s reason=%s failed_component=%s failed_component_error=%s",
+                uid,
+                result.get("error", "unknown"),
+                result.get("failed_component"),
+                result.get("failed_component_error"),
+            )
             await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
             return
         logger.info("top_analysis_charge_attempt user_id=%s price=%s", uid, price)
@@ -6187,19 +6195,46 @@ async def _build_polymarket_analysis_context_for_top_analysis(
     def _parse_outcome_probability(text_value: str):
         if not isinstance(text_value, str) or not text_value:
             return None, None
-        m = re.search(r"(yes|no|да|нет|произойд|не\s+произойд|won't|will\s+not)\b", text_value, re.IGNORECASE)
-        p = re.search(r"(\d{1,3}(?:[\.,]\d+)?)\s*%", text_value)
-        if not p:
+        outcome = _normalize_binary_outcome(text_value)
+        prob = _to_float_probability(text_value)
+        if outcome is None or prob is None:
             return None, None
-        prob = float(p.group(1).replace(",", "."))
-        if prob < 0 or prob > 100:
-            return None, None
-        outcome = (m.group(1).lower() if m else "")
-        if any(t in outcome for t in ["no", "нет", "не", "won't", "not"]):
-            return "NO", prob
-        if outcome:
-            return "YES", prob
-        return None, prob
+        return outcome, prob
+
+    def _to_float_probability(value):
+        if isinstance(value, (int, float)):
+            prob = float(value)
+            return prob if 0.0 <= prob <= 100.0 else None
+        if not isinstance(value, str):
+            return None
+        text_value = value.strip()
+        if not text_value:
+            return None
+        prob_match = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", text_value)
+        if not prob_match:
+            prob_match = re.search(r"(\d{1,3}(?:[.,]\d+)?)", text_value)
+        if not prob_match:
+            return None
+        try:
+            prob = float(prob_match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+        return prob if 0.0 <= prob <= 100.0 else None
+
+    def _normalize_binary_outcome(value):
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        # Important: check negative Russian phrase before positive phrase.
+        no_tokens = ["событие не произойдёт", "не произойд", "won't", "will not", "no", "нет"]
+        yes_tokens = ["событие произойдёт", "произойд", "will happen", "yes", "да"]
+        if any(token in normalized for token in no_tokens):
+            return "NO"
+        if any(token in normalized for token in yes_tokens):
+            return "YES"
+        return None
 
     url = (message.text or "").strip()
     if not url:
@@ -6225,19 +6260,30 @@ async def _build_polymarket_analysis_context_for_top_analysis(
     ) or url
 
     leader = _first_non_empty(result.get("leader"), result.get("outcome"), result.get("display_prediction"))
+    leader_normalized = _normalize_binary_outcome(leader)
     market_probability = _first_non_empty(result.get("market_probability"), result.get("market_prob"), market_data.get("market_probability"))
+    market_probability_float = _to_float_probability(
+        _first_non_empty(
+            result.get("market_probability"),
+            result.get("market_prob"),
+            market_data.get("market_probability"),
+            result.get("probability"),
+            result.get("display_prediction"),
+            result.get("prediction"),
+            result.get("decision"),
+        )
+    )
     model_probability = _first_non_empty(result.get("model_probability"), result.get("probability"), result.get("confidence_probability"))
     display_prediction = _first_non_empty(result.get("display_prediction"), result.get("prediction"), result.get("decision"), leader)
 
     market_options = _as_dict(result.get("market_options"))
     probability_source = None
     if not market_options:
-        if isinstance(leader, str) and isinstance(market_probability, (int, float)):
-            leader_upper = leader.strip().upper()
-            if leader_upper in {"YES", "NO"}:
-                lead_prob = float(market_probability)
+        if leader_normalized in {"YES", "NO"} and market_probability_float is not None:
+            lead_prob = market_probability_float
+            if 0.0 <= lead_prob <= 100.0:
                 other = round(max(0.0, 100.0 - lead_prob), 4)
-                market_options = {leader_upper: lead_prob, "NO" if leader_upper == "YES" else "YES": other}
+                market_options = {leader_normalized: lead_prob, "NO" if leader_normalized == "YES" else "YES": other}
                 probability_source = "market_probability"
         if not market_options and isinstance(display_prediction, str):
             parsed_outcome, parsed_prob = _parse_outcome_probability(display_prediction)
@@ -6287,7 +6333,7 @@ async def _build_polymarket_analysis_context_for_top_analysis(
         "base_analysis": base_analysis,
         "analysis": result,
         "source_summary": sources,
-        "market_probability": market_probability,
+        "market_probability": market_probability_float if market_probability_float is not None else market_probability,
         "display_prediction": display_prediction,
         "category": _first_non_empty(result.get("category"), result.get("category_type")),
     }
@@ -6363,6 +6409,18 @@ async def top_analysis_state_link_handler(message: types.Message, state: FSMCont
                 len(analysis.get("market_options") or {}),
                 bool(analysis.get("base_analysis")),
                 len(analysis.get("source_summary") or []),
+            )
+            options = analysis.get("market_options") or {}
+            safe_options = {}
+            if isinstance(options, dict):
+                for k, v in options.items():
+                    if isinstance(v, (int, float)):
+                        safe_options[k] = round(float(v), 2)
+            logger.info(
+                "top_analysis_context_options user_id=%s options=%s source=%s",
+                uid,
+                safe_options,
+                analysis.get("probability_source"),
             )
         except Exception as exc:
             logger.warning("top_analysis_context_build_failed user_id=%s reason=%s", uid, type(exc).__name__)
