@@ -1,4 +1,5 @@
 from typing import Any, Dict
+import logging
 
 from .chief_forecaster import ChiefForecaster
 from .research_specialist import ResearchSpecialist
@@ -14,19 +15,36 @@ class TopAnalysisAgent:
         self.chief_forecaster = ChiefForecaster()
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        logger = logging.getLogger(__name__)
         try:
             research_result = self.research_specialist.run(input_data)
             social_signal_result = self.social_signal_specialist.run(input_data)
             risk_audit_result = self.risk_auditor.run(input_data)
-            for result in (research_result, social_signal_result, risk_audit_result):
+            specialist_results = (
+                ("research_specialist", research_result),
+                ("social_signal_specialist", social_signal_result),
+                ("risk_auditor", risk_audit_result),
+            )
+            for component_name, result in specialist_results:
                 if result.get("status") != "ok":
-                    return {"status": "maintenance", "final_available": False, "error": "required_component_unavailable", "user_message_key": "top_analysis_maintenance"}
+                    logger.warning(
+                        "top_analysis_component_unavailable component=%s status=%s error=%s",
+                        component_name,
+                        result.get("status"),
+                        result.get("error"),
+                    )
+                    return {"status": "maintenance", "final_available": False, "error": "required_component_unavailable", "failed_component": component_name, "failed_component_status": result.get("status"), "failed_component_error": result.get("error"), "user_message_key": "top_analysis_maintenance"}
 
             chief_forecast_result = self.chief_forecaster.run(
                 {"input_data": input_data, "research_result": research_result, "social_signal_result": social_signal_result, "risk_audit_result": risk_audit_result}
             )
             if chief_forecast_result.get("status") != "ok":
-                return {"status": "maintenance", "final_available": False, "error": "required_component_unavailable", "user_message_key": "top_analysis_maintenance"}
+                logger.warning(
+                    "top_analysis_component_unavailable component=chief_forecaster status=%s error=%s",
+                    chief_forecast_result.get("status"),
+                    chief_forecast_result.get("error"),
+                )
+                return {"status": "maintenance", "final_available": False, "error": "required_component_unavailable", "failed_component": "chief_forecaster", "failed_component_status": chief_forecast_result.get("status"), "failed_component_error": chief_forecast_result.get("error"), "user_message_key": "top_analysis_maintenance"}
             if not bool(chief_forecast_result.get("final_forecast_available")):
                 return {"status": "maintenance", "final_available": False, "error": "final_forecast_unavailable", "user_message_key": "top_analysis_maintenance"}
 
