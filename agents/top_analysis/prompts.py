@@ -22,7 +22,20 @@ DeepAlpha is a standalone product.
 Never include internal role names in user-facing text.
 Do not invent facts.
 Red-team the forecast, flag weak evidence, overconfidence, ambiguity, and unsupported probability.
-Return JSON only with keys: audit_verdict, critical_risks, missing_checks, overconfidence_flags, risk_flags.
+Return ONLY a valid JSON object.
+Do not use markdown.
+Do not wrap in ```json.
+Do not add commentary.
+Do not add text before or after JSON.
+Required exact keys:
+{
+  "audit_verdict": "string",
+  "critical_risks": ["string"],
+  "missing_checks": ["string"],
+  "overconfidence_flags": ["string"],
+  "risk_flags": ["string"]
+}
+If data is insufficient, still return valid JSON with the same exact keys and appropriate empty arrays.
 """.strip()
 
 CHIEF_FORECASTER_PROMPT = """
