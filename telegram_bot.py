@@ -48,6 +48,7 @@ from services.badge_service import (
 from services.resolved_market_recap_service import render_resolved_market_recap
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -723,6 +724,17 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
         return
 
     try:
+        progress_text = (
+            "🔥 Запускаю DeepAlpha Top Analysis...\n"
+            "⏳ Расширенный анализ может занять 1–3 минуты.\n"
+            "Токены будут списаны только после успешного результата."
+            if lang == "ru"
+            else "🔥 Starting DeepAlpha Top Analysis...\n"
+                 "⏳ Extended analysis may take 1–3 minutes.\n"
+                 "Tokens will be charged only after a successful result."
+        )
+        await respond_fn(progress_text)
+
         agent = TopAnalysisAgent()
         input_data = {
             "question": analysis.get("question", ""),
@@ -731,17 +743,27 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
             "base_analysis": analysis.get("analysis", {}),
             "source_summary": analysis.get("source_summary", []),
         }
+        logger.info("top_analysis_execution_start user_id=%s", uid)
         result = agent.run(input_data)
+        logger.info(
+            "top_analysis_execution_done user_id=%s status=%s final_available=%s",
+            uid,
+            result.get("status"),
+            result.get("final_available"),
+        )
         if result.get("status") != "ok" or not result.get("final_available"):
+            logger.info("top_analysis_maintenance user_id=%s reason=%s", uid, result.get("error", "unknown"))
             await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
             return
+        logger.info("top_analysis_charge_attempt user_id=%s price=%s", uid, price)
         new_balance = add_tokens(uid, -price)
         if new_balance == 0 and user_balance > 0:
             await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
             return
         await respond_fn(_format_top_analysis_output(lang, input_data.get("question", ""), result))
+        logger.info("top_analysis_success user_id=%s", uid)
     except Exception as exc:
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "top_analysis_runtime_error uid=%s err_type=%s",
             uid,
             type(exc).__name__,
@@ -5577,6 +5599,7 @@ async def top_analysis_prompt_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
+    logger.info("top_analysis_mode_selected user_id=%s", uid)
 
     if not _is_top_analysis_enabled():
         text = "🔥 Top Analysis сейчас недоступен." if lang == "ru" else "🔥 Top Analysis is currently unavailable."
@@ -6019,7 +6042,10 @@ async def analyze_url_handler(message: types.Message):
 
     if current_state == AnalysisStates.waiting_for_top_analysis_link.state:
         lang = get_user_lang(uid)
-        if not _is_top_analysis_enabled() or not _top_analysis_preflight_ready():
+        logger.info("top_analysis_link_received user_id=%s", uid)
+        ready = _is_top_analysis_enabled() and _top_analysis_preflight_ready()
+        logger.info("top_analysis_preflight user_id=%s ready=%s", uid, ready)
+        if not ready:
             await state.finish()
             await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
             return
