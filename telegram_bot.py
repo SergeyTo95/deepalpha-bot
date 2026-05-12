@@ -722,23 +722,31 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
         await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
         return
 
-    agent = TopAnalysisAgent()
-    input_data = {
-        "question": analysis.get("question", ""),
-        "market_options": analysis.get("options", {}),
-        "event_profile": analysis.get("event_profile", {}),
-        "base_analysis": analysis.get("analysis", {}),
-        "source_summary": analysis.get("source_summary", []),
-    }
-    result = agent.run(input_data)
-    if result.get("status") != "ok" or not result.get("final_available"):
+    try:
+        agent = TopAnalysisAgent()
+        input_data = {
+            "question": analysis.get("question", ""),
+            "market_options": analysis.get("options", {}),
+            "event_profile": analysis.get("event_profile", {}),
+            "base_analysis": analysis.get("analysis", {}),
+            "source_summary": analysis.get("source_summary", []),
+        }
+        result = agent.run(input_data)
+        if result.get("status") != "ok" or not result.get("final_available"):
+            await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
+            return
+        new_balance = add_tokens(uid, -price)
+        if new_balance == 0 and user_balance > 0:
+            await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
+            return
+        await respond_fn(_format_top_analysis_output(lang, input_data.get("question", ""), result))
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "top_analysis_runtime_error uid=%s err_type=%s",
+            uid,
+            type(exc).__name__,
+        )
         await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
-        return
-    new_balance = add_tokens(uid, -price)
-    if new_balance == 0 and user_balance > 0:
-        await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
-        return
-    await respond_fn(_format_top_analysis_output(lang, input_data.get("question", ""), result))
 
 
 def _confidence_emoji(confidence: str) -> str:
