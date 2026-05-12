@@ -6155,6 +6155,52 @@ async def _build_polymarket_analysis_context_for_top_analysis(
     uid: int,
     lang: str,
 ) -> dict:
+    def _as_dict(value) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    def _first_non_empty(*values):
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if value not in (None, "", [], {}):
+                return value
+        return None
+
+    def _normalize_sources(raw_sources):
+        if not raw_sources:
+            return []
+        if isinstance(raw_sources, list):
+            normalized = []
+            for item in raw_sources:
+                if isinstance(item, str) and item.strip():
+                    normalized.append(item.strip())
+                elif isinstance(item, dict):
+                    short = {k: v for k, v in item.items() if k in {"title", "url", "source", "date", "type"} and v}
+                    normalized.append(short or str(item)[:200])
+                else:
+                    normalized.append(str(item)[:200])
+            return normalized
+        if isinstance(raw_sources, dict):
+            return [raw_sources]
+        return [str(raw_sources)[:200]]
+
+    def _parse_outcome_probability(text_value: str):
+        if not isinstance(text_value, str) or not text_value:
+            return None, None
+        m = re.search(r"(yes|no|да|нет|произойд|не\s+произойд|won't|will\s+not)\b", text_value, re.IGNORECASE)
+        p = re.search(r"(\d{1,3}(?:[\.,]\d+)?)\s*%", text_value)
+        if not p:
+            return None, None
+        prob = float(p.group(1).replace(",", "."))
+        if prob < 0 or prob > 100:
+            return None, None
+        outcome = (m.group(1).lower() if m else "")
+        if any(t in outcome for t in ["no", "нет", "не", "won't", "not"]):
+            return "NO", prob
+        if outcome:
+            return "YES", prob
+        return None, prob
+
     url = (message.text or "").strip()
     if not url:
         raise ValueError("empty_url")
@@ -6167,9 +6213,87 @@ async def _build_polymarket_analysis_context_for_top_analysis(
     except Exception as exc:
         raise RuntimeError(str(exc)) from exc
 
-    result["url"] = url
-    result["market_slug"] = result.get("market_slug") or _extract_slug_from_url(url)
-    return result
+    market_data = _as_dict(result.get("market_data"))
+    deep_analysis = _as_dict(result.get("deep_analysis"))
+    deep_event_profile = _as_dict(deep_analysis.get("event_profile"))
+
+    question = _first_non_empty(
+        result.get("question"),
+        result.get("market_question"),
+        market_data.get("question"),
+        deep_event_profile.get("question"),
+    ) or url
+
+    leader = _first_non_empty(result.get("leader"), result.get("outcome"), result.get("display_prediction"))
+    market_probability = _first_non_empty(result.get("market_probability"), result.get("market_prob"), market_data.get("market_probability"))
+    model_probability = _first_non_empty(result.get("model_probability"), result.get("probability"), result.get("confidence_probability"))
+    display_prediction = _first_non_empty(result.get("display_prediction"), result.get("prediction"), result.get("decision"), leader)
+
+    market_options = _as_dict(result.get("market_options"))
+    probability_source = None
+    if not market_options:
+        if isinstance(leader, str) and isinstance(market_probability, (int, float)):
+            leader_upper = leader.strip().upper()
+            if leader_upper in {"YES", "NO"}:
+                lead_prob = float(market_probability)
+                other = round(max(0.0, 100.0 - lead_prob), 4)
+                market_options = {leader_upper: lead_prob, "NO" if leader_upper == "YES" else "YES": other}
+                probability_source = "market_probability"
+        if not market_options and isinstance(display_prediction, str):
+            parsed_outcome, parsed_prob = _parse_outcome_probability(display_prediction)
+            if parsed_outcome and parsed_prob is not None:
+                market_options = {parsed_outcome: parsed_prob, "NO" if parsed_outcome == "YES" else "YES": round(max(0.0, 100.0 - parsed_prob), 4)}
+                probability_source = "model_probability"
+
+    event_profile = _as_dict(result.get("event_profile")) or deep_event_profile
+    if not event_profile:
+        event_profile = {
+            "market_type": _first_non_empty(result.get("market_type"), result.get("market_structure"), "binary_event"),
+            "category_type": _first_non_empty(result.get("category_type"), result.get("category"), "unknown"),
+            "subcategory": _first_non_empty(result.get("subcategory"), "unknown"),
+            "market_subtype": _first_non_empty(result.get("market_subtype"), "unknown"),
+            "resolution_metric": _first_non_empty(result.get("resolution_metric"), "market_rules"),
+        }
+
+    sources = _normalize_sources(
+        _first_non_empty(
+            result.get("sources"),
+            result.get("source_summary"),
+            _as_dict(result.get("news_data")).get("sources"),
+            deep_analysis.get("sources"),
+        )
+    )
+
+    base_analysis = {
+        "display_prediction": display_prediction,
+        "model_probability": model_probability,
+        "market_probability": market_probability,
+        "leader": leader,
+        "confidence": result.get("confidence"),
+        "value_summary": _first_non_empty(result.get("value_summary"), result.get("value_signal")),
+        "key_signals": result.get("key_signals"),
+        "drivers": result.get("drivers"),
+        "risks": result.get("risks"),
+        "source_count": len(sources),
+    }
+    base_analysis = {k: v for k, v in base_analysis.items() if v not in (None, "", [], {})}
+
+    context = {
+        "url": url,
+        "market_slug": result.get("market_slug") or _extract_slug_from_url(url),
+        "question": question,
+        "market_options": market_options,
+        "event_profile": event_profile,
+        "base_analysis": base_analysis,
+        "analysis": result,
+        "source_summary": sources,
+        "market_probability": market_probability,
+        "display_prediction": display_prediction,
+        "category": _first_non_empty(result.get("category"), result.get("category_type")),
+    }
+    if probability_source:
+        context["probability_source"] = probability_source
+    return context
 
 
 @dp.message_handler(
@@ -6218,12 +6342,27 @@ async def top_analysis_state_link_handler(message: types.Message, state: FSMCont
         try:
             analysis = await _build_polymarket_analysis_context_for_top_analysis(message, uid, lang)
             last_analysis_cache[uid] = analysis
+            event_profile = analysis.get("event_profile") if isinstance(analysis.get("event_profile"), dict) else {}
+            has_event_profile = bool(event_profile) and bool(
+                event_profile.get("market_type") or event_profile.get("category_type") or event_profile.get("market_subtype")
+            )
+            question_log = (analysis.get("question") or "")
+            if isinstance(question_log, str) and len(question_log) > 80:
+                question_log = f"{question_log[:77]}..."
             logger.info(
                 "top_analysis_context_built user_id=%s has_question=%s has_options=%s has_event_profile=%s",
                 uid,
                 bool(analysis.get("question")),
                 bool(analysis.get("market_options")),
-                bool(analysis.get("event_profile")),
+                has_event_profile,
+            )
+            logger.info(
+                "top_analysis_context_fields user_id=%s question=%s options_count=%s has_base=%s sources_count=%s",
+                uid,
+                bool(question_log) if not isinstance(question_log, str) else question_log,
+                len(analysis.get("market_options") or {}),
+                bool(analysis.get("base_analysis")),
+                len(analysis.get("source_summary") or []),
             )
         except Exception as exc:
             logger.warning("top_analysis_context_build_failed user_id=%s reason=%s", uid, type(exc).__name__)
