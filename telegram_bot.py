@@ -6030,30 +6030,48 @@ _ANALYSIS_DEDUP_TTL_SEC = 45
 # URL ANALYSIS
 # ═══════════════════════════════════════════
 
-@dp.message_handler(lambda m: m.text and "polymarket.com" in m.text)
+@dp.message_handler(
+    lambda m: m.text and "polymarket.com" in m.text.lower(),
+    state=AnalysisStates.waiting_for_top_analysis_link,
+)
+async def top_analysis_state_link_handler(message: types.Message, state: FSMContext):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    logger.info("top_analysis_link_received user_id=%s", uid)
+
+    ready = _is_top_analysis_enabled() and _top_analysis_preflight_ready()
+    logger.info("top_analysis_preflight user_id=%s ready=%s", uid, ready)
+
+    if not ready:
+        await state.finish()
+        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
+        return
+
+    analysis = {
+        "question": (message.text or "").strip(),
+        "url": (message.text or "").strip(),
+        "market_options": {},
+        "event_profile": {},
+        "analysis": {},
+        "source_summary": [],
+    }
+    logger.info("top_analysis_minimal_context_used user_id=%s", uid)
+
+    cached = last_analysis_cache.get(uid) or {}
+    if isinstance(cached, dict):
+        analysis.update(cached)
+
+    await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
+    await state.finish()
+
+
+@dp.message_handler(lambda m: m.text and "polymarket.com" in m.text.lower())
 async def analyze_url_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
-    state = dp.current_state(user=uid, chat=message.chat.id)
-    current_state = await state.get_state()
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
-        return
-
-    if current_state == AnalysisStates.waiting_for_top_analysis_link.state:
-        lang = get_user_lang(uid)
-        logger.info("top_analysis_link_received user_id=%s", uid)
-        ready = _is_top_analysis_enabled() and _top_analysis_preflight_ready()
-        logger.info("top_analysis_preflight user_id=%s ready=%s", uid, ready)
-        if not ready:
-            await state.finish()
-            await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
-            return
-        analysis = {"url": (message.text or "").strip(), "question": "", "options": {}, "analysis": {}, "source_summary": []}
-        cached = last_analysis_cache.get(uid) or {}
-        analysis.update(cached)
-        await state.finish()
-        await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
         return
 
     # Telegram/web previews or overlapping handlers can deliver the same URL twice.
@@ -6265,6 +6283,20 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 # ═══════════════════════════════════════════
 # FALLBACK
 # ═══════════════════════════════════════════
+
+@dp.message_handler(
+    lambda m: m.text and "polymarket.com" not in m.text.lower(),
+    state=AnalysisStates.waiting_for_top_analysis_link,
+)
+async def top_analysis_state_non_polymarket_handler(message: types.Message):
+    lang = get_user_lang(message.from_user.id)
+    text = (
+        "Отправь ссылку Polymarket для Top Analysis."
+        if lang == "ru"
+        else "Send a Polymarket link for Top Analysis."
+    )
+    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/"))
 async def fallback_handler(message: types.Message):
