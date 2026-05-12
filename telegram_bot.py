@@ -6227,9 +6227,9 @@ async def _build_polymarket_analysis_context_for_top_analysis(
         normalized = value.strip().lower()
         if not normalized:
             return None
-        # Important: check negative Russian phrase before positive phrase.
-        no_tokens = ["событие не произойдёт", "не произойд", "won't", "will not", "no", "нет"]
-        yes_tokens = ["событие произойдёт", "произойд", "will happen", "yes", "да"]
+        # Important: check explicit negatives before generic positives.
+        no_tokens = ["событие не произойдёт", "событие не произойдет", "не произойд", "won't", "will not", "no", "нет"]
+        yes_tokens = ["событие произойдёт", "событие произойдет", "произойд", "will happen", "yes", "да"]
         if any(token in normalized for token in no_tokens):
             return "NO"
         if any(token in normalized for token in yes_tokens):
@@ -6278,18 +6278,30 @@ async def _build_polymarket_analysis_context_for_top_analysis(
 
     market_options = _as_dict(result.get("market_options"))
     probability_source = None
-    if not market_options:
-        if leader_normalized in {"YES", "NO"} and market_probability_float is not None:
-            lead_prob = market_probability_float
-            if 0.0 <= lead_prob <= 100.0:
-                other = round(max(0.0, 100.0 - lead_prob), 4)
-                market_options = {leader_normalized: lead_prob, "NO" if leader_normalized == "YES" else "YES": other}
-                probability_source = "market_probability"
-        if not market_options and isinstance(display_prediction, str):
-            parsed_outcome, parsed_prob = _parse_outcome_probability(display_prediction)
-            if parsed_outcome and parsed_prob is not None:
-                market_options = {parsed_outcome: parsed_prob, "NO" if parsed_outcome == "YES" else "YES": round(max(0.0, 100.0 - parsed_prob), 4)}
-                probability_source = "model_probability"
+    parsed_outcome = None
+    parsed_prob = None
+    for candidate in (
+        result.get("probability"),
+        result.get("display_prediction"),
+        result.get("prediction"),
+        result.get("decision"),
+        result.get("summary"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            parsed_outcome, parsed_prob = _parse_outcome_probability(candidate)
+            if parsed_outcome in {"YES", "NO"} and parsed_prob is not None:
+                break
+
+    if parsed_outcome in {"YES", "NO"} and parsed_prob is not None:
+        other = round(max(0.0, 100.0 - parsed_prob), 4)
+        market_options = {parsed_outcome: parsed_prob, "NO" if parsed_outcome == "YES" else "YES": other}
+        probability_source = "model_probability"
+    elif leader_normalized in {"YES", "NO"} and market_probability_float is not None:
+        lead_prob = market_probability_float
+        if 0.0 <= lead_prob <= 100.0:
+            other = round(max(0.0, 100.0 - lead_prob), 4)
+            market_options = {leader_normalized: lead_prob, "NO" if leader_normalized == "YES" else "YES": other}
+            probability_source = "market_probability"
 
     event_profile = _as_dict(result.get("event_profile")) or deep_event_profile
     if not event_profile:

@@ -1,8 +1,11 @@
+import logging
 from typing import Any, Dict
 
 from .base import TopAnalysisSpecialistBase
 from .prompts import RISK_AUDITOR_PROMPT
 from .provider_router import TopAnalysisProviderRouter
+
+logger = logging.getLogger(__name__)
 
 
 class RiskAuditor(TopAnalysisSpecialistBase):
@@ -15,10 +18,24 @@ class RiskAuditor(TopAnalysisSpecialistBase):
         payload = {"prompt": f"{RISK_AUDITOR_PROMPT}\nINPUT:\n{input_data}"}
         response = router.route(self.provider_key, payload)
         parsed = response.get("json") or {}
+        content = (response.get("content") or "").strip()
         if response.get("status") != "ok":
             return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": response.get("error", "unavailable")}
-        if not parsed:
+        if not content:
             return {"specialist_name": self.name, "status": "error", "provider_key": self.provider_key, "error": "invalid_or_empty_json"}
+        if not parsed:
+            logger.warning("risk_auditor_non_json_fallback content_len=%s", len(content))
+            return {
+                "specialist_name": self.name,
+                "status": "ok",
+                "provider_key": self.provider_key,
+                "audit_verdict": "non_json_audit_fallback",
+                "critical_risks": [content[:300]] if content else [],
+                "missing_checks": [],
+                "overconfidence_flags": [],
+                "risk_flags": ["risk_audit_non_json_response"],
+                "raw_content": "",
+            }
         return {
             "specialist_name": self.name,
             "status": "ok",
