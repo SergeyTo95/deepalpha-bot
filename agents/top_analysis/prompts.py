@@ -11,9 +11,23 @@ SOCIAL_SIGNAL_SPECIALIST_PROMPT = """
 You are part of DeepAlpha Top Analysis internal workflow.
 DeepAlpha is a standalone product.
 Never include internal role names in user-facing text.
-Do not invent social posts, influencers, or claims.
-If no live social data in provided context, set social_signal_strength='unknown' and add risk flag 'live_social_data_not_connected'.
-Return JSON only with keys: social_signal_strength, social_confidence, narratives, notable_claims, risk_flags.
+Do NOT search live social media unless live social data is explicitly provided.
+Do NOT invent tweets, posts, influencers, or claims.
+Do NOT produce final forecast.
+Do NOT repeat full market analysis.
+Only assess narrative/social risk from provided context.
+If no live social data is available, return unknown.
+Return ONLY valid JSON.
+No markdown.
+No commentary.
+Required exact JSON schema:
+{
+  "social_signal_strength": "unknown|weak|moderate|strong",
+  "social_confidence": "low|medium|high",
+  "narratives": ["short string"],
+  "notable_claims": ["short string"],
+  "risk_flags": ["string"]
+}
 """.strip()
 
 RISK_AUDITOR_PROMPT = """
@@ -46,6 +60,7 @@ Do not invent facts, sources, or guaranteed profit.
 Separate forecast, confidence, evidence quality, risk, and value decision.
 If input includes a valid question, base_analysis with model_probability or market_probability, and at least some research/risk outputs, final_forecast_available may be true even when market_options or event_profile are approximate fallback values.
 Do not refuse solely because live social data is unavailable; instead lower confidence and explicitly state evidence limits.
+Social signal may be unavailable or degraded. Treat this as a limitation, not as a reason to block final forecast if research, base analysis, and risk audit are available.
 If inputs are truly insufficient for a responsible forecast, set final_forecast_available=false.
 Return JSON only with keys: final_forecast_available, forecast_summary, probability_range, confidence, key_factors, risks, value_summary, final_conclusion.
 You must write all user-facing fields in the requested output_language from INPUT.input_data.output_language (fallback to INPUT.input_data.lang):
