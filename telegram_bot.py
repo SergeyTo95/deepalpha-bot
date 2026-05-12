@@ -697,6 +697,17 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 if lang == "ru"
                 else "Details hidden due to technical maintenance policy."
             )
+        if lang == "ru" and text:
+            fallback_map = {
+                "Low": "Низкая",
+                "Medium": "Средняя",
+                "High": "Высокая",
+                "No clear value": "Явного value нет",
+                "No trade": "Нет входа",
+                "Forecast": "Прогноз",
+            }
+            for en, ru in fallback_map.items():
+                text = text.replace(en, ru)
         return text or ("—" if lang == "ru" else "—")
 
     def _format_probability_range(value, out_lang: str) -> str:
@@ -821,6 +832,8 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
             "event_profile": analysis.get("event_profile", {}),
             "base_analysis": analysis.get("analysis", {}),
             "source_summary": analysis.get("source_summary", []),
+            "lang": lang,
+            "output_language": "ru" if lang == "ru" else "en",
         }
         logger.info("top_analysis_execution_start user_id=%s", uid)
         result = agent.run(input_data)
