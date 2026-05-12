@@ -678,36 +678,115 @@ def _get_top_analysis_balance_message(lang: str, price: int) -> str:
 def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
     forbidden_terms = ["gpt", "claude", "grok", "gemini", "openai", "anthropic", "xai", "provider", "model failed", "agent failed", "multi-agent"]
 
+    def _safe_text(value, default="—"):
+        if isinstance(value, str):
+            text = value.strip()
+            return text or default
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, (dict, list)):
+            return default
+        return default
+
     def _scrub_text(value: str) -> str:
-        text = str(value or "")
+        text = _safe_text(value, default="")
         lowered = text.lower()
         if any(term in lowered for term in forbidden_terms):
-            return "Details hidden due to technical maintenance policy."
-        return text
+            return (
+                "Детали скрыты в рамках технической политики обслуживания."
+                if lang == "ru"
+                else "Details hidden due to technical maintenance policy."
+            )
+        return text or ("—" if lang == "ru" else "—")
+
+    def _format_probability_range(value, out_lang: str) -> str:
+        if not isinstance(value, dict):
+            return "—"
+        lines = []
+        for outcome in ["YES", "NO"]:
+            item = value.get(outcome)
+            if isinstance(item, dict):
+                low = item.get("low")
+                high = item.get("high")
+                if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+                    lines.append(f"{outcome}: {low:g}–{high:g}%")
+            elif isinstance(item, (int, float)):
+                lines.append(f"{outcome}: {item:g}%")
+        return "\n".join(lines) if lines else "—"
+
+    def _format_forecast_summary(value, out_lang: str) -> str:
+        if isinstance(value, str):
+            return _scrub_text(value)
+        if not isinstance(value, dict):
+            return "—"
+
+        lines = []
+        forecast = _safe_text(value.get("forecast"), default="")
+        if forecast:
+            lines.append(_scrub_text(forecast))
+
+        model_probability = _format_probability_range(value.get("model_probability"), out_lang)
+        if model_probability != "—":
+            model_flat = model_probability.replace("\n", ", ")
+            prefix = "Оценка модели" if out_lang == "ru" else "Model estimate"
+            lines.append(f"{prefix}: {model_flat}.")
+
+        market_snapshot = _format_probability_range(value.get("market_probability_snapshot"), out_lang)
+        if market_snapshot != "—":
+            market_flat = market_snapshot.replace("\n", ", ")
+            prefix = "Снимок рынка" if out_lang == "ru" else "Market snapshot"
+            lines.append(f"{prefix}: {market_flat}.")
+
+        return "\n".join(lines) if lines else "—"
+
+    def _format_confidence(value, out_lang: str) -> str:
+        if isinstance(value, str):
+            return _scrub_text(value)
+        if not isinstance(value, dict):
+            return "Низкая" if out_lang == "ru" else "Low"
+        level = _safe_text(value.get("level"), default="Низкая" if out_lang == "ru" else "Low")
+        rationale = value.get("rationale")
+        evidence_quality = _safe_text(value.get("evidence_quality"), default="")
+        lines = [level]
+        if isinstance(rationale, list):
+            bullets = []
+            for item in rationale[:3]:
+                item_text = _safe_text(item, default="")
+                if item_text:
+                    bullets.append(f"— {_scrub_text(item_text)}")
+            if bullets:
+                lines.extend(bullets)
+        if evidence_quality:
+            prefix = "Качество данных" if out_lang == "ru" else "Evidence quality"
+            lines.append(f"{prefix}: {_scrub_text(evidence_quality)}")
+        return "\n".join(lines)
 
     chief = result.get("chief_forecast_result", {})
     factors = [_scrub_text(x) for x in (chief.get("key_factors") or [])]
     risks = [_scrub_text(x) for x in (chief.get("risks") or [])]
-    ftxt = "\n".join([f"— {x}" for x in factors[:5]]) or "— n/a"
-    rtxt = "\n".join([f"— {x}" for x in risks[:5]]) or "— n/a"
+    ftxt = "\n".join([f"— {x}" for x in factors[:5] if x]) or "—"
+    rtxt = "\n".join([f"— {x}" for x in risks[:5] if x]) or "—"
+    forecast_text = _format_forecast_summary(chief.get("forecast_summary"), lang)
+    probability_text = _format_probability_range(chief.get("probability_range"), lang)
+    confidence_text = _format_confidence(chief.get("confidence"), lang)
     if lang == "ru":
         return (
             "🔥 DeepAlpha Top Analysis\n\n"
-            f"📌 Рынок:\n{question}\n\n"
-            f"🎯 Расширенный прогноз:\n{_scrub_text(chief.get('forecast_summary','Нет сильного прогноза.'))}\n\n"
-            f"📊 Вероятность:\n{chief.get('probability_range',{})}\n\n"
-            f"🧠 Уверенность:\n{chief.get('confidence','Низкая')}\n\n"
+            f"📌 Рынок:\n{_safe_text(question)}\n\n"
+            f"🎯 Расширенный прогноз:\n{forecast_text}\n\n"
+            f"📊 Вероятность:\n{probability_text}\n\n"
+            f"🧠 Уверенность:\n{confidence_text}\n\n"
             f"🧩 Ключевые факторы:\n{ftxt}\n\n"
             f"⚠️ Риски:\n{rtxt}\n\n"
-            f"💰 Value:\n{_scrub_text(chief.get('value_summary','Нет явного value.'))}\n\n"
+            f"💰 Ценность:\n{_scrub_text(chief.get('value_summary','Нет явной ценности.'))}\n\n"
             f"✅ Вывод:\n{_scrub_text(chief.get('final_conclusion','Нет ясного вывода.'))}"
         )
     return (
         "🔥 DeepAlpha Top Analysis\n\n"
-        f"📌 Market:\n{question}\n\n"
-        f"🎯 Extended forecast:\n{_scrub_text(chief.get('forecast_summary','No strong forecast.'))}\n\n"
-        f"📊 Probability:\n{chief.get('probability_range',{})}\n\n"
-        f"🧠 Confidence:\n{chief.get('confidence','Low')}\n\n"
+        f"📌 Market:\n{_safe_text(question)}\n\n"
+        f"🎯 Extended forecast:\n{forecast_text}\n\n"
+        f"📊 Probability:\n{probability_text}\n\n"
+        f"🧠 Confidence:\n{confidence_text}\n\n"
         f"🧩 Key factors:\n{ftxt}\n\n"
         f"⚠️ Risks:\n{rtxt}\n\n"
         f"💰 Value:\n{_scrub_text(chief.get('value_summary','No clear value.'))}\n\n"
