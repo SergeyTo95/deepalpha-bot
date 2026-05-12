@@ -6150,6 +6150,28 @@ async def _run_normal_polymarket_analysis(message: types.Message):
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
 
 
+async def _build_polymarket_analysis_context_for_top_analysis(
+    message: types.Message,
+    uid: int,
+    lang: str,
+) -> dict:
+    url = (message.text or "").strip()
+    if not url:
+        raise ValueError("empty_url")
+
+    try:
+        agent = ChiefAgent()
+        result = agent.run(url, lang=lang, user_id=uid)
+        if not result or not isinstance(result, dict):
+            raise ValueError("no_analysis_result")
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    result["url"] = url
+    result["market_slug"] = result.get("market_slug") or _extract_slug_from_url(url)
+    return result
+
+
 @dp.message_handler(
     lambda m: m.text and "polymarket.com" in m.text.lower(),
     state=AnalysisStates.waiting_for_link,
@@ -6178,19 +6200,43 @@ async def top_analysis_state_link_handler(message: types.Message, state: FSMCont
         await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
         return
 
-    analysis = {
-        "question": (message.text or "").strip(),
-        "url": (message.text or "").strip(),
-        "market_options": {},
-        "event_profile": {},
-        "analysis": {},
-        "source_summary": [],
-    }
-    logger.info("top_analysis_minimal_context_used user_id=%s", uid)
+    requested_url = (message.text or "").strip()
+    requested_slug = _extract_slug_from_url(requested_url)
+    cached = last_analysis_cache.get(uid)
+    analysis = None
 
-    cached = last_analysis_cache.get(uid) or {}
     if isinstance(cached, dict):
-        analysis.update(cached)
+        cached_url = (cached.get("url") or "").strip()
+        cached_slug = cached.get("market_slug") or _extract_slug_from_url(cached_url)
+        if (requested_slug and cached_slug == requested_slug) or (
+            requested_url and cached_url and requested_url == cached_url
+        ):
+            analysis = cached
+            logger.info("top_analysis_context_cache_hit user_id=%s", uid)
+
+    if analysis is None:
+        try:
+            analysis = await _build_polymarket_analysis_context_for_top_analysis(message, uid, lang)
+            last_analysis_cache[uid] = analysis
+            logger.info(
+                "top_analysis_context_built user_id=%s has_question=%s has_options=%s has_event_profile=%s",
+                uid,
+                bool(analysis.get("question")),
+                bool(analysis.get("market_options")),
+                bool(analysis.get("event_profile")),
+            )
+        except Exception as exc:
+            logger.warning("top_analysis_context_build_failed user_id=%s reason=%s", uid, type(exc).__name__)
+            await state.finish()
+            maintenance_msg = (
+                "🔧 Top Analysis временно недоступен.\n"
+                "Не удалось подготовить данные рынка для расширенного анализа. Токены не списаны. Попробуй позже."
+                if lang == "ru"
+                else "🔧 Top Analysis is temporarily unavailable.\n"
+                "Could not prepare market data for the extended analysis. No tokens were charged. Please try again later."
+            )
+            await message.answer(maintenance_msg, reply_markup=get_main_keyboard(uid))
+            return
 
     await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
     await state.finish()
