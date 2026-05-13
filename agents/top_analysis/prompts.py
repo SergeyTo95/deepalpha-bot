@@ -85,6 +85,11 @@ Rules for probability_range:
 - YES and NO ranges should be directionally consistent
 - if exact estimate is uncertain, use conservative ranges
 - if there is a point estimate, convert it into a reasonable range
-- if market snapshot exists, it may be used as a reference but not copied blindly
+- input_data.market_options is the market probability snapshot (рыночный снимок) when present
+- when input_data.market_options is non-empty, do not claim market odds/quotes/pricing are unavailable
+- when market snapshot exists, anchor your range near the snapshot by default
+- move materially away from market snapshot only if strong, explicit evidence supports the divergence
+- if you diverge from market snapshot, explain why in value_summary
+- if market snapshot exists, value_summary must compare DeepAlpha estimate vs market snapshot
 - if estimation is truly impossible, set final_forecast_available=false
 """.strip()
