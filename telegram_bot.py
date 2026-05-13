@@ -702,12 +702,14 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 "Low": "Низкая",
                 "Medium": "Средняя",
                 "High": "Высокая",
-                "No clear value": "Явного value нет",
+                "No clear value": "Явного ценового преимущества нет",
                 "No trade": "Нет входа",
                 "Forecast": "Прогноз",
             }
             for en, ru in fallback_map.items():
                 text = text.replace(en, ru)
+            text = text.replace("вэлью", "ценовое преимущество")
+            text = text.replace("Вэлью", "Ценовое преимущество")
         replacements = {
             "live social data unavailable": (
                 "социальные/нарративные сигналы недоступны"
@@ -729,7 +731,7 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 if lang == "ru"
                 else "social signals are partially available"
             ),
-            "NO_TRADE": "value слабое" if lang == "ru" else "weak value",
+            "NO_TRADE": "ценовое преимущество низкое" if lang == "ru" else "weak value",
             "WAIT": (
                 "лучше дождаться лучшей цены, но базовый выбор сохраняется"
                 if lang == "ru"
@@ -878,7 +880,7 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
 
     pick_strength_raw = _safe_text(chief.get("pick_strength"), default="")
     if not pick_strength_raw or pick_strength_raw == "—":
-        pick_strength_raw = "слабый" if lang == "ru" else "weak"
+        pick_strength_raw = "низкая" if lang == "ru" else "weak"
 
     value_strength_raw = _safe_text(chief.get("value_strength"), default="")
     if not value_strength_raw or value_strength_raw == "—":
@@ -887,28 +889,35 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
     value_explanation_raw = _safe_text(chief.get("value_explanation"), default="")
     if not value_explanation_raw or value_explanation_raw == "—":
         value_explanation_raw = (
-            "DeepAlpha выбирает наиболее вероятный исход, но сила value ограничена из-за качества данных или близости цены к справедливой оценке."
+            "DeepAlpha выбирает наиболее вероятный исход, но ценовое преимущество ограничено из-за качества данных или близости цены к справедливой оценке."
             if lang == "ru"
             else "DeepAlpha selects the most likely outcome, but value strength is limited due to data quality or price being close to fair value."
         )
 
     forecast_pick = _scrub_text(inferred_pick)
     pick_strength = _scrub_text(pick_strength_raw)
+    if lang == "ru":
+        pick_strength = {"слабый": "низкая", "средний": "средняя", "сильный": "высокая"}.get(pick_strength.lower(), pick_strength)
     value_strength = _scrub_text(value_strength_raw)
     value_explanation = _scrub_text(value_explanation_raw)
+    final_conclusion = _scrub_text(chief.get("final_conclusion", "Нет ясного вывода." if lang == "ru" else "No clear conclusion."))
+    if lang == "ru" and forecast_pick and forecast_pick != "—":
+        required_phrase = f"Если выбирать сторону — DeepAlpha выбирает {forecast_pick}."
+        if required_phrase not in final_conclusion:
+            final_conclusion = f"{final_conclusion} {required_phrase}".strip()
     if lang == "ru":
         return (
             "🔥 DeepAlpha Top Analysis\n\n"
             f"📌 Рынок:\n{_safe_text(question)}\n\n"
             f"🎯 Выбор DeepAlpha:\n{forecast_pick}\n\n"
-            f"📌 Сила выбора:\n{pick_strength}\n\n"
+            f"📌 Уверенность в выборе:\n{pick_strength}\n\n"
             f"🎯 Расширенный прогноз:\n{forecast_text}\n\n"
             f"📊 Вероятность:\n{probability_text}\n\n"
             f"🧠 Уверенность:\n{confidence_text}\n\n"
             f"🧩 Ключевые факторы:\n{ftxt}\n\n"
             f"⚠️ Риски:\n{rtxt}\n\n"
-            f"💰 Ценность:\nСила value: {value_strength}\n{value_explanation}\n\n"
-            f"✅ Вывод:\n{_scrub_text(chief.get('final_conclusion','Нет ясного вывода.'))}"
+            f"💰 Ценность:\nСила ценового преимущества: {value_strength}\n{value_explanation}\n\n"
+            f"✅ Вывод:\n{final_conclusion}"
         )
     return (
         "🔥 DeepAlpha Top Analysis\n\n"

@@ -72,13 +72,16 @@ Market question may remain as provided if originally English. Do not translate m
 For RU:
 - confidence.level must be one of: "низкая", "средняя", "высокая"
 - pick_confidence must be one of: "низкая", "средняя", "высокая"
-- pick_strength must be one of: "слабый", "средний", "сильный"
+- pick_strength must be one of: "низкая", "средняя", "высокая"
 - value_strength must be one of: "слабое", "среднее", "сильное", "неясное"
 - confidence.evidence_quality should be Russian if present
 - key_factors and risks must be Russian strings or Russian structured content
 - value_summary and final_conclusion must be Russian
  - value_explanation must be Russian
 For EN: use English.
+For RU wording quality:
+- Avoid transliterated "вэлью".
+- You may use "value", or preferably: "ценовое преимущество", "сила value", "преимущество относительно цены".
 When final_forecast_available=true, probability_range must be present and non-empty.
 When final_forecast_available=true, also always return:
 {
@@ -94,7 +97,7 @@ When final_forecast_available=true:
 - value_explanation must not be empty
 - if value is weak, explain why the pick still remains best while price/data quality limits value
 When final_forecast_available=true, final_conclusion must explicitly include forecast_pick:
-- RU format requirement: "Если выбирать исход — {forecast_pick}."
+- RU format requirement: "Если выбирать сторону — DeepAlpha выбирает {forecast_pick}."
 - EN format requirement: "If choosing an outcome — {forecast_pick}."
 - Do not end with only "value weak", "wait", or "no trade".
 For binary markets, forecast_pick must be YES or NO.
