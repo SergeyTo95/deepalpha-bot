@@ -708,14 +708,65 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
             }
             for en, ru in fallback_map.items():
                 text = text.replace(en, ru)
+        replacements = {
+            "live social data unavailable": (
+                "социальные/нарративные сигналы недоступны"
+                if lang == "ru"
+                else "social/narrative signals unavailable"
+            ),
+            "live_social_data_unavailable": (
+                "социальные/нарративные сигналы недоступны"
+                if lang == "ru"
+                else "social/narrative signals unavailable"
+            ),
+            "social_signal_degraded": (
+                "социальные сигналы ограничены"
+                if lang == "ru"
+                else "social signals are limited"
+            ),
+            "social_signal_non_json_response": (
+                "социальные сигналы доступны частично"
+                if lang == "ru"
+                else "social signals are partially available"
+            ),
+            "NO_TRADE": "нет входа" if lang == "ru" else "no trade",
+            "WAIT": "ждать" if lang == "ru" else "wait",
+            "TAKE_YES": "возможен вход в YES" if lang == "ru" else "possible YES entry",
+            "TAKE_NO": "возможен вход в NO" if lang == "ru" else "possible NO entry",
+        }
+        for src, dst in replacements.items():
+            text = re.sub(re.escape(src), dst, text, flags=re.IGNORECASE)
         return text or ("—" if lang == "ru" else "—")
 
+    def _extract_probability_from_text(raw: str):
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        text = raw.replace("–", "-").replace("—", "-")
+        pattern = re.compile(
+            r"YES\s*:?\s*(\d{1,3}(?:\.\d+)?)\s*-\s*(\d{1,3}(?:\.\d+)?)\s*%?"
+            r"[\s,;/\|]+NO\s*:?\s*(\d{1,3}(?:\.\d+)?)\s*-\s*(\d{1,3}(?:\.\d+)?)\s*%?",
+            flags=re.IGNORECASE,
+        )
+        m = pattern.search(text)
+        if not m:
+            return None
+        vals = [float(x) for x in m.groups()]
+        if any(v < 0 or v > 100 for v in vals):
+            return None
+        return {
+            "YES": {"low": vals[0], "high": vals[1]},
+            "NO": {"low": vals[2], "high": vals[3]},
+        }
+
     def _format_probability_range(value, out_lang: str) -> str:
-        if not isinstance(value, dict):
+        parsed = value if isinstance(value, dict) else None
+        if isinstance(value, str):
+            parsed = _extract_probability_from_text(value)
+        if not isinstance(parsed, dict):
             return "—"
         lines = []
         for outcome in ["YES", "NO"]:
-            item = value.get(outcome)
+            item = parsed.get(outcome)
             if isinstance(item, dict):
                 low = item.get("low")
                 high = item.get("high")
@@ -779,6 +830,15 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
     rtxt = "\n".join([f"— {x}" for x in risks[:5] if x]) or "—"
     forecast_text = _format_forecast_summary(chief.get("forecast_summary"), lang)
     probability_text = _format_probability_range(chief.get("probability_range"), lang)
+    if probability_text == "—":
+        for fallback_key in ["final_conclusion", "forecast_summary", "value_summary"]:
+            fallback_value = chief.get(fallback_key)
+            if isinstance(fallback_value, dict):
+                fallback_value = " ".join(str(v) for v in fallback_value.values())
+            parsed_fallback = _format_probability_range(fallback_value, lang)
+            if parsed_fallback != "—":
+                probability_text = parsed_fallback
+                break
     confidence_text = _format_confidence(chief.get("confidence"), lang)
     if lang == "ru":
         return (
