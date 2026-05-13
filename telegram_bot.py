@@ -780,6 +780,27 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 lines.append(f"{label}: {item:g}%")
         return "\n".join(lines) if lines else "—"
 
+    def _infer_pick_from_probability_range(probability_range) -> str:
+        if not isinstance(probability_range, dict):
+            return ""
+        best_outcome = ""
+        best_score = None
+        for outcome, item in probability_range.items():
+            score = None
+            if isinstance(item, dict):
+                low = item.get("low")
+                high = item.get("high")
+                if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+                    score = (float(low) + float(high)) / 2.0
+            elif isinstance(item, (int, float)):
+                score = float(item)
+            if score is None:
+                continue
+            if best_score is None or score > best_score:
+                best_score = score
+                best_outcome = str(outcome).strip()
+        return best_outcome
+
     def _format_forecast_summary(value, out_lang: str) -> str:
         if isinstance(value, str):
             return _scrub_text(value)
@@ -844,10 +865,37 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 probability_text = parsed_fallback
                 break
     confidence_text = _format_confidence(chief.get("confidence"), lang)
-    forecast_pick = _scrub_text(chief.get("forecast_pick", "—"))
-    pick_strength = _scrub_text(chief.get("pick_strength", "—"))
-    value_strength = _scrub_text(chief.get("value_strength", "—"))
-    value_explanation = _scrub_text(chief.get("value_explanation", "—"))
+    inferred_pick = _safe_text(chief.get("forecast_pick"), default="")
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = _safe_text(chief.get("best_outcome"), default="")
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = _infer_pick_from_probability_range(chief.get("probability_range"))
+    if not inferred_pick or inferred_pick == "—":
+        fallback_market_options = result.get("market_options") or {}
+        inferred_pick = _infer_pick_from_probability_range(fallback_market_options)
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = "неясно" if lang == "ru" else "unclear"
+
+    pick_strength_raw = _safe_text(chief.get("pick_strength"), default="")
+    if not pick_strength_raw or pick_strength_raw == "—":
+        pick_strength_raw = "слабый" if lang == "ru" else "weak"
+
+    value_strength_raw = _safe_text(chief.get("value_strength"), default="")
+    if not value_strength_raw or value_strength_raw == "—":
+        value_strength_raw = "слабое" if lang == "ru" else "weak"
+
+    value_explanation_raw = _safe_text(chief.get("value_explanation"), default="")
+    if not value_explanation_raw or value_explanation_raw == "—":
+        value_explanation_raw = (
+            "DeepAlpha выбирает наиболее вероятный исход, но сила value ограничена из-за качества данных или близости цены к справедливой оценке."
+            if lang == "ru"
+            else "DeepAlpha selects the most likely outcome, but value strength is limited due to data quality or price being close to fair value."
+        )
+
+    forecast_pick = _scrub_text(inferred_pick)
+    pick_strength = _scrub_text(pick_strength_raw)
+    value_strength = _scrub_text(value_strength_raw)
+    value_explanation = _scrub_text(value_explanation_raw)
     if lang == "ru":
         return (
             "🔥 DeepAlpha Top Analysis\n\n"
@@ -859,7 +907,7 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
             f"🧠 Уверенность:\n{confidence_text}\n\n"
             f"🧩 Ключевые факторы:\n{ftxt}\n\n"
             f"⚠️ Риски:\n{rtxt}\n\n"
-            f"💰 Value:\nСила value: {value_strength}\n{value_explanation}\n\n"
+            f"💰 Ценность:\nСила value: {value_strength}\n{value_explanation}\n\n"
             f"✅ Вывод:\n{_scrub_text(chief.get('final_conclusion','Нет ясного вывода.'))}"
         )
     return (

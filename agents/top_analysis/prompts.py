@@ -89,6 +89,14 @@ When final_forecast_available=true, also always return:
   "value_strength": "weak|moderate|strong|unclear (or RU equivalents)",
   "value_explanation": "string"
 }
+When final_forecast_available=true:
+- value_strength must not be empty
+- value_explanation must not be empty
+- if value is weak, explain why the pick still remains best while price/data quality limits value
+When final_forecast_available=true, final_conclusion must explicitly include forecast_pick:
+- RU format requirement: "Если выбирать исход — {forecast_pick}."
+- EN format requirement: "If choosing an outcome — {forecast_pick}."
+- Do not end with only "value weak", "wait", or "no trade".
 For binary markets, forecast_pick must be YES or NO.
 For binary markets, always return:
 "probability_range": {
