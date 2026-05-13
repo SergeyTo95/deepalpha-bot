@@ -729,8 +729,12 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 if lang == "ru"
                 else "social signals are partially available"
             ),
-            "NO_TRADE": "нет входа" if lang == "ru" else "no trade",
-            "WAIT": "ждать" if lang == "ru" else "wait",
+            "NO_TRADE": "value слабое" if lang == "ru" else "weak value",
+            "WAIT": (
+                "лучше дождаться лучшей цены, но базовый выбор сохраняется"
+                if lang == "ru"
+                else "better to wait for a better price, while keeping the base pick"
+            ),
             "TAKE_YES": "возможен вход в YES" if lang == "ru" else "possible YES entry",
             "TAKE_NO": "возможен вход в NO" if lang == "ru" else "possible NO entry",
         }
@@ -765,16 +769,37 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
         if not isinstance(parsed, dict):
             return "—"
         lines = []
-        for outcome in ["YES", "NO"]:
-            item = parsed.get(outcome)
+        for outcome, item in parsed.items():
+            label = str(outcome)
             if isinstance(item, dict):
                 low = item.get("low")
                 high = item.get("high")
                 if isinstance(low, (int, float)) and isinstance(high, (int, float)):
-                    lines.append(f"{outcome}: {low:g}–{high:g}%")
+                    lines.append(f"{label}: {low:g}–{high:g}%")
             elif isinstance(item, (int, float)):
-                lines.append(f"{outcome}: {item:g}%")
+                lines.append(f"{label}: {item:g}%")
         return "\n".join(lines) if lines else "—"
+
+    def _infer_pick_from_probability_range(probability_range) -> str:
+        if not isinstance(probability_range, dict):
+            return ""
+        best_outcome = ""
+        best_score = None
+        for outcome, item in probability_range.items():
+            score = None
+            if isinstance(item, dict):
+                low = item.get("low")
+                high = item.get("high")
+                if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+                    score = (float(low) + float(high)) / 2.0
+            elif isinstance(item, (int, float)):
+                score = float(item)
+            if score is None:
+                continue
+            if best_score is None or score > best_score:
+                best_score = score
+                best_outcome = str(outcome).strip()
+        return best_outcome
 
     def _format_forecast_summary(value, out_lang: str) -> str:
         if isinstance(value, str):
@@ -840,27 +865,62 @@ def _format_top_analysis_output(lang: str, question: str, result: dict) -> str:
                 probability_text = parsed_fallback
                 break
     confidence_text = _format_confidence(chief.get("confidence"), lang)
+    inferred_pick = _safe_text(chief.get("forecast_pick"), default="")
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = _safe_text(chief.get("best_outcome"), default="")
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = _infer_pick_from_probability_range(chief.get("probability_range"))
+    if not inferred_pick or inferred_pick == "—":
+        fallback_market_options = result.get("market_options") or {}
+        inferred_pick = _infer_pick_from_probability_range(fallback_market_options)
+    if not inferred_pick or inferred_pick == "—":
+        inferred_pick = "неясно" if lang == "ru" else "unclear"
+
+    pick_strength_raw = _safe_text(chief.get("pick_strength"), default="")
+    if not pick_strength_raw or pick_strength_raw == "—":
+        pick_strength_raw = "слабый" if lang == "ru" else "weak"
+
+    value_strength_raw = _safe_text(chief.get("value_strength"), default="")
+    if not value_strength_raw or value_strength_raw == "—":
+        value_strength_raw = "слабое" if lang == "ru" else "weak"
+
+    value_explanation_raw = _safe_text(chief.get("value_explanation"), default="")
+    if not value_explanation_raw or value_explanation_raw == "—":
+        value_explanation_raw = (
+            "DeepAlpha выбирает наиболее вероятный исход, но сила value ограничена из-за качества данных или близости цены к справедливой оценке."
+            if lang == "ru"
+            else "DeepAlpha selects the most likely outcome, but value strength is limited due to data quality or price being close to fair value."
+        )
+
+    forecast_pick = _scrub_text(inferred_pick)
+    pick_strength = _scrub_text(pick_strength_raw)
+    value_strength = _scrub_text(value_strength_raw)
+    value_explanation = _scrub_text(value_explanation_raw)
     if lang == "ru":
         return (
             "🔥 DeepAlpha Top Analysis\n\n"
             f"📌 Рынок:\n{_safe_text(question)}\n\n"
+            f"🎯 Выбор DeepAlpha:\n{forecast_pick}\n\n"
+            f"📌 Сила выбора:\n{pick_strength}\n\n"
             f"🎯 Расширенный прогноз:\n{forecast_text}\n\n"
             f"📊 Вероятность:\n{probability_text}\n\n"
             f"🧠 Уверенность:\n{confidence_text}\n\n"
             f"🧩 Ключевые факторы:\n{ftxt}\n\n"
             f"⚠️ Риски:\n{rtxt}\n\n"
-            f"💰 Ценность:\n{_scrub_text(chief.get('value_summary','Нет явной ценности.'))}\n\n"
+            f"💰 Ценность:\nСила value: {value_strength}\n{value_explanation}\n\n"
             f"✅ Вывод:\n{_scrub_text(chief.get('final_conclusion','Нет ясного вывода.'))}"
         )
     return (
         "🔥 DeepAlpha Top Analysis\n\n"
         f"📌 Market:\n{_safe_text(question)}\n\n"
+        f"🎯 DeepAlpha pick:\n{forecast_pick}\n\n"
+        f"📌 Pick strength:\n{pick_strength}\n\n"
         f"🎯 Extended forecast:\n{forecast_text}\n\n"
         f"📊 Probability:\n{probability_text}\n\n"
         f"🧠 Confidence:\n{confidence_text}\n\n"
         f"🧩 Key factors:\n{ftxt}\n\n"
         f"⚠️ Risks:\n{rtxt}\n\n"
-        f"💰 Value:\n{_scrub_text(chief.get('value_summary','No clear value.'))}\n\n"
+        f"💰 Value:\nValue strength: {value_strength}\n{value_explanation}\n\n"
         f"✅ Conclusion:\n{_scrub_text(chief.get('final_conclusion','No clear conclusion.'))}"
     )
 
