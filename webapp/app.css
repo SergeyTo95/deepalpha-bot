@@ -56,7 +56,32 @@ h1 { margin: 6px 0 4px; font-size: 30px; }
 .small { font-size: 12px; color: var(--muted); margin-top: 10px; }
 .inline-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .status-pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; background: rgba(121, 255, 203, 0.18); color: var(--success); }
+.analysis-input {
+  width: 100%;
+  border: 1px solid #2b3470;
+  border-radius: 12px;
+  background: #121735;
+  color: var(--text);
+  padding: 12px;
+  font-size: 14px;
+  outline: none;
+}
+.analysis-input::placeholder { color: #8590bf; }
+.analysis-input:focus { border-color: #5b79ff; box-shadow: 0 0 0 2px rgba(91, 121, 255, 0.2); }
+.analysis-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.analysis-status {
+  min-height: 18px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
 
 @media (min-width: 560px) {
   .grid-2 { grid-template-columns: 1fr 1fr; }
+  .analysis-actions { grid-template-columns: 1fr 1fr; }
 }
