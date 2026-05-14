@@ -1,6 +1,8 @@
 import inspect
 from typing import Any, Dict
 
+from services.webapp_report_formatter import build_webapp_analysis_report
+
 from agents.chief_agent import ChiefAgent
 from db.database import (
     add_tokens,
@@ -85,27 +87,20 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
     except Exception:
         pass
 
-    compact_result = {
-        "question": result.get("question", "") or "",
-        "display_prediction": result.get("display_prediction", "") or "",
-        "market_probability": result.get("market_probability", "") or "",
-        "confidence": result.get("confidence", "") or "",
-        "category": result.get("category", "") or "",
-        "summary": result.get("conclusion", "") or result.get("reasoning", "") or "",
-    }
+    report = build_webapp_analysis_report(result, url, "quick", lang)
 
     add_web_analysis_history(
         user_id=user_id,
         analysis_type="quick",
         market_url=url,
-        market_slug=result.get("slug", "") or _extract_slug(url),
-        question=compact_result["question"],
-        display_prediction=compact_result["display_prediction"],
-        market_probability=compact_result["market_probability"],
-        confidence=compact_result["confidence"],
-        category=compact_result["category"],
+        market_slug=report.get("market_slug", "") or _extract_slug(url),
+        question=report.get("question", ""),
+        display_prediction=report.get("display_prediction", ""),
+        market_probability=report.get("market_probability", ""),
+        confidence=report.get("confidence", ""),
+        category=report.get("category", ""),
         status="success",
-        result_json=result,
+        result_json=report,
     )
 
     return {
@@ -114,5 +109,6 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         "status": "success",
         "analysis_type": "quick",
         "charged": charged,
-        "result": compact_result,
+        "telegram_delivery": {"attempted": False, "sent": False},
+        "result": report,
     }
