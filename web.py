@@ -12,7 +12,7 @@ from db.database import (
     get_all_authors, get_author_profile, get_author_post,
     is_author, create_donation, add_pending,
     create_web_session, get_user_by_session, delete_web_session,
-    get_web_account, link_web_account,
+    link_web_account,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -523,8 +523,7 @@ async def handle_auth_logout(request):
 async def handle_google_start(request):
     cid = os.getenv("GOOGLE_CLIENT_ID", "")
     redir = os.getenv("GOOGLE_REDIRECT_URI", "")
-    base_url = os.getenv("WEB_APP_BASE_URL", "")
-    if not cid or not redir or not base_url:
+    if not cid or not redir:
         return _json_response({"ok": False, "error": "Google login is not configured"})
     state = secrets.token_urlsafe(24)
     params = {
