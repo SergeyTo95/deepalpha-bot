@@ -92,3 +92,18 @@ h1 { margin: 6px 0 4px; font-size: 30px; }
   .grid-2 { grid-template-columns: 1fr 1fr; }
   .analysis-actions { grid-template-columns: 1fr 1fr; }
 }
+
+.analysis-result {
+  margin-top: 10px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.history-item {
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,.02);
+}

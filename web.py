@@ -6,6 +6,7 @@ from aiohttp import web
 from admin_routes import setup_admin_routes
 from services.payment_service import get_pricing_payload
 from services.web_auth_service import verify_telegram_init_data, get_cookie_secure_flag
+from services.webapp_analysis_service import run_webapp_quick_analysis
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -13,6 +14,7 @@ from db.database import (
     is_author, create_donation, add_pending,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account,
+    add_web_analysis_history, get_web_analysis_history,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -611,14 +613,45 @@ async def handle_webapp_analyze(request):
     if mode not in ("quick", "top"):
         return _json_response({"ok": False, "error": "invalid_mode"}, status=400)
 
+    if mode == "top":
+        add_web_analysis_history(
+            user_id=user_id,
+            analysis_type="top",
+            market_url=url,
+            status="coming_soon",
+        )
+        return _json_response({
+            "ok": True,
+            "status": "coming_soon",
+            "analysis_type": "top",
+            "message": "Top Analysis is coming soon on WebApp.",
+            "market_url": url,
+        })
+
+    raw_language = (user.get("language", "ru") or "ru").lower()
+    language = "ru" if raw_language.startswith("ru") else "en"
+    result = run_webapp_quick_analysis(user_id=user_id, url=url, lang=language)
+    if not result.get("ok"):
+        return _json_response({"ok": False, "error": result.get("error", "analysis_failed")}, status=int(result.get("status_code", 500)))
     return _json_response({
         "ok": True,
-        "status": "coming_soon",
-        "mode": mode,
-        "message": "Web analysis execution is not enabled yet.",
-        "market_url": url,
-        "user_id": user_id,
+        "status": result.get("status", "success"),
+        "analysis_type": "quick",
+        "charged": bool(result.get("charged")),
+        "result": result.get("result", {}),
     })
+
+
+async def handle_webapp_history(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    items = get_web_analysis_history(user_id, limit=10)
+    return _json_response({"ok": True, "items": items})
 
 
 async def handle_auth_logout(request):
@@ -695,6 +728,7 @@ app.router.add_get("/api/auth/me", handle_auth_me)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
 app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
+app.router.add_get("/api/webapp/history", handle_webapp_history)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)

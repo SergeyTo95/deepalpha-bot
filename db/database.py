@@ -134,6 +134,25 @@ def init_db():
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_analysis_history (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        market_url TEXT NOT NULL,
+        market_slug TEXT,
+        question TEXT,
+        display_prediction TEXT,
+        market_probability TEXT,
+        confidence TEXT,
+        category TEXT,
+        status TEXT NOT NULL,
+        result_json TEXT,
+        error TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS pending_payments (
         user_id BIGINT PRIMARY KEY,
         amount REAL,
@@ -674,6 +693,71 @@ def get_web_account(provider: str, provider_sub: str) -> Optional[Dict[str, Any]
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def add_web_analysis_history(
+    user_id: int,
+    analysis_type: str,
+    market_url: str,
+    market_slug: str = "",
+    question: str = "",
+    display_prediction: str = "",
+    market_probability: str = "",
+    confidence: str = "",
+    category: str = "",
+    status: str = "success",
+    result_json: Any = "",
+    error: str = "",
+) -> Optional[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    created_at = datetime.utcnow().isoformat()
+    try:
+        stored_result = ""
+        if isinstance(result_json, (dict, list)):
+            stored_result = json.dumps(result_json, ensure_ascii=False)
+        elif result_json is not None:
+            stored_result = str(result_json)
+        cursor.execute("""
+        INSERT INTO web_analysis_history
+        (user_id, analysis_type, market_url, market_slug, question, display_prediction,
+         market_probability, confidence, category, status, result_json, error, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            user_id, analysis_type, market_url, market_slug, question, display_prediction,
+            market_probability, confidence, category, status, stored_result, error, created_at
+        ))
+        row = cursor.fetchone()
+        conn.commit()
+        return int(row[0]) if row else None
+    except Exception as e:
+        print(f"add_web_analysis_history error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_web_analysis_history(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    safe_limit = max(1, min(int(limit or 10), 100))
+    try:
+        cursor.execute("""
+        SELECT id, analysis_type, market_url, market_slug, question,
+               display_prediction, market_probability, confidence, category, status, created_at
+        FROM web_analysis_history
+        WHERE user_id = %s
+        ORDER BY id DESC
+        LIMIT %s
+        """, (user_id, safe_limit))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"get_web_analysis_history error: {e}")
+        return []
     finally:
         conn.close()
 
