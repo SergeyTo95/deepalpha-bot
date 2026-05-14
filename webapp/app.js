@@ -38,9 +38,18 @@ const I18N = {
     marketPlaceholder: "https://polymarket.com/event/...",
     quickAnalysis: "🔍 Quick Analysis",
     topAnalysisAction: "🔥 Top Analysis",
+    analyzingQuickButton: "Analyzing market...",
+    analyzingQuickStatus: "DeepAlpha is analyzing the market. This usually takes up to 30–60 seconds.",
+    analyzingTopButton: "Starting Top Analysis...",
+    analyzingTopStatus: "DeepAlpha is running advanced analysis. This may take 1–3 minutes.",
     validateMarketUrl: "Paste a Polymarket link.",
     comingSoonAnalysis: "Web analysis execution is not enabled yet. Full reports will appear here soon.",
     analysisOk: "Analysis completed.",
+    analysisDoneTitle: "✅ Analysis completed",
+    analysisDoneHint: "Open the full report to view the complete DeepAlpha Signal.",
+    topAnalysisDoneTitle: "✅ Top Analysis completed",
+    openReport: "Open report",
+    copy: "Copy",
     analysisError: "Analysis failed. Please try again.",
     notEnoughTokens: "Not enough tokens. Open cashier.",
     historyEmpty: "No analysis history yet.",
@@ -62,6 +71,8 @@ const I18N = {
     active: "Active",
     telegramAuthUnavailable: "Telegram auth unavailable. Open this page from Telegram WebApp.",
     historyItemUnavailable: "This history item has no full report yet."
+    ,
+    loadMore: "Load more"
   },
   ru: {
     title: "Личный кабинет",
@@ -84,9 +95,18 @@ const I18N = {
     marketPlaceholder: "https://polymarket.com/event/...",
     quickAnalysis: "🔍 Быстрый анализ",
     topAnalysisAction: "🔥 Top Analysis",
+    analyzingQuickButton: "Анализирую рынок...",
+    analyzingQuickStatus: "DeepAlpha анализирует рынок. Обычно это занимает до 30–60 секунд.",
+    analyzingTopButton: "Запускаю Top Analysis...",
+    analyzingTopStatus: "DeepAlpha выполняет расширенный анализ. Это может занять 1–3 минуты.",
     validateMarketUrl: "Вставьте ссылку Polymarket.",
     comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
     analysisOk: "Анализ выполнен.",
+    analysisDoneTitle: "✅ Анализ выполнен",
+    analysisDoneHint: "Откройте полный отчёт, чтобы увидеть весь DeepAlpha Signal.",
+    topAnalysisDoneTitle: "✅ Top Analysis выполнен",
+    openReport: "Открыть отчёт",
+    copy: "Копировать",
     analysisError: "Ошибка анализа. Попробуйте снова.",
     notEnoughTokens: "Недостаточно токенов. Откройте кассу.",
     historyEmpty: "История пока пустая.",
@@ -107,7 +127,8 @@ const I18N = {
     logout: "Выйти",
     active: "Активна",
     telegramAuthUnavailable: "Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp.",
-    historyItemUnavailable: "Для этой записи пока нет полного отчёта."
+    historyItemUnavailable: "Для этой записи пока нет полного отчёта.",
+    loadMore: "Загрузить ещё"
   }
 };
 
@@ -174,8 +195,28 @@ function showReportModal(text, lang, telegramSent) {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 }
 
-async function callHistory() {
-  const r = await fetch("/api/webapp/history", { credentials: "include" });
+async function copyToClipboardSafe(text) {
+  const value = String(text || "");
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
+async function callHistory(limit = 10, offset = 0) {
+  const r = await fetch(`/api/webapp/history?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`, { credentials: "include" });
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
@@ -294,36 +335,90 @@ function renderAuthed(summary, lang) {
   const topBtn = document.getElementById("topAnalysisBtn");
   const resultBox = document.getElementById("analysisResult");
   const historyBox = document.getElementById("analysisHistory");
+  let isRunning = false;
+  let historyOffset = 0;
+  const historyLimit = 10;
+  let historyHasMore = false;
+  let historyItems = [];
 
-  const renderHistory = async () => {
-    const res = await callHistory();
-    if (!res.ok || !res.data?.ok) {
-      historyBox.innerHTML = `<p class="meta">${escapeHtml(t.authError)}</p>`;
-      return;
+  const setRunningState = (running, mode = "quick") => {
+    isRunning = running;
+    quickBtn.disabled = running;
+    topBtn.disabled = running;
+    if (running) {
+      quickBtn.textContent = mode === "quick" ? t.analyzingQuickButton : t.quickAnalysis;
+      topBtn.textContent = mode === "top" ? t.analyzingTopButton : t.topAnalysisAction;
+      status.textContent = mode === "top" ? t.analyzingTopStatus : t.analyzingQuickStatus;
+    } else {
+      quickBtn.textContent = t.quickAnalysis;
+      topBtn.textContent = t.topAnalysisAction;
     }
-    const items = Array.isArray(res.data.items) ? res.data.items : [];
-    if (!items.length) {
+  };
+
+  const formatTypeLabel = (analysisType) => {
+    const key = String(analysisType || "").toLowerCase();
+    return key === "top" ? "Top Analysis" : (lang === "ru" ? "Быстрый анализ" : "Quick Analysis");
+  };
+
+  const formatStatusLabel = (statusValue) => {
+    const key = String(statusValue || "").toLowerCase();
+    if (lang === "ru") {
+      if (key === "success") return "готово";
+      if (key === "error") return "ошибка";
+      if (key === "coming_soon") return "скоро";
+    }
+    if (key === "coming_soon") return "coming soon";
+    return key || "error";
+  };
+
+  const renderHistoryItems = () => {
+    if (!historyItems.length) {
       historyBox.innerHTML = `<p class="meta">${escapeHtml(t.historyEmpty)}</p>`;
       return;
     }
-    historyBox.innerHTML = items.map((item) => `
+    const rows = historyItems.map((item) => `
       <div class="history-item" data-history-id="${escapeHtml(item.id || "")}" data-status="${escapeHtml(item.status || "")}">
-        <div><b>${escapeHtml((item.analysis_type || "").toUpperCase())}</b> · ${escapeHtml(item.status || "")}</div>
+        <div><b>${escapeHtml(formatTypeLabel(item.analysis_type))}</b> · ${escapeHtml(formatStatusLabel(item.status || ""))}</div>
         <div class="small">${escapeHtml(item.question || item.market_slug || item.market_url || "")}</div>
         <div class="small">${escapeHtml(item.display_prediction || "")}</div>
         <div class="small">${escapeHtml(item.created_at || "")}</div>
       </div>
     `).join("");
+    const loadMoreBtn = historyHasMore ? `<div class="history-load-more-wrap"><button id="historyLoadMoreBtn" class="btn btn-secondary">${escapeHtml(t.loadMore)}</button></div>` : "";
+    historyBox.innerHTML = rows + loadMoreBtn;
+    const btn = document.getElementById("historyLoadMoreBtn");
+    if (btn) btn.onclick = () => loadHistory(false);
+  };
+
+  const loadHistory = async (reset = true) => {
+    if (reset) {
+      historyOffset = 0;
+      historyItems = [];
+      historyHasMore = false;
+    }
+    const res = await callHistory(historyLimit, historyOffset);
+    if (!res.ok || !res.data?.ok) {
+      historyBox.innerHTML = `<p class="meta">${escapeHtml(t.authError)}</p>`;
+      return;
+    }
+    const items = Array.isArray(res.data.items) ? res.data.items : [];
+    historyItems = historyItems.concat(items);
+    historyOffset += items.length;
+    historyHasMore = Boolean(res.data?.pagination?.has_more);
+    renderHistoryItems();
   };
 
   const runAnalyze = async (mode) => {
+    if (isRunning) return;
     const url = String(input?.value || "").trim();
     if (!url || !url.toLowerCase().includes("polymarket.com")) {
       status.textContent = t.validateMarketUrl;
       return;
     }
 
+    setRunningState(true, mode);
     const res = await callAnalyze(url, mode);
+    setRunningState(false);
     if (res.status === 401) {
       status.textContent = t.authError;
       return;
@@ -348,23 +443,41 @@ function renderAuthed(summary, lang) {
     if (res.data?.ok && res.data?.status === "coming_soon") {
       status.textContent = t.comingSoonAnalysis;
       resultBox.innerHTML = "";
-      await renderHistory();
+      await loadHistory(true);
       return;
     }
 
     if (res.data?.ok && res.data?.status === "success") {
       const out = res.data.result || {};
-      status.textContent = t.analysisOk;
-      resultBox.innerHTML = `
-        <p><b>${escapeHtml(t.analysisResultTitle)}</b></p>
-        <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
-        <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
-        <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
-        <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
-        <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
-        <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
-      `;
-      await renderHistory();
+      const reportText = out.canonical_text || out.copy_text || out.telegram_text || "";
+      const telegramSent = Boolean(res.data?.telegram_delivery?.sent);
+      status.textContent = mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle;
+      if (reportText) {
+        resultBox.innerHTML = `
+          <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
+          <p class="small">${escapeHtml(t.analysisDoneHint)}</p>
+          <div class="analysis-actions" style="margin-top:12px;">
+            <button id="openReportInlineBtn" class="btn btn-secondary">${escapeHtml(t.openReport)}</button>
+            <button id="copyReportInlineBtn" class="btn btn-primary">${escapeHtml(t.copy)}</button>
+          </div>
+        `;
+        showReportModal(reportText, lang, telegramSent);
+        const openBtn = document.getElementById("openReportInlineBtn");
+        if (openBtn) openBtn.onclick = () => showReportModal(reportText, lang, telegramSent);
+        const copyBtn = document.getElementById("copyReportInlineBtn");
+        if (copyBtn) copyBtn.onclick = async () => { await copyToClipboardSafe(reportText); };
+      } else {
+        resultBox.innerHTML = `
+          <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
+          <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
+          <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
+          <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
+          <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
+          <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
+          <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
+        `;
+      }
+      await loadHistory(true);
       return;
     }
 
@@ -410,7 +523,7 @@ function renderAuthed(summary, lang) {
 
   quickBtn.onclick = () => runAnalyze("quick");
   topBtn.onclick = () => runAnalyze("top");
-  renderHistory();
+  loadHistory(true);
 }
 
 async function init() {
