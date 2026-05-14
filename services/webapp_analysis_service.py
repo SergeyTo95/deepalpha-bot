@@ -4,6 +4,8 @@ from typing import Any, Dict
 from services.webapp_report_formatter import build_webapp_analysis_report
 
 from agents.chief_agent import ChiefAgent
+from services.webapp_report_formatter import save_analysis_to_web_history
+
 from db.database import (
     add_tokens,
     add_web_analysis_history,
@@ -87,6 +89,7 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
     except Exception:
         pass
 
+<<<<<<< HEAD
     report = build_webapp_analysis_report(result, url, "quick", lang)
 
     add_web_analysis_history(
@@ -103,6 +106,27 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         result_json=report,
     )
 
+=======
+    history_id = save_analysis_to_web_history(
+        user_id=user_id,
+        analysis_type="quick",
+        market_url=url,
+        raw_result=result,
+        lang=lang,
+        status="success",
+    )
+
+    compact_result = {
+        "question": result.get("question", "") or "",
+        "display_prediction": result.get("display_prediction", "") or "",
+        "market_probability": result.get("market_probability", "") or "",
+        "confidence": result.get("confidence", "") or "",
+        "category": result.get("category", "") or "",
+        "summary": result.get("conclusion", "") or result.get("reasoning", "") or "",
+        "history_id": history_id,
+    }
+
+>>>>>>> pr-81-webapp-delivery-history-sync
     return {
         "ok": True,
         "status_code": 200,
