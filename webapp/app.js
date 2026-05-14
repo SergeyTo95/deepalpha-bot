@@ -48,6 +48,8 @@ const I18N = {
     analysisDoneTitle: "✅ Analysis completed",
     analysisDoneHint: "Open the full report to view the complete DeepAlpha Signal.",
     topAnalysisDoneTitle: "✅ Top Analysis completed",
+    openReport: "Open report",
+    copy: "Copy",
     analysisError: "Analysis failed. Please try again.",
     notEnoughTokens: "Not enough tokens. Open cashier.",
     historyEmpty: "No analysis history yet.",
@@ -103,6 +105,8 @@ const I18N = {
     analysisDoneTitle: "✅ Анализ выполнен",
     analysisDoneHint: "Откройте полный отчёт, чтобы увидеть весь DeepAlpha Signal.",
     topAnalysisDoneTitle: "✅ Top Analysis выполнен",
+    openReport: "Открыть отчёт",
+    copy: "Копировать",
     analysisError: "Ошибка анализа. Попробуйте снова.",
     notEnoughTokens: "Недостаточно токенов. Откройте кассу.",
     historyEmpty: "История пока пустая.",
@@ -189,6 +193,26 @@ function showReportModal(text, lang, telegramSent) {
     await navigator.clipboard.writeText(text || "");
   };
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
+async function copyToClipboardSafe(text) {
+  const value = String(text || "");
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(ta);
+  }
 }
 
 async function callHistory(limit = 10, offset = 0) {
@@ -425,18 +449,34 @@ function renderAuthed(summary, lang) {
 
     if (res.data?.ok && res.data?.status === "success") {
       const out = res.data.result || {};
+      const reportText = out.canonical_text || out.copy_text || out.telegram_text || "";
+      const telegramSent = Boolean(res.data?.telegram_delivery?.sent);
       status.textContent = mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle;
-      resultBox.innerHTML = `
-        <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
-        <p class="small">${escapeHtml(t.analysisDoneHint)}</p>
-        <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
-        <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
-        <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
-        <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
-        <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
-        <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
-      `;
-      showReportModal(out.canonical_text || out.copy_text || out.telegram_text || "", lang, Boolean(res.data?.telegram_delivery?.sent));
+      if (reportText) {
+        resultBox.innerHTML = `
+          <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
+          <p class="small">${escapeHtml(t.analysisDoneHint)}</p>
+          <div class="analysis-actions" style="margin-top:12px;">
+            <button id="openReportInlineBtn" class="btn btn-secondary">${escapeHtml(t.openReport)}</button>
+            <button id="copyReportInlineBtn" class="btn btn-primary">${escapeHtml(t.copy)}</button>
+          </div>
+        `;
+        showReportModal(reportText, lang, telegramSent);
+        const openBtn = document.getElementById("openReportInlineBtn");
+        if (openBtn) openBtn.onclick = () => showReportModal(reportText, lang, telegramSent);
+        const copyBtn = document.getElementById("copyReportInlineBtn");
+        if (copyBtn) copyBtn.onclick = async () => { await copyToClipboardSafe(reportText); };
+      } else {
+        resultBox.innerHTML = `
+          <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
+          <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
+          <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
+          <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
+          <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
+          <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
+          <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
+        `;
+      }
       await loadHistory(true);
       return;
     }
