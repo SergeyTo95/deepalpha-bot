@@ -7,175 +7,210 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-<<<<<<< HEAD
+function normalizeLang(value) {
+  const v = String(value || "").toLowerCase();
+  return v.startsWith("ru") ? "ru" : "en";
+}
+
+function guestLangFallback() {
+  return normalizeLang(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || "en");
+}
+
+const I18N = {
+  en: {
+    title: "Web Dashboard",
+    subtitle: "AI-powered prediction market intelligence",
+    guestPrompt: "Sign in to access your DeepAlpha dashboard",
+    tg: "Continue with Telegram",
+    gg: "Continue with Google",
+    tgNote: "Open from Telegram for automatic login.",
+    user: "User",
+    balance: "Token balance",
+    subscription: "Subscription",
+    activeUntil: "Active until",
+    notActive: "Not active",
+    top: "Top Analysis",
+    price: "Price",
+    tokens: "tokens",
+    coming: "Analyze market · Coming soon on WebApp",
+    cashier: "Cashier",
+    cashierDesc: "Buy tokens and manage payments",
+    openCashier: "Open Cashier",
+    actions: "Quick actions",
+    logout: "Logout",
+    active: "Active",
+    telegramAuthUnavailable: "Telegram auth unavailable. Open this page from Telegram WebApp."
+  },
+  ru: {
+    title: "Личный кабинет",
+    subtitle: "AI-анализ рынков прогнозов",
+    guestPrompt: "Войдите, чтобы открыть личный кабинет DeepAlpha",
+    tg: "Продолжить через Telegram",
+    gg: "Продолжить через Google",
+    tgNote: "Откройте из Telegram для автоматического входа.",
+    user: "Пользователь",
+    balance: "Баланс токенов",
+    subscription: "Подписка",
+    activeUntil: "Активна до",
+    notActive: "Не активна",
+    top: "Top Analysis",
+    price: "Цена",
+    tokens: "токенов",
+    coming: "Анализ рынка · скоро в WebApp",
+    cashier: "Касса",
+    cashierDesc: "Покупка токенов и управление оплатой",
+    openCashier: "Открыть кассу",
+    actions: "Быстрые действия",
+    logout: "Выйти",
+    active: "Активна",
+    telegramAuthUnavailable: "Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp."
+  }
+};
+
 async function callMe() {
-  const r = await fetch('/api/auth/me', { credentials: 'include' });
+  const r = await fetch("/api/auth/me", { credentials: "include" });
   return r.json();
 }
 
 async function callSummary() {
-  const r = await fetch('/api/webapp/summary', { credentials: 'include' });
+  const r = await fetch("/api/webapp/summary", { credentials: "include" });
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
 async function telegramAuthIfAvailable() {
-  const initData = window.Telegram?.WebApp?.initData || '';
+  const initData = window.Telegram?.WebApp?.initData || "";
   if (!initData) return false;
-  const r = await fetch('/api/auth/telegram', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ init_data: initData }),
+
+  const r = await fetch("/api/auth/telegram", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ init_data: initData })
   });
+
   return r.ok;
 }
 
 async function logout() {
-  await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-  renderGuest();
+  await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+  renderGuest(guestLangFallback());
 }
 
-function renderGuest() {
-  document.getElementById('appRoot').innerHTML = `
-    <section class="card">
-      <h2>Welcome</h2>
-      <p class="meta">Sign in to access your DeepAlpha dashboard</p>
-      <div class="actions">
-        <button id="tgBtn" class="btn btn-primary">Continue with Telegram</button>
-        <button id="gBtn" class="btn btn-secondary">Continue with Google</button>
-      </div>
-      <p class="small">Open from Telegram for automatic login.</p>
-    </section>`;
+function setHeroText(lang) {
+  const t = I18N[lang] || I18N.en;
+  const subtitle = document.getElementById("heroSubtitle");
+  const title = document.getElementById("heroTitle");
 
-  document.getElementById('tgBtn').onclick = async () => {
+  if (subtitle) subtitle.textContent = t.subtitle;
+  if (title) title.textContent = t.title;
+}
+
+function renderGuest(lang) {
+  lang = normalizeLang(lang);
+  const t = I18N[lang] || I18N.en;
+
+  setHeroText(lang);
+
+  document.getElementById("appRoot").innerHTML = `
+    <section class="card">
+      <p class="meta">${t.guestPrompt}</p>
+      <div class="actions">
+        <button id="tgBtn" class="btn btn-primary">${t.tg}</button>
+        <button id="gBtn" class="btn btn-secondary">${t.gg}</button>
+      </div>
+      <p class="small">${t.tgNote}</p>
+    </section>
+  `;
+
+  document.getElementById("tgBtn").onclick = async () => {
     const ok = await telegramAuthIfAvailable();
     if (ok) return init();
-    alert('Telegram auth unavailable. Open this page from Telegram WebApp.');
+    alert(t.telegramAuthUnavailable);
   };
-  document.getElementById('gBtn').onclick = () => { window.location.href = '/api/auth/google/start'; };
+
+  document.getElementById("gBtn").onclick = () => {
+    window.location.href = "/api/auth/google/start";
+  };
 }
 
-function renderAuthed(summary) {
+function renderAuthed(summary, lang) {
+  lang = normalizeLang(lang);
+  const t = I18N[lang] || I18N.en;
+
+  setHeroText(lang);
+
   const user = summary.user || {};
   const balance = summary.balance || {};
   const sub = summary.subscription || {};
   const pricing = summary.pricing || {};
-  const subscriptionLine = sub.active ? `Active until ${escapeHtml(sub.until || '-')}` : 'Not active';
 
-  document.getElementById('appRoot').innerHTML = `
+  const displayName = user.username
+    ? "@" + user.username
+    : (user.first_name || "DeepAlpha User");
+
+  const subscriptionLine = sub.active
+    ? `${t.activeUntil} ${escapeHtml(sub.until || sub.raw_subscription_until || "-")}`
+    : t.notActive;
+
+  document.getElementById("appRoot").innerHTML = `
     <section class="card">
-      <h2>👤 User</h2>
-      <p class="value">${escapeHtml(user.username ? '@' + user.username : (user.first_name || 'DeepAlpha User'))}</p>
+      <h2>👤 ${t.user}</h2>
+      <p class="value">${escapeHtml(displayName)}</p>
       <p class="meta">ID: ${escapeHtml(user.user_id)}</p>
     </section>
 
     <div class="grid-2">
       <section class="card">
-        <h2>💎 Token balance</h2>
-        <p class="value">${escapeHtml(balance.tokens || 0)} tokens</p>
+        <h2>💎 ${t.balance}</h2>
+        <p class="value">${escapeHtml(balance.tokens || 0)} ${t.tokens}</p>
       </section>
 
       <section class="card">
-        <h2>🔔 Subscription</h2>
+        <h2>🔔 ${t.subscription}</h2>
         <p class="meta">${subscriptionLine}</p>
-        ${sub.active ? '<span class="status-pill">Active</span>' : ''}
+        ${sub.active ? `<span class="status-pill">${t.active}</span>` : ""}
       </section>
     </div>
 
     <section class="card">
-      <h2>🔥 Top Analysis</h2>
-      <p class="meta">Price: ${escapeHtml(pricing.top_analysis_price_tokens || '70')} tokens</p>
-      <button class="btn btn-secondary" disabled>Analyze market · Coming soon on WebApp</button>
+      <h2>🔥 ${t.top}</h2>
+      <p class="meta">${t.price}: ${escapeHtml(pricing.top_analysis_price_tokens || "70")} ${t.tokens}</p>
+      <button class="btn btn-secondary" disabled>${t.coming}</button>
     </section>
 
     <section class="card">
-      <h2>💳 Cashier</h2>
-      <p class="meta">Buy tokens and manage payments</p>
-      <a href="/pay"><button class="btn btn-primary">Open Cashier</button></a>
+      <h2>💳 ${t.cashier}</h2>
+      <p class="meta">${t.cashierDesc}</p>
+      <a href="/pay"><button class="btn btn-primary">${t.openCashier}</button></a>
     </section>
 
     <section class="card">
-      <h2>Quick actions</h2>
+      <h2>${t.actions}</h2>
       <div class="inline-links">
-        <a href="/pay"><button class="btn btn-secondary">Open Cashier</button></a>
-        <button id="logoutBtn" class="btn btn-secondary">Logout</button>
+        <a href="/pay"><button class="btn btn-secondary">${t.openCashier}</button></a>
+        <button id="logoutBtn" class="btn btn-secondary">${t.logout}</button>
       </div>
-    </section>`;
+    </section>
+  `;
 
-  document.getElementById('logoutBtn').onclick = logout;
+  document.getElementById("logoutBtn").onclick = logout;
 }
 
 async function init() {
   await telegramAuthIfAvailable();
+
   const me = await callMe();
-  if (!(me && me.ok && me.auth && me.auth.authenticated)) return renderGuest();
+  if (!(me && me.ok && me.auth && me.auth.authenticated)) {
+    return renderGuest(guestLangFallback());
+  }
 
   const summaryResp = await callSummary();
-  if (!summaryResp.ok) return renderGuest();
-  renderAuthed(summaryResp.data);
-}
-
-=======
-function normalizeLang(value) {
-  const v = String(value || '').toLowerCase();
-  return v.startsWith('ru') ? 'ru' : 'en';
-}
-
-function guestLangFallback() {
-  return normalizeLang(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || 'en');
-}
-
-const I18N = {
-  en: {
-    title: 'Web Dashboard', subtitle: 'AI-powered prediction market intelligence', guestPrompt: 'Sign in to access your DeepAlpha dashboard',
-    tg: 'Continue with Telegram', gg: 'Continue with Google', tgNote: 'Open from Telegram for automatic login.',
-    user: 'User', balance: 'Token balance', subscription: 'Subscription', activeUntil: 'Active until', notActive: 'Not active',
-    top: 'Top Analysis', price: 'Price', tokens: 'tokens', coming: 'Analyze market · Coming soon on WebApp',
-    cashier: 'Cashier', cashierDesc: 'Buy tokens and manage payments', openCashier: 'Open Cashier', actions: 'Quick actions', logout: 'Logout', active: 'Active', telegramAuthUnavailable: 'Telegram auth unavailable. Open this page from Telegram WebApp.'
-  },
-  ru: {
-    title: 'Личный кабинет', subtitle: 'AI-анализ рынков прогнозов', guestPrompt: 'Войдите, чтобы открыть личный кабинет DeepAlpha',
-    tg: 'Продолжить через Telegram', gg: 'Продолжить через Google', tgNote: 'Откройте из Telegram для автоматического входа.',
-    user: 'Пользователь', balance: 'Баланс токенов', subscription: 'Подписка', activeUntil: 'Активна до', notActive: 'Не активна',
-    top: 'Top Analysis', price: 'Цена', tokens: 'токенов', coming: 'Анализ рынка · скоро в WebApp',
-    cashier: 'Касса', cashierDesc: 'Покупка токенов и управление оплатой', openCashier: 'Открыть кассу', actions: 'Быстрые действия', logout: 'Выйти', active: 'Активна', telegramAuthUnavailable: 'Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp.'
+  if (!summaryResp.ok) {
+    return renderGuest(guestLangFallback());
   }
-};
 
-async function callMe(){ const r=await fetch('/api/auth/me',{credentials:'include'}); return r.json(); }
-async function callSummary(){ const r=await fetch('/api/webapp/summary',{credentials:'include'}); return {ok:r.ok,status:r.status,data:await r.json()}; }
-async function telegramAuthIfAvailable(){ const initData=window.Telegram?.WebApp?.initData||''; if(!initData) return false; const r=await fetch('/api/auth/telegram',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:initData})}); return r.ok; }
-async function logout(){ await fetch('/api/auth/logout',{method:'POST',credentials:'include'}); renderGuest(guestLangFallback()); }
-
-function setHeroText(lang){ const subtitle=document.getElementById('heroSubtitle'); const title=document.getElementById('heroTitle'); if(subtitle) subtitle.textContent=I18N[lang].subtitle; if(title) title.textContent=I18N[lang].title; }
-
-function renderGuest(lang){
-  const t=I18N[lang]; setHeroText(lang);
-  document.getElementById('appRoot').innerHTML=`<section class="card"><p class="meta">${t.guestPrompt}</p><div class="actions"><button id="tgBtn" class="btn btn-primary">${t.tg}</button><button id="gBtn" class="btn btn-secondary">${t.gg}</button></div><p class="small">${t.tgNote}</p></section>`;
-  document.getElementById('tgBtn').onclick=async()=>{const ok=await telegramAuthIfAvailable(); if(ok) return init(); alert(t.telegramAuthUnavailable);};
-  document.getElementById('gBtn').onclick=()=>{window.location.href='/api/auth/google/start';};
+  const lang = normalizeLang(summaryResp.data?.language || summaryResp.data?.user?.language || "en");
+  renderAuthed(summaryResp.data, lang);
 }
 
-function renderAuthed(summary,lang){
-  const t=I18N[lang]; setHeroText(lang);
-  const user=summary.user||{}, balance=summary.balance||{}, sub=summary.subscription||{}, pricing=summary.pricing||{};
-  const subscriptionLine=sub.active?`${t.activeUntil} ${escapeHtml(sub.until||sub.raw_subscription_until||'-')}`:t.notActive;
-  document.getElementById('appRoot').innerHTML=`<section class="card"><h2>👤 ${t.user}</h2><p class="value">${escapeHtml(user.username?'@'+user.username:(user.first_name||'DeepAlpha User'))}</p><p class="meta">ID: ${escapeHtml(user.user_id)}</p></section>
-  <div class="grid-2"><section class="card"><h2>💎 ${t.balance}</h2><p class="value">${escapeHtml(balance.tokens||0)} ${t.tokens}</p></section><section class="card"><h2>🔔 ${t.subscription}</h2><p class="meta">${subscriptionLine}</p>${sub.active?`<span class="status-pill">${t.active}</span>`:''}</section></div>
-  <section class="card"><h2>🔥 ${t.top}</h2><p class="meta">${t.price}: ${escapeHtml(pricing.top_analysis_price_tokens||'70')} ${t.tokens}</p><button class="btn btn-secondary" disabled>${t.coming}</button></section>
-  <section class="card"><h2>💳 ${t.cashier}</h2><p class="meta">${t.cashierDesc}</p><a href="/pay"><button class="btn btn-primary">${t.openCashier}</button></a></section>
-  <section class="card"><h2>${t.actions}</h2><div class="inline-links"><a href="/pay"><button class="btn btn-secondary">${t.openCashier}</button></a><button id="logoutBtn" class="btn btn-secondary">${t.logout}</button></div></section>`;
-  document.getElementById('logoutBtn').onclick=logout;
-}
-
-async function init(){
-  await telegramAuthIfAvailable();
-  const me=await callMe();
-  if(!(me&&me.ok&&me.auth&&me.auth.authenticated)) return renderGuest(guestLangFallback());
-  const summaryResp=await callSummary();
-  if(!summaryResp.ok) return renderGuest(guestLangFallback());
-  const lang=normalizeLang(summaryResp.data?.language||summaryResp.data?.user?.language||'en');
-  renderAuthed(summaryResp.data,lang);
-}
->>>>>>> pr-76-webapp-dashboard
 init();
