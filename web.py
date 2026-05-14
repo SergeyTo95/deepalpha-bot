@@ -96,6 +96,17 @@ def _json_response(data: dict, status: int = 200) -> web.Response:
     )
 
 
+def _safe_int(value, default: int, min_value: int, max_value: int | None = None) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        parsed = default
+    parsed = max(min_value, parsed)
+    if max_value is not None:
+        parsed = min(max_value, parsed)
+    return parsed
+
+
 async def handle_user_api(request):
     user_id = request.match_info.get("user_id", "")
     try:
@@ -615,17 +626,22 @@ async def handle_webapp_analyze(request):
         return _json_response({"ok": False, "error": "invalid_mode"}, status=400)
 
     if mode == "top":
+        raw_language = (user.get("language", "ru") or "ru").lower()
+        language = "ru" if raw_language.startswith("ru") else "en"
         add_web_analysis_history(
             user_id=user_id,
             analysis_type="top",
             market_url=url,
             status="coming_soon",
         )
+        message = "Top Analysis in WebApp is coming soon."
+        if language == "ru":
+            message = "Top Analysis в WebApp скоро будет доступен."
         return _json_response({
             "ok": True,
             "status": "coming_soon",
             "analysis_type": "top",
-            "message": "Top Analysis is coming soon on WebApp.",
+            "message": message,
             "market_url": url,
         })
 
@@ -664,8 +680,19 @@ async def handle_webapp_history(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
-    items = get_web_analysis_history(user_id, limit=10)
-    return _json_response({"ok": True, "items": items})
+    limit = _safe_int(request.query.get("limit", "10"), default=10, min_value=1, max_value=30)
+    offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0)
+    items = get_web_analysis_history(user_id, limit=limit, offset=offset)
+    return _json_response({
+        "ok": True,
+        "items": items,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "count": len(items),
+            "has_more": len(items) == limit,
+        },
+    })
 
 
 async def handle_webapp_history_item(request):

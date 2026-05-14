@@ -740,10 +740,11 @@ def add_web_analysis_history(
         conn.close()
 
 
-def get_web_analysis_history(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_web_analysis_history(user_id: int, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    safe_limit = max(1, min(int(limit or 10), 100))
+    safe_limit = max(1, min(int(limit or 10), 30))
+    safe_offset = max(0, int(offset or 0))
     try:
         cursor.execute("""
         SELECT id, analysis_type, market_url, market_slug, question,
@@ -751,8 +752,8 @@ def get_web_analysis_history(user_id: int, limit: int = 10) -> List[Dict[str, An
         FROM web_analysis_history
         WHERE user_id = %s
         ORDER BY id DESC
-        LIMIT %s
-        """, (user_id, safe_limit))
+        LIMIT %s OFFSET %s
+        """, (user_id, safe_limit, safe_offset))
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
