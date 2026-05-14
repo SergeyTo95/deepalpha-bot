@@ -583,6 +583,44 @@ async def handle_webapp_summary(request):
     })
 
 
+async def handle_webapp_analyze(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    user = get_user(user_id)
+    if not user:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    url = str(payload.get("url", "") or "").strip()
+    mode = str(payload.get("mode", "") or "").strip().lower()
+
+    if (not url) or (len(url) > 500) or ("polymarket.com" not in url.lower()):
+        return _json_response({"ok": False, "error": "invalid_url"}, status=400)
+
+    if mode not in ("quick", "top"):
+        return _json_response({"ok": False, "error": "invalid_mode"}, status=400)
+
+    return _json_response({
+        "ok": True,
+        "status": "coming_soon",
+        "mode": mode,
+        "message": "Web analysis execution is not enabled yet.",
+        "market_url": url,
+        "user_id": user_id,
+    })
+
+
 async def handle_auth_logout(request):
     token = request.cookies.get("deepalpha_session", "")
     if token:
@@ -655,6 +693,8 @@ app.router.add_post("/api/auth/telegram", handle_auth_telegram)
 app.router.add_route("OPTIONS", "/api/auth/telegram", handle_options)
 app.router.add_get("/api/auth/me", handle_auth_me)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
+app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
+app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)
