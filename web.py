@@ -535,7 +535,7 @@ async def handle_webapp_summary(request):
             "first_name": user.get("first_name", "") or "",
         },
         "balance": {
-            "tokens": user.get("token_balance", 0) or 0,
+            "tokens": ((user.get("token_balance") if user.get("token_balance") is not None else user.get("tokens", 0)) or 0),
         },
         "subscription": {
             "active": bool(is_subscribed(user_id)),
@@ -543,7 +543,7 @@ async def handle_webapp_summary(request):
         },
         "pricing": {
             "analysis_price_tokens": get_setting("analysis_price_tokens", "10"),
-            "top_analysis_price_tokens": get_setting("opportunity_price_tokens", "70"),
+            "top_analysis_price_tokens": get_setting("top_analysis_price_tokens", get_setting("opportunity_price_tokens", "70")),
             "token_price_ton": get_setting("token_price_ton", "0.1"),
         },
         "routes": {
