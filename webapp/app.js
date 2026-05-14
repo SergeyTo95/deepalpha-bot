@@ -69,7 +69,7 @@ const I18N = {
     marketAnalysis: "Анализ рынка",
     marketAnalysisDesc: "Вставьте ссылку Polymarket, чтобы подготовить анализ в WebApp.",
     marketPlaceholder: "https://polymarket.com/event/...",
-    quickAnalysis: "🔍 Quick Analysis",
+    quickAnalysis: "🔍 Быстрый анализ",
     topAnalysisAction: "🔥 Top Analysis",
     validateMarketUrl: "Вставьте ссылку Polymarket.",
     comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
@@ -200,13 +200,7 @@ function renderAuthed(summary, lang) {
       </section>
     </div>
 
-    <section class="card">
-      <h2>🔥 ${t.top}</h2>
-      <p class="meta">${t.price}: ${escapeHtml(pricing.top_analysis_price_tokens || "70")} ${t.tokens}</p>
-      <button class="btn btn-secondary" disabled>${t.coming}</button>
-    </section>
-
-    <section class="card">
+    <section class="card analysis-card">
       <h2>🔥 ${t.marketAnalysis}</h2>
       <p class="meta">${t.marketAnalysisDesc}</p>
       <input id="marketUrlInput" class="analysis-input" type="url" placeholder="${escapeHtml(t.marketPlaceholder)}" />

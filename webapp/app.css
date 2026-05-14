@@ -73,6 +73,13 @@ h1 { margin: 6px 0 4px; font-size: 30px; }
   gap: 10px;
   margin-top: 10px;
 }
+
+.analysis-card {
+  border-color: rgba(143, 100, 255, 0.45);
+  background: linear-gradient(160deg, rgba(93, 44, 176, 0.24), rgba(25, 32, 66, 0.9));
+  box-shadow: 0 14px 36px rgba(79, 47, 145, 0.45);
+}
+
 .analysis-status {
   min-height: 18px;
   margin: 10px 0 0;
