@@ -1,6 +1,8 @@
 import os
 import json
 import time
+import secrets
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -100,6 +102,34 @@ def init_db():
         referral_bonus_ton REAL DEFAULT 0,
         referrer_id BIGINT DEFAULT NULL,
         created_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_sessions (
+        session_token_hash TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        provider TEXT,
+        created_at TEXT,
+        expires_at TEXT,
+        last_seen_at TEXT,
+        user_agent TEXT,
+        ip_hash TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_accounts (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        provider TEXT NOT NULL,
+        provider_sub TEXT NOT NULL,
+        email TEXT,
+        name TEXT,
+        avatar_url TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        UNIQUE(provider, provider_sub)
     )
     """)
 
@@ -528,6 +558,122 @@ def get_all_users(limit: int = 1000) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"get_all_users error: {e}")
         return []
+    finally:
+        conn.close()
+
+
+def _hash_session_token(raw_session_token: str) -> str:
+    return hashlib.sha256(raw_session_token.encode("utf-8")).hexdigest()
+
+
+def _hash_ip(ip: str) -> str:
+    if not ip:
+        return ""
+    return hashlib.sha256(ip.encode("utf-8")).hexdigest()
+
+
+def create_web_session(user_id: int, provider: str, user_agent: str = "", ip: str = "") -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    raw_session_token = secrets.token_urlsafe(48)
+    token_hash = _hash_session_token(raw_session_token)
+    now = datetime.utcnow()
+    expires = now + timedelta(days=30)
+    try:
+        cursor.execute("""
+        INSERT INTO web_sessions
+        (session_token_hash, user_id, provider, created_at, expires_at, last_seen_at, user_agent, ip_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            token_hash, user_id, provider, now.isoformat(), expires.isoformat(),
+            now.isoformat(), (user_agent or "")[:512], _hash_ip(ip),
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+    return raw_session_token
+
+
+def get_user_by_session(raw_session_token: str) -> Optional[Dict[str, Any]]:
+    if not raw_session_token:
+        return None
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    token_hash = _hash_session_token(raw_session_token)
+    now_iso = datetime.utcnow().isoformat()
+    try:
+        cursor.execute("""
+        SELECT s.user_id, s.provider, s.expires_at, u.username, u.first_name
+        FROM web_sessions s
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.session_token_hash = %s
+        """, (token_hash,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if data.get("expires_at") and data["expires_at"] < now_iso:
+            cursor.execute("DELETE FROM web_sessions WHERE session_token_hash = %s", (token_hash,))
+            conn.commit()
+            return None
+        cursor.execute(
+            "UPDATE web_sessions SET last_seen_at = %s WHERE session_token_hash = %s",
+            (now_iso, token_hash),
+        )
+        conn.commit()
+        return data
+    finally:
+        conn.close()
+
+
+def delete_web_session(raw_session_token: str) -> bool:
+    if not raw_session_token:
+        return False
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM web_sessions WHERE session_token_hash = %s", (_hash_session_token(raw_session_token),))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def link_web_account(
+    user_id: int,
+    provider: str,
+    provider_sub: str,
+    email: str = "",
+    name: str = "",
+    avatar_url: str = "",
+) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    try:
+        cursor.execute("""
+        INSERT INTO web_accounts
+        (user_id, provider, provider_sub, email, name, avatar_url, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (provider, provider_sub)
+        DO UPDATE SET user_id = EXCLUDED.user_id, email = EXCLUDED.email, name = EXCLUDED.name,
+            avatar_url = EXCLUDED.avatar_url, updated_at = EXCLUDED.updated_at
+        """, (user_id, provider, provider_sub, email, name, avatar_url, now, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_web_account(provider: str, provider_sub: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            "SELECT * FROM web_accounts WHERE provider = %s AND provider_sub = %s",
+            (provider, provider_sub),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
