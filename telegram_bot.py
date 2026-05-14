@@ -6367,6 +6367,10 @@ async def _run_normal_polymarket_analysis(message: types.Message):
             text = result["full_analysis"]
         else:
             text = _format_analysis(result, uid)
+        if isinstance(result, dict):
+            result["canonical_text"] = text
+            result["telegram_text"] = text
+            result["copy_text"] = text
         share_kb = get_share_analysis_keyboard(uid, result)
         await _send_long_message(
             message,
