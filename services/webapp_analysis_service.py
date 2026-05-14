@@ -1,8 +1,6 @@
 import inspect
 from typing import Any, Dict
 
-from services.webapp_report_formatter import build_webapp_analysis_report
-
 from agents.chief_agent import ChiefAgent
 from services.webapp_report_formatter import save_analysis_to_web_history
 
@@ -89,24 +87,6 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
     except Exception:
         pass
 
-<<<<<<< HEAD
-    report = build_webapp_analysis_report(result, url, "quick", lang)
-
-    add_web_analysis_history(
-        user_id=user_id,
-        analysis_type="quick",
-        market_url=url,
-        market_slug=report.get("market_slug", "") or _extract_slug(url),
-        question=report.get("question", ""),
-        display_prediction=report.get("display_prediction", ""),
-        market_probability=report.get("market_probability", ""),
-        confidence=report.get("confidence", ""),
-        category=report.get("category", ""),
-        status="success",
-        result_json=report,
-    )
-
-=======
     history_id = save_analysis_to_web_history(
         user_id=user_id,
         analysis_type="quick",
@@ -126,13 +106,11 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         "history_id": history_id,
     }
 
->>>>>>> pr-81-webapp-delivery-history-sync
     return {
         "ok": True,
         "status_code": 200,
         "status": "success",
         "analysis_type": "quick",
         "charged": charged,
-        "telegram_delivery": {"attempted": False, "sent": False},
-        "result": report,
+        "result": compact_result,
     }

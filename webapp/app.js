@@ -41,21 +41,10 @@ const I18N = {
     validateMarketUrl: "Paste a Polymarket link.",
     comingSoonAnalysis: "Web analysis execution is not enabled yet. Full reports will appear here soon.",
     analysisOk: "Analysis completed.",
-    analyzingMarket: "Analyzing market...",
-    startingTop: "Starting Top Analysis. This may take 1–3 minutes...",
     analysisError: "Analysis failed. Please try again.",
     notEnoughTokens: "Not enough tokens. Open cashier.",
     historyEmpty: "No analysis history yet.",
     analysisResultTitle: "Analysis result",
-    reasoningLabel: "Reasoning",
-    mainScenarioLabel: "Main scenario",
-    altScenarioLabel: "Alternative scenario",
-    sourcesLabel: "Sources",
-    copy: "Copy",
-    close: "Close",
-    copied: "Copied",
-    openReport: "Open report",
-    telegramDelivered: "Report was also sent to Telegram.",
     marketLabel: "Market",
     forecastLabel: "Forecast",
     marketProbabilityLabel: "Market probability",
@@ -98,21 +87,10 @@ const I18N = {
     validateMarketUrl: "Вставьте ссылку Polymarket.",
     comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
     analysisOk: "Анализ выполнен.",
-    analyzingMarket: "Анализирую рынок...",
-    startingTop: "Запускаю Top Analysis. Это может занять 1–3 минуты...",
     analysisError: "Ошибка анализа. Попробуйте снова.",
     notEnoughTokens: "Недостаточно токенов. Откройте кассу.",
     historyEmpty: "История пока пустая.",
     analysisResultTitle: "Результат анализа",
-    reasoningLabel: "Логика",
-    mainScenarioLabel: "Основной сценарий",
-    altScenarioLabel: "Альтернативный сценарий",
-    sourcesLabel: "Источники",
-    copy: "Копировать",
-    close: "Закрыть",
-    copied: "Скопировано",
-    openReport: "Открыть отчёт",
-    telegramDelivered: "Отчёт также отправлен в Telegram.",
     marketLabel: "Рынок",
     forecastLabel: "Прогноз",
     marketProbabilityLabel: "Вероятность рынка",
@@ -177,11 +155,6 @@ async function callHistory() {
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
-async function callHistoryItem(id) {
-  const r = await fetch(`/api/webapp/history/${id}`, { credentials: "include" });
-  return { ok: r.ok, status: r.status, data: await r.json() };
-}
-
 function setHeroText(lang) {
   const t = I18N[lang] || I18N.en;
   const subtitle = document.getElementById("heroSubtitle");
@@ -217,45 +190,6 @@ function renderGuest(lang) {
   document.getElementById("gBtn").onclick = () => {
     window.location.href = "/api/auth/google/start";
   };
-}
-
-
-function copyText(text) {
-  const value = String(text || "");
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
-  const ta = document.createElement("textarea");
-  ta.value = value;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.focus(); ta.select();
-  document.execCommand("copy");
-  document.body.removeChild(ta);
-  return Promise.resolve();
-}
-
-function renderReportModal(report, t, deliverySent) {
-  const old = document.getElementById("analysisModal"); if (old) old.remove();
-  const sources = Array.isArray(report.sources) ? report.sources : [];
-  const m = document.createElement("div");
-  m.id = "analysisModal"; m.className = "modal-overlay";
-  m.innerHTML = `<div class="modal-card"><h3>${escapeHtml(t.analysisResultTitle)}</h3>
-  <p><b>${t.marketLabel}:</b> ${escapeHtml(report.question || report.market_slug || report.market_url || "-")}</p>
-  <p><b>${t.forecastLabel}:</b> ${escapeHtml(report.display_prediction || "-")}</p>
-  <p><b>${t.marketProbabilityLabel}:</b> ${escapeHtml(report.market_probability || "-")}</p>
-  <p><b>${t.confidenceLabel}:</b> ${escapeHtml(report.confidence || "-")}</p>
-  <p><b>${t.categoryLabel}:</b> ${escapeHtml(report.category || "-")}</p>
-  <p><b>${t.reasoningLabel}:</b> ${escapeHtml(report.reasoning || "-")}</p>
-  <p><b>${t.mainScenarioLabel}:</b> ${escapeHtml(report.main_scenario || "-")}</p>
-  <p><b>${t.altScenarioLabel}:</b> ${escapeHtml(report.alternative_scenario || "-")}</p>
-  <p><b>${t.conclusionLabel}:</b> ${escapeHtml(report.conclusion || "-")}</p>
-  ${sources.length ? `<p><b>${t.sourcesLabel}:</b> ${escapeHtml(sources.join(', '))}</p>` : ''}
-  ${deliverySent ? `<p class="meta">${escapeHtml(t.telegramDelivered)}</p>` : ''}
-  <div class="analysis-actions"><button id="copyReportBtn" class="btn btn-primary">${t.copy}</button><button id="closeModalBtn" class="btn btn-secondary">${t.close}</button></div>
-  <p id="copyStatus" class="small"></p></div>`;
-  document.body.appendChild(m);
-  document.getElementById("closeModalBtn").onclick=()=>m.remove();
-  document.getElementById("copyReportBtn").onclick=async()=>{await copyText(report.copy_text || report.telegram_text || "");document.getElementById("copyStatus").textContent=t.copied;};
 }
 
 function renderAuthed(summary, lang) {
@@ -349,18 +283,13 @@ function renderAuthed(summary, lang) {
       return;
     }
     historyBox.innerHTML = items.map((item) => `
-<<<<<<< HEAD
-      <div class="history-item" data-id="${item.id}">
-=======
       <div class="history-item" data-history-id="${escapeHtml(item.id || "")}" data-status="${escapeHtml(item.status || "")}">
->>>>>>> pr-81-webapp-delivery-history-sync
         <div><b>${escapeHtml((item.analysis_type || "").toUpperCase())}</b> · ${escapeHtml(item.status || "")}</div>
         <div class="small">${escapeHtml(item.question || item.market_slug || item.market_url || "")}</div>
         <div class="small">${escapeHtml(item.display_prediction || "")}</div>
         <div class="small">${escapeHtml(item.created_at || "")}</div>
       </div>
     `).join("");
-    historyBox.querySelectorAll(".history-item").forEach((el)=>{el.onclick=async()=>{const id=el.getAttribute("data-id");const d=await callHistoryItem(id);if(d.ok&&d.data?.ok&&d.data.item?.result){renderReportModal(d.data.item.result,t,false);}}});
   };
 
   const runAnalyze = async (mode) => {
@@ -369,39 +298,53 @@ function renderAuthed(summary, lang) {
       status.textContent = t.validateMarketUrl;
       return;
     }
-    quickBtn.disabled = true;
-    topBtn.disabled = true;
-    status.textContent = mode === "top" ? t.startingTop : t.analyzingMarket;
-    try {
-      const res = await callAnalyze(url, mode);
-      if (res.status === 401) { status.textContent = t.authError; return; }
-      if (!res.ok) {
-        status.textContent = res.data?.error === "invalid_url" ? t.invalidMarketUrl : (res.data?.error === "not_enough_tokens" ? t.notEnoughTokens : t.analysisError);
-        resultBox.innerHTML = "";
-        return;
-      }
-      if (res.data?.status === "coming_soon") {
-        status.textContent = t.comingSoonAnalysis;
-        resultBox.innerHTML = "";
-        await renderHistory();
-        return;
-      }
-      if (res.data?.status === "success") {
-        const result = res.data?.result || {};
-        const deliverySent = !!res.data?.telegram_delivery?.sent;
-        status.textContent = t.analysisOk;
-        resultBox.innerHTML = `<div class="history-item"><p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(result.display_prediction || "-")}</p><p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(result.confidence || "-")}</p><p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml((result.conclusion || "").slice(0, 180))}</p><button id="openReportBtn" class="btn btn-secondary">${t.openReport}</button></div>`;
-        const openBtn = document.getElementById("openReportBtn");
-        if (openBtn) openBtn.onclick = () => renderReportModal(result, t, deliverySent);
-        renderReportModal(result, t, deliverySent);
-        await renderHistory();
-        return;
-      }
-      status.textContent = t.analysisError;
-    } finally {
-      quickBtn.disabled = false;
-      topBtn.disabled = false;
+
+    const res = await callAnalyze(url, mode);
+    if (res.status === 401) {
+      status.textContent = t.authError;
+      return;
     }
+
+    if (!res.ok) {
+      if (res.data?.error === "invalid_url") {
+        status.textContent = t.invalidMarketUrl;
+        resultBox.innerHTML = "";
+        return;
+      }
+      if (res.data?.error === "not_enough_tokens") {
+        status.textContent = t.notEnoughTokens;
+        resultBox.innerHTML = "";
+        return;
+      }
+      status.textContent = t.authError;
+      resultBox.innerHTML = "";
+      return;
+    }
+
+    if (res.data?.ok && res.data?.status === "coming_soon") {
+      status.textContent = t.comingSoonAnalysis;
+      resultBox.innerHTML = "";
+      await renderHistory();
+      return;
+    }
+
+    if (res.data?.ok && res.data?.status === "success") {
+      const out = res.data.result || {};
+      status.textContent = t.analysisOk;
+      resultBox.innerHTML = `
+        <p><b>${escapeHtml(t.analysisResultTitle)}</b></p>
+        <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
+        <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
+        <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
+        <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
+        <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
+        <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
+      `;
+      await renderHistory();
+      return;
+    }
+
+    status.textContent = t.analysisError;
   };
 
 
