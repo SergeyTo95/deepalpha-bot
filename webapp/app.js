@@ -33,6 +33,15 @@ const I18N = {
     price: "Price",
     tokens: "tokens",
     coming: "Analyze market · Coming soon on WebApp",
+    marketAnalysis: "Market Analysis",
+    marketAnalysisDesc: "Paste a Polymarket link to prepare analysis in WebApp.",
+    marketPlaceholder: "https://polymarket.com/event/...",
+    quickAnalysis: "🔍 Quick Analysis",
+    topAnalysisAction: "🔥 Top Analysis",
+    validateMarketUrl: "Paste a Polymarket link.",
+    comingSoonAnalysis: "Web analysis execution is not enabled yet. Full reports will appear here soon.",
+    authError: "Authorization error. Please reopen the dashboard.",
+    invalidMarketUrl: "Invalid Polymarket link.",
     cashier: "Cashier",
     cashierDesc: "Buy tokens and manage payments",
     openCashier: "Open Cashier",
@@ -57,6 +66,15 @@ const I18N = {
     price: "Цена",
     tokens: "токенов",
     coming: "Анализ рынка · скоро в WebApp",
+    marketAnalysis: "Анализ рынка",
+    marketAnalysisDesc: "Вставьте ссылку Polymarket, чтобы подготовить анализ в WebApp.",
+    marketPlaceholder: "https://polymarket.com/event/...",
+    quickAnalysis: "🔍 Quick Analysis",
+    topAnalysisAction: "🔥 Top Analysis",
+    validateMarketUrl: "Вставьте ссылку Polymarket.",
+    comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
+    authError: "Ошибка авторизации. Откройте кабинет заново.",
+    invalidMarketUrl: "Некорректная ссылка Polymarket.",
     cashier: "Касса",
     cashierDesc: "Покупка токенов и управление оплатой",
     openCashier: "Открыть кассу",
@@ -94,6 +112,16 @@ async function telegramAuthIfAvailable() {
 async function logout() {
   await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
   renderGuest(guestLangFallback());
+}
+
+async function callAnalyze(url, mode) {
+  const r = await fetch("/api/webapp/analyze", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, mode })
+  });
+  return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
 function setHeroText(lang) {
@@ -179,6 +207,17 @@ function renderAuthed(summary, lang) {
     </section>
 
     <section class="card">
+      <h2>🔥 ${t.marketAnalysis}</h2>
+      <p class="meta">${t.marketAnalysisDesc}</p>
+      <input id="marketUrlInput" class="analysis-input" type="url" placeholder="${escapeHtml(t.marketPlaceholder)}" />
+      <div class="analysis-actions">
+        <button id="quickAnalysisBtn" class="btn btn-primary">${t.quickAnalysis}</button>
+        <button id="topAnalysisBtn" class="btn btn-secondary">${t.topAnalysisAction}</button>
+      </div>
+      <p id="analysisStatus" class="analysis-status"></p>
+    </section>
+
+    <section class="card">
       <h2>💳 ${t.cashier}</h2>
       <p class="meta">${t.cashierDesc}</p>
       <a href="/pay"><button class="btn btn-primary">${t.openCashier}</button></a>
@@ -194,6 +233,44 @@ function renderAuthed(summary, lang) {
   `;
 
   document.getElementById("logoutBtn").onclick = logout;
+
+  const input = document.getElementById("marketUrlInput");
+  const status = document.getElementById("analysisStatus");
+  const quickBtn = document.getElementById("quickAnalysisBtn");
+  const topBtn = document.getElementById("topAnalysisBtn");
+
+  const runAnalyze = async (mode) => {
+    const url = String(input?.value || "").trim();
+    if (!url || !url.toLowerCase().includes("polymarket.com")) {
+      status.textContent = t.validateMarketUrl;
+      return;
+    }
+
+    const res = await callAnalyze(url, mode);
+    if (res.status === 401) {
+      status.textContent = t.authError;
+      return;
+    }
+
+    if (!res.ok) {
+      if (res.data?.error === "invalid_url") {
+        status.textContent = t.invalidMarketUrl;
+        return;
+      }
+      status.textContent = t.authError;
+      return;
+    }
+
+    if (res.data?.ok && res.data?.status === "coming_soon") {
+      status.textContent = t.comingSoonAnalysis;
+      return;
+    }
+
+    status.textContent = t.authError;
+  };
+
+  quickBtn.onclick = () => runAnalyze("quick");
+  topBtn.onclick = () => runAnalyze("top");
 }
 
 async function init() {
