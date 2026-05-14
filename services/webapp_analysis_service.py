@@ -2,7 +2,7 @@ import inspect
 from typing import Any, Dict
 
 from agents.chief_agent import ChiefAgent
-from services.webapp_report_formatter import save_analysis_to_web_history
+from services.webapp_report_formatter import build_webapp_analysis_report, save_analysis_to_web_history
 
 from db.database import (
     add_tokens,
@@ -72,7 +72,7 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         add_web_analysis_history(user_id=user_id, analysis_type="quick", market_url=url, market_slug=_extract_slug(url), status="error", error=str(e)[:500])
         return {"ok": False, "status_code": 500, "error": "analysis_failed"}
 
-    if not isinstance(result, dict) or not result.get("display_prediction"):
+    if not isinstance(result, dict):
         add_web_analysis_history(user_id=user_id, analysis_type="quick", market_url=url, market_slug=_extract_slug(url), status="error", result_json=result or "", error="empty_result")
         return {"ok": False, "status_code": 500, "error": "analysis_failed"}
 
@@ -96,15 +96,9 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         status="success",
     )
 
-    compact_result = {
-        "question": result.get("question", "") or "",
-        "display_prediction": result.get("display_prediction", "") or "",
-        "market_probability": result.get("market_probability", "") or "",
-        "confidence": result.get("confidence", "") or "",
-        "category": result.get("category", "") or "",
-        "summary": result.get("conclusion", "") or result.get("reasoning", "") or "",
-        "history_id": history_id,
-    }
+    compact_result = build_webapp_analysis_report(raw_result=result, market_url=url, lang=lang)
+    compact_result["analysis_type"] = "quick"
+    compact_result["history_id"] = history_id
 
     return {
         "ok": True,

@@ -150,6 +150,30 @@ async function callAnalyze(url, mode) {
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
+
+function showReportModal(text, lang, telegramSent) {
+  const t = I18N[normalizeLang(lang)] || I18N.en;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const tgNote = telegramSent ? '<p class="small">Отчёт также отправлен в Telegram.</p>' : "";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h2>${escapeHtml(t.analysisResultTitle)}</h2>
+      ${tgNote}
+      <div class="report-text">${escapeHtml(text || "")}</div>
+      <div class="analysis-actions" style="margin-top:12px;">
+        <button class="btn btn-secondary" id="copyReportBtn">Copy</button>
+        <button class="btn btn-primary" id="closeReportBtn">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#closeReportBtn").onclick = () => overlay.remove();
+  overlay.querySelector("#copyReportBtn").onclick = async () => {
+    await navigator.clipboard.writeText(text || "");
+  };
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
 async function callHistory() {
   const r = await fetch("/api/webapp/history", { credentials: "include" });
   return { ok: r.ok, status: r.status, data: await r.json() };
@@ -362,6 +386,12 @@ function renderAuthed(summary, lang) {
       result.question || result.display_prediction || result.conclusion || result.copy_text
     );
     if (itemStatus === "success" && hasMeaningful) {
+      const canonical = result.canonical_text || result.copy_text || result.telegram_text || "";
+      if (canonical) {
+        showReportModal(canonical, lang, false);
+        status.textContent = t.analysisOk;
+        return;
+      }
       const out = result;
       resultBox.innerHTML = `
         <p><b>${escapeHtml(t.analysisResultTitle)}</b></p>

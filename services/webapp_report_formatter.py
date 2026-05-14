@@ -3,6 +3,15 @@ from typing import Any, Dict, Optional
 from db.database import add_web_analysis_history
 
 
+def build_canonical_quick_analysis_text(raw_result: Dict[str, Any]) -> str:
+    result = raw_result if isinstance(raw_result, dict) else {}
+    for key in ("canonical_text", "telegram_text", "copy_text", "full_analysis"):
+        val = result.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 def _extract_slug(url: str) -> str:
     marker = "/event/"
     lower = (url or "").lower()
@@ -16,7 +25,8 @@ def _extract_slug(url: str) -> str:
 def build_webapp_analysis_report(raw_result: Dict[str, Any], market_url: str = "", lang: str = "en") -> Dict[str, Any]:
     result = raw_result if isinstance(raw_result, dict) else {}
     question = str(result.get("question") or "").strip()
-    display_prediction = str(result.get("display_prediction") or result.get("probability") or "").strip()
+    canonical_text = build_canonical_quick_analysis_text(result)
+    display_prediction = str(result.get("display_prediction") or "").strip()
     market_probability = str(result.get("market_probability") or "").strip()
     confidence = str(result.get("confidence") or "").strip()
     category = str(result.get("category") or "").strip()
@@ -30,8 +40,11 @@ def build_webapp_analysis_report(raw_result: Dict[str, Any], market_url: str = "
         "confidence": confidence,
         "category": category,
         "conclusion": conclusion,
-        "copy_text": conclusion,
+        "canonical_text": canonical_text,
+        "telegram_text": canonical_text,
+        "copy_text": canonical_text or conclusion,
         "market_slug": slug,
+        "sections": result.get("sections") if isinstance(result.get("sections"), dict) else {},
     }
 
 
