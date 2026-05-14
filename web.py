@@ -1,13 +1,18 @@
 import os
 import json
+import secrets
+from urllib.parse import urlencode
 from aiohttp import web
 from admin_routes import setup_admin_routes
 from services.payment_service import get_pricing_payload
+from services.web_auth_service import verify_telegram_init_data, get_cookie_secure_flag
 from db.database import (
-    get_user, get_setting, is_subscribed,
+    get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post,
-    is_author, create_donation, add_pending
+    is_author, create_donation, add_pending,
+    create_web_session, get_user_by_session, delete_web_session,
+    link_web_account,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -37,6 +42,15 @@ async def handle_manifest(request):
             content_type="application/json",
             headers=CORS_HEADERS,
         )
+    except FileNotFoundError:
+        return web.Response(text="Not found", status=404)
+
+
+async def handle_app(request):
+    try:
+        with open("webapp/app.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html")
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
 
@@ -431,9 +445,119 @@ async def handle_api_pricing(request):
     return _json_response(get_pricing_payload())
 
 
+def _set_session_cookie(response: web.Response, token: str) -> None:
+    response.set_cookie(
+        "deepalpha_session",
+        token,
+        max_age=2592000,
+        httponly=True,
+        secure=get_cookie_secure_flag(),
+        samesite="Lax",
+        path="/",
+    )
+
+
+async def handle_auth_telegram(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return _json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+    init_data = (data.get("init_data") or "").strip()
+    bot_token = os.getenv("BOT_TOKEN", "")
+    valid, reason, tg_user = verify_telegram_init_data(init_data, bot_token, max_age_seconds=86400)
+    if not valid or not tg_user:
+        return _json_response({"ok": False, "error": "Unauthorized"}, status=401)
+
+    user_id = int(tg_user.get("id", 0))
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "Unauthorized"}, status=401)
+    username = tg_user.get("username", "") or ""
+    first_name = tg_user.get("first_name", "") or ""
+
+    ensure_user(user_id, username, first_name)
+    link_web_account(user_id, "telegram", str(user_id), name=first_name)
+    session_token = create_web_session(
+        user_id=user_id,
+        provider="telegram",
+        user_agent=request.headers.get("User-Agent", ""),
+        ip=request.remote or "",
+    )
+    response = _json_response({
+        "ok": True,
+        "user": {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "provider": "telegram",
+        }
+    })
+    _set_session_cookie(response, session_token)
+    return response
+
+
+async def handle_auth_me(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "auth": {"authenticated": False}})
+    return _json_response({
+        "ok": True,
+        "user": {
+            "user_id": current.get("user_id"),
+            "username": current.get("username", ""),
+            "first_name": current.get("first_name", ""),
+        },
+        "auth": {"provider": current.get("provider", ""), "authenticated": True},
+    })
+
+
+async def handle_auth_logout(request):
+    token = request.cookies.get("deepalpha_session", "")
+    if token:
+        delete_web_session(token)
+    response = _json_response({"ok": True})
+    response.del_cookie("deepalpha_session", path="/")
+    return response
+
+
+async def handle_google_start(request):
+    cid = os.getenv("GOOGLE_CLIENT_ID", "")
+    redir = os.getenv("GOOGLE_REDIRECT_URI", "")
+    if not cid or not redir:
+        return _json_response({"ok": False, "error": "Google login is not configured"})
+    state = secrets.token_urlsafe(24)
+    params = {
+        "client_id": cid,
+        "redirect_uri": redir,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+    response = web.HTTPFound(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
+    response.set_cookie("deepalpha_google_state", state, max_age=600, httponly=True, secure=get_cookie_secure_flag(), samesite="Lax", path="/")
+    raise response
+
+
+async def handle_google_callback(request):
+    cid = os.getenv("GOOGLE_CLIENT_ID", "")
+    secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    redir = os.getenv("GOOGLE_REDIRECT_URI", "")
+    if not cid or not secret or not redir:
+        return _json_response({"ok": False, "error": "Google login is not configured"})
+    state = request.query.get("state", "")
+    expected = request.cookies.get("deepalpha_google_state", "")
+    if not state or not expected or not secrets.compare_digest(state, expected):
+        return _json_response({"ok": False, "error": "Invalid OAuth state"}, status=400)
+    return _json_response({"ok": False, "error": "Google OAuth callback skeleton only. Token exchange not configured in this deployment."})
+
+
 app = web.Application()
 
 app.router.add_get("/", handle_index)
+app.router.add_get("/pay", handle_index)
+app.router.add_get("/app", handle_app)
 app.router.add_get("/tonconnect-manifest.json", handle_manifest)
 app.router.add_get("/webapp/{filename}", handle_static)
 
@@ -455,6 +579,13 @@ app.router.add_route("OPTIONS", "/api/watchlist/buy_slots", handle_options)
 app.router.add_get("/health", handle_health)
 app.router.add_get("/api/health", handle_api_health)
 app.router.add_get("/api/pricing", handle_api_pricing)
+app.router.add_post("/api/auth/telegram", handle_auth_telegram)
+app.router.add_route("OPTIONS", "/api/auth/telegram", handle_options)
+app.router.add_get("/api/auth/me", handle_auth_me)
+app.router.add_post("/api/auth/logout", handle_auth_logout)
+app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
+app.router.add_get("/api/auth/google/start", handle_google_start)
+app.router.add_get("/api/auth/google/callback", handle_google_callback)
 
 setup_admin_routes(app)
 
