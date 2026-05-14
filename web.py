@@ -7,6 +7,7 @@ from admin_routes import setup_admin_routes
 from services.payment_service import get_pricing_payload
 from services.web_auth_service import verify_telegram_init_data, get_cookie_secure_flag
 from services.webapp_analysis_service import run_webapp_quick_analysis
+from services.webapp_bot_delivery import deliver_webapp_analysis_to_telegram
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -14,7 +15,7 @@ from db.database import (
     is_author, create_donation, add_pending,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account,
-    add_web_analysis_history, get_web_analysis_history,
+    add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -624,7 +625,7 @@ async def handle_webapp_analyze(request):
             "ok": True,
             "status": "coming_soon",
             "analysis_type": "top",
-            "message": "Top Analysis is coming soon on WebApp.",
+            "message": "Top Analysis Web execution is being prepared.",
             "market_url": url,
         })
 
@@ -636,11 +637,21 @@ async def handle_webapp_analyze(request):
         if "required_tokens" in result:
             payload["required_tokens"] = result.get("required_tokens")
         return _json_response(payload, status=int(result.get("status_code", 500)))
+    telegram_delivery = result.get("telegram_delivery") or {"attempted": False, "sent": False}
+    provider = str(current.get("provider") or "").lower()
+    if provider == "telegram":
+        delivery = await deliver_webapp_analysis_to_telegram(user_id=user_id, report=result.get("result", {}), lang=language)
+        telegram_delivery = {
+            "attempted": bool(delivery.get("attempted")),
+            "sent": bool(delivery.get("sent")),
+        }
+
     return _json_response({
         "ok": True,
         "status": result.get("status", "success"),
         "analysis_type": "quick",
         "charged": bool(result.get("charged")),
+        "telegram_delivery": telegram_delivery,
         "result": result.get("result", {}),
     })
 
@@ -655,6 +666,35 @@ async def handle_webapp_history(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     items = get_web_analysis_history(user_id, limit=10)
     return _json_response({"ok": True, "items": items})
+
+
+async def handle_webapp_history_item(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        item_id = int(request.match_info.get("id", "0"))
+    except Exception:
+        item_id = 0
+    if item_id <= 0:
+        return _json_response({"ok": False, "error": "not_found"}, status=404)
+    item = get_web_analysis_history_item(user_id, item_id)
+    if not item:
+        return _json_response({"ok": False, "error": "not_found"}, status=404)
+    return _json_response({"ok": True, "item": {
+        "id": item.get("id"),
+        "analysis_type": item.get("analysis_type", "quick"),
+        "status": item.get("status", ""),
+        "market_url": item.get("market_url", ""),
+        "question": item.get("question", ""),
+        "display_prediction": item.get("display_prediction", ""),
+        "created_at": item.get("created_at", ""),
+        "result": item.get("result", {}),
+    }})
 
 
 async def handle_auth_logout(request):
@@ -732,6 +772,7 @@ app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
 app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
 app.router.add_get("/api/webapp/history", handle_webapp_history)
+app.router.add_get("/api/webapp/history/{id}", handle_webapp_history_item)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)
