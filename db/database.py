@@ -762,6 +762,42 @@ def get_web_analysis_history(user_id: int, limit: int = 10) -> List[Dict[str, An
         conn.close()
 
 
+
+def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT id, user_id, analysis_type, market_url, market_slug, question,
+               display_prediction, market_probability, confidence, category, status,
+               result_json, error, created_at
+        FROM web_analysis_history
+        WHERE user_id = %s AND id = %s
+        LIMIT 1
+        """, (user_id, item_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        raw = data.get("result_json")
+        if isinstance(raw, str) and raw:
+            try:
+                data["result"] = json.loads(raw)
+            except Exception:
+                data["result"] = {}
+        elif isinstance(raw, dict):
+            data["result"] = raw
+        else:
+            data["result"] = {}
+        data.pop("result_json", None)
+        data.pop("user_id", None)
+        return data
+    except Exception as e:
+        print(f"get_web_analysis_history_item error: {e}")
+        return None
+    finally:
+        conn.close()
+
 def get_all_user_ids() -> List[int]:
     conn = get_connection()
     cursor = conn.cursor()
