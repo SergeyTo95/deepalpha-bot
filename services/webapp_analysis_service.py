@@ -2,6 +2,8 @@ import inspect
 from typing import Any, Dict
 
 from agents.chief_agent import ChiefAgent
+from services.webapp_report_formatter import save_analysis_to_web_history
+
 from db.database import (
     add_tokens,
     add_web_analysis_history,
@@ -85,6 +87,15 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
     except Exception:
         pass
 
+    history_id = save_analysis_to_web_history(
+        user_id=user_id,
+        analysis_type="quick",
+        market_url=url,
+        raw_result=result,
+        lang=lang,
+        status="success",
+    )
+
     compact_result = {
         "question": result.get("question", "") or "",
         "display_prediction": result.get("display_prediction", "") or "",
@@ -92,21 +103,8 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         "confidence": result.get("confidence", "") or "",
         "category": result.get("category", "") or "",
         "summary": result.get("conclusion", "") or result.get("reasoning", "") or "",
+        "history_id": history_id,
     }
-
-    add_web_analysis_history(
-        user_id=user_id,
-        analysis_type="quick",
-        market_url=url,
-        market_slug=result.get("slug", "") or _extract_slug(url),
-        question=compact_result["question"],
-        display_prediction=compact_result["display_prediction"],
-        market_probability=compact_result["market_probability"],
-        confidence=compact_result["confidence"],
-        category=compact_result["category"],
-        status="success",
-        result_json=result,
-    )
 
     return {
         "ok": True,

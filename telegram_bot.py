@@ -6374,6 +6374,17 @@ async def _run_normal_polymarket_analysis(message: types.Message):
             reply_markup=share_kb,
             parse_mode="HTML",
         )
+        try:
+            save_analysis_to_web_history(
+                user_id=message.from_user.id,
+                analysis_type="quick",
+                market_url=url,
+                raw_result=result if isinstance(result, dict) else {},
+                lang=get_user_lang(message.from_user.id),
+                status="success",
+            )
+        except Exception:
+            pass
         return
     except Exception as e:
         await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))

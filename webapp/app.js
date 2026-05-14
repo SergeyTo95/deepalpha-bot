@@ -60,7 +60,8 @@ const I18N = {
     actions: "Quick actions",
     logout: "Logout",
     active: "Active",
-    telegramAuthUnavailable: "Telegram auth unavailable. Open this page from Telegram WebApp."
+    telegramAuthUnavailable: "Telegram auth unavailable. Open this page from Telegram WebApp.",
+    historyItemUnavailable: "This history item has no full report yet."
   },
   ru: {
     title: "Личный кабинет",
@@ -105,7 +106,8 @@ const I18N = {
     actions: "Быстрые действия",
     logout: "Выйти",
     active: "Активна",
-    telegramAuthUnavailable: "Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp."
+    telegramAuthUnavailable: "Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp.",
+    historyItemUnavailable: "Для этой записи пока нет полного отчёта."
   }
 };
 
@@ -281,7 +283,7 @@ function renderAuthed(summary, lang) {
       return;
     }
     historyBox.innerHTML = items.map((item) => `
-      <div class="history-item">
+      <div class="history-item" data-history-id="${escapeHtml(item.id || "")}" data-status="${escapeHtml(item.status || "")}">
         <div><b>${escapeHtml((item.analysis_type || "").toUpperCase())}</b> · ${escapeHtml(item.status || "")}</div>
         <div class="small">${escapeHtml(item.question || item.market_slug || item.market_url || "")}</div>
         <div class="small">${escapeHtml(item.display_prediction || "")}</div>
@@ -343,6 +345,37 @@ function renderAuthed(summary, lang) {
     }
 
     status.textContent = t.analysisError;
+  };
+
+
+  historyBox.onclick = async (ev) => {
+    const row = ev.target.closest(".history-item");
+    if (!row) return;
+    const itemId = row.getAttribute("data-history-id");
+    const itemStatus = row.getAttribute("data-status") || "";
+    if (!itemId) return;
+    const resp = await fetch(`/api/webapp/history/${encodeURIComponent(itemId)}`, { credentials: "include" });
+    const data = await resp.json();
+    const item = data?.item || {};
+    const result = item.result_json || {};
+    const hasMeaningful = Boolean(
+      result.question || result.display_prediction || result.conclusion || result.copy_text
+    );
+    if (itemStatus === "success" && hasMeaningful) {
+      const out = result;
+      resultBox.innerHTML = `
+        <p><b>${escapeHtml(t.analysisResultTitle)}</b></p>
+        <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || item.question || "")}</p>
+        <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || item.display_prediction || "")}</p>
+        <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || item.market_probability || "")}</p>
+        <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || item.confidence || "")}</p>
+        <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || item.category || "")}</p>
+        <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.conclusion || out.copy_text || "")}</p>
+      `;
+      status.textContent = t.analysisOk;
+      return;
+    }
+    status.textContent = t.historyItemUnavailable;
   };
 
   quickBtn.onclick = () => runAnalyze("quick");

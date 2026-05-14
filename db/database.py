@@ -3024,3 +3024,33 @@ def get_watchlist_by_id(watchlist_id: int) -> Optional[Dict[str, Any]]:
         return None
     finally:
         conn.close()
+
+
+def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT id, user_id, analysis_type, market_url, market_slug, question,
+               display_prediction, market_probability, confidence, category,
+               status, result_json, error, created_at
+        FROM web_analysis_history
+        WHERE id = %s AND user_id = %s
+        LIMIT 1
+        """, (item_id, user_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        raw = data.get("result_json")
+        if isinstance(raw, str) and raw:
+            try:
+                data["result_json"] = json.loads(raw)
+            except Exception:
+                pass
+        return data
+    except Exception as e:
+        print(f"get_web_analysis_history_item error: {e}")
+        return None
+    finally:
+        conn.close()
