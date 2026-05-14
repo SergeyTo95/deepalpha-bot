@@ -527,19 +527,30 @@ async def handle_webapp_summary(request):
     if not user:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
 
+    raw_language = (user.get("language", "ru") or "ru").lower()
+    language = "ru" if raw_language.startswith("ru") else "en"
+    tokens = user.get("token_balance")
+    if tokens is None:
+        tokens = user.get("tokens", 0)
+    subscribed = bool(is_subscribed(user_id) or bool(user.get("is_vip")))
+
     return _json_response({
         "ok": True,
+        "language": language,
         "user": {
             "user_id": user_id,
             "username": user.get("username", "") or "",
             "first_name": user.get("first_name", "") or "",
+            "language": language,
         },
         "balance": {
-            "tokens": ((user.get("token_balance") if user.get("token_balance") is not None else user.get("tokens", 0)) or 0),
+            "tokens": tokens or 0,
         },
         "subscription": {
-            "active": bool(is_subscribed(user_id)),
+            "active": subscribed,
             "until": get_subscription_until(user_id),
+            "is_vip": bool(user.get("is_vip")),
+            "raw_subscription_until": user.get("subscription_until", "") or "",
         },
         "pricing": {
             "analysis_price_tokens": get_setting("analysis_price_tokens", "10"),
