@@ -511,6 +511,46 @@ async def handle_auth_me(request):
     })
 
 
+
+
+async def handle_webapp_summary(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    user = get_user(user_id)
+    if not user:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    return _json_response({
+        "ok": True,
+        "user": {
+            "user_id": user_id,
+            "username": user.get("username", "") or "",
+            "first_name": user.get("first_name", "") or "",
+        },
+        "balance": {
+            "tokens": user.get("token_balance", 0) or 0,
+        },
+        "subscription": {
+            "active": bool(is_subscribed(user_id)),
+            "until": get_subscription_until(user_id),
+        },
+        "pricing": {
+            "analysis_price_tokens": get_setting("analysis_price_tokens", "10"),
+            "top_analysis_price_tokens": get_setting("opportunity_price_tokens", "70"),
+            "token_price_ton": get_setting("token_price_ton", "0.1"),
+        },
+        "routes": {
+            "payment": "/pay",
+            "app": "/app",
+        },
+    })
 async def handle_auth_logout(request):
     token = request.cookies.get("deepalpha_session", "")
     if token:
@@ -582,6 +622,7 @@ app.router.add_get("/api/pricing", handle_api_pricing)
 app.router.add_post("/api/auth/telegram", handle_auth_telegram)
 app.router.add_route("OPTIONS", "/api/auth/telegram", handle_options)
 app.router.add_get("/api/auth/me", handle_auth_me)
+app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)
