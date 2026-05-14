@@ -96,7 +96,7 @@ def _json_response(data: dict, status: int = 200) -> web.Response:
     )
 
 
-def _safe_int(value, default: int, min_value: int, max_value: int | None = None) -> int:
+def _safe_int(value, default: int, min_value: int, max_value=None) -> int:
     try:
         parsed = int(str(value).strip())
     except Exception:
