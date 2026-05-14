@@ -630,9 +630,12 @@ async def handle_webapp_analyze(request):
 
     raw_language = (user.get("language", "ru") or "ru").lower()
     language = "ru" if raw_language.startswith("ru") else "en"
-    result = run_webapp_quick_analysis(user_id=user_id, url=url, lang=language)
+    result = await run_webapp_quick_analysis(user_id=user_id, url=url, lang=language)
     if not result.get("ok"):
-        return _json_response({"ok": False, "error": result.get("error", "analysis_failed")}, status=int(result.get("status_code", 500)))
+        payload = {"ok": False, "error": result.get("error", "analysis_failed")}
+        if "required_tokens" in result:
+            payload["required_tokens"] = result.get("required_tokens")
+        return _json_response(payload, status=int(result.get("status_code", 500)))
     return _json_response({
         "ok": True,
         "status": result.get("status", "success"),

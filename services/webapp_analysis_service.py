@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Dict
 
 from agents.chief_agent import ChiefAgent
@@ -24,7 +25,15 @@ def _extract_slug(url: str) -> str:
     return tail.split("?")[0].split("#")[0].strip("/")
 
 
-def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") -> Dict[str, Any]:
+def _safe_analysis_price() -> int:
+    raw = get_setting("analysis_price_tokens", "10")
+    try:
+        return max(0, int(str(raw).strip() or "10"))
+    except Exception:
+        return 10
+
+
+async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") -> Dict[str, Any]:
     user = get_user(user_id)
     if not user:
         return {"ok": False, "status_code": 401, "error": "unauthorized"}
@@ -40,7 +49,7 @@ def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") -> Dict[
     charged = False
     use_free = False
     should_charge_tokens = False
-    price = int(get_setting("analysis_price_tokens", "10"))
+    price = _safe_analysis_price()
 
     if paid_mode_on and (not is_vip) and (not subscribed):
         if can_use_free_trial(user_id, "analyses"):
@@ -48,11 +57,15 @@ def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") -> Dict[
         else:
             balance = int(user.get("token_balance", 0) or 0)
             if balance < price:
-                return {"ok": False, "status_code": 402, "error": "not_enough_tokens"}
+                return {"ok": False, "status_code": 402, "error": "not_enough_tokens", "required_tokens": price}
             should_charge_tokens = True
 
     try:
-        result = ChiefAgent().run(url, lang=lang, user_id=user_id)
+        maybe_result = ChiefAgent().run(url, lang=lang, user_id=user_id)
+        if inspect.isawaitable(maybe_result):
+            result = await maybe_result
+        else:
+            result = maybe_result
     except Exception as e:
         add_web_analysis_history(user_id=user_id, analysis_type="quick", market_url=url, market_slug=_extract_slug(url), status="error", error=str(e)[:500])
         return {"ok": False, "status_code": 500, "error": "analysis_failed"}
@@ -67,7 +80,10 @@ def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") -> Dict[
         add_tokens(user_id, -price)
         charged = True
 
-    increment_user_stat(user_id, "total_analyses")
+    try:
+        increment_user_stat(user_id, "total_analyses")
+    except Exception:
+        pass
 
     compact_result = {
         "question": result.get("question", "") or "",

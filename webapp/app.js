@@ -42,6 +42,15 @@ const I18N = {
     comingSoonAnalysis: "Web analysis execution is not enabled yet. Full reports will appear here soon.",
     analysisOk: "Analysis completed.",
     analysisError: "Analysis failed. Please try again.",
+    notEnoughTokens: "Not enough tokens. Open cashier.",
+    historyEmpty: "No analysis history yet.",
+    analysisResultTitle: "Analysis result",
+    marketLabel: "Market",
+    forecastLabel: "Forecast",
+    marketProbabilityLabel: "Market probability",
+    confidenceLabel: "Confidence",
+    categoryLabel: "Category",
+    conclusionLabel: "Conclusion",
     historyTitle: "Analysis history",
     authError: "Authorization error. Please reopen the dashboard.",
     invalidMarketUrl: "Invalid Polymarket link.",
@@ -78,6 +87,15 @@ const I18N = {
     comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
     analysisOk: "Анализ выполнен.",
     analysisError: "Ошибка анализа. Попробуйте снова.",
+    notEnoughTokens: "Недостаточно токенов. Откройте кассу.",
+    historyEmpty: "История пока пустая.",
+    analysisResultTitle: "Результат анализа",
+    marketLabel: "Рынок",
+    forecastLabel: "Прогноз",
+    marketProbabilityLabel: "Вероятность рынка",
+    confidenceLabel: "Уверенность",
+    categoryLabel: "Категория",
+    conclusionLabel: "Вывод",
     historyTitle: "История анализов",
     authError: "Ошибка авторизации. Откройте кабинет заново.",
     invalidMarketUrl: "Некорректная ссылка Polymarket.",
@@ -259,7 +277,7 @@ function renderAuthed(summary, lang) {
     }
     const items = Array.isArray(res.data.items) ? res.data.items : [];
     if (!items.length) {
-      historyBox.innerHTML = `<p class="meta">—</p>`;
+      historyBox.innerHTML = `<p class="meta">${escapeHtml(t.historyEmpty)}</p>`;
       return;
     }
     historyBox.innerHTML = items.map((item) => `
@@ -288,14 +306,22 @@ function renderAuthed(summary, lang) {
     if (!res.ok) {
       if (res.data?.error === "invalid_url") {
         status.textContent = t.invalidMarketUrl;
+        resultBox.innerHTML = "";
+        return;
+      }
+      if (res.data?.error === "not_enough_tokens") {
+        status.textContent = t.notEnoughTokens;
+        resultBox.innerHTML = "";
         return;
       }
       status.textContent = t.authError;
+      resultBox.innerHTML = "";
       return;
     }
 
     if (res.data?.ok && res.data?.status === "coming_soon") {
       status.textContent = t.comingSoonAnalysis;
+      resultBox.innerHTML = "";
       await renderHistory();
       return;
     }
@@ -304,11 +330,13 @@ function renderAuthed(summary, lang) {
       const out = res.data.result || {};
       status.textContent = t.analysisOk;
       resultBox.innerHTML = `
-        <p><b>${escapeHtml(out.question || "")}</b></p>
-        <p>${escapeHtml(out.display_prediction || "")}</p>
-        <p class="small">${escapeHtml(out.market_probability || "")} · ${escapeHtml(out.confidence || "")}</p>
-        <p class="small">${escapeHtml(out.category || "")}</p>
-        <p class="small">${escapeHtml(out.summary || "")}</p>
+        <p><b>${escapeHtml(t.analysisResultTitle)}</b></p>
+        <p class="small"><b>${escapeHtml(t.marketLabel)}:</b> ${escapeHtml(out.question || "")}</p>
+        <p><b>${escapeHtml(t.forecastLabel)}:</b> ${escapeHtml(out.display_prediction || "")}</p>
+        <p class="small"><b>${escapeHtml(t.marketProbabilityLabel)}:</b> ${escapeHtml(out.market_probability || "")}</p>
+        <p class="small"><b>${escapeHtml(t.confidenceLabel)}:</b> ${escapeHtml(out.confidence || "")}</p>
+        <p class="small"><b>${escapeHtml(t.categoryLabel)}:</b> ${escapeHtml(out.category || "")}</p>
+        <p class="small"><b>${escapeHtml(t.conclusionLabel)}:</b> ${escapeHtml(out.summary || "")}</p>
       `;
       await renderHistory();
       return;
