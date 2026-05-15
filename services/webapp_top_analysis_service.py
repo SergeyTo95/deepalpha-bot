@@ -75,7 +75,8 @@ async def run_webapp_top_analysis(user_id: int, url: str, lang: str) -> Dict[str
             "lang": lang,
             "output_language": "ru" if lang == "ru" else "en",
         }
-        result = TopAnalysisAgent().run(input_data)
+        maybe_top = TopAnalysisAgent().run(input_data)
+        result = await maybe_top if inspect.isawaitable(maybe_top) else maybe_top
     except Exception:
         add_web_analysis_history(user_id=user_id, analysis_type="top", market_url=url, market_slug=_extract_slug(url), status="error", error="top_analysis_failed")
         return {"ok": False, "status_code": 500, "error": "top_analysis_failed"}
