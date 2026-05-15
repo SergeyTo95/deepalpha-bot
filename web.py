@@ -553,8 +553,16 @@ async def handle_webapp_summary(request):
     language = "ru" if raw_language.startswith("ru") else "en"
 
     tokens = user.get("token_balance")
-    if tokens is None:
+    if tokens is None or tokens == "":
         tokens = user.get("tokens", 0)
+    try:
+        tokens = float(tokens)
+    except Exception:
+        tokens = 0
+    if tokens != tokens:
+        tokens = 0
+    if int(tokens) == tokens:
+        tokens = int(tokens)
 
     subscribed = bool(is_subscribed(user_id) or bool(user.get("is_vip")))
 
@@ -570,7 +578,7 @@ async def handle_webapp_summary(request):
             "language": language,
         },
         "balance": {
-            "tokens": tokens or 0,
+            "tokens": tokens,
         },
         "subscription": {
             "active": subscribed,

@@ -288,6 +288,8 @@ function renderAuthed(summary, lang) {
   const balance = summary.balance || {};
   const sub = summary.subscription || {};
   const pricing = summary.pricing || {};
+  const parsedTokens = Number(balance.tokens || 0);
+  const safeTokens = Number.isFinite(parsedTokens) ? parsedTokens : 0;
 
   const displayName = user.username
     ? "@" + user.username
@@ -307,7 +309,7 @@ function renderAuthed(summary, lang) {
     <div class="grid-2">
       <section class="card">
         <h2>💎 ${t.balance}</h2>
-        <p class="value">${escapeHtml(balance.tokens || 0)} ${t.tokens}</p>
+        <p class="value">${escapeHtml(safeTokens)} ${t.tokens}</p>
       </section>
 
       <section class="card">
