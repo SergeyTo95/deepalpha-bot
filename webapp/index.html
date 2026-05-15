@@ -665,15 +665,54 @@
         // USER DATA
         // ═══════════════════════════════════════════
 
-        async function loadUserData() {
-            if (!userId) return;
+        function safeTokenAmount(value) {
+            const n = Number(value || 0);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function updateBalanceDisplay(value) {
+            const safeBalance = safeTokenAmount(value);
+            document.getElementById('balance').textContent = safeBalance;
+            return safeBalance;
+        }
+
+        async function loadWebappSummaryFallback() {
             try {
-                const resp = await fetch(`${API_BASE}/api/user/${userId}`);
-                if (resp.ok) {
+                const resp = await fetch(`${API_BASE}/api/webapp/summary`, {
+                    method: 'GET',
+                    credentials: 'include',
+                });
+                if (!resp.ok) {
+                    return null;
+                }
+                const data = await resp.json();
+                userData = userData || {};
+                if (data && data.user) {
+                    userData = { ...userData, ...data.user };
+                }
+                if (data && data.balance) {
+                    userData = { ...userData, token_balance: data.balance.tokens };
+                    updateBalanceDisplay(data.balance.tokens);
+                } else {
+                    updateBalanceDisplay(0);
+                }
+                return data;
+            } catch (e) {
+                console.log('Summary fallback error:', e);
+                return null;
+            }
+        }
+
+        async function loadUserData() {
+            updateBalanceDisplay(0);
+            try {
+                if (userId) {
+                    const resp = await fetch(`${API_BASE}/api/user/${userId}`);
+                    if (resp.ok) {
                     const data = await resp.json();
                     userData = data;
 
-                    document.getElementById('balance').textContent = data.token_balance ?? 0;
+                    updateBalanceDisplay(data.token_balance);
                     document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
                     document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
 
@@ -726,10 +765,11 @@
 
                     return data;
                 }
+                }
             } catch(e) {
                 console.log('Load user error:', e);
             }
-            return null;
+            return loadWebappSummaryFallback();
         }
 
         // ═══════════════════════════════════════════
