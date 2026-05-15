@@ -676,8 +676,6 @@
             return safeBalance;
         }
 
-<<<<<<< HEAD
-=======
         function safeStatAmount(value) {
             const n = Number(value || 0);
             return Number.isFinite(n) ? n : 0;
@@ -688,33 +686,35 @@
             document.getElementById('stat-opp').textContent = safeStatAmount(signals);
         }
 
->>>>>>> pr-87-cashier-display
         async function loadWebappSummaryFallback() {
             try {
                 const resp = await fetch(`${API_BASE}/api/webapp/summary`, {
                     method: 'GET',
                     credentials: 'include',
                 });
+
                 if (!resp.ok) {
                     return null;
                 }
+
                 const data = await resp.json();
                 userData = userData || {};
+
                 if (data && data.user) {
                     userData = { ...userData, ...data.user };
                 }
+
                 if (data && data.balance) {
                     userData = { ...userData, token_balance: data.balance.tokens };
                     updateBalanceDisplay(data.balance.tokens);
                 } else {
                     updateBalanceDisplay(0);
                 }
-<<<<<<< HEAD
-=======
+
                 const analyses = data?.stats?.analyses ?? data?.usage?.analyses ?? userData?.total_analyses ?? 0;
                 const signals = data?.stats?.signals ?? data?.usage?.signals ?? userData?.total_opportunities ?? 0;
                 updateStatsDisplay(analyses, signals);
->>>>>>> pr-87-cashier-display
+
                 return data;
             } catch (e) {
                 console.log('Summary fallback error:', e);
@@ -724,82 +724,75 @@
 
         async function loadUserData() {
             updateBalanceDisplay(0);
-<<<<<<< HEAD
-=======
             updateStatsDisplay(0, 0);
->>>>>>> pr-87-cashier-display
+
             try {
                 if (userId) {
                     const resp = await fetch(`${API_BASE}/api/user/${userId}`);
                     if (resp.ok) {
-                    const data = await resp.json();
-                    userData = data;
+                        const data = await resp.json();
+                        userData = data;
 
-                    updateBalanceDisplay(data.token_balance);
-<<<<<<< HEAD
-                    document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
-                    document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
-=======
-                    updateStatsDisplay(data.total_analyses, data.total_opportunities);
->>>>>>> pr-87-cashier-display
+                        updateBalanceDisplay(data.token_balance);
+                        updateStatsDisplay(data.total_analyses, data.total_opportunities);
 
-                    if (data.token_price) tokenPrice = parseFloat(data.token_price);
-                    if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
-                    if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
-                    if (data.cached_price) document.getElementById('price-cached').textContent = `${data.cached_price} токенов`;
-                    if (data.subscription_price) subPrice = parseFloat(data.subscription_price);
-                    if (data.subscription_days) subDays = parseInt(data.subscription_days);
+                        if (data.token_price) tokenPrice = parseFloat(data.token_price);
+                        if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
+                        if (data.opp_price) document.getElementById('price-opp').textContent = `${data.opp_price} токенов`;
+                        if (data.cached_price) document.getElementById('price-cached').textContent = `${data.cached_price} токенов`;
+                        if (data.subscription_price) subPrice = parseFloat(data.subscription_price);
+                        if (data.subscription_days) subDays = parseInt(data.subscription_days);
 
-                    document.getElementById('sub-price-display').textContent = `${subPrice} TON / ${subDays} дней`;
-                    document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} TON`;
+                        document.getElementById('sub-price-display').textContent = `${subPrice} TON / ${subDays} дней`;
+                        document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} TON`;
 
-                    // Настройки авторов/донатов/слотов
-                    if (data.author_status_price_ton) authorStatusPrice = parseFloat(data.author_status_price_ton);
-                    if (data.platform_fee_percent) platformFeePercent = parseFloat(data.platform_fee_percent);
-                    if (data.min_donation_ton) minDonation = parseFloat(data.min_donation_ton);
-                    if (data.watchlist_extra_slots_price) slotsPrice = parseInt(data.watchlist_extra_slots_price);
-                    if (data.watchlist_extra_slots_count) slotsCount = parseInt(data.watchlist_extra_slots_count);
+                        // Настройки авторов/донатов/слотов
+                        if (data.author_status_price_ton) authorStatusPrice = parseFloat(data.author_status_price_ton);
+                        if (data.platform_fee_percent) platformFeePercent = parseFloat(data.platform_fee_percent);
+                        if (data.min_donation_ton) minDonation = parseFloat(data.min_donation_ton);
+                        if (data.watchlist_extra_slots_price) slotsPrice = parseInt(data.watchlist_extra_slots_price);
+                        if (data.watchlist_extra_slots_count) slotsCount = parseInt(data.watchlist_extra_slots_count);
 
-                    // Обновляем UI вкладок
-                    updateAuthorStatusUI();
-                    updateSlotsUI();
-                    updateDonateUI();
+                        // Обновляем UI вкладок
+                        updateAuthorStatusUI();
+                        updateSlotsUI();
+                        updateDonateUI();
 
-                    // Подписка / автор бейджи
-                    if (data.is_subscribed) {
-                        document.getElementById('sub-badge').style.display = 'inline-block';
-                        document.getElementById('sub-status-card').style.display = 'block';
-                        if (data.subscription_until) {
-                            document.getElementById('sub-until').textContent = `До ${data.subscription_until.slice(0,10)}`;
+                        // Подписка / автор бейджи
+                        if (data.is_subscribed) {
+                            document.getElementById('sub-badge').style.display = 'inline-block';
+                            document.getElementById('sub-status-card').style.display = 'block';
+                            if (data.subscription_until) {
+                                document.getElementById('sub-until').textContent = `До ${data.subscription_until.slice(0,10)}`;
+                            }
+                            document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} TON`;
+                        } else {
+                            document.getElementById('sub-badge').style.display = 'none';
+                            document.getElementById('sub-status-card').style.display = 'none';
                         }
-                        document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} TON`;
-                    } else {
-                        document.getElementById('sub-badge').style.display = 'none';
-                        document.getElementById('sub-status-card').style.display = 'none';
-                    }
 
-                    if (data.is_author) {
-                        document.getElementById('author-badge').style.display = 'inline-block';
-                    } else {
-                        document.getElementById('author-badge').style.display = 'none';
-                    }
+                        if (data.is_author) {
+                            document.getElementById('author-badge').style.display = 'inline-block';
+                        } else {
+                            document.getElementById('author-badge').style.display = 'none';
+                        }
 
-                    // Пакеты
-                    if (data.packages && data.packages.length > 0) {
-                        packages = data.packages;
-                        renderPackages();
-                    }
+                        // Пакеты
+                        if (data.packages && data.packages.length > 0) {
+                            packages = data.packages;
+                            renderPackages();
+                        }
 
-                    return data;
-                }
+                        return data;
+                    }
                 }
             } catch(e) {
                 console.log('Load user error:', e);
             }
+
             return loadWebappSummaryFallback();
         }
 
-        // ═══════════════════════════════════════════
         // AUTHOR STATUS TAB
         // ═══════════════════════════════════════════
 
