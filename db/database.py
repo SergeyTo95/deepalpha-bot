@@ -152,6 +152,24 @@ def init_db():
     )
     """)
 
+
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_analysis_jobs (
+        job_id TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        market_url TEXT NOT NULL,
+        status TEXT NOT NULL,
+        progress TEXT,
+        history_id INTEGER,
+        result_json TEXT,
+        error TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS pending_payments (
         user_id BIGINT PRIMARY KEY,
@@ -795,6 +813,106 @@ def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[s
         return data
     except Exception as e:
         print(f"get_web_analysis_history_item error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def create_web_analysis_job(user_id: int, analysis_type: str, market_url: str) -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    job_id = secrets.token_urlsafe(24)
+    try:
+        cursor.execute("""
+        INSERT INTO web_analysis_jobs
+        (job_id, user_id, analysis_type, market_url, status, progress, history_id, result_json, error, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (job_id, user_id, analysis_type, market_url, "queued", "", None, "", "", now, now))
+        conn.commit()
+        return job_id
+    finally:
+        conn.close()
+
+
+def update_web_analysis_job(
+    job_id: str,
+    user_id: int,
+    status: Optional[str] = None,
+    progress: Optional[str] = None,
+    history_id: Optional[int] = None,
+    result_json: Any = None,
+    error: Optional[str] = None,
+) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    try:
+        parts = ["updated_at = %s"]
+        values: List[Any] = [now]
+        if status is not None:
+            parts.append("status = %s")
+            values.append(str(status))
+        if progress is not None:
+            parts.append("progress = %s")
+            values.append(str(progress))
+        if history_id is not None:
+            parts.append("history_id = %s")
+            values.append(int(history_id))
+        if result_json is not None:
+            if isinstance(result_json, (dict, list)):
+                stored = json.dumps(result_json, ensure_ascii=False)
+            else:
+                stored = str(result_json)
+            parts.append("result_json = %s")
+            values.append(stored)
+        if error is not None:
+            parts.append("error = %s")
+            values.append(str(error))
+        values.extend([job_id, user_id])
+        cursor.execute(
+            f"UPDATE web_analysis_jobs SET {', '.join(parts)} WHERE job_id = %s AND user_id = %s",
+            tuple(values),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"update_web_analysis_job error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_web_analysis_job(job_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT job_id, user_id, analysis_type, market_url, status, progress,
+               history_id, result_json, error, created_at, updated_at
+        FROM web_analysis_jobs
+        WHERE job_id = %s AND user_id = %s
+        LIMIT 1
+        """, (job_id, user_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        raw = data.get("result_json")
+        if isinstance(raw, str) and raw:
+            try:
+                data["result"] = json.loads(raw)
+            except Exception:
+                data["result"] = {}
+        elif isinstance(raw, dict):
+            data["result"] = raw
+        else:
+            data["result"] = {}
+        data.pop("result_json", None)
+        data.pop("user_id", None)
+        return data
+    except Exception as e:
+        print(f"get_web_analysis_job error: {e}")
         return None
     finally:
         conn.close()

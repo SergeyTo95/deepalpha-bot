@@ -42,6 +42,8 @@ const I18N = {
     analyzingQuickStatus: "DeepAlpha is analyzing the market. This usually takes up to 30–60 seconds.",
     analyzingTopButton: "Starting Top Analysis...",
     analyzingTopStatus: "DeepAlpha is running advanced analysis. This may take 1–3 minutes.",
+    topMainRunning: "DeepAlpha is running advanced Top Analysis. This is a deep multi-agent analysis and may take 2–4 minutes. Do not close the window.",
+    topStillRunningTimeout: "Analysis is still running. Refresh history in a minute — the report will appear there after completion.",
     validateMarketUrl: "Paste a Polymarket link.",
     comingSoonAnalysis: "Web analysis execution is not enabled yet. Full reports will appear here soon.",
     analysisOk: "Analysis completed.",
@@ -100,6 +102,8 @@ const I18N = {
     analyzingQuickStatus: "DeepAlpha анализирует рынок. Обычно это занимает до 30–60 секунд.",
     analyzingTopButton: "Запускаю Top Analysis...",
     analyzingTopStatus: "DeepAlpha выполняет расширенный анализ. Это может занять 1–3 минуты.",
+    topMainRunning: "DeepAlpha выполняет расширенный Top Analysis. Это глубокий анализ с несколькими ИИ-модулями и может занять 2–4 минуты. Не закрывайте окно.",
+    topStillRunningTimeout: "Анализ всё ещё выполняется. Обновите историю через минуту — отчёт появится там после завершения.",
     validateMarketUrl: "Вставьте ссылку Polymarket.",
     comingSoonAnalysis: "Пока запуск анализа в WebApp не включён. Скоро здесь появится полный отчёт.",
     analysisOk: "Анализ выполнен.",
@@ -170,6 +174,21 @@ async function callAnalyze(url, mode) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, mode })
   });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+
+async function callTopAnalyzeStart(url) {
+  const r = await fetch("/api/webapp/analyze/start", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, mode: "top" })
+  });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+
+async function callAnalyzeStatus(jobId) {
+  const r = await fetch(`/api/webapp/analyze/status/${encodeURIComponent(jobId)}`, { credentials: "include" });
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
@@ -410,11 +429,110 @@ function renderAuthed(summary, lang) {
     renderHistoryItems();
   };
 
+  const topProgressPhrases = {
+    en: [
+      "Top Analysis started...",
+      "Preparing base market context...",
+      "Researching sources and news...",
+      "Checking risks and weak points...",
+      "Building the final DeepAlpha forecast...",
+      "Almost ready, assembling the report..."
+    ],
+    ru: [
+      "Top Analysis запущен...",
+      "Готовлю базовый рыночный контекст...",
+      "Исследую источники и новости...",
+      "Проверяю риски и слабые места прогноза...",
+      "Формирую финальный прогноз DeepAlpha...",
+      "Почти готово, собираю отчёт..."
+    ]
+  };
+
+  const runTopAnalyzeJob = async (url) => {
+    setRunningState(true, "top");
+    status.textContent = t.topMainRunning;
+    resultBox.innerHTML = "";
+    const start = await callTopAnalyzeStart(url);
+    if (!start.ok || !start.data?.ok || !start.data?.job_id) {
+      setRunningState(false);
+      if (start.status === 401) status.textContent = t.authError;
+      else if (start.data?.error === "invalid_url") status.textContent = t.invalidMarketUrl;
+      else if (start.data?.error === "not_enough_tokens") status.textContent = t.notEnoughTokens;
+      else status.textContent = t.analysisError;
+      return;
+    }
+    const jobId = start.data.job_id;
+    const startedAt = Date.now();
+    let tick = 0;
+    while (Date.now() - startedAt < 6 * 60 * 1000) {
+      const polled = await callAnalyzeStatus(jobId);
+      if (polled.status === 401) {
+        setRunningState(false);
+        status.textContent = t.authError;
+        return;
+      }
+      if (!polled.ok || !polled.data?.ok) {
+        setRunningState(false);
+        status.textContent = t.analysisError;
+        return;
+      }
+      const st = String(polled.data.status || "").toLowerCase();
+      if (st === "queued" || st === "running") {
+        const phrases = topProgressPhrases[lang] || topProgressPhrases.en;
+        const technicalProgressCodes = new Set([
+          "top_analysis_started",
+          "queued",
+          "running",
+          "top_analysis_running"
+        ]);
+        const backendProgress = String(polled.data.progress || "").trim();
+        const phrase = backendProgress && !technicalProgressCodes.has(backendProgress)
+          ? backendProgress
+          : phrases[tick % phrases.length];
+        status.textContent = `${t.topMainRunning} ${phrase}`;
+        tick += 1;
+        await new Promise((r) => setTimeout(r, 3500));
+        continue;
+      }
+      if (st === "error") {
+        setRunningState(false);
+        status.textContent = polled.data?.error === "not_enough_tokens" ? t.notEnoughTokens : t.analysisError;
+        return;
+      }
+      if (st === "success") {
+        setRunningState(false);
+        const out = polled.data.result || {};
+        const reportText = out.canonical_text || out.copy_text || out.telegram_text || "";
+        const telegramSent = Boolean(polled.data?.telegram_delivery?.sent || out?.telegram_delivery?.sent);
+        status.textContent = t.topAnalysisDoneTitle;
+        if (reportText) {
+          resultBox.innerHTML = `<p><b>${escapeHtml(t.topAnalysisDoneTitle)}</b></p><p class="small">${escapeHtml(t.topAnalysisDoneHint)}</p><div class="analysis-actions" style="margin-top:12px;"><button id="openReportInlineBtn" class="btn btn-secondary">${escapeHtml(t.openReport)}</button><button id="copyReportInlineBtn" class="btn btn-primary">${escapeHtml(t.copy)}</button></div>`;
+          showReportModal(reportText, lang, telegramSent);
+          const openBtn = document.getElementById("openReportInlineBtn");
+          if (openBtn) openBtn.onclick = () => showReportModal(reportText, lang, telegramSent);
+          const copyBtn = document.getElementById("copyReportInlineBtn");
+          if (copyBtn) copyBtn.onclick = async () => { await copyToClipboardSafe(reportText); };
+        }
+        await loadHistory(true);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3500));
+    }
+    setRunningState(false);
+    status.textContent = t.topStillRunningTimeout;
+    await loadHistory(true);
+  };
+
   const runAnalyze = async (mode) => {
     if (isRunning) return;
     const url = String(input?.value || "").trim();
     if (!url || !url.toLowerCase().includes("polymarket.com")) {
       status.textContent = t.validateMarketUrl;
+      return;
+    }
+
+    if (mode === "top") {
+      await runTopAnalyzeJob(url);
       return;
     }
 

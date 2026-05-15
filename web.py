@@ -1,6 +1,7 @@
 import os
 import json
 import secrets
+import asyncio
 from urllib.parse import urlencode
 from aiohttp import web
 from admin_routes import setup_admin_routes
@@ -17,6 +18,7 @@ from db.database import (
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
+    create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -598,6 +600,43 @@ async def handle_webapp_summary(request):
     })
 
 
+async def run_webapp_top_analysis_job(job_id: str, user_id: int, url: str, lang: str, provider: str):
+    try:
+        update_web_analysis_job(job_id, user_id, status="running", progress="top_analysis_started")
+        result = await run_webapp_top_analysis(user_id=user_id, url=url, lang=lang)
+        if not result.get("ok"):
+            err = str(result.get("error", "top_analysis_failed") or "top_analysis_failed")
+            update_web_analysis_job(job_id, user_id, status="error", progress="", error=err)
+            return
+        out = result.get("result", {}) or {}
+        history_id = result.get("history_id") or out.get("history_id")
+        telegram_delivery = {"attempted": False, "sent": False, "error": ""}
+        if str(provider or "").lower() == "telegram":
+            try:
+                telegram_delivery = await deliver_webapp_analysis_to_telegram(
+                    user_id=user_id,
+                    market_url=url,
+                    raw_result=out,
+                    lang=lang,
+                )
+            except Exception:
+                telegram_delivery = {"attempted": True, "sent": False, "error": "delivery_failed"}
+        payload = dict(out)
+        payload["telegram_delivery"] = telegram_delivery
+        update_web_analysis_job(
+            job_id,
+            user_id,
+            status="success",
+            progress="",
+            history_id=int(history_id) if history_id else None,
+            result_json=payload,
+            error="",
+        )
+    except Exception:
+        update_web_analysis_job(job_id, user_id, status="error", progress="", error="top_analysis_failed")
+
+
+
 async def handle_webapp_analyze(request):
     token = request.cookies.get("deepalpha_session", "")
     current = get_user_by_session(token) if token else None
@@ -676,6 +715,65 @@ async def handle_webapp_analyze(request):
         "result": result.get("result", {}),
         "telegram_delivery": bot_delivery,
     })
+
+
+async def handle_webapp_analyze_start(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0 or not get_user(user_id):
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    url = str(payload.get("url", "") or "").strip()
+    mode = str(payload.get("mode", "") or "").strip().lower()
+    if (not url) or (len(url) > 500) or ("polymarket.com" not in url.lower()):
+        return _json_response({"ok": False, "error": "invalid_url"}, status=400)
+    if mode != "top":
+        return _json_response({"ok": False, "error": "invalid_mode"}, status=400)
+    user = get_user(user_id)
+    raw_language = (user.get("language", "ru") or "ru").lower()
+    language = "ru" if raw_language.startswith("ru") else "en"
+    provider = str(current.get("provider", "") or "")
+    job_id = create_web_analysis_job(user_id=user_id, analysis_type="top", market_url=url)
+    asyncio.create_task(run_webapp_top_analysis_job(job_id, user_id, url, language, provider))
+    return _json_response({"ok": True, "job_id": job_id, "status": "queued", "analysis_type": "top"})
+
+
+async def handle_webapp_analyze_status(request):
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    user_id = int(current.get("user_id", 0) or 0)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    job_id = str(request.match_info.get("job_id", "") or "").strip()
+    if not job_id:
+        return _json_response({"ok": False, "error": "not_found"}, status=404)
+    job = get_web_analysis_job(job_id, user_id)
+    if not job:
+        return _json_response({"ok": False, "error": "not_found"}, status=404)
+    data = {
+        "ok": True,
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "analysis_type": job.get("analysis_type"),
+        "progress": job.get("progress") or "",
+    }
+    if job.get("status") == "success":
+        result = job.get("result") or {}
+        data["history_id"] = job.get("history_id")
+        data["result"] = result
+        if isinstance(result, dict) and result.get("telegram_delivery"):
+            data["telegram_delivery"] = result.get("telegram_delivery")
+    elif job.get("status") == "error":
+        data["error"] = job.get("error") or "top_analysis_failed"
+    return _json_response(data)
 
 
 async def handle_webapp_history(request):
@@ -792,7 +890,11 @@ app.router.add_route("OPTIONS", "/api/auth/telegram", handle_options)
 app.router.add_get("/api/auth/me", handle_auth_me)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
+app.router.add_post("/api/webapp/analyze/start", handle_webapp_analyze_start)
+app.router.add_get("/api/webapp/analyze/status/{job_id}", handle_webapp_analyze_status)
 app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
+app.router.add_route("OPTIONS", "/api/webapp/analyze/start", handle_options)
+app.router.add_route("OPTIONS", "/api/webapp/analyze/status/{job_id}", handle_options)
 app.router.add_get("/api/webapp/history", handle_webapp_history)
 app.router.add_get("/api/webapp/history/{item_id}", handle_webapp_history_item)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
