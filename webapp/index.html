@@ -676,6 +676,16 @@
             return safeBalance;
         }
 
+        function safeStatAmount(value) {
+            const n = Number(value || 0);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function updateStatsDisplay(analyses, signals) {
+            document.getElementById('stat-analyses').textContent = safeStatAmount(analyses);
+            document.getElementById('stat-opp').textContent = safeStatAmount(signals);
+        }
+
         async function loadWebappSummaryFallback() {
             try {
                 const resp = await fetch(`${API_BASE}/api/webapp/summary`, {
@@ -696,6 +706,9 @@
                 } else {
                     updateBalanceDisplay(0);
                 }
+                const analyses = data?.stats?.analyses ?? data?.usage?.analyses ?? userData?.total_analyses ?? 0;
+                const signals = data?.stats?.signals ?? data?.usage?.signals ?? userData?.total_opportunities ?? 0;
+                updateStatsDisplay(analyses, signals);
                 return data;
             } catch (e) {
                 console.log('Summary fallback error:', e);
@@ -705,6 +718,7 @@
 
         async function loadUserData() {
             updateBalanceDisplay(0);
+            updateStatsDisplay(0, 0);
             try {
                 if (userId) {
                     const resp = await fetch(`${API_BASE}/api/user/${userId}`);
@@ -713,8 +727,7 @@
                     userData = data;
 
                     updateBalanceDisplay(data.token_balance);
-                    document.getElementById('stat-analyses').textContent = data.total_analyses ?? 0;
-                    document.getElementById('stat-opp').textContent = data.total_opportunities ?? 0;
+                    updateStatsDisplay(data.total_analyses, data.total_opportunities);
 
                     if (data.token_price) tokenPrice = parseFloat(data.token_price);
                     if (data.analysis_price) document.getElementById('price-analysis').textContent = `${data.analysis_price} токенов`;
