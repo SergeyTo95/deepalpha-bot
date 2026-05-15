@@ -8,6 +8,7 @@ from services.payment_service import get_pricing_payload
 from services.web_auth_service import verify_telegram_init_data, get_cookie_secure_flag
 from services.webapp_analysis_service import run_webapp_quick_analysis
 from services.webapp_bot_delivery import deliver_webapp_analysis_to_telegram
+from services.webapp_top_analysis_service import run_webapp_top_analysis
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -625,28 +626,33 @@ async def handle_webapp_analyze(request):
     if mode not in ("quick", "top"):
         return _json_response({"ok": False, "error": "invalid_mode"}, status=400)
 
-    if mode == "top":
-        raw_language = (user.get("language", "ru") or "ru").lower()
-        language = "ru" if raw_language.startswith("ru") else "en"
-        add_web_analysis_history(
-            user_id=user_id,
-            analysis_type="top",
-            market_url=url,
-            status="coming_soon",
-        )
-        message = "Top Analysis in WebApp is coming soon."
-        if language == "ru":
-            message = "Top Analysis в WebApp скоро будет доступен."
-        return _json_response({
-            "ok": True,
-            "status": "coming_soon",
-            "analysis_type": "top",
-            "message": message,
-            "market_url": url,
-        })
-
     raw_language = (user.get("language", "ru") or "ru").lower()
     language = "ru" if raw_language.startswith("ru") else "en"
+
+    if mode == "top":
+        result = await run_webapp_top_analysis(user_id=user_id, url=url, lang=language)
+        if not result.get("ok"):
+            payload = {"ok": False, "error": result.get("error", "top_analysis_failed")}
+            if "required_tokens" in result:
+                payload["required_tokens"] = result.get("required_tokens")
+            return _json_response(payload, status=int(result.get("status_code", 500)))
+        bot_delivery = {"attempted": False, "sent": False, "error": ""}
+        if str(current.get("provider", "")).lower() == "telegram":
+            bot_delivery = await deliver_webapp_analysis_to_telegram(
+                user_id=user_id,
+                market_url=url,
+                raw_result=result.get("result", {}),
+                lang=language,
+            )
+        return _json_response({
+            "ok": True,
+            "status": "success",
+            "analysis_type": "top",
+            "charged": bool(result.get("charged")),
+            "telegram_delivery": bot_delivery,
+            "result": result.get("result", {}),
+        })
+
     result = await run_webapp_quick_analysis(user_id=user_id, url=url, lang=language)
     if not result.get("ok"):
         payload = {"ok": False, "error": result.get("error", "analysis_failed")}

@@ -48,6 +48,7 @@ const I18N = {
     analysisDoneTitle: "✅ Analysis completed",
     analysisDoneHint: "Open the full report to view the complete DeepAlpha Signal.",
     topAnalysisDoneTitle: "✅ Top Analysis completed",
+    topAnalysisDoneHint: "Open the full report to view the complete DeepAlpha Top Analysis.",
     openReport: "Open report",
     copy: "Copy",
     analysisError: "Analysis failed. Please try again.",
@@ -105,6 +106,7 @@ const I18N = {
     analysisDoneTitle: "✅ Анализ выполнен",
     analysisDoneHint: "Откройте полный отчёт, чтобы увидеть весь DeepAlpha Signal.",
     topAnalysisDoneTitle: "✅ Top Analysis выполнен",
+    topAnalysisDoneHint: "Откройте полный отчёт, чтобы увидеть расширенный DeepAlpha Top Analysis.",
     openReport: "Открыть отчёт",
     copy: "Копировать",
     analysisError: "Ошибка анализа. Попробуйте снова.",
@@ -440,13 +442,6 @@ function renderAuthed(summary, lang) {
       return;
     }
 
-    if (res.data?.ok && res.data?.status === "coming_soon") {
-      status.textContent = t.comingSoonAnalysis;
-      resultBox.innerHTML = "";
-      await loadHistory(true);
-      return;
-    }
-
     if (res.data?.ok && res.data?.status === "success") {
       const out = res.data.result || {};
       const reportText = out.canonical_text || out.copy_text || out.telegram_text || "";
@@ -455,7 +450,7 @@ function renderAuthed(summary, lang) {
       if (reportText) {
         resultBox.innerHTML = `
           <p><b>${escapeHtml(mode === "top" ? t.topAnalysisDoneTitle : t.analysisDoneTitle)}</b></p>
-          <p class="small">${escapeHtml(t.analysisDoneHint)}</p>
+          <p class="small">${escapeHtml(mode === "top" ? t.topAnalysisDoneHint : t.analysisDoneHint)}</p>
           <div class="analysis-actions" style="margin-top:12px;">
             <button id="openReportInlineBtn" class="btn btn-secondary">${escapeHtml(t.openReport)}</button>
             <button id="copyReportInlineBtn" class="btn btn-primary">${escapeHtml(t.copy)}</button>
