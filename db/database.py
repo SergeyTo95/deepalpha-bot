@@ -640,9 +640,12 @@ def get_user_by_session(raw_session_token: str) -> Optional[Dict[str, Any]]:
     now_iso = datetime.utcnow().isoformat()
     try:
         cursor.execute("""
-        SELECT s.user_id, s.provider, s.expires_at, u.username, u.first_name
+        SELECT s.user_id, s.provider, s.expires_at, u.username, u.first_name,
+               COALESCE(a.name, '') AS name,
+               COALESCE(a.email, '') AS email
         FROM web_sessions s
         JOIN users u ON u.user_id = s.user_id
+        LEFT JOIN web_accounts a ON a.user_id = s.user_id AND a.provider = s.provider
         WHERE s.session_token_hash = %s
         """, (token_hash,))
         row = cursor.fetchone()

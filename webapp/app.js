@@ -23,7 +23,7 @@ const I18N = {
     guestPrompt: "Sign in to access your DeepAlpha dashboard",
     tg: "Continue with Telegram",
     gg: "Continue with Google",
-    tgNote: "Open from Telegram for automatic login.",
+    tgNote: "Open from Telegram for automatic login, or continue with Google.",
     user: "User",
     balance: "Token balance",
     subscription: "Subscription",
@@ -83,7 +83,7 @@ const I18N = {
     guestPrompt: "Войдите, чтобы открыть личный кабинет DeepAlpha",
     tg: "Продолжить через Telegram",
     gg: "Продолжить через Google",
-    tgNote: "Откройте из Telegram для автоматического входа.",
+    tgNote: "Откройте из Telegram для авто-входа или войдите через Google.",
     user: "Пользователь",
     balance: "Баланс токенов",
     subscription: "Подписка",
@@ -270,7 +270,7 @@ function renderGuest(lang) {
   document.getElementById("tgBtn").onclick = async () => {
     const ok = await telegramAuthIfAvailable();
     if (ok) return init();
-    alert(t.telegramAuthUnavailable);
+    window.location.href = "https://t.me/DeepAlphaAI_bot?start=web_login";
   };
 
   document.getElementById("gBtn").onclick = () => {
@@ -291,7 +291,7 @@ function renderAuthed(summary, lang) {
 
   const displayName = user.username
     ? "@" + user.username
-    : (user.first_name || "DeepAlpha User");
+    : (user.first_name || user.name || user.email || "User");
 
   const subscriptionLine = sub.active
     ? `${t.activeUntil} ${escapeHtml(sub.until || sub.raw_subscription_until || "-")}`

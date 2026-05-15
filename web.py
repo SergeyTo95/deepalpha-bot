@@ -1,8 +1,11 @@
 import os
 import json
+import hmac
+import hashlib
 import secrets
 import asyncio
 from urllib.parse import urlencode
+import aiohttp
 from aiohttp import web
 from admin_routes import setup_admin_routes
 from services.payment_service import get_pricing_payload
@@ -16,7 +19,7 @@ from db.database import (
     get_all_authors, get_author_profile, get_author_post,
     is_author, create_donation, add_pending,
     create_web_session, get_user_by_session, delete_web_session,
-    link_web_account,
+    link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
 )
@@ -523,26 +526,14 @@ async def handle_auth_me(request):
             "user_id": current.get("user_id"),
             "username": current.get("username", ""),
             "first_name": current.get("first_name", ""),
+            "name": current.get("name", "") or "",
+            "email": current.get("email", "") or "",
         },
         "auth": {"provider": current.get("provider", ""), "authenticated": True},
     })
 
 
 
-
-async def handle_webapp_summary(request):
-    token = request.cookies.get("deepalpha_session", "")
-    current = get_user_by_session(token) if token else None
-    if not current:
-        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
-
-    user_id = int(current.get("user_id", 0) or 0)
-    if user_id <= 0:
-        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
-
-    user = get_user(user_id)
-    if not user:
-        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
 
 async def handle_webapp_summary(request):
     token = request.cookies.get("deepalpha_session", "")
@@ -574,6 +565,8 @@ async def handle_webapp_summary(request):
             "user_id": user_id,
             "username": user.get("username", "") or "",
             "first_name": user.get("first_name", "") or "",
+            "name": user.get("first_name", "") or "",
+            "email": user.get("email", "") or "",
             "language": language,
         },
         "balance": {
@@ -830,20 +823,33 @@ async def handle_google_start(request):
     cid = os.getenv("GOOGLE_CLIENT_ID", "")
     redir = os.getenv("GOOGLE_REDIRECT_URI", "")
     if not cid or not redir:
-        return _json_response({"ok": False, "error": "Google login is not configured"})
-    state = secrets.token_urlsafe(24)
+        return _json_response({"ok": False, "error": "google_login_not_configured"})
+    state = secrets.token_urlsafe(32)
     params = {
         "client_id": cid,
         "redirect_uri": redir,
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
-        "access_type": "offline",
-        "prompt": "consent",
+        "prompt": "select_account",
     }
     response = web.HTTPFound(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
     response.set_cookie("deepalpha_google_state", state, max_age=600, httponly=True, secure=get_cookie_secure_flag(), samesite="Lax", path="/")
     raise response
+
+
+def _oauth_html(message):
+    return web.Response(text=(
+        "<!doctype html><html><body style='font-family:sans-serif;padding:24px;'>"
+        + message + "<br/><br/><a href='/app'>Back to app</a></body></html>"
+    ), content_type="text/html")
+
+
+def _google_user_id(provider_sub):
+    # Stable high-range BIGINT namespace to avoid collisions with Telegram numeric IDs.
+    digest = hashlib.sha256(("google:" + provider_sub).encode("utf-8")).digest()
+    value = int.from_bytes(digest[:8], "big") & ((1 << 62) - 1)
+    return (1 << 61) + value
 
 
 async def handle_google_callback(request):
@@ -851,12 +857,81 @@ async def handle_google_callback(request):
     secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redir = os.getenv("GOOGLE_REDIRECT_URI", "")
     if not cid or not secret or not redir:
-        return _json_response({"ok": False, "error": "Google login is not configured"})
-    state = request.query.get("state", "")
-    expected = request.cookies.get("deepalpha_google_state", "")
-    if not state or not expected or not secrets.compare_digest(state, expected):
-        return _json_response({"ok": False, "error": "Invalid OAuth state"}, status=400)
-    return _json_response({"ok": False, "error": "Google OAuth callback skeleton only. Token exchange not configured in this deployment."})
+        return _json_response({"ok": False, "error": "google_login_not_configured"})
+
+    error = (request.query.get("error", "") or "").strip()
+    if error:
+        return _oauth_html("Google sign-in was canceled or failed.")
+
+    code = (request.query.get("code", "") or "").strip()
+    state = (request.query.get("state", "") or "").strip()
+    expected = (request.cookies.get("deepalpha_google_state", "") or "").strip()
+    if (not code) or (not state) or (not expected) or (not hmac.compare_digest(state, expected)):
+        return _json_response({"ok": False, "error": "invalid_oauth_state"}, status=401)
+
+    token_url = "https://oauth2.googleapis.com/token"
+    userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data={
+                "code": code,
+                "client_id": cid,
+                "client_secret": secret,
+                "redirect_uri": redir,
+                "grant_type": "authorization_code",
+            }) as token_resp:
+                if token_resp.status != 200:
+                    return _oauth_html("Google sign-in failed during token exchange.")
+                token_payload = await token_resp.json()
+
+            access_token = str(token_payload.get("access_token", "") or "")
+            if not access_token:
+                return _oauth_html("Google sign-in failed: missing access token.")
+
+            async with session.get(userinfo_url, headers={"Authorization": "Bearer " + access_token}) as userinfo_resp:
+                if userinfo_resp.status != 200:
+                    return _oauth_html("Google sign-in failed when fetching profile.")
+                profile = await userinfo_resp.json()
+    except Exception:
+        return _oauth_html("Google sign-in is temporarily unavailable. Please try again.")
+
+    provider_sub = str(profile.get("sub", "") or "").strip()
+    if not provider_sub:
+        return _oauth_html("Google sign-in failed: invalid account profile.")
+    email = str(profile.get("email", "") or "").strip()
+    name = str(profile.get("name", "") or "").strip()
+    picture = str(profile.get("picture", "") or "").strip()
+
+    account = get_web_account("google", provider_sub)
+    if account and account.get("user_id"):
+        user_id = int(account.get("user_id"))
+    else:
+        user_id = _google_user_id(provider_sub)
+        username = email.split("@", 1)[0] if email and "@" in email else ""
+        ensure_user(user_id, username, name)
+
+    link_web_account(
+        user_id,
+        provider="google",
+        provider_sub=provider_sub,
+        email=email,
+        name=name,
+        avatar_url=picture,
+    )
+
+    session_token = create_web_session(
+        user_id=user_id,
+        provider="google",
+        user_agent=request.headers.get("User-Agent", ""),
+        ip=request.remote or "",
+    )
+
+    base_url = (os.getenv("WEB_APP_BASE_URL", "") or "").strip()
+    redirect_url = (base_url.rstrip("/") + "/app") if base_url else "/app"
+    response = web.HTTPFound(redirect_url)
+    _set_session_cookie(response, session_token)
+    response.del_cookie("deepalpha_google_state", path="/")
+    raise response
 
 
 app = web.Application()
