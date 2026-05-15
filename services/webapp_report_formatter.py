@@ -22,6 +22,72 @@ def _extract_slug(url: str) -> str:
     return tail.split("?")[0].split("#")[0].strip("/")
 
 
+def format_webapp_top_analysis_text(result: Dict[str, Any], lang: str) -> str:
+    chief = result.get("chief_forecast_result") if isinstance(result.get("chief_forecast_result"), dict) else {}
+    question = str(result.get("question") or "—").strip()
+    forecast_pick = str(chief.get("forecast_pick") or chief.get("best_outcome") or "—").strip()
+    pick_strength = str(chief.get("pick_strength") or "—").strip()
+    forecast_summary = str(chief.get("forecast_summary") or "—").strip()
+    probability_range = str(chief.get("probability_range") or "—").strip()
+    confidence = str(chief.get("confidence") or "—").strip()
+    factors = chief.get("key_factors") if isinstance(chief.get("key_factors"), list) else []
+    risks = chief.get("risks") if isinstance(chief.get("risks"), list) else []
+    value_strength = str(chief.get("value_strength") or "—").strip()
+    value_explanation = str(chief.get("value_explanation") or "—").strip()
+    final_conclusion = str(chief.get("final_conclusion") or "—").strip()
+    ftxt = "\n".join([f"— {str(x).strip()}" for x in factors[:5] if str(x).strip()]) or "—"
+    rtxt = "\n".join([f"— {str(x).strip()}" for x in risks[:5] if str(x).strip()]) or "—"
+    if lang == "ru":
+        return (
+            "🔥 DeepAlpha Top Analysis\n\n"
+            f"📌 Рынок:\n{question}\n\n"
+            f"🎯 Выбор DeepAlpha:\n{forecast_pick}\n\n"
+            f"📌 Уверенность в выборе:\n{pick_strength}\n\n"
+            f"🎯 Расширенный прогноз:\n{forecast_summary}\n\n"
+            f"📊 Вероятность:\n{probability_range}\n\n"
+            f"🧠 Уверенность:\n{confidence}\n\n"
+            f"🧩 Ключевые факторы:\n{ftxt}\n\n"
+            f"⚠️ Риски:\n{rtxt}\n\n"
+            f"💰 Ценность:\nСила ценового преимущества: {value_strength}\n{value_explanation}\n\n"
+            f"✅ Вывод:\n{final_conclusion}"
+        )
+    return (
+        "🔥 DeepAlpha Top Analysis\n\n"
+        f"📌 Market:\n{question}\n\n"
+        f"🎯 DeepAlpha pick:\n{forecast_pick}\n\n"
+        f"📌 Pick strength:\n{pick_strength}\n\n"
+        f"🎯 Extended forecast:\n{forecast_summary}\n\n"
+        f"📊 Probability:\n{probability_range}\n\n"
+        f"🧠 Confidence:\n{confidence}\n\n"
+        f"🧩 Key factors:\n{ftxt}\n\n"
+        f"⚠️ Risks:\n{rtxt}\n\n"
+        f"💰 Value:\nValue strength: {value_strength}\n{value_explanation}\n\n"
+        f"✅ Conclusion:\n{final_conclusion}"
+    )
+
+
+def build_webapp_top_analysis_report(raw_result: Dict[str, Any], market_url: str, question: str, lang: str) -> Dict[str, Any]:
+    chief = raw_result.get("chief_forecast_result") if isinstance(raw_result.get("chief_forecast_result"), dict) else {}
+    canonical = format_webapp_top_analysis_text({"question": question, "chief_forecast_result": chief}, lang)
+    return {
+        "analysis_type": "top",
+        "question": question,
+        "market_url": market_url,
+        "market_slug": _extract_slug(market_url),
+        "forecast_pick": str(chief.get("forecast_pick") or "").strip(),
+        "best_outcome": str(chief.get("best_outcome") or "").strip(),
+        "pick_confidence": str(chief.get("pick_confidence") or "").strip(),
+        "pick_strength": str(chief.get("pick_strength") or "").strip(),
+        "value_strength": str(chief.get("value_strength") or "").strip(),
+        "probability_range": str(chief.get("probability_range") or "").strip(),
+        "confidence": str(chief.get("confidence") or "").strip(),
+        "canonical_text": canonical,
+        "copy_text": canonical,
+        "telegram_text": canonical,
+        "sections": chief,
+    }
+
+
 def build_webapp_analysis_report(raw_result: Dict[str, Any], market_url: str = "", lang: str = "en") -> Dict[str, Any]:
     result = raw_result if isinstance(raw_result, dict) else {}
     question = str(result.get("question") or "").strip()
