@@ -479,8 +479,16 @@ function renderAuthed(summary, lang) {
       const st = String(polled.data.status || "").toLowerCase();
       if (st === "queued" || st === "running") {
         const phrases = topProgressPhrases[lang] || topProgressPhrases.en;
+        const technicalProgressCodes = new Set([
+          "top_analysis_started",
+          "queued",
+          "running",
+          "top_analysis_running"
+        ]);
         const backendProgress = String(polled.data.progress || "").trim();
-        const phrase = backendProgress || phrases[tick % phrases.length];
+        const phrase = backendProgress && !technicalProgressCodes.has(backendProgress)
+          ? backendProgress
+          : phrases[tick % phrases.length];
         status.textContent = `${t.topMainRunning} ${phrase}`;
         tick += 1;
         await new Promise((r) => setTimeout(r, 3500));
