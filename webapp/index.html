@@ -51,10 +51,12 @@
         .package-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
         .package-card.active { background: rgba(98,54,255,0.2); border-color: #6236ff; box-shadow: 0 0 20px rgba(98,54,255,0.3); }
         .package-card.popular { border-color: rgba(200,80,192,0.5); }
-        .popular-badge { position: absolute; top: 12px; right: 12px; background: linear-gradient(135deg, #6236ff, #c850c0); border-radius: 8px; padding: 3px 8px; font-size: 11px; font-weight: 700; }
-        .package-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .popular-badge { display: inline-flex; align-items: center; justify-content: center; max-width: 100%; background: linear-gradient(135deg, #6236ff, #c850c0); border-radius: 8px; padding: 3px 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .package-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 10px; margin-bottom: 6px; }
+        .package-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-width: 0; }
+        .package-badge-slot { display: flex; justify-content: flex-end; min-height: 24px; }
         .package-name { font-size: 16px; font-weight: 700; color: #fff; }
-        .package-price { font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .package-price { flex-shrink: 0; text-align: right; font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #6236ff, #c850c0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
         .package-bottom { display: flex; justify-content: space-between; align-items: center; }
         .package-tokens { font-size: 14px; color: rgba(255,255,255,0.6); }
         .package-discount { font-size: 12px; font-weight: 700; color: #4ade80; background: rgba(74,222,128,0.15); border-radius: 6px; padding: 2px 8px; }
@@ -154,6 +156,18 @@
         .refresh-indicator.active { display: block; }
         .no-packages { text-align: center; color: rgba(255,255,255,0.4); font-size: 13px; padding: 20px; }
         .section-title { font-size: 13px; color: rgba(255,255,255,0.5); margin: 20px 0 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        .available-now-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 16px; margin-bottom: 16px; }
+        .available-now-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 10px; }
+        .available-now-grid { display: grid; gap: 8px; }
+        .available-now-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); }
+        .available-now-label { font-size: 13px; color: rgba(255,255,255,0.85); }
+        .available-now-value { font-size: 14px; font-weight: 700; color: #c850c0; }
+        @media (max-width: 420px) {
+            .package-header { grid-template-columns: 1fr; }
+            .package-badge-slot { justify-content: flex-start; min-height: 0; }
+            .popular-badge { white-space: normal; line-height: 1.2; }
+            .package-price { font-size: 18px; }
+        }
     </style>
 </head>
 <body>
@@ -211,6 +225,14 @@
                 <div class="pricing-row">
                     <div class="pricing-name">🔮 Личный сигнал</div>
                     <div class="pricing-value" id="price-opp">20 токенов</div>
+                </div>
+            </div>
+            <div class="available-now-card">
+                <div class="available-now-title" id="available-now-title">Доступно сейчас</div>
+                <div class="available-now-grid">
+                    <div class="available-now-item"><div class="available-now-label" id="available-market-label">🔍 Анализ рынка</div><div class="available-now-value" id="available-market">—</div></div>
+                    <div class="available-now-item"><div class="available-now-label" id="available-hour-label">💡 Сигнал часа</div><div class="available-now-value" id="available-hour">—</div></div>
+                    <div class="available-now-item"><div class="available-now-label" id="available-personal-label">🔮 Личный сигнал</div><div class="available-now-value" id="available-personal">—</div></div>
                 </div>
             </div>
 
@@ -480,6 +502,9 @@
         let selectedPostId = null;
         let selectedPostData = null;
         let allAuthors = [];
+        let currentPricing = { analysis: 0, hour: 0, personal: 0 };
+        const uiLang = (tg.initDataUnsafe?.user?.language_code || navigator.language || 'ru').toLowerCase();
+        const isRuLang = uiLang.startsWith('ru');
 
         let currentTab = "tokens";
         let specialMode = null;  // 'author_status' / 'donate' / 'watchlist_slots'
@@ -603,10 +628,12 @@
 
                 return `
                 <div class="package-card${popularClass}" id="pkg-${pkg.id}" onclick="selectPackage(${pkg.id}, ${pkg.price_ton})">
-                    ${popularBadge}
-                    <div class="package-top">
-                        <div class="package-name">${pkg.name}</div>
-                        <div class="package-price">${pkg.price_ton} TON</div>
+                    <div class="package-header">
+                        <div class="package-top">
+                            <div class="package-name">${pkg.name}</div>
+                            <div class="package-price">${pkg.price_ton} TON</div>
+                        </div>
+                        <div class="package-badge-slot">${popularBadge}</div>
                     </div>
                     <div class="package-bottom">
                         <div>
@@ -686,6 +713,35 @@
             document.getElementById('stat-opp').textContent = safeStatAmount(signals);
         }
 
+        function safePriceAmount(value) {
+            const n = Number(value);
+            return Number.isFinite(n) && n > 0 ? n : 0;
+        }
+
+        function setAvailableNowLocale() {
+            document.getElementById('available-now-title').textContent = isRuLang ? 'Доступно сейчас' : 'Available now';
+            document.getElementById('available-market-label').textContent = isRuLang ? '🔍 Анализ рынка' : '🔍 Market analysis';
+            document.getElementById('available-hour-label').textContent = isRuLang ? '💡 Сигнал часа' : '💡 Signal of the hour';
+            document.getElementById('available-personal-label').textContent = isRuLang ? '🔮 Личный сигнал' : '🔮 Personal signal';
+        }
+
+        function updateAvailableNowDisplay(data) {
+            const tokenBalance = safeTokenAmount(data?.token_balance);
+            const marketPrice = safePriceAmount(data?.analysis_price ?? currentPricing.analysis);
+            const hourPrice = safePriceAmount(data?.cached_price ?? currentPricing.hour);
+            const personalPrice = safePriceAmount(data?.opp_price ?? currentPricing.personal);
+            currentPricing = { analysis: marketPrice, hour: hourPrice, personal: personalPrice };
+
+            const includedText = isRuLang ? 'Подписка активна' : 'Included';
+            const marketValue = data?.is_subscribed ? includedText : (marketPrice > 0 ? String(Math.floor(tokenBalance / marketPrice)) : '0');
+            const hourValue = data?.is_subscribed ? includedText : (hourPrice > 0 ? String(Math.floor(tokenBalance / hourPrice)) : '0');
+            const personalValue = personalPrice > 0 ? String(Math.floor(tokenBalance / personalPrice)) : '0';
+
+            document.getElementById('available-market').textContent = marketValue;
+            document.getElementById('available-hour').textContent = hourValue;
+            document.getElementById('available-personal').textContent = personalValue;
+        }
+
         async function loadWebappSummaryFallback() {
             try {
                 const resp = await fetch(`${API_BASE}/api/webapp/summary`, {
@@ -714,6 +770,13 @@
                 const analyses = data?.stats?.analyses ?? data?.usage?.analyses ?? userData?.total_analyses ?? 0;
                 const signals = data?.stats?.signals ?? data?.usage?.signals ?? userData?.total_opportunities ?? 0;
                 updateStatsDisplay(analyses, signals);
+                updateAvailableNowDisplay({
+                    token_balance: data?.balance?.tokens ?? userData?.token_balance,
+                    analysis_price: data?.pricing?.analysis_price ?? data?.analysis_price,
+                    cached_price: data?.pricing?.cached_price ?? data?.cached_price,
+                    opp_price: data?.pricing?.opp_price ?? data?.opp_price,
+                    is_subscribed: data?.subscription?.active ?? userData?.is_subscribed,
+                });
 
                 return data;
             } catch (e) {
@@ -782,6 +845,7 @@
                             packages = data.packages;
                             renderPackages();
                         }
+                        updateAvailableNowDisplay(data);
 
                         return data;
                     }
@@ -1346,6 +1410,7 @@
         // ═══════════════════════════════════════════
 
         (async function init() {
+            setAvailableNowLocale();
             await initTonConnect();
             await loadUserData();
 
