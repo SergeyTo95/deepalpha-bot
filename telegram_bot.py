@@ -78,6 +78,21 @@ user_languages: Dict[int, str] = {}
 # Временное хранение контекста анализа (для кнопок "В Watchlist" и "Опубликовать")
 last_analysis_cache: Dict[int, dict] = {}
 PENDING_CHECK_CREATION: Dict[int, dict] = {}
+CHECK_CARD_BASE_URL = "https://raw.githubusercontent.com/SergeyTo95/deepalpha-bot/feature/turbo-short-term-btc/assets/check_cards"
+CHECK_CARD_IMAGES = {
+    "ru": {
+        "quick_single": f"{CHECK_CARD_BASE_URL}/quick_single_ru.png",
+        "quick_multi": f"{CHECK_CARD_BASE_URL}/quick_multi_ru.png",
+        "signal_single": f"{CHECK_CARD_BASE_URL}/signal_single_ru.png",
+        "signal_multi": f"{CHECK_CARD_BASE_URL}/signal_multi_ru.png",
+    },
+    "en": {
+        "quick_single": f"{CHECK_CARD_BASE_URL}/quick_single_en.png",
+        "quick_multi": f"{CHECK_CARD_BASE_URL}/quick_multi_en.png",
+        "signal_single": f"{CHECK_CARD_BASE_URL}/signal_single_en.png",
+        "signal_multi": f"{CHECK_CARD_BASE_URL}/signal_multi_en.png",
+    },
+}
 
 
 class AuthorStates(StatesGroup):
@@ -6774,12 +6789,14 @@ async def analyze_url_handler(message: types.Message):
 async def inline_check_share_handler(inline_query: types.InlineQuery):
     uid = inline_query.from_user.id
     lang = get_user_lang(uid) if uid in user_languages else "ru"
+    if lang != "ru":
+        lang = "en"
     raw = (inline_query.query or "").strip()
     code = raw.replace("check_", "", 1).strip()
     link = f"https://t.me/{BOT_USERNAME}?start=check_{code}"
 
-    unavailable_title = "⚠️ Чек недоступен" if lang == "ru" else "⚠️ Check unavailable"
-    unavailable_desc = "Истёк, отключен или закончились активации" if lang == "ru" else "Expired, disabled, or no activations left"
+    unavailable_title = "Чек недоступен" if lang == "ru" else "Check unavailable"
+    unavailable_desc = "Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used."
     unavailable_text = "Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used."
 
     try:
@@ -6818,41 +6835,69 @@ async def inline_check_share_handler(inline_query: types.InlineQuery):
         return
 
     check_type = check.get("check_type")
-    label = "Быстрый анализ" if check_type == "quick_analysis" else "Signal / Opportunity Analysis"
+    label = "Быстрый анализ" if (lang == "ru" and check_type == "quick_analysis") else ("Quick Analysis" if check_type == "quick_analysis" else "Signal / Opportunity Analysis")
     used = int(check.get("used_activations") or 0)
     mx = int(check.get("max_activations") or 1)
+    remaining = max(0, mx - used)
     channel = check.get("required_channel") or ""
-    channel_line = f"\n📢 Условие: подписка на {channel}" if channel else ""
+    channel_line = (
+        (f"\n📢 Требуется подписка: {channel}" if lang == "ru" else f"\n📢 Subscription required: {channel}")
+        if channel else ""
+    )
+    image_key = ("quick_" if check_type == "quick_analysis" else "signal_") + ("single" if mx <= 1 else "multi")
+    image_url = CHECK_CARD_IMAGES[lang][image_key]
 
     if mx <= 1:
         title = "🎁 DeepAlpha Check"
-        desc = f"{label} · 1 активация" if lang == "ru" else f"{label} · 1 activation"
-        text = (
-            f"🎁 DeepAlpha Check\n\nВнутри: {label}\nПолучатель сможет активировать чек и получить AI-анализ рынка без списания токенов.{channel_line}\n\n👇 Нажмите кнопку ниже, чтобы активировать чек."
-            if lang == "ru"
-            else f"🎁 DeepAlpha Check\n\nInside: {label}\nRecipient can activate the check and get AI market analysis without token charges.{channel_line}\n\n👇 Tap the button below to activate this check."
+        desc = "Быстрый анализ" if (lang == "ru" and check_type == "quick_analysis") else ("Quick Analysis" if check_type == "quick_analysis" else "Signal / Opportunity Analysis")
+        caption = (
+            f"🎁 DeepAlpha Check\n\n{label} Polymarket без списания токенов.\n{channel_line}\n\n👇 Активируйте чек кнопкой ниже."
+            if lang == "ru" and check_type == "quick_analysis"
+            else (
+                f"🎁 DeepAlpha Check\n\nSignal / Opportunity Analysis без списания токенов.\n{channel_line}\n\n👇 Активируйте чек кнопкой ниже."
+                if lang == "ru"
+                else (
+                    f"🎁 DeepAlpha Check\n\nQuick Polymarket analysis with no token charge.\n{channel_line}\n\n👇 Tap the button below to activate your check."
+                    if check_type == "quick_analysis"
+                    else f"🎁 DeepAlpha Check\n\nSignal / Opportunity Analysis with no token charge.\n{channel_line}\n\n👇 Tap the button below to activate your check."
+                )
+            )
         )
     else:
         title = "🎁 DeepAlpha Multi-Check"
-        desc = f"{label} · {used}/{mx} активаций" if lang == "ru" else f"{label} · {used}/{mx} activations"
-        text = (
-            f"🎁 DeepAlpha Multi-Check\n\nВнутри: {label}\nАктиваций: {used} / {mx}\nПолучатель сможет активировать чек и получить AI-анализ рынка без списания токенов.{channel_line}\n\n👇 Нажмите кнопку ниже, чтобы активировать чек."
-            if lang == "ru"
-            else f"🎁 DeepAlpha Multi-Check\n\nInside: {label}\nActivations: {used} / {mx}\nRecipient can activate the check and get AI market analysis without token charges.{channel_line}\n\n👇 Tap the button below to activate this check."
+        desc = (
+            f"Быстрый анализ · осталось {remaining}/{mx}" if (lang == "ru" and check_type == "quick_analysis")
+            else (f"Signal / Opportunity Analysis · осталось {remaining}/{mx}" if lang == "ru"
+                  else (f"Quick Analysis · remaining {remaining}/{mx}" if check_type == "quick_analysis" else f"Signal / Opportunity Analysis · remaining {remaining}/{mx}"))
+        )
+        caption = (
+            f"🎁 DeepAlpha Multi-Check\n\nБыстрый анализ Polymarket без списания токенов.\nОсталось активаций: {remaining}/{mx}{channel_line}\n\n👇 Активируйте чек кнопкой ниже."
+            if lang == "ru" and check_type == "quick_analysis"
+            else (
+                f"🎁 DeepAlpha Multi-Check\n\nSignal / Opportunity Analysis без списания токенов.\nОсталось активаций: {remaining}/{mx}{channel_line}\n\n👇 Активируйте чек кнопкой ниже."
+                if lang == "ru"
+                else (
+                    f"🎁 DeepAlpha Multi-Check\n\nQuick Polymarket analysis with no token charge.\nRemaining activations: {remaining}/{mx}{channel_line}\n\n👇 Tap the button below to activate your check."
+                    if check_type == "quick_analysis"
+                    else f"🎁 DeepAlpha Multi-Check\n\nSignal / Opportunity Analysis with no token charge.\nRemaining activations: {remaining}/{mx}{channel_line}\n\n👇 Tap the button below to activate your check."
+                )
+            )
         )
 
     if channel:
-        desc += f" · подписка на {channel}" if lang == "ru" else f" · subscription to {channel}"
+        desc += f" · подписка {channel}" if lang == "ru" else f" · subscription {channel}"
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("🎁 Активировать чек" if lang == "ru" else "🎁 Activate check", url=link))
     kb.add(InlineKeyboardButton("🤖 Открыть DeepAlpha" if lang == "ru" else "🤖 Open DeepAlpha", url=f"https://t.me/{BOT_USERNAME}"))
 
-    result = types.InlineQueryResultArticle(
-        id=f"check_{code}",
+    result = types.InlineQueryResultPhoto(
+        id=f"check_{code}_{used}_{mx}",
         title=title,
         description=desc,
-        input_message_content=types.InputTextMessageContent(message_text=text, disable_web_page_preview=True),
+        photo_url=image_url,
+        thumb_url=image_url,
+        caption=caption,
         reply_markup=kb,
     )
     await bot.answer_inline_query(inline_query.id, results=[result], cache_time=1, is_personal=True)
