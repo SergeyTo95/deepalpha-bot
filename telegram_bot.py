@@ -6892,7 +6892,7 @@ async def inline_check_share_handler(inline_query: types.InlineQuery):
     kb.add(InlineKeyboardButton("🤖 Открыть DeepAlpha" if lang == "ru" else "🤖 Open DeepAlpha", url=f"https://t.me/{BOT_USERNAME}"))
 
     result = types.InlineQueryResultPhoto(
-        id=f"check_{code}_{used}_{mx}",
+        id=f"check_photo_{code}_{used}_{mx}",
         title=title,
         description=desc,
         photo_url=image_url,
