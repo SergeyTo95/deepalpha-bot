@@ -7399,9 +7399,9 @@ async def check_disable_confirm_callback(callback: types.CallbackQuery):
         await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
         return
     text = (
-        "🚫 Отключить чек?\n\nНовые пользователи больше не смогут активировать этот чек.\nУже активированные кредиты у пользователей сохранятся.\n\nВозврат токенов не выполняется."
+        "🚫 Отключить чек?\n\nНовые пользователи больше не смогут активировать этот чек.\nУже активированные кредиты у пользователей сохранятся.\n\nНеиспользованные активации будут возвращены токенами, если чек был создан после обновления и цена покупки сохранена."
         if lang == "ru"
-        else "🚫 Disable this check?\n\nNew users will no longer be able to activate this check.\nAlready activated user credits will remain available.\n\nNo token refunds are provided."
+        else "🚫 Disable this check?\n\nNew users will no longer be able to activate this check.\nAlready activated user credits will remain available.\n\nUnused activations will be refunded in tokens if this check was created after the update and the purchase price was stored."
     )
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("✅ Отключить" if lang == "ru" else "✅ Disable", callback_data=f"check_disable_yes:{check_id}"))
@@ -7424,12 +7424,20 @@ async def check_disable_yes_callback(callback: types.CallbackQuery):
     if not check:
         await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
         return
-    disable_analysis_check_by_id(check_id)
-    await callback.message.answer(
-        "✅ Чек отключен.\n\nНовые пользователи больше не смогут его активировать.\nУже активированные кредиты сохранятся."
-        if lang == "ru"
-        else "✅ Check disabled.\n\nNew users can no longer activate it.\nAlready activated credits remain available."
-    )
+    refund = int(disable_analysis_check_by_id(check_id) or 0)
+    if refund > 0:
+        text = (
+            f"✅ Чек отключен.\n\nНовые пользователи больше не смогут его активировать.\nУже активированные кредиты сохранятся.\n\nВозвращено: {refund} токенов"
+            if lang == "ru"
+            else f"✅ Check disabled.\n\nNew users can no longer activate it.\nAlready activated credits remain available.\n\nRefunded: {refund} tokens"
+        )
+    else:
+        text = (
+            "✅ Чек отключен.\n\nНовые пользователи больше не смогут его активировать.\nУже активированные кредиты сохранятся.\n\nВозврат: 0 токенов"
+            if lang == "ru"
+            else "✅ Check disabled.\n\nNew users can no longer activate it.\nAlready activated credits remain available.\n\nRefund: 0 tokens"
+        )
+    await callback.message.answer(text)
     await _send_my_checks(callback.message, uid)
     await callback.answer("✅")
 
