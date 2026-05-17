@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+import re
 from typing import Dict
 
 from aiogram import Bot, Dispatcher, types
@@ -36,6 +37,10 @@ from db.database import (
     is_subscribed_to_author, get_user_subscriptions,
     get_author_subscribers, toggle_subscription_notifications,
     get_subscription_feed, get_author_donations_list,
+    create_analysis_check, get_analysis_check_by_code, claim_analysis_check,
+    get_unused_analysis_credit, mark_analysis_credit_used,
+    try_deduct_tokens, disable_analysis_check_by_id,
+    has_user_claimed_check,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -556,6 +561,55 @@ def _deduct_tokens(user_id: int, price_key: str, default: str) -> None:
     if not user or user["is_vip"]:
         return
     add_tokens(user_id, -int(get_setting(price_key, default)))
+
+
+def _normalize_channel(raw: str) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    value = value.replace("https://", "").replace("http://", "")
+    if value.startswith("t.me/"):
+        value = "@" + value[5:]
+    if not value.startswith("@"):
+        return ""
+    return value if re.fullmatch(r"@[A-Za-z0-9_]{5,}", value) else ""
+
+
+def _is_admin(uid: int) -> bool:
+    admin_ids = {int(os.getenv("ADMIN_ID", "0") or 0)}
+    extra = os.getenv("SUPERADMIN_IDS", "")
+    for chunk in extra.split(","):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            admin_ids.add(int(chunk))
+    return uid in admin_ids
+
+
+def _safe_int_setting(key: str, default: int) -> int:
+    raw = get_setting(key, str(default))
+    try:
+        value = int(str(raw).strip())
+        return value if value > 0 else default
+    except Exception:
+        return default
+
+
+def _check_claim_availability(check: dict, user_id: int) -> str:
+    if not check or check.get("status") != "active":
+        return "unavailable"
+    expires_at = check.get("expires_at")
+    if expires_at:
+        try:
+            from datetime import datetime
+            if datetime.fromisoformat(expires_at) < datetime.utcnow():
+                return "unavailable"
+        except Exception:
+            pass
+    if int(check.get("used_activations", 0)) >= int(check.get("max_activations", 1)):
+        return "unavailable"
+    if has_user_claimed_check(check["id"], user_id):
+        return "already_claimed"
+    return "ok"
 
 
 def _confidence_emoji(confidence: str) -> str:
@@ -1587,6 +1641,43 @@ async def start_handler(message: types.Message):
                 show_profile_of = int(args.replace("profile_", ""))
             except ValueError:
                 pass
+        elif args.startswith("check_"):
+            code = args.replace("check_", "", 1).strip()
+            check = get_analysis_check_by_code(code)
+            lang = get_user_lang(message.from_user.id)
+            unavailable = "Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used."
+            already = "Вы уже активировали этот чек." if lang == "ru" else "You have already activated this check."
+            if not check:
+                await message.answer(unavailable)
+                return
+            availability = _check_claim_availability(check, message.from_user.id)
+            if availability == "already_claimed":
+                await message.answer(already)
+                return
+            if availability != "ok":
+                await message.answer(unavailable)
+                return
+            if check.get("require_channel_sub"):
+                channel = check.get("required_channel") or ""
+                kb = InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("📢 Подписаться" if lang == "ru" else "📢 Subscribe", url=f"https://t.me/{channel[1:]}"),
+                    InlineKeyboardButton("✅ Проверить подписку" if lang == "ru" else "✅ Check subscription", callback_data=f"check_sub_{code}")
+                )
+                txt = f"Чтобы активировать чек, подпишитесь на канал: {channel}" if lang == "ru" else f"To activate this check, subscribe to: {channel}"
+                await message.answer(txt, reply_markup=kb)
+                return
+            claimed = claim_analysis_check(code, message.from_user.id)
+            if not claimed.get("ok"):
+                err = claimed.get("error")
+                if err == "already_claimed":
+                    await message.answer(already)
+                else:
+                    await message.answer(unavailable)
+                return
+            ctype = claimed.get("check_type")
+            text = "🎁 Чек активирован\n\nВнутри: 1 Быстрый анализ\nОтправьте ссылку Polymarket, и DeepAlpha выполнит анализ без списания токенов." if ctype == "quick_analysis" else "🎁 Чек активирован\n\nВнутри: 1 Signal / Opportunity Analysis\nОтправьте ссылку Polymarket, и DeepAlpha выполнит анализ без списания токенов."
+            await message.answer(text)
+            return
 
     _register_user(message, referred_by=referred_by)
 
@@ -1609,6 +1700,44 @@ async def start_handler(message: types.Message):
         text += ref_text
 
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_sub_"))
+async def check_sub_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    code = callback.data.replace("check_sub_", "", 1)
+    check = get_analysis_check_by_code(code)
+    unavailable = "Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used."
+    already = "Вы уже активировали этот чек." if lang == "ru" else "You have already activated this check."
+    if not check:
+        await callback.answer(unavailable, show_alert=True)
+        return
+    availability = _check_claim_availability(check, uid)
+    if availability == "already_claimed":
+        await callback.answer(already, show_alert=True)
+        return
+    if availability != "ok":
+        await callback.answer(unavailable, show_alert=True)
+        return
+    channel = check.get("required_channel") or ""
+    try:
+        member = await bot.get_chat_member(channel, uid)
+        if member.status not in ("creator", "administrator", "member"):
+            await callback.answer("Подписка пока не найдена." if lang == "ru" else "Subscription not found yet.", show_alert=True)
+            return
+    except Exception:
+        msg = "Бот не может проверить подписку на этот канал. Добавьте @DeepAlphaAI_bot в канал администратором или создайте чек без обязательной подписки."
+        await callback.message.answer(msg if lang == "ru" else "The bot cannot verify subscription to this channel. Add @DeepAlphaAI_bot as an admin to the channel or create a check without subscription requirement.")
+        return
+    claimed = claim_analysis_check(code, uid)
+    if not claimed.get("ok"):
+        await callback.answer(unavailable, show_alert=True)
+        return
+    ctype = claimed.get("check_type")
+    text = "🎁 Чек активирован\n\nВнутри: 1 Быстрый анализ\nОтправьте ссылку Polymarket, и DeepAlpha выполнит анализ без списания токенов." if ctype == "quick_analysis" else "🎁 Чек активирован\n\nВнутри: 1 Signal / Opportunity Analysis\nОтправьте ссылку Polymarket, и DeepAlpha выполнит анализ без списания токенов."
+    await callback.message.answer(text)
+    await callback.answer()
 
 
 @dp.message_handler(commands=["profile"])
@@ -1634,6 +1763,92 @@ async def watchlist_command(message: types.Message):
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
     await message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+async def _create_check_command(message: types.Message, check_type: str, admin_mode: bool = False):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    parts = (message.text or "").split()
+    max_activations = 1
+    channel = ""
+    if admin_mode:
+        if not _is_admin(uid):
+            return
+        if len(parts) < 2 or not parts[1].isdigit() or not (1 <= int(parts[1]) <= 10000):
+            await message.answer("Укажите количество активаций, например: /admin_check_top 10")
+            return
+        max_activations = int(parts[1])
+        if len(parts) >= 3:
+            channel = _normalize_channel(parts[2])
+    else:
+        if len(parts) >= 2:
+            channel = _normalize_channel(parts[1])
+    if (len(parts) >= (3 if admin_mode else 2)) and not channel:
+        await message.answer("Укажите канал в формате @channelusername." if lang == "ru" else "Please specify the channel as @channelusername.")
+        return
+
+    price = 0
+    if not admin_mode:
+        if check_type == "quick_analysis":
+            price = _safe_int_setting("analysis_price_tokens", 10)
+        else:
+            top_price = _safe_int_setting("top_analysis_price_tokens", 70)
+            opp_price = _safe_int_setting("opportunity_price_tokens", 70)
+            price = top_price if str(get_setting("top_analysis_price_tokens", "")).strip() else opp_price
+        user = get_user(uid) or {}
+        if int(user.get("token_balance", 0)) < price:
+            await message.answer("Недостаточно токенов для создания чека." if lang == "ru" else "Not enough tokens to create this check.")
+            return
+
+    check = create_analysis_check(
+        created_by_user_id=uid,
+        check_type=check_type,
+        created_by_admin=admin_mode,
+        max_activations=max_activations,
+        require_channel_sub=bool(channel),
+        required_channel=channel,
+    )
+    if not check:
+        await message.answer(t(uid, "error"))
+        return
+    if not admin_mode and price > 0:
+        if not try_deduct_tokens(uid, price):
+            disable_analysis_check_by_id(check["id"])
+            await message.answer("Не удалось списать токены. Чек отключен, попробуйте снова." if lang == "ru" else "Token deduction failed. The check was disabled, please try again.")
+            return
+    link = f"https://t.me/{BOT_USERNAME}?start=check_{check['code']}"
+    if admin_mode:
+        cond = f"\nCondition: subscription to {channel}" if channel else ""
+        label = "Signal / Opportunity Analysis" if check_type == "top_analysis" else "Quick Analysis"
+        await message.answer(f"🎁 Promo check created\n\nType: {label}\nActivations: {max_activations}{cond}\nLink:\n{link}")
+        return
+
+    inside = "1 Быстрый анализ" if check_type == "quick_analysis" else "1 Signal / Opportunity Analysis"
+    condition = f"\n\nУсловие: подписка на {channel}" if channel and lang == "ru" else (f"\n\nCondition: subscription to {channel}" if channel else "")
+    await message.answer(
+        f"🎁 DeepAlpha Check создан\n\nВнутри: {inside}\nСтоимость: {price} токенов\nСсылка:\n{link}\n\nОтправьте эту ссылку другу — он сможет активировать чек и получить анализ.{condition}"
+    )
+
+
+@dp.message_handler(commands=["check_quick"])
+async def check_quick_command(message: types.Message):
+    await _create_check_command(message, "quick_analysis", admin_mode=False)
+
+
+@dp.message_handler(commands=["check_top"])
+async def check_top_command(message: types.Message):
+    await _create_check_command(message, "top_analysis", admin_mode=False)
+
+
+@dp.message_handler(commands=["admin_check_quick"])
+async def admin_check_quick_command(message: types.Message):
+    await _create_check_command(message, "quick_analysis", admin_mode=True)
+
+
+@dp.message_handler(commands=["admin_check_top"])
+async def admin_check_top_command(message: types.Message):
+    await _create_check_command(message, "top_analysis", admin_mode=True)
 
 @dp.message_handler(
     lambda m: m.text in ["📘 Как читать анализ", "📘 How to read the analysis"],
@@ -3060,12 +3275,15 @@ async def personal_signal_handler(message: types.Message):
         await message.answer(t(uid, "banned"))
         return
 
+    check_credit = get_unused_analysis_credit(uid, "top_analysis")
     subscribed = is_subscribed(uid)
     user = get_user(uid)
     use_tokens = False
     use_free = False
 
-    if subscribed or (user and user.get("is_vip")):
+    if check_credit:
+        pass
+    elif subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "opportunities"):
             if not _check_tokens(uid, "opportunity_price_tokens", "20"):
                 await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
@@ -3103,7 +3321,9 @@ async def personal_signal_handler(message: types.Message):
         if result.get("question"):
             add_to_signal_history(uid, result["question"])
 
-        if use_free:
+        if check_credit:
+            pass
+        elif use_free:
             use_free_trial(uid, "opportunities")
         elif use_tokens:
             _deduct_tokens(uid, "opportunity_price_tokens", "20")
@@ -3112,6 +3332,9 @@ async def personal_signal_handler(message: types.Message):
 
         increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid, cached=False)
+        if check_credit:
+            mark_analysis_credit_used(check_credit["claim_id"])
+            text = f"{text}\n\n🎁 Использован DeepAlpha Check: Top Analysis"
         await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
 
     except Exception as e:
@@ -3367,12 +3590,15 @@ async def analyze_url_handler(message: types.Message):
         await message.answer(t(uid, "banned"))
         return
 
+    check_credit = get_unused_analysis_credit(uid, "quick_analysis")
     subscribed = is_subscribed(uid)
     user = get_user(uid)
     use_tokens = False
     use_free = False
 
-    if subscribed or (user and user.get("is_vip")):
+    if check_credit:
+        pass
+    elif subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "analyses"):
             if not _check_tokens(uid, "analysis_price_tokens", "10"):
                 await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
@@ -3402,7 +3628,9 @@ async def analyze_url_handler(message: types.Message):
             await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
             return
 
-        if use_free:
+        if check_credit:
+            pass
+        elif use_free:
             use_free_trial(uid, "analyses")
         elif use_tokens:
             _deduct_tokens(uid, "analysis_price_tokens", "10")
@@ -3417,6 +3645,9 @@ async def analyze_url_handler(message: types.Message):
         last_analysis_cache[uid] = result
 
         text = _format_analysis(result, uid)
+        if check_credit:
+            mark_analysis_credit_used(check_credit["claim_id"])
+            text = f"{text}\n\n🎁 Использован DeepAlpha Check: Быстрый анализ"
         share_kb = get_share_analysis_keyboard(uid, result)
         await _send_long_message(
             message,
