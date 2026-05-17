@@ -7054,7 +7054,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
-@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "") not in ["🎁 Чеки", "🎁 Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m))
+@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m))
 async def fallback_handler(message: types.Message):
     # Polymarket URLs are handled by the dedicated polymarket.com handler above.
     # Without this guard, one user URL can trigger both handlers and start analysis twice.
