@@ -7122,6 +7122,7 @@ async def check_sub_callback(callback: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith("check_create_select:"))
 async def check_create_select_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
+    lang = get_user_lang(uid)
     kind = callback.data.split(":", 1)[1]
     check_type = "quick_analysis" if kind == "quick" else "top_analysis"
     _cleanup_pending_check_creations()
