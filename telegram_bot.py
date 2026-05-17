@@ -43,7 +43,7 @@ from db.database import (
     get_author_subscribers, toggle_subscription_notifications,
     get_subscription_feed, get_author_donations_list,
     get_all_user_ids,
-    create_analysis_check,
+    create_analysis_check, get_analysis_check_by_code,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
