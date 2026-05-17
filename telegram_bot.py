@@ -6918,7 +6918,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
-@dp.message_handler(lambda m: not (m.text or "").startswith("/"))
+@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "") not in ["🎁 Чеки", "🎁 Checks"])
 async def fallback_handler(message: types.Message):
     # Polymarket URLs are handled by the dedicated polymarket.com handler above.
     # Without this guard, one user URL can trigger both handlers and start analysis twice.
@@ -6960,12 +6960,14 @@ def _check_label(lang: str, check_type: str) -> str:
     return "Signal / Opportunity Analysis"
 
 
-async def _show_check_confirmation(message: types.Message, check_type: str, channel: str = "") -> None:
-    uid = message.from_user.id
-    uid = message.from_user.id
+async def _show_check_confirmation(message: types.Message, check_type: str, channel: str = "", user_id: Optional[int] = None) -> None:
+    uid = user_id or message.from_user.id
     lang = get_user_lang(uid)
     user = get_user(uid) or {}
-    balance = int(user.get("token_balance", 0))
+    try:
+        balance = int(float(user.get("token_balance") or 0))
+    except Exception:
+        balance = 0
     price = _check_price_for_type(check_type)
     label = _check_label(lang, check_type)
     if balance < price:
@@ -7091,7 +7093,7 @@ async def check_create_select_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
     kind = callback.data.split(":", 1)[1]
     check_type = "quick_analysis" if kind == "quick" else "top_analysis"
-    await _show_check_confirmation(callback.message, check_type, "")
+    await _show_check_confirmation(callback.message, check_type, "", user_id=uid)
     await callback.answer()
 
 
@@ -7126,7 +7128,10 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
     channel = pending.get("channel") or ""
     price = _check_price_for_type(check_type)
     user = get_user(uid) or {}
-    balance = int(user.get("token_balance", 0))
+    try:
+        balance = int(float(user.get("token_balance") or 0))
+    except Exception:
+        balance = 0
     if balance < price:
         await callback.message.answer(f"❌ Недостаточно токенов\n\nДля этого чека нужно: {price} токенов\nВаш баланс: {balance} токенов\n\nПополните баланс и попробуйте снова." if lang == "ru" else f"❌ Not enough tokens\n\nRequired: {price} tokens\nYour balance: {balance} tokens\n\nTop up your balance and try again.")
         await callback.answer()
