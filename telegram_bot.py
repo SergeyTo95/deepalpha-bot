@@ -5954,7 +5954,7 @@ async def signal_of_hour_handler(message: types.Message):
     user = get_user(uid)
     paid_mode = get_setting("paid_mode", "off")
 
-    if not check_credit and (subscribed or (user and user.get("is_vip"))):
+    if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "opportunities"):
             if paid_mode == "on" and not _check_tokens(uid, "cached_signal_price_tokens", "5"):
                 await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
@@ -6050,7 +6050,6 @@ async def personal_signal_handler(message: types.Message):
     use_tokens = False
     use_free = False
     check_credit = get_unused_analysis_credit(uid, "top_analysis")
-    check_credit = get_unused_analysis_credit(uid, "quick_analysis")
     if check_credit:
         use_tokens = False
         use_free = False
@@ -6380,13 +6379,12 @@ async def _run_normal_polymarket_analysis(message: types.Message):
     user = get_user(uid)
     use_tokens = False
     use_free = False
-    check_credit = get_unused_analysis_credit(uid, "top_analysis")
     check_credit = get_unused_analysis_credit(uid, "quick_analysis")
     if check_credit:
         use_tokens = False
         use_free = False
 
-    if subscribed or (user and user.get("is_vip")):
+    if not check_credit and (subscribed or (user and user.get("is_vip"))):
         if not check_daily_limit(uid, "analyses"):
             if not _check_tokens(uid, "analysis_price_tokens", "10"):
                 await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
