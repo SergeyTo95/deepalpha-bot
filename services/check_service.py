@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import psycopg2
 from db.database import get_connection
 
@@ -57,11 +57,9 @@ def get_unused_analysis_credit(user_id: int, analysis_type: str) -> Optional[Dic
         cur.execute("""
         SELECT c.id, c.check_id, c.claimed_at, c.analysis_type
         FROM analysis_check_claims c
-        JOIN analysis_checks ch ON ch.id = c.check_id
         WHERE c.user_id=%s
           AND c.status='claimed'
           AND c.analysis_type=%s
-          AND ch.status='active'
         ORDER BY claimed_at ASC NULLS LAST, id ASC
         LIMIT 1
         """, (user_id, analysis_type))
@@ -121,6 +119,58 @@ def disable_analysis_check_by_id(check_id: int):
     try:
         cur.execute("UPDATE analysis_checks SET status='disabled' WHERE id=%s", (check_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_created_checks(user_id: int, include_disabled: bool = False, limit: int = 20) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        safe_limit = max(1, min(int(limit or 20), 100))
+        if include_disabled:
+            cur.execute(
+                """
+                SELECT id, code, check_type, max_activations, used_activations, require_channel_sub,
+                       required_channel, status, created_at, expires_at, created_by_admin
+                FROM analysis_checks
+                WHERE created_by_user_id=%s
+                ORDER BY created_at DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (user_id, safe_limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, code, check_type, max_activations, used_activations, require_channel_sub,
+                       required_channel, status, created_at, expires_at, created_by_admin
+                FROM analysis_checks
+                WHERE created_by_user_id=%s
+                  AND status='active'
+                  AND COALESCE(used_activations, 0) < COALESCE(max_activations, 1)
+                ORDER BY created_at DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (user_id, safe_limit),
+            )
+        rows = cur.fetchall() or []
+        result = []
+        for row in rows:
+            result.append({
+                "id": row[0],
+                "code": row[1],
+                "check_type": row[2],
+                "max_activations": row[3],
+                "used_activations": row[4],
+                "require_channel_sub": bool(row[5]),
+                "required_channel": row[6] or "",
+                "status": row[7],
+                "created_at": row[8],
+                "expires_at": row[9],
+                "created_by_admin": bool(row[10]),
+            })
+        return result
     finally:
         conn.close()
 
