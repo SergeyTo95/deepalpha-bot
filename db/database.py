@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -292,6 +293,38 @@ def init_db():
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_checks (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        created_by_user_id BIGINT,
+        created_by_admin BOOLEAN DEFAULT FALSE,
+        check_type TEXT NOT NULL,
+        max_activations INTEGER DEFAULT 1,
+        used_activations INTEGER DEFAULT 0,
+        expires_at TEXT,
+        require_channel_sub BOOLEAN DEFAULT FALSE,
+        required_channel TEXT,
+        status TEXT DEFAULT 'active',
+        created_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_checks_code ON analysis_checks(code)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_check_claims (
+        id SERIAL PRIMARY KEY,
+        check_id INTEGER NOT NULL,
+        user_id BIGINT NOT NULL,
+        status TEXT DEFAULT 'claimed',
+        claimed_at TEXT,
+        used_at TEXT,
+        analysis_type TEXT,
+        UNIQUE(check_id, user_id)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_user_status ON analysis_check_claims(user_id, status)")
 
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
@@ -897,6 +930,131 @@ def save_opportunity(data: Dict[str, Any], user_id: int = 0) -> int:
     except Exception as e:
         print(f"save_opportunity error: {e}")
         return 0
+    finally:
+        conn.close()
+
+
+def create_analysis_check(
+    created_by_user_id: Optional[int],
+    check_type: str,
+    created_by_admin: bool = False,
+    max_activations: int = 1,
+    expires_at: Optional[str] = None,
+    require_channel_sub: bool = False,
+    required_channel: str = "",
+) -> Optional[Dict[str, Any]]:
+    if check_type not in ("quick_analysis", "top_analysis"):
+        return None
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        code = secrets.token_urlsafe(18).replace("-", "").replace("_", "")
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+        INSERT INTO analysis_checks
+        (code, created_by_user_id, created_by_admin, check_type, max_activations, used_activations,
+         expires_at, require_channel_sub, required_channel, status, created_at)
+        VALUES (%s,%s,%s,%s,%s,0,%s,%s,%s,'active',%s)
+        RETURNING *
+        """, (code, created_by_user_id, created_by_admin, check_type, max_activations, expires_at,
+              require_channel_sub, required_channel, now))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"create_analysis_check error: {e}")
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+
+def get_analysis_check_by_code(code: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT * FROM analysis_checks WHERE code = %s", (code,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def claim_analysis_check(code: str, user_id: int) -> Dict[str, Any]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT * FROM analysis_checks WHERE code = %s FOR UPDATE", (code,))
+        check = cursor.fetchone()
+        if not check or check.get("status") != "active":
+            conn.rollback()
+            return {"ok": False, "error": "unavailable"}
+        expires_at = check.get("expires_at")
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) < datetime.utcnow():
+                    conn.rollback()
+                    return {"ok": False, "error": "expired"}
+            except Exception:
+                pass
+        if int(check.get("used_activations", 0)) >= int(check.get("max_activations", 1)):
+            conn.rollback()
+            return {"ok": False, "error": "used_up"}
+        cursor.execute("SELECT id FROM analysis_check_claims WHERE check_id=%s AND user_id=%s", (check["id"], user_id))
+        if cursor.fetchone():
+            conn.rollback()
+            return {"ok": False, "error": "already_claimed"}
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+        INSERT INTO analysis_check_claims (check_id, user_id, status, claimed_at, analysis_type)
+        VALUES (%s,%s,'claimed',%s,%s) RETURNING id
+        """, (check["id"], user_id, now, check["check_type"]))
+        claim_id = cursor.fetchone()["id"]
+        cursor.execute("UPDATE analysis_checks SET used_activations = used_activations + 1 WHERE id = %s", (check["id"],))
+        conn.commit()
+        return {"ok": True, "claim_id": claim_id, "check_type": check["check_type"]}
+    except Exception as e:
+        print(f"claim_analysis_check error: {e}")
+        conn.rollback()
+        return {"ok": False, "error": "internal"}
+    finally:
+        conn.close()
+
+
+def get_unused_analysis_credit(user_id: int, analysis_type: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT c.id AS claim_id, c.check_id, c.analysis_type, c.claimed_at
+        FROM analysis_check_claims c
+        JOIN analysis_checks ac ON ac.id = c.check_id
+        WHERE c.user_id = %s AND c.status = 'claimed' AND c.analysis_type = %s AND ac.status = 'active'
+        ORDER BY c.claimed_at ASC, c.id ASC
+        LIMIT 1
+        """, (user_id, analysis_type))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def mark_analysis_credit_used(claim_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE analysis_check_claims
+        SET status='used', used_at=%s
+        WHERE id=%s AND status='claimed'
+        """, (datetime.utcnow().isoformat(), claim_id))
+        conn.commit()
+    except Exception as e:
+        print(f"mark_analysis_credit_used error: {e}")
     finally:
         conn.close()
 
