@@ -227,6 +227,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         if _is_top_analysis_enabled():
             kb.add(KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("🎁 Чеки"))
         kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
@@ -248,6 +249,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
             kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
+        kb.add(KeyboardButton("🎁 Checks"))
         kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
@@ -6996,9 +6998,7 @@ async def _show_check_confirmation(message: types.Message, check_type: str, chan
     await message.answer(text, reply_markup=kb)
 
 
-@dp.message_handler(commands=["checks"])
-@dp.message_handler(lambda m: m.text in ["🎁 Чеки", "🎁 Checks"])
-async def checks_menu_handler(message: types.Message):
+async def _send_checks_menu(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
@@ -7012,6 +7012,16 @@ async def checks_menu_handler(message: types.Message):
     kb.add(InlineKeyboardButton("🔥 Signal / Opportunity Analysis", callback_data="check_create_select:top"))
     kb.add(InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="check_create_cancel"))
     await message.answer(text, reply_markup=kb)
+
+
+@dp.message_handler(commands=["checks"])
+async def checks_menu_handler(message: types.Message):
+    await _send_checks_menu(message)
+
+
+@dp.message_handler(lambda m: (m.text or "") in ["🎁 Чеки", "🎁 Checks"])
+async def checks_menu_text_handler(message: types.Message):
+    await _send_checks_menu(message)
 
 
 @dp.message_handler(commands=["check_quick", "check_top", "admin_check_quick", "admin_check_top"])
