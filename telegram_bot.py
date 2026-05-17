@@ -53,7 +53,7 @@ from services.resolved_market_recap_service import render_resolved_market_recap
 
 from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
-    disable_analysis_check_by_id, try_deduct_tokens, get_check_availability,
+    disable_analysis_check_by_id, try_deduct_tokens, get_check_availability, get_user_created_checks,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -243,7 +243,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         if _is_top_analysis_enabled():
             kb.add(KeyboardButton("🏆 Топ"))
         kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
-        kb.add(KeyboardButton("🎁 Чеки"))
+        kb.add(KeyboardButton("🎁 Чеки"), KeyboardButton("🎁 Мои чеки"))
         kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
@@ -265,7 +265,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
             kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
         kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
-        kb.add(KeyboardButton("🎁 Checks"))
+        kb.add(KeyboardButton("🎁 Checks"), KeyboardButton("🎁 My Checks"))
         kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
@@ -7169,6 +7169,40 @@ async def _send_checks_menu(message: types.Message) -> None:
     await message.answer(text, reply_markup=kb)
 
 
+def _format_check_type_label(lang: str, check_type: str) -> str:
+    if check_type == "top_analysis":
+        return "Signal / Opportunity Analysis"
+    return "Быстрый анализ" if lang == "ru" else "Quick Analysis"
+
+
+async def _send_my_checks(message: types.Message, user_id: int) -> None:
+    lang = get_user_lang(user_id)
+    checks = get_user_created_checks(user_id, include_disabled=False, limit=20)
+    if not checks:
+        text = (
+            "🎁 У вас нет активных чеков.\n\nСоздайте новый чек через кнопку «🎁 Чеки»."
+            if lang == "ru"
+            else "🎁 You have no active checks.\n\nCreate a new check using “🎁 Checks”."
+        )
+        await message.answer(text)
+        return
+    text = (
+        "🎁 Ваши активные чеки\n\nНиже список чеков, которые ещё можно активировать."
+        if lang == "ru"
+        else "🎁 Your active checks\n\nBelow is the list of checks that can still be activated."
+    )
+    kb = InlineKeyboardMarkup(row_width=1)
+    for check in checks:
+        lbl = _format_check_type_label(lang, check.get("check_type"))
+        used = int(check.get("used_activations") or 0)
+        mx = int(check.get("max_activations") or 1)
+        status = check.get("status") or "active"
+        kb.add(InlineKeyboardButton(f"{lbl} · {used}/{mx} · {status}", callback_data=f"check_manage:{check['id']}"))
+    kb.add(InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="check_manage_refresh"))
+    kb.add(InlineKeyboardButton("❌ Закрыть" if lang == "ru" else "❌ Close", callback_data="check_manage_close"))
+    await message.answer(text, reply_markup=kb)
+
+
 @dp.message_handler(commands=["checks"])
 async def checks_menu_handler(message: types.Message):
     await _send_checks_menu(message)
@@ -7177,6 +7211,16 @@ async def checks_menu_handler(message: types.Message):
 @dp.message_handler(lambda m: (m.text or "") in ["🎁 Чеки", "🎁 Checks"])
 async def checks_menu_text_handler(message: types.Message):
     await _send_checks_menu(message)
+
+
+@dp.message_handler(commands=["my_checks"])
+async def my_checks_handler(message: types.Message):
+    await _send_my_checks(message, message.from_user.id)
+
+
+@dp.message_handler(lambda m: (m.text or "") in ["🎁 Мои чеки", "🎁 My Checks"])
+async def my_checks_text_handler(message: types.Message):
+    await _send_my_checks(message, message.from_user.id)
 
 
 @dp.message_handler(commands=["check_quick", "check_top", "admin_check_quick", "admin_check_top"])
@@ -7279,6 +7323,106 @@ async def check_create_select_callback(callback: types.CallbackQuery):
     kb.add(InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="check_create_cancel"))
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_manage_close")
+async def check_manage_close_callback(callback: types.CallbackQuery):
+    lang = get_user_lang(callback.from_user.id)
+    await callback.message.answer("Закрыто." if lang == "ru" else "Closed.")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_manage_refresh")
+async def check_manage_refresh_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    await _send_my_checks(callback.message, callback.from_user.id)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_manage:"))
+async def check_manage_item_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    try:
+        check_id = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    checks = get_user_created_checks(uid, include_disabled=True, limit=100)
+    check = next((x for x in checks if int(x.get("id") or 0) == check_id), None)
+    if not check and _is_admin(uid):
+        admin_checks = get_user_created_checks(uid, include_disabled=True, limit=100)
+        check = next((x for x in admin_checks if int(x.get("id") or 0) == check_id), None)
+    if not check:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    label = _format_check_type_label(lang, check.get("check_type") or "quick_analysis")
+    used = int(check.get("used_activations") or 0)
+    mx = int(check.get("max_activations") or 1)
+    channel = check.get("required_channel") if check.get("require_channel_sub") else ""
+    condition = f"подписка на {channel}" if channel and lang == "ru" else (f"subscription to {channel}" if channel else ("нет" if lang == "ru" else "none"))
+    link = f"https://t.me/{BOT_USERNAME}?start=check_{check.get('code')}"
+    text = (
+        f"🎁 DeepAlpha Check\n\nТип: {label}\nАктиваций: {used} / {mx}\nСтатус: {check.get('status')}\nСоздан: {check.get('created_at')}\nУсловие: {condition}\nСсылка:\n{link}"
+        if lang == "ru"
+        else f"🎁 DeepAlpha Check\n\nType: {label}\nActivations: {used} / {mx}\nStatus: {check.get('status')}\nCreated: {check.get('created_at')}\nCondition: {condition}\nLink:\n{link}"
+    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📤 Поделиться" if lang == "ru" else "📤 Share", switch_inline_query=f"check_{check.get('code')}"))
+    if check.get("status") == "active":
+        kb.add(InlineKeyboardButton("🚫 Отключить чек" if lang == "ru" else "🚫 Disable check", callback_data=f"check_disable_confirm:{check_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="check_manage_refresh"))
+    await callback.message.answer(text, reply_markup=kb)
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_disable_confirm:"))
+async def check_disable_confirm_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    try:
+        check_id = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    checks = get_user_created_checks(uid, include_disabled=True, limit=100)
+    check = next((x for x in checks if int(x.get("id") or 0) == check_id), None)
+    if not check:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    text = (
+        "🚫 Отключить чек?\n\nНовые пользователи больше не смогут активировать этот чек.\nУже активированные кредиты у пользователей сохранятся.\n\nВозврат токенов не выполняется."
+        if lang == "ru"
+        else "🚫 Disable this check?\n\nNew users will no longer be able to activate this check.\nAlready activated user credits will remain available.\n\nNo token refunds are provided."
+    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ Отключить" if lang == "ru" else "✅ Disable", callback_data=f"check_disable_yes:{check_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data=f"check_manage:{check_id}"))
+    await callback.message.answer(text, reply_markup=kb)
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_disable_yes:"))
+async def check_disable_yes_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    try:
+        check_id = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    checks = get_user_created_checks(uid, include_disabled=False, limit=100)
+    check = next((x for x in checks if int(x.get("id") or 0) == check_id), None)
+    if not check:
+        await callback.answer("Недоступно." if lang == "ru" else "Unavailable.", show_alert=True)
+        return
+    disable_analysis_check_by_id(check_id)
+    await callback.message.answer(
+        "✅ Чек отключен.\n\nНовые пользователи больше не смогут его активировать.\nУже активированные кредиты сохранятся."
+        if lang == "ru"
+        else "✅ Check disabled.\n\nNew users can no longer activate it.\nAlready activated credits remain available."
+    )
+    await _send_my_checks(callback.message, uid)
+    await callback.answer("✅")
 
 
 async def _show_channel_condition_step(message: types.Message, uid: int):
