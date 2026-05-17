@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras
+from psycopg2 import errors
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -209,6 +210,38 @@ def init_db():
         updated_at TEXT
     )
     """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_checks (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        created_by_user_id BIGINT,
+        created_by_admin BOOLEAN DEFAULT FALSE,
+        check_type TEXT NOT NULL,
+        max_activations INTEGER DEFAULT 1,
+        used_activations INTEGER DEFAULT 0,
+        expires_at TEXT,
+        require_channel_sub BOOLEAN DEFAULT FALSE,
+        required_channel TEXT,
+        status TEXT DEFAULT 'active',
+        created_at TEXT
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_check_claims (
+        id SERIAL PRIMARY KEY,
+        check_id INTEGER NOT NULL,
+        user_id BIGINT NOT NULL,
+        status TEXT DEFAULT 'claimed',
+        claimed_at TEXT,
+        used_at TEXT,
+        analysis_type TEXT,
+        UNIQUE(check_id, user_id)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_checks_code ON analysis_checks(code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_user_status ON analysis_check_claims(user_id, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_check_user ON analysis_check_claims(check_id, user_id)")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS predictions_tracking (
@@ -817,6 +850,39 @@ def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[s
     except Exception as e:
         print(f"get_web_analysis_history_item error: {e}")
         return None
+    finally:
+        conn.close()
+
+
+def create_analysis_check(created_by_user_id, check_type, created_by_admin=False, max_activations=1, expires_at=None, require_channel_sub=False, required_channel="") -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    now = datetime.utcnow().isoformat()
+    code = secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:16]
+    try:
+        cursor.execute("""
+        INSERT INTO analysis_checks (code, created_by_user_id, created_by_admin, check_type, max_activations, used_activations, expires_at, require_channel_sub, required_channel, status, created_at)
+        VALUES (%s, %s, %s, %s, %s, 0, %s, %s, %s, 'active', %s)
+        RETURNING *
+        """, (code, created_by_user_id, bool(created_by_admin), check_type, int(max_activations), expires_at, bool(require_channel_sub), required_channel or "", now))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        print(f"create_analysis_check error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_analysis_check_by_code(code: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT * FROM analysis_checks WHERE code = %s LIMIT 1", (code,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
