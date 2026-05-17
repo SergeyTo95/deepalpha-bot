@@ -224,9 +224,17 @@ def init_db():
         require_channel_sub BOOLEAN DEFAULT FALSE,
         required_channel TEXT,
         status TEXT DEFAULT 'active',
-        created_at TEXT
+        created_at TEXT,
+        unit_price_tokens INTEGER DEFAULT 0,
+        total_price_tokens INTEGER DEFAULT 0,
+        refunded_tokens INTEGER DEFAULT 0,
+        disabled_at TEXT
     )
     """)
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS unit_price_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS total_price_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS refunded_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS disabled_at TEXT")
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS analysis_check_claims (
         id SERIAL PRIMARY KEY,
@@ -854,17 +862,17 @@ def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[s
         conn.close()
 
 
-def create_analysis_check(created_by_user_id, check_type, created_by_admin=False, max_activations=1, expires_at=None, require_channel_sub=False, required_channel="") -> Optional[Dict[str, Any]]:
+def create_analysis_check(created_by_user_id, check_type, created_by_admin=False, max_activations=1, expires_at=None, require_channel_sub=False, required_channel="", unit_price_tokens=0, total_price_tokens=0) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     now = datetime.utcnow().isoformat()
     code = secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:16]
     try:
         cursor.execute("""
-        INSERT INTO analysis_checks (code, created_by_user_id, created_by_admin, check_type, max_activations, used_activations, expires_at, require_channel_sub, required_channel, status, created_at)
-        VALUES (%s, %s, %s, %s, %s, 0, %s, %s, %s, 'active', %s)
+        INSERT INTO analysis_checks (code, created_by_user_id, created_by_admin, check_type, max_activations, used_activations, expires_at, require_channel_sub, required_channel, status, created_at, unit_price_tokens, total_price_tokens, refunded_tokens, disabled_at)
+        VALUES (%s, %s, %s, %s, %s, 0, %s, %s, %s, 'active', %s, %s, %s, 0, NULL)
         RETURNING *
-        """, (code, created_by_user_id, bool(created_by_admin), check_type, int(max_activations), expires_at, bool(require_channel_sub), required_channel or "", now))
+        """, (code, created_by_user_id, bool(created_by_admin), check_type, int(max_activations), expires_at, bool(require_channel_sub), required_channel or "", now, int(unit_price_tokens or 0), int(total_price_tokens or 0)))
         row = cursor.fetchone()
         conn.commit()
         return dict(row) if row else None

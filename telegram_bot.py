@@ -7250,7 +7250,16 @@ async def create_check_handler(message: types.Message):
     if max_activations < 1 or max_activations > 10000:
         await message.answer("Укажите количество активаций, например: /admin_check_top 10" if lang == "ru" else "Specify activations, e.g. /admin_check_top 10")
         return
-    check = create_analysis_check(uid, check_type, created_by_admin=True, max_activations=max_activations, require_channel_sub=bool(channel), required_channel=channel)
+    check = create_analysis_check(
+        uid,
+        check_type,
+        created_by_admin=True,
+        max_activations=max_activations,
+        require_channel_sub=bool(channel),
+        required_channel=channel,
+        unit_price_tokens=0,
+        total_price_tokens=0,
+    )
     if not check:
         await message.answer(t(uid, "error"))
         return
@@ -7588,7 +7597,16 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
         )
         await callback.answer()
         return
-    check = create_analysis_check(uid, check_type, created_by_admin=False, max_activations=activations, require_channel_sub=bool(channel), required_channel=channel)
+    check = create_analysis_check(
+        uid,
+        check_type,
+        created_by_admin=False,
+        max_activations=activations,
+        require_channel_sub=bool(channel),
+        required_channel=channel,
+        unit_price_tokens=unit_price,
+        total_price_tokens=total_price,
+    )
     if not check:
         await callback.message.answer(t(uid, "error"))
         await callback.answer()

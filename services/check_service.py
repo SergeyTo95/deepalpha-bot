@@ -117,8 +117,36 @@ def disable_analysis_check_by_id(check_id: int):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("UPDATE analysis_checks SET status='disabled' WHERE id=%s", (check_id,))
+        now = datetime.utcnow().isoformat()
+        cur.execute("""
+        SELECT created_by_user_id, created_by_admin, max_activations, used_activations, unit_price_tokens, refunded_tokens, status
+        FROM analysis_checks
+        WHERE id=%s
+        FOR UPDATE
+        """, (check_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return 0
+        user_id, created_by_admin, max_act, used_act, unit_price, refunded, status = row
+        if status != "active":
+            conn.rollback()
+            return 0
+        max_act = int(max_act or 0)
+        used_act = int(used_act or 0)
+        unit_price = int(unit_price or 0)
+        refunded = int(refunded or 0)
+        unused = max(0, max_act - used_act)
+        refund_amount = 0 if created_by_admin else max(0, unused * unit_price)
+        delta_refund = max(0, refund_amount - refunded)
+        if delta_refund > 0 and user_id:
+            cur.execute("UPDATE users SET token_balance = COALESCE(token_balance, 0) + %s WHERE user_id=%s", (delta_refund, user_id))
+        cur.execute(
+            "UPDATE analysis_checks SET status='disabled', refunded_tokens=%s, disabled_at=%s WHERE id=%s",
+            (refund_amount, now, check_id),
+        )
         conn.commit()
+        return delta_refund
     finally:
         conn.close()
 
