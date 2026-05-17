@@ -146,7 +146,9 @@ def get_user_created_checks(user_id: int, include_disabled: bool = False, limit:
                 SELECT id, code, check_type, max_activations, used_activations, require_channel_sub,
                        required_channel, status, created_at, expires_at, created_by_admin
                 FROM analysis_checks
-                WHERE created_by_user_id=%s AND status='active'
+                WHERE created_by_user_id=%s
+                  AND status='active'
+                  AND COALESCE(used_activations, 0) < COALESCE(max_activations, 1)
                 ORDER BY created_at DESC NULLS LAST, id DESC
                 LIMIT %s
                 """,
