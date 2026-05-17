@@ -6920,7 +6920,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
-@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "") not in ["🎁 Чеки", "🎁 Checks"])
+@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "") not in ["🎁 Чеки", "🎁 Checks"] and not _is_waiting_check_channel(m))
 async def fallback_handler(message: types.Message):
     # Polymarket URLs are handled by the dedicated polymarket.com handler above.
     # Without this guard, one user URL can trigger both handlers and start analysis twice.
@@ -6960,6 +6960,13 @@ def _check_label(lang: str, check_type: str) -> str:
     if check_type == "quick_analysis":
         return "Быстрый анализ" if lang == "ru" else "Quick Analysis"
     return "Signal / Opportunity Analysis"
+
+
+def _is_waiting_check_channel(message: types.Message) -> bool:
+    uid = message.from_user.id
+    _cleanup_pending_check_creations()
+    pending = PENDING_CHECK_CREATION.get(uid) or {}
+    return bool(pending.get("awaiting_channel"))
 
 
 async def _show_check_confirmation(message: types.Message, check_type: str, channel: str = "", user_id: Optional[int] = None) -> None:
@@ -7103,8 +7110,77 @@ async def check_create_select_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
     kind = callback.data.split(":", 1)[1]
     check_type = "quick_analysis" if kind == "quick" else "top_analysis"
-    await _show_check_confirmation(callback.message, check_type, "", user_id=uid)
+    _cleanup_pending_check_creations()
+    PENDING_CHECK_CREATION[uid] = {
+        "check_type": check_type,
+        "channel": "",
+        "created_at": time.time(),
+        "awaiting_channel": False,
+    }
+    lang = get_user_lang(uid)
+    text = (
+        "📢 Добавить условие подписки?\n\nМожно сделать так, чтобы получатель смог активировать чек только после подписки на ваш Telegram-канал.\n\nВыберите вариант:"
+        if lang == "ru"
+        else "📢 Add subscription condition?\n\nYou can require recipient to subscribe to your Telegram channel before activation.\n\nChoose an option:"
+    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ Без подписки" if lang == "ru" else "✅ No subscription", callback_data="check_channel_skip"))
+    kb.add(InlineKeyboardButton("📢 Добавить канал" if lang == "ru" else "📢 Add channel", callback_data="check_channel_add"))
+    kb.add(InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="check_create_cancel"))
+    await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_channel_skip")
+async def check_channel_skip_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    _cleanup_pending_check_creations()
+    pending = PENDING_CHECK_CREATION.get(uid)
+    lang = get_user_lang(uid)
+    if not pending:
+        await callback.message.answer("Заявка на создание чека устарела. Отправьте команду ещё раз." if lang == "ru" else "Check creation request expired. Please send the command again.")
+        await callback.answer()
+        return
+    pending["awaiting_channel"] = False
+    pending["channel"] = ""
+    await _show_check_confirmation(callback.message, pending.get("check_type", "quick_analysis"), "", user_id=uid)
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_channel_add")
+async def check_channel_add_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    _cleanup_pending_check_creations()
+    pending = PENDING_CHECK_CREATION.get(uid)
+    lang = get_user_lang(uid)
+    if not pending:
+        await callback.message.answer("Заявка на создание чека устарела. Отправьте команду ещё раз." if lang == "ru" else "Check creation request expired. Please send the command again.")
+        await callback.answer()
+        return
+    pending["awaiting_channel"] = True
+    await callback.message.answer(
+        "Отправьте username канала в формате:\n\n@channelusername\n\nВажно: @DeepAlphaAI_bot должен быть администратором канала, иначе бот не сможет проверить подписку."
+        if lang == "ru"
+        else "Send channel username in format:\n\n@channelusername\n\nImportant: @DeepAlphaAI_bot must be channel admin, otherwise subscription cannot be verified."
+    )
+    await callback.answer()
+
+
+@dp.message_handler(lambda m: _is_waiting_check_channel(m))
+async def check_channel_input_handler(message: types.Message):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    pending = PENDING_CHECK_CREATION.get(uid)
+    if not pending:
+        await message.answer("Заявка на создание чека устарела. Отправьте команду ещё раз." if lang == "ru" else "Check creation request expired. Please send the command again.")
+        return
+    channel = _normalize_channel((message.text or "").strip())
+    if not channel:
+        await message.answer("Укажите канал в формате @channelusername." if lang == "ru" else "Please specify the channel as @channelusername.")
+        return
+    pending["channel"] = channel
+    pending["awaiting_channel"] = False
+    await _show_check_confirmation(message, pending.get("check_type", "quick_analysis"), channel, user_id=uid)
 
 
 @dp.callback_query_handler(lambda c: c.data == "check_buy_tokens")
@@ -7168,12 +7244,14 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
     if channel:
         text += f"\n📢 {'Условие: подписка на' if lang == 'ru' else 'Condition: subscription to'} {channel}\n"
     text += f"\n🔗 {'Ссылка' if lang == 'ru' else 'Link'}:\n{link}\n\n{'Отправьте это сообщение другу или поделитесь ссылкой.' if lang == 'ru' else 'Send this message to a friend or share the link.'}"
+    if lang == "ru":
+        text += "\n\nПоделиться через кнопку можно ссылкой и текстом.\nЕсли хотите отправить сообщение вместе с кнопками — просто перешлите это сообщение."
     share_text = "🎁 Я отправил тебе DeepAlpha Check.\nАктивируй его и получи AI-анализ рынка без списания токенов."
     if channel:
         share_text += f"\nДля активации нужна подписка на {channel}."
     share_url = f"https://t.me/share/url?url={quote(link)}&text={quote(share_text)}"
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("🎁 Активировать чек" if lang == "ru" else "🎁 Activate check", url=link))
-    kb.add(InlineKeyboardButton("📤 Поделиться" if lang == "ru" else "📤 Share", url=share_url))
+    kb.add(InlineKeyboardButton("📤 Поделиться ссылкой" if lang == "ru" else "📤 Share link", url=share_url))
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer("✅")
