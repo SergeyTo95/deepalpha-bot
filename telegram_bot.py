@@ -40,7 +40,7 @@ from db.database import (
     get_author_subscribers, toggle_subscription_notifications,
     get_subscription_feed, get_author_donations_list,
     get_all_user_ids,
-    create_analysis_check, get_analysis_check_by_code,
+    create_analysis_check,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -50,7 +50,7 @@ from services.resolved_market_recap_service import render_resolved_market_recap
 
 from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
-    disable_analysis_check_by_id, try_deduct_tokens,
+    disable_analysis_check_by_id, try_deduct_tokens, get_check_availability,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -4242,11 +4242,13 @@ async def start_handler(message: types.Message):
                 pass
         elif args.startswith("check_"):
             code = args.replace("check_", "", 1).strip()
-            check = get_analysis_check_by_code(code)
+            availability = get_check_availability(code, message.from_user.id)
             lang = get_user_lang(message.from_user.id)
-            if not check or check.get('status') != 'active' or int(check.get('used_activations') or 0) >= int(check.get('max_activations') or 0):
-                await message.answer("Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used.")
+            if not availability.get("ok"):
+                msg = "Вы уже активировали этот чек." if availability.get("error") == "already_claimed" else ("Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used.")
+                await message.answer(msg if lang == "ru" or availability.get("error") != "already_claimed" else "You have already activated this check.")
                 return
+            check = availability["check"]
             if check.get('require_channel_sub') and check.get('required_channel'):
                 ch = check.get('required_channel')
                 kb = InlineKeyboardMarkup()
@@ -7004,10 +7006,16 @@ async def check_sub_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
     code = callback.data.replace('check_sub_', '', 1)
     lang = get_user_lang(uid)
-    check = get_analysis_check_by_code(code)
-    if not check or check.get('status') != 'active' or int(check.get('used_activations') or 0) >= int(check.get('max_activations') or 0):
-        await callback.answer('Этот чек недоступен или уже использован.' if lang == 'ru' else 'This check is unavailable or already used.', show_alert=True)
+    availability = get_check_availability(code, uid)
+    if not availability.get("ok"):
+        text = (
+            ('Вы уже активировали этот чек.' if lang == 'ru' else 'You have already activated this check.')
+            if availability.get("error") == "already_claimed"
+            else ('Этот чек недоступен или уже использован.' if lang == 'ru' else 'This check is unavailable or already used.')
+        )
+        await callback.answer(text, show_alert=True)
         return
+    check = availability["check"]
     channel = check.get('required_channel') or ''
     try:
         member = await bot.get_chat_member(channel, uid)
