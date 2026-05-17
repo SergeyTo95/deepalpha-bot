@@ -4,6 +4,7 @@ import os
 import logging
 import json
 import time
+from datetime import datetime
 from urllib.parse import quote
 from typing import Dict, List, Optional
 
@@ -6769,6 +6770,94 @@ async def analyze_url_handler(message: types.Message):
 # INLINE QUERY
 # ═══════════════════════════════════════════
 
+@dp.inline_handler(lambda q: (q.query or "").startswith("check_"))
+async def inline_check_share_handler(inline_query: types.InlineQuery):
+    uid = inline_query.from_user.id
+    lang = get_user_lang(uid) if uid in user_languages else "ru"
+    raw = (inline_query.query or "").strip()
+    code = raw.replace("check_", "", 1).strip()
+    link = f"https://t.me/{BOT_USERNAME}?start=check_{code}"
+
+    unavailable_title = "⚠️ Чек недоступен" if lang == "ru" else "⚠️ Check unavailable"
+    unavailable_desc = "Истёк, отключен или закончились активации" if lang == "ru" else "Expired, disabled, or no activations left"
+    unavailable_text = "Этот чек недоступен или уже использован." if lang == "ru" else "This check is unavailable or already used."
+
+    try:
+        check = get_analysis_check_by_code(code) if code else None
+    except Exception:
+        check = None
+
+    is_available = False
+    if check:
+        try:
+            status_ok = (check.get("status") == "active")
+            used = int(check.get("used_activations") or 0)
+            mx = int(check.get("max_activations") or 1)
+            expired = False
+            exp = check.get("expires_at")
+            if exp:
+                try:
+                    expired = datetime.fromisoformat(exp) < datetime.utcnow()
+                except Exception:
+                    expired = False
+            is_available = status_ok and (used < mx) and (not expired)
+        except Exception:
+            is_available = False
+
+    if not is_available:
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🤖 Открыть DeepAlpha" if lang == "ru" else "🤖 Open DeepAlpha", url=f"https://t.me/{BOT_USERNAME}"))
+        result = types.InlineQueryResultArticle(
+            id=f"check_unavailable_{code or 'empty'}",
+            title=unavailable_title,
+            description=unavailable_desc,
+            input_message_content=types.InputTextMessageContent(message_text=unavailable_text, disable_web_page_preview=True),
+            reply_markup=kb,
+        )
+        await bot.answer_inline_query(inline_query.id, results=[result], cache_time=1, is_personal=True)
+        return
+
+    check_type = check.get("check_type")
+    label = "Быстрый анализ" if check_type == "quick_analysis" else "Signal / Opportunity Analysis"
+    used = int(check.get("used_activations") or 0)
+    mx = int(check.get("max_activations") or 1)
+    channel = check.get("required_channel") or ""
+    channel_line = f"\n📢 Условие: подписка на {channel}" if channel else ""
+
+    if mx <= 1:
+        title = "🎁 DeepAlpha Check"
+        desc = f"{label} · 1 активация" if lang == "ru" else f"{label} · 1 activation"
+        text = (
+            f"🎁 DeepAlpha Check\n\nВнутри: {label}\nПолучатель сможет активировать чек и получить AI-анализ рынка без списания токенов.{channel_line}\n\n👇 Нажмите кнопку ниже, чтобы активировать чек."
+            if lang == "ru"
+            else f"🎁 DeepAlpha Check\n\nInside: {label}\nRecipient can activate the check and get AI market analysis without token charges.{channel_line}\n\n👇 Tap the button below to activate this check."
+        )
+    else:
+        title = "🎁 DeepAlpha Multi-Check"
+        desc = f"{label} · {used}/{mx} активаций" if lang == "ru" else f"{label} · {used}/{mx} activations"
+        text = (
+            f"🎁 DeepAlpha Multi-Check\n\nВнутри: {label}\nАктиваций: {used} / {mx}\nПолучатель сможет активировать чек и получить AI-анализ рынка без списания токенов.{channel_line}\n\n👇 Нажмите кнопку ниже, чтобы активировать чек."
+            if lang == "ru"
+            else f"🎁 DeepAlpha Multi-Check\n\nInside: {label}\nActivations: {used} / {mx}\nRecipient can activate the check and get AI market analysis without token charges.{channel_line}\n\n👇 Tap the button below to activate this check."
+        )
+
+    if channel:
+        desc += f" · подписка на {channel}" if lang == "ru" else f" · subscription to {channel}"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🎁 Активировать чек" if lang == "ru" else "🎁 Activate check", url=link))
+    kb.add(InlineKeyboardButton("🤖 Открыть DeepAlpha" if lang == "ru" else "🤖 Open DeepAlpha", url=f"https://t.me/{BOT_USERNAME}"))
+
+    result = types.InlineQueryResultArticle(
+        id=f"check_{code}",
+        title=title,
+        description=desc,
+        input_message_content=types.InputTextMessageContent(message_text=text, disable_web_page_preview=True),
+        reply_markup=kb,
+    )
+    await bot.answer_inline_query(inline_query.id, results=[result], cache_time=1, is_personal=True)
+
+
 @dp.inline_handler()
 async def inline_query_handler(inline_query: types.InlineQuery):
     from services.inline_service import (
@@ -7333,13 +7422,11 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
         text += f"\n📢 {'Условие: подписка на' if lang == 'ru' else 'Condition: subscription to'} {channel}\n"
     text += f"\n🔗 {'Ссылка' if lang == 'ru' else 'Link'}:\n{link}\n\n{'Отправьте это сообщение другу или поделитесь ссылкой.' if lang == 'ru' else 'Send this message to a friend or share the link.'}"
     if lang == "ru":
-        text += "\n\nПоделиться через кнопку можно ссылкой и текстом.\nЕсли хотите отправить сообщение вместе с кнопками — просто перешлите это сообщение."
-    share_text = "🎁 Я отправил DeepAlpha Multi-Check.\nАктивируй его и получи AI-анализ рынка без списания токенов." if activations > 1 else "🎁 Я отправил тебе DeepAlpha Check.\nАктивируй его и получи AI-анализ рынка без списания токенов."
-    if channel:
-        share_text += f"\nДля активации нужна подписка на {channel}."
-    share_url = f"https://t.me/share/url?url={quote(link)}&text={quote(share_text)}"
+        text += "\n\n📤 Кнопка «Поделиться» откроет inline-режим Telegram.\nЕсли он не открылся, просто перешлите это сообщение."
+    else:
+        text += "\n\n📤 The “Share” button opens Telegram inline sharing.\nIf it does not open, just forward this message."
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("🎁 Активировать чек" if lang == "ru" else "🎁 Activate check", url=link))
-    kb.add(InlineKeyboardButton("📤 Поделиться ссылкой" if lang == "ru" else "📤 Share link", url=share_url))
+    kb.add(InlineKeyboardButton("📤 Поделиться" if lang == "ru" else "📤 Share", switch_inline_query=f"check_{check['code']}"))
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer("✅")
