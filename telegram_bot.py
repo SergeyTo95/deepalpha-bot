@@ -3,6 +3,8 @@ import asyncio
 import os
 import logging
 import json
+import time
+from urllib.parse import quote
 from typing import Dict, List, Optional
 
 from aiogram import Bot, Dispatcher, types
@@ -74,6 +76,7 @@ user_languages: Dict[int, str] = {}
 
 # Временное хранение контекста анализа (для кнопок "В Watchlist" и "Опубликовать")
 last_analysis_cache: Dict[int, dict] = {}
+PENDING_CHECK_CREATION: Dict[int, dict] = {}
 
 
 class AuthorStates(StatesGroup):
@@ -6938,67 +6941,115 @@ async def fallback_handler(message: types.Message):
         reply_markup=get_main_keyboard(message.from_user.id),
     )
 
+def _cleanup_pending_check_creations() -> None:
+    now = time.time()
+    for uid, payload in list(PENDING_CHECK_CREATION.items()):
+        if now - float(payload.get("created_at", 0)) > 600:
+            PENDING_CHECK_CREATION.pop(uid, None)
+
+
+def _check_price_for_type(check_type: str) -> int:
+    if check_type == "quick_analysis":
+        return _safe_int_setting("analysis_price_tokens", 10)
+    return _safe_int_setting("top_analysis_price_tokens", _safe_int_setting("opportunity_price_tokens", 70))
+
+
+def _check_label(lang: str, check_type: str) -> str:
+    if check_type == "quick_analysis":
+        return "Быстрый анализ" if lang == "ru" else "Quick Analysis"
+    return "Signal / Opportunity Analysis"
+
+
+async def _show_check_confirmation(message: types.Message, check_type: str, channel: str = "") -> None:
+    uid = message.from_user.id
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    user = get_user(uid) or {}
+    balance = int(user.get("token_balance", 0))
+    price = _check_price_for_type(check_type)
+    label = _check_label(lang, check_type)
+    if balance < price:
+        text = (
+            f"❌ Недостаточно токенов\n\nДля этого чека нужно: {price} токенов\nВаш баланс: {balance} токенов\n\nПополните баланс и попробуйте снова."
+            if lang == "ru"
+            else f"❌ Not enough tokens\n\nRequired: {price} tokens\nYour balance: {balance} tokens\n\nTop up your balance and try again."
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("💎 Пополнить баланс" if lang == "ru" else "💎 Top up balance", callback_data="check_buy_tokens"))
+        kb.add(InlineKeyboardButton("❌ Закрыть" if lang == "ru" else "❌ Close", callback_data="check_create_cancel"))
+        await message.answer(text, reply_markup=kb)
+        return
+    _cleanup_pending_check_creations()
+    PENDING_CHECK_CREATION[uid] = {"check_type": check_type, "channel": channel or "", "created_at": time.time()}
+    text = (
+        f"🎁 Создать DeepAlpha Check?\n\nВнутри: 1 {label}\nСтоимость: {price} токенов\nВаш баланс: {balance} токенов\n\nПосле создания вы получите красивую ссылку/сообщение, которое можно отправить другу.\n\nТокены будут списаны только после подтверждения."
+        if lang == "ru"
+        else f"🎁 Create DeepAlpha Check?\n\nInside: 1 {label}\nPrice: {price} tokens\nYour balance: {balance} tokens\n\nAfter creation you will get a shareable message/link.\n\nTokens are charged only after confirmation."
+    )
+    if channel:
+        text += f"\n\n{'Условие: подписка на' if lang == 'ru' else 'Condition: subscription to'} {channel}"
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton((f"✅ Создать за {price} токенов" if lang == "ru" else f"✅ Create for {price} tokens"), callback_data="check_create_confirm"))
+    kb.add(InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="check_create_cancel"))
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.message_handler(commands=["checks"])
+@dp.message_handler(lambda m: m.text in ["🎁 Чеки", "🎁 Checks"])
+async def checks_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    text = (
+        "🎁 DeepAlpha Checks\n\nСоздайте чек и отправьте его другу.\nПолучатель сможет активировать чек и получить анализ без списания токенов.\n\nВыберите тип чека:"
+        if lang == "ru"
+        else "🎁 DeepAlpha Checks\n\nCreate a check and send it to a friend.\nThe recipient can activate it and receive analysis without token charge.\n\nChoose check type:"
+    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔍 Быстрый анализ" if lang == "ru" else "🔍 Quick Analysis", callback_data="check_create_select:quick"))
+    kb.add(InlineKeyboardButton("🔥 Signal / Opportunity Analysis", callback_data="check_create_select:top"))
+    kb.add(InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="check_create_cancel"))
+    await message.answer(text, reply_markup=kb)
+
+
 @dp.message_handler(commands=["check_quick", "check_top", "admin_check_quick", "admin_check_top"])
 async def create_check_handler(message: types.Message):
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    parts = (message.text or '').split()
+    parts = (message.text or "").split()
     cmd = parts[0].lower()
-    is_admin_cmd = cmd.startswith('/admin_')
-    if is_admin_cmd and not _is_admin(uid):
-        return
-    check_type = 'quick_analysis' if 'quick' in cmd else 'top_analysis'
-    channel = ''
-    max_activations = 1
-    if is_admin_cmd:
-        if len(parts) < 2 or not parts[1].isdigit():
-            await message.answer('Укажите количество активаций, например: /admin_check_top 10' if lang == 'ru' else 'Specify activations, e.g. /admin_check_top 10')
+    is_admin_cmd = cmd.startswith("/admin_")
+    check_type = "quick_analysis" if "quick" in cmd else "top_analysis"
+    channel = ""
+    if len(parts) > (2 if is_admin_cmd else 1):
+        ch = _normalize_channel(parts[2] if is_admin_cmd else parts[1])
+        if not ch:
+            await message.answer("Укажите канал в формате @channelusername." if lang == "ru" else "Please specify the channel as @channelusername.")
             return
-        max_activations = int(parts[1])
-        if max_activations < 1 or max_activations > 10000:
-            await message.answer('Укажите количество активаций, например: /admin_check_top 10' if lang == 'ru' else 'Specify activations, e.g. /admin_check_top 10')
-            return
-        if len(parts) > 2:
-            ch = _normalize_channel(parts[2])
-            if not ch:
-                await message.answer('Укажите канал в формате @channelusername.' if lang == 'ru' else 'Please specify the channel as @channelusername.')
-                return
-            channel = ch
-    else:
-        if len(parts) > 1:
-            ch = _normalize_channel(parts[1])
-            if not ch:
-                await message.answer('Укажите канал в формате @channelusername.' if lang == 'ru' else 'Please specify the channel as @channelusername.')
-                return
-            channel = ch
-    price = _safe_int_setting('analysis_price_tokens', 10) if check_type == 'quick_analysis' else _safe_int_setting('top_analysis_price_tokens', _safe_int_setting('opportunity_price_tokens', 70))
+        channel = ch
     if not is_admin_cmd:
-        user = get_user(uid) or {}
-        if int(user.get('token_balance', 0)) < price:
-            await message.answer('Недостаточно токенов для создания чека.' if lang == 'ru' else 'Not enough tokens to create this check.')
-            return
-    check = create_analysis_check(uid, check_type, created_by_admin=is_admin_cmd, max_activations=max_activations, require_channel_sub=bool(channel), required_channel=channel)
+        await _show_check_confirmation(message, check_type, channel)
+        return
+    if not _is_admin(uid):
+        return
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Укажите количество активаций, например: /admin_check_top 10" if lang == "ru" else "Specify activations, e.g. /admin_check_top 10")
+        return
+    max_activations = int(parts[1])
+    if max_activations < 1 or max_activations > 10000:
+        await message.answer("Укажите количество активаций, например: /admin_check_top 10" if lang == "ru" else "Specify activations, e.g. /admin_check_top 10")
+        return
+    check = create_analysis_check(uid, check_type, created_by_admin=True, max_activations=max_activations, require_channel_sub=bool(channel), required_channel=channel)
     if not check:
-        await message.answer(t(uid, 'error'))
+        await message.answer(t(uid, "error"))
         return
-    if not is_admin_cmd:
-        if not try_deduct_tokens(uid, price):
-            disable_analysis_check_by_id(check['id'])
-            await message.answer('Не удалось списать токены. Чек отключен, попробуйте снова.' if lang == 'ru' else 'Token deduction failed. The check was disabled, please try again.')
-            return
     link = f"https://t.me/{BOT_USERNAME}?start=check_{check['code']}"
-    label = 'Быстрый анализ' if check_type == 'quick_analysis' else 'Signal / Opportunity Analysis'
-    if is_admin_cmd:
-        txt = f"🎁 Promo check created\n\nType: {label}\nActivations: {max_activations}\n"
-        if channel:
-            txt += f"Condition: subscription to {channel}\n"
-        txt += f"Link:\n{link}"
-        await message.answer(txt)
-    else:
-        txt = f"🎁 DeepAlpha Check создан\n\nВнутри: 1 {label}\nСтоимость: {price} токенов\nСсылка:\n{link}\n\nОтправьте эту ссылку другу — он сможет активировать чек и получить анализ."
-        if channel:
-            txt += f"\n\nУсловие: подписка на {channel}"
-        await message.answer(txt)
+    label = _check_label(lang, check_type)
+    txt = f"🎁 Promo check created\n\nType: {label}\nActivations: {max_activations}\n"
+    if channel:
+        txt += f"Condition: subscription to {channel}\n"
+    txt += f"Link:\n{link}"
+    await message.answer(txt)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith('check_sub_'))
@@ -7033,3 +7084,81 @@ async def check_sub_callback(callback: types.CallbackQuery):
     label = 'Быстрый анализ' if check.get('check_type') == 'quick_analysis' else 'Signal / Opportunity Analysis'
     await callback.message.answer(f"🎁 Чек активирован\n\nВнутри: 1 {label}\nОтправьте ссылку Polymarket, и DeepAlpha выполнит анализ без списания токенов.")
     await callback.answer('✅')
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_create_select:"))
+async def check_create_select_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    kind = callback.data.split(":", 1)[1]
+    check_type = "quick_analysis" if kind == "quick" else "top_analysis"
+    await _show_check_confirmation(callback.message, check_type, "")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_buy_tokens")
+async def check_buy_tokens_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    await callback.message.answer("Нажмите «💎 Купить токены» в главном меню." if lang == "ru" else "Use “💎 Buy tokens” in the main menu.")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_create_cancel")
+async def check_create_cancel_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    PENDING_CHECK_CREATION.pop(uid, None)
+    lang = get_user_lang(uid)
+    await callback.message.answer("Создание чека отменено." if lang == "ru" else "Check creation cancelled.")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "check_create_confirm")
+async def check_create_confirm_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    _cleanup_pending_check_creations()
+    pending = PENDING_CHECK_CREATION.get(uid)
+    if not pending:
+        await callback.message.answer("Заявка на создание чека устарела. Отправьте команду ещё раз." if lang == "ru" else "Check creation request expired. Please send the command again.")
+        await callback.answer()
+        return
+    check_type = pending.get("check_type") if pending.get("check_type") in ("quick_analysis", "top_analysis") else "quick_analysis"
+    channel = pending.get("channel") or ""
+    price = _check_price_for_type(check_type)
+    user = get_user(uid) or {}
+    balance = int(user.get("token_balance", 0))
+    if balance < price:
+        await callback.message.answer(f"❌ Недостаточно токенов\n\nДля этого чека нужно: {price} токенов\nВаш баланс: {balance} токенов\n\nПополните баланс и попробуйте снова." if lang == "ru" else f"❌ Not enough tokens\n\nRequired: {price} tokens\nYour balance: {balance} tokens\n\nTop up your balance and try again.")
+        await callback.answer()
+        return
+    check = create_analysis_check(uid, check_type, created_by_admin=False, max_activations=1, require_channel_sub=bool(channel), required_channel=channel)
+    if not check:
+        await callback.message.answer(t(uid, "error"))
+        await callback.answer()
+        return
+    if not try_deduct_tokens(uid, price):
+        disable_analysis_check_by_id(check["id"])
+        await callback.message.answer("Не удалось списать токены. Чек отключен, попробуйте снова." if lang == "ru" else "Token deduction failed. The check was disabled, please try again.")
+        await callback.answer()
+        return
+    PENDING_CHECK_CREATION.pop(uid, None)
+    link = f"https://t.me/{BOT_USERNAME}?start=check_{check['code']}"
+    creator_name = f"@{callback.from_user.username}" if callback.from_user.username else (callback.from_user.first_name or str(uid))
+    label = _check_label(lang, check_type)
+    text = (
+        f"🎁 DeepAlpha Check\n\nВнутри: 1 {label}\nПолучатель сможет активировать чек и получить анализ без списания токенов.\n\n💎 Оплачено: {price} токенов\n👤 Создатель: {creator_name}\n"
+        if lang == "ru"
+        else f"🎁 DeepAlpha Check\n\nInside: 1 {label}\nRecipient can activate the check and get analysis without token charge.\n\n💎 Paid: {price} tokens\n👤 Creator: {creator_name}\n"
+    )
+    if channel:
+        text += f"\n📢 {'Условие: подписка на' if lang == 'ru' else 'Condition: subscription to'} {channel}\n"
+    text += f"\n🔗 {'Ссылка' if lang == 'ru' else 'Link'}:\n{link}\n\n{'Отправьте это сообщение другу или поделитесь ссылкой.' if lang == 'ru' else 'Send this message to a friend or share the link.'}"
+    share_text = "🎁 Я отправил тебе DeepAlpha Check.\nАктивируй его и получи AI-анализ рынка без списания токенов."
+    if channel:
+        share_text += f"\nДля активации нужна подписка на {channel}."
+    share_url = f"https://t.me/share/url?url={quote(link)}&text={quote(share_text)}"
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🎁 Активировать чек" if lang == "ru" else "🎁 Activate check", url=link))
+    kb.add(InlineKeyboardButton("📤 Поделиться" if lang == "ru" else "📤 Share", url=share_url))
+    await callback.message.answer(text, reply_markup=kb)
+    await callback.answer("✅")
