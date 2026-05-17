@@ -581,6 +581,28 @@ def add_tokens(user_id: int, amount: int) -> int:
         conn.close()
 
 
+def try_deduct_tokens(user_id: int, amount: int) -> bool:
+    if amount <= 0:
+        return True
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users
+        SET token_balance = token_balance - %s, updated_at = %s
+        WHERE user_id = %s AND token_balance >= %s
+        """, (amount, datetime.utcnow().isoformat(), user_id, amount))
+        ok = cursor.rowcount == 1
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f"try_deduct_tokens error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def set_tokens(user_id: int, amount: int) -> None:
     conn = get_connection()
     cursor = conn.cursor()
@@ -1055,6 +1077,37 @@ def mark_analysis_credit_used(claim_id: int) -> None:
         conn.commit()
     except Exception as e:
         print(f"mark_analysis_credit_used error: {e}")
+    finally:
+        conn.close()
+
+
+def disable_analysis_check_by_id(check_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE analysis_checks
+        SET status = 'disabled'
+        WHERE id = %s
+        """, (check_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"disable_analysis_check_by_id error: {e}")
+    finally:
+        conn.close()
+
+
+def has_user_claimed_check(check_id: int, user_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT 1 FROM analysis_check_claims WHERE check_id = %s AND user_id = %s",
+            (check_id, user_id),
+        )
+        return cursor.fetchone() is not None
+    except Exception:
+        return False
     finally:
         conn.close()
 
