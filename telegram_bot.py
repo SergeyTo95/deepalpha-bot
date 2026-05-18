@@ -7627,6 +7627,16 @@ def _ton_send_error(uid: int, code: str) -> str:
     return (en if get_user_lang(uid)=="en" else ru).get(code, ("Operation failed" if get_user_lang(uid)=="en" else "Операция не выполнена"))
 
 
+def _ton_network_display() -> str:
+    from services.ton_chain_service import _network
+    return _network().upper()
+
+
+def _ton_reserve_nano() -> int:
+    from services.ton_wallet_service import get_ton_send_fee_reserve_nano
+    return int(get_ton_send_fee_reserve_nano())
+
+
 async def _send_ton_wallet_screen(message: types.Message):
     uid = message.from_user.id
     w = get_or_create_user_ton_wallet(uid)
@@ -7636,13 +7646,13 @@ async def _send_ton_wallet_screen(message: types.Message):
     b = get_user_ton_balance(uid, refresh=True)
     lang = get_user_lang(uid)
     if lang == "ru":
-        text = f"💎 Ваш TON кошелёк\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети TON."
+        text = f"💎 Ваш TON кошелёк\n\nСеть: {_ton_network_display()}\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети {_ton_network_display()}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
-        text = f"💎 Your TON Wallet\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on the TON network."
+        text = f"💎 Your TON Wallet\n\nNetwork: {_ton_network_display()}\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on {_ton_network_display()}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
@@ -7677,8 +7687,13 @@ async def ton_refresh_cb(c: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == "ton_receive")
 async def ton_receive_cb(c: types.CallbackQuery):
     b = get_user_ton_balance(c.from_user.id, refresh=False)
-    msg = ("Адрес для пополнения:\n" if get_user_lang(c.from_user.id)=="ru" else "Deposit address:\n") + b.get("wallet_address", "")
-    await c.message.answer(msg)
+    lang = get_user_lang(c.from_user.id)
+    address = b.get("wallet_address", "")
+    if lang == "ru":
+        msg = f"📥 Адрес для пополнения TON:\n\n`{address}`\n\nОтправляйте только TON в сети {_ton_network_display()}."
+    else:
+        msg = f"📥 TON deposit address:\n\n`{address}`\n\nSend only TON on {_ton_network_display()}."
+    await c.message.answer(msg, parse_mode="Markdown")
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "ton_send")
@@ -7732,19 +7747,107 @@ async def ton_send_flow(message: types.Message):
             return
         st["address"] = normalize_ton_address(addr)
         st["step"] = "amount"
-        await message.answer("Введите сумму TON:" if lang=="ru" else "Enter TON amount:")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("💰 Отправить всё" if lang=="ru" else "💰 Send MAX", callback_data="ton_send_max"))
+        await message.answer("Введите сумму TON:" if lang=="ru" else "Enter TON amount:", reply_markup=kb)
         return
     if st["step"] == "amount":
         try:
             nano = ton_to_nano((message.text or '').strip())
-            st["amount_nano"] = nano
-            amount_disp = nano_to_ton_display(nano)
+            if int(nano) <= 0:
+                raise ValueError("invalid_amount")
         except Exception:
             await message.answer("Неверная сумма" if lang=="ru" else "Invalid amount")
             return
+        b = get_user_ton_balance(message.from_user.id, refresh=True)
+        if not b.get("ok"):
+            await message.answer(_ton_send_error(message.from_user.id, "balance_unavailable"))
+            return
+        balance_nano = int(b.get("balance_nano") or 0)
+        reserve_nano = _ton_reserve_nano()
+        if int(nano) + reserve_nano > balance_nano:
+            reserve_disp = nano_to_ton_display(reserve_nano)
+            if lang == "ru":
+                await message.answer(f"Недостаточно TON.\nБаланс: {b['balance_display']} TON\nСумма: {nano_to_ton_display(nano)} TON\nРезерв комиссии: ~{reserve_disp} TON")
+            else:
+                await message.answer(f"Insufficient TON.\nBalance: {b['balance_display']} TON\nAmount: {nano_to_ton_display(nano)} TON\nFee reserve: ~{reserve_disp} TON")
+            return
+        st["amount_nano"] = nano
+        amount_disp = nano_to_ton_display(nano)
+        reserve_disp = nano_to_ton_display(reserve_nano)
         st["step"] = "confirm"
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("✅ Отправить" if lang=="ru" else "✅ Send", callback_data="ton_send_confirm"), InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_send_cancel"))
-        text = (f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма:\n{amount_disp} TON\n\nКомиссия сети будет списана дополнительно с вашего TON-кошелька." if lang=="ru" else f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount:\n{amount_disp} TON\n\nNetwork fee will be charged additionally from your TON wallet.")
+        total_disp = nano_to_ton_display(int(nano) + reserve_nano)
+        text = (f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} TON\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} TON\n\nПримерно потребуется всего:\n~{total_disp} TON\n\nБудет доступно к отправке всё, кроме резерва комиссии." if lang=="ru" else f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} TON\n\nEstimated network fee/reserve:\n~{reserve_disp} TON\n\nApprox total needed:\n~{total_disp} TON")
         await message.answer(text, reply_markup=kb)
 
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send_max")
+async def ton_send_max_cb(c: types.CallbackQuery):
+    uid = c.from_user.id
+    st = TON_SEND_PENDING.get(uid)
+    if not st or st.get("step") != "amount" or not st.get("address"):
+        await c.answer()
+        return
+    lang = get_user_lang(uid)
+    from services.ton_chain_service import nano_to_ton_display
+    b = get_user_ton_balance(uid, refresh=True)
+    if not b.get("ok"):
+        await c.answer(_ton_send_error(uid, "balance_unavailable"), show_alert=True)
+        return
+    balance_nano = int(b.get("balance_nano") or 0)
+    reserve_nano = _ton_reserve_nano()
+    max_send_nano = balance_nano - reserve_nano
+    if max_send_nano <= 0:
+        reserve_disp = nano_to_ton_display(reserve_nano)
+        txt = (f"Недостаточно TON.\nБаланс: {b['balance_display']} TON\nРезерв комиссии: ~{reserve_disp} TON" if lang == "ru"
+               else f"Insufficient TON.\nBalance: {b['balance_display']} TON\nFee reserve: ~{reserve_disp} TON")
+        await c.message.answer(txt)
+        await c.answer()
+        return
+    st["amount_nano"] = int(max_send_nano)
+    st["step"] = "confirm"
+    amount_disp = nano_to_ton_display(max_send_nano)
+    reserve_disp = nano_to_ton_display(reserve_nano)
+    total_disp = nano_to_ton_display(max_send_nano + reserve_nano)
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("✅ Отправить" if lang=="ru" else "✅ Send", callback_data="ton_send_confirm"), InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_send_cancel"))
+    text = (f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} TON\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} TON\n\nПримерно потребуется всего:\n~{total_disp} TON\n\nБудет доступно к отправке всё, кроме резерва комиссии." if lang=="ru" else f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} TON\n\nEstimated network fee/reserve:\n~{reserve_disp} TON\n\nApprox total needed:\n~{total_disp} TON")
+    await c.message.answer(text, reply_markup=kb)
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send_cancel")
+async def ton_send_cancel_cb(c: types.CallbackQuery):
+    TON_SEND_PENDING.pop(c.from_user.id, None)
+    await c.message.answer("Отправка отменена" if get_user_lang(c.from_user.id)=="ru" else "Send cancelled")
+    await c.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send_confirm")
+async def ton_send_confirm_cb(c: types.CallbackQuery):
+    uid = c.from_user.id
+    st = TON_SEND_PENDING.get(uid)
+    if not st or st.get("step") != "confirm":
+        await c.answer()
+        return
+    result = send_ton_from_user_wallet(uid, st.get("address", ""), int(st.get("amount_nano") or 0))
+    TON_SEND_PENDING.pop(uid, None)
+    lang = get_user_lang(uid)
+    if not result.get("ok"):
+        await c.message.answer(_ton_send_error(uid, result.get("error", "")))
+        await c.answer()
+        return
+    tx_hash = result.get("tx_hash")
+    if lang == "ru":
+        if tx_hash:
+            text = f"✅ TON отправлен.\n\nTx:\n{tx_hash}"
+        else:
+            text = "✅ TON отправлен.\n\nСтатус: submitted"
+    else:
+        if tx_hash:
+            text = f"✅ TON sent.\n\nTx:\n{tx_hash}"
+        else:
+            text = "✅ TON sent.\n\nStatus: submitted"
+    await c.message.answer(text)
+    await c.answer()
