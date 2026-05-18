@@ -1,0 +1,160 @@
+name: TON Wallet Runtime Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ton-wallet-runtime-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+
+
+      - name: tonsdk API introspection
+        run: |
+          python - <<'PY'
+          import inspect
+          from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+
+          print("WalletVersionEnum attrs:", [a for a in dir(WalletVersionEnum) if "v4" in a.lower()])
+          print("Wallets attrs:", [a for a in dir(Wallets) if not a.startswith("_")])
+          print("Wallets.ALL exists:", hasattr(Wallets, "ALL"))
+          if hasattr(Wallets, "ALL"):
+              print("Wallets.ALL keys:", list(Wallets.ALL.keys()))
+              ver = getattr(WalletVersionEnum, "v4r2", None)
+              print("v4r2:", ver)
+              print("v4r2 in ALL:", ver in Wallets.ALL if ver is not None else None)
+              if ver in Wallets.ALL:
+                  cls = Wallets.ALL[ver]
+                  print("wallet cls:", cls)
+                  print("wallet cls signature:", inspect.signature(cls))
+          print("Wallets.create exists:", hasattr(Wallets, "create"))
+          if hasattr(Wallets, "create"):
+              print("Wallets.create signature:", inspect.signature(Wallets.create))
+          print("Wallets.from_mnemonics exists:", hasattr(Wallets, "from_mnemonics"))
+          if hasattr(Wallets, "from_mnemonics"):
+              print("Wallets.from_mnemonics signature:", inspect.signature(Wallets.from_mnemonics))
+          PY
+
+
+      - name: from_mnemonics shape probe
+        run: |
+          python - <<'PY'
+          from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+          from tonsdk.crypto import mnemonic_new
+
+          words = mnemonic_new()
+          print("sample words:", len(words))
+
+          try:
+              res = Wallets.from_mnemonics(words, version=WalletVersionEnum.v4r2, workchain=0)
+          except TypeError as e:
+              print("from_mnemonics workchain TypeError:", str(e))
+              res = Wallets.from_mnemonics(words, version=WalletVersionEnum.v4r2, wc=0)
+
+          print("from_mnemonics result type:", type(res))
+          if isinstance(res, tuple):
+              print("from_mnemonics tuple length:", len(res))
+              for i, item in enumerate(res):
+                  print("from_mnemonics item", i, "type:", type(item))
+                  if hasattr(item, "address"):
+                      try:
+                          print("item", i, "address:", item.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True))
+                      except Exception as e:
+                          print("item", i, "address render error:", type(e).__name__, str(e)[:120])
+          else:
+              print("from_mnemonics non-tuple attrs:", [a for a in dir(res) if not a.startswith("_")][:50])
+          PY
+
+      - name: Wallet import/runtime smoke
+        run: |
+          python - <<'PY'
+          from services.ton_wallet_service import _wallet_ready, _generate_wallet_real, _wallet_from_mnemonic
+
+          print("wallet_ready:", _wallet_ready())
+          assert _wallet_ready() is True
+
+          seed, address, pub = _generate_wallet_real()
+          print("seed words:", len(seed.split()))
+          print("address:", address)
+          print("public_key length:", len(pub))
+
+          assert len(seed.split()) in (12, 24)
+          assert len(address) >= 32
+          assert len(pub) >= 32
+
+          wallet2, public_key2, private_key2, regenerated_address = _wallet_from_mnemonic(seed)
+          print("regenerated address:", regenerated_address)
+          assert regenerated_address == address
+          PY
+
+
+      - name: transfer signature probe
+        run: |
+          python - <<'PY'
+          import inspect
+          from services.ton_wallet_service import _generate_wallet_real, _wallet_from_mnemonic
+
+          seed, address, pub = _generate_wallet_real()
+          wallet, public_key, private_key, regenerated_address = _wallet_from_mnemonic(seed)
+
+          print("wallet type:", type(wallet))
+          print("wallet attrs sample:", [a for a in dir(wallet) if not a.startswith("_")][:80])
+          print("create_transfer_message signature:", inspect.signature(wallet.create_transfer_message))
+          print("private_key type:", type(private_key), "len:", len(private_key) if hasattr(private_key, "__len__") else None)
+          PY
+
+      - name: Signed BoC creation test (offline)
+        run: |
+          python - <<'PY'
+          from services.ton_wallet_service import (
+              _generate_wallet_real,
+              _wallet_from_mnemonic,
+              _build_signed_transfer_message,
+              _extract_boc_from_transfer,
+          )
+          from services.ton_chain_service import validate_ton_address
+
+          seed, address, pub = _generate_wallet_real()
+          print("address:", address)
+          print("address valid:", validate_ton_address(address))
+          assert validate_ton_address(address)
+
+          wallet, public_key, private_key, regenerated_address = _wallet_from_mnemonic(seed)
+          assert regenerated_address == address
+
+          transfer = _build_signed_transfer_message(
+              wallet=wallet,
+              private_key=private_key,
+              destination_address=address,
+              amount_nano=1_000_000,
+              seqno=0,
+              comment="test",
+          )
+          b64 = _extract_boc_from_transfer(transfer)
+
+          print("boc base64 prefix:", b64[:20])
+
+          assert len(b64) > 0
+          PY
+
+      - name: Compile checks
+        run: |
+          python -m py_compile web.py db/database.py telegram_bot.py services/*.py agents/top_analysis/*.py bot/*.py
+
+      - name: Conflict marker check
+        run: |
+          grep -R -n "<<<<<<<\|=======\|>>>>>>>" . --exclude-dir=.git --exclude-dir=__pycache__

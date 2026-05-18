@@ -3,3 +3,5 @@ aiohttp
 requests==2.32.3
 python-dotenv==1.0.1
 psycopg2-binary==2.9.9
+tonsdk
+cryptography
