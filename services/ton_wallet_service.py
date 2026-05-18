@@ -386,11 +386,20 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
 
 
 def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str]) -> None:
+    normalized_hash = str(tx_hash or "").strip()
     conn = get_connection(); cur = conn.cursor()
     cur.execute("""INSERT INTO ton_wallet_transactions (user_id,wallet_address,direction,amount_nano,fee_nano,tx_hash,destination_address,status,comment,created_at,updated_at,error)
                    VALUES (%s,%s,'withdrawal',%s,'0',%s,%s,%s,%s,%s,%s,%s)""",
-                (user_id, wallet_address, str(amount_nano), tx_hash, destination, status, comment, _now(), _now(), error))
+                (user_id, wallet_address, str(amount_nano), normalized_hash, destination, status, comment, _now(), _now(), error))
     conn.commit(); conn.close()
+    logger.warning(
+        "TON tx recorded user_id=%s destination_address=%s amount_nano=%s status=%s tx_hash_present=%s",
+        user_id,
+        destination,
+        amount_nano,
+        status,
+        bool(normalized_hash),
+    )
 
 
 def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nano: int, comment: str = "") -> dict:

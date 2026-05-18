@@ -18,6 +18,28 @@ def _network() -> str:
     return (os.getenv("TON_NETWORK") or "testnet").strip().lower()
 
 
+def _extract_ton_tx_hash(payload: Any) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        h = payload.strip()
+        return h if h and h != "-" else ""
+    if isinstance(payload, dict):
+        keys = ("tx_hash", "hash", "transaction_hash", "boc_hash", "message_hash")
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip() and value.strip() != "-":
+                return value.strip()
+        result = payload.get("result")
+        if isinstance(result, dict):
+            nested = _extract_ton_tx_hash(result)
+            if nested:
+                return nested
+        if isinstance(result, str) and result.strip() and result.strip() != "-":
+            return result.strip()
+    return ""
+
+
 def _base_url() -> str:
     override = (os.getenv("TONCENTER_BASE_URL") or "").strip()
     if override:
@@ -185,12 +207,8 @@ def send_boc_return_hash(boc: str) -> dict:
             "toncenter_status": r.status_code,
             "error_message": response_preview,
         }
-    result = data.get("result")
-    if isinstance(result, str):
-        return {"ok": True, "tx_hash": result}
-    if isinstance(result, dict):
-        return {"ok": True, "tx_hash": result.get("hash") or result.get("message_hash")}
-    return {"ok": True, "tx_hash": None}
+    tx_hash = _extract_ton_tx_hash(data)
+    return {"ok": True, "tx_hash": tx_hash or None}
 
 
 def nano_to_ton_display(amount_nano: Union[int, str]) -> str:
