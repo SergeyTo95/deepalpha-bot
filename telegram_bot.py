@@ -7720,6 +7720,13 @@ async def ton_seed_confirm(c: types.CallbackQuery):
 
 @dp.message_handler(lambda m: m.from_user and m.from_user.id in TON_SEND_PENDING and not (m.text or '').startswith('/'))
 async def ton_send_flow(message: types.Message):
+    from services.ton_chain_service import (
+        validate_ton_address,
+        normalize_ton_address,
+        nano_to_ton_display,
+        ton_to_nano,
+    )
+
     st = TON_SEND_PENDING.get(message.from_user.id)
     if not st:
         return
