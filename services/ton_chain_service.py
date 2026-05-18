@@ -1,4 +1,5 @@
 import os
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Union
 
@@ -97,14 +98,28 @@ def get_wallet_seqno(address: str) -> int:
 
 def send_boc_return_hash(boc: str) -> dict:
     if not (boc or "").strip():
-        return {"ok": False, "error": "send_failed"}
+        return {"ok": False, "error": "send_failed", "error_detail": "unknown"}
     try:
         r = requests.post(f"{_base_url()}/sendBoc", params=_params(), json={"boc": boc}, timeout=20)
-        data = r.json() if r.ok else {}
-    except Exception:
-        return {"ok": False, "error": "send_failed"}
+        try:
+            data = r.json()
+        except Exception:
+            data = {}
+        response_preview = str(data or r.text or "")[:400]
+    except Exception as e:
+        logger.warning("TON sendBoc request failed: %s", e.__class__.__name__)
+        return {"ok": False, "error": "send_failed", "error_detail": "toncenter_unavailable"}
     if not r.ok or not data.get("ok"):
-        return {"ok": False, "error": "send_failed"}
+        response_lower = response_preview.lower()
+        detail = "unknown"
+        if any(x in response_lower for x in ("insufficient", "not enough", "low balance", "no funds")):
+            detail = "insufficient_network_fee"
+        elif any(x in response_lower for x in ("seqno", "account is not active", "cannot apply external message")):
+            detail = "seqno_or_account_state"
+        elif any(x in response_lower for x in ("liteserver", "not accepted", "rejected", "external message was not accepted")):
+            detail = "toncenter_rejected"
+        logger.warning("TON sendBoc rejected status=%s ok=%s detail=%s response=%s", r.status_code, data.get("ok"), detail, response_preview)
+        return {"ok": False, "error": "send_failed", "error_detail": detail, "toncenter_status": r.status_code}
     result = data.get("result")
     if isinstance(result, str):
         return {"ok": True, "tx_hash": result}
@@ -125,3 +140,4 @@ def ton_to_nano(amount_ton: Union[str, float, Decimal]) -> int:
     if val <= 0:
         raise ValueError("invalid_amount")
     return int((val * Decimal(1_000_000_000)).to_integral_value())
+logger = logging.getLogger(__name__)

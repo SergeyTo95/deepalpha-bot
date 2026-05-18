@@ -454,11 +454,28 @@ function renderAuthed(summary, lang) {
     return frac ? `${whole.toString()}.${frac}` : whole.toString();
   };
 
-  const mapTonError = (code, details) => {
+  const mapTonError = (code, details, errorDetail = "unknown") => {
     if (String(code || "") === "insufficient_balance") {
       return lang === "ru"
         ? `Недостаточно TON с учётом комиссии.\nБаланс: ${details.balanceDisplay} TON\nРезерв комиссии: ~${details.feeReserveDisplay} TON\nМаксимум к отправке: ${details.maxSendDisplay} TON\n\nНажмите “Отправить всё”, чтобы отправить максимум.`
         : `Insufficient TON including fee reserve.\nBalance: ${details.balanceDisplay} TON\nFee reserve: ~${details.feeReserveDisplay} TON\nMaximum send amount: ${details.maxSendDisplay} TON\n\nTap “Send MAX” to use the maximum.`;
+    }
+    if (String(code || "") === "send_failed") {
+      const detailMapRu = {
+        toncenter_rejected: "Сеть TON отклонила транзакцию. Попробуйте уменьшить сумму или обновить баланс.",
+        insufficient_network_fee: "Недостаточно TON с учётом реальной комиссии сети. Уменьшите сумму.",
+        seqno_or_account_state: "Не удалось подтвердить состояние кошелька. Обновите баланс и попробуйте ещё раз.",
+        toncenter_unavailable: "TON Center временно недоступен. Попробуйте позже.",
+        unknown: "Ошибка отправки в сеть."
+      };
+      const detailMapEn = {
+        toncenter_rejected: "The TON network rejected the transaction. Try a smaller amount or refresh balance.",
+        insufficient_network_fee: "Not enough TON after real network fee. Reduce the amount.",
+        seqno_or_account_state: "Wallet state could not be confirmed. Refresh balance and try again.",
+        toncenter_unavailable: "TON Center is temporarily unavailable. Please try later.",
+        unknown: "Network send failed."
+      };
+      return (lang === "ru" ? detailMapRu : detailMapEn)[String(errorDetail || "unknown")] || (lang === "ru" ? detailMapRu.unknown : detailMapEn.unknown);
     }
     const en = {
       invalid_address: "Invalid TON address.",
@@ -615,7 +632,7 @@ function renderAuthed(summary, lang) {
       feeReserveDisplay: String(sent.data?.fee_reserve_display || tonWalletState.feeReserveDisplay || "0"),
       maxSendDisplay: String(sent.data?.max_send_display || tonWalletState.maxSendDisplay || "0")
     };
-    tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details);
+    tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details, sent.data?.error_detail || "unknown");
   };
   loadTonWallet(false).then(() => loadTonWallet(true));
   if (window.__tonRefreshIntervalId) clearInterval(window.__tonRefreshIntervalId);

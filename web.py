@@ -679,7 +679,7 @@ async def handle_wallet_ton_send(request):
     except Exception:
         return _json_response({"ok": False, "error": "invalid_amount"}, status=400)
     result = send_ton_from_user_wallet(user_id=user_id, destination_address=destination_address, amount_nano=amount_nano, comment=comment)
-    if (not result.get("ok")) and str(result.get("error")) == "insufficient_balance":
+    if (not result.get("ok")) and str(result.get("error")) in {"insufficient_balance", "send_failed"}:
         b = get_user_ton_balance(user_id, refresh=True)
         reserve_nano = int(get_ton_send_fee_reserve_nano())
         balance_nano = int(b.get("balance_nano") or 0)
