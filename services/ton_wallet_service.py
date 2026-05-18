@@ -1,7 +1,7 @@
 import base64
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from db.database import get_connection
 from services.ton_chain_service import (
@@ -202,7 +202,7 @@ def _safe_wallet_data(row):
     return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at"], row))
 
 
-def get_user_ton_wallet(user_id: int) -> dict | None:
+def get_user_ton_wallet(user_id: int) -> Optional[dict]:
     conn = get_connection(); cur = conn.cursor()
     cur.execute("""SELECT user_id,wallet_address,network,wallet_version,last_balance_nano,last_balance_checked_at,seed_reveal_used,seed_revealed_at
                    FROM user_ton_wallets WHERE user_id=%s""", (user_id,))
