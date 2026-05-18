@@ -5,6 +5,7 @@ import re
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from urllib.parse import quote
 
 from db.database import get_connection
 from services.ton_chain_service import (
@@ -50,9 +51,12 @@ def get_ton_runtime_network() -> str:
 
 def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     h = str(tx_hash or "").strip()
-    if not h or h == "-":
+    if not h:
         return ""
-    if not re.match(r"^[A-Za-z0-9_-]{8,}$", h):
+    h_lower = h.lower()
+    if h in {"-"} or h_lower in {"none", "null"}:
+        return ""
+    if not re.match(r"^[A-Za-z0-9_\-+/=]{20,}$", h):
         return ""
     net = str(network or "").strip().lower() or get_ton_runtime_network()
     from db.database import get_setting
@@ -63,7 +67,7 @@ def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     base = main_base if net == "mainnet" else test_base
     if not base.endswith("/"):
         base += "/"
-    return base + h
+    return base + quote(h, safe="")
 
 
 def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
