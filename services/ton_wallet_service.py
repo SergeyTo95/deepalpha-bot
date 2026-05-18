@@ -32,6 +32,13 @@ def _enabled() -> bool:
     return (os.getenv("TON_WALLET_ENABLED") or "false").lower() == "true"
 
 
+TON_SEND_FEE_RESERVE_NANO = 50_000_000
+
+
+def get_ton_send_fee_reserve_nano() -> int:
+    return TON_SEND_FEE_RESERVE_NANO
+
+
 def _now() -> str:
     return datetime.utcnow().isoformat()
 
@@ -280,7 +287,7 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     except Exception:
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "balance_unavailable")
         return {"ok": False, "error": "balance_unavailable"}
-    reserve = 50_000_000
+    reserve = get_ton_send_fee_reserve_nano()
     if balance < int(amount_nano) + reserve:
         return {"ok": False, "error": "insufficient_balance"}
 
