@@ -47,6 +47,24 @@ def get_ton_runtime_network() -> str:
     return (os.getenv("TON_NETWORK") or "testnet").strip().lower()
 
 
+def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
+    h = str(tx_hash or "").strip()
+    if not h or h == "-":
+        return ""
+    if not re.match(r"^[A-Za-z0-9_-]{8,}$", h):
+        return ""
+    net = str(network or "").strip().lower() or get_ton_runtime_network()
+    from db.database import get_setting
+    default_main = "https://tonviewer.com/transaction/"
+    default_test = "https://testnet.tonviewer.com/transaction/"
+    main_base = str(get_setting("ton_explorer_mainnet_base", default_main) or default_main).strip()
+    test_base = str(get_setting("ton_explorer_testnet_base", default_test) or default_test).strip()
+    base = main_base if net == "mainnet" else test_base
+    if not base.endswith("/"):
+        base += "/"
+    return base + h
+
+
 def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
     from db.database import get_setting
     return {
@@ -57,6 +75,66 @@ def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
         "ton_wallet_fee_wallet": str(get_setting("ton_wallet_fee_wallet", "") or "").strip(),
         "ton_wallet_fee_mode": str(get_setting("ton_wallet_fee_mode", "reserve_only") or "reserve_only").strip().lower(),
     }
+
+
+def calculate_ton_withdraw_platform_fee(amount_nano: int) -> Dict[str, Any]:
+    settings = get_ton_withdraw_fee_settings()
+    amount = int(amount_nano or 0)
+    if amount < 0:
+        amount = 0
+    if not settings.get("ton_wallet_withdraw_fee_enabled"):
+        return {"platform_fee_nano": 0, "platform_fee_display": nano_to_ton_display(0), "enabled": False}
+    try:
+        pct = float(str(settings.get("ton_wallet_withdraw_fee_percent") or "0").replace(",", "."))
+    except Exception:
+        pct = 0.0
+    fee = int((amount * pct) / 100.0) if pct > 0 else 0
+    try:
+        mn = int(str(settings.get("ton_wallet_withdraw_fee_min_nano") or "0"))
+    except Exception:
+        mn = 0
+    try:
+        mx = int(str(settings.get("ton_wallet_withdraw_fee_max_nano") or "0"))
+    except Exception:
+        mx = 0
+    if mn > 0 and fee < mn:
+        fee = mn
+    if mx > 0 and fee > mx:
+        fee = mx
+    if fee < 0:
+        fee = 0
+    return {"platform_fee_nano": fee, "platform_fee_display": nano_to_ton_display(fee), "enabled": True}
+
+
+def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    lim = int(limit or 20)
+    if lim < 1:
+        lim = 20
+    if lim > 50:
+        lim = 50
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at
+                   FROM ton_wallet_transactions WHERE user_id=%s
+                   ORDER BY id DESC LIMIT %s""", (user_id, lim))
+    rows = cur.fetchall() or []
+    conn.close()
+    out = []
+    for r in rows:
+        amount_nano = int(str(r[2] or "0"))
+        addr = str(r[5] or r[6] or "")
+        tx_hash = str(r[4] or "").strip()
+        out.append({
+            "id": int(r[0]),
+            "direction": str(r[1] or ""),
+            "amount_nano": str(amount_nano),
+            "amount_display": nano_to_ton_display(amount_nano),
+            "status": str(r[3] or ""),
+            "tx_hash": tx_hash,
+            "explorer_url": get_ton_tx_explorer_url(tx_hash),
+            "address": addr,
+            "created_at": r[7],
+        })
+    return out
 
 
 def list_enabled_ton_jettons(network: str) -> List[Dict[str, Any]]:
