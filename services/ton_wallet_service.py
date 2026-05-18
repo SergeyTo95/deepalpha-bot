@@ -14,6 +14,7 @@ from services.ton_chain_service import (
     normalize_ton_address,
     send_boc_return_hash,
     validate_ton_address,
+    resolve_recent_ton_tx_hash,
 )
 logger = logging.getLogger(__name__)
 
@@ -385,7 +386,7 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
     return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at}
 
 
-def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str]) -> None:
+def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str], tx_hash_source: str = "missing") -> None:
     normalized_hash = str(tx_hash or "").strip()
     conn = get_connection(); cur = conn.cursor()
     cur.execute("""INSERT INTO ton_wallet_transactions (user_id,wallet_address,direction,amount_nano,fee_nano,tx_hash,destination_address,status,comment,created_at,updated_at,error)
@@ -393,12 +394,13 @@ def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination:
                 (user_id, wallet_address, str(amount_nano), normalized_hash, destination, status, comment, _now(), _now(), error))
     conn.commit(); conn.close()
     logger.warning(
-        "TON tx recorded user_id=%s destination_address=%s amount_nano=%s status=%s tx_hash_present=%s",
+        "TON tx recorded user_id=%s destination_address=%s amount_nano=%s status=%s tx_hash_present=%s tx_hash_source=%s",
         user_id,
         destination,
         amount_nano,
         status,
         bool(normalized_hash),
+        str(tx_hash_source or "missing"),
     )
 
 
@@ -460,6 +462,7 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "signing_failed")
         return {"ok": False, "error": "signing_failed"}
 
+    send_started_ts = int(time.time())
     result = send_boc_return_hash(boc_base64)
     if not result.get("ok"):
         error_detail = str(result.get("error_detail") or "unknown")
@@ -483,7 +486,7 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
                         retry_result = send_boc_return_hash(retry_boc_base64)
                         if retry_result.get("ok"):
                             tx_hash = retry_result.get("tx_hash")
-                            _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None)
+                            _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None, "send_boc" if tx_hash else "missing")
                             return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "status": "submitted"}
                 except Exception:
                     pass
@@ -494,8 +497,21 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "send_failed")
         return {"ok": False, "error": "send_failed", "error_detail": error_detail}
 
-    tx_hash = result.get("tx_hash")
-    _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None)
+    tx_hash = str(result.get("tx_hash") or "").strip()
+    tx_hash_source = "send_boc" if tx_hash else "missing"
+    if not tx_hash:
+        resolved = resolve_recent_ton_tx_hash(
+            source_address=wallet_address,
+            destination_address=destination,
+            amount_nano=int(amount_nano),
+            after_ts=send_started_ts,
+            attempts=3,
+            delay_seconds=1.5,
+        )
+        if resolved:
+            tx_hash = resolved
+            tx_hash_source = "get_transactions"
+    _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None, tx_hash_source)
     return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "status": "submitted"}
 
 
