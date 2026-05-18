@@ -152,6 +152,52 @@ def _parse_wallet_from_mnemonics_result(res):
 
     return wallet, public_key, private_key
 
+
+
+def _build_signed_transfer_message(wallet, private_key, destination_address, amount_nano, seqno, comment=""):
+    payload = (comment or "")[:256]
+    variants = [
+        ((), {"to_addr": destination_address, "amount": int(amount_nano), "seqno": int(seqno), "payload": payload, "send_mode": 3}),
+        ((), {"to_addr": destination_address, "amount": int(amount_nano), "seqno": int(seqno), "payload": payload}),
+        ((destination_address, int(amount_nano), int(seqno)), {"payload": payload, "send_mode": 3}),
+        ((destination_address, int(amount_nano), int(seqno), payload), {}),
+        ((), {"to_addr": destination_address, "amount": int(amount_nano), "seqno": int(seqno), "payload": payload, "send_mode": 3, "signing_key": private_key}),
+        ((), {"to_addr": destination_address, "amount": int(amount_nano), "seqno": int(seqno), "payload": payload, "send_mode": 3, "private_key": private_key}),
+    ]
+    for args, kwargs in variants:
+        try:
+            return wallet.create_transfer_message(*args, **kwargs)
+        except TypeError:
+            continue
+        except Exception:
+            continue
+    raise RuntimeError("signing_failed")
+
+
+def _extract_boc_from_transfer(transfer) -> str:
+    msg = None
+    if isinstance(transfer, dict):
+        msg = transfer.get("message") or transfer.get("external_message") or transfer.get("boc")
+    elif hasattr(transfer, "message"):
+        msg = transfer.message
+    else:
+        msg = transfer
+
+    if isinstance(msg, str):
+        if not msg.strip():
+            raise RuntimeError("signing_failed")
+        return msg
+
+    if hasattr(msg, "to_boc"):
+        boc_bytes = msg.to_boc(False)
+        return base64.b64encode(boc_bytes).decode()
+
+    if hasattr(transfer, "to_boc"):
+        boc_bytes = transfer.to_boc(False)
+        return base64.b64encode(boc_bytes).decode()
+
+    raise RuntimeError("signing_failed")
+
 def _safe_wallet_data(row):
     return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at"], row))
 
@@ -244,16 +290,17 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         if normalize_ton_address(derived_address) != normalize_ton_address(wallet_address):
             raise RuntimeError("wallet_mismatch")
         seqno = get_wallet_seqno(wallet_address)
-        transfer = wallet.create_transfer_message(
-            to_addr=destination,
-            amount=int(amount_nano),
-            seqno=seqno,
-            payload=(comment or "")[:256],
-            send_mode=3,
+        transfer = _build_signed_transfer_message(
+            wallet=wallet,
             private_key=private_key,
+            destination_address=destination,
+            amount_nano=amount_nano,
+            seqno=seqno,
+            comment=comment,
         )
-        boc_bytes = transfer["message"].to_boc(False)
-        boc_base64 = base64.b64encode(boc_bytes).decode()
+        boc_base64 = _extract_boc_from_transfer(transfer)
+        if not boc_base64:
+            raise RuntimeError("signing_failed")
     except Exception:
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "signing_failed")
         return {"ok": False, "error": "signing_failed"}

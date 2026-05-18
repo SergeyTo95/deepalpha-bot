@@ -101,11 +101,31 @@ jobs:
           assert regenerated_address == address
           PY
 
+
+      - name: transfer signature probe
+        run: |
+          python - <<'PY'
+          import inspect
+          from services.ton_wallet_service import _generate_wallet_real, _wallet_from_mnemonic
+
+          seed, address, pub = _generate_wallet_real()
+          wallet, public_key, private_key, regenerated_address = _wallet_from_mnemonic(seed)
+
+          print("wallet type:", type(wallet))
+          print("wallet attrs sample:", [a for a in dir(wallet) if not a.startswith("_")][:80])
+          print("create_transfer_message signature:", inspect.signature(wallet.create_transfer_message))
+          print("private_key type:", type(private_key), "len:", len(private_key) if hasattr(private_key, "__len__") else None)
+          PY
+
       - name: Signed BoC creation test (offline)
         run: |
           python - <<'PY'
-          import base64
-          from services.ton_wallet_service import _generate_wallet_real, _wallet_from_mnemonic
+          from services.ton_wallet_service import (
+              _generate_wallet_real,
+              _wallet_from_mnemonic,
+              _build_signed_transfer_message,
+              _extract_boc_from_transfer,
+          )
           from services.ton_chain_service import validate_ton_address
 
           seed, address, pub = _generate_wallet_real()
@@ -116,22 +136,18 @@ jobs:
           wallet, public_key, private_key, regenerated_address = _wallet_from_mnemonic(seed)
           assert regenerated_address == address
 
-          transfer = wallet.create_transfer_message(
-              to_addr=address,
-              amount=1_000_000,
-              seqno=0,
-              payload="test",
-              send_mode=3,
+          transfer = _build_signed_transfer_message(
+              wallet=wallet,
               private_key=private_key,
+              destination_address=address,
+              amount_nano=1_000_000,
+              seqno=0,
+              comment="test",
           )
+          b64 = _extract_boc_from_transfer(transfer)
 
-          boc = transfer["message"].to_boc(False)
-          b64 = base64.b64encode(boc).decode()
-
-          print("boc bytes:", len(boc))
           print("boc base64 prefix:", b64[:20])
 
-          assert len(boc) > 0
           assert len(b64) > 0
           PY
 
