@@ -1,6 +1,6 @@
 import os
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 import requests
 
@@ -109,11 +109,11 @@ def send_boc_return_hash(boc: str) -> dict:
     return {"ok": True, "tx_hash": None}
 
 
-def nano_to_ton_display(amount_nano: int | str) -> str:
+def nano_to_ton_display(amount_nano: Union[int, str]) -> str:
     return f"{(Decimal(int(amount_nano)) / Decimal(1_000_000_000)):.6f}".rstrip("0").rstrip(".")
 
 
-def ton_to_nano(amount_ton: str | float | Decimal) -> int:
+def ton_to_nano(amount_ton: Union[str, float, Decimal]) -> int:
     try:
         val = Decimal(str(amount_ton))
     except (InvalidOperation, ValueError):

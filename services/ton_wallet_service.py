@@ -250,6 +250,13 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
     return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at}
 
 
+TON_SEND_FEE_RESERVE_NANO = 50_000_000
+
+
+def get_ton_send_fee_reserve_nano() -> int:
+    return TON_SEND_FEE_RESERVE_NANO
+
+
 def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str]) -> None:
     conn = get_connection(); cur = conn.cursor()
     cur.execute("""INSERT INTO ton_wallet_transactions (user_id,wallet_address,direction,amount_nano,fee_nano,tx_hash,destination_address,status,comment,created_at,updated_at,error)
@@ -280,7 +287,7 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     except Exception:
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "balance_unavailable")
         return {"ok": False, "error": "balance_unavailable"}
-    reserve = 50_000_000
+    reserve = get_ton_send_fee_reserve_nano()
     if balance < int(amount_nano) + reserve:
         return {"ok": False, "error": "insufficient_balance"}
 
