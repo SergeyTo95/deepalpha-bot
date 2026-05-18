@@ -22,6 +22,8 @@ from services.ton_wallet_service import (
     get_ton_withdraw_fee_settings,
     list_enabled_ton_jettons,
     get_user_jetton_balances,
+    get_user_ton_transactions,
+    calculate_ton_withdraw_platform_fee,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from db.database import (
@@ -33,6 +35,7 @@ from db.database import (
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
+    add_tokens,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -635,6 +638,10 @@ async def handle_wallet_ton(request):
     if not balance.get("ok"):
         return _json_response(balance, status=400)
     wallet = get_or_create_user_ton_wallet(user_id)
+    fee = calculate_ton_withdraw_platform_fee(int(balance.get("balance_nano") or 0))
+    max_send_nano = int(balance.get("balance_nano") or 0) - int(get_ton_send_fee_reserve_nano()) - int(fee.get("platform_fee_nano") or 0)
+    if max_send_nano < 0:
+        max_send_nano = 0
     return _json_response({
         "ok": True,
         "network": get_ton_runtime_network(),
@@ -646,6 +653,10 @@ async def handle_wallet_ton(request):
         "fee_reserve_nano": str(get_ton_send_fee_reserve_nano()),
         "fee_reserve_display": nano_to_ton_display(get_ton_send_fee_reserve_nano()),
         "withdraw_fee_settings": get_ton_withdraw_fee_settings(),
+        "platform_fee_nano": str(fee.get("platform_fee_nano", 0)),
+        "platform_fee_display": str(fee.get("platform_fee_display", "0")),
+        "max_send_nano": str(max_send_nano),
+        "max_send_display": nano_to_ton_display(max_send_nano),
         "jettons": get_user_jetton_balances(user_id, refresh=False),
         "enabled_jettons": list_enabled_ton_jettons(get_ton_runtime_network()),
     })
@@ -678,7 +689,14 @@ async def handle_wallet_ton_send(request):
         amount_nano = ton_to_nano(amount_ton)
     except Exception:
         return _json_response({"ok": False, "error": "invalid_amount"}, status=400)
-    result = send_ton_from_user_wallet(user_id=user_id, destination_address=destination_address, amount_nano=amount_nano, comment=comment)
+    platform_fee = calculate_ton_withdraw_platform_fee(amount_nano)
+    required_nano = int(amount_nano) + int(get_ton_send_fee_reserve_nano()) + int(platform_fee.get("platform_fee_nano") or 0)
+    b = get_user_ton_balance(user_id, refresh=True)
+    balance_nano = int(b.get("balance_nano") or 0)
+    if balance_nano < required_nano:
+        result = {"ok": False, "error": "insufficient_balance"}
+    else:
+        result = send_ton_from_user_wallet(user_id=user_id, destination_address=destination_address, amount_nano=amount_nano, comment=comment)
     if (not result.get("ok")) and str(result.get("error")) in {"insufficient_balance", "send_failed"}:
         b = get_user_ton_balance(user_id, refresh=True)
         reserve_nano = int(get_ton_send_fee_reserve_nano())
@@ -912,6 +930,56 @@ async def handle_webapp_history_item(request):
     return _json_response({"ok": True, "item": item})
 
 
+async def handle_wallet_ton_transactions(request):
+    user_id = _current_web_user_id(request)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    limit = _safe_int(request.query.get("limit", "20"), default=20, min_value=1, max_value=50)
+    items = get_user_ton_transactions(user_id=user_id, limit=limit)
+    return _json_response({"ok": True, "items": items})
+
+
+async def handle_wallet_ton_buy_tokens(request):
+    user_id = _current_web_user_id(request)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if str(get_setting("ton_wallet_token_purchase_enabled", "off")).lower() != "on":
+        return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    amount_tokens_raw = str(payload.get("amount_tokens", "")).strip()
+    if not amount_tokens_raw.isdigit():
+        return _json_response({"ok": False, "error": "invalid_amount_tokens"}, status=400)
+    amount_tokens = int(amount_tokens_raw)
+    min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
+    if amount_tokens < min_tokens:
+        return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
+    platform_wallet = str(get_setting("ton_platform_wallet", "") or "").strip()
+    if not validate_ton_address(platform_wallet):
+        return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
+    price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
+    if price_per_token <= 0:
+        return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
+    purchase_amount_nano = amount_tokens * price_per_token
+    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=platform_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
+    if not sent.get("ok"):
+        return _json_response(sent, status=400)
+    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
+    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
+    total_tokens = amount_tokens + bonus_tokens
+    add_tokens(user_id, total_tokens)
+    return _json_response({
+        "ok": True,
+        "tokens_credited": amount_tokens,
+        "bonus_tokens": bonus_tokens,
+        "total_tokens": total_tokens,
+        "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
+        "tx_hash": str(sent.get("tx_hash") or ""),
+    })
+
+
 async def handle_auth_logout(request):
     token = request.cookies.get("deepalpha_session", "")
     if token:
@@ -1072,6 +1140,8 @@ app.router.add_get("/api/webapp/analyze/status/{job_id}", handle_webapp_analyze_
 app.router.add_get("/api/wallets/ton", handle_wallet_ton)
 app.router.add_post("/api/wallets/ton/refresh", handle_wallet_ton_refresh)
 app.router.add_post("/api/wallets/ton/send", handle_wallet_ton_send)
+app.router.add_get("/api/wallets/ton/transactions", handle_wallet_ton_transactions)
+app.router.add_post("/api/wallets/ton/buy-tokens", handle_wallet_ton_buy_tokens)
 app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
 app.router.add_route("OPTIONS", "/api/webapp/analyze/start", handle_options)
 app.router.add_route("OPTIONS", "/api/webapp/analyze/status/{job_id}", handle_options)
@@ -1080,6 +1150,8 @@ app.router.add_get("/api/webapp/history/{item_id}", handle_webapp_history_item)
 app.router.add_route("OPTIONS", "/api/wallets/ton", handle_options)
 app.router.add_route("OPTIONS", "/api/wallets/ton/refresh", handle_options)
 app.router.add_route("OPTIONS", "/api/wallets/ton/send", handle_options)
+app.router.add_route("OPTIONS", "/api/wallets/ton/transactions", handle_options)
+app.router.add_route("OPTIONS", "/api/wallets/ton/buy-tokens", handle_options)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)
