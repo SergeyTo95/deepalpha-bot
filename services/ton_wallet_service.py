@@ -38,7 +38,14 @@ def _now() -> str:
 
 
 def _wallet_ready() -> bool:
-    return all([Wallets, WalletVersionEnum, mnemonic_new, mnemonic_to_wallet_key])
+    if not all([Wallets, WalletVersionEnum, mnemonic_new, mnemonic_to_wallet_key]):
+        return False
+    if not hasattr(WalletVersionEnum, "v4r2"):
+        return False
+    ver = WalletVersionEnum.v4r2
+    has_all = hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL
+    has_from_public = hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key"))
+    return has_all or has_from_public
 
 
 def _get_fernet() -> Optional[Fernet]:
@@ -68,8 +75,18 @@ def decrypt_secret(cipher: str) -> str:
 
 
 def _build_wallet_from_public_key(public_key: bytes):
-    wallet_cls = Wallets.ALL[WalletVersionEnum.v4r2]
-    return wallet_cls(public_key=public_key, wc=0)
+    if not _wallet_ready():
+        raise RuntimeError("setup_required")
+    ver = WalletVersionEnum.v4r2
+    if hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL:
+        wallet_cls = Wallets.ALL[ver]
+        return wallet_cls(public_key=public_key, wc=0)
+    if hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key")):
+        try:
+            return Wallets.from_public_key(public_key, ver, workchain=0)
+        except TypeError:
+            return Wallets.from_public_key(public_key, ver, wc=0)
+    raise RuntimeError("setup_required")
 
 
 def _generate_wallet_real() -> tuple[str, str, str]:

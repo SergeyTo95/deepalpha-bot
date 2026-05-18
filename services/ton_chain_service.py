@@ -95,7 +95,7 @@ def send_boc_return_hash(boc: str) -> dict:
     if not (boc or "").strip():
         return {"ok": False, "error": "send_failed"}
     try:
-        r = requests.post(f"{_base_url()}/sendBoc", json={"boc": boc, **_params()}, timeout=20)
+        r = requests.post(f"{_base_url()}/sendBoc", params=_params(), json={"boc": boc}, timeout=20)
         data = r.json() if r.ok else {}
     except Exception:
         return {"ok": False, "error": "send_failed"}
