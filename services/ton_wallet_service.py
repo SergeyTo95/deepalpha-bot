@@ -1,6 +1,8 @@
 import base64
 import os
 import logging
+import re
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -346,9 +348,13 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
             raise RuntimeError("wallet_mismatch")
         seqno = get_wallet_seqno(wallet_address)
         if seqno is None:
+            time.sleep(0.5)
+            seqno = get_wallet_seqno(wallet_address)
+        logger.warning("TON seqno fetched network=%s wallet=%s seqno=%s", get_ton_runtime_network(), wallet_address, seqno)
+        if seqno is None:
             logger.warning(
-                "TON send seqno unavailable user_id=%s network=%s src=%s dst=%s amount_nano=%s fee_reserve_nano=%s balance_nano=%s",
-                user_id, get_ton_runtime_network(), wallet_address, destination, int(amount_nano), reserve, balance
+                "TON send seqno unavailable network=%s wallet=%s",
+                get_ton_runtime_network(), wallet_address
             )
             _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "send_failed")
             return {"ok": False, "error": "send_failed", "error_detail": "seqno_or_account_state"}
@@ -370,9 +376,33 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     result = send_boc_return_hash(boc_base64)
     if not result.get("ok"):
         error_detail = str(result.get("error_detail") or "unknown")
+        error_message = str(result.get("error_message") or "")
+        if "too old seqno" in error_message.lower() and "wallet_seqno=" in error_message and "msg_seqno=" in error_message:
+            m = re.search(r"wallet_seqno=(\d+)", error_message)
+            retry_seqno = int(m.group(1)) if m else None
+            if retry_seqno is not None:
+                logger.warning("TON seqno retry network=%s wallet=%s retry_seqno=%s", get_ton_runtime_network(), wallet_address, retry_seqno)
+                try:
+                    retry_transfer = _build_signed_transfer_message(
+                        wallet=wallet,
+                        private_key=private_key,
+                        destination_address=destination,
+                        amount_nano=amount_nano,
+                        seqno=retry_seqno,
+                        comment=comment,
+                    )
+                    retry_boc_base64 = _extract_boc_from_transfer(retry_transfer)
+                    if retry_boc_base64:
+                        retry_result = send_boc_return_hash(retry_boc_base64)
+                        if retry_result.get("ok"):
+                            tx_hash = retry_result.get("tx_hash")
+                            _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None)
+                            return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "status": "submitted"}
+                except Exception:
+                    pass
         logger.warning(
-            "TON send failed user_id=%s network=%s src=%s dst=%s amount_nano=%s seqno=%s fee_reserve_nano=%s balance_nano=%s toncenter_status=%s error_detail=%s",
-            user_id, get_ton_runtime_network(), wallet_address, destination, int(amount_nano), seqno, reserve, balance, result.get("toncenter_status"), error_detail
+            "TON send failed network=%s wallet=%s seqno=%s toncenter_status=%s error_detail=%s",
+            get_ton_runtime_network(), wallet_address, seqno, result.get("toncenter_status"), error_detail
         )
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "send_failed")
         return {"ok": False, "error": "send_failed", "error_detail": error_detail}
