@@ -39,8 +39,7 @@ jobs:
           assert len(address) >= 32
           assert len(pub) >= 32
 
-          wallet2, _, _ = _wallet_from_mnemonic(seed)
-          regenerated_address = wallet2.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+          wallet2, public_key2, private_key2, regenerated_address = _wallet_from_mnemonic(seed)
           print("regenerated address:", regenerated_address)
           assert regenerated_address == address
           PY

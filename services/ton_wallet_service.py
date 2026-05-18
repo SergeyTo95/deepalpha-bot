@@ -42,11 +42,10 @@ def _wallet_ready() -> bool:
         return False
     if not hasattr(WalletVersionEnum, "v4r2"):
         return False
-    has_create = hasattr(Wallets, "create") and callable(getattr(Wallets, "create"))
-    has_from_public = hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key"))
     ver = WalletVersionEnum.v4r2
     has_all = hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL
-    return has_create or has_from_public or has_all
+    has_from_public = hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key"))
+    return has_all or has_from_public
 
 
 def _get_fernet() -> Optional[Fernet]:
@@ -80,16 +79,14 @@ def _build_wallet_from_public_key(public_key: bytes):
         raise RuntimeError("setup_required")
 
     ver = WalletVersionEnum.v4r2
-
     if hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL:
         wallet_cls = Wallets.ALL[ver]
-        ctor_variants = [
+        for kwargs in (
             {"publicKey": public_key, "wc": 0},
             {"public_key": public_key, "wc": 0},
             {"publicKey": public_key, "workchain": 0},
             {"public_key": public_key, "workchain": 0},
-        ]
-        for kwargs in ctor_variants:
+        ):
             try:
                 return wallet_cls(**kwargs)
             except Exception:
@@ -107,24 +104,9 @@ def _build_wallet_from_public_key(public_key: bytes):
     raise RuntimeError("setup_required")
 
 
-def _wallet_from_mnemonic(seed_phrase: str):
+def _build_wallet_from_mnemonics(words: list[str]):
     if not _wallet_ready():
         raise RuntimeError("setup_required")
-    words = [w for w in (seed_phrase or "").split() if w]
-    if len(words) < 12:
-        raise RuntimeError("setup_required")
-
-    if hasattr(Wallets, "create") and callable(getattr(Wallets, "create")):
-        for kwargs in (
-            {"version": WalletVersionEnum.v4r2, "workchain": 0, "mnemonics": words},
-            {"version": WalletVersionEnum.v4r2, "wc": 0, "mnemonics": words},
-        ):
-            try:
-                _, public_key, private_key, wallet = Wallets.create(**kwargs)
-                return wallet, public_key, private_key
-            except Exception:
-                pass
-
     public_key, private_key = mnemonic_to_wallet_key(words)
     wallet = _build_wallet_from_public_key(public_key)
     return wallet, public_key, private_key
@@ -133,24 +115,19 @@ def _wallet_from_mnemonic(seed_phrase: str):
 def _generate_wallet_real() -> tuple[str, str, str]:
     if not _wallet_ready():
         raise RuntimeError("setup_required")
-
-    if hasattr(Wallets, "create") and callable(getattr(Wallets, "create")):
-        for kwargs in (
-            {"version": WalletVersionEnum.v4r2, "workchain": 0},
-            {"version": WalletVersionEnum.v4r2, "wc": 0},
-        ):
-            try:
-                mnemonics, public_key, _private_key, wallet = Wallets.create(**kwargs)
-                address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-                return " ".join(mnemonics), address, public_key.hex()
-            except Exception:
-                pass
-
     mnemonics = mnemonic_new()
-    public_key, _private_key = mnemonic_to_wallet_key(mnemonics)
-    wallet = _build_wallet_from_public_key(public_key)
+    wallet, public_key, _private_key = _build_wallet_from_mnemonics(mnemonics)
     address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
     return " ".join(mnemonics), address, public_key.hex()
+
+
+def _wallet_from_mnemonic(seed_phrase: str):
+    words = [w for w in (seed_phrase or "").split() if w]
+    if len(words) < 12:
+        raise RuntimeError("setup_required")
+    wallet, public_key, private_key = _build_wallet_from_mnemonics(words)
+    address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+    return wallet, public_key, private_key, address
 
 
 def _safe_wallet_data(row):
@@ -241,10 +218,9 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
     try:
         seed_phrase = decrypt_secret(seed_encrypted)
-        wallet, _public_key, private_key = _wallet_from_mnemonic(seed_phrase)
-        derived_address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-        if derived_address != wallet_address:
-            raise RuntimeError("signing_failed")
+        wallet, _public_key, private_key, derived_address = _wallet_from_mnemonic(seed_phrase)
+        if normalize_ton_address(derived_address) != normalize_ton_address(wallet_address):
+            raise RuntimeError("wallet_mismatch")
         seqno = get_wallet_seqno(wallet_address)
         transfer = wallet.create_transfer_message(
             to_addr=destination,
