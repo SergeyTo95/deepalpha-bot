@@ -107,7 +107,7 @@ async def admin_settings(r):
     d=await _guard(r)
     if d:return d
     key=_key(r)
-    keys=["paid_mode","token_price_ton","analysis_price_tokens","opportunity_price_tokens","cached_signal_price_tokens","subscription_price_ton","web_payments_enabled","web_tron_usdt_enabled","announcement_text"]
+    keys=["paid_mode","token_price_ton","analysis_price_tokens","opportunity_price_tokens","cached_signal_price_tokens","subscription_price_ton","web_payments_enabled","web_tron_usdt_enabled","announcement_text","ton_wallet_withdraw_fee_enabled","ton_wallet_withdraw_fee_percent","ton_wallet_withdraw_fee_min_nano","ton_wallet_withdraw_fee_max_nano","ton_wallet_fee_wallet","ton_wallet_fee_mode","ton_wallet_token_purchase_enabled","ton_platform_wallet","ton_token_price_per_internal_token_nano","ton_token_purchase_min_tokens","ton_token_purchase_bonus_percent"]
     labels={"token_price_ton":"Token price, TON","subscription_price_ton":"Subscription price, TON","analysis_price_tokens":"Analysis price, tokens","cached_signal_price_tokens":"Cached signal price, tokens","opportunity_price_tokens":"Opportunity price, tokens","web_payments_enabled":"Web payments enabled","web_tron_usdt_enabled":"Web TRON USDT enabled"}
     if r.method=='POST':
         f=await r.post()
