@@ -87,7 +87,11 @@ const I18N = {
     refresh: "Refresh",
     copyAddress: "Copy address",
     sendTon: "Send TON",
-    sendMax: "Send MAX"
+    sendMax: "Send MAX",
+    tonHistory: "📜 TON Transactions",
+    tonHistoryEmpty: "No TON transactions yet.",
+    refreshHistory: "Refresh transactions",
+    buyWithTon: "Buy tokens with TON wallet"
   },
   ru: {
     title: "Личный кабинет",
@@ -153,7 +157,11 @@ const I18N = {
     refresh: "Обновить",
     copyAddress: "Скопировать адрес",
     sendTon: "Отправить TON",
-    sendMax: "Отправить всё"
+    sendMax: "Отправить всё",
+    tonHistory: "📜 TON Транзакции",
+    tonHistoryEmpty: "TON транзакций пока нет.",
+    refreshHistory: "Обновить транзакции",
+    buyWithTon: "Купить токены с TON кошелька"
   }
 };
 
@@ -224,6 +232,10 @@ async function callTonSend(destination_address, amount_ton, comment) {
     method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ destination_address, amount_ton, comment })
   });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+async function callTonHistory(limit = 20) {
+  const r = await fetch(`/api/wallets/ton/transactions?limit=${encodeURIComponent(limit)}`, { credentials: "include" });
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
@@ -394,6 +406,11 @@ function renderAuthed(summary, lang) {
       </div>
       <p class="small" id="tonJettonsLine">${t.tonTokensDisabled}</p>
       <p class="small" id="tonStatusLine"></p>
+      <h3>${t.tonHistory}</h3>
+      <button id="tonHistoryRefreshBtn" class="btn btn-secondary">🔄 ${t.refreshHistory}</button>
+      <div id="tonHistoryList" class="history-list"></div>
+      <h3>${t.buyWithTon}</h3>
+      <div class="inline-links"><input id="tonBuyTokensInput" class="analysis-input" placeholder="10" /><button id="tonBuyBtn" class="btn btn-primary">🪙 Buy</button></div>
     </section>
 
     <section class="card">
@@ -417,6 +434,7 @@ function renderAuthed(summary, lang) {
   const tonAddressLine = document.getElementById("tonAddressLine");
   const tonBalanceLine = document.getElementById("tonBalanceLine");
   const tonStatusLine = document.getElementById("tonStatusLine");
+  const tonHistoryList = document.getElementById("tonHistoryList");
   let isRunning = false;
   let historyOffset = 0;
   const historyLimit = 10;
@@ -528,6 +546,13 @@ function renderAuthed(summary, lang) {
     document.getElementById("tonJettonsLine").textContent = jettons.length ? `Tokens on TON: ${jettons.length}` : t.tonTokensDisabled;
     tonRefreshRunning = false;
   };
+  const loadTonHistory = async () => {
+    const res = await callTonHistory(20);
+    if (!res.ok || !res.data?.ok) { tonHistoryList.innerHTML = `<p class="meta">${escapeHtml(t.authError)}</p>`; return; }
+    const items = Array.isArray(res.data.items) ? res.data.items : [];
+    if (!items.length) { tonHistoryList.innerHTML = `<p class="meta">${escapeHtml(t.tonHistoryEmpty)}</p>`; return; }
+    tonHistoryList.innerHTML = items.map((x) => `<div class='history-item'><div><b>${escapeHtml(x.direction || "-")}</b> · ${escapeHtml(x.amount_display || "0")} TON · ${escapeHtml(x.status || "")}</div><div class='small'>${escapeHtml(x.address || "")}</div><div class='small'>${escapeHtml(x.tx_hash || "")}</div><div class='small'>${escapeHtml(x.created_at || "")}</div></div>`).join("");
+  };
 
   const setRunningState = (running, mode = "quick") => {
     isRunning = running;
@@ -596,6 +621,7 @@ function renderAuthed(summary, lang) {
     renderHistoryItems();
   };
   document.getElementById("tonRefreshBtn").onclick = async () => { await loadTonWallet(true); };
+  document.getElementById("tonHistoryRefreshBtn").onclick = async () => { await loadTonHistory(); };
   document.getElementById("tonCopyBtn").onclick = async () => { if (tonWalletData?.wallet_address) await copyToClipboardSafe(tonWalletData.wallet_address); };
   document.getElementById("tonMaxBtn").onclick = async () => {
     if (tonWalletState.maxSendNano <= 0n) {
@@ -625,6 +651,7 @@ function renderAuthed(summary, lang) {
     if (sent.data?.ok) {
       tonStatusLine.textContent = lang === "ru" ? "✅ TON отправлен.\nБаланс обновляется..." : "✅ TON sent.\nRefreshing balance...";
       await loadTonWallet(true);
+      await loadTonHistory();
       return;
     }
     const details = {
@@ -634,7 +661,15 @@ function renderAuthed(summary, lang) {
     };
     tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details, sent.data?.error_detail || "unknown");
   };
+  document.getElementById("tonBuyBtn").onclick = async () => {
+    const amount_tokens = String(document.getElementById("tonBuyTokensInput").value || "").trim();
+    const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount_tokens }) });
+    const d = await r.json();
+    tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : String(d.error || "buy_failed");
+    if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
+  };
   loadTonWallet(false).then(() => loadTonWallet(true));
+  loadTonHistory();
   if (window.__tonRefreshIntervalId) clearInterval(window.__tonRefreshIntervalId);
   window.__tonRefreshIntervalId = setInterval(() => {
     if (document.getElementById("tonNetworkLine")) loadTonWallet(true);
