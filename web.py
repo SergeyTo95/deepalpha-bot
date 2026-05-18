@@ -13,6 +13,17 @@ from services.web_auth_service import verify_telegram_init_data, get_cookie_secu
 from services.webapp_analysis_service import run_webapp_quick_analysis
 from services.webapp_bot_delivery import deliver_webapp_analysis_to_telegram
 from services.webapp_top_analysis_service import run_webapp_top_analysis
+from services.ton_wallet_service import (
+    get_user_ton_balance,
+    get_or_create_user_ton_wallet,
+    send_ton_from_user_wallet,
+    get_ton_send_fee_reserve_nano,
+    get_ton_runtime_network,
+    get_ton_withdraw_fee_settings,
+    list_enabled_ton_jettons,
+    get_user_jetton_balances,
+)
+from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -598,7 +609,90 @@ async def handle_webapp_summary(request):
             "payment": "/pay",
             "app": "/app",
         },
+        "ton_wallet": {
+            "enabled": str(get_setting("web_ton_enabled", "off")).lower() == "on",
+            "network": get_ton_runtime_network(),
+            "token_purchase_enabled": str(get_setting("ton_wallet_token_purchase_enabled", "off")).lower() == "on",
+        },
     })
+
+
+def _current_web_user_id(request) -> int:
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    if not current:
+        return 0
+    user_id = int(current.get("user_id", 0) or 0)
+    return user_id if user_id > 0 else 0
+
+
+async def handle_wallet_ton(request):
+    user_id = _current_web_user_id(request)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    get_or_create_user_ton_wallet(user_id)
+    balance = get_user_ton_balance(user_id, refresh=False)
+    if not balance.get("ok"):
+        return _json_response(balance, status=400)
+    wallet = get_or_create_user_ton_wallet(user_id)
+    return _json_response({
+        "ok": True,
+        "network": get_ton_runtime_network(),
+        "wallet_address": balance.get("wallet_address", ""),
+        "balance_nano": str(balance.get("balance_nano", "0")),
+        "balance_display": str(balance.get("balance_display", "0")),
+        "last_balance_checked_at": balance.get("last_balance_checked_at"),
+        "seed_reveal_used": bool(wallet.get("seed_reveal_used")),
+        "fee_reserve_nano": str(get_ton_send_fee_reserve_nano()),
+        "fee_reserve_display": nano_to_ton_display(get_ton_send_fee_reserve_nano()),
+        "withdraw_fee_settings": get_ton_withdraw_fee_settings(),
+        "jettons": get_user_jetton_balances(user_id, refresh=False),
+        "enabled_jettons": list_enabled_ton_jettons(get_ton_runtime_network()),
+    })
+
+
+async def handle_wallet_ton_refresh(request):
+    user_id = _current_web_user_id(request)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    balance = get_user_ton_balance(user_id, refresh=True)
+    if not balance.get("ok"):
+        return _json_response(balance, status=400)
+    return await handle_wallet_ton(request)
+
+
+async def handle_wallet_ton_send(request):
+    user_id = _current_web_user_id(request)
+    if user_id <= 0:
+        return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    destination_address = str(payload.get("destination_address", "") or "").strip()
+    amount_ton = str(payload.get("amount_ton", "") or "").strip()
+    comment = str(payload.get("comment", "") or "").strip()
+    if not validate_ton_address(destination_address):
+        return _json_response({"ok": False, "error": "invalid_address"}, status=400)
+    try:
+        amount_nano = ton_to_nano(amount_ton)
+    except Exception:
+        return _json_response({"ok": False, "error": "invalid_amount"}, status=400)
+    result = send_ton_from_user_wallet(user_id=user_id, destination_address=destination_address, amount_nano=amount_nano, comment=comment)
+    if (not result.get("ok")) and str(result.get("error")) == "insufficient_balance":
+        b = get_user_ton_balance(user_id, refresh=True)
+        reserve_nano = int(get_ton_send_fee_reserve_nano())
+        balance_nano = int(b.get("balance_nano") or 0)
+        max_send_nano = balance_nano - reserve_nano
+        if max_send_nano < 0:
+            max_send_nano = 0
+        result["balance_nano"] = str(balance_nano)
+        result["balance_display"] = nano_to_ton_display(balance_nano)
+        result["fee_reserve_nano"] = str(reserve_nano)
+        result["fee_reserve_display"] = nano_to_ton_display(reserve_nano)
+        result["max_send_nano"] = str(max_send_nano)
+        result["max_send_display"] = nano_to_ton_display(max_send_nano)
+    return _json_response(result, status=200 if result.get("ok") else 400)
 
 
 async def run_webapp_top_analysis_job(job_id: str, user_id: int, url: str, lang: str, provider: str):
@@ -975,11 +1069,17 @@ app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
 app.router.add_post("/api/webapp/analyze/start", handle_webapp_analyze_start)
 app.router.add_get("/api/webapp/analyze/status/{job_id}", handle_webapp_analyze_status)
+app.router.add_get("/api/wallets/ton", handle_wallet_ton)
+app.router.add_post("/api/wallets/ton/refresh", handle_wallet_ton_refresh)
+app.router.add_post("/api/wallets/ton/send", handle_wallet_ton_send)
 app.router.add_route("OPTIONS", "/api/webapp/analyze", handle_options)
 app.router.add_route("OPTIONS", "/api/webapp/analyze/start", handle_options)
 app.router.add_route("OPTIONS", "/api/webapp/analyze/status/{job_id}", handle_options)
 app.router.add_get("/api/webapp/history", handle_webapp_history)
 app.router.add_get("/api/webapp/history/{item_id}", handle_webapp_history_item)
+app.router.add_route("OPTIONS", "/api/wallets/ton", handle_options)
+app.router.add_route("OPTIONS", "/api/wallets/ton/refresh", handle_options)
+app.router.add_route("OPTIONS", "/api/wallets/ton/send", handle_options)
 app.router.add_post("/api/auth/logout", handle_auth_logout)
 app.router.add_route("OPTIONS", "/api/auth/logout", handle_options)
 app.router.add_get("/api/auth/google/start", handle_google_start)

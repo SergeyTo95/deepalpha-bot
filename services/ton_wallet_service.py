@@ -1,7 +1,7 @@
 import base64
 import os
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from db.database import get_connection
 from services.ton_chain_service import (
@@ -37,6 +37,52 @@ TON_SEND_FEE_RESERVE_NANO = 50_000_000
 
 def get_ton_send_fee_reserve_nano() -> int:
     return TON_SEND_FEE_RESERVE_NANO
+
+
+def get_ton_runtime_network() -> str:
+    return (os.getenv("TON_NETWORK") or "testnet").strip().lower()
+
+
+def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
+    from db.database import get_setting
+    return {
+        "ton_wallet_withdraw_fee_enabled": str(get_setting("ton_wallet_withdraw_fee_enabled", "off")).lower() == "on",
+        "ton_wallet_withdraw_fee_percent": str(get_setting("ton_wallet_withdraw_fee_percent", "0") or "0"),
+        "ton_wallet_withdraw_fee_min_nano": str(get_setting("ton_wallet_withdraw_fee_min_nano", "0") or "0"),
+        "ton_wallet_withdraw_fee_max_nano": str(get_setting("ton_wallet_withdraw_fee_max_nano", "0") or "0"),
+        "ton_wallet_fee_wallet": str(get_setting("ton_wallet_fee_wallet", "") or "").strip(),
+        "ton_wallet_fee_mode": str(get_setting("ton_wallet_fee_mode", "reserve_only") or "reserve_only").strip().lower(),
+    }
+
+
+def list_enabled_ton_jettons(network: str) -> List[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""SELECT symbol,name,network,master_address,decimals,is_enabled,is_deepalpha_token,sort_order
+                   FROM ton_jetton_assets WHERE network=%s AND is_enabled=TRUE ORDER BY sort_order ASC,id ASC""", (network,))
+    rows = cur.fetchall() or []
+    conn.close()
+    result = []
+    for row in rows:
+        result.append({
+            "symbol": row[0], "name": row[1], "network": row[2], "master_address": row[3],
+            "decimals": int(row[4] or 9), "is_enabled": bool(row[5]), "is_deepalpha_token": bool(row[6]), "sort_order": int(row[7] or 0)
+        })
+    return result
+
+
+def get_user_jetton_balances(user_id: int, refresh: bool = False) -> List[Dict[str, Any]]:
+    if refresh:
+        return []
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""SELECT jetton_master_address,balance_raw,balance_display,last_checked_at
+                   FROM user_ton_jetton_balances WHERE user_id=%s ORDER BY id DESC""", (user_id,))
+    rows = cur.fetchall() or []
+    conn.close()
+    return [{"jetton_master_address": r[0], "balance_raw": str(r[1] or "0"), "balance_display": str(r[2] or "0"), "last_checked_at": r[3]} for r in rows]
+
+
+def refresh_user_jetton_balance(user_id: int, master_address: str) -> Dict[str, Any]:
+    return {"ok": False, "error": "not_implemented"}
 
 
 def _now() -> str:
