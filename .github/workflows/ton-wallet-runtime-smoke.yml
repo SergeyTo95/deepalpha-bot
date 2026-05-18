@@ -1,0 +1,84 @@
+name: TON Wallet Runtime Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ton-wallet-runtime-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+
+      - name: Wallet import/runtime smoke
+        run: |
+          python - <<'PY'
+          from services.ton_wallet_service import _wallet_ready, _generate_wallet_real
+
+          print("wallet_ready:", _wallet_ready())
+          assert _wallet_ready() is True
+
+          seed, address, pub = _generate_wallet_real()
+          print("seed words:", len(seed.split()))
+          print("address:", address)
+          print("public_key length:", len(pub))
+
+          assert len(seed.split()) in (12, 24)
+          assert len(address) >= 32
+          assert len(pub) >= 32
+          PY
+
+      - name: Signed BoC creation test (offline)
+        run: |
+          python - <<'PY'
+          import base64
+          from services.ton_wallet_service import _generate_wallet_real, _build_wallet_from_public_key
+          from services.ton_chain_service import validate_ton_address
+          from tonsdk.crypto import mnemonic_to_wallet_key
+
+          seed, address, pub = _generate_wallet_real()
+          print("address:", address)
+          print("address valid:", validate_ton_address(address))
+          assert validate_ton_address(address)
+
+          public_key, private_key = mnemonic_to_wallet_key(seed.split())
+          wallet = _build_wallet_from_public_key(public_key)
+
+          transfer = wallet.create_transfer_message(
+              to_addr=address,
+              amount=1_000_000,
+              seqno=0,
+              payload="test",
+              send_mode=3,
+              private_key=private_key,
+          )
+
+          boc = transfer["message"].to_boc(False)
+          b64 = base64.b64encode(boc).decode()
+
+          print("boc bytes:", len(boc))
+          print("boc base64 prefix:", b64[:20])
+
+          assert len(boc) > 0
+          assert len(b64) > 0
+          PY
+
+      - name: Compile checks
+        run: |
+          python -m py_compile web.py db/database.py telegram_bot.py services/*.py agents/top_analysis/*.py bot/*.py
+
+      - name: Conflict marker check
+        run: |
+          grep -R -n "<<<<<<<\|=======\|>>>>>>>" . --exclude-dir=.git --exclude-dir=__pycache__
