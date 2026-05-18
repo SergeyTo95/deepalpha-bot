@@ -7726,7 +7726,7 @@ async def ton_send_flow(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     if st["step"] == "address":
         addr = (message.text or '').strip()
-        from services.ton_chain_service import validate_ton_address, normalize_ton_address, nano_to_ton_display
+        from services.ton_chain_service import validate_ton_address, normalize_ton_address, nano_to_ton_display, ton_to_nano
         if not validate_ton_address(addr):
             await message.answer("Неверный TON адрес. Попробуйте ещё раз:" if lang=="ru" else "Invalid TON address. Try again:")
             return
@@ -7748,3 +7748,41 @@ async def ton_send_flow(message: types.Message):
         text = (f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма:\n{amount_disp} TON\n\nКомиссия сети будет списана дополнительно с вашего TON-кошелька." if lang=="ru" else f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount:\n{amount_disp} TON\n\nNetwork fee will be charged additionally from your TON wallet.")
         await message.answer(text, reply_markup=kb)
 
+
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send_cancel")
+async def ton_send_cancel_cb(c: types.CallbackQuery):
+    TON_SEND_PENDING.pop(c.from_user.id, None)
+    await c.message.answer("Отправка TON отменена." if get_user_lang(c.from_user.id) == "ru" else "TON send cancelled.")
+    await c.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send_confirm")
+async def ton_send_confirm_cb(c: types.CallbackQuery):
+    uid = c.from_user.id
+    lang = get_user_lang(uid)
+    st = TON_SEND_PENDING.get(uid) or {}
+
+    if st.get("step") != "confirm" or not st.get("address") or not st.get("amount_nano"):
+        await c.answer("Заявка на отправку устарела." if lang == "ru" else "Send request expired.", show_alert=True)
+        return
+
+    await c.answer("Отправляю..." if lang == "ru" else "Sending...")
+
+    result = send_ton_from_user_wallet(
+        user_id=uid,
+        destination_address=st["address"],
+        amount_nano=int(st["amount_nano"]),
+        comment="DeepAlpha TON transfer",
+    )
+
+    TON_SEND_PENDING.pop(uid, None)
+
+    if not result.get("ok"):
+        await c.message.answer(_ton_send_error(uid, result.get("error") or "send_failed"))
+        return
+
+    tx_hash = result.get("tx_hash") or "submitted"
+    await c.message.answer(
+        f"✅ TON отправлен.\n\nTx: {tx_hash}" if lang == "ru" else f"✅ TON sent.\n\nTx: {tx_hash}"
+    )
