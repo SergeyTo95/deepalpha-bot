@@ -76,6 +76,13 @@ const I18N = {
     historyItemUnavailable: "This history item has no full report yet."
     ,
     loadMore: "Load more"
+    ,
+    tonWallet: "TON Wallet",
+    tonTokensDisabled: "TON tokens are not enabled yet.",
+    refresh: "Refresh",
+    copyAddress: "Copy address",
+    sendTon: "Send TON",
+    sendMax: "Send MAX"
   },
   ru: {
     title: "Личный кабинет",
@@ -135,6 +142,13 @@ const I18N = {
     telegramAuthUnavailable: "Авторизация Telegram недоступна. Откройте страницу из Telegram WebApp.",
     historyItemUnavailable: "Для этой записи пока нет полного отчёта.",
     loadMore: "Загрузить ещё"
+    ,
+    tonWallet: "TON кошелёк",
+    tonTokensDisabled: "TON-токены пока не подключены.",
+    refresh: "Обновить",
+    copyAddress: "Скопировать адрес",
+    sendTon: "Отправить TON",
+    sendMax: "Отправить всё"
   }
 };
 
@@ -189,6 +203,22 @@ async function callTopAnalyzeStart(url) {
 
 async function callAnalyzeStatus(jobId) {
   const r = await fetch(`/api/webapp/analyze/status/${encodeURIComponent(jobId)}`, { credentials: "include" });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+
+async function callTonWallet() {
+  const r = await fetch("/api/wallets/ton", { credentials: "include" });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+async function callTonRefresh() {
+  const r = await fetch("/api/wallets/ton/refresh", { method: "POST", credentials: "include" });
+  return { ok: r.ok, status: r.status, data: await r.json() };
+}
+async function callTonSend(destination_address, amount_ton, comment) {
+  const r = await fetch("/api/wallets/ton/send", {
+    method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ destination_address, amount_ton, comment })
+  });
   return { ok: r.ok, status: r.status, data: await r.json() };
 }
 
@@ -340,6 +370,26 @@ function renderAuthed(summary, lang) {
       <p class="meta">${t.cashierDesc}</p>
       <a href="/pay"><button class="btn btn-primary">${t.openCashier}</button></a>
     </section>
+    <section class="card">
+      <h2>💎 ${t.tonWallet}</h2>
+      <p class="meta" id="tonNetworkLine">-</p>
+      <p class="small" id="tonAddressLine">-</p>
+      <p class="value" id="tonBalanceLine">-</p>
+      <div class="inline-links">
+        <button id="tonRefreshBtn" class="btn btn-secondary">🔄 ${t.refresh}</button>
+        <button id="tonCopyBtn" class="btn btn-secondary">📋 ${t.copyAddress}</button>
+      </div>
+      <div class="inline-links" style="margin-top:8px;">
+        <input id="tonDestInput" class="analysis-input" placeholder="EQ..." />
+        <input id="tonAmountInput" class="analysis-input" placeholder="0.1" />
+      </div>
+      <div class="inline-links" style="margin-top:8px;">
+        <button id="tonSendBtn" class="btn btn-primary">📤 ${t.sendTon}</button>
+        <button id="tonMaxBtn" class="btn btn-secondary">💰 ${t.sendMax}</button>
+      </div>
+      <p class="small" id="tonJettonsLine">${t.tonTokensDisabled}</p>
+      <p class="small" id="tonStatusLine"></p>
+    </section>
 
     <section class="card">
       <h2>${t.actions}</h2>
@@ -358,11 +408,31 @@ function renderAuthed(summary, lang) {
   const topBtn = document.getElementById("topAnalysisBtn");
   const resultBox = document.getElementById("analysisResult");
   const historyBox = document.getElementById("analysisHistory");
+  const tonNetworkLine = document.getElementById("tonNetworkLine");
+  const tonAddressLine = document.getElementById("tonAddressLine");
+  const tonBalanceLine = document.getElementById("tonBalanceLine");
+  const tonStatusLine = document.getElementById("tonStatusLine");
   let isRunning = false;
   let historyOffset = 0;
   const historyLimit = 10;
   let historyHasMore = false;
   let historyItems = [];
+  let tonWalletData = null;
+
+  const loadTonWallet = async (doRefresh) => {
+    const res = doRefresh ? await callTonRefresh() : await callTonWallet();
+    if (!res.ok || !res.data?.ok) {
+      tonStatusLine.textContent = "TON wallet unavailable";
+      return;
+    }
+    tonWalletData = res.data;
+    tonNetworkLine.textContent = `Network: ${String(res.data.network || "").toUpperCase()}`;
+    tonAddressLine.textContent = `Address: ${res.data.wallet_address || "-"}`;
+    tonBalanceLine.textContent = `${res.data.balance_display || "0"} TON`;
+    tonStatusLine.textContent = "";
+    const jettons = Array.isArray(res.data.enabled_jettons) ? res.data.enabled_jettons : [];
+    document.getElementById("tonJettonsLine").textContent = jettons.length ? `Tokens on TON: ${jettons.length}` : t.tonTokensDisabled;
+  };
 
   const setRunningState = (running, mode = "quick") => {
     isRunning = running;
@@ -430,6 +500,17 @@ function renderAuthed(summary, lang) {
     historyHasMore = Boolean(res.data?.pagination?.has_more);
     renderHistoryItems();
   };
+  document.getElementById("tonRefreshBtn").onclick = async () => { await loadTonWallet(true); };
+  document.getElementById("tonCopyBtn").onclick = async () => { if (tonWalletData?.wallet_address) await copyToClipboardSafe(tonWalletData.wallet_address); };
+  document.getElementById("tonMaxBtn").onclick = async () => { if (tonWalletData?.balance_display) document.getElementById("tonAmountInput").value = tonWalletData.balance_display; };
+  document.getElementById("tonSendBtn").onclick = async () => {
+    const destination = String(document.getElementById("tonDestInput").value || "").trim();
+    const amount = String(document.getElementById("tonAmountInput").value || "").trim();
+    const sent = await callTonSend(destination, amount, "");
+    tonStatusLine.textContent = sent.data?.ok ? "Sent" : `Error: ${sent.data?.error || "send_failed"}`;
+    if (sent.data?.ok) await loadTonWallet(true);
+  };
+  loadTonWallet(false);
 
   const topProgressPhrases = {
     en: [
