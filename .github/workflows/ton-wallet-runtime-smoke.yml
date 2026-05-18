@@ -44,9 +44,9 @@ jobs:
           print("Wallets.create exists:", hasattr(Wallets, "create"))
           if hasattr(Wallets, "create"):
               print("Wallets.create signature:", inspect.signature(Wallets.create))
-          print("Wallets.from_public_key exists:", hasattr(Wallets, "from_public_key"))
-          if hasattr(Wallets, "from_public_key"):
-              print("Wallets.from_public_key signature:", inspect.signature(Wallets.from_public_key))
+          print("Wallets.from_mnemonics exists:", hasattr(Wallets, "from_mnemonics"))
+          if hasattr(Wallets, "from_mnemonics"):
+              print("Wallets.from_mnemonics signature:", inspect.signature(Wallets.from_mnemonics))
           PY
 
       - name: Wallet import/runtime smoke
@@ -75,17 +75,16 @@ jobs:
         run: |
           python - <<'PY'
           import base64
-          from services.ton_wallet_service import _generate_wallet_real, _build_wallet_from_public_key
+          from services.ton_wallet_service import _generate_wallet_real, _wallet_from_mnemonic
           from services.ton_chain_service import validate_ton_address
-          from tonsdk.crypto import mnemonic_to_wallet_key
 
           seed, address, pub = _generate_wallet_real()
           print("address:", address)
           print("address valid:", validate_ton_address(address))
           assert validate_ton_address(address)
 
-          public_key, private_key = mnemonic_to_wallet_key(seed.split())
-          wallet = _build_wallet_from_public_key(public_key)
+          wallet, public_key, private_key, regenerated_address = _wallet_from_mnemonic(seed)
+          assert regenerated_address == address
 
           transfer = wallet.create_transfer_message(
               to_addr=address,

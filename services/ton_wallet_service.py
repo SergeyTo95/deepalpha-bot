@@ -20,12 +20,11 @@ except Exception:
 
 try:
     from tonsdk.contract.wallet import Wallets, WalletVersionEnum
-    from tonsdk.crypto import mnemonic_is_valid, mnemonic_new, mnemonic_to_wallet_key
+    from tonsdk.crypto import mnemonic_is_valid, mnemonic_new
 except Exception:
     Wallets = None
     WalletVersionEnum = None
     mnemonic_new = None
-    mnemonic_to_wallet_key = None
     mnemonic_is_valid = None
 
 
@@ -38,18 +37,14 @@ def _now() -> str:
 
 
 def _wallet_ready() -> bool:
-    if not all([Wallets, WalletVersionEnum, mnemonic_new, mnemonic_to_wallet_key]):
+    if not all([Wallets, WalletVersionEnum, mnemonic_new]):
         return False
     if not hasattr(WalletVersionEnum, "v4r2"):
         return False
-    try:
-        words = mnemonic_new()
-        public_key, _private_key = mnemonic_to_wallet_key(words)
-        wallet = _try_wallet_from_public_key(public_key)
-        address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-        return bool(address)
-    except Exception:
-        return False
+    has_create = hasattr(Wallets, "create") and callable(getattr(Wallets, "create"))
+    has_from_mnemonics = hasattr(Wallets, "from_mnemonics") and callable(getattr(Wallets, "from_mnemonics"))
+    return has_create and has_from_mnemonics
+
 
 
 def _get_fernet() -> Optional[Fernet]:
@@ -78,80 +73,45 @@ def decrypt_secret(cipher: str) -> str:
     return f.decrypt(cipher.encode()).decode()
 
 
-def _try_wallet_from_public_key(public_key: bytes):
-    ver = WalletVersionEnum.v4r2
-
-    def _valid_wallet(w):
-        try:
-            a = w.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-            return bool(a)
-        except Exception:
-            return False
-
-    if hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL:
-        wallet_cls = Wallets.ALL[ver]
-        variants = [
-            ((), {"publicKey": public_key, "wc": 0}),
-            ((), {"publicKey": public_key, "workchain": 0}),
-            ((), {"public_key": public_key, "wc": 0}),
-            ((), {"public_key": public_key, "workchain": 0}),
-            (({"publicKey": public_key, "wc": 0},), {}),
-            (({"publicKey": public_key, "workchain": 0},), {}),
-            (({"public_key": public_key, "wc": 0},), {}),
-            (({"public_key": public_key, "workchain": 0},), {}),
-            ((), {"publicKey": public_key}),
-            (({"publicKey": public_key},), {}),
-        ]
-        for args, kwargs in variants:
-            try:
-                w = wallet_cls(*args, **kwargs)
-                if _valid_wallet(w):
-                    return w
-            except Exception:
-                pass
-
-    if hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key")):
-        for kwargs in ({"workchain": 0}, {"wc": 0}):
-            try:
-                w = Wallets.from_public_key(public_key, ver, **kwargs)
-                if _valid_wallet(w):
-                    return w
-            except Exception:
-                pass
-
-    raise RuntimeError("setup_required")
-
-
-def _build_wallet_from_public_key(public_key: bytes):
-    if not _wallet_ready():
-        raise RuntimeError("setup_required")
-    return _try_wallet_from_public_key(public_key)
-
-
-def _build_wallet_from_mnemonics(words: list[str]):
-    if not _wallet_ready():
-        raise RuntimeError("setup_required")
-    public_key, private_key = mnemonic_to_wallet_key(words)
-    wallet = _build_wallet_from_public_key(public_key)
-    return wallet, public_key, private_key
-
-
 def _generate_wallet_real() -> tuple[str, str, str]:
     if not _wallet_ready():
         raise RuntimeError("setup_required")
-    mnemonics = mnemonic_new()
-    wallet, public_key, _private_key = _build_wallet_from_mnemonics(mnemonics)
-    address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-    return " ".join(mnemonics), address, public_key.hex()
+
+    for kwargs in (
+        {"version": WalletVersionEnum.v4r2, "workchain": 0},
+        {"version": WalletVersionEnum.v4r2, "wc": 0},
+    ):
+        try:
+            mnemonics, public_key, _private_key, wallet = Wallets.create(**kwargs)
+            address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+            return " ".join(mnemonics), address, public_key.hex()
+        except Exception:
+            pass
+    raise RuntimeError("setup_required")
 
 
 def _wallet_from_mnemonic(seed_phrase: str):
+    if not _wallet_ready():
+        raise RuntimeError("setup_required")
     words = [w for w in (seed_phrase or "").split() if w]
     if len(words) < 12:
         raise RuntimeError("setup_required")
-    wallet, public_key, private_key = _build_wallet_from_mnemonics(words)
-    address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
-    return wallet, public_key, private_key, address
+
+    for kwargs in (
+        {"version": WalletVersionEnum.v4r2, "workchain": 0},
+        {"version": WalletVersionEnum.v4r2, "wc": 0},
+    ):
+        try:
+            result = Wallets.from_mnemonics(words, **kwargs)
+            if not isinstance(result, (list, tuple)) or len(result) < 3:
+                continue
+            # expected: public_key, private_key, wallet
+            public_key, private_key, wallet = result[0], result[1], result[2]
+            address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+            return wallet, public_key, private_key, address
+        except Exception:
+            pass
+    raise RuntimeError("setup_required")
 
 
 def _safe_wallet_data(row):
