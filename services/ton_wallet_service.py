@@ -1,5 +1,6 @@
 import base64
 import os
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -12,6 +13,7 @@ from services.ton_chain_service import (
     send_boc_return_hash,
     validate_ton_address,
 )
+logger = logging.getLogger(__name__)
 
 try:
     from cryptography.fernet import Fernet
@@ -343,6 +345,13 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         if normalize_ton_address(derived_address) != normalize_ton_address(wallet_address):
             raise RuntimeError("wallet_mismatch")
         seqno = get_wallet_seqno(wallet_address)
+        if seqno is None:
+            logger.warning(
+                "TON send seqno unavailable user_id=%s network=%s src=%s dst=%s amount_nano=%s fee_reserve_nano=%s balance_nano=%s",
+                user_id, get_ton_runtime_network(), wallet_address, destination, int(amount_nano), reserve, balance
+            )
+            _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "send_failed")
+            return {"ok": False, "error": "send_failed", "error_detail": "seqno_or_account_state"}
         transfer = _build_signed_transfer_message(
             wallet=wallet,
             private_key=private_key,
@@ -360,8 +369,13 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
     result = send_boc_return_hash(boc_base64)
     if not result.get("ok"):
+        error_detail = str(result.get("error_detail") or "unknown")
+        logger.warning(
+            "TON send failed user_id=%s network=%s src=%s dst=%s amount_nano=%s seqno=%s fee_reserve_nano=%s balance_nano=%s toncenter_status=%s error_detail=%s",
+            user_id, get_ton_runtime_network(), wallet_address, destination, int(amount_nano), seqno, reserve, balance, result.get("toncenter_status"), error_detail
+        )
         _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "send_failed")
-        return {"ok": False, "error": "send_failed"}
+        return {"ok": False, "error": "send_failed", "error_detail": error_detail}
 
     tx_hash = result.get("tx_hash")
     _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None)
