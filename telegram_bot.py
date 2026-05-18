@@ -7627,11 +7627,6 @@ def _ton_send_error(uid: int, code: str) -> str:
     return (en if get_user_lang(uid)=="en" else ru).get(code, ("Operation failed" if get_user_lang(uid)=="en" else "Операция не выполнена"))
 
 
-def _ton_network_display() -> str:
-    from services.ton_chain_service import _network
-    return _network().upper()
-
-
 def _ton_reserve_nano() -> int:
     from services.ton_wallet_service import get_ton_send_fee_reserve_nano
     return int(get_ton_send_fee_reserve_nano())
@@ -7645,14 +7640,15 @@ async def _send_ton_wallet_screen(message: types.Message):
         return
     b = get_user_ton_balance(uid, refresh=True)
     lang = get_user_lang(uid)
+    network_display = str((b.get("network") or "testnet")).upper()
     if lang == "ru":
-        text = f"💎 Ваш TON кошелёк\n\nСеть: {_ton_network_display()}\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети {_ton_network_display()}."
+        text = f"💎 Ваш TON кошелёк\n\nСеть: {network_display}\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети {network_display}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
-        text = f"💎 Your TON Wallet\n\nNetwork: {_ton_network_display()}\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on {_ton_network_display()}."
+        text = f"💎 Your TON Wallet\n\nNetwork: {network_display}\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on {network_display}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
@@ -7689,11 +7685,12 @@ async def ton_receive_cb(c: types.CallbackQuery):
     b = get_user_ton_balance(c.from_user.id, refresh=False)
     lang = get_user_lang(c.from_user.id)
     address = b.get("wallet_address", "")
+    network_display = str((b.get("network") or "testnet")).upper()
     if lang == "ru":
-        msg = f"📥 Адрес для пополнения TON:\n\n`{address}`\n\nОтправляйте только TON в сети {_ton_network_display()}."
+        msg = f"📥 Адрес для пополнения TON:\n\n<code>{address}</code>\n\nОтправляйте только TON в сети {network_display}."
     else:
-        msg = f"📥 TON deposit address:\n\n`{address}`\n\nSend only TON on {_ton_network_display()}."
-    await c.message.answer(msg, parse_mode="Markdown")
+        msg = f"📥 TON deposit address:\n\n<code>{address}</code>\n\nSend only TON on {network_display}."
+    await c.message.answer(msg, parse_mode="HTML")
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "ton_send")
