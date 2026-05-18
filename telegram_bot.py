@@ -1,6 +1,7 @@
 import re
 import asyncio
 import os
+import html
 import logging
 import json
 import time
@@ -7645,18 +7646,22 @@ async def _send_ton_wallet_screen(message: types.Message):
     lang = get_user_lang(uid)
     network_label = _ton_network_label(b.get("network"))
     if lang == "ru":
-        text = f"💎 Ваш TON кошелёк\n\nСеть: {network_label}\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети {network_label}."
+        address_html = html.escape(str(b.get("wallet_address", "")))
+    balance_html = html.escape(str(b.get("balance_display", "0")))
+    network_html = html.escape(str(network_label))
+    if lang == "ru":
+        text = f"💎 Ваш TON кошелёк\n\nСеть: {network_html}\n\nАдрес для пополнения:\n<code>{address_html}</code>\n\nБаланс: {balance_html} TON\n\nОтправляйте только TON в сети {network_html}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
-        text = f"💎 Your TON Wallet\n\nNetwork: {network_label}\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on {network_label}."
+        text = f"💎 Your TON Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} TON\n\nSend only TON on {network_html}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 @dp.message_handler(commands=["ton_wallet","ton_balance"])
 async def cmd_ton_wallet(message: types.Message):
