@@ -22,7 +22,11 @@ def _base_url() -> str:
 
 
 def _params() -> Dict[str, Any]:
-    key = (os.getenv("TONCENTER_API_KEY") or "").strip()
+    network = _network()
+    if network == "mainnet":
+        key = (os.getenv("TONCENTER_MAINNET_API_KEY") or os.getenv("TONCENTER_API_KEY") or "").strip()
+    else:
+        key = (os.getenv("TONCENTER_TESTNET_API_KEY") or os.getenv("TONCENTER_API_KEY") or "").strip()
     return {"api_key": key} if key else {}
 
 
