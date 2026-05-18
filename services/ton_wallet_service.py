@@ -5,7 +5,6 @@ import re
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from urllib.parse import quote
 
 from db.database import get_connection
 from services.ton_chain_service import (
@@ -56,8 +55,13 @@ def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     h_lower = h.lower()
     if h in {"-"} or h_lower in {"none", "null"}:
         return ""
-    if not re.match(r"^[A-Za-z0-9_\-+/=]{20,}$", h):
+
+    h_url = h.replace("+", "-").replace("/", "_").rstrip("=")
+    if len(h_url) < 20:
         return ""
+    if not re.match(r"^[A-Za-z0-9_\-]+$", h_url):
+        return ""
+
     net = str(network or "").strip().lower() or get_ton_runtime_network()
     from db.database import get_setting
     default_main = "https://tonviewer.com/transaction/"
@@ -67,7 +71,7 @@ def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     base = main_base if net == "mainnet" else test_base
     if not base.endswith("/"):
         base += "/"
-    return base + quote(h, safe="")
+    return base + h_url
 
 
 def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
