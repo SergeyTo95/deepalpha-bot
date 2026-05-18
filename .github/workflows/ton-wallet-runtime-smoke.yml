@@ -49,6 +49,36 @@ jobs:
               print("Wallets.from_mnemonics signature:", inspect.signature(Wallets.from_mnemonics))
           PY
 
+
+      - name: from_mnemonics shape probe
+        run: |
+          python - <<'PY'
+          from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+          from tonsdk.crypto import mnemonic_new
+
+          words = mnemonic_new()
+          print("sample words:", len(words))
+
+          try:
+              res = Wallets.from_mnemonics(words, version=WalletVersionEnum.v4r2, workchain=0)
+          except TypeError as e:
+              print("from_mnemonics workchain TypeError:", str(e))
+              res = Wallets.from_mnemonics(words, version=WalletVersionEnum.v4r2, wc=0)
+
+          print("from_mnemonics result type:", type(res))
+          if isinstance(res, tuple):
+              print("from_mnemonics tuple length:", len(res))
+              for i, item in enumerate(res):
+                  print("from_mnemonics item", i, "type:", type(item))
+                  if hasattr(item, "address"):
+                      try:
+                          print("item", i, "address:", item.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True))
+                      except Exception as e:
+                          print("item", i, "address render error:", type(e).__name__, str(e)[:120])
+          else:
+              print("from_mnemonics non-tuple attrs:", [a for a in dir(res) if not a.startswith("_")][:50])
+          PY
+
       - name: Wallet import/runtime smoke
         run: |
           python - <<'PY'

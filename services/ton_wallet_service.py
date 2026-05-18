@@ -103,16 +103,54 @@ def _wallet_from_mnemonic(seed_phrase: str):
     ):
         try:
             result = Wallets.from_mnemonics(words, **kwargs)
-            if not isinstance(result, (list, tuple)) or len(result) < 3:
-                continue
-            # expected: public_key, private_key, wallet
-            public_key, private_key, wallet = result[0], result[1], result[2]
+            wallet, public_key, private_key = _parse_wallet_from_mnemonics_result(result)
             address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
             return wallet, public_key, private_key, address
         except Exception:
             pass
     raise RuntimeError("setup_required")
 
+
+
+
+def _parse_wallet_from_mnemonics_result(res):
+    wallet = None
+    public_key = None
+    private_key = None
+
+    if isinstance(res, tuple):
+        if len(res) == 3:
+            a, b, c = res
+            if hasattr(c, "address"):
+                public_key, private_key, wallet = a, b, c
+            elif hasattr(a, "address"):
+                wallet, public_key, private_key = a, b, c
+        elif len(res) == 4:
+            a, b, c, d = res
+            if hasattr(d, "address"):
+                wallet = d
+                public_key = b
+                private_key = c
+
+        if wallet is None:
+            for item in res:
+                if hasattr(item, "address"):
+                    wallet = item
+                    break
+
+        if public_key is None or private_key is None:
+            byte_items = [x for x in res if isinstance(x, (bytes, bytearray))]
+            if len(byte_items) >= 2:
+                public_key = public_key or byte_items[0]
+                private_key = private_key or byte_items[1]
+    else:
+        if hasattr(res, "address"):
+            wallet = res
+
+    if wallet is None or private_key is None:
+        raise RuntimeError("setup_required")
+
+    return wallet, public_key, private_key
 
 def _safe_wallet_data(row):
     return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at"], row))
