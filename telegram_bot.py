@@ -7021,7 +7021,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 
-@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m))
+@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m) and (m.text or "").strip() not in ["💎 TON кошелёк", "💎 TON Wallet"] and not (m.from_user and m.from_user.id in TON_SEND_PENDING))
 async def fallback_handler(message: types.Message):
     # Polymarket URLs are handled by the dedicated polymarket.com handler above.
     # Without this guard, one user URL can trigger both handlers and start analysis twice.
@@ -7621,6 +7621,12 @@ def _ton_unavailable(uid: int) -> str:
     return "TON wallet is temporarily unavailable" if get_user_lang(uid) == "en" else "TON кошелёк временно недоступен"
 
 
+def _ton_send_error(uid: int, code: str) -> str:
+    en = {"invalid_address":"Invalid TON address.","invalid_amount":"Invalid amount.","wallet_not_found":"TON wallet not found.","balance_unavailable":"Unable to fetch on-chain balance.","insufficient_balance":"Insufficient TON balance.","seqno_unavailable":"Unable to get wallet seqno.","send_failed":"Network send failed.","signing_failed":"Signing failed.","setup_required":"TON wallet backend is not fully configured.","disabled":"TON wallet is temporarily unavailable"}
+    ru = {"invalid_address":"Неверный TON адрес.","invalid_amount":"Неверная сумма.","wallet_not_found":"TON кошелёк не найден.","balance_unavailable":"Не удалось получить баланс из сети.","insufficient_balance":"Недостаточно TON на кошельке.","seqno_unavailable":"Не удалось получить seqno кошелька.","send_failed":"Ошибка отправки в сеть.","signing_failed":"Ошибка подписи транзакции.","setup_required":"TON кошелёк не настроен на сервере.","disabled":"TON кошелёк временно недоступен"}
+    return (en if get_user_lang(uid)=="en" else ru).get(code, ("Operation failed" if get_user_lang(uid)=="en" else "Операция не выполнена"))
+
+
 async def _send_ton_wallet_screen(message: types.Message):
     uid = message.from_user.id
     w = get_or_create_user_ton_wallet(uid)
@@ -7650,6 +7656,10 @@ async def cmd_ton_wallet(message: types.Message):
 @dp.message_handler(commands=["ton_send"])
 async def cmd_ton_send(message: types.Message):
     uid = message.from_user.id
+    w = get_or_create_user_ton_wallet(uid)
+    if not w.get("ok"):
+        await message.answer(_ton_unavailable(uid))
+        return
     TON_SEND_PENDING[uid] = {"step": "address"}
     await message.answer("Введите TON адрес получателя:" if get_user_lang(uid)=="ru" else "Enter destination TON address:")
 
@@ -7673,6 +7683,10 @@ async def ton_receive_cb(c: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == "ton_send")
 async def ton_send_cb(c: types.CallbackQuery):
+    w = get_or_create_user_ton_wallet(c.from_user.id)
+    if not w.get("ok"):
+        await c.answer(_ton_unavailable(c.from_user.id), show_alert=True)
+        return
     TON_SEND_PENDING[c.from_user.id] = {"step": "address"}
     await c.message.answer("Введите TON адрес получателя:" if get_user_lang(c.from_user.id)=="ru" else "Enter destination TON address:")
     await c.answer()
@@ -7707,16 +7721,30 @@ async def ton_seed_confirm(c: types.CallbackQuery):
 @dp.message_handler(lambda m: m.from_user and m.from_user.id in TON_SEND_PENDING and not (m.text or '').startswith('/'))
 async def ton_send_flow(message: types.Message):
     st = TON_SEND_PENDING.get(message.from_user.id)
-    if not st: return
+    if not st:
+        return
     lang = get_user_lang(message.from_user.id)
     if st["step"] == "address":
-        st["address"] = (message.text or '').strip(); st["step"] = "amount"
+        addr = (message.text or '').strip()
+        from services.ton_chain_service import validate_ton_address, normalize_ton_address, nano_to_ton_display
+        if not validate_ton_address(addr):
+            await message.answer("Неверный TON адрес. Попробуйте ещё раз:" if lang=="ru" else "Invalid TON address. Try again:")
+            return
+        st["address"] = normalize_ton_address(addr)
+        st["step"] = "amount"
         await message.answer("Введите сумму TON:" if lang=="ru" else "Enter TON amount:")
         return
     if st["step"] == "amount":
-        try: nano = ton_to_nano((message.text or '').strip())
+        try:
+            nano = ton_to_nano((message.text or '').strip())
+            st["amount_nano"] = nano
+            amount_disp = nano_to_ton_display(nano)
         except Exception:
-            await message.answer("Неверная сумма" if lang=="ru" else "Invalid amount"); return
-        res = send_ton_from_user_wallet(message.from_user.id, st.get("address",""), nano)
-        TON_SEND_PENDING.pop(message.from_user.id, None)
-        await message.answer(("Успешно отправлено. TX: " if lang=="ru" else "Sent. TX: ") + str(res.get("tx_hash") or res.get("error")))
+            await message.answer("Неверная сумма" if lang=="ru" else "Invalid amount")
+            return
+        st["step"] = "confirm"
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(InlineKeyboardButton("✅ Отправить" if lang=="ru" else "✅ Send", callback_data="ton_send_confirm"), InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_send_cancel"))
+        text = (f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма:\n{amount_disp} TON\n\nКомиссия сети будет списана дополнительно с вашего TON-кошелька." if lang=="ru" else f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount:\n{amount_disp} TON\n\nNetwork fee will be charged additionally from your TON wallet.")
+        await message.answer(text, reply_markup=kb)
+
