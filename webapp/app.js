@@ -12,6 +12,11 @@ function normalizeLang(value) {
   return v.startsWith("ru") ? "ru" : "en";
 }
 
+if (window.__tonRefreshIntervalId) {
+  clearInterval(window.__tonRefreshIntervalId);
+  window.__tonRefreshIntervalId = null;
+}
+
 function guestLangFallback() {
   return normalizeLang(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || "en");
 }
@@ -418,11 +423,71 @@ function renderAuthed(summary, lang) {
   let historyHasMore = false;
   let historyItems = [];
   let tonWalletData = null;
+  let tonWalletState = {
+    balanceNano: 0n,
+    balanceDisplay: "0",
+    feeReserveNano: 0n,
+    feeReserveDisplay: "0",
+    maxSendNano: 0n,
+    maxSendDisplay: "0"
+  };
+  let tonRefreshRunning = false;
+
+  const parseTonToNanoClient = (value) => {
+    const s = String(value || "").trim().replace(",", ".");
+    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    const parts = s.split(".");
+    const whole = parts[0] || "0";
+    const fracRaw = parts[1] || "";
+    const frac = (fracRaw + "000000000").slice(0, 9);
+    try {
+      return BigInt(whole) * 1000000000n + BigInt(frac);
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  const tonDisplayFromNanoClient = (nano) => {
+    const n = nano < 0n ? 0n : nano;
+    const whole = n / 1000000000n;
+    const frac = (n % 1000000000n).toString().padStart(9, "0").replace(/0+$/, "");
+    return frac ? `${whole.toString()}.${frac}` : whole.toString();
+  };
+
+  const mapTonError = (code, details) => {
+    if (String(code || "") === "insufficient_balance") {
+      return lang === "ru"
+        ? `Недостаточно TON с учётом комиссии.\nБаланс: ${details.balanceDisplay} TON\nРезерв комиссии: ~${details.feeReserveDisplay} TON\nМаксимум к отправке: ${details.maxSendDisplay} TON\n\nНажмите “Отправить всё”, чтобы отправить максимум.`
+        : `Insufficient TON including fee reserve.\nBalance: ${details.balanceDisplay} TON\nFee reserve: ~${details.feeReserveDisplay} TON\nMaximum send amount: ${details.maxSendDisplay} TON\n\nTap “Send MAX” to use the maximum.`;
+    }
+    const en = {
+      invalid_address: "Invalid TON address.",
+      invalid_amount: "Invalid amount.",
+      disabled: "TON wallet is temporarily unavailable.",
+      setup_required: "TON wallet backend is not fully configured.",
+      send_failed: "Network send failed.",
+      signing_failed: "Signing failed.",
+      balance_unavailable: "Unable to fetch on-chain balance."
+    };
+    const ru = {
+      invalid_address: "Неверный TON адрес.",
+      invalid_amount: "Неверная сумма.",
+      disabled: "TON кошелёк временно недоступен.",
+      setup_required: "TON кошелёк не настроен на сервере.",
+      send_failed: "Ошибка отправки в сеть.",
+      signing_failed: "Ошибка подписи транзакции.",
+      balance_unavailable: "Не удалось получить баланс из сети."
+    };
+    return (lang === "ru" ? ru : en)[String(code || "")] || (lang === "ru" ? "Ошибка отправки TON." : "TON send failed.");
+  };
 
   const loadTonWallet = async (doRefresh) => {
+    if (tonRefreshRunning) return;
+    tonRefreshRunning = true;
     const res = doRefresh ? await callTonRefresh() : await callTonWallet();
     if (!res.ok || !res.data?.ok) {
       tonStatusLine.textContent = "TON wallet unavailable";
+      tonRefreshRunning = false;
       return;
     }
     tonWalletData = res.data;
@@ -430,8 +495,21 @@ function renderAuthed(summary, lang) {
     tonAddressLine.textContent = `Address: ${res.data.wallet_address || "-"}`;
     tonBalanceLine.textContent = `${res.data.balance_display || "0"} TON`;
     tonStatusLine.textContent = "";
+    const balanceNano = BigInt(String(res.data.balance_nano || "0"));
+    const feeReserveNano = BigInt(String(res.data.fee_reserve_nano || "0"));
+    let maxSendNano = balanceNano - feeReserveNano;
+    if (maxSendNano < 0n) maxSendNano = 0n;
+    tonWalletState = {
+      balanceNano,
+      balanceDisplay: String(res.data.balance_display || "0"),
+      feeReserveNano,
+      feeReserveDisplay: String(res.data.fee_reserve_display || tonDisplayFromNanoClient(feeReserveNano)),
+      maxSendNano,
+      maxSendDisplay: tonDisplayFromNanoClient(maxSendNano)
+    };
     const jettons = Array.isArray(res.data.enabled_jettons) ? res.data.enabled_jettons : [];
     document.getElementById("tonJettonsLine").textContent = jettons.length ? `Tokens on TON: ${jettons.length}` : t.tonTokensDisabled;
+    tonRefreshRunning = false;
   };
 
   const setRunningState = (running, mode = "quick") => {
@@ -502,15 +580,48 @@ function renderAuthed(summary, lang) {
   };
   document.getElementById("tonRefreshBtn").onclick = async () => { await loadTonWallet(true); };
   document.getElementById("tonCopyBtn").onclick = async () => { if (tonWalletData?.wallet_address) await copyToClipboardSafe(tonWalletData.wallet_address); };
-  document.getElementById("tonMaxBtn").onclick = async () => { if (tonWalletData?.balance_display) document.getElementById("tonAmountInput").value = tonWalletData.balance_display; };
+  document.getElementById("tonMaxBtn").onclick = async () => {
+    if (tonWalletState.maxSendNano <= 0n) {
+      tonStatusLine.textContent = lang === "ru"
+        ? `Недостаточно TON для отправки с учётом резерва комиссии.\nБаланс: ${tonWalletState.balanceDisplay} TON\nРезерв: ~${tonWalletState.feeReserveDisplay} TON`
+        : `Not enough TON to send after fee reserve.\nBalance: ${tonWalletState.balanceDisplay} TON\nReserve: ~${tonWalletState.feeReserveDisplay} TON`;
+      return;
+    }
+    document.getElementById("tonAmountInput").value = tonWalletState.maxSendDisplay;
+    tonStatusLine.textContent = lang === "ru"
+      ? `Будет отправлено всё доступное за вычетом резерва комиссии: ${tonWalletState.maxSendDisplay} TON`
+      : `Will send all available after fee reserve: ${tonWalletState.maxSendDisplay} TON`;
+  };
   document.getElementById("tonSendBtn").onclick = async () => {
     const destination = String(document.getElementById("tonDestInput").value || "").trim();
     const amount = String(document.getElementById("tonAmountInput").value || "").trim();
+    const amountNano = parseTonToNanoClient(amount);
+    if (amountNano === null || amountNano <= 0n) {
+      tonStatusLine.textContent = mapTonError("invalid_amount", tonWalletState);
+      return;
+    }
+    if (amountNano > tonWalletState.maxSendNano) {
+      tonStatusLine.textContent = mapTonError("insufficient_balance", tonWalletState);
+      return;
+    }
     const sent = await callTonSend(destination, amount, "");
-    tonStatusLine.textContent = sent.data?.ok ? "Sent" : `Error: ${sent.data?.error || "send_failed"}`;
-    if (sent.data?.ok) await loadTonWallet(true);
+    if (sent.data?.ok) {
+      tonStatusLine.textContent = lang === "ru" ? "✅ TON отправлен.\nБаланс обновляется..." : "✅ TON sent.\nRefreshing balance...";
+      await loadTonWallet(true);
+      return;
+    }
+    const details = {
+      balanceDisplay: String(sent.data?.balance_display || tonWalletState.balanceDisplay || "0"),
+      feeReserveDisplay: String(sent.data?.fee_reserve_display || tonWalletState.feeReserveDisplay || "0"),
+      maxSendDisplay: String(sent.data?.max_send_display || tonWalletState.maxSendDisplay || "0")
+    };
+    tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details);
   };
-  loadTonWallet(false);
+  loadTonWallet(false).then(() => loadTonWallet(true));
+  if (window.__tonRefreshIntervalId) clearInterval(window.__tonRefreshIntervalId);
+  window.__tonRefreshIntervalId = setInterval(() => {
+    if (document.getElementById("tonNetworkLine")) loadTonWallet(true);
+  }, 30000);
 
   const topProgressPhrases = {
     en: [

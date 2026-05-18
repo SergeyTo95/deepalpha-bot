@@ -23,7 +23,7 @@ from services.ton_wallet_service import (
     list_enabled_ton_jettons,
     get_user_jetton_balances,
 )
-from services.ton_chain_service import validate_ton_address, ton_to_nano
+from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -644,6 +644,7 @@ async def handle_wallet_ton(request):
         "last_balance_checked_at": balance.get("last_balance_checked_at"),
         "seed_reveal_used": bool(wallet.get("seed_reveal_used")),
         "fee_reserve_nano": str(get_ton_send_fee_reserve_nano()),
+        "fee_reserve_display": nano_to_ton_display(get_ton_send_fee_reserve_nano()),
         "withdraw_fee_settings": get_ton_withdraw_fee_settings(),
         "jettons": get_user_jetton_balances(user_id, refresh=False),
         "enabled_jettons": list_enabled_ton_jettons(get_ton_runtime_network()),
@@ -678,6 +679,19 @@ async def handle_wallet_ton_send(request):
     except Exception:
         return _json_response({"ok": False, "error": "invalid_amount"}, status=400)
     result = send_ton_from_user_wallet(user_id=user_id, destination_address=destination_address, amount_nano=amount_nano, comment=comment)
+    if (not result.get("ok")) and str(result.get("error")) == "insufficient_balance":
+        b = get_user_ton_balance(user_id, refresh=True)
+        reserve_nano = int(get_ton_send_fee_reserve_nano())
+        balance_nano = int(b.get("balance_nano") or 0)
+        max_send_nano = balance_nano - reserve_nano
+        if max_send_nano < 0:
+            max_send_nano = 0
+        result["balance_nano"] = str(balance_nano)
+        result["balance_display"] = nano_to_ton_display(balance_nano)
+        result["fee_reserve_nano"] = str(reserve_nano)
+        result["fee_reserve_display"] = nano_to_ton_display(reserve_nano)
+        result["max_send_nano"] = str(max_send_nano)
+        result["max_send_display"] = nano_to_ton_display(max_send_nano)
     return _json_response(result, status=200 if result.get("ok") else 400)
 
 
