@@ -59,6 +59,64 @@ def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
     }
 
 
+def calculate_ton_withdraw_platform_fee(amount_nano: int) -> Dict[str, Any]:
+    settings = get_ton_withdraw_fee_settings()
+    amount = int(amount_nano or 0)
+    if amount < 0:
+        amount = 0
+    if not settings.get("ton_wallet_withdraw_fee_enabled"):
+        return {"platform_fee_nano": 0, "platform_fee_display": nano_to_ton_display(0), "enabled": False}
+    try:
+        pct = float(str(settings.get("ton_wallet_withdraw_fee_percent") or "0").replace(",", "."))
+    except Exception:
+        pct = 0.0
+    fee = int((amount * pct) / 100.0) if pct > 0 else 0
+    try:
+        mn = int(str(settings.get("ton_wallet_withdraw_fee_min_nano") or "0"))
+    except Exception:
+        mn = 0
+    try:
+        mx = int(str(settings.get("ton_wallet_withdraw_fee_max_nano") or "0"))
+    except Exception:
+        mx = 0
+    if mn > 0 and fee < mn:
+        fee = mn
+    if mx > 0 and fee > mx:
+        fee = mx
+    if fee < 0:
+        fee = 0
+    return {"platform_fee_nano": fee, "platform_fee_display": nano_to_ton_display(fee), "enabled": True}
+
+
+def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    lim = int(limit or 20)
+    if lim < 1:
+        lim = 20
+    if lim > 50:
+        lim = 50
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at
+                   FROM ton_wallet_transactions WHERE user_id=%s
+                   ORDER BY id DESC LIMIT %s""", (user_id, lim))
+    rows = cur.fetchall() or []
+    conn.close()
+    out = []
+    for r in rows:
+        amount_nano = int(str(r[2] or "0"))
+        addr = str(r[5] or r[6] or "")
+        out.append({
+            "id": int(r[0]),
+            "direction": str(r[1] or ""),
+            "amount_nano": str(amount_nano),
+            "amount_display": nano_to_ton_display(amount_nano),
+            "status": str(r[3] or ""),
+            "tx_hash": str(r[4] or ""),
+            "address": addr,
+            "created_at": r[7],
+        })
+    return out
+
+
 def list_enabled_ton_jettons(network: str) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor()
     cur.execute("""SELECT symbol,name,network,master_address,decimals,is_enabled,is_deepalpha_token,sort_order
