@@ -51,6 +51,11 @@ from services.badge_service import (
 )
 from services.resolved_market_recap_service import render_resolved_market_recap
 
+from services.ton_wallet_service import (
+    get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
+)
+from services.ton_chain_service import ton_to_nano
+
 from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
     disable_analysis_check_by_id, try_deduct_tokens, get_check_availability, get_user_created_checks,
@@ -248,6 +253,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         if user_is_author:
             kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
         kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("💎 TON кошелёк"))
         kb.add(KeyboardButton("💎 Купить токены"))
         kb.add(
             KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
@@ -270,6 +276,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         if user_is_author:
             kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
         kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("💎 TON Wallet"))
         kb.add(KeyboardButton("💎 Buy tokens"))
         kb.add(
             KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
@@ -7605,3 +7612,111 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
     kb.add(InlineKeyboardButton("📤 Поделиться" if lang == "ru" else "📤 Share", switch_inline_query=f"check_{check['code']}"))
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer("✅")
+
+
+TON_SEND_PENDING: Dict[int, dict] = {}
+
+
+def _ton_unavailable(uid: int) -> str:
+    return "TON wallet is temporarily unavailable" if get_user_lang(uid) == "en" else "TON кошелёк временно недоступен"
+
+
+async def _send_ton_wallet_screen(message: types.Message):
+    uid = message.from_user.id
+    w = get_or_create_user_ton_wallet(uid)
+    if not w.get("ok"):
+        await message.answer(_ton_unavailable(uid))
+        return
+    b = get_user_ton_balance(uid, refresh=True)
+    lang = get_user_lang(uid)
+    if lang == "ru":
+        text = f"💎 Ваш TON кошелёк\n\nАдрес для пополнения:\n{b['wallet_address']}\n\nБаланс: {b['balance_display']} TON\n\nОтправляйте только TON в сети TON."
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
+        kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
+    else:
+        text = f"💎 Your TON Wallet\n\nDeposit address:\n{b['wallet_address']}\n\nBalance: {b['balance_display']} TON\n\nSend only TON on the TON network."
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
+        kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
+    await message.answer(text, reply_markup=kb)
+
+@dp.message_handler(commands=["ton_wallet","ton_balance"])
+async def cmd_ton_wallet(message: types.Message):
+    await _send_ton_wallet_screen(message)
+
+@dp.message_handler(commands=["ton_send"])
+async def cmd_ton_send(message: types.Message):
+    uid = message.from_user.id
+    TON_SEND_PENDING[uid] = {"step": "address"}
+    await message.answer("Введите TON адрес получателя:" if get_user_lang(uid)=="ru" else "Enter destination TON address:")
+
+@dp.message_handler(lambda m: m.text in ["💎 TON кошелёк", "💎 TON Wallet"])
+async def ton_wallet_button(message: types.Message):
+    await _send_ton_wallet_screen(message)
+
+@dp.callback_query_handler(lambda c: c.data == "ton_refresh")
+async def ton_refresh_cb(c: types.CallbackQuery):
+    b = get_user_ton_balance(c.from_user.id, refresh=True)
+    if not b.get("ok"):
+        await c.answer(_ton_unavailable(c.from_user.id), show_alert=True); return
+    await c.answer(("Баланс обновлён: " if get_user_lang(c.from_user.id)=="ru" else "Balance refreshed: ") + b['balance_display'] + " TON", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == "ton_receive")
+async def ton_receive_cb(c: types.CallbackQuery):
+    b = get_user_ton_balance(c.from_user.id, refresh=False)
+    msg = ("Адрес для пополнения:\n" if get_user_lang(c.from_user.id)=="ru" else "Deposit address:\n") + b.get("wallet_address", "")
+    await c.message.answer(msg)
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ton_send")
+async def ton_send_cb(c: types.CallbackQuery):
+    TON_SEND_PENDING[c.from_user.id] = {"step": "address"}
+    await c.message.answer("Введите TON адрес получателя:" if get_user_lang(c.from_user.id)=="ru" else "Enter destination TON address:")
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ton_seed_export")
+async def ton_seed_export_cb(c: types.CallbackQuery):
+    lang = get_user_lang(c.from_user.id)
+    if c.message.chat.type != "private":
+        await c.answer("Seed phrase can only be shown in a private chat with the bot." if lang=="en" else "Seed phrase можно показать только в личном чате с ботом.", show_alert=True); return
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ Показать seed phrase один раз" if lang=="ru" else "✅ Show seed phrase once", callback_data="ton_seed_reveal_confirm"))
+    kb.add(InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_seed_reveal_cancel"))
+    await c.message.answer("⚠️ Important: seed phrase will be shown only once." if lang=="en" else "⚠️ Важно: seed phrase будет показана только один раз.", reply_markup=kb)
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ton_seed_reveal_cancel")
+async def ton_seed_cancel(c: types.CallbackQuery):
+    await c.answer("Cancelled")
+
+@dp.callback_query_handler(lambda c: c.data == "ton_seed_reveal_confirm")
+async def ton_seed_confirm(c: types.CallbackQuery):
+    lang = get_user_lang(c.from_user.id)
+    r = reveal_user_ton_seed_once(c.from_user.id)
+    if not r.get("ok"):
+        txt = "Seed phrase has already been shown. DeepAlpha cannot show it again." if lang=="en" else "Seed phrase уже была показана. DeepAlpha больше не может показать её повторно."
+        await c.message.answer(txt); await c.answer(); return
+    txt = (f"🔐 Seed phrase for your TON wallet:\n\n{r['seed_phrase']}"
+           if lang=="en" else f"🔐 Seed phrase вашего TON-кошелька:\n\n{r['seed_phrase']}")
+    await c.message.answer(txt)
+    await c.answer()
+
+@dp.message_handler(lambda m: m.from_user and m.from_user.id in TON_SEND_PENDING and not (m.text or '').startswith('/'))
+async def ton_send_flow(message: types.Message):
+    st = TON_SEND_PENDING.get(message.from_user.id)
+    if not st: return
+    lang = get_user_lang(message.from_user.id)
+    if st["step"] == "address":
+        st["address"] = (message.text or '').strip(); st["step"] = "amount"
+        await message.answer("Введите сумму TON:" if lang=="ru" else "Enter TON amount:")
+        return
+    if st["step"] == "amount":
+        try: nano = ton_to_nano((message.text or '').strip())
+        except Exception:
+            await message.answer("Неверная сумма" if lang=="ru" else "Invalid amount"); return
+        res = send_ton_from_user_wallet(message.from_user.id, st.get("address",""), nano)
+        TON_SEND_PENDING.pop(message.from_user.id, None)
+        await message.answer(("Успешно отправлено. TX: " if lang=="ru" else "Sent. TX: ") + str(res.get("tx_hash") or res.get("error")))

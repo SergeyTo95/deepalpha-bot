@@ -401,6 +401,53 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
 
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_wallets (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT UNIQUE NOT NULL,
+        network TEXT DEFAULT 'testnet',
+        wallet_address TEXT UNIQUE NOT NULL,
+        wallet_version TEXT DEFAULT 'v4r2',
+        public_key TEXT,
+        seed_encrypted TEXT NOT NULL,
+        seed_revealed_at TEXT,
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        status TEXT DEFAULT 'active',
+        created_at TEXT,
+        updated_at TEXT,
+        last_balance_nano TEXT DEFAULT '0',
+        last_balance_checked_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_user_id ON user_ton_wallets(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT,
+        direction TEXT NOT NULL,
+        amount_nano TEXT NOT NULL,
+        fee_nano TEXT DEFAULT '0',
+        tx_hash TEXT,
+        destination_address TEXT,
+        source_address TEXT,
+        status TEXT DEFAULT 'pending',
+        comment TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        confirmed_at TEXT,
+        error TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_user_created ON ton_wallet_transactions(user_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_hash ON ton_wallet_transactions(tx_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_status ON ton_wallet_transactions(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_wallet_address ON ton_wallet_transactions(wallet_address)")
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
