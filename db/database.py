@@ -212,6 +212,39 @@ def init_db():
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_jetton_assets (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        network TEXT DEFAULT 'mainnet',
+        master_address TEXT UNIQUE NOT NULL,
+        decimals INTEGER DEFAULT 9,
+        is_enabled BOOLEAN DEFAULT TRUE,
+        is_deepalpha_token BOOLEAN DEFAULT FALSE,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_jetton_balances (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        jetton_master_address TEXT NOT NULL,
+        balance_raw TEXT DEFAULT '0',
+        balance_display TEXT DEFAULT '0',
+        last_checked_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_network_enabled ON ton_jetton_assets(network, is_enabled)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_master_address ON ton_jetton_assets(master_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_user_jetton ON user_ton_jetton_balances(user_id, jetton_master_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_wallet ON user_ton_jetton_balances(wallet_address)")
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS analysis_checks (
         id SERIAL PRIMARY KEY,
         code TEXT UNIQUE NOT NULL,
