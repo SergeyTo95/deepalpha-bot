@@ -91,6 +91,7 @@ const I18N = {
     tonHistory: "📜 TON Transactions",
     tonHistoryEmpty: "No TON transactions yet.",
     refreshHistory: "Refresh transactions",
+    openInTonviewer: "Open in Tonviewer",
     buyWithTon: "Buy tokens with TON wallet"
   },
   ru: {
@@ -161,6 +162,7 @@ const I18N = {
     tonHistory: "📜 TON Транзакции",
     tonHistoryEmpty: "TON транзакций пока нет.",
     refreshHistory: "Обновить транзакции",
+    openInTonviewer: "Открыть в Tonviewer",
     buyWithTon: "Купить токены с TON кошелька"
   }
 };
@@ -551,7 +553,13 @@ function renderAuthed(summary, lang) {
     if (!res.ok || !res.data?.ok) { tonHistoryList.innerHTML = `<p class="meta">${escapeHtml(t.authError)}</p>`; return; }
     const items = Array.isArray(res.data.items) ? res.data.items : [];
     if (!items.length) { tonHistoryList.innerHTML = `<p class="meta">${escapeHtml(t.tonHistoryEmpty)}</p>`; return; }
-    tonHistoryList.innerHTML = items.map((x) => `<div class='history-item'><div><b>${escapeHtml(x.direction || "-")}</b> · ${escapeHtml(x.amount_display || "0")} TON · ${escapeHtml(x.status || "")}</div><div class='small'>${escapeHtml(x.address || "")}</div><div class='small'>${escapeHtml(x.tx_hash || "")}</div><div class='small'>${escapeHtml(x.created_at || "")}</div></div>`).join("");
+    tonHistoryList.innerHTML = items.map((x) => {
+      const explorerUrl = String(x.explorer_url || "").trim();
+      const explorerLine = explorerUrl
+        ? `<div class='small'><a href="${escapeHtml(explorerUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.openInTonviewer)}</a></div>`
+        : "";
+      return `<div class='history-item'><div><b>${escapeHtml(x.direction || "-")}</b> · ${escapeHtml(x.amount_display || "0")} TON · ${escapeHtml(x.status || "")}</div><div class='small'>${escapeHtml(x.address || "")}</div><div class='small'>${escapeHtml(x.tx_hash || "")}</div>${explorerLine}<div class='small'>${escapeHtml(x.created_at || "")}</div></div>`;
+    }).join("");
   };
 
   const setRunningState = (running, mode = "quick") => {

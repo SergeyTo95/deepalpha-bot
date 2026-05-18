@@ -7674,6 +7674,10 @@ def _short_ton_value(value: str) -> str:
     return raw[:10] + "..." + raw[-8:]
 
 
+def _safe_html(value: str) -> str:
+    return html.escape(str(value or ""))
+
+
 def _ton_tx_direction_label(lang: str, direction: str) -> str:
     d = str(direction or "").strip().lower()
     if d in ("send", "withdrawal", "outgoing"):
@@ -7709,28 +7713,29 @@ async def ton_transactions_cb(c: types.CallbackQuery):
         status = str(tx.get("status") or "")
         address = _short_ton_value(str(tx.get("address") or ""))
         tx_hash = _short_ton_value(str(tx.get("tx_hash") or ""))
+        explorer_url = str(tx.get("explorer_url") or "").strip()
         created = str(tx.get("created_at") or "")
         if lang == "ru":
-            lines.extend([
-                f"{idx}. {direction}",
-                f"Сумма: {amount} TON",
-                f"Статус: {status}",
-                f"Адрес: {address or '-'}",
-                f"Tx: {tx_hash or '-'}",
-                f"Дата: {created}",
-                "",
-            ])
+            lines.append(f"{idx}. {_safe_html(direction)}")
+            lines.append(f"Сумма: {_safe_html(amount)} TON")
+            lines.append(f"Статус: {_safe_html(status)}")
+            lines.append(f"Адрес: {_safe_html(address or '-')}")
+            lines.append(f"Tx: {_safe_html(tx_hash or '-')}")
+            if explorer_url:
+                lines.append(f'Explorer: <a href="{_safe_html(explorer_url)}">Tonviewer</a>')
+            lines.append(f"Дата: {_safe_html(created)}")
+            lines.append("")
         else:
-            lines.extend([
-                f"{idx}. {direction}",
-                f"Amount: {amount} TON",
-                f"Status: {status}",
-                f"Address: {address or '-'}",
-                f"Tx: {tx_hash or '-'}",
-                f"Date: {created}",
-                "",
-            ])
-    await c.message.answer("\n".join(lines).strip(), reply_markup=_ton_transactions_keyboard(lang))
+            lines.append(f"{idx}. {_safe_html(direction)}")
+            lines.append(f"Amount: {_safe_html(amount)} TON")
+            lines.append(f"Status: {_safe_html(status)}")
+            lines.append(f"Address: {_safe_html(address or '-')}")
+            lines.append(f"Tx: {_safe_html(tx_hash or '-')}")
+            if explorer_url:
+                lines.append(f'Explorer: <a href="{_safe_html(explorer_url)}">Tonviewer</a>')
+            lines.append(f"Date: {_safe_html(created)}")
+            lines.append("")
+    await c.message.answer("\n".join(lines).strip(), reply_markup=_ton_transactions_keyboard(lang), parse_mode="HTML")
     await c.answer()
 
 

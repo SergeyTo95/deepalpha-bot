@@ -47,6 +47,24 @@ def get_ton_runtime_network() -> str:
     return (os.getenv("TON_NETWORK") or "testnet").strip().lower()
 
 
+def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
+    h = str(tx_hash or "").strip()
+    if not h or h == "-":
+        return ""
+    if not re.match(r"^[A-Za-z0-9_-]{8,}$", h):
+        return ""
+    net = str(network or "").strip().lower() or get_ton_runtime_network()
+    from db.database import get_setting
+    default_main = "https://tonviewer.com/transaction/"
+    default_test = "https://testnet.tonviewer.com/transaction/"
+    main_base = str(get_setting("ton_explorer_mainnet_base", default_main) or default_main).strip()
+    test_base = str(get_setting("ton_explorer_testnet_base", default_test) or default_test).strip()
+    base = main_base if net == "mainnet" else test_base
+    if not base.endswith("/"):
+        base += "/"
+    return base + h
+
+
 def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
     from db.database import get_setting
     return {
@@ -104,13 +122,15 @@ def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, A
     for r in rows:
         amount_nano = int(str(r[2] or "0"))
         addr = str(r[5] or r[6] or "")
+        tx_hash = str(r[4] or "").strip()
         out.append({
             "id": int(r[0]),
             "direction": str(r[1] or ""),
             "amount_nano": str(amount_nano),
             "amount_display": nano_to_ton_display(amount_nano),
             "status": str(r[3] or ""),
-            "tx_hash": str(r[4] or ""),
+            "tx_hash": tx_hash,
+            "explorer_url": get_ton_tx_explorer_url(tx_hash),
             "address": addr,
             "created_at": r[7],
         })
