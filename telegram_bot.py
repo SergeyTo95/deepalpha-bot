@@ -7628,9 +7628,11 @@ def _ton_send_error(uid: int, code: str) -> str:
     return (en if get_user_lang(uid)=="en" else ru).get(code, ("Operation failed" if get_user_lang(uid)=="en" else "Операция не выполнена"))
 
 
-def _ton_network_label(raw_network: Optional[str]) -> str:
-    network = (raw_network or os.getenv("TON_NETWORK", "testnet")).strip().upper()
-    return "MAINNET" if network == "MAINNET" else "TESTNET"
+def _ton_network_label(raw_network: Optional[str] = None) -> str:
+    # Display runtime TON network from Railway/env, not stale wallet DB row.
+    # Existing wallets may have been created while TON_NETWORK=testnet.
+    network = (os.getenv("TON_NETWORK", "testnet") or "testnet").strip().lower()
+    return "MAINNET" if network == "mainnet" else "TESTNET"
 
 
 async def _send_ton_wallet_screen(message: types.Message):
