@@ -7726,7 +7726,7 @@ async def ton_send_flow(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     if st["step"] == "address":
         addr = (message.text or '').strip()
-        from services.ton_chain_service import validate_ton_address, normalize_ton_address, nano_to_ton_display, ton_to_nano
+        from services.ton_chain_service import validate_ton_address, normalize_ton_address, nano_to_ton_display, ton_to_nano, ton_to_nano
         if not validate_ton_address(addr):
             await message.answer("Неверный TON адрес. Попробуйте ещё раз:" if lang=="ru" else "Invalid TON address. Try again:")
             return
