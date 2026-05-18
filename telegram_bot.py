@@ -231,44 +231,101 @@ def t(user_id: int, key: str) -> str:
 
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
-    subscribed = is_subscribed(user_id)
-    user_is_author = is_author(user_id)
-
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
-        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
-        kb.add(KeyboardButton("🏁 Market Recap"), KeyboardButton("📊 История"))
-        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("➕ Другие анализы"))
-        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("🎁 Чеки"))
-        kb.add(KeyboardButton("🎁 Мои чеки"), KeyboardButton("📰 Подписки"))
-        kb.add(KeyboardButton("📢 Авторы"))
-        if user_is_author:
-            kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
-        kb.add(KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("🔍 Анализ"))
         kb.add(KeyboardButton("💎 TON кошелёк"))
-        kb.add(KeyboardButton("💎 Купить токены"))
-        kb.add(
-            KeyboardButton("🔔 Подписка" if not subscribed else "✅ Подписка активна"),
-            KeyboardButton("👥 Рефералы"),
-        )
-        kb.add(KeyboardButton("🌐 Язык"))
+        kb.add(KeyboardButton("🎁 Чеки"))
+        kb.add(KeyboardButton("💳 Касса"))
+        kb.add(KeyboardButton("👤 Профиль"))
+        kb.add(KeyboardButton("⚙️ Ещё"))
     else:
-        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
-        kb.add(KeyboardButton("🏁 Market Recap"), KeyboardButton("📊 History"))
-        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("➕ Other Analyses"))
-        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("🎁 Checks"))
-        kb.add(KeyboardButton("🎁 My Checks"), KeyboardButton("📰 Subscriptions"))
-        kb.add(KeyboardButton("📢 Authors"))
-        if user_is_author:
-            kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
-        kb.add(KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("🔍 Analysis"))
         kb.add(KeyboardButton("💎 TON Wallet"))
-        kb.add(KeyboardButton("💎 Buy tokens"))
-        kb.add(
-            KeyboardButton("🔔 Subscribe" if not subscribed else "✅ Subscription active"),
-            KeyboardButton("👥 Referrals"),
-        )
-        kb.add(KeyboardButton("🌐 Language"))
+        kb.add(KeyboardButton("🎁 Checks"))
+        kb.add(KeyboardButton("💳 Cashier"))
+        kb.add(KeyboardButton("👤 Profile"))
+        kb.add(KeyboardButton("⚙️ More"))
+    return kb
+
+
+def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("⚡️ Быстрый анализ"), KeyboardButton("💡 Сигнал часа"))
+        kb.add(KeyboardButton("🧠 Deep анализ"), KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("📜 История"), KeyboardButton("➕ Другие анализы"))
+        kb.add(KeyboardButton("⬅️ Назад к анализу"))
+    else:
+        kb.add(KeyboardButton("⚡️ Quick Analysis"), KeyboardButton("💡 Signal of the hour"))
+        kb.add(KeyboardButton("🧠 Deep Analysis"), KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("📜 History"), KeyboardButton("➕ Other Analyses"))
+        kb.add(KeyboardButton("⬅️ Back to analysis"))
+    return kb
+
+
+def get_checks_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("🎁 Чеки"))
+        kb.add(KeyboardButton("🎁 Создать чек"), KeyboardButton("📦 Мои чеки"))
+        kb.add(KeyboardButton("✅ Активировать чек"))
+        kb.add(KeyboardButton("⬅️ Назад"))
+    else:
+        kb.add(KeyboardButton("🎁 Checks"))
+        kb.add(KeyboardButton("🎁 Create Check"), KeyboardButton("📦 My Checks"))
+        kb.add(KeyboardButton("✅ Activate Check"))
+        kb.add(KeyboardButton("⬅️ Back"))
+    return kb
+
+
+def get_cashier_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("💳 Касса"))
+        kb.add(KeyboardButton("💎 Купить токены"), KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("🔔 Подписка"))
+        kb.add(KeyboardButton("⬅️ Назад"))
+    else:
+        kb.add(KeyboardButton("💳 Cashier"))
+        kb.add(KeyboardButton("💎 Buy tokens"), KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("🔔 Subscription"))
+        kb.add(KeyboardButton("⬅️ Back"))
+    return kb
+
+
+def get_profile_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("👤 Профиль"))
+        kb.add(KeyboardButton("📜 История"), KeyboardButton("✍️ Мои прогнозы"))
+        kb.add(KeyboardButton("💰 Баланс автора"), KeyboardButton("👥 Рефералы"))
+        kb.add(KeyboardButton("⬅️ Назад"))
+    else:
+        kb.add(KeyboardButton("👤 Profile"))
+        kb.add(KeyboardButton("📜 History"), KeyboardButton("✍️ My forecasts"))
+        kb.add(KeyboardButton("💰 Author balance"), KeyboardButton("👥 Referrals"))
+        kb.add(KeyboardButton("⬅️ Back"))
+    return kb
+
+
+def get_more_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("⚙️ Ещё"))
+        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("📣 Авторы"))
+        kb.add(KeyboardButton("🌐 Язык"), KeyboardButton("❓ Помощь"))
+        kb.add(KeyboardButton("⬅️ Назад"))
+    else:
+        kb.add(KeyboardButton("⚙️ More"))
+        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("📣 Authors"))
+        kb.add(KeyboardButton("🌐 Language"), KeyboardButton("❓ Help"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -5116,7 +5173,7 @@ async def subscriptions_button_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
-@dp.message_handler(lambda m: m.text in ["✍️ Мои прогнозы", "✍️ My posts"])
+@dp.message_handler(lambda m: m.text in ["✍️ Мои прогнозы", "✍️ My posts", "✍️ My forecasts"])
 async def my_posts_button_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -5837,7 +5894,7 @@ def _parse_probability(prob_str: str) -> float:
 # ANALYSIS / SIGNALS
 # ═══════════════════════════════════════════
 
-@dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analyze"])
+@dp.message_handler(lambda m: m.text in ["⚡️ Быстрый анализ", "⚡️ Quick Analysis", "🧠 Deep анализ", "🧠 Deep Analysis", "🔍 Analyze"])
 async def analyze_prompt_handler(message: types.Message):
     await AnalysisStates.waiting_for_link.set()
     _register_user(message)
@@ -5861,17 +5918,25 @@ _MAIN_MENU_BUTTONS = {
     "👤 Профиль", "👤 Profile",
     "📋 Watchlist",
     "📰 Подписки", "📰 Subscriptions",
-    "📢 Авторы", "📢 Authors",
-    "✍️ Мои прогнозы", "✍️ My posts",
+    "📣 Авторы", "📣 Authors", "📢 Авторы", "📢 Authors",
+    "✍️ Мои прогнозы", "✍️ My posts", "✍️ My forecasts",
     "💰 Баланс автора", "💰 Author balance",
     "📊 История", "📊 History",
     "💰 Баланс", "💰 Balance",
     "💎 Купить токены", "💎 Buy tokens",
     "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active",
     "👥 Рефералы", "👥 Referrals",
-    "🌐 Язык", "Русский", "English",
+    "🌐 Язык", "🌐 Language", "Русский", "English",
+    "💳 Касса", "💳 Cashier",
+    "⚙️ Ещё", "⚙️ More",
+    "🎁 Создать чек", "🎁 Create Check",
+    "📦 Мои чеки", "📦 My Checks",
+    "✅ Активировать чек", "✅ Activate Check",
+    "🔔 Subscription",
+    "❓ Помощь", "❓ Help",
     "➕ Другие анализы", "➕ Other Analyses",
     "⬅️ Назад", "⬅️ Back",
+    "⬅️ Назад к анализу", "⬅️ Back to analysis",
     "🏁 Market Recap",
 }
 
@@ -5884,11 +5949,61 @@ async def other_analyses_menu_handler(message: types.Message):
     await message.answer(title, reply_markup=get_other_analyses_keyboard(uid))
 
 
+@dp.message_handler(lambda m: m.text in ["⬅️ Назад к анализу", "⬅️ Back to analysis"])
+async def other_analyses_back_to_analysis_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("⬅️", reply_markup=get_analysis_keyboard(uid))
+
+
 @dp.message_handler(lambda m: m.text in ["⬅️ Назад", "⬅️ Back"])
-async def other_analyses_back_handler(message: types.Message):
+async def back_to_main_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     await message.answer("⬅️", reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analysis"])
+async def analysis_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("🔍", reply_markup=get_analysis_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["🎁 Чеки", "🎁 Checks"])
+async def checks_submenu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("🎁", reply_markup=get_checks_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["💳 Касса", "💳 Cashier"])
+async def cashier_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("💳", reply_markup=get_cashier_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["👤 Профиль", "👤 Profile"])
+async def profile_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("👤", reply_markup=get_profile_menu_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["⚙️ Ещё", "⚙️ More"])
+async def more_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("⚙️", reply_markup=get_more_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["✅ Активировать чек", "✅ Activate Check"])
+async def activate_check_hint_handler(message: types.Message):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    text = "Отправьте ссылку на чек (или откройте её), чтобы активировать." if lang == "ru" else "Send (or open) a check link to activate it."
+    await message.answer(text, reply_markup=get_checks_keyboard(uid))
 
 async def _escape_state_and_route_main_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -7224,7 +7339,7 @@ async def my_checks_handler(message: types.Message):
     await _send_my_checks(message, message.from_user.id)
 
 
-@dp.message_handler(lambda m: (m.text or "") in ["🎁 Мои чеки", "🎁 My Checks"])
+@dp.message_handler(lambda m: (m.text or "") in ["🎁 Мои чеки", "🎁 My Checks", "📦 Мои чеки", "📦 My Checks"])
 async def my_checks_text_handler(message: types.Message):
     await _send_my_checks(message, message.from_user.id)
 
