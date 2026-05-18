@@ -236,26 +236,15 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
-        if _is_top_analysis_enabled():
-            kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("🔥 Top Analysis"))
-        else:
-            kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
-        if _is_top_analysis_enabled():
-            kb.add(KeyboardButton("💡 Сигнал часа"), KeyboardButton("🪙 Крипто анализ"))
-        else:
-            kb.add(KeyboardButton("🪙 Крипто анализ"), KeyboardButton("📘 Как читать анализ"))
-        if _is_top_analysis_enabled():
-            kb.add(KeyboardButton("📘 Как читать анализ"), KeyboardButton("🔮 Личный сигнал"))
-        else:
-            kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
-        if _is_top_analysis_enabled():
-            kb.add(KeyboardButton("🏆 Топ"))
-        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📋 Watchlist"))
-        kb.add(KeyboardButton("🎁 Чеки"), KeyboardButton("🎁 Мои чеки"))
-        kb.add(KeyboardButton("📰 Подписки"), KeyboardButton("📢 Авторы"))
+        kb.add(KeyboardButton("🔍 Анализ"), KeyboardButton("💡 Сигнал часа"))
+        kb.add(KeyboardButton("🏁 Market Recap"), KeyboardButton("📊 История"))
+        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("➕ Другие анализы"))
+        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("🎁 Чеки"))
+        kb.add(KeyboardButton("🎁 Мои чеки"), KeyboardButton("📰 Подписки"))
+        kb.add(KeyboardButton("📢 Авторы"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ Мои прогнозы"), KeyboardButton("💰 Баланс автора"))
-        kb.add(KeyboardButton("📊 История"), KeyboardButton("💰 Баланс"))
+        kb.add(KeyboardButton("💰 Баланс"))
         kb.add(KeyboardButton("💎 TON кошелёк"))
         kb.add(KeyboardButton("💎 Купить токены"))
         kb.add(
@@ -264,21 +253,15 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         )
         kb.add(KeyboardButton("🌐 Язык"))
     else:
-        if _is_top_analysis_enabled():
-            kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("🔥 Top Analysis"))
-            kb.add(KeyboardButton("💡 Signal of the hour"), KeyboardButton("🔮 Personal signal"))
-            kb.add(KeyboardButton("🏆 Top"), KeyboardButton("🪙 Crypto Analysis"))
-            kb.add(KeyboardButton("📘 How to read the analysis"))
-        else:
-            kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
-            kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
-            kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("📘 How to read the analysis"))
-        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📋 Watchlist"))
-        kb.add(KeyboardButton("🎁 Checks"), KeyboardButton("🎁 My Checks"))
-        kb.add(KeyboardButton("📰 Subscriptions"), KeyboardButton("📢 Authors"))
+        kb.add(KeyboardButton("🔍 Analyze"), KeyboardButton("💡 Signal of the hour"))
+        kb.add(KeyboardButton("🏁 Market Recap"), KeyboardButton("📊 History"))
+        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("➕ Other Analyses"))
+        kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("🎁 Checks"))
+        kb.add(KeyboardButton("🎁 My Checks"), KeyboardButton("📰 Subscriptions"))
+        kb.add(KeyboardButton("📢 Authors"))
         if user_is_author:
             kb.add(KeyboardButton("✍️ My posts"), KeyboardButton("💰 Author balance"))
-        kb.add(KeyboardButton("📊 History"), KeyboardButton("💰 Balance"))
+        kb.add(KeyboardButton("💰 Balance"))
         kb.add(KeyboardButton("💎 TON Wallet"))
         kb.add(KeyboardButton("💎 Buy tokens"))
         kb.add(
@@ -286,6 +269,36 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton("👥 Referrals"),
         )
         kb.add(KeyboardButton("🌐 Language"))
+    return kb
+
+
+def get_other_analyses_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔥 Top Analysis"), KeyboardButton("🪙 Крипто анализ"))
+        else:
+            kb.add(KeyboardButton("🪙 Крипто анализ"), KeyboardButton("🔮 Личный сигнал"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔮 Личный сигнал"), KeyboardButton("🏆 Топ"))
+        else:
+            kb.add(KeyboardButton("🏆 Топ"), KeyboardButton("📘 Как читать анализ"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("📘 Как читать анализ"))
+        kb.add(KeyboardButton("⬅️ Назад"))
+    else:
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔥 Top Analysis"), KeyboardButton("🪙 Crypto Analysis"))
+        else:
+            kb.add(KeyboardButton("🪙 Crypto Analysis"), KeyboardButton("🔮 Personal signal"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("🔮 Personal signal"), KeyboardButton("🏆 Top"))
+        else:
+            kb.add(KeyboardButton("🏆 Top"), KeyboardButton("📘 How to read the analysis"))
+        if _is_top_analysis_enabled():
+            kb.add(KeyboardButton("📘 How to read the analysis"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -4405,6 +4418,11 @@ async def recap_send_start(message: types.Message, state: FSMContext):
     await message.answer("🏁 Market Recap\nОтправь название завершённого рынка.")
 
 
+@dp.message_handler(lambda m: m.text == "🏁 Market Recap", state="*")
+async def market_recap_button_handler(message: types.Message, state: FSMContext):
+    await recap_send_start(message, state)
+
+
 @dp.message_handler(state=MarketRecapStates.waiting_market_title)
 async def recap_send_collect_title(message: types.Message, state: FSMContext):
     await state.update_data(market_title=message.text.strip())
@@ -5852,7 +5870,25 @@ _MAIN_MENU_BUTTONS = {
     "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active",
     "👥 Рефералы", "👥 Referrals",
     "🌐 Язык", "Русский", "English",
+    "➕ Другие анализы", "➕ Other Analyses",
+    "⬅️ Назад", "⬅️ Back",
+    "🏁 Market Recap",
 }
+
+
+@dp.message_handler(lambda m: m.text in ["➕ Другие анализы", "➕ Other Analyses"])
+async def other_analyses_menu_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    title = "🧩 Другие анализы" if get_user_lang(uid) == "ru" else "🧩 Other Analyses"
+    await message.answer(title, reply_markup=get_other_analyses_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["⬅️ Назад", "⬅️ Back"])
+async def other_analyses_back_handler(message: types.Message):
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer("⬅️", reply_markup=get_main_keyboard(uid))
 
 async def _escape_state_and_route_main_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
