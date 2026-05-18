@@ -42,10 +42,14 @@ def _wallet_ready() -> bool:
         return False
     if not hasattr(WalletVersionEnum, "v4r2"):
         return False
-    ver = WalletVersionEnum.v4r2
-    has_all = hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL
-    has_from_public = hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key"))
-    return has_all or has_from_public
+    try:
+        words = mnemonic_new()
+        public_key, _private_key = mnemonic_to_wallet_key(words)
+        wallet = _try_wallet_from_public_key(public_key)
+        address = wallet.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+        return bool(address)
+    except Exception:
+        return False
 
 
 def _get_fernet() -> Optional[Fernet]:
@@ -74,34 +78,54 @@ def decrypt_secret(cipher: str) -> str:
     return f.decrypt(cipher.encode()).decode()
 
 
-def _build_wallet_from_public_key(public_key: bytes):
-    if not _wallet_ready():
-        raise RuntimeError("setup_required")
-
+def _try_wallet_from_public_key(public_key: bytes):
     ver = WalletVersionEnum.v4r2
+
+    def _valid_wallet(w):
+        try:
+            a = w.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+            return bool(a)
+        except Exception:
+            return False
+
     if hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL:
         wallet_cls = Wallets.ALL[ver]
-        for kwargs in (
-            {"publicKey": public_key, "wc": 0},
-            {"public_key": public_key, "wc": 0},
-            {"publicKey": public_key, "workchain": 0},
-            {"public_key": public_key, "workchain": 0},
-        ):
+        variants = [
+            ((), {"publicKey": public_key, "wc": 0}),
+            ((), {"publicKey": public_key, "workchain": 0}),
+            ((), {"public_key": public_key, "wc": 0}),
+            ((), {"public_key": public_key, "workchain": 0}),
+            (({"publicKey": public_key, "wc": 0},), {}),
+            (({"publicKey": public_key, "workchain": 0},), {}),
+            (({"public_key": public_key, "wc": 0},), {}),
+            (({"public_key": public_key, "workchain": 0},), {}),
+            ((), {"publicKey": public_key}),
+            (({"publicKey": public_key},), {}),
+        ]
+        for args, kwargs in variants:
             try:
-                return wallet_cls(**kwargs)
+                w = wallet_cls(*args, **kwargs)
+                if _valid_wallet(w):
+                    return w
             except Exception:
                 pass
 
     if hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key")):
-        try:
-            return Wallets.from_public_key(public_key, ver, workchain=0)
-        except Exception:
+        for kwargs in ({"workchain": 0}, {"wc": 0}):
             try:
-                return Wallets.from_public_key(public_key, ver, wc=0)
+                w = Wallets.from_public_key(public_key, ver, **kwargs)
+                if _valid_wallet(w):
+                    return w
             except Exception:
                 pass
 
     raise RuntimeError("setup_required")
+
+
+def _build_wallet_from_public_key(public_key: bytes):
+    if not _wallet_ready():
+        raise RuntimeError("setup_required")
+    return _try_wallet_from_public_key(public_key)
 
 
 def _build_wallet_from_mnemonics(words: list[str]):

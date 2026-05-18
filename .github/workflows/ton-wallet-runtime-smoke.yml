@@ -22,6 +22,33 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
 
+
+      - name: tonsdk API introspection
+        run: |
+          python - <<'PY'
+          import inspect
+          from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+
+          print("WalletVersionEnum attrs:", [a for a in dir(WalletVersionEnum) if "v4" in a.lower()])
+          print("Wallets attrs:", [a for a in dir(Wallets) if not a.startswith("_")])
+          print("Wallets.ALL exists:", hasattr(Wallets, "ALL"))
+          if hasattr(Wallets, "ALL"):
+              print("Wallets.ALL keys:", list(Wallets.ALL.keys()))
+              ver = getattr(WalletVersionEnum, "v4r2", None)
+              print("v4r2:", ver)
+              print("v4r2 in ALL:", ver in Wallets.ALL if ver is not None else None)
+              if ver in Wallets.ALL:
+                  cls = Wallets.ALL[ver]
+                  print("wallet cls:", cls)
+                  print("wallet cls signature:", inspect.signature(cls))
+          print("Wallets.create exists:", hasattr(Wallets, "create"))
+          if hasattr(Wallets, "create"):
+              print("Wallets.create signature:", inspect.signature(Wallets.create))
+          print("Wallets.from_public_key exists:", hasattr(Wallets, "from_public_key"))
+          if hasattr(Wallets, "from_public_key"):
+              print("Wallets.from_public_key signature:", inspect.signature(Wallets.from_public_key))
+          PY
+
       - name: Wallet import/runtime smoke
         run: |
           python - <<'PY'
