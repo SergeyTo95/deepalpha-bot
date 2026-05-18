@@ -25,7 +25,7 @@ jobs:
       - name: Wallet import/runtime smoke
         run: |
           python - <<'PY'
-          from services.ton_wallet_service import _wallet_ready, _generate_wallet_real
+          from services.ton_wallet_service import _wallet_ready, _generate_wallet_real, _wallet_from_mnemonic
 
           print("wallet_ready:", _wallet_ready())
           assert _wallet_ready() is True
@@ -38,6 +38,11 @@ jobs:
           assert len(seed.split()) in (12, 24)
           assert len(address) >= 32
           assert len(pub) >= 32
+
+          wallet2, _, _ = _wallet_from_mnemonic(seed)
+          regenerated_address = wallet2.address.to_string(is_user_friendly=True, is_bounceable=False, is_url_safe=True)
+          print("regenerated address:", regenerated_address)
+          assert regenerated_address == address
           PY
 
       - name: Signed BoC creation test (offline)
