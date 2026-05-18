@@ -77,15 +77,33 @@ def decrypt_secret(cipher: str) -> str:
 def _build_wallet_from_public_key(public_key: bytes):
     if not _wallet_ready():
         raise RuntimeError("setup_required")
+
     ver = WalletVersionEnum.v4r2
+    errors = []
+
     if hasattr(Wallets, "ALL") and isinstance(getattr(Wallets, "ALL", None), dict) and ver in Wallets.ALL:
         wallet_cls = Wallets.ALL[ver]
-        return wallet_cls(public_key=public_key, wc=0)
+        ctor_variants = [
+            {"publicKey": public_key, "wc": 0},
+            {"public_key": public_key, "wc": 0},
+            {"publicKey": public_key, "workchain": 0},
+            {"public_key": public_key, "workchain": 0},
+        ]
+        for kwargs in ctor_variants:
+            try:
+                return wallet_cls(**kwargs)
+            except Exception as e:
+                errors.append(str(e))
+
     if hasattr(Wallets, "from_public_key") and callable(getattr(Wallets, "from_public_key")):
         try:
             return Wallets.from_public_key(public_key, ver, workchain=0)
-        except TypeError:
-            return Wallets.from_public_key(public_key, ver, wc=0)
+        except Exception:
+            try:
+                return Wallets.from_public_key(public_key, ver, wc=0)
+            except Exception:
+                pass
+
     raise RuntimeError("setup_required")
 
 
