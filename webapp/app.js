@@ -88,9 +88,9 @@ const I18N = {
     copyAddress: "Copy address",
     sendTon: "Send TON",
     sendMax: "Send MAX",
-    tonHistory: "TON History",
-    tonHistoryEmpty: "TON history is empty.",
-    refreshHistory: "Refresh history",
+    tonHistory: "📜 TON Transactions",
+    tonHistoryEmpty: "No TON transactions yet.",
+    refreshHistory: "Refresh transactions",
     buyWithTon: "Buy tokens with TON wallet"
   },
   ru: {
@@ -158,9 +158,9 @@ const I18N = {
     copyAddress: "Скопировать адрес",
     sendTon: "Отправить TON",
     sendMax: "Отправить всё",
-    tonHistory: "История TON",
-    tonHistoryEmpty: "История TON пока пуста.",
-    refreshHistory: "Обновить историю",
+    tonHistory: "📜 TON Транзакции",
+    tonHistoryEmpty: "TON транзакций пока нет.",
+    refreshHistory: "Обновить транзакции",
     buyWithTon: "Купить токены с TON кошелька"
   }
 };

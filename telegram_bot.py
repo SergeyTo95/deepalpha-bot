@@ -55,6 +55,7 @@ from services.resolved_market_recap_service import render_resolved_market_recap
 from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
     get_ton_send_fee_reserve_nano,
+    get_user_ton_transactions,
 )
 from services.ton_chain_service import ton_to_nano, nano_to_ton_display
 
@@ -7654,14 +7655,89 @@ async def _send_ton_wallet_screen(message: types.Message):
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("📜 TON Транзакции", callback_data="ton_transactions"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
         text = f"💎 Your TON Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} TON\n\nSend only TON on {network_html}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("📜 TON Transactions", callback_data="ton_transactions"))
         kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _short_ton_value(value: str) -> str:
+    raw = str(value or "").strip()
+    if len(raw) <= 22:
+        return raw
+    return raw[:10] + "..." + raw[-8:]
+
+
+def _ton_tx_direction_label(lang: str, direction: str) -> str:
+    d = str(direction or "").strip().lower()
+    if d in ("send", "withdrawal", "outgoing"):
+        return "📤 Отправка" if lang == "ru" else "📤 Send"
+    if d in ("receive", "deposit", "incoming"):
+        return "📥 Пополнение" if lang == "ru" else "📥 Receive"
+    if d == "token_purchase":
+        return "🪙 Покупка токенов" if lang == "ru" else "🪙 Token purchase"
+    return "🔹 Операция" if lang == "ru" else "🔹 Operation"
+
+
+def _ton_transactions_keyboard(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🔄 Обновить транзакции" if lang == "ru" else "🔄 Refresh transactions", callback_data="ton_transactions"))
+    kb.add(InlineKeyboardButton("⬅️ Назад к TON кошельку" if lang == "ru" else "⬅️ Back to TON wallet", callback_data="ton_wallet_back"))
+    return kb
+
+
+@dp.callback_query_handler(lambda c: c.data == "ton_transactions")
+async def ton_transactions_cb(c: types.CallbackQuery):
+    uid = c.from_user.id
+    lang = get_user_lang(uid)
+    items = get_user_ton_transactions(uid, limit=20)
+    if not items:
+        msg = "📜 TON транзакций пока нет." if lang == "ru" else "📜 No TON transactions yet."
+        await c.message.answer(msg, reply_markup=_ton_transactions_keyboard(lang))
+        await c.answer()
+        return
+    lines = ["📜 TON Транзакции" if lang == "ru" else "📜 TON Transactions", ""]
+    for idx, tx in enumerate(items, start=1):
+        direction = _ton_tx_direction_label(lang, str(tx.get("direction") or ""))
+        amount = str(tx.get("amount_display") or "0")
+        status = str(tx.get("status") or "")
+        address = _short_ton_value(str(tx.get("address") or ""))
+        tx_hash = _short_ton_value(str(tx.get("tx_hash") or ""))
+        created = str(tx.get("created_at") or "")
+        if lang == "ru":
+            lines.extend([
+                f"{idx}. {direction}",
+                f"Сумма: {amount} TON",
+                f"Статус: {status}",
+                f"Адрес: {address or '-'}",
+                f"Tx: {tx_hash or '-'}",
+                f"Дата: {created}",
+                "",
+            ])
+        else:
+            lines.extend([
+                f"{idx}. {direction}",
+                f"Amount: {amount} TON",
+                f"Status: {status}",
+                f"Address: {address or '-'}",
+                f"Tx: {tx_hash or '-'}",
+                f"Date: {created}",
+                "",
+            ])
+    await c.message.answer("\n".join(lines).strip(), reply_markup=_ton_transactions_keyboard(lang))
+    await c.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data == "ton_wallet_back")
+async def ton_wallet_back_cb(c: types.CallbackQuery):
+    await _send_ton_wallet_screen(c.message)
+    await c.answer()
 
 @dp.message_handler(commands=["ton_wallet","ton_balance"])
 async def cmd_ton_wallet(message: types.Message):
