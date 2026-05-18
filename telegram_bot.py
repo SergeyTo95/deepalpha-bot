@@ -5157,7 +5157,7 @@ async def watchlist_button_handler(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(uid))
 
 
-@dp.message_handler(lambda m: m.text in ["📢 Авторы", "📢 Authors"])
+@dp.message_handler(lambda m: m.text in ["📣 Авторы", "📣 Authors", "📢 Авторы", "📢 Authors"])
 async def authors_button_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -6346,7 +6346,9 @@ async def buy_tokens_handler(message: types.Message):
     await message.answer(text, reply_markup=get_pay_keyboard(lang))
 
 
-@dp.message_handler(lambda m: m.text in ["🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active"])
+@dp.message_handler(
+    lambda m: m.text in ["🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "🔔 Subscription", "✅ Subscription active"]
+)
 async def subscription_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -6446,7 +6448,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
 
     await message.answer(text, reply_markup=get_main_keyboard(uid))
     
-@dp.message_handler(lambda m: m.text in ["📊 История", "📊 History"])
+@dp.message_handler(lambda m: m.text in ["📊 История", "📊 History", "📜 История", "📜 History"])
 async def history_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
@@ -7331,6 +7333,11 @@ async def checks_menu_handler(message: types.Message):
 
 @dp.message_handler(lambda m: (m.text or "") in ["🎁 Чеки", "🎁 Checks"])
 async def checks_menu_text_handler(message: types.Message):
+    await _send_checks_menu(message)
+
+
+@dp.message_handler(lambda m: (m.text or "") in ["🎁 Создать чек", "🎁 Create Check"])
+async def checks_create_text_handler(message: types.Message):
     await _send_checks_menu(message)
 
 
