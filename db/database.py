@@ -481,6 +481,39 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_status ON ton_wallet_transactions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_wallet_address ON ton_wallet_transactions(wallet_address)")
 
+
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS product_type TEXT")
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS payment_intent_id BIGINT")
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS purchase_status TEXT")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_purchase_intents (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        product_type TEXT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        project_wallet TEXT NOT NULL,
+        expected_amount_nano TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        tx_hash TEXT,
+        requested_tokens INTEGER DEFAULT 0,
+        bonus_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
+        price_per_token_nano TEXT DEFAULT '0',
+        subscription_days INTEGER DEFAULT 0,
+        metadata_json TEXT DEFAULT '{}',
+        created_at TEXT,
+        submitted_at TEXT,
+        fulfilled_at TEXT,
+        failed_at TEXT,
+        fail_reason TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_user ON ton_purchase_intents(user_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_status ON ton_purchase_intents(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ton_purchase_intents_tx_hash_unique ON ton_purchase_intents(tx_hash) WHERE tx_hash IS NOT NULL AND tx_hash <> ''")
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
@@ -1173,6 +1206,105 @@ def increment_user_stat(user_id: int, field: str) -> None:
     finally:
         conn.close()
 
+
+
+def create_ton_purchase_intent(user_id: int, product_type: str, wallet_address: str, project_wallet: str, expected_amount_nano: int, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    now = datetime.utcnow().isoformat()
+    try:
+        cur.execute("""
+        INSERT INTO ton_purchase_intents (user_id, product_type, wallet_address, project_wallet, expected_amount_nano, metadata_json,
+            requested_tokens, bonus_tokens, total_tokens, price_per_token_nano, subscription_days, created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        RETURNING *
+        """, (user_id, product_type, wallet_address, project_wallet, str(int(expected_amount_nano or 0)), json.dumps(metadata or {}, ensure_ascii=False),
+              int((metadata or {}).get('requested_tokens') or 0), int((metadata or {}).get('bonus_tokens') or 0), int((metadata or {}).get('total_tokens') or 0), str((metadata or {}).get('price_per_token_nano') or '0'), int((metadata or {}).get('subscription_days') or 0), now, now))
+        row = cur.fetchone(); conn.commit(); return dict(row) if row else None
+    except Exception as e:
+        print(f"create_ton_purchase_intent error: {e}"); return None
+    finally:
+        conn.close()
+
+def submit_ton_purchase_intent(intent_id: int, tx_hash: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    now = datetime.utcnow().isoformat(); h = (tx_hash or '').strip()
+    try:
+        cur.execute("SELECT * FROM ton_purchase_intents WHERE id=%s FOR UPDATE", (intent_id,))
+        row = cur.fetchone()
+        if not row or row['status'] not in ('created','submitted'): conn.rollback(); return None
+        if not h:
+            cur.execute(
+                "UPDATE ton_purchase_intents SET status='submitted', submitted_at=COALESCE(submitted_at,%s), updated_at=%s WHERE id=%s RETURNING *",
+                (now, now, intent_id),
+            )
+            out = cur.fetchone()
+            conn.commit()
+            return dict(out) if out else None
+        cur.execute("SELECT id FROM ton_purchase_intents WHERE tx_hash=%s AND id<>%s", (h, intent_id))
+        if cur.fetchone(): conn.rollback(); return None
+        cur.execute("UPDATE ton_purchase_intents SET status='submitted', tx_hash=%s, submitted_at=COALESCE(submitted_at,%s), updated_at=%s WHERE id=%s RETURNING *", (h, now, now, intent_id))
+        out=cur.fetchone()
+        cur.execute("UPDATE ton_wallet_transactions SET product_type=%s,payment_intent_id=%s,purchase_status='submitted',updated_at=%s WHERE tx_hash=%s", (row['product_type'], intent_id, now, h))
+        conn.commit(); return dict(out) if out else None
+    except Exception as e:
+        print(f"submit_ton_purchase_intent error: {e}"); conn.rollback(); return None
+    finally: conn.close()
+
+def fulfill_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
+    conn=get_connection(); cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor); now=datetime.utcnow().isoformat()
+    try:
+        cur.execute("SELECT * FROM ton_purchase_intents WHERE id=%s FOR UPDATE", (intent_id,)); row=cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        if row['status'] == 'fulfilled':
+            conn.commit()
+            return dict(row)
+        if row['status']!='submitted':
+            conn.rollback()
+            return None
+        product_type = str(row.get('product_type') or '').strip()
+        if product_type == 'token_purchase':
+            credit = int(row.get('total_tokens') or row.get('requested_tokens') or 0)
+            cur.execute(
+                "UPDATE users SET token_balance = COALESCE(token_balance, 0) + %s, updated_at = %s WHERE user_id = %s",
+                (credit, now, int(row['user_id']))
+            )
+        elif product_type == 'subscription':
+            days = int(row.get('subscription_days') or 30)
+            cur.execute("SELECT subscription_until FROM users WHERE user_id=%s FOR UPDATE", (int(row['user_id']),))
+            urow = cur.fetchone()
+            now_dt = datetime.utcnow()
+            base = now_dt
+            if urow and urow.get('subscription_until'):
+                try:
+                    current_dt = datetime.fromisoformat(str(urow.get('subscription_until')))
+                    if current_dt > now_dt:
+                        base = current_dt
+                except Exception:
+                    pass
+            until = (base + timedelta(days=days)).isoformat()
+            cur.execute("UPDATE users SET subscription_until=%s, updated_at=%s WHERE user_id=%s", (until, now, int(row['user_id'])))
+        cur.execute("UPDATE ton_purchase_intents SET status='fulfilled', fulfilled_at=%s, updated_at=%s WHERE id=%s RETURNING *", (now, now, intent_id))
+        out=cur.fetchone();
+        cur.execute("UPDATE ton_wallet_transactions SET purchase_status='fulfilled',updated_at=%s WHERE payment_intent_id=%s", (now, intent_id))
+        conn.commit(); return dict(out) if out else None
+    except Exception as e:
+        print(f"fulfill_ton_purchase_intent error: {e}"); conn.rollback(); return None
+    finally: conn.close()
+
+def fail_ton_purchase_intent(intent_id: int, reason: str) -> Optional[Dict[str, Any]]:
+    conn=get_connection(); cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor); now=datetime.utcnow().isoformat()
+    try:
+        cur.execute("SELECT * FROM ton_purchase_intents WHERE id=%s FOR UPDATE", (intent_id,)); row=cur.fetchone()
+        if not row or row['status']=='fulfilled': conn.rollback(); return None
+        cur.execute("UPDATE ton_purchase_intents SET status='failed', failed_at=%s, fail_reason=%s, updated_at=%s WHERE id=%s RETURNING *", (now, reason[:255], now, intent_id))
+        out=cur.fetchone();
+        cur.execute("UPDATE ton_wallet_transactions SET purchase_status='failed',updated_at=%s WHERE payment_intent_id=%s", (now, intent_id))
+        conn.commit(); return dict(out) if out else None
+    except Exception as e:
+        print(f"fail_ton_purchase_intent error: {e}"); conn.rollback(); return None
+    finally: conn.close()
 
 # ═══════════════════════════════════════════
 # REFERRALS
