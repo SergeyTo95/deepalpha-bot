@@ -256,12 +256,12 @@ def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("⚡️ Быстрый анализ"), KeyboardButton("💡 Сигнал часа"))
         kb.add(KeyboardButton("🧠 Deep анализ"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("➕ Другие анализы"))
-        kb.add(KeyboardButton("⬅️ Назад к анализу"))
+        kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("⚡️ Quick Analysis"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🧠 Deep Analysis"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("➕ Other Analyses"))
-        kb.add(KeyboardButton("⬅️ Back to analysis"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -343,7 +343,7 @@ def get_other_analyses_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             kb.add(KeyboardButton("🏆 Топ"), KeyboardButton("📘 Как читать анализ"))
         if _is_top_analysis_enabled():
             kb.add(KeyboardButton("📘 Как читать анализ"))
-        kb.add(KeyboardButton("⬅️ Назад"))
+        kb.add(KeyboardButton("⬅️ Назад к анализу"))
     else:
         if _is_top_analysis_enabled():
             kb.add(KeyboardButton("🔥 Top Analysis"), KeyboardButton("🪙 Crypto Analysis"))
@@ -355,7 +355,7 @@ def get_other_analyses_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             kb.add(KeyboardButton("🏆 Top"), KeyboardButton("📘 How to read the analysis"))
         if _is_top_analysis_enabled():
             kb.add(KeyboardButton("📘 How to read the analysis"))
-        kb.add(KeyboardButton("⬅️ Back"))
+        kb.add(KeyboardButton("⬅️ Back to analysis"))
     return kb
 
 
