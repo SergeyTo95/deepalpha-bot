@@ -256,12 +256,12 @@ def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("⚡️ Быстрый анализ"), KeyboardButton("💡 Сигнал часа"))
         kb.add(KeyboardButton("🧠 Deep анализ"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("➕ Другие анализы"))
-        kb.add(KeyboardButton("⬅️ Назад к анализу"))
+        kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("⚡️ Quick Analysis"), KeyboardButton("💡 Signal of the hour"))
         kb.add(KeyboardButton("🧠 Deep Analysis"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("➕ Other Analyses"))
-        kb.add(KeyboardButton("⬅️ Back to analysis"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -272,12 +272,12 @@ def get_checks_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🎁 Чеки"))
         kb.add(KeyboardButton("🎁 Создать чек"), KeyboardButton("📦 Мои чеки"))
         kb.add(KeyboardButton("✅ Активировать чек"))
-        kb.add(KeyboardButton("⬅️ Назад"))
+        kb.add(KeyboardButton("⬅️ Назад к анализу"))
     else:
         kb.add(KeyboardButton("🎁 Checks"))
         kb.add(KeyboardButton("🎁 Create Check"), KeyboardButton("📦 My Checks"))
         kb.add(KeyboardButton("✅ Activate Check"))
-        kb.add(KeyboardButton("⬅️ Back"))
+        kb.add(KeyboardButton("⬅️ Back to analysis"))
     return kb
 
 
@@ -5949,25 +5949,35 @@ async def other_analyses_menu_handler(message: types.Message):
     await message.answer(title, reply_markup=get_other_analyses_keyboard(uid))
 
 
-@dp.message_handler(lambda m: m.text in ["⬅️ Назад к анализу", "⬅️ Back to analysis"])
-async def other_analyses_back_to_analysis_handler(message: types.Message):
+async def _show_analysis_menu(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("⬅️", reply_markup=get_analysis_keyboard(uid))
+    lang = get_user_lang(uid)
+    await message.answer("🔍 Анализ" if lang == "ru" else "🔍 Analysis", reply_markup=get_analysis_keyboard(uid))
 
 
-@dp.message_handler(lambda m: m.text in ["⬅️ Назад", "⬅️ Back"])
-async def back_to_main_handler(message: types.Message):
+async def _show_main_menu(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("⬅️", reply_markup=get_main_keyboard(uid))
+    lang = get_user_lang(uid)
+    await message.answer("🏠 Главное меню" if lang == "ru" else "🏠 Main menu", reply_markup=get_main_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["⬅️ Назад к анализу", "⬅️ Back to analysis"], state="*")
+async def other_analyses_back_to_analysis_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await _show_analysis_menu(message)
+
+
+@dp.message_handler(lambda m: m.text in ["⬅️ Назад", "⬅️ Back"], state="*")
+async def back_to_main_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await _show_main_menu(message)
 
 
 @dp.message_handler(lambda m: m.text in ["🔍 Анализ", "🔍 Analysis"])
 async def analysis_menu_handler(message: types.Message):
-    _register_user(message)
-    uid = message.from_user.id
-    await message.answer("🔍", reply_markup=get_analysis_keyboard(uid))
+    await _show_analysis_menu(message)
 
 
 @dp.message_handler(lambda m: m.text in ["🎁 Чеки", "🎁 Checks"])
