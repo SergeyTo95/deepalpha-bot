@@ -1039,7 +1039,13 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    project_wallet = (os.getenv("TON_PROJECT_WALLET", "") or get_setting("ton_project_wallet", "") or get_setting("ton_platform_wallet", "")).strip()
+    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
+    project_wallet = (
+        os.getenv("TON_PROJECT_WALLET", "")
+        or get_setting("ton_project_wallet", "")
+        or get_setting("ton_platform_wallet", "")
+        or default_purchase_wallet
+    ).strip()
     if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
     price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
