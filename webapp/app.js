@@ -669,11 +669,23 @@ function renderAuthed(summary, lang) {
     };
     tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details, sent.data?.error_detail || "unknown");
   };
+  const mapTonPurchaseError = (code) => {
+    const unavailable = lang === "ru"
+      ? "Покупка токенов временно недоступна."
+      : "Token purchases are temporarily unavailable.";
+    const c = String(code || "");
+    if (c === "ton_token_purchase_disabled" || c === "ton_platform_wallet_not_configured") return unavailable;
+    if (c === "invalid_amount_tokens") return lang === "ru" ? "Введите корректное количество токенов." : "Enter a valid token amount.";
+    if (c === "amount_tokens_too_small") return lang === "ru" ? "Слишком маленькое количество токенов." : "Token amount is too small.";
+    if (c === "invalid_ton_token_price") return unavailable;
+    return unavailable;
+  };
+
   document.getElementById("tonBuyBtn").onclick = async () => {
     const amount_tokens = String(document.getElementById("tonBuyTokensInput").value || "").trim();
     const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount_tokens }) });
     const d = await r.json();
-    tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : String(d.error || "buy_failed");
+    tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : mapTonPurchaseError(d.error || "buy_failed");
     if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
   };
   loadTonWallet(false).then(() => loadTonWallet(true));
