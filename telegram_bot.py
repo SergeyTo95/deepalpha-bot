@@ -7854,6 +7854,8 @@ def _ton_tx_direction_label(lang: str, direction: str) -> str:
         return "📥 Пополнение" if lang == "ru" else "📥 Receive"
     if d == "token_purchase":
         return "🪙 Покупка токенов" if lang == "ru" else "🪙 Token purchase"
+    if d == "subscription_purchase":
+        return "🔔 Покупка подписки" if lang == "ru" else "🔔 Subscription purchase"
     return "🔹 Операция" if lang == "ru" else "🔹 Operation"
 
 

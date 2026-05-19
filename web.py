@@ -35,7 +35,7 @@ from db.database import (
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
-    add_tokens,
+    create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -956,27 +956,41 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    platform_wallet = str(get_setting("ton_platform_wallet", "") or "").strip()
-    if not validate_ton_address(platform_wallet):
-        return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
+    project_wallet = str(os.getenv("TON_PROJECT_WALLET", "") or get_setting("ton_project_wallet", "") or "").strip()
+    if not validate_ton_address(project_wallet):
+        return _json_response({"ok": False, "error": "ton_project_wallet_not_configured"}, status=400)
     price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
     if price_per_token <= 0:
         return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
     purchase_amount_nano = amount_tokens * price_per_token
-    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=platform_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
+    source_wallet = get_user_ton_balance(user_id, refresh=False).get("wallet_address", "")
+    intent = create_ton_purchase_intent(
+        user_id=user_id,
+        product_type="token_purchase",
+        product_units=amount_tokens,
+        amount_nano=purchase_amount_nano,
+        destination_address=project_wallet,
+        source_wallet_address=source_wallet,
+        comment=f"DeepAlpha token purchase:{user_id}",
+    )
+    if not intent.get("ok"):
+        return _json_response({"ok": False, "error": intent.get("error") or "create_intent_failed"}, status=400)
+    intent_id = int(intent.get("intent_id") or 0)
+    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment=f"DeepAlpha token purchase:{intent_id}")
     if not sent.get("ok"):
         return _json_response(sent, status=400)
-    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
-    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
-    total_tokens = amount_tokens + bonus_tokens
-    add_tokens(user_id, total_tokens)
+    tx_hash = str(sent.get("tx_hash") or "")
+    tx_hash_source = "send_boc" if tx_hash else "missing"
+    submit_ton_purchase_intent(intent_id, tx_hash=tx_hash, tx_hash_source=tx_hash_source)
+    credited = fulfill_ton_purchase_intent(intent_id, tx_hash=tx_hash, tx_hash_source=tx_hash_source) if tx_hash else {"ok": False, "error": "tx_hash_missing"}
     return _json_response({
         "ok": True,
-        "tokens_credited": amount_tokens,
-        "bonus_tokens": bonus_tokens,
-        "total_tokens": total_tokens,
+        "payment_intent_id": intent_id,
+        "tokens_credited": amount_tokens if credited.get("ok") else 0,
         "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
-        "tx_hash": str(sent.get("tx_hash") or ""),
+        "tx_hash": tx_hash,
+        "purchase_status": "fulfilled" if credited.get("ok") else "submitted",
+        "message": "payment_submitted_waiting_verification" if not credited.get("ok") else "payment_fulfilled",
     })
 
 
