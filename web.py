@@ -35,7 +35,8 @@ from db.database import (
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
-    add_tokens,
+    add_tokens, get_connection,
+    create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -956,32 +957,40 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    project_wallet = (
-        os.getenv("TON_PROJECT_WALLET", "")
-        or get_setting("ton_project_wallet", "")
-        or get_setting("ton_platform_wallet", "")
-    ).strip()
+    project_wallet = (os.getenv("TON_PROJECT_WALLET", "") or get_setting("ton_project_wallet", "") or get_setting("ton_platform_wallet", "")).strip()
     if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
     price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
     if price_per_token <= 0:
         return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
-    purchase_amount_nano = amount_tokens * price_per_token
-    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
-    if not sent.get("ok"):
-        return _json_response(sent, status=400)
     bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
     bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
     total_tokens = amount_tokens + bonus_tokens
-    add_tokens(user_id, total_tokens)
-    return _json_response({
-        "ok": True,
-        "tokens_credited": amount_tokens,
-        "bonus_tokens": bonus_tokens,
-        "total_tokens": total_tokens,
-        "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
-        "tx_hash": str(sent.get("tx_hash") or ""),
+    purchase_amount_nano = amount_tokens * price_per_token
+    wallet = get_or_create_user_ton_wallet(user_id)
+    intent = create_ton_purchase_intent(user_id, 'tokens', str(wallet.get('wallet_address') or ''), project_wallet, purchase_amount_nano, {
+        'requested_tokens': amount_tokens, 'bonus_tokens': bonus_tokens, 'total_tokens': total_tokens, 'price_per_token_nano': str(price_per_token)
     })
+    if not intent:
+        return _json_response({"ok": False, "error": "intent_create_failed"}, status=500)
+    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
+    if not sent.get("ok"):
+        return _json_response(sent, status=400)
+    tx_hash = str(sent.get('tx_hash') or '').strip()
+    if not tx_hash:
+        return _json_response({"ok": True, "intent_id": intent.get('id'), "status": "created", "error": "tx_hash_missing"})
+    submitted = submit_ton_purchase_intent(int(intent.get('id')), tx_hash)
+    if not submitted:
+        return _json_response({"ok": False, "error": "intent_submit_failed"}, status=409)
+    conn=get_connection(); cur=conn.cursor()
+    cur.execute("""SELECT wallet_address,destination_address,amount_nano,created_at,purchase_status FROM ton_wallet_transactions WHERE tx_hash=%s ORDER BY id DESC LIMIT 1""", (tx_hash,))
+    row=cur.fetchone(); conn.close()
+    verify_ok=False
+    if row:
+        verify_ok = str(row[0] or '').strip()==str(wallet.get('wallet_address') or '').strip() and str(row[1] or '').strip()==project_wallet and int(str(row[2] or '0'))==int(purchase_amount_nano) and str(row[3] or '')>=str(intent.get('created_at') or '')
+    if verify_ok:
+        fulfill_ton_purchase_intent(int(intent.get('id')))
+    return _json_response({"ok": True, "intent_id": intent.get('id'), "status": "fulfilled" if verify_ok else "submitted", "tx_hash": tx_hash, "ton_paid_display": nano_to_ton_display(purchase_amount_nano), "tokens_credited": amount_tokens if verify_ok else 0, "bonus_tokens": bonus_tokens if verify_ok else 0, "total_tokens": total_tokens if verify_ok else 0})
 
 
 async def handle_auth_logout(request):
