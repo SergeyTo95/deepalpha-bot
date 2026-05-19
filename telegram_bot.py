@@ -254,12 +254,12 @@ def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("⚡️ Быстрый анализ"), KeyboardButton("💡 Сигнал часа"))
-        kb.add(KeyboardButton("🧠 Deep анализ"), KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("➕ Другие анализы"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("⚡️ Quick Analysis"), KeyboardButton("💡 Signal of the hour"))
-        kb.add(KeyboardButton("🧠 Deep Analysis"), KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("➕ Other Analyses"))
         kb.add(KeyboardButton("⬅️ Back"))
     return kb
@@ -5894,7 +5894,7 @@ def _parse_probability(prob_str: str) -> float:
 # ANALYSIS / SIGNALS
 # ═══════════════════════════════════════════
 
-@dp.message_handler(lambda m: m.text in ["⚡️ Быстрый анализ", "⚡️ Quick Analysis", "🧠 Deep анализ", "🧠 Deep Analysis", "🔍 Analyze"])
+@dp.message_handler(lambda m: m.text in ["⚡️ Быстрый анализ", "⚡️ Quick Analysis", "🔍 Analyze"])
 async def analyze_prompt_handler(message: types.Message):
     await AnalysisStates.waiting_for_link.set()
     _register_user(message)
