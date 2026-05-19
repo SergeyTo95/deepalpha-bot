@@ -15,6 +15,8 @@ from services.ton_chain_service import (
     send_boc_return_hash,
     validate_ton_address,
     resolve_recent_ton_tx_hash,
+    _base_url,
+    _params,
 )
 logger = logging.getLogger(__name__)
 
@@ -534,6 +536,45 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
             tx_hash_source = "get_transactions"
     _record_tx(user_id, wallet_address, amount_nano, destination, "submitted", tx_hash, comment, None, tx_hash_source)
     return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "status": "submitted"}
+
+
+def verify_ton_transfer_onchain(source_wallet: str, destination_wallet: str, amount_nano: int, tx_hash: str, after_ts: int = 0) -> Dict[str, Any]:
+    src = normalize_ton_address(source_wallet)
+    dst = normalize_ton_address(destination_wallet)
+    target_hash = str(tx_hash or "").strip()
+    if not src or not dst or not target_hash:
+        return {"ok": False, "error": "invalid_verify_payload"}
+    try:
+        r = requests.get(f"{_base_url()}/getTransactions", params={"address": src, "limit": 20, **_params()}, timeout=20)
+        data = r.json() if r.ok else {}
+        items = data.get("result") if isinstance(data, dict) else None
+    except Exception:
+        return {"ok": False, "error": "verification_unavailable"}
+    if not isinstance(items, list):
+        return {"ok": False, "error": "verification_unavailable"}
+    for tx in items:
+        if not isinstance(tx, dict):
+            continue
+        txid = str((tx.get("transaction_id") or {}).get("hash") or tx.get("hash") or "").strip()
+        if txid != target_hash:
+            continue
+        ts = int(tx.get("utime") or tx.get("timestamp") or 0)
+        if after_ts and ts and ts < int(after_ts):
+            return {"ok": False, "error": "tx_too_old"}
+        out_msgs = tx.get("out_msgs") if isinstance(tx.get("out_msgs"), list) else []
+        for msg in out_msgs:
+            mdst = normalize_ton_address(str(msg.get("destination") or msg.get("dst") or ""))
+            if mdst != dst:
+                continue
+            try:
+                mval = int(msg.get("value") or msg.get("amount") or 0)
+            except Exception:
+                mval = 0
+            if mval != int(amount_nano):
+                continue
+            return {"ok": True, "tx_hash": txid, "tx_timestamp": ts}
+        return {"ok": False, "error": "destination_or_amount_mismatch"}
+    return {"ok": False, "error": "tx_not_found"}
 
 
 def reveal_user_ton_seed_once(user_id: int) -> dict:

@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import secrets
 import asyncio
+from datetime import datetime
 from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
@@ -24,6 +25,7 @@ from services.ton_wallet_service import (
     get_user_jetton_balances,
     get_user_ton_transactions,
     calculate_ton_withdraw_platform_fee,
+    verify_ton_transfer_onchain,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from db.database import (
@@ -36,6 +38,8 @@ from db.database import (
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
+    update_ton_purchase_intent_comment, fail_ton_purchase_intent, get_ton_purchase_intent,
+    link_ton_wallet_tx_to_intent,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -964,33 +968,69 @@ async def handle_wallet_ton_buy_tokens(request):
         return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
     purchase_amount_nano = amount_tokens * price_per_token
     source_wallet = get_user_ton_balance(user_id, refresh=False).get("wallet_address", "")
+    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
+    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
+    total_tokens = amount_tokens + bonus_tokens
     intent = create_ton_purchase_intent(
         user_id=user_id,
         product_type="token_purchase",
-        product_units=amount_tokens,
+        product_units=total_tokens,
         amount_nano=purchase_amount_nano,
         destination_address=project_wallet,
         source_wallet_address=source_wallet,
-        comment=f"DeepAlpha token purchase:{user_id}",
+        comment="",
+        metadata={
+            "requested_tokens": amount_tokens,
+            "bonus_tokens": bonus_tokens,
+            "total_tokens": total_tokens,
+            "price_per_token_nano": price_per_token,
+        },
     )
     if not intent.get("ok"):
         return _json_response({"ok": False, "error": intent.get("error") or "create_intent_failed"}, status=400)
     intent_id = int(intent.get("intent_id") or 0)
-    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment=f"DeepAlpha token purchase:{intent_id}")
+    comment = f"DeepAlpha token purchase:{intent_id}"
+    update_ton_purchase_intent_comment(intent_id, comment)
+    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment=comment)
     if not sent.get("ok"):
+        fail_ton_purchase_intent(intent_id, str(sent.get("error") or "send_failed"))
         return _json_response(sent, status=400)
     tx_hash = str(sent.get("tx_hash") or "")
     tx_hash_source = "send_boc" if tx_hash else "missing"
     submit_ton_purchase_intent(intent_id, tx_hash=tx_hash, tx_hash_source=tx_hash_source)
-    credited = fulfill_ton_purchase_intent(intent_id, tx_hash=tx_hash, tx_hash_source=tx_hash_source) if tx_hash else {"ok": False, "error": "tx_hash_missing"}
+    link_ton_wallet_tx_to_intent(user_id=user_id, tx_hash=tx_hash, intent_id=intent_id, product_type="token_purchase", purchase_status="submitted")
+    purchase_status = "submitted"
+    message = "payment_submitted_waiting_verification"
+    if tx_hash:
+        intent_row = get_ton_purchase_intent(intent_id) or {}
+        created_ts = 0
+        try:
+            created_ts = int(datetime.fromisoformat(str(intent_row.get("created_at") or "")).timestamp())
+        except Exception:
+            created_ts = 0
+        verify = verify_ton_transfer_onchain(
+            source_wallet=source_wallet,
+            destination_wallet=project_wallet,
+            amount_nano=purchase_amount_nano,
+            tx_hash=tx_hash,
+            after_ts=created_ts,
+        )
+        if verify.get("ok"):
+            fulfilled = fulfill_ton_purchase_intent(intent_id, tx_hash=tx_hash, tx_hash_source=tx_hash_source)
+            if fulfilled.get("ok"):
+                purchase_status = "fulfilled"
+                message = "payment_fulfilled"
+                link_ton_wallet_tx_to_intent(user_id=user_id, tx_hash=tx_hash, intent_id=intent_id, product_type="token_purchase", purchase_status="fulfilled")
     return _json_response({
         "ok": True,
         "payment_intent_id": intent_id,
-        "tokens_credited": amount_tokens if credited.get("ok") else 0,
+        "tokens_credited": total_tokens if purchase_status == "fulfilled" else 0,
+        "bonus_tokens": bonus_tokens,
+        "total_tokens": total_tokens,
         "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
         "tx_hash": tx_hash,
-        "purchase_status": "fulfilled" if credited.get("ok") else "submitted",
-        "message": "payment_submitted_waiting_verification" if not credited.get("ok") else "payment_fulfilled",
+        "purchase_status": purchase_status,
+        "message": message,
     })
 
 

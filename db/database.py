@@ -991,6 +991,19 @@ def create_ton_purchase_intent(user_id: int, product_type: str, product_units: i
         conn.close()
 
 
+def update_ton_purchase_intent_comment(intent_id: int, comment: str) -> bool:
+    conn = get_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE ton_purchase_intents SET comment=%s WHERE id=%s", (str(comment or ""), int(intent_id)))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def submit_ton_purchase_intent(intent_id: int, tx_hash: str, tx_hash_source: str = "missing", error: str = "") -> bool:
     conn = get_connection(); cursor = conn.cursor()
     try:
@@ -998,6 +1011,65 @@ def submit_ton_purchase_intent(intent_id: int, tx_hash: str, tx_hash_source: str
                           SET status='submitted', tx_hash=%s, tx_hash_source=%s, submitted_at=%s, error=%s
                           WHERE id=%s AND status IN ('pending','failed')""",
                        (str(tx_hash or ""), str(tx_hash_source or "missing"), datetime.utcnow().isoformat(), str(error or ""), int(intent_id)))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def fail_ton_purchase_intent(intent_id: int, error: str) -> bool:
+    conn = get_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("""UPDATE ton_purchase_intents
+                          SET status='failed', error=%s
+                          WHERE id=%s AND status IN ('pending','submitted')""", (str(error or "send_failed"), int(intent_id)))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT * FROM ton_purchase_intents WHERE id=%s LIMIT 1", (int(intent_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def link_ton_wallet_tx_to_intent(user_id: int, tx_hash: str, intent_id: int, product_type: str, purchase_status: str) -> bool:
+    conn = get_connection(); cursor = conn.cursor()
+    try:
+        if str(tx_hash or "").strip():
+            cursor.execute("""
+            UPDATE ton_wallet_transactions
+            SET product_type=%s, payment_intent_id=%s, purchase_status=%s
+            WHERE id = (
+              SELECT id FROM ton_wallet_transactions
+              WHERE user_id=%s AND tx_hash=%s
+              ORDER BY id DESC LIMIT 1
+            )
+            """, (str(product_type), int(intent_id), str(purchase_status), int(user_id), str(tx_hash)))
+        else:
+            cursor.execute("""
+            UPDATE ton_wallet_transactions
+            SET product_type=%s, payment_intent_id=%s, purchase_status=%s
+            WHERE id = (
+              SELECT id FROM ton_wallet_transactions
+              WHERE user_id=%s AND payment_intent_id IS NULL
+              ORDER BY id DESC LIMIT 1
+            )
+            """, (str(product_type), int(intent_id), str(purchase_status), int(user_id)))
         conn.commit()
         return cursor.rowcount > 0
     except Exception:
