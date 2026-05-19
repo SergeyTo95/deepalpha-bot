@@ -1232,6 +1232,14 @@ def submit_ton_purchase_intent(intent_id: int, tx_hash: str) -> Optional[Dict[st
         cur.execute("SELECT * FROM ton_purchase_intents WHERE id=%s FOR UPDATE", (intent_id,))
         row = cur.fetchone()
         if not row or row['status'] not in ('created','submitted'): conn.rollback(); return None
+        if not h:
+            cur.execute(
+                "UPDATE ton_purchase_intents SET status='submitted', submitted_at=COALESCE(submitted_at,%s), updated_at=%s WHERE id=%s RETURNING *",
+                (now, now, intent_id),
+            )
+            out = cur.fetchone()
+            conn.commit()
+            return dict(out) if out else None
         cur.execute("SELECT id FROM ton_purchase_intents WHERE tx_hash=%s AND id<>%s", (h, intent_id))
         if cur.fetchone(): conn.rollback(); return None
         cur.execute("UPDATE ton_purchase_intents SET status='submitted', tx_hash=%s, submitted_at=COALESCE(submitted_at,%s), updated_at=%s WHERE id=%s RETURNING *", (h, now, now, intent_id))
