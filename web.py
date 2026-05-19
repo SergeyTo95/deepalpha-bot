@@ -26,6 +26,7 @@ from services.ton_wallet_service import (
     calculate_ton_withdraw_platform_fee,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
+from services.ton_chain_service import resolve_recent_ton_tx_hash
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -37,6 +38,7 @@ from db.database import (
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
     add_tokens, get_connection,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
+    fail_ton_purchase_intent,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -126,6 +128,86 @@ def _safe_int(value, default: int, min_value: int, max_value=None) -> int:
     if max_value is not None:
         parsed = min(max_value, parsed)
     return parsed
+
+
+def verify_ton_purchase_onchain(intent_id: int) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, user_id, product_type, wallet_address, project_wallet, expected_amount_nano,
+                   status, tx_hash, created_at
+            FROM ton_purchase_intents
+            WHERE id = %s
+            """,
+            (intent_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"ok": False, "error": "intent_not_found"}
+        (
+            _id, _user_id, _product_type, wallet_address, project_wallet,
+            expected_amount_nano, status, tx_hash, created_at,
+        ) = row
+        if str(status or "").strip() == "fulfilled":
+            return {"ok": False, "error": "intent_already_fulfilled"}
+        try:
+            created_ts = int(__import__("datetime").datetime.fromisoformat(str(created_at)).timestamp())
+        except Exception:
+            created_ts = None
+        expected = int(str(expected_amount_nano or "0"))
+        src = str(wallet_address or "").strip()
+        dst = str(project_wallet or "").strip()
+        if not src or not dst or expected <= 0:
+            return {"ok": False, "error": "intent_invalid"}
+        h = str(tx_hash or "").strip()
+        if not h:
+            h = resolve_recent_ton_tx_hash(
+                source_address=src,
+                destination_address=dst,
+                amount_nano=expected,
+                after_ts=created_ts,
+                attempts=3,
+                delay_seconds=1.2,
+            )
+            if h:
+                submit_ton_purchase_intent(int(intent_id), h)
+        if not h:
+            return {"ok": False, "error": "tx_hash_not_found"}
+        cur.execute("SELECT id FROM ton_purchase_intents WHERE tx_hash=%s AND id<>%s", (h, intent_id))
+        if cur.fetchone():
+            return {"ok": False, "error": "tx_hash_not_unique"}
+        # Lightweight local safety cross-check with on-chain resolved hash present.
+        cur.execute(
+            """
+            SELECT wallet_address, destination_address, amount_nano, created_at
+            FROM ton_wallet_transactions
+            WHERE tx_hash=%s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (h,),
+        )
+        tx = cur.fetchone()
+        if tx:
+            tx_src = str(tx[0] or "").strip()
+            tx_dst = str(tx[1] or "").strip()
+            tx_amount = int(str(tx[2] or "0"))
+            tx_created = str(tx[3] or "")
+            if tx_src != src:
+                return {"ok": False, "error": "source_mismatch"}
+            if tx_dst != dst:
+                return {"ok": False, "error": "destination_mismatch"}
+            if tx_amount != expected:
+                return {"ok": False, "error": "amount_mismatch"}
+            if created_at and tx_created and tx_created < str(created_at):
+                return {"ok": False, "error": "timestamp_mismatch"}
+        return {"ok": True, "tx_hash": h}
+    except Exception as e:
+        return {"ok": False, "error": f"verify_failed:{e}"}
+    finally:
+        conn.close()
 
 
 async def handle_user_api(request):
@@ -968,29 +1050,48 @@ async def handle_wallet_ton_buy_tokens(request):
     total_tokens = amount_tokens + bonus_tokens
     purchase_amount_nano = amount_tokens * price_per_token
     wallet = get_or_create_user_ton_wallet(user_id)
-    intent = create_ton_purchase_intent(user_id, 'tokens', str(wallet.get('wallet_address') or ''), project_wallet, purchase_amount_nano, {
+    intent = create_ton_purchase_intent(user_id, 'token_purchase', str(wallet.get('wallet_address') or ''), project_wallet, purchase_amount_nano, {
         'requested_tokens': amount_tokens, 'bonus_tokens': bonus_tokens, 'total_tokens': total_tokens, 'price_per_token_nano': str(price_per_token)
     })
     if not intent:
         return _json_response({"ok": False, "error": "intent_create_failed"}, status=500)
-    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
+    sent = send_ton_from_user_wallet(
+        user_id=user_id,
+        destination_address=project_wallet,
+        amount_nano=purchase_amount_nano,
+        comment=f"DeepAlpha token purchase:{intent.get('id')}",
+    )
     if not sent.get("ok"):
+        fail_ton_purchase_intent(int(intent.get("id")), str(sent.get("error") or "send_failed"))
         return _json_response(sent, status=400)
     tx_hash = str(sent.get('tx_hash') or '').strip()
     if not tx_hash:
-        return _json_response({"ok": True, "intent_id": intent.get('id'), "status": "created", "error": "tx_hash_missing"})
+        submit_ton_purchase_intent(int(intent.get('id')), "")
+        return _json_response({
+            "ok": True,
+            "intent_id": intent.get('id'),
+            "status": "submitted",
+            "tokens_credited": 0,
+            "message": "payment_submitted_waiting_tx_hash",
+        })
     submitted = submit_ton_purchase_intent(int(intent.get('id')), tx_hash)
     if not submitted:
         return _json_response({"ok": False, "error": "intent_submit_failed"}, status=409)
-    conn=get_connection(); cur=conn.cursor()
-    cur.execute("""SELECT wallet_address,destination_address,amount_nano,created_at,purchase_status FROM ton_wallet_transactions WHERE tx_hash=%s ORDER BY id DESC LIMIT 1""", (tx_hash,))
-    row=cur.fetchone(); conn.close()
-    verify_ok=False
-    if row:
-        verify_ok = str(row[0] or '').strip()==str(wallet.get('wallet_address') or '').strip() and str(row[1] or '').strip()==project_wallet and int(str(row[2] or '0'))==int(purchase_amount_nano) and str(row[3] or '')>=str(intent.get('created_at') or '')
+    verification = verify_ton_purchase_onchain(int(intent.get("id")))
+    verify_ok = bool(verification.get("ok"))
     if verify_ok:
         fulfill_ton_purchase_intent(int(intent.get('id')))
-    return _json_response({"ok": True, "intent_id": intent.get('id'), "status": "fulfilled" if verify_ok else "submitted", "tx_hash": tx_hash, "ton_paid_display": nano_to_ton_display(purchase_amount_nano), "tokens_credited": amount_tokens if verify_ok else 0, "bonus_tokens": bonus_tokens if verify_ok else 0, "total_tokens": total_tokens if verify_ok else 0})
+    return _json_response({
+        "ok": True,
+        "intent_id": intent.get('id'),
+        "status": "fulfilled" if verify_ok else "submitted",
+        "tx_hash": str(verification.get("tx_hash") or tx_hash),
+        "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
+        "tokens_credited": total_tokens if verify_ok else 0,
+        "bonus_tokens": bonus_tokens if verify_ok else 0,
+        "total_tokens": total_tokens if verify_ok else 0,
+        "message": "" if verify_ok else str(verification.get("error") or "payment_submitted_waiting_confirmation"),
+    })
 
 
 async def handle_auth_logout(request):
