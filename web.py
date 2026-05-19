@@ -712,6 +712,20 @@ def _current_web_user_id(request) -> int:
     return user_id if user_id > 0 else 0
 
 
+def get_ton_token_price_per_internal_token_nano() -> int:
+    explicit_nano = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
+    if explicit_nano > 0:
+        return explicit_nano
+    token_price_ton_raw = str(get_setting("token_price_ton", "0") or "0").strip()
+    try:
+        token_price_ton = float(token_price_ton_raw)
+        if token_price_ton > 0:
+            return ton_to_nano(token_price_ton)
+    except Exception:
+        return 0
+    return 0
+
+
 async def handle_wallet_ton(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
@@ -1048,7 +1062,7 @@ async def handle_wallet_ton_buy_tokens(request):
     ).strip()
     if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
-    price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
+    price_per_token = get_ton_token_price_per_internal_token_nano()
     if price_per_token <= 0:
         return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
     bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
