@@ -956,14 +956,18 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    platform_wallet = str(get_setting("ton_platform_wallet", "") or "").strip()
-    if not validate_ton_address(platform_wallet):
+    project_wallet = (
+        os.getenv("TON_PROJECT_WALLET", "")
+        or get_setting("ton_project_wallet", "")
+        or get_setting("ton_platform_wallet", "")
+    ).strip()
+    if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
     price_per_token = int(str(get_setting("ton_token_price_per_internal_token_nano", "0") or "0"))
     if price_per_token <= 0:
         return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
     purchase_amount_nano = amount_tokens * price_per_token
-    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=platform_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
+    sent = send_ton_from_user_wallet(user_id=user_id, destination_address=project_wallet, amount_nano=purchase_amount_nano, comment="DeepAlpha token purchase")
     if not sent.get("ok"):
         return _json_response(sent, status=400)
     bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))

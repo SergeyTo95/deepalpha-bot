@@ -48,7 +48,7 @@ def get_ton_runtime_network() -> str:
     return (os.getenv("TON_NETWORK") or "testnet").strip().lower()
 
 
-def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
+def _normalize_ton_tx_hash_for_explorer(tx_hash: str) -> str:
     h = str(tx_hash or "").strip()
     if not h:
         return ""
@@ -56,10 +56,23 @@ def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     if h in {"-"} or h_lower in {"none", "null"}:
         return ""
 
-    h_url = h.replace("+", "-").replace("/", "_").rstrip("=")
-    if len(h_url) < 20:
+    if re.fullmatch(r"[0-9a-fA-F]{64}", h):
+        return h_lower
+
+    b64 = h.replace("-", "+").replace("_", "/")
+    b64 += "=" * ((4 - (len(b64) % 4)) % 4)
+    try:
+        decoded = base64.b64decode(b64, validate=False)
+    except Exception:
         return ""
-    if not re.match(r"^[A-Za-z0-9_\-]+$", h_url):
+    if len(decoded) != 32:
+        return ""
+    return decoded.hex()
+
+
+def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
+    h_hex = _normalize_ton_tx_hash_for_explorer(tx_hash)
+    if not h_hex:
         return ""
 
     net = str(network or "").strip().lower() or get_ton_runtime_network()
@@ -71,7 +84,7 @@ def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     base = main_base if net == "mainnet" else test_base
     if not base.endswith("/"):
         base += "/"
-    return base + h_url
+    return base + h_hex
 
 
 def get_ton_withdraw_fee_settings() -> Dict[str, Any]:
