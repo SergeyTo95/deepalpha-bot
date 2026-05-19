@@ -288,12 +288,12 @@ def get_cashier_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("💳 Касса"))
         kb.add(KeyboardButton("💎 Купить токены"), KeyboardButton("💰 Баланс"))
         kb.add(KeyboardButton("🔔 Подписка"))
-        kb.add(KeyboardButton("⬅️ Назад к анализу"))
+        kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("💳 Cashier"))
         kb.add(KeyboardButton("💎 Buy tokens"), KeyboardButton("💰 Balance"))
         kb.add(KeyboardButton("🔔 Subscription"))
-        kb.add(KeyboardButton("⬅️ Back to analysis"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -304,12 +304,12 @@ def get_profile_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("👤 Профиль"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("✍️ Мои прогнозы"))
         kb.add(KeyboardButton("💰 Баланс автора"), KeyboardButton("👥 Рефералы"))
-        kb.add(KeyboardButton("⬅️ Назад"))
+        kb.add(KeyboardButton("⬅️ Назад к анализу"))
     else:
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("✍️ My forecasts"))
         kb.add(KeyboardButton("💰 Author balance"), KeyboardButton("👥 Referrals"))
-        kb.add(KeyboardButton("⬅️ Back"))
+        kb.add(KeyboardButton("⬅️ Back to analysis"))
     return kb
 
 
