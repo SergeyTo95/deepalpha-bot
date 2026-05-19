@@ -698,7 +698,7 @@ async def handle_webapp_summary(request):
         "ton_wallet": {
             "enabled": str(get_setting("web_ton_enabled", "off")).lower() == "on",
             "network": get_ton_runtime_network(),
-            "token_purchase_enabled": str(get_setting("ton_wallet_token_purchase_enabled", "off")).lower() == "on",
+            "token_purchase_enabled": is_ton_wallet_token_purchase_enabled(),
         },
     })
 
@@ -724,6 +724,26 @@ def get_ton_token_price_per_internal_token_nano() -> int:
     except Exception:
         return 0
     return 0
+
+
+def _parse_feature_flag_value(raw_value):
+    value = str(raw_value or "").strip().lower()
+    if value in {"true", "1", "yes", "on", "enabled"}:
+        return True
+    if value in {"false", "0", "no", "off", "disabled"}:
+        return False
+    return None
+
+
+def is_ton_wallet_token_purchase_enabled() -> bool:
+    env_upper = _parse_feature_flag_value(os.getenv("TON_WALLET_TOKEN_PURCHASE_ENABLED", ""))
+    if env_upper is not None:
+        return env_upper
+    env_lower = _parse_feature_flag_value(os.getenv("ton_wallet_token_purchase_enabled", ""))
+    if env_lower is not None:
+        return env_lower
+    db_value = _parse_feature_flag_value(get_setting("ton_wallet_token_purchase_enabled", "off"))
+    return bool(db_value)
 
 
 async def handle_wallet_ton(request):
@@ -1040,7 +1060,11 @@ async def handle_wallet_ton_buy_tokens(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
-    if str(get_setting("ton_wallet_token_purchase_enabled", "off")).lower() != "on":
+    if not is_ton_wallet_token_purchase_enabled():
+        env_upper = os.getenv("TON_WALLET_TOKEN_PURCHASE_ENABLED", "")
+        env_lower = os.getenv("ton_wallet_token_purchase_enabled", "")
+        db_value = get_setting("ton_wallet_token_purchase_enabled", "off")
+        print("TON token purchase disabled", {"env_upper": env_upper, "env_lower": env_lower, "db": db_value})
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:
         payload = await request.json()
