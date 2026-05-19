@@ -1246,10 +1246,37 @@ def fulfill_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
     conn=get_connection(); cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor); now=datetime.utcnow().isoformat()
     try:
         cur.execute("SELECT * FROM ton_purchase_intents WHERE id=%s FOR UPDATE", (intent_id,)); row=cur.fetchone()
-        if not row or row['status']=='fulfilled': conn.rollback(); return None
-        if row['status']!='submitted': conn.rollback(); return None
-        if row['product_type']=='tokens': add_tokens(int(row['user_id']), int(row.get('total_tokens') or row.get('requested_tokens') or 0))
-        elif row['product_type']=='subscription': set_subscription(int(row['user_id']), int(row.get('subscription_days') or 30))
+        if not row:
+            conn.rollback()
+            return None
+        if row['status'] == 'fulfilled':
+            conn.commit()
+            return dict(row)
+        if row['status']!='submitted':
+            conn.rollback()
+            return None
+        product_type = str(row.get('product_type') or '').strip()
+        if product_type == 'token_purchase':
+            credit = int(row.get('total_tokens') or row.get('requested_tokens') or 0)
+            cur.execute(
+                "UPDATE users SET token_balance = COALESCE(token_balance, 0) + %s, updated_at = %s WHERE user_id = %s",
+                (credit, now, int(row['user_id']))
+            )
+        elif product_type == 'subscription':
+            days = int(row.get('subscription_days') or 30)
+            cur.execute("SELECT subscription_until FROM users WHERE user_id=%s FOR UPDATE", (int(row['user_id']),))
+            urow = cur.fetchone()
+            now_dt = datetime.utcnow()
+            base = now_dt
+            if urow and urow.get('subscription_until'):
+                try:
+                    current_dt = datetime.fromisoformat(str(urow.get('subscription_until')))
+                    if current_dt > now_dt:
+                        base = current_dt
+                except Exception:
+                    pass
+            until = (base + timedelta(days=days)).isoformat()
+            cur.execute("UPDATE users SET subscription_until=%s, updated_at=%s WHERE user_id=%s", (until, now, int(row['user_id'])))
         cur.execute("UPDATE ton_purchase_intents SET status='fulfilled', fulfilled_at=%s, updated_at=%s WHERE id=%s RETURNING *", (now, now, intent_id))
         out=cur.fetchone();
         cur.execute("UPDATE ton_wallet_transactions SET purchase_status='fulfilled',updated_at=%s WHERE payment_intent_id=%s", (now, intent_id))

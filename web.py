@@ -25,7 +25,7 @@ from services.ton_wallet_service import (
     get_user_ton_transactions,
     calculate_ton_withdraw_platform_fee,
 )
-from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
+from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display, normalize_ton_address
 from services.ton_chain_service import resolve_recent_ton_tx_hash
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
@@ -157,8 +157,8 @@ def verify_ton_purchase_onchain(intent_id: int) -> dict:
         except Exception:
             created_ts = None
         expected = int(str(expected_amount_nano or "0"))
-        src = str(wallet_address or "").strip()
-        dst = str(project_wallet or "").strip()
+        src = normalize_ton_address(str(wallet_address or "").strip())
+        dst = normalize_ton_address(str(project_wallet or "").strip())
         if not src or not dst or expected <= 0:
             return {"ok": False, "error": "intent_invalid"}
         h = str(tx_hash or "").strip()
@@ -191,8 +191,8 @@ def verify_ton_purchase_onchain(intent_id: int) -> dict:
         )
         tx = cur.fetchone()
         if tx:
-            tx_src = str(tx[0] or "").strip()
-            tx_dst = str(tx[1] or "").strip()
+            tx_src = normalize_ton_address(str(tx[0] or "").strip())
+            tx_dst = normalize_ton_address(str(tx[1] or "").strip())
             tx_amount = int(str(tx[2] or "0"))
             tx_created = str(tx[3] or "")
             if tx_src != src:
