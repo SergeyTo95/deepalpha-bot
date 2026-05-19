@@ -272,12 +272,12 @@ def get_checks_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🎁 Чеки"))
         kb.add(KeyboardButton("🎁 Создать чек"), KeyboardButton("📦 Мои чеки"))
         kb.add(KeyboardButton("✅ Активировать чек"))
-        kb.add(KeyboardButton("⬅️ Назад к анализу"))
+        kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("🎁 Checks"))
         kb.add(KeyboardButton("🎁 Create Check"), KeyboardButton("📦 My Checks"))
         kb.add(KeyboardButton("✅ Activate Check"))
-        kb.add(KeyboardButton("⬅️ Back to analysis"))
+        kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
 
@@ -288,12 +288,12 @@ def get_cashier_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("💳 Касса"))
         kb.add(KeyboardButton("💎 Купить токены"), KeyboardButton("💰 Баланс"))
         kb.add(KeyboardButton("🔔 Подписка"))
-        kb.add(KeyboardButton("⬅️ Назад"))
+        kb.add(KeyboardButton("⬅️ Назад к анализу"))
     else:
         kb.add(KeyboardButton("💳 Cashier"))
         kb.add(KeyboardButton("💎 Buy tokens"), KeyboardButton("💰 Balance"))
         kb.add(KeyboardButton("🔔 Subscription"))
-        kb.add(KeyboardButton("⬅️ Back"))
+        kb.add(KeyboardButton("⬅️ Back to analysis"))
     return kb
 
 
