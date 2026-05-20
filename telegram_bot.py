@@ -8146,17 +8146,26 @@ async def ton_wallet_button(message: types.Message):
 
 @dp.callback_query_handler(lambda c: c.data == "ton_refresh")
 async def ton_refresh_cb(c: types.CallbackQuery):
-    b = get_user_ton_balance(c.from_user.id, refresh=True)
+    uid = c.from_user.id
+    w = get_or_create_user_ton_wallet(uid)
+    if not w.get("ok"):
+        await c.answer(_ton_unavailable(uid), show_alert=True); return
+    b = get_user_ton_balance(uid, refresh=True)
     if not b.get("ok"):
-        await c.answer(_ton_unavailable(c.from_user.id), show_alert=True); return
-    await c.answer(("Баланс обновлён: " if get_user_lang(c.from_user.id)=="ru" else "Balance refreshed: ") + b['balance_display'] + " TON", show_alert=True)
+        await c.answer(_ton_unavailable(uid), show_alert=True); return
+    await c.answer(("Баланс обновлён: " if get_user_lang(uid)=="ru" else "Balance refreshed: ") + b['balance_display'] + " TON", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "ton_receive")
 async def ton_receive_cb(c: types.CallbackQuery):
-    b = get_user_ton_balance(c.from_user.id, refresh=False)
-    lang = get_user_lang(c.from_user.id)
+    uid = c.from_user.id
+    w = get_or_create_user_ton_wallet(uid)
+    if not w.get("ok"):
+        await c.answer(_ton_unavailable(uid), show_alert=True)
+        return
+    b = get_user_ton_balance(uid, refresh=False)
+    lang = get_user_lang(uid)
     network_label = _ton_network_label(b.get("network"))
-    address = b.get("wallet_address", "")
+    address = w.get("wallet_address", "")
     msg = (
         f"📥 Адрес для пополнения TON:\n\n<code>{address}</code>\n\nОтправляйте только TON в сети {network_label}."
         if lang == "ru"
