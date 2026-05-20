@@ -45,7 +45,7 @@ from db.database import (
     get_subscription_feed, get_author_donations_list,
     get_all_user_ids,
     create_analysis_check, get_analysis_check_by_code,
-    create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent,
+    create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent, link_ton_wallet_tx_to_intent,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -7945,10 +7945,22 @@ async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMCon
         await c.answer()
         return
     submit_ton_purchase_intent(int(intent.get("id")), tx_hash)
+    link_ton_wallet_tx_to_intent(
+        tx_hash=tx_hash,
+        intent_id=int(intent.get("id")),
+        product_type="token_purchase",
+        purchase_status="submitted",
+    )
     verification = verify_ton_purchase_onchain(int(intent.get("id")))
     verify_ok = bool(verification.get("ok"))
     if verify_ok:
         fulfill_ton_purchase_intent(int(intent.get("id")))
+        link_ton_wallet_tx_to_intent(
+            tx_hash=tx_hash,
+            intent_id=int(intent.get("id")),
+            product_type="token_purchase",
+            purchase_status="fulfilled",
+        )
     await state.finish()
     ton_amount = nano_to_ton_display(purchase_amount_nano)
     final_hash = str(verification.get("tx_hash") or tx_hash)
