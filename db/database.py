@@ -28,638 +28,637 @@ def get_connection():
 
 
 def init_db():
-    conn = None
-    cursor = None
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analyses (
-            id SERIAL PRIMARY KEY,
-            url TEXT,
-            question TEXT,
-            category TEXT,
-            market_probability TEXT,
-            system_probability TEXT,
-            confidence TEXT,
-            reasoning TEXT,
-            main_scenario TEXT,
-            alt_scenario TEXT,
-            conclusion TEXT,
-            created_at TEXT,
-            user_id INTEGER DEFAULT 0
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS opportunities (
-            id SERIAL PRIMARY KEY,
-            url TEXT,
-            question TEXT,
-            category TEXT,
-            market_probability TEXT,
-            system_probability TEXT,
-            confidence TEXT,
-            reasoning TEXT,
-            main_scenario TEXT,
-            alt_scenario TEXT,
-            conclusion TEXT,
-            opportunity_score INTEGER,
-            created_at TEXT,
-            user_id INTEGER DEFAULT 0
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            token_balance INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0,
-            is_vip INTEGER DEFAULT 0,
-            total_analyses INTEGER DEFAULT 0,
-            total_opportunities INTEGER DEFAULT 0,
-            referred_by BIGINT DEFAULT NULL,
-            referral_earnings_ton REAL DEFAULT 0,
-            total_referrals INTEGER DEFAULT 0,
-            subscription_until TEXT DEFAULT NULL,
-            daily_analyses INTEGER DEFAULT 0,
-            daily_opportunities INTEGER DEFAULT 0,
-            daily_reset_date TEXT DEFAULT NULL,
-            free_analyses_used INTEGER DEFAULT 0,
-            free_opportunities_used INTEGER DEFAULT 0,
-            created_at TEXT,
-            updated_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id SERIAL PRIMARY KEY,
-            tx_hash TEXT UNIQUE,
-            user_id BIGINT,
-            ton_amount REAL,
-            tokens_granted INTEGER,
-            referral_bonus_ton REAL DEFAULT 0,
-            referrer_id BIGINT DEFAULT NULL,
-            created_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS web_sessions (
-            session_token_hash TEXT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            provider TEXT,
-            created_at TEXT,
-            expires_at TEXT,
-            last_seen_at TEXT,
-            user_agent TEXT,
-            ip_hash TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS web_accounts (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            provider TEXT NOT NULL,
-            provider_sub TEXT NOT NULL,
-            email TEXT,
-            name TEXT,
-            avatar_url TEXT,
-            created_at TEXT,
-            updated_at TEXT,
-            UNIQUE(provider, provider_sub)
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS web_analysis_history (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            analysis_type TEXT NOT NULL,
-            market_url TEXT NOT NULL,
-            market_slug TEXT,
-            question TEXT,
-            display_prediction TEXT,
-            market_probability TEXT,
-            confidence TEXT,
-            category TEXT,
-            status TEXT NOT NULL,
-            result_json TEXT,
-            error TEXT,
-            created_at TEXT
-        )
-        """)
-
-
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS web_analysis_jobs (
-            job_id TEXT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            analysis_type TEXT NOT NULL,
-            market_url TEXT NOT NULL,
-            status TEXT NOT NULL,
-            progress TEXT,
-            history_id INTEGER,
-            result_json TEXT,
-            error TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pending_payments (
-            user_id BIGINT PRIMARY KEY,
-            amount REAL,
-            payment_type TEXT DEFAULT 'tokens',
-            created_at INTEGER
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS signal_history (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            question TEXT,
-            created_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS signal_cache (
-            category TEXT PRIMARY KEY,
-            data TEXT,
-            updated_at INTEGER
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS token_packages (
-            id SERIAL PRIMARY KEY,
-            name TEXT,
-            tokens INTEGER,
-            price_ton REAL,
-            discount_percent INTEGER DEFAULT 0,
-            is_active INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_at TEXT,
-            updated_at TEXT
-        )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ton_jetton_assets (
-            id SERIAL PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            name TEXT,
-            network TEXT DEFAULT 'mainnet',
-            master_address TEXT UNIQUE NOT NULL,
-            decimals INTEGER DEFAULT 9,
-            is_enabled BOOLEAN DEFAULT TRUE,
-            is_deepalpha_token BOOLEAN DEFAULT FALSE,
-            sort_order INTEGER DEFAULT 0,
-            created_at TEXT,
-            updated_at TEXT
-        )
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_ton_jetton_balances (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            wallet_address TEXT NOT NULL,
-            jetton_master_address TEXT NOT NULL,
-            balance_raw TEXT DEFAULT '0',
-            balance_display TEXT DEFAULT '0',
-            last_checked_at TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_network_enabled ON ton_jetton_assets(network, is_enabled)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_master_address ON ton_jetton_assets(master_address)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_user_jetton ON user_ton_jetton_balances(user_id, jetton_master_address)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_wallet ON user_ton_jetton_balances(wallet_address)")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_checks (
-            id SERIAL PRIMARY KEY,
-            code TEXT UNIQUE NOT NULL,
-            created_by_user_id BIGINT,
-            created_by_admin BOOLEAN DEFAULT FALSE,
-            check_type TEXT NOT NULL,
-            max_activations INTEGER DEFAULT 1,
-            used_activations INTEGER DEFAULT 0,
-            expires_at TEXT,
-            require_channel_sub BOOLEAN DEFAULT FALSE,
-            required_channel TEXT,
-            status TEXT DEFAULT 'active',
-            created_at TEXT,
-            unit_price_tokens INTEGER DEFAULT 0,
-            total_price_tokens INTEGER DEFAULT 0,
-            refunded_tokens INTEGER DEFAULT 0,
-            disabled_at TEXT
-        )
-        """)
-        cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS unit_price_tokens INTEGER DEFAULT 0")
-        cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS total_price_tokens INTEGER DEFAULT 0")
-        cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS refunded_tokens INTEGER DEFAULT 0")
-        cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS disabled_at TEXT")
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_check_claims (
-            id SERIAL PRIMARY KEY,
-            check_id INTEGER NOT NULL,
-            user_id BIGINT NOT NULL,
-            status TEXT DEFAULT 'claimed',
-            claimed_at TEXT,
-            used_at TEXT,
-            analysis_type TEXT,
-            UNIQUE(check_id, user_id)
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_checks_code ON analysis_checks(code)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_user_status ON analysis_check_claims(user_id, status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_check_user ON analysis_check_claims(check_id, user_id)")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS predictions_tracking (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT DEFAULT 0,
-            market_slug TEXT,
-            market_url TEXT,
-            question TEXT,
-            category TEXT,
-            market_type TEXT,
-            semantic_type TEXT,
-            market_probability_yes REAL,
-            market_probability_no REAL,
-            market_leader TEXT,
-            market_prob_value REAL,
-            system_prediction TEXT,
-            system_probability REAL,
-            system_outcome TEXT,
-            confidence TEXT,
-            delta REAL,
-            alpha_label TEXT,
-            market_balance TEXT,
-            display_prediction TEXT,
-            created_at TEXT,
-            market_end_date TEXT,
-            resolved_at TEXT DEFAULT NULL,
-            actual_outcome TEXT DEFAULT NULL,
-            is_correct INTEGER DEFAULT NULL,
-            brier_score REAL DEFAULT NULL,
-            log_loss REAL DEFAULT NULL
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_slug ON predictions_tracking(market_slug)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_resolved ON predictions_tracking(resolved_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_user ON predictions_tracking(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_category ON predictions_tracking(category)")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS watchlist (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            market_slug TEXT NOT NULL,
-            market_url TEXT,
-            question TEXT,
-            category TEXT,
-            initial_probability REAL,
-            initial_market_prob_str TEXT,
-            last_checked_probability REAL,
-            last_probability_change REAL DEFAULT 0,
-            market_end_date TEXT,
-            notify_enabled INTEGER DEFAULT 1,
-            notified_change INTEGER DEFAULT 0,
-            notified_closing_soon INTEGER DEFAULT 0,
-            notified_resolved INTEGER DEFAULT 0,
-            is_closed INTEGER DEFAULT 0,
-            extra_slot INTEGER DEFAULT 0,
-            created_at TEXT,
-            last_checked_at TEXT
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_slug ON watchlist(market_slug)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_closed ON watchlist(is_closed)")
-
-        # ═══ AUTHORS & POSTS ═══
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS author_posts (
-            id SERIAL PRIMARY KEY,
-            author_id BIGINT NOT NULL,
-            market_slug TEXT,
-            market_url TEXT,
-            question TEXT,
-            category TEXT,
-            display_prediction TEXT,
-            confidence TEXT,
-            market_probability TEXT,
-            alpha_label TEXT,
-            author_comment TEXT,
-            full_analysis_json TEXT,
-            total_donations_ton REAL DEFAULT 0,
-            total_donors INTEGER DEFAULT 0,
-            created_at TEXT,
-            is_deleted INTEGER DEFAULT 0
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON author_posts(author_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON author_posts(created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_deleted ON author_posts(is_deleted)")
-
-        # ═══ SUBSCRIPTIONS (бесплатные) ═══
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS author_subscriptions (
-            id SERIAL PRIMARY KEY,
-            subscriber_id BIGINT NOT NULL,
-            author_id BIGINT NOT NULL,
-            notifications_enabled INTEGER DEFAULT 1,
-            created_at TEXT,
-            UNIQUE(subscriber_id, author_id)
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_subscriber ON author_subscriptions(subscriber_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_author ON author_subscriptions(author_id)")
-
-        # ═══ DONATIONS ═══
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS author_donations (
-            id SERIAL PRIMARY KEY,
-            donor_id BIGINT NOT NULL,
-            author_id BIGINT NOT NULL,
-            post_id INTEGER DEFAULT NULL,
-            ton_amount REAL NOT NULL,
-            platform_fee_ton REAL DEFAULT 0,
-            author_received_ton REAL DEFAULT 0,
-            tx_hash TEXT,
-            status TEXT DEFAULT 'pending',
-            comment TEXT,
-            created_at TEXT
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_author ON author_donations(author_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_donor ON author_donations(donor_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_post ON author_donations(post_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_status ON author_donations(status)")
-
-        # ═══ WITHDRAWAL REQUESTS ═══
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS withdrawal_requests (
-            id SERIAL PRIMARY KEY,
-            author_id BIGINT NOT NULL,
-            amount_ton REAL NOT NULL,
-            ton_wallet TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            admin_note TEXT,
-            tx_hash TEXT,
-            created_at TEXT,
-            processed_at TEXT
-        )
-        """)
-
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
-
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_ton_wallets (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT UNIQUE NOT NULL,
-            network TEXT DEFAULT 'testnet',
-            wallet_address TEXT UNIQUE NOT NULL,
-            wallet_version TEXT DEFAULT 'v4r2',
-            public_key TEXT,
-            seed_encrypted TEXT NOT NULL,
-            seed_revealed_at TEXT,
-            seed_reveal_used BOOLEAN DEFAULT FALSE,
-            status TEXT DEFAULT 'active',
-            created_at TEXT,
-            updated_at TEXT,
-            last_balance_nano TEXT DEFAULT '0',
-            last_balance_checked_at TEXT
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_user_id ON user_ton_wallets(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ton_wallet_transactions (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            wallet_address TEXT,
-            direction TEXT NOT NULL,
-            amount_nano TEXT NOT NULL,
-            fee_nano TEXT DEFAULT '0',
-            tx_hash TEXT,
-            destination_address TEXT,
-            source_address TEXT,
-            status TEXT DEFAULT 'pending',
-            comment TEXT,
-            created_at TEXT,
-            updated_at TEXT,
-            confirmed_at TEXT,
-            error TEXT
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_user_created ON ton_wallet_transactions(user_id, created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_hash ON ton_wallet_transactions(tx_hash)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_status ON ton_wallet_transactions(status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_wallet_address ON ton_wallet_transactions(wallet_address)")
-
-
-        cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS product_type TEXT")
-        cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS payment_intent_id BIGINT")
-        cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS purchase_status TEXT")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ton_purchase_intents (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            product_type TEXT NOT NULL,
-            wallet_address TEXT NOT NULL,
-            project_wallet TEXT NOT NULL,
-            expected_amount_nano TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'created',
-            tx_hash TEXT,
-            requested_tokens INTEGER DEFAULT 0,
-            bonus_tokens INTEGER DEFAULT 0,
-            total_tokens INTEGER DEFAULT 0,
-            price_per_token_nano TEXT DEFAULT '0',
-            subscription_days INTEGER DEFAULT 0,
-            metadata_json TEXT DEFAULT '{}',
-            created_at TEXT,
-            submitted_at TEXT,
-            fulfilled_at TEXT,
-            failed_at TEXT,
-            fail_reason TEXT,
-            updated_at TEXT
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_user ON ton_purchase_intents(user_id, created_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_status ON ton_purchase_intents(status)")
-        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ton_purchase_intents_tx_hash_unique ON ton_purchase_intents(tx_hash) WHERE tx_hash IS NOT NULL AND tx_hash <> ''")
-
-        migrations = [
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TEXT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyses INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_opportunities INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_reset_date TEXT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_analyses_used INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_opportunities_used INTEGER DEFAULT 0",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referral_bonus_ton REAL DEFAULT 0",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referrer_id BIGINT DEFAULT NULL",
-            "ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'tokens'",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_author INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_balance_ton REAL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_withdrawn_ton REAL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_bio TEXT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_since TEXT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS ton_wallet TEXT DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS inline_queries_count INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'ru'",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS extra_watchlist_slots INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_subscribers INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_posts INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_today INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_reset_date TEXT DEFAULT NULL",
-        ]
-        for migration in migrations:
-            try:
-                cursor.execute(migration)
-            except Exception:
-                pass
-
-        conn.commit()
-
-        cursor.execute("SELECT COUNT(*) FROM token_packages")
-        count = cursor.fetchone()[0]
-        if count == 0:
-            default_packages = [
-                ("Стартовый", 10, 0.5, 0, 1, 1),
-                ("Популярный", 50, 2.0, 20, 1, 2),
-                ("Профи", 100, 3.5, 30, 1, 3),
-            ]
-            for name, tokens, price, discount, is_active, sort_order in default_packages:
-                cursor.execute("""
-                INSERT INTO token_packages (name, tokens, price_ton, discount_percent, is_active, sort_order, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (name, tokens, price, discount, is_active, sort_order,
-                      datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
-            conn.commit()
-
-        watchlist_defaults = [
-            ("watchlist_enabled", "on"),
-            ("watchlist_price_tokens", "5"),
-            ("watchlist_limit_regular", "10"),
-            ("watchlist_limit_vip", "50"),
-            ("watchlist_extra_slots_price", "20"),
-            ("watchlist_extra_slots_count", "5"),
-            ("watchlist_probability_threshold", "10"),
-            ("watchlist_closing_hours", "24"),
-            ("watchlist_check_interval_hours", "3"),
-        ]
-        for key, value in watchlist_defaults:
-            cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO settings (key, value, updated_at)
-                VALUES (%s, %s, %s)
-                """, (key, value, datetime.utcnow().isoformat()))
-        conn.commit()
-
-        authors_defaults = [
-            ("authors_enabled", "on"),
-            ("donations_enabled", "on"),
-            ("author_status_price_ton", "5"),
-            ("platform_fee_percent", "20"),
-            ("min_donation_ton", "0.1"),
-            ("min_withdrawal_ton", "1"),
-            ("max_posts_per_day", "5"),
-        ]
-        for key, value in authors_defaults:
-            cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO settings (key, value, updated_at)
-                VALUES (%s, %s, %s)
-                """, (key, value, datetime.utcnow().isoformat()))
-        conn.commit()
-
-        market_recap_defaults = [
-            ("market_recap_enabled", "false"),
-            ("market_recap_manual_enabled", "true"),
-            ("market_recap_auto_enabled", "false"),
-            ("market_recap_require_admin_approval", "true"),
-            ("market_recap_times_per_day", "2"),
-            ("market_recap_auto_times", "12:00,20:00"),
-            ("market_recap_max_per_day", "2"),
-            ("market_recap_language_mode", "user_language"),
-            ("market_recap_min_volume", "0"),
-            ("market_recap_send_to_all", "false"),
-            ("market_recap_send_to_active_users", "true"),
-            ("market_recap_categories", "all"),
-        ]
-        for key, value in market_recap_defaults:
-            cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO settings (key, value, updated_at)
-                VALUES (%s, %s, %s)
-                """, (key, value, datetime.utcnow().isoformat()))
-        conn.commit()
-
-        top_analysis_defaults = [
-            ("top_analysis_enabled", "false"),
-            ("top_analysis_price_tokens", "70"),
-            ("top_analysis_research_enabled", "true"),
-            ("top_analysis_chief_enabled", "true"),
-            ("top_analysis_audit_enabled", "true"),
-            ("top_analysis_social_enabled", "true"),
-            ("top_analysis_timeout_sec", "120"),
-        ]
-        for key, value in top_analysis_defaults:
-            cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO settings (key, value, updated_at)
-                VALUES (%s, %s, %s)
-                """, (key, value, datetime.utcnow().isoformat()))
-        conn.commit()
-
+        _init_db_inner(conn, cursor)
     finally:
-        if cursor:
-                cursor.close()
-        if conn:
-                conn.close()
+        try:
+            cursor.close()
+        finally:
+            conn.close()
 
+
+def _init_db_inner(conn, cursor):
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analyses (
+        id SERIAL PRIMARY KEY,
+        url TEXT,
+        question TEXT,
+        category TEXT,
+        market_probability TEXT,
+        system_probability TEXT,
+        confidence TEXT,
+        reasoning TEXT,
+        main_scenario TEXT,
+        alt_scenario TEXT,
+        conclusion TEXT,
+        created_at TEXT,
+        user_id INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS opportunities (
+        id SERIAL PRIMARY KEY,
+        url TEXT,
+        question TEXT,
+        category TEXT,
+        market_probability TEXT,
+        system_probability TEXT,
+        confidence TEXT,
+        reasoning TEXT,
+        main_scenario TEXT,
+        alt_scenario TEXT,
+        conclusion TEXT,
+        opportunity_score INTEGER,
+        created_at TEXT,
+        user_id INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        token_balance INTEGER DEFAULT 0,
+        is_banned INTEGER DEFAULT 0,
+        is_vip INTEGER DEFAULT 0,
+        total_analyses INTEGER DEFAULT 0,
+        total_opportunities INTEGER DEFAULT 0,
+        referred_by BIGINT DEFAULT NULL,
+        referral_earnings_ton REAL DEFAULT 0,
+        total_referrals INTEGER DEFAULT 0,
+        subscription_until TEXT DEFAULT NULL,
+        daily_analyses INTEGER DEFAULT 0,
+        daily_opportunities INTEGER DEFAULT 0,
+        daily_reset_date TEXT DEFAULT NULL,
+        free_analyses_used INTEGER DEFAULT 0,
+        free_opportunities_used INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        tx_hash TEXT UNIQUE,
+        user_id BIGINT,
+        ton_amount REAL,
+        tokens_granted INTEGER,
+        referral_bonus_ton REAL DEFAULT 0,
+        referrer_id BIGINT DEFAULT NULL,
+        created_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_sessions (
+        session_token_hash TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        provider TEXT,
+        created_at TEXT,
+        expires_at TEXT,
+        last_seen_at TEXT,
+        user_agent TEXT,
+        ip_hash TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_accounts (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        provider TEXT NOT NULL,
+        provider_sub TEXT NOT NULL,
+        email TEXT,
+        name TEXT,
+        avatar_url TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        UNIQUE(provider, provider_sub)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_analysis_history (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        market_url TEXT NOT NULL,
+        market_slug TEXT,
+        question TEXT,
+        display_prediction TEXT,
+        market_probability TEXT,
+        confidence TEXT,
+        category TEXT,
+        status TEXT NOT NULL,
+        result_json TEXT,
+        error TEXT,
+        created_at TEXT
+    )
+    """)
+
+
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS web_analysis_jobs (
+        job_id TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        market_url TEXT NOT NULL,
+        status TEXT NOT NULL,
+        progress TEXT,
+        history_id INTEGER,
+        result_json TEXT,
+        error TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pending_payments (
+        user_id BIGINT PRIMARY KEY,
+        amount REAL,
+        payment_type TEXT DEFAULT 'tokens',
+        created_at INTEGER
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_history (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT,
+        question TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_cache (
+        category TEXT PRIMARY KEY,
+        data TEXT,
+        updated_at INTEGER
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS token_packages (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        tokens INTEGER,
+        price_ton REAL,
+        discount_percent INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_jetton_assets (
+        id SERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        network TEXT DEFAULT 'mainnet',
+        master_address TEXT UNIQUE NOT NULL,
+        decimals INTEGER DEFAULT 9,
+        is_enabled BOOLEAN DEFAULT TRUE,
+        is_deepalpha_token BOOLEAN DEFAULT FALSE,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_jetton_balances (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        jetton_master_address TEXT NOT NULL,
+        balance_raw TEXT DEFAULT '0',
+        balance_display TEXT DEFAULT '0',
+        last_checked_at TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_network_enabled ON ton_jetton_assets(network, is_enabled)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_jetton_assets_master_address ON ton_jetton_assets(master_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_user_jetton ON user_ton_jetton_balances(user_id, jetton_master_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_jetton_balances_wallet ON user_ton_jetton_balances(wallet_address)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_checks (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        created_by_user_id BIGINT,
+        created_by_admin BOOLEAN DEFAULT FALSE,
+        check_type TEXT NOT NULL,
+        max_activations INTEGER DEFAULT 1,
+        used_activations INTEGER DEFAULT 0,
+        expires_at TEXT,
+        require_channel_sub BOOLEAN DEFAULT FALSE,
+        required_channel TEXT,
+        status TEXT DEFAULT 'active',
+        created_at TEXT,
+        unit_price_tokens INTEGER DEFAULT 0,
+        total_price_tokens INTEGER DEFAULT 0,
+        refunded_tokens INTEGER DEFAULT 0,
+        disabled_at TEXT
+    )
+    """)
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS unit_price_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS total_price_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS refunded_tokens INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE analysis_checks ADD COLUMN IF NOT EXISTS disabled_at TEXT")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS analysis_check_claims (
+        id SERIAL PRIMARY KEY,
+        check_id INTEGER NOT NULL,
+        user_id BIGINT NOT NULL,
+        status TEXT DEFAULT 'claimed',
+        claimed_at TEXT,
+        used_at TEXT,
+        analysis_type TEXT,
+        UNIQUE(check_id, user_id)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_checks_code ON analysis_checks(code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_user_status ON analysis_check_claims(user_id, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_check_claims_check_user ON analysis_check_claims(check_id, user_id)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS predictions_tracking (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT DEFAULT 0,
+        market_slug TEXT,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        market_type TEXT,
+        semantic_type TEXT,
+        market_probability_yes REAL,
+        market_probability_no REAL,
+        market_leader TEXT,
+        market_prob_value REAL,
+        system_prediction TEXT,
+        system_probability REAL,
+        system_outcome TEXT,
+        confidence TEXT,
+        delta REAL,
+        alpha_label TEXT,
+        market_balance TEXT,
+        display_prediction TEXT,
+        created_at TEXT,
+        market_end_date TEXT,
+        resolved_at TEXT DEFAULT NULL,
+        actual_outcome TEXT DEFAULT NULL,
+        is_correct INTEGER DEFAULT NULL,
+        brier_score REAL DEFAULT NULL,
+        log_loss REAL DEFAULT NULL
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_slug ON predictions_tracking(market_slug)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_resolved ON predictions_tracking(resolved_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_user ON predictions_tracking(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_category ON predictions_tracking(category)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS watchlist (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        market_slug TEXT NOT NULL,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        initial_probability REAL,
+        initial_market_prob_str TEXT,
+        last_checked_probability REAL,
+        last_probability_change REAL DEFAULT 0,
+        market_end_date TEXT,
+        notify_enabled INTEGER DEFAULT 1,
+        notified_change INTEGER DEFAULT 0,
+        notified_closing_soon INTEGER DEFAULT 0,
+        notified_resolved INTEGER DEFAULT 0,
+        is_closed INTEGER DEFAULT 0,
+        extra_slot INTEGER DEFAULT 0,
+        created_at TEXT,
+        last_checked_at TEXT
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_slug ON watchlist(market_slug)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_closed ON watchlist(is_closed)")
+
+    # ═══ AUTHORS & POSTS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_posts (
+        id SERIAL PRIMARY KEY,
+        author_id BIGINT NOT NULL,
+        market_slug TEXT,
+        market_url TEXT,
+        question TEXT,
+        category TEXT,
+        display_prediction TEXT,
+        confidence TEXT,
+        market_probability TEXT,
+        alpha_label TEXT,
+        author_comment TEXT,
+        full_analysis_json TEXT,
+        total_donations_ton REAL DEFAULT 0,
+        total_donors INTEGER DEFAULT 0,
+        created_at TEXT,
+        is_deleted INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON author_posts(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON author_posts(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_deleted ON author_posts(is_deleted)")
+
+    # ═══ SUBSCRIPTIONS (бесплатные) ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_subscriptions (
+        id SERIAL PRIMARY KEY,
+        subscriber_id BIGINT NOT NULL,
+        author_id BIGINT NOT NULL,
+        notifications_enabled INTEGER DEFAULT 1,
+        created_at TEXT,
+        UNIQUE(subscriber_id, author_id)
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_subscriber ON author_subscriptions(subscriber_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subs_author ON author_subscriptions(author_id)")
+
+    # ═══ DONATIONS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS author_donations (
+        id SERIAL PRIMARY KEY,
+        donor_id BIGINT NOT NULL,
+        author_id BIGINT NOT NULL,
+        post_id INTEGER DEFAULT NULL,
+        ton_amount REAL NOT NULL,
+        platform_fee_ton REAL DEFAULT 0,
+        author_received_ton REAL DEFAULT 0,
+        tx_hash TEXT,
+        status TEXT DEFAULT 'pending',
+        comment TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_author ON author_donations(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_donor ON author_donations(donor_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_post ON author_donations(post_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_donations_status ON author_donations(status)")
+
+    # ═══ WITHDRAWAL REQUESTS ═══
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+        id SERIAL PRIMARY KEY,
+        author_id BIGINT NOT NULL,
+        amount_ton REAL NOT NULL,
+        ton_wallet TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        admin_note TEXT,
+        tx_hash TEXT,
+        created_at TEXT,
+        processed_at TEXT
+    )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
+
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_wallets (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT UNIQUE NOT NULL,
+        network TEXT DEFAULT 'testnet',
+        wallet_address TEXT UNIQUE NOT NULL,
+        wallet_version TEXT DEFAULT 'v4r2',
+        public_key TEXT,
+        seed_encrypted TEXT NOT NULL,
+        seed_revealed_at TEXT,
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        status TEXT DEFAULT 'active',
+        created_at TEXT,
+        updated_at TEXT,
+        last_balance_nano TEXT DEFAULT '0',
+        last_balance_checked_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_user_id ON user_ton_wallets(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT,
+        direction TEXT NOT NULL,
+        amount_nano TEXT NOT NULL,
+        fee_nano TEXT DEFAULT '0',
+        tx_hash TEXT,
+        destination_address TEXT,
+        source_address TEXT,
+        status TEXT DEFAULT 'pending',
+        comment TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        confirmed_at TEXT,
+        error TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_user_created ON ton_wallet_transactions(user_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_hash ON ton_wallet_transactions(tx_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_status ON ton_wallet_transactions(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_wallet_txs_wallet_address ON ton_wallet_transactions(wallet_address)")
+
+
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS product_type TEXT")
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS payment_intent_id BIGINT")
+    cursor.execute("ALTER TABLE ton_wallet_transactions ADD COLUMN IF NOT EXISTS purchase_status TEXT")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ton_purchase_intents (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        product_type TEXT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        project_wallet TEXT NOT NULL,
+        expected_amount_nano TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        tx_hash TEXT,
+        requested_tokens INTEGER DEFAULT 0,
+        bonus_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
+        price_per_token_nano TEXT DEFAULT '0',
+        subscription_days INTEGER DEFAULT 0,
+        metadata_json TEXT DEFAULT '{}',
+        created_at TEXT,
+        submitted_at TEXT,
+        fulfilled_at TEXT,
+        failed_at TEXT,
+        fail_reason TEXT,
+        updated_at TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_user ON ton_purchase_intents(user_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_status ON ton_purchase_intents(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ton_purchase_intents_tx_hash_unique ON ton_purchase_intents(tx_hash) WHERE tx_hash IS NOT NULL AND tx_hash <> ''")
+
+    migrations = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referrals INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyses INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_opportunities INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_reset_date TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_analyses_used INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_opportunities_used INTEGER DEFAULT 0",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referral_bonus_ton REAL DEFAULT 0",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS referrer_id BIGINT DEFAULT NULL",
+        "ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'tokens'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_author INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_balance_ton REAL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_withdrawn_ton REAL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_bio TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_since TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS ton_wallet TEXT DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS inline_queries_count INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'ru'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS extra_watchlist_slots INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_subscribers INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_posts INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_today INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_reset_date TEXT DEFAULT NULL",
+    ]
+    for migration in migrations:
+        try:
+            cursor.execute(migration)
+        except Exception:
+            pass
+
+    conn.commit()
+
+    cursor.execute("SELECT COUNT(*) FROM token_packages")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        default_packages = [
+            ("Стартовый", 10, 0.5, 0, 1, 1),
+            ("Популярный", 50, 2.0, 20, 1, 2),
+            ("Профи", 100, 3.5, 30, 1, 3),
+        ]
+        for name, tokens, price, discount, is_active, sort_order in default_packages:
+            cursor.execute("""
+            INSERT INTO token_packages (name, tokens, price_ton, discount_percent, is_active, sort_order, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, tokens, price, discount, is_active, sort_order,
+                  datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
+        conn.commit()
+
+    watchlist_defaults = [
+        ("watchlist_enabled", "on"),
+        ("watchlist_price_tokens", "5"),
+        ("watchlist_limit_regular", "10"),
+        ("watchlist_limit_vip", "50"),
+        ("watchlist_extra_slots_price", "20"),
+        ("watchlist_extra_slots_count", "5"),
+        ("watchlist_probability_threshold", "10"),
+        ("watchlist_closing_hours", "24"),
+        ("watchlist_check_interval_hours", "3"),
+    ]
+    for key, value in watchlist_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
+    authors_defaults = [
+        ("authors_enabled", "on"),
+        ("donations_enabled", "on"),
+        ("author_status_price_ton", "5"),
+        ("platform_fee_percent", "20"),
+        ("min_donation_ton", "0.1"),
+        ("min_withdrawal_ton", "1"),
+        ("max_posts_per_day", "5"),
+    ]
+    for key, value in authors_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
+    market_recap_defaults = [
+        ("market_recap_enabled", "false"),
+        ("market_recap_manual_enabled", "true"),
+        ("market_recap_auto_enabled", "false"),
+        ("market_recap_require_admin_approval", "true"),
+        ("market_recap_times_per_day", "2"),
+        ("market_recap_auto_times", "12:00,20:00"),
+        ("market_recap_max_per_day", "2"),
+        ("market_recap_language_mode", "user_language"),
+        ("market_recap_min_volume", "0"),
+        ("market_recap_send_to_all", "false"),
+        ("market_recap_send_to_active_users", "true"),
+        ("market_recap_categories", "all"),
+    ]
+    for key, value in market_recap_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
+    top_analysis_defaults = [
+        ("top_analysis_enabled", "false"),
+        ("top_analysis_price_tokens", "70"),
+        ("top_analysis_research_enabled", "true"),
+        ("top_analysis_chief_enabled", "true"),
+        ("top_analysis_audit_enabled", "true"),
+        ("top_analysis_social_enabled", "true"),
+        ("top_analysis_timeout_sec", "120"),
+    ]
+    for key, value in top_analysis_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
 
 # ═══════════════════════════════════════════
 # SETTINGS
