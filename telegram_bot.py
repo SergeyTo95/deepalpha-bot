@@ -8076,8 +8076,9 @@ async def ton_transactions_cb(c: types.CallbackQuery):
             offset = max(0, int(c.data.split(":", 1)[1]))
         except Exception:
             offset = 0
-    items = get_user_ton_transactions(uid, limit=limit, offset=offset)
-    has_more = len(items) >= limit
+    items = get_user_ton_transactions(uid, limit=limit + 1, offset=offset)
+    has_more = len(items) > limit
+    items = items[:limit]
     if not items:
         msg = "📜 TON транзакций пока нет." if lang == "ru" else "📜 No TON transactions yet."
         await c.message.answer(msg, reply_markup=_ton_transactions_keyboard(lang, offset=offset, has_more=False, limit=limit))
