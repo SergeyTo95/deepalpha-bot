@@ -378,7 +378,17 @@ def _extract_boc_from_transfer(transfer) -> str:
     raise RuntimeError("signing_failed")
 
 def _safe_wallet_data(row):
-    return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at", "id"], row))
+    return {
+        "user_id": row[0],
+        "wallet_address": row[1],
+        "network": row[2],
+        "wallet_version": row[3],
+        "last_balance_nano": row[4],
+        "last_balance_checked_at": row[5],
+        "seed_reveal_used": row[6],
+        "seed_revealed_at": row[7],
+        "id": row[11],
+    }
 
 
 def _safe_int(value, default=0):
