@@ -1061,10 +1061,6 @@ async def handle_wallet_ton_buy_tokens(request):
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_ton_wallet_token_purchase_enabled():
-        env_upper = os.getenv("TON_WALLET_TOKEN_PURCHASE_ENABLED", "")
-        env_lower = os.getenv("ton_wallet_token_purchase_enabled", "")
-        db_value = get_setting("ton_wallet_token_purchase_enabled", "off")
-        print("TON token purchase disabled", {"env_upper": env_upper, "env_lower": env_lower, "db": db_value})
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:
         payload = await request.json()
