@@ -84,7 +84,14 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-init_db()
+_db_initialized = False
+
+def initialize_database_once() -> None:
+    global _db_initialized
+    if _db_initialized:
+        return
+    init_db()
+    _db_initialized = True
 
 # Кеш языков в памяти
 user_languages: Dict[int, str] = {}

@@ -1052,6 +1052,8 @@ async def run_polling():
 
 
 async def main():
+    telegram_bot.initialize_database_once()
+
     try:
         await telegram_bot.bot.delete_webhook(drop_pending_updates=True)
         print("✅ Webhook deleted")

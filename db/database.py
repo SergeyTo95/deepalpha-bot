@@ -16,14 +16,30 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 def get_connection():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is missing")
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
     return conn
 
 
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
+    try:
+        _init_db_inner(conn, cursor)
+    finally:
+        try:
+            cursor.close()
+        finally:
+            conn.close()
 
+
+def _init_db_inner(conn, cursor):
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS analyses (
         id SERIAL PRIMARY KEY,
@@ -643,9 +659,6 @@ def init_db():
             VALUES (%s, %s, %s)
             """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
-
-    conn.close()
-
 
 # ═══════════════════════════════════════════
 # SETTINGS
