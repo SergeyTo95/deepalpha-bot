@@ -421,6 +421,46 @@ def _load_canonical_wallet_row(user_id: int):
     return rows[0]
 
 
+def _load_canonical_wallet_row_full(user_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT id,user_id,wallet_address,network,wallet_version,last_balance_nano,last_balance_checked_at,seed_reveal_used,seed_revealed_at,seed_encrypted,status,created_at,updated_at
+           FROM user_ton_wallets
+           WHERE user_id=%s
+           ORDER BY
+               CASE
+                   WHEN status='active' AND COALESCE(last_balance_nano,'0')::numeric > 0 THEN 0
+                   WHEN status='active' THEN 1
+                   ELSE 2
+               END,
+               CASE
+                   WHEN EXISTS (
+                       SELECT 1
+                       FROM ton_wallet_transactions t
+                       WHERE t.user_id = user_ton_wallets.user_id
+                         AND t.wallet_address = user_ton_wallets.wallet_address
+                   ) THEN 0
+                   ELSE 1
+               END,
+               created_at ASC,
+               id ASC""",
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        addresses = [str(r[2] or "") for r in rows]
+        logger.warning(
+            "Multiple TON wallet rows found for user_id=%s addresses=%s",
+            user_id,
+            addresses,
+        )
+    return rows[0]
+
+
 def get_user_ton_wallet(user_id: int) -> Optional[dict]:
     row = _load_canonical_wallet_row(user_id)
     return _safe_wallet_data(row) if row else None
@@ -494,23 +534,11 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         return {"ok": False, "error": "invalid_address"}
     if int(amount_nano) <= 0:
         return {"ok": False, "error": "invalid_amount"}
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute(
-        """SELECT wallet_address, seed_encrypted
-           FROM user_ton_wallets
-           WHERE user_id=%s
-           ORDER BY
-               CASE WHEN status='active' THEN 0 ELSE 1 END,
-               COALESCE(updated_at, created_at) DESC,
-               id DESC
-           LIMIT 1""",
-        (user_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
-    if not row:
+    canonical_row = _load_canonical_wallet_row_full(user_id)
+    if not canonical_row:
         return {"ok": False, "error": "wallet_not_found"}
-    wallet_address, seed_encrypted = row
+    wallet_address = canonical_row[2]
+    seed_encrypted = canonical_row[9]
 
     try:
         balance = get_ton_balance(wallet_address)
@@ -607,33 +635,22 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
 
 def reveal_user_ton_seed_once(user_id: int) -> dict:
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute(
-        """SELECT seed_encrypted,seed_reveal_used
-           FROM user_ton_wallets
-           WHERE user_id=%s
-           ORDER BY
-               CASE WHEN status='active' THEN 0 ELSE 1 END,
-               COALESCE(updated_at, created_at) DESC,
-               id DESC
-           LIMIT 1""",
-        (user_id,),
-    )
-    row = cur.fetchone()
+    row = _load_canonical_wallet_row_full(user_id)
     if not row:
-        conn.close(); return {"ok": False, "error": "wallet_not_found"}
-    if row[1]:
-        conn.close(); return {"ok": False, "error": "already_revealed"}
+        return {"ok": False, "error": "wallet_not_found"}
+    if row[7]:
+        return {"ok": False, "error": "already_revealed"}
     try:
-        seed = decrypt_secret(row[0]).strip()
+        seed = decrypt_secret(row[9]).strip()
         words = [w for w in seed.split() if w]
         if len(words) < 12:
-            conn.close(); return {"ok": False, "error": "wallet_unavailable"}
+            return {"ok": False, "error": "wallet_unavailable"}
         if mnemonic_is_valid and not mnemonic_is_valid(words):
-            conn.close(); return {"ok": False, "error": "wallet_unavailable"}
+            return {"ok": False, "error": "wallet_unavailable"}
     except Exception:
-        conn.close(); return {"ok": False, "error": "wallet_unavailable"}
+        return {"ok": False, "error": "wallet_unavailable"}
     now = _now()
+    conn = get_connection(); cur = conn.cursor()
     cur.execute("UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE user_id=%s AND seed_reveal_used=FALSE", (now, now, user_id))
     conn.commit(); conn.close()
     return {"ok": True, "seed_phrase": seed}
