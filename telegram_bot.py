@@ -8049,6 +8049,25 @@ def _ton_tx_direction_label(lang: str, direction: str) -> str:
     return "🔹 Операция" if lang == "ru" else "🔹 Operation"
 
 
+def format_ton_tx_date(value, lang: str = "ru") -> str:
+    if not value:
+        return "-"
+
+    dt = None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return "-"
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return "-"
+
+    return dt.strftime("%d.%m.%Y %H:%M") if lang == "ru" else dt.strftime("%Y-%m-%d %H:%M")
+
+
 def _ton_transactions_keyboard(lang: str, offset: int = 0, has_more: bool = False, limit: int = 10) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("🔄 Обновить транзакции" if lang == "ru" else "🔄 Refresh transactions", callback_data="ton_transactions:0"))
@@ -8092,7 +8111,7 @@ async def ton_transactions_cb(c: types.CallbackQuery):
         address = _short_ton_value(str(tx.get("address") or ""))
         tx_hash = _short_ton_value(str(tx.get("tx_hash") or ""))
         explorer_url = str(tx.get("explorer_url") or "").strip()
-        created = str(tx.get("created_at") or "")
+        created = format_ton_tx_date(tx.get("created_at"), lang=lang)
         if lang == "ru":
             lines.append(f"{idx}. {_safe_html(direction)}")
             lines.append(f"Сумма: {_safe_html(amount)} TON")
