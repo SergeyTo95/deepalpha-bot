@@ -28,9 +28,11 @@ def get_connection():
 
 
 def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
+    conn = None
+    cursor = None
     try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS analyses (
@@ -653,8 +655,10 @@ def init_db():
         conn.commit()
 
     finally:
-        cursor.close()
-        conn.close()
+        if cursor:
+                cursor.close()
+        if conn:
+                conn.close()
 
 
 # ═══════════════════════════════════════════
