@@ -128,16 +128,19 @@ def calculate_ton_withdraw_platform_fee(amount_nano: int) -> Dict[str, Any]:
     return {"platform_fee_nano": fee, "platform_fee_display": nano_to_ton_display(fee), "enabled": True}
 
 
-def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+def get_user_ton_transactions(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     lim = int(limit or 20)
     if lim < 1:
         lim = 20
     if lim > 50:
         lim = 50
+    off = int(offset or 0)
+    if off < 0:
+        off = 0
     conn = get_connection(); cur = conn.cursor()
-    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at
+    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at,comment
                    FROM ton_wallet_transactions WHERE user_id=%s
-                   ORDER BY id DESC LIMIT %s""", (user_id, lim))
+                   ORDER BY id DESC LIMIT %s OFFSET %s""", (user_id, lim, off))
     rows = cur.fetchall() or []
     conn.close()
     out = []
@@ -145,6 +148,10 @@ def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, A
         amount_nano = int(str(r[2] or "0"))
         addr = str(r[5] or r[6] or "")
         tx_hash = str(r[4] or "").strip()
+        if not tx_hash:
+            comment_hash = str(r[8] or "").strip()
+            if len(comment_hash) >= 40 and " " not in comment_hash:
+                tx_hash = comment_hash
         out.append({
             "id": int(r[0]),
             "direction": str(r[1] or ""),

@@ -942,8 +942,18 @@ async def handle_wallet_ton_transactions(request):
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     limit = _safe_int(request.query.get("limit", "20"), default=20, min_value=1, max_value=50)
-    items = get_user_ton_transactions(user_id=user_id, limit=limit)
-    return _json_response({"ok": True, "items": items})
+    offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0, max_value=10000)
+    items = get_user_ton_transactions(user_id=user_id, limit=limit, offset=offset)
+    has_more = len(items) >= limit
+    next_offset = offset + limit if has_more else offset
+    return _json_response({
+        "ok": True,
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_offset": next_offset,
+    })
 
 
 async def handle_wallet_ton_buy_tokens(request):
