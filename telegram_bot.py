@@ -45,6 +45,7 @@ from db.database import (
     get_subscription_feed, get_author_donations_list,
     get_all_user_ids,
     create_analysis_check, get_analysis_check_by_code,
+    create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -58,6 +59,11 @@ from services.ton_wallet_service import (
     get_user_ton_transactions,
 )
 from services.ton_chain_service import ton_to_nano, nano_to_ton_display
+from services.ton_purchase_service import (
+    is_ton_wallet_token_purchase_enabled,
+    get_ton_token_price_per_internal_token_nano,
+    verify_ton_purchase_onchain,
+)
 
 from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
@@ -122,6 +128,11 @@ class AnalysisStates(StatesGroup):
 class MarketRecapStates(StatesGroup):
     waiting_market_title = State()
     waiting_market_outcome = State()
+
+
+class TonWalletTokenPurchaseStates(StatesGroup):
+    waiting_ton_wallet_token_amount = State()
+    confirm_ton_wallet_token_purchase = State()
 
 
 CATEGORY_LABELS = {
@@ -381,6 +392,8 @@ def get_pay_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
     kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
+    ton_label = "💎 Купить токены с TON кошелька" if lang == "ru" else "💎 Buy tokens with TON wallet"
+    kb.add(InlineKeyboardButton(ton_label, callback_data="buy_tokens_ton_wallet"))
     return kb
 
 
@@ -7786,6 +7799,169 @@ async def check_create_confirm_callback(callback: types.CallbackQuery):
 
 
 TON_SEND_PENDING: Dict[int, dict] = {}
+
+
+def _ton_project_wallet() -> str:
+    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
+    return (
+        os.getenv("TON_PROJECT_WALLET", "")
+        or get_setting("ton_project_wallet", "")
+        or get_setting("ton_platform_wallet", "")
+        or default_purchase_wallet
+    ).strip()
+
+
+@dp.callback_query_handler(lambda c: c.data == "buy_tokens_ton_wallet", state="*")
+async def buy_tokens_ton_wallet_start(c: types.CallbackQuery, state: FSMContext):
+    uid = c.from_user.id
+    lang = get_user_lang(uid)
+    if not is_ton_wallet_token_purchase_enabled():
+        await c.answer("Покупка токенов через TON временно отключена." if lang == "ru" else "TON wallet token purchase is disabled.", show_alert=True)
+        return
+    w = get_or_create_user_ton_wallet(uid)
+    if not w.get("ok"):
+        await c.answer(_ton_unavailable(uid), show_alert=True)
+        return
+    min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
+    await state.finish()
+    await TonWalletTokenPurchaseStates.waiting_ton_wallet_token_amount.set()
+    await c.message.answer(
+        f"Введите количество токенов для покупки (минимум {min_tokens}):" if lang == "ru" else f"Enter token amount to buy (minimum {min_tokens}):"
+    )
+    await c.answer()
+
+
+@dp.message_handler(state=TonWalletTokenPurchaseStates.waiting_ton_wallet_token_amount)
+async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    amount_raw = str(message.text or "").strip()
+    if not amount_raw.isdigit():
+        await message.answer("Нужно целое число токенов." if lang == "ru" else "Token amount must be an integer.")
+        return
+    amount_tokens = int(amount_raw)
+    min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
+    if amount_tokens < min_tokens:
+        await message.answer(f"Минимум: {min_tokens}." if lang == "ru" else f"Minimum is {min_tokens}.")
+        return
+    price_per_token = get_ton_token_price_per_internal_token_nano()
+    if price_per_token <= 0:
+        await state.finish()
+        await message.answer("Некорректная TON цена токена." if lang == "ru" else "Invalid TON token price.")
+        return
+    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
+    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
+    total_tokens = amount_tokens + bonus_tokens
+    purchase_amount_nano = amount_tokens * price_per_token
+    balance_data = get_user_ton_balance(uid, refresh=True)
+    if not balance_data.get("ok"):
+        await state.finish()
+        await message.answer(_ton_send_error(uid, "balance_unavailable"))
+        return
+    balance_nano = int(balance_data.get("balance_nano") or 0)
+    reserve_nano = int(get_ton_send_fee_reserve_nano())
+    required_nano = purchase_amount_nano + reserve_nano
+    if balance_nano < required_nano:
+        await message.answer(
+            (f"Недостаточно TON.\nБаланс: {balance_data.get('balance_display')} TON\nНужно: {nano_to_ton_display(required_nano)} TON")
+            if lang == "ru"
+            else (f"Insufficient TON.\nBalance: {balance_data.get('balance_display')} TON\nNeeded: {nano_to_ton_display(required_nano)} TON")
+        )
+        return
+    project_wallet = _ton_project_wallet()
+    short_wallet = _short_ton_value(project_wallet)
+    ton_amount_display = nano_to_ton_display(purchase_amount_nano)
+    text = (
+        "💎 Покупка токенов с TON кошелька\n\n"
+        f"Токены: {amount_tokens}\n"
+        f"Бонус: {bonus_tokens}\n"
+        f"Итого будет зачислено: {total_tokens}\n\n"
+        f"К оплате: {ton_amount_display} TON\n"
+        f"Ваш TON баланс: {balance_data.get('balance_display')} TON\n\n"
+        f"Кошелёк проекта:\n{short_wallet}\n\n"
+        "Подтвердить покупку?"
+        if lang == "ru"
+        else
+        "💎 Buy tokens with TON wallet\n\n"
+        f"Tokens: {amount_tokens}\n"
+        f"Bonus: {bonus_tokens}\n"
+        f"Total to credit: {total_tokens}\n\n"
+        f"To pay: {ton_amount_display} TON\n"
+        f"Your TON balance: {balance_data.get('balance_display')} TON\n\n"
+        f"Project wallet:\n{short_wallet}\n\n"
+        "Confirm purchase?"
+    )
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ Подтвердить" if lang == "ru" else "✅ Confirm", callback_data="buy_tokens_ton_wallet_confirm"),
+        InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="buy_tokens_ton_wallet_cancel"),
+    )
+    await state.update_data(amount_tokens=amount_tokens, bonus_tokens=bonus_tokens, total_tokens=total_tokens, purchase_amount_nano=purchase_amount_nano, project_wallet=project_wallet)
+    await TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase.set()
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data in ["buy_tokens_ton_wallet_cancel", "buy_tokens_ton_wallet_confirm"], state=TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase)
+async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMContext):
+    uid = c.from_user.id
+    lang = get_user_lang(uid)
+    if c.data == "buy_tokens_ton_wallet_cancel":
+        await state.finish()
+        await c.message.answer("Покупка отменена." if lang == "ru" else "Purchase cancelled.")
+        await c.answer()
+        return
+    data = await state.get_data()
+    amount_tokens = int(data.get("amount_tokens") or 0)
+    bonus_tokens = int(data.get("bonus_tokens") or 0)
+    total_tokens = int(data.get("total_tokens") or 0)
+    purchase_amount_nano = int(data.get("purchase_amount_nano") or 0)
+    project_wallet = str(data.get("project_wallet") or "").strip()
+    wallet = get_or_create_user_ton_wallet(uid)
+    intent = create_ton_purchase_intent(uid, "token_purchase", str(wallet.get("wallet_address") or ""), project_wallet, purchase_amount_nano, {
+        "requested_tokens": amount_tokens, "bonus_tokens": bonus_tokens, "total_tokens": total_tokens,
+        "price_per_token_nano": str(get_ton_token_price_per_internal_token_nano()),
+    })
+    if not intent:
+        await state.finish()
+        await c.message.answer("Не удалось создать покупку." if lang == "ru" else "Failed to create purchase intent.")
+        await c.answer()
+        return
+    sent = send_ton_from_user_wallet(uid, project_wallet, purchase_amount_nano, f"DeepAlpha token purchase:{intent.get('id')}")
+    if not sent.get("ok"):
+        fail_ton_purchase_intent(int(intent.get("id")), str(sent.get("error") or "send_failed"))
+        await state.finish()
+        await c.message.answer(_ton_send_error(uid, str(sent.get("error") or "send_failed")))
+        await c.answer()
+        return
+    tx_hash = str(sent.get("tx_hash") or "").strip()
+    if not tx_hash:
+        submit_ton_purchase_intent(int(intent.get("id")), "")
+        await state.finish()
+        await c.message.answer(
+            "✅ TON отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции."
+            if lang == "ru" else
+            "✅ TON sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification."
+        )
+        await c.answer()
+        return
+    submit_ton_purchase_intent(int(intent.get("id")), tx_hash)
+    verification = verify_ton_purchase_onchain(int(intent.get("id")))
+    verify_ok = bool(verification.get("ok"))
+    if verify_ok:
+        fulfill_ton_purchase_intent(int(intent.get("id")))
+    await state.finish()
+    ton_amount = nano_to_ton_display(purchase_amount_nano)
+    final_hash = str(verification.get("tx_hash") or tx_hash)
+    if verify_ok:
+        text = (f"✅ Покупка выполнена.\nЗачислено: {total_tokens} токенов\nОплачено: {ton_amount} TON\nTx: {final_hash}"
+                if lang == "ru" else
+                f"✅ Purchase completed.\nCredited: {total_tokens} tokens\nPaid: {ton_amount} TON\nTx: {final_hash}")
+    else:
+        text = (f"✅ TON отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции.\nTx: {final_hash}"
+                if lang == "ru" else
+                f"✅ TON sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification.\nTx: {final_hash}")
+    await c.message.answer(text)
+    await c.answer()
 
 
 def _ton_unavailable(uid: int) -> str:
