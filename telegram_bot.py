@@ -63,6 +63,7 @@ from services.ton_purchase_service import (
     is_ton_wallet_token_purchase_enabled,
     get_ton_token_price_per_internal_token_nano,
     verify_ton_purchase_onchain,
+    resolve_ton_purchase_project_wallet,
 )
 
 from services.check_service import (
@@ -7809,13 +7810,7 @@ TON_SEND_PENDING: Dict[int, dict] = {}
 
 
 def _ton_project_wallet() -> str:
-    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
-    return (
-        os.getenv("TON_PROJECT_WALLET", "")
-        or get_setting("ton_project_wallet", "")
-        or get_setting("ton_platform_wallet", "")
-        or default_purchase_wallet
-    ).strip()
+    return resolve_ton_purchase_project_wallet()
 
 
 @dp.callback_query_handler(lambda c: c.data == "buy_tokens_ton_wallet", state="*")
@@ -7884,7 +7879,8 @@ async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext
         f"Бонус: {bonus_tokens}\n"
         f"Итого будет зачислено: {total_tokens}\n\n"
         f"К оплате: {ton_amount_display} TON\n"
-        f"Ваш TON баланс: {balance_data.get('balance_display')} TON\n\n"
+        f"Ваш TON баланс: {balance_data.get('balance_display')} TON\n"
+        f"Резерв на комиссию: {nano_to_ton_display(reserve_nano)} TON\n\n"
         f"Кошелёк проекта:\n{short_wallet}\n\n"
         "Подтвердить покупку?"
         if lang == "ru"
@@ -7894,7 +7890,8 @@ async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext
         f"Bonus: {bonus_tokens}\n"
         f"Total to credit: {total_tokens}\n\n"
         f"To pay: {ton_amount_display} TON\n"
-        f"Your TON balance: {balance_data.get('balance_display')} TON\n\n"
+        f"Your TON balance: {balance_data.get('balance_display')} TON\n"
+        f"Fee reserve: {nano_to_ton_display(reserve_nano)} TON\n\n"
         f"Project wallet:\n{short_wallet}\n\n"
         "Confirm purchase?"
     )
