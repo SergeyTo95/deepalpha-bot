@@ -1250,6 +1250,33 @@ def submit_ton_purchase_intent(intent_id: int, tx_hash: str) -> Optional[Dict[st
         print(f"submit_ton_purchase_intent error: {e}"); conn.rollback(); return None
     finally: conn.close()
 
+
+def link_ton_wallet_tx_to_intent(tx_hash: str, intent_id: int, product_type: str = "token_purchase", purchase_status: str = "submitted") -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    h = str(tx_hash or "").strip()
+    if not h:
+        conn.close()
+        return False
+    try:
+        cur.execute(
+            """
+            UPDATE ton_wallet_transactions
+            SET product_type=%s, payment_intent_id=%s, purchase_status=%s, updated_at=%s
+            WHERE tx_hash=%s
+            """,
+            (str(product_type or "token_purchase"), int(intent_id), str(purchase_status or "submitted"), now, h),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        print(f"link_ton_wallet_tx_to_intent error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
 def fulfill_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
     conn=get_connection(); cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor); now=datetime.utcnow().isoformat()
     try:
