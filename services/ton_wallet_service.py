@@ -381,11 +381,48 @@ def _safe_wallet_data(row):
     return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at"], row))
 
 
+def _load_canonical_wallet_row(user_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT user_id,wallet_address,network,wallet_version,last_balance_nano,last_balance_checked_at,seed_reveal_used,seed_revealed_at,status,updated_at,created_at,id
+           FROM user_ton_wallets
+           WHERE user_id=%s
+           ORDER BY
+               CASE
+                   WHEN status='active' AND COALESCE(last_balance_nano,'0')::numeric > 0 THEN 0
+                   WHEN status='active' THEN 1
+                   ELSE 2
+               END,
+               CASE
+                   WHEN EXISTS (
+                       SELECT 1
+                       FROM ton_wallet_transactions t
+                       WHERE t.user_id = user_ton_wallets.user_id
+                         AND t.wallet_address = user_ton_wallets.wallet_address
+                   ) THEN 0
+                   ELSE 1
+               END,
+               created_at ASC,
+               id ASC""",
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        addresses = [str(r[1] or "") for r in rows]
+        logger.warning(
+            "Multiple TON wallet rows found for user_id=%s addresses=%s",
+            user_id,
+            addresses,
+        )
+    return rows[0]
+
+
 def get_user_ton_wallet(user_id: int) -> Optional[dict]:
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute("""SELECT user_id,wallet_address,network,wallet_version,last_balance_nano,last_balance_checked_at,seed_reveal_used,seed_revealed_at
-                   FROM user_ton_wallets WHERE user_id=%s""", (user_id,))
-    row = cur.fetchone(); conn.close()
+    row = _load_canonical_wallet_row(user_id)
     return _safe_wallet_data(row) if row else None
 
 
@@ -458,8 +495,19 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     if int(amount_nano) <= 0:
         return {"ok": False, "error": "invalid_amount"}
     conn = get_connection(); cur = conn.cursor()
-    cur.execute("SELECT wallet_address, seed_encrypted FROM user_ton_wallets WHERE user_id=%s", (user_id,))
-    row = cur.fetchone(); conn.close()
+    cur.execute(
+        """SELECT wallet_address, seed_encrypted
+           FROM user_ton_wallets
+           WHERE user_id=%s
+           ORDER BY
+               CASE WHEN status='active' THEN 0 ELSE 1 END,
+               COALESCE(updated_at, created_at) DESC,
+               id DESC
+           LIMIT 1""",
+        (user_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
     if not row:
         return {"ok": False, "error": "wallet_not_found"}
     wallet_address, seed_encrypted = row
@@ -560,7 +608,17 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
 def reveal_user_ton_seed_once(user_id: int) -> dict:
     conn = get_connection(); cur = conn.cursor()
-    cur.execute("SELECT seed_encrypted,seed_reveal_used FROM user_ton_wallets WHERE user_id=%s", (user_id,))
+    cur.execute(
+        """SELECT seed_encrypted,seed_reveal_used
+           FROM user_ton_wallets
+           WHERE user_id=%s
+           ORDER BY
+               CASE WHEN status='active' THEN 0 ELSE 1 END,
+               COALESCE(updated_at, created_at) DESC,
+               id DESC
+           LIMIT 1""",
+        (user_id,),
+    )
     row = cur.fetchone()
     if not row:
         conn.close(); return {"ok": False, "error": "wallet_not_found"}
