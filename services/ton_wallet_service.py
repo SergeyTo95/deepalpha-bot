@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from db.database import get_connection
+from db.database import get_connection, get_setting
 from services.ton_chain_service import (
     get_ton_balance,
     get_wallet_seqno,
@@ -378,33 +378,81 @@ def _extract_boc_from_transfer(transfer) -> str:
     raise RuntimeError("signing_failed")
 
 def _safe_wallet_data(row):
-    return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at"], row))
+    return {
+        "user_id": row[0],
+        "wallet_address": row[1],
+        "network": row[2],
+        "wallet_version": row[3],
+        "last_balance_nano": row[4],
+        "last_balance_checked_at": row[5],
+        "seed_reveal_used": row[6],
+        "seed_revealed_at": row[7],
+        "id": row[11],
+    }
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(str(value or default))
+    except Exception:
+        return default
 
 
 def _load_canonical_wallet_row(user_id: int):
     conn = get_connection()
     cur = conn.cursor()
+    override_key = f"ton_canonical_wallet_address_{int(user_id)}"
+    override_address = normalize_ton_address(str(get_setting(override_key, "") or "").strip())
     cur.execute(
         """SELECT user_id,wallet_address,network,wallet_version,last_balance_nano,last_balance_checked_at,seed_reveal_used,seed_revealed_at,status,updated_at,created_at,id
            FROM user_ton_wallets
            WHERE user_id=%s
-           ORDER BY
-               CASE WHEN status='active' THEN 0 ELSE 1 END,
-               COALESCE(updated_at, created_at) DESC,
-               id DESC""",
+           ORDER BY id ASC""",
         (user_id,),
     )
     rows = cur.fetchall()
     conn.close()
     if not rows:
         return None
+
     if len(rows) > 1:
-        addresses = [str(r[1] or "") for r in rows]
-        logger.warning(
-            "Multiple TON wallet rows found for user_id=%s addresses=%s",
-            user_id,
-            addresses,
-        )
+        for row in rows:
+            logger.warning(
+                "TON duplicate wallet row user_id=%s id=%s wallet_address=%s status=%s last_balance_nano=%s created_at=%s updated_at=%s",
+                user_id,
+                row[11],
+                str(row[1] or ""),
+                str(row[8] or ""),
+                str(row[4] or "0"),
+                str(row[10] or ""),
+                str(row[9] or ""),
+            )
+
+    if override_address:
+        for row in rows:
+            if normalize_ton_address(str(row[1] or "").strip()) == override_address:
+                return row
+
+    active_rows = [r for r in rows if str(r[8] or "").lower() == "active"]
+    active_with_balance = [r for r in active_rows if _safe_int(r[4]) > 0]
+    if active_with_balance:
+        return active_with_balance[0]
+
+    conn = get_connection()
+    c2 = conn.cursor()
+    c2.execute("SELECT DISTINCT wallet_address FROM ton_wallet_transactions WHERE user_id=%s", (user_id,))
+    tx_wallets = {normalize_ton_address(str(item[0] or "").strip()) for item in c2.fetchall()}
+    conn.close()
+    rows_with_txs = [row for row in rows if normalize_ton_address(str(row[1] or "").strip()) in tx_wallets]
+    if rows_with_txs:
+        for row in active_rows:
+            if row in rows_with_txs:
+                return row
+        return rows_with_txs[0]
+
+    if active_rows:
+        return active_rows[0]
+
     return rows[0]
 
 
@@ -446,7 +494,7 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
             balance_nano = get_ton_balance(w["wallet_address"])
             checked_at = _now()
             conn = get_connection(); cur = conn.cursor()
-            cur.execute("UPDATE user_ton_wallets SET last_balance_nano=%s,last_balance_checked_at=%s,updated_at=%s WHERE user_id=%s", (str(balance_nano), checked_at, _now(), user_id))
+            cur.execute("UPDATE user_ton_wallets SET last_balance_nano=%s,last_balance_checked_at=%s,updated_at=%s WHERE id=%s", (str(balance_nano), checked_at, _now(), w.get("id")))
             conn.commit(); conn.close()
         except Exception:
             pass
@@ -481,17 +529,16 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
         return {"ok": False, "error": "invalid_address"}
     if int(amount_nano) <= 0:
         return {"ok": False, "error": "invalid_amount"}
+    canonical = get_user_ton_wallet(user_id)
+    if not canonical or not canonical.get("id"):
+        return {"ok": False, "error": "wallet_not_found"}
     conn = get_connection(); cur = conn.cursor()
     cur.execute(
         """SELECT wallet_address, seed_encrypted
            FROM user_ton_wallets
-           WHERE user_id=%s
-           ORDER BY
-               CASE WHEN status='active' THEN 0 ELSE 1 END,
-               COALESCE(updated_at, created_at) DESC,
-               id DESC
+           WHERE id=%s
            LIMIT 1""",
-        (user_id,),
+        (canonical["id"],),
     )
     row = cur.fetchone()
     conn.close()
@@ -594,25 +641,24 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
 
 def reveal_user_ton_seed_once(user_id: int) -> dict:
+    canonical = get_user_ton_wallet(user_id)
+    if not canonical or not canonical.get("id"):
+        return {"ok": False, "error": "wallet_not_found"}
     conn = get_connection(); cur = conn.cursor()
     cur.execute(
-        """SELECT seed_encrypted,seed_reveal_used
+        """SELECT id,seed_encrypted,seed_reveal_used
            FROM user_ton_wallets
-           WHERE user_id=%s
-           ORDER BY
-               CASE WHEN status='active' THEN 0 ELSE 1 END,
-               COALESCE(updated_at, created_at) DESC,
-               id DESC
+           WHERE id=%s
            LIMIT 1""",
-        (user_id,),
+        (canonical["id"],),
     )
     row = cur.fetchone()
     if not row:
         conn.close(); return {"ok": False, "error": "wallet_not_found"}
-    if row[1]:
+    if row[2]:
         conn.close(); return {"ok": False, "error": "already_revealed"}
     try:
-        seed = decrypt_secret(row[0]).strip()
+        seed = decrypt_secret(row[1]).strip()
         words = [w for w in seed.split() if w]
         if len(words) < 12:
             conn.close(); return {"ok": False, "error": "wallet_unavailable"}
@@ -621,6 +667,6 @@ def reveal_user_ton_seed_once(user_id: int) -> dict:
     except Exception:
         conn.close(); return {"ok": False, "error": "wallet_unavailable"}
     now = _now()
-    cur.execute("UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE user_id=%s AND seed_reveal_used=FALSE", (now, now, user_id))
+    cur.execute("UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE id=%s AND seed_reveal_used=FALSE", (now, now, row[0]))
     conn.commit(); conn.close()
     return {"ok": True, "seed_phrase": seed}
