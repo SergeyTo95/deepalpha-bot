@@ -638,6 +638,7 @@ def reveal_user_ton_seed_once(user_id: int) -> dict:
     row = _load_canonical_wallet_row_full(user_id)
     if not row:
         return {"ok": False, "error": "wallet_not_found"}
+    canonical_wallet_id = row[0]
     if row[7]:
         return {"ok": False, "error": "already_revealed"}
     try:
@@ -651,6 +652,12 @@ def reveal_user_ton_seed_once(user_id: int) -> dict:
         return {"ok": False, "error": "wallet_unavailable"}
     now = _now()
     conn = get_connection(); cur = conn.cursor()
-    cur.execute("UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE user_id=%s AND seed_reveal_used=FALSE", (now, now, user_id))
+    cur.execute(
+        "UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE id=%s AND user_id=%s AND seed_reveal_used=FALSE",
+        (now, now, canonical_wallet_id, user_id),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return {"ok": False, "error": "already_revealed"}
     conn.commit(); conn.close()
     return {"ok": True, "seed_phrase": seed}
