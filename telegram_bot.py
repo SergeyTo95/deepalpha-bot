@@ -6017,7 +6017,8 @@ async def cashier_menu_handler(message: types.Message):
 async def profile_menu_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("👤", reply_markup=get_profile_menu_keyboard(uid))
+    text = _format_profile(uid)
+    await message.answer(text, reply_markup=get_profile_keyboard(uid))
 
 
 @dp.message_handler(lambda m: m.text in ["⚙️ Ещё", "⚙️ More"])
