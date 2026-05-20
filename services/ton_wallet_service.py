@@ -70,6 +70,21 @@ def _normalize_ton_tx_hash_for_explorer(tx_hash: str) -> str:
     return decoded.hex()
 
 
+def _looks_like_ton_tx_hash(value: str) -> bool:
+    v = str(value or "").strip()
+    if not v:
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]{64}", v):
+        return True
+    b64 = v.replace("-", "+").replace("_", "/")
+    b64 += "=" * ((4 - (len(b64) % 4)) % 4)
+    try:
+        decoded = base64.b64decode(b64, validate=False)
+    except Exception:
+        return False
+    return len(decoded) == 32
+
+
 def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     h_hex = _normalize_ton_tx_hash_for_explorer(tx_hash)
     if not h_hex:
@@ -150,7 +165,7 @@ def get_user_ton_transactions(user_id: int, limit: int = 20, offset: int = 0) ->
         tx_hash = str(r[4] or "").strip()
         if not tx_hash:
             comment_hash = str(r[8] or "").strip()
-            if len(comment_hash) >= 40 and " " not in comment_hash:
+            if _looks_like_ton_tx_hash(comment_hash):
                 tx_hash = comment_hash
         out.append({
             "id": int(r[0]),
