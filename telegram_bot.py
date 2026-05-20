@@ -400,8 +400,6 @@ def get_pay_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     label = "💎 Открыть кассу" if lang == "ru" else "💎 Open payment"
     kb.add(InlineKeyboardButton(label, web_app=types.WebAppInfo(url=WEBAPP_URL)))
-    ton_label = "💎 Купить токены с TON кошелька" if lang == "ru" else "💎 Buy tokens with TON wallet"
-    kb.add(InlineKeyboardButton(ton_label, callback_data="buy_tokens_ton_wallet"))
     return kb
 
 
@@ -8016,6 +8014,7 @@ async def _send_ton_wallet_screen(message: types.Message):
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("📜 TON Транзакции", callback_data="ton_transactions"))
+        kb.add(InlineKeyboardButton("💎 Купить токены", callback_data="buy_tokens_ton_wallet"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
         text = f"💎 Your TON Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} TON\n\nSend only TON on {network_html}."
@@ -8023,6 +8022,7 @@ async def _send_ton_wallet_screen(message: types.Message):
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
         kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
         kb.add(InlineKeyboardButton("📜 TON Transactions", callback_data="ton_transactions"))
+        kb.add(InlineKeyboardButton("💎 Buy tokens", callback_data="buy_tokens_ton_wallet"))
         kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -8049,21 +8049,39 @@ def _ton_tx_direction_label(lang: str, direction: str) -> str:
     return "🔹 Операция" if lang == "ru" else "🔹 Operation"
 
 
-def _ton_transactions_keyboard(lang: str) -> InlineKeyboardMarkup:
+def _ton_transactions_keyboard(lang: str, offset: int = 0, has_more: bool = False, limit: int = 10) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("🔄 Обновить транзакции" if lang == "ru" else "🔄 Refresh transactions", callback_data="ton_transactions"))
+    kb.add(InlineKeyboardButton("🔄 Обновить транзакции" if lang == "ru" else "🔄 Refresh transactions", callback_data="ton_transactions:0"))
+    nav = []
+    if offset > 0:
+        prev_offset = max(0, offset - limit)
+        nav.append(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data=f"ton_transactions:{prev_offset}"))
+    if has_more:
+        next_offset = offset + limit
+        nav.append(InlineKeyboardButton("➡️ Ещё" if lang == "ru" else "➡️ More", callback_data=f"ton_transactions:{next_offset}"))
+    if nav:
+        kb.row(*nav)
     kb.add(InlineKeyboardButton("⬅️ Назад к TON кошельку" if lang == "ru" else "⬅️ Back to TON wallet", callback_data="ton_wallet_back"))
     return kb
 
 
-@dp.callback_query_handler(lambda c: c.data == "ton_transactions")
+@dp.callback_query_handler(lambda c: c.data == "ton_transactions" or c.data.startswith("ton_transactions:"))
 async def ton_transactions_cb(c: types.CallbackQuery):
     uid = c.from_user.id
     lang = get_user_lang(uid)
-    items = get_user_ton_transactions(uid, limit=20)
+    limit = 10
+    offset = 0
+    if ":" in c.data:
+        try:
+            offset = max(0, int(c.data.split(":", 1)[1]))
+        except Exception:
+            offset = 0
+    items = get_user_ton_transactions(uid, limit=limit + 1, offset=offset)
+    has_more = len(items) > limit
+    items = items[:limit]
     if not items:
         msg = "📜 TON транзакций пока нет." if lang == "ru" else "📜 No TON transactions yet."
-        await c.message.answer(msg, reply_markup=_ton_transactions_keyboard(lang))
+        await c.message.answer(msg, reply_markup=_ton_transactions_keyboard(lang, offset=offset, has_more=False, limit=limit))
         await c.answer()
         return
     lines = ["📜 TON Транзакции" if lang == "ru" else "📜 TON Transactions", ""]
@@ -8095,7 +8113,11 @@ async def ton_transactions_cb(c: types.CallbackQuery):
                 lines.append(f'Explorer: <a href="{_safe_html(explorer_url)}">Tonviewer</a>')
             lines.append(f"Date: {_safe_html(created)}")
             lines.append("")
-    await c.message.answer("\n".join(lines).strip(), reply_markup=_ton_transactions_keyboard(lang), parse_mode="HTML")
+    await c.message.answer(
+        "\n".join(lines).strip(),
+        reply_markup=_ton_transactions_keyboard(lang, offset=offset, has_more=has_more, limit=limit),
+        parse_mode="HTML"
+    )
     await c.answer()
 
 

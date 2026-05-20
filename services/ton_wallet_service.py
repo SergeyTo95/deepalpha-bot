@@ -70,6 +70,21 @@ def _normalize_ton_tx_hash_for_explorer(tx_hash: str) -> str:
     return decoded.hex()
 
 
+def _looks_like_ton_tx_hash(value: str) -> bool:
+    v = str(value or "").strip()
+    if not v:
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]{64}", v):
+        return True
+    b64 = v.replace("-", "+").replace("_", "/")
+    b64 += "=" * ((4 - (len(b64) % 4)) % 4)
+    try:
+        decoded = base64.b64decode(b64, validate=False)
+    except Exception:
+        return False
+    return len(decoded) == 32
+
+
 def get_ton_tx_explorer_url(tx_hash: str, network: str = "") -> str:
     h_hex = _normalize_ton_tx_hash_for_explorer(tx_hash)
     if not h_hex:
@@ -128,16 +143,19 @@ def calculate_ton_withdraw_platform_fee(amount_nano: int) -> Dict[str, Any]:
     return {"platform_fee_nano": fee, "platform_fee_display": nano_to_ton_display(fee), "enabled": True}
 
 
-def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+def get_user_ton_transactions(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     lim = int(limit or 20)
     if lim < 1:
         lim = 20
     if lim > 50:
         lim = 50
+    off = int(offset or 0)
+    if off < 0:
+        off = 0
     conn = get_connection(); cur = conn.cursor()
-    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at
+    cur.execute("""SELECT id,direction,amount_nano,status,tx_hash,destination_address,source_address,created_at,comment
                    FROM ton_wallet_transactions WHERE user_id=%s
-                   ORDER BY id DESC LIMIT %s""", (user_id, lim))
+                   ORDER BY id DESC LIMIT %s OFFSET %s""", (user_id, lim, off))
     rows = cur.fetchall() or []
     conn.close()
     out = []
@@ -145,6 +163,10 @@ def get_user_ton_transactions(user_id: int, limit: int = 20) -> List[Dict[str, A
         amount_nano = int(str(r[2] or "0"))
         addr = str(r[5] or r[6] or "")
         tx_hash = str(r[4] or "").strip()
+        if not tx_hash:
+            comment_hash = str(r[8] or "").strip()
+            if _looks_like_ton_tx_hash(comment_hash):
+                tx_hash = comment_hash
         out.append({
             "id": int(r[0]),
             "direction": str(r[1] or ""),
