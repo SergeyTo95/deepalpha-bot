@@ -381,6 +381,13 @@ def _safe_wallet_data(row):
     return dict(zip(["user_id", "wallet_address", "network", "wallet_version", "last_balance_nano", "last_balance_checked_at", "seed_reveal_used", "seed_revealed_at", "id"], row))
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(str(value or default))
+    except Exception:
+        return default
+
+
 def _load_canonical_wallet_row(user_id: int):
     conn = get_connection()
     cur = conn.cursor()
@@ -417,7 +424,7 @@ def _load_canonical_wallet_row(user_id: int):
                 return row
 
     active_rows = [r for r in rows if str(r[8] or "").lower() == "active"]
-    active_with_balance = [r for r in active_rows if int(str(r[4] or "0")) > 0]
+    active_with_balance = [r for r in active_rows if _safe_int(r[4]) > 0]
     if active_with_balance:
         return active_with_balance[0]
 
