@@ -9,6 +9,8 @@ from datetime import datetime
 from urllib.parse import quote
 from typing import Dict, List, Optional
 
+import psycopg2
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -84,7 +86,34 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-init_db()
+
+def safe_init_db_with_retry() -> bool:
+    delays = [2, 5, 10, 20, 30]
+
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            init_db()
+            logger.info("DB init succeeded")
+            return True
+        except psycopg2.OperationalError as exc:
+            if attempt < len(delays):
+                logger.warning("DB init failed, retrying... attempt %s/%s in %ss. Error: %s", attempt, len(delays), delay, exc)
+                time.sleep(delay)
+                continue
+            logger.exception("DB init failed after retries; bot will continue in degraded mode")
+            return False
+        except Exception as exc:
+            if attempt < len(delays):
+                logger.warning("DB init failed, retrying... attempt %s/%s in %ss. Error: %s", attempt, len(delays), delay, exc)
+                time.sleep(delay)
+                continue
+            logger.exception("DB init failed after retries; bot will continue in degraded mode")
+            return False
+
+    return False
+
+
+safe_init_db_with_retry()
 
 # Кеш языков в памяти
 user_languages: Dict[int, str] = {}

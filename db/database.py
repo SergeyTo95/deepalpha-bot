@@ -20,6 +20,15 @@ def get_connection():
     return conn
 
 
+def is_db_available() -> bool:
+    try:
+        conn = get_connection()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
