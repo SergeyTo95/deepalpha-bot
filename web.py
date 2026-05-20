@@ -30,6 +30,7 @@ from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
     verify_ton_purchase_onchain,
+    resolve_ton_purchase_project_wallet,
 )
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
@@ -42,7 +43,7 @@ from db.database import (
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
     add_tokens, get_connection,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
-    fail_ton_purchase_intent,
+    fail_ton_purchase_intent, link_ton_wallet_tx_to_intent,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -963,13 +964,7 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
-    project_wallet = (
-        os.getenv("TON_PROJECT_WALLET", "")
-        or get_setting("ton_project_wallet", "")
-        or get_setting("ton_platform_wallet", "")
-        or default_purchase_wallet
-    ).strip()
+    project_wallet = resolve_ton_purchase_project_wallet()
     if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
     price_per_token = get_ton_token_price_per_internal_token_nano()
@@ -1007,10 +1002,12 @@ async def handle_wallet_ton_buy_tokens(request):
     submitted = submit_ton_purchase_intent(int(intent.get('id')), tx_hash)
     if not submitted:
         return _json_response({"ok": False, "error": "intent_submit_failed"}, status=409)
+    link_ton_wallet_tx_to_intent(tx_hash=tx_hash, intent_id=int(intent.get("id")), product_type="token_purchase", purchase_status="submitted")
     verification = verify_ton_purchase_onchain(int(intent.get("id")))
     verify_ok = bool(verification.get("ok"))
     if verify_ok:
         fulfill_ton_purchase_intent(int(intent.get('id')))
+        link_ton_wallet_tx_to_intent(tx_hash=str(verification.get("tx_hash") or tx_hash), intent_id=int(intent.get("id")), product_type="token_purchase", purchase_status="fulfilled")
     return _json_response({
         "ok": True,
         "intent_id": intent.get('id'),

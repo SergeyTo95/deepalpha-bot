@@ -28,6 +28,16 @@ def _parse_feature_flag_value(raw_value):
     return None
 
 
+def resolve_ton_purchase_project_wallet() -> str:
+    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
+    return (
+        os.getenv("TON_PROJECT_WALLET", "")
+        or get_setting("ton_project_wallet", "")
+        or get_setting("ton_platform_wallet", "")
+        or default_purchase_wallet
+    ).strip()
+
+
 def is_ton_wallet_token_purchase_enabled() -> bool:
     env_upper = _parse_feature_flag_value(os.getenv("TON_WALLET_TOKEN_PURCHASE_ENABLED", ""))
     if env_upper is not None:
