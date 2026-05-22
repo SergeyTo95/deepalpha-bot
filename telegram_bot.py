@@ -3809,6 +3809,8 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"Анализов: {user['total_analyses']}\n"
             f"Сигналов: {user['total_opportunities']}\n"
             f"Рефералов: {user.get('total_referrals', 0)}\n"
+            f"\n🔗 Реферальная ссылка:\n"
+            f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
         if user_resolved > 0:
             text += f"\n🎯 Точность прогнозов\n"
@@ -3838,6 +3840,8 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"Analyses: {user['total_analyses']}\n"
             f"Signals: {user['total_opportunities']}\n"
             f"Referrals: {user.get('total_referrals', 0)}\n"
+            f"\n🔗 Referral link:\n"
+            f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
         if user_resolved > 0:
             text += f"\n🎯 Prediction Accuracy\n"
