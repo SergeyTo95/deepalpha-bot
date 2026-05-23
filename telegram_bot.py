@@ -46,7 +46,8 @@ from db.database import (
     get_all_user_ids,
     create_analysis_check, get_analysis_check_by_code,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent, link_ton_wallet_tx_to_intent,
-    get_referral_reward_withdrawal_requests,
+    get_referral_reward_withdrawal_requests, mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
+    get_active_referral_payout_wallet,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -58,6 +59,7 @@ from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
     get_ton_send_fee_reserve_nano,
     get_user_ton_transactions,
+    create_referral_payout_wallet, reveal_referral_payout_wallet_seed_once, send_referral_payout_from_wallet,
 )
 from services.ton_chain_service import ton_to_nano, nano_to_ton_display
 from services.ton_purchase_service import (
@@ -4483,7 +4485,86 @@ async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
         lines.append(
             f"• #{r.get('id')} | user={r.get('user_id')} | amount_nano={r.get('amount_nano')} | status={r.get('status')} | created={r.get('created_at')}"
         )
-    await message.answer("\n".join(lines))
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"))
+    for r in rows[:10]:
+        rid = int(r.get("id") or 0)
+        kb.add(InlineKeyboardButton(f"💸 Pay from payout wallet #{rid}", callback_data=f"ref_pay_wallet_{rid}"))
+        kb.add(InlineKeyboardButton(f"✅ Mark Paid manually #{rid}", callback_data=f"ref_mark_paid_{rid}"))
+        kb.add(InlineKeyboardButton(f"❌ Reject #{rid}", callback_data=f"ref_reject_{rid}"))
+    await message.answer("\n".join(lines), reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "ref_payout_wallet")
+async def ref_payout_wallet_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    w = get_active_referral_payout_wallet()
+    if not w:
+        text = "💼 Referral payout wallet\n\nStatus: not created"
+    else:
+        bal = "0"
+        try:
+            bal = nano_to_ton_display(get_ton_balance(str(w.get("wallet_address") or "")))
+        except Exception:
+            pass
+        text = f"💼 Referral payout wallet\n\nStatus: active\nAddress:\n{w.get('wallet_address')}\n\nBalance: {bal} TON"
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("➕ Create payout wallet", callback_data="ref_payout_create"))
+    kb.add(InlineKeyboardButton("🔐 Reveal seed phrase", callback_data="ref_payout_seed"))
+    await c.message.answer(text, reply_markup=kb); await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ref_payout_create")
+async def ref_payout_create_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    res = create_referral_payout_wallet(c.from_user.id)
+    await c.message.answer("✅ Payout wallet created." if res.get("ok") else f"❌ Failed: {res.get('error')}")
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "ref_payout_seed")
+async def ref_payout_seed_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    res = reveal_referral_payout_wallet_seed_once(c.from_user.id)
+    if not res.get("ok"):
+        await c.message.answer(f"❌ Seed unavailable: {res.get('error')}")
+    else:
+        await c.message.answer(f"⚠️ Seed phrase (show once):\n{res.get('seed_phrase')}")
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("ref_pay_wallet_"))
+async def ref_pay_wallet_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    rid = int(c.data.split("_")[-1])
+    res = send_referral_payout_from_wallet(rid, c.from_user.id)
+    await c.message.answer(f"✅ Paid #{rid}\nTx: {res.get('tx_hash')}" if res.get("ok") else f"❌ Pay failed #{rid}: {res.get('error')}")
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("ref_mark_paid_"))
+async def ref_mark_paid_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    rid = int(c.data.split("_")[-1])
+    ok = mark_referral_withdrawal_request_paid(rid, c.from_user.id, tx_hash="manual_admin_paid")
+    await c.message.answer("✅ Marked paid manually." if ok else "❌ Failed to mark paid.")
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("ref_reject_"))
+async def ref_reject_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    rid = int(c.data.split("_")[-1])
+    ok = reject_referral_withdrawal_request(rid, c.from_user.id, notes="Rejected by admin")
+    await c.message.answer("✅ Rejected." if ok else "❌ Failed to reject.")
+    await c.answer()
 
 
 def _get_market_recap_recipients() -> List[int]:
