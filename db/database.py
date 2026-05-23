@@ -541,6 +541,7 @@ def _init_db_inner(conn, cursor):
         reward_nano BIGINT NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'pending',
         unlock_at TIMESTAMP,
+        withdrawal_request_id BIGINT,
         withdrawn_at TIMESTAMP,
         withdrawal_tx_hash TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -551,6 +552,7 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_source_user_id ON referral_rewards(source_user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_status ON referral_rewards(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_unlock_at ON referral_rewards(unlock_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_withdrawal_request_id ON referral_rewards(withdrawal_request_id)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_rewards_purchase_ref_user ON referral_rewards(purchase_ref, user_id) WHERE purchase_ref IS NOT NULL")
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS referral_reward_withdrawal_requests (
@@ -594,6 +596,7 @@ def _init_db_inner(conn, cursor):
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_posts INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_today INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS posts_reset_date TEXT DEFAULT NULL",
+        "ALTER TABLE referral_rewards ADD COLUMN IF NOT EXISTS withdrawal_request_id BIGINT",
     ]
     for migration in migrations:
         try:
@@ -1560,9 +1563,9 @@ def withdraw_available_referral_rewards_to_internal_wallet(user_id: int) -> Dict
         reward_ids = [int(r["id"]) for r in rows]
         cur.execute("""
             UPDATE referral_rewards
-            SET status='pending_admin_review', updated_at=NOW()
+            SET status='pending_admin_review', withdrawal_request_id=%s, updated_at=NOW()
             WHERE id = ANY(%s) AND status='available'
-        """, (reward_ids,))
+        """, (int(req.get("id") or 0), reward_ids))
         conn.commit()
         return {"ok": True, "mode": "manual_request", "amount_nano": available, "request_id": int(req.get("id") or 0)}
     except Exception as e:
@@ -1582,6 +1585,108 @@ def get_referral_reward_withdrawal_requests(status: str = "", limit: int = 50) -
     except Exception as e:
         print(f"get_referral_reward_withdrawal_requests error: {e}")
         return []
+    finally:
+        conn.close()
+
+
+def get_referral_rewards_admin_stats() -> Dict[str, int]:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='pending') AS pending_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='available') AS available_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='pending_admin_review') AS in_review_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='withdrawn') AS withdrawn_nano,
+              COALESCE(COUNT(*),0) AS total_rewards_count,
+              COALESCE(COUNT(DISTINCT user_id),0) AS total_referrers_count
+            FROM referral_rewards
+        """)
+        row = cur.fetchone() or (0, 0, 0, 0, 0, 0)
+        cur.execute("SELECT COALESCE(COUNT(*),0) FROM referral_reward_withdrawal_requests WHERE status='pending'")
+        pending_requests = int((cur.fetchone() or [0])[0] or 0)
+        return {
+            "pending_nano": int(row[0] or 0),
+            "available_nano": int(row[1] or 0),
+            "in_review_nano": int(row[2] or 0),
+            "withdrawn_nano": int(row[3] or 0),
+            "pending_withdrawal_requests_count": pending_requests,
+            "total_rewards_count": int(row[4] or 0),
+            "total_referrers_count": int(row[5] or 0),
+        }
+    except Exception as e:
+        print(f"get_referral_rewards_admin_stats error: {e}")
+        return {"pending_nano": 0, "available_nano": 0, "in_review_nano": 0, "withdrawn_nano": 0, "pending_withdrawal_requests_count": 0, "total_rewards_count": 0, "total_referrers_count": 0}
+    finally:
+        conn.close()
+
+
+def get_referral_withdrawal_request(request_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE id=%s LIMIT 1", (int(request_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_referral_withdrawal_request error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def mark_referral_withdrawal_request_paid(request_id: int, admin_user_id: int, tx_hash: Optional[str] = None) -> bool:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE id=%s FOR UPDATE", (int(request_id),))
+        req = cur.fetchone()
+        if not req or req["status"] != "pending":
+            conn.rollback()
+            return False
+        final_tx_hash = tx_hash or "manual_admin_paid"
+        cur.execute("""
+            UPDATE referral_reward_withdrawal_requests
+            SET status='paid', processed_at=NOW(), processed_by=%s, tx_hash=%s
+            WHERE id=%s AND status='pending'
+        """, (int(admin_user_id), final_tx_hash, int(request_id)))
+        cur.execute("""
+            UPDATE referral_rewards
+            SET status='withdrawn', withdrawn_at=NOW(), withdrawal_tx_hash=%s, updated_at=NOW()
+            WHERE withdrawal_request_id=%s AND status='pending_admin_review'
+        """, (final_tx_hash, int(request_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"mark_referral_withdrawal_request_paid error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def reject_referral_withdrawal_request(request_id: int, admin_user_id: int, notes: Optional[str] = None) -> bool:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE id=%s FOR UPDATE", (int(request_id),))
+        req = cur.fetchone()
+        if not req or req["status"] != "pending":
+            conn.rollback()
+            return False
+        cur.execute("""
+            UPDATE referral_reward_withdrawal_requests
+            SET status='rejected', processed_at=NOW(), processed_by=%s, notes=%s
+            WHERE id=%s AND status='pending'
+        """, (int(admin_user_id), (notes or "")[:500], int(request_id)))
+        cur.execute("""
+            UPDATE referral_rewards
+            SET status='available', withdrawal_request_id=NULL, updated_at=NOW()
+            WHERE withdrawal_request_id=%s AND status='pending_admin_review'
+        """, (int(request_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"reject_referral_withdrawal_request error: {e}")
+        conn.rollback()
+        return False
     finally:
         conn.close()
 
