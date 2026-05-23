@@ -570,6 +570,22 @@ def _init_db_inner(conn, cursor):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ref_reward_withdraw_reqs_user ON referral_reward_withdrawal_requests(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ref_reward_withdraw_reqs_status ON referral_reward_withdrawal_requests(status)")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS referral_payout_wallets (
+        id SERIAL PRIMARY KEY,
+        wallet_address TEXT NOT NULL,
+        seed_encrypted TEXT NOT NULL,
+        network TEXT NOT NULL DEFAULT 'MAINNET',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        seed_revealed_at TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_payout_wallets_status ON referral_payout_wallets(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_payout_wallets_wallet_address ON referral_payout_wallets(wallet_address)")
 
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
@@ -1575,10 +1591,15 @@ def withdraw_available_referral_rewards_to_internal_wallet(user_id: int) -> Dict
         conn.close()
 
 
-def get_referral_reward_withdrawal_requests(status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+def get_referral_reward_withdrawal_requests(status: str = "", limit: int = 50, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        if status:
+        if statuses:
+            clean_statuses = [str(s).strip() for s in statuses if str(s).strip()]
+            if not clean_statuses:
+                return []
+            cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE status = ANY(%s) ORDER BY id DESC LIMIT %s", (clean_statuses, int(limit)))
+        elif status:
             cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE status=%s ORDER BY id DESC LIMIT %s", (status, int(limit)))
         else:
             cur.execute("SELECT * FROM referral_reward_withdrawal_requests ORDER BY id DESC LIMIT %s", (int(limit),))
@@ -1630,6 +1651,38 @@ def get_referral_withdrawal_request(request_id: int) -> Optional[Dict[str, Any]]
         return dict(row) if row else None
     except Exception as e:
         print(f"get_referral_withdrawal_request error: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_active_referral_payout_wallet() -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM referral_payout_wallets WHERE status='active' ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_active_referral_payout_wallet error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def create_referral_payout_wallet_record(wallet_address: str, seed_encrypted: str, network: str, admin_user_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("UPDATE referral_payout_wallets SET status='inactive', updated_at=NOW() WHERE status='active'")
+        cur.execute("""
+            INSERT INTO referral_payout_wallets (wallet_address, seed_encrypted, network, status, created_by)
+            VALUES (%s, %s, %s, 'active', %s)
+            RETURNING *
+        """, (wallet_address, seed_encrypted, network, int(admin_user_id)))
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"create_referral_payout_wallet_record error: {e}")
+        conn.rollback()
         return None
     finally:
         conn.close()
