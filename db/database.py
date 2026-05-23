@@ -1591,10 +1591,15 @@ def withdraw_available_referral_rewards_to_internal_wallet(user_id: int) -> Dict
         conn.close()
 
 
-def get_referral_reward_withdrawal_requests(status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+def get_referral_reward_withdrawal_requests(status: str = "", limit: int = 50, statuses: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        if status:
+        if statuses:
+            clean_statuses = [str(s).strip() for s in statuses if str(s).strip()]
+            if not clean_statuses:
+                return []
+            cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE status = ANY(%s) ORDER BY id DESC LIMIT %s", (clean_statuses, int(limit)))
+        elif status:
             cur.execute("SELECT * FROM referral_reward_withdrawal_requests WHERE status=%s ORDER BY id DESC LIMIT %s", (status, int(limit)))
         else:
             cur.execute("SELECT * FROM referral_reward_withdrawal_requests ORDER BY id DESC LIMIT %s", (int(limit),))

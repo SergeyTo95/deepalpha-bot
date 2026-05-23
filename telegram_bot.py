@@ -59,7 +59,7 @@ from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
     get_ton_send_fee_reserve_nano,
     get_user_ton_transactions,
-    create_referral_payout_wallet, reveal_referral_payout_wallet_seed_once, send_referral_payout_from_wallet,
+    create_referral_payout_wallet, reveal_referral_payout_wallet_seed_once, send_referral_payout_from_wallet, finalize_referral_payout_reconciliation,
 )
 from services.ton_chain_service import ton_to_nano, nano_to_ton_display
 from services.ton_purchase_service import (
@@ -4476,7 +4476,7 @@ async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
     from bot.admin import is_admin
     if not is_admin(message.from_user.id):
         return
-    rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
+    rows = get_referral_reward_withdrawal_requests(statuses=["pending", "processing", "payout_sent_reconcile_required"], limit=30)
     if not rows:
         await message.answer("No pending referral withdrawal requests.")
         return
@@ -4487,11 +4487,15 @@ async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
         )
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"))
-    for r in rows[:10]:
+    for r in rows[:15]:
         rid = int(r.get("id") or 0)
-        kb.add(InlineKeyboardButton(f"💸 Pay from payout wallet #{rid}", callback_data=f"ref_pay_wallet_{rid}"))
-        kb.add(InlineKeyboardButton(f"✅ Mark Paid manually #{rid}", callback_data=f"ref_mark_paid_{rid}"))
-        kb.add(InlineKeyboardButton(f"❌ Reject #{rid}", callback_data=f"ref_reject_{rid}"))
+        status = str(r.get("status") or "")
+        if status == "pending":
+            kb.add(InlineKeyboardButton(f"💸 Pay from payout wallet #{rid}", callback_data=f"ref_pay_wallet_{rid}"))
+            kb.add(InlineKeyboardButton(f"✅ Mark Paid manually #{rid}", callback_data=f"ref_mark_paid_{rid}"))
+            kb.add(InlineKeyboardButton(f"❌ Reject #{rid}", callback_data=f"ref_reject_{rid}"))
+        elif status == "payout_sent_reconcile_required":
+            kb.add(InlineKeyboardButton(f"🧾 Finalize reconciliation #{rid}", callback_data=f"ref_reconcile_paid_{rid}"))
     await message.answer("\n".join(lines), reply_markup=kb)
 
 
@@ -4529,11 +4533,21 @@ async def ref_payout_seed_cb(c: types.CallbackQuery):
     from bot.admin import is_admin
     if not is_admin(c.from_user.id):
         return
+    if c.message.chat.type != "private":
+        lang = get_user_lang(c.from_user.id)
+        await c.answer("Для безопасности откройте это в личном чате с ботом." if lang == "ru" else "For security, open this in a private chat with the bot.", show_alert=True)
+        return
     res = reveal_referral_payout_wallet_seed_once(c.from_user.id)
     if not res.get("ok"):
-        await c.message.answer(f"❌ Seed unavailable: {res.get('error')}")
+        await c.message.answer("❌ Seed unavailable.")
     else:
-        await c.message.answer(f"⚠️ Seed phrase (show once):\n{res.get('seed_phrase')}")
+        lang = get_user_lang(c.from_user.id)
+        warning = (
+            "⚠️ Эта seed-фраза управляет кошельком реферальных выплат.\nСохраните её офлайн. Никому не передавайте. Она показывается только один раз."
+            if lang == "ru"
+            else "⚠️ This seed controls the referral payout wallet.\nStore it offline. Do not share it. It is shown only once."
+        )
+        await c.message.answer(f"{warning}\n\n{res.get('seed_phrase')}", disable_web_page_preview=True)
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ref_pay_wallet_"))
@@ -4543,7 +4557,34 @@ async def ref_pay_wallet_cb(c: types.CallbackQuery):
         return
     rid = int(c.data.split("_")[-1])
     res = send_referral_payout_from_wallet(rid, c.from_user.id)
-    await c.message.answer(f"✅ Paid #{rid}\nTx: {res.get('tx_hash')}" if res.get("ok") else f"❌ Pay failed #{rid}: {res.get('error')}")
+    if res.get("ok"):
+        await c.message.answer(f"✅ Paid #{rid}\nTx: {res.get('tx_hash')}")
+    else:
+        lang = get_user_lang(c.from_user.id)
+        err = str(res.get("error") or "")
+        msg_map = {
+            "payout_already_processing": ("Выплата уже в обработке. Не нажимайте повторно.", "Payout is already processing. Do not click again."),
+            "payout_requires_reconciliation": ("TON уже был отправлен. Нужна ручная сверка.", "TON was already sent. Manual reconciliation is required."),
+            "request_already_paid": ("Эта заявка уже оплачена.", "This request is already paid."),
+            "insufficient_balance": ("Недостаточно TON на payout wallet.", "Payout wallet has insufficient balance."),
+            "payout_sent_reconcile_required": ("TON уже отправлен, требуется ручная сверка.", "TON already sent, reconciliation is required."),
+        }
+        ru_en = msg_map.get(err, ("❌ Ошибка выплаты. Попробуйте позже.", "❌ Payout failed. Please try later."))
+        await c.message.answer(ru_en[0] if lang == "ru" else ru_en[1])
+    await c.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("ref_reconcile_paid_"))
+async def ref_reconcile_paid_cb(c: types.CallbackQuery):
+    from bot.admin import is_admin
+    if not is_admin(c.from_user.id):
+        return
+    rid = int(c.data.split("_")[-1])
+    res = finalize_referral_payout_reconciliation(rid, c.from_user.id)
+    await c.message.answer(
+        f"✅ Reconciliation finalized #{rid}\nTx: {res.get('tx_hash')}"
+        if res.get("ok")
+        else "❌ Failed to finalize reconciliation."
+    )
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ref_mark_paid_"))
