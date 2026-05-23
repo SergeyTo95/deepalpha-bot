@@ -1120,6 +1120,7 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
         InlineKeyboardButton("💎 Изменить минимум вывода" if lang == "ru" else "💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
         InlineKeyboardButton("🧢 Изменить дневной лимит" if lang == "ru" else "🧢 Set daily cap", callback_data="referral_set_daily_cap"),
         InlineKeyboardButton("📤 Заявки на вывод" if lang == "ru" else "📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
+        InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"),
         InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back to admin", callback_data="admin_back"),
     )
