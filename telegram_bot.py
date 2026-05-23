@@ -500,6 +500,9 @@ def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
         kb.add(InlineKeyboardButton(edit_bio_label, callback_data="author_edit_bio"))
         kb.add(InlineKeyboardButton(wallet_label, callback_data="author_set_wallet"))
 
+    earn_label = "💸 Заработать" if lang == "ru" else "💸 Earn"
+
+    kb.add(InlineKeyboardButton(earn_label, callback_data="profile_open_earn"))
     kb.add(
         InlineKeyboardButton(share_label, url=share_url),
         InlineKeyboardButton(badges_label, callback_data="show_all_badges"),
@@ -6505,6 +6508,17 @@ async def referrals_handler(message: types.Message, state: FSMContext):
     await message.answer(text, reply_markup=get_main_keyboard(uid))
     
 
+
+
+@dp.callback_query_handler(lambda c: c.data == "profile_open_earn")
+async def profile_open_earn(callback: types.CallbackQuery, state: FSMContext):
+    lang = get_user_lang(callback.from_user.id)
+    text = "💸 Заработать" if lang == "ru" else "💸 Earn"
+    fake_message = callback.message
+    fake_message.from_user = callback.from_user
+    fake_message.text = text
+    await referral_earnings_handler(fake_message, state)
+    await callback.answer()
 
 @dp.message_handler(lambda m: m.text in ["💸 Заработать", "💸 Earn"], state="*")
 async def referral_earnings_handler(message: types.Message, state: FSMContext):
