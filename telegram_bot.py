@@ -6510,27 +6510,13 @@ async def referrals_handler(message: types.Message, state: FSMContext):
 
 
 
-@dp.callback_query_handler(lambda c: c.data == "profile_open_earn")
-async def profile_open_earn(callback: types.CallbackQuery, state: FSMContext):
-    lang = get_user_lang(callback.from_user.id)
-    text = "💸 Заработать" if lang == "ru" else "💸 Earn"
-    fake_message = callback.message
-    fake_message.from_user = callback.from_user
-    fake_message.text = text
-    await referral_earnings_handler(fake_message, state)
-    await callback.answer()
-
-@dp.message_handler(lambda m: m.text in ["💸 Заработать", "💸 Earn"], state="*")
-async def referral_earnings_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    _register_user(message)
-    uid = message.from_user.id
-    lang = get_user_lang(uid)
-    data = get_earnings_screen_data(uid)
+async def send_referral_earnings_screen(target, user_id: int):
+    lang = get_user_lang(user_id)
+    data = get_earnings_screen_data(user_id)
     summary = data.get("summary") or {}
     settings = data.get("settings") or {}
-    ref_link = f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}"
-    user = get_user(uid) or {}
+    ref_link = f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{user_id}"
+    user = get_user(user_id) or {}
     text = (
         f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {user.get('total_referrals', 0)}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
         if lang == "ru" else
@@ -6539,7 +6525,20 @@ async def referral_earnings_handler(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("📤 Вывести на TON кошелёк" if lang == "ru" else "📤 Withdraw to TON wallet", callback_data="earn_withdraw"))
     kb.add(InlineKeyboardButton("🏆 Топ рефереров" if lang == "ru" else "🏆 Top referrers", callback_data="earn_top_ref"), InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="earn_refresh"))
-    await message.answer(text, reply_markup=kb)
+    await target.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "profile_open_earn")
+async def profile_open_earn(callback: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await send_referral_earnings_screen(callback.message, callback.from_user.id)
+    await callback.answer()
+
+@dp.message_handler(lambda m: m.text in ["💸 Заработать", "💸 Earn"], state="*")
+async def referral_earnings_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    await send_referral_earnings_screen(message, message.from_user.id)
 
 
 @dp.callback_query_handler(lambda c: c.data in ["earn_withdraw", "earn_top_ref", "earn_refresh"])
