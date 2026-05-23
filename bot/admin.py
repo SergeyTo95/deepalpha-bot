@@ -25,6 +25,9 @@ from db.database import (
     mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
     get_user_language,
 )
+from services.moderation_service import (
+    get_moderation_tester_ids, set_moderation_tester_ids,
+)
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
@@ -92,6 +95,7 @@ class SystemStates(StatesGroup):
     waiting_broadcast = State()
     waiting_notify_hour = State()
     waiting_channel_interval = State()
+    waiting_moderation_testers = State()
 
 
 class WatchlistStates(StatesGroup):
@@ -160,20 +164,24 @@ def _admin_lang(user_id: int) -> str:
 
 def bot_moderation_text(lang: str) -> str:
     enabled = get_setting("bot_moderation_mode_enabled", "false") == "true"
+    testers = sorted(get_moderation_tester_ids())
+    testers_text = ", ".join(str(x) for x in testers) if testers else ("—" if lang == "ru" else "—")
     if lang == "ru":
         return (
             "🚧 Модерация бота\n\n"
             f"Статус: {'Включена' if enabled else 'Выключена'}\n\n"
+            f"Тестеры: {testers_text}\n\n"
             "Когда режим включён:\n"
-            "обычные пользователи не могут пользоваться ботом,\n"
-            "админы продолжают работать как обычно."
+            "обычные пользователи не могут пользоваться ботом и WebApp.\n"
+            "Админы и тестеры продолжают работать."
         )
     return (
         "🚧 Bot moderation\n\n"
         f"Status: {'Enabled' if enabled else 'Disabled'}\n\n"
+        f"Testers: {testers_text}\n\n"
         "When enabled:\n"
-        "regular users cannot use the bot,\n"
-        "admins continue working normally."
+        "regular users cannot use the bot or WebApp.\n"
+        "Admins and testers continue working."
     )
 
 
@@ -185,6 +193,7 @@ def bot_moderation_kb(lang: str) -> InlineKeyboardMarkup:
             ("❌ Выключить модерацию" if lang == "ru" else "❌ Disable moderation") if enabled else ("✅ Включить модерацию" if lang == "ru" else "✅ Enable moderation"),
             callback_data="bot_moderation_toggle",
         ),
+        InlineKeyboardButton("👥 Изменить тестеров" if lang == "ru" else "👥 Edit testers", callback_data="bot_moderation_edit_testers"),
         InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_bot_moderation"),
         InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="admin_back"),
     )
@@ -1194,6 +1203,36 @@ def register_admin(dp: Dispatcher):
         set_setting("bot_moderation_mode_enabled", "false" if enabled else "true")
         await callback.answer("✅ Обновлено" if lang == "ru" else "✅ Updated")
         await callback.message.edit_text(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "bot_moderation_edit_testers")
+    async def bot_moderation_edit_testers(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        await SystemStates.waiting_moderation_testers.set()
+        await callback.message.answer(
+            "Отправьте Telegram user_id тестеров через запятую.\nПример: 123456,789012\nОтправьте \"-\" чтобы очистить список."
+            if lang == "ru" else
+            "Send tester Telegram user_ids separated by commas.\nExample: 123456,789012\nSend \"-\" to clear the list."
+        )
+
+    @dp.message_handler(state=SystemStates.waiting_moderation_testers)
+    async def bot_moderation_save_testers(message: types.Message, state: FSMContext):
+        lang = _admin_lang(message.from_user.id)
+        raw = str(message.text or "").strip()
+        if raw == "-":
+            set_moderation_tester_ids([])
+            await state.finish()
+            await message.answer("✅ Список тестеров очищен." if lang == "ru" else "✅ Tester list cleared.")
+            await message.answer(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
+            return
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts or any(not p.isdigit() for p in parts):
+            await message.answer("❌ Неверный формат. Нужны только числовые user_id через запятую." if lang == "ru" else "❌ Invalid format. Use comma-separated numeric user_ids only.")
+            return
+        ids = sorted({int(p) for p in parts if int(p) > 0})
+        set_moderation_tester_ids(ids)
+        await state.finish()
+        await message.answer("✅ Тестеры обновлены." if lang == "ru" else "✅ Testers updated.")
+        await message.answer(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
 
     # === AI ===
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")

@@ -13,6 +13,7 @@ from services.web_auth_service import verify_telegram_init_data, get_cookie_secu
 from services.webapp_analysis_service import run_webapp_quick_analysis
 from services.webapp_bot_delivery import deliver_webapp_analysis_to_telegram
 from services.webapp_top_analysis_service import run_webapp_top_analysis
+from services.moderation_service import is_moderation_allowed, get_user_lang_or_default, get_moderation_message
 from services.ton_wallet_service import (
     get_user_ton_balance,
     get_or_create_user_ton_wallet,
@@ -566,6 +567,8 @@ async def handle_webapp_summary(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
 
     user = get_user(user_id)
     if not user:
@@ -637,10 +640,21 @@ def _current_web_user_id(request) -> int:
     return user_id if user_id > 0 else 0
 
 
+def _webapp_moderation_block_response(user_id: int):
+    lang = get_user_lang_or_default(user_id)
+    return _json_response({
+        "ok": False,
+        "error": "bot_under_moderation",
+        "message": get_moderation_message(lang),
+    }, status=403)
+
+
 async def handle_wallet_ton(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     get_or_create_user_ton_wallet(user_id)
     balance = get_user_ton_balance(user_id, refresh=False)
     if not balance.get("ok"):
@@ -674,6 +688,8 @@ async def handle_wallet_ton_refresh(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     balance = get_user_ton_balance(user_id, refresh=True)
     if not balance.get("ok"):
         return _json_response(balance, status=400)
@@ -684,6 +700,8 @@ async def handle_wallet_ton_send(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     try:
         payload = await request.json()
     except Exception:
@@ -767,6 +785,8 @@ async def handle_webapp_analyze(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
 
     user = get_user(user_id)
     if not user:
@@ -846,6 +866,8 @@ async def handle_webapp_analyze_start(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0 or not get_user(user_id):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     try:
         payload = await request.json()
     except Exception:
@@ -873,6 +895,8 @@ async def handle_webapp_analyze_status(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     job_id = str(request.match_info.get("job_id", "") or "").strip()
     if not job_id:
         return _json_response({"ok": False, "error": "not_found"}, status=404)
@@ -905,6 +929,8 @@ async def handle_webapp_history(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     limit = _safe_int(request.query.get("limit", "10"), default=10, min_value=1, max_value=30)
     offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0)
     items = get_web_analysis_history(user_id, limit=limit, offset=offset)
@@ -928,6 +954,8 @@ async def handle_webapp_history_item(request):
     user_id = int(current.get("user_id", 0) or 0)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     try:
         item_id = int(request.match_info.get("item_id", "0"))
     except Exception:
@@ -942,6 +970,8 @@ async def handle_wallet_ton_transactions(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     limit = _safe_int(request.query.get("limit", "20"), default=20, min_value=1, max_value=50)
     offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0, max_value=10000)
     items = get_user_ton_transactions(user_id=user_id, limit=limit + 1, offset=offset)
@@ -962,6 +992,8 @@ async def handle_wallet_ton_buy_tokens(request):
     user_id = _current_web_user_id(request)
     if user_id <= 0:
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+    if not is_moderation_allowed(user_id):
+        return _webapp_moderation_block_response(user_id)
     if not is_ton_wallet_token_purchase_enabled():
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:

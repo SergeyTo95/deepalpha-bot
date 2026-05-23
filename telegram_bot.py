@@ -76,6 +76,10 @@ from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
     disable_analysis_check_by_id, try_deduct_tokens, get_check_availability, get_user_created_checks,
 )
+from services.moderation_service import (
+    is_moderation_allowed, is_moderation_enabled,
+    get_moderation_message, get_moderation_alert,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -252,29 +256,18 @@ def t(user_id: int, key: str) -> str:
     return TEXTS.get(lang, TEXTS["ru"]).get(key, key)
 
 
-def is_bot_moderation_enabled() -> bool:
-    return str(get_setting("bot_moderation_mode_enabled", "false")).lower() == "true"
-
-
-def is_admin_user(user_id: int) -> bool:
-    from bot.admin import is_admin
-    return is_admin(user_id)
-
-
 def moderation_message(lang: str) -> str:
-    if lang == "ru":
-        return "🚧 Бот находится на модерации.\nСейчас доступ временно ограничен.\nПожалуйста, попробуйте позже."
-    return "🚧 The bot is currently under moderation.\nAccess is temporarily limited.\nPlease try again later."
+    return get_moderation_message(lang)
 
 
 def moderation_alert_text(lang: str) -> str:
-    return "🚧 Бот на модерации" if lang == "ru" else "🚧 Bot under moderation"
+    return get_moderation_alert(lang)
 
 
 class ModerationGuardMiddleware(BaseMiddleware):
     async def on_pre_process_message(self, message: types.Message, data: dict):
         user = message.from_user
-        if not user or is_admin_user(user.id) or not is_bot_moderation_enabled():
+        if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
             return
         lang = get_user_lang(user.id) if user else "en"
         now = time.time()
@@ -286,7 +279,7 @@ class ModerationGuardMiddleware(BaseMiddleware):
 
     async def on_pre_process_callback_query(self, callback_query: types.CallbackQuery, data: dict):
         user = callback_query.from_user
-        if not user or is_admin_user(user.id) or not is_bot_moderation_enabled():
+        if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
             return
         lang = get_user_lang(user.id) if user else "en"
         await callback_query.answer(moderation_alert_text(lang), show_alert=True)

@@ -726,6 +726,7 @@ def _init_db_inner(conn, cursor):
         ("referral_payout_wallet_enabled", "false"),
         ("referral_rewards_admin_approval_required", "false"),
         ("bot_moderation_mode_enabled", "false"),
+        ("bot_moderation_tester_ids", ""),
     ]
     for key, value in referral_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
