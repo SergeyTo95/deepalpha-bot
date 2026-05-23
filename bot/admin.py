@@ -23,10 +23,9 @@ from db.database import (
     get_referral_reward_settings, update_referral_reward_settings,
     get_referral_rewards_admin_stats, get_referral_reward_withdrawal_requests,
     mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
-    get_user_language,
 )
 from services.moderation_service import (
-    get_moderation_tester_ids, set_moderation_tester_ids,
+    get_moderation_tester_ids, set_moderation_tester_ids, get_user_lang_or_default,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -159,7 +158,7 @@ def admin_main_kb():
 
 
 def _admin_lang(user_id: int) -> str:
-    return "ru" if get_user_language(user_id) == "ru" else "en"
+    return get_user_lang_or_default(user_id)
 
 
 def bot_moderation_text(lang: str) -> str:

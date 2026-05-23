@@ -1,7 +1,7 @@
 from typing import Iterable, Set
 import os
 
-from db.database import get_setting, set_setting, get_user_language
+from db.database import get_setting, set_setting, get_user
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 
@@ -65,4 +65,8 @@ def get_moderation_alert(lang: str) -> str:
 
 
 def get_user_lang_or_default(user_id: int) -> str:
-    return "ru" if get_user_language(user_id) == "ru" else "en"
+    try:
+        user = get_user(user_id) or {}
+        return "ru" if str(user.get("language", "en")).lower() == "ru" else "en"
+    except Exception:
+        return "en"
