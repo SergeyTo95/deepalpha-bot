@@ -46,6 +46,7 @@ from db.database import (
     get_all_user_ids,
     create_analysis_check, get_analysis_check_by_code,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent, link_ton_wallet_tx_to_intent,
+    get_referral_reward_withdrawal_requests,
 )
 from services.badge_service import (
     get_user_badges, format_badges_line, format_badges_list,
@@ -65,6 +66,7 @@ from services.ton_purchase_service import (
     verify_ton_purchase_onchain,
     resolve_ton_purchase_project_wallet,
 )
+from services.referral_rewards_service import process_token_purchase_referral_reward, get_earnings_screen_data, withdraw_referral_rewards
 
 from services.check_service import (
     claim_analysis_check, get_unused_analysis_credit, mark_analysis_credit_used,
@@ -4463,6 +4465,24 @@ async def recap_preview_handler(message: types.Message):
     await message.answer(f"🇬🇧 EN preview:\n\n{en_preview}")
 
 
+@dp.message_handler(commands=["ref_withdrawals"], state="*")
+async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
+    await state.finish()
+    from bot.admin import is_admin
+    if not is_admin(message.from_user.id):
+        return
+    rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
+    if not rows:
+        await message.answer("No pending referral withdrawal requests.")
+        return
+    lines = ["📤 Pending referral withdrawal requests:"]
+    for r in rows:
+        lines.append(
+            f"• #{r.get('id')} | user={r.get('user_id')} | amount_nano={r.get('amount_nano')} | status={r.get('status')} | created={r.get('created_at')}"
+        )
+    await message.answer("\n".join(lines))
+
+
 def _get_market_recap_recipients() -> List[int]:
     send_all = get_setting("market_recap_send_to_all", "false") == "true"
     send_active = get_setting("market_recap_send_to_active_users", "true") == "true"
@@ -6517,10 +6537,16 @@ async def earn_actions_cb(c: types.CallbackQuery):
         if not res.get("ok"):
             if res.get("error") == "below_minimum":
                 msg = (f"Минимальная сумма для вывода: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nСейчас доступно: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON." if lang == "ru" else f"Minimum withdrawal: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nCurrently available: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON.")
+            elif res.get("error") == "pending_request_exists":
+                msg = ("⏳ У вас уже есть заявка на вывод в обработке." if lang == "ru" else "⏳ You already have a withdrawal request in progress.")
             else:
-                msg = "Withdrawal request created. Admin will process it." if lang == "en" else "✅ Заявка на вывод создана. Админ обработает её вручную."
+                msg = ("❌ Не удалось создать заявку на вывод. Попробуйте позже." if lang == "ru" else "❌ Failed to create withdrawal request. Please try again later.")
         else:
-            msg = (f"✅ Реферальная награда отправлена на ваш внутренний TON кошелёк.\nСумма: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nTx: {res.get('tx_hash')}" if lang == "ru" else f"✅ Referral reward sent to your internal TON wallet.\nAmount: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nTx: {res.get('tx_hash')}")
+            msg = (
+                f"✅ Заявка на вывод создана.\nАдмин обработает вывод вручную.\nСумма: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nRequest ID: {int(res.get('request_id') or 0)}"
+                if lang == "ru" else
+                f"✅ Withdrawal request created.\nAdmin will process it manually.\nAmount: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nRequest ID: {int(res.get('request_id') or 0)}"
+            )
         await c.message.answer(msg)
     elif c.data == "earn_top_ref":
         refs = get_top_referrers(10)

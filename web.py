@@ -31,6 +31,7 @@ from services.ton_purchase_service import (
     is_ton_wallet_token_purchase_enabled,
     verify_ton_purchase_onchain,
 )
+from services.referral_rewards_service import process_token_purchase_referral_reward
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -1022,6 +1023,14 @@ async def handle_wallet_ton_buy_tokens(request):
     verify_ok = bool(verification.get("ok"))
     if verify_ok:
         fulfill_ton_purchase_intent(int(intent.get('id')))
+        try:
+            process_token_purchase_referral_reward(
+                buyer_user_id=int(user_id),
+                purchase_amount_nano=int(purchase_amount_nano),
+                purchase_ref=str(intent.get("id") or ""),
+            )
+        except Exception as e:
+            print(f"web referral reward hook error: {e}")
     return _json_response({
         "ok": True,
         "intent_id": intent.get('id'),
