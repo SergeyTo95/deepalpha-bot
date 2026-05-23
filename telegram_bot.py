@@ -13,6 +13,8 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher.handler import CancelHandler
+from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 from agents.chief_agent import ChiefAgent
@@ -119,6 +121,8 @@ CHECK_CARD_IMAGES = {
         "signal_multi": f"{CHECK_CARD_BASE_URL}/signal_multi_en.png",
     },
 }
+MODERATION_NOTIFY_COOLDOWN_SECONDS = 60
+_moderation_last_notice_at: Dict[int, float] = {}
 
 
 class AuthorStates(StatesGroup):
@@ -246,6 +250,55 @@ def set_lang(user_id: int, lang: str) -> None:
 def t(user_id: int, key: str) -> str:
     lang = get_user_lang(user_id)
     return TEXTS.get(lang, TEXTS["ru"]).get(key, key)
+
+
+def is_bot_moderation_enabled() -> bool:
+    return str(get_setting("bot_moderation_mode_enabled", "false")).lower() == "true"
+
+
+def is_admin_user(user_id: int) -> bool:
+    from bot.admin import is_admin
+    return is_admin(user_id)
+
+
+def moderation_message(lang: str) -> str:
+    if lang == "ru":
+        return "🚧 Бот находится на модерации.\nСейчас доступ временно ограничен.\nПожалуйста, попробуйте позже."
+    return "🚧 The bot is currently under moderation.\nAccess is temporarily limited.\nPlease try again later."
+
+
+def moderation_alert_text(lang: str) -> str:
+    return "🚧 Бот на модерации" if lang == "ru" else "🚧 Bot under moderation"
+
+
+class ModerationGuardMiddleware(BaseMiddleware):
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        user = message.from_user
+        if not user or is_admin_user(user.id) or not is_bot_moderation_enabled():
+            return
+        lang = get_user_lang(user.id) if user else "en"
+        now = time.time()
+        last_at = _moderation_last_notice_at.get(user.id, 0)
+        if now - last_at >= MODERATION_NOTIFY_COOLDOWN_SECONDS:
+            _moderation_last_notice_at[user.id] = now
+            await message.answer(moderation_message(lang))
+        raise CancelHandler()
+
+    async def on_pre_process_callback_query(self, callback_query: types.CallbackQuery, data: dict):
+        user = callback_query.from_user
+        if not user or is_admin_user(user.id) or not is_bot_moderation_enabled():
+            return
+        lang = get_user_lang(user.id) if user else "en"
+        await callback_query.answer(moderation_alert_text(lang), show_alert=True)
+        now = time.time()
+        last_at = _moderation_last_notice_at.get(user.id, 0)
+        if now - last_at >= MODERATION_NOTIFY_COOLDOWN_SECONDS and callback_query.message:
+            _moderation_last_notice_at[user.id] = now
+            await callback_query.message.answer(moderation_message(lang))
+        raise CancelHandler()
+
+
+dp.middleware.setup(ModerationGuardMiddleware())
 
 
 # ═══════════════════════════════════════════
