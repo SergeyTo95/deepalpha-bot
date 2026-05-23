@@ -3,6 +3,11 @@ import os
 
 from db.database import get_setting, set_setting, get_user
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+SUPERADMIN_IDS = {
+    int(x.strip())
+    for x in (os.getenv("SUPERADMIN_IDS", "") or "").split(",")
+    if x.strip().isdigit()
+}
 
 
 DEFAULT_MODERATION_MESSAGE_RU = (
@@ -47,11 +52,15 @@ def set_moderation_tester_ids(ids: Iterable[int]) -> str:
 def is_moderation_allowed(user_id: int) -> bool:
     if user_id <= 0:
         return False
+    if not is_moderation_enabled():
+        return True
     if user_id == ADMIN_ID:
+        return True
+    if user_id in SUPERADMIN_IDS:
         return True
     if user_id in get_moderation_tester_ids():
         return True
-    return not is_moderation_enabled()
+    return False
 
 
 def get_moderation_message(lang: str) -> str:

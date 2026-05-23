@@ -172,7 +172,7 @@ def bot_moderation_text(lang: str) -> str:
             f"Тестеры: {testers_text}\n\n"
             "Когда режим включён:\n"
             "обычные пользователи не могут пользоваться ботом и WebApp.\n"
-            "Админы и тестеры продолжают работать."
+            "Админы (включая superadmin) и тестеры продолжают работать."
         )
     return (
         "🚧 Bot moderation\n\n"
@@ -180,7 +180,7 @@ def bot_moderation_text(lang: str) -> str:
         f"Testers: {testers_text}\n\n"
         "When enabled:\n"
         "regular users cannot use the bot or WebApp.\n"
-        "Admins and testers continue working."
+        "Admins (including superadmins) and testers continue working."
     )
 
 
