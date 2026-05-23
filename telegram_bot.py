@@ -4468,7 +4468,8 @@ async def recap_preview_handler(message: types.Message):
 @dp.message_handler(commands=["ref_withdrawals"], state="*")
 async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
     await state.finish()
-    if not _is_admin(message.from_user.id):
+    from bot.admin import is_admin
+    if not is_admin(message.from_user.id):
         return
     rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
     if not rows:
