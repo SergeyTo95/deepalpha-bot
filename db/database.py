@@ -1487,16 +1487,23 @@ def get_user_referral_earnings_summary(user_id: int) -> Dict[str, Any]:
     try:
         cur.execute("""
             SELECT
-              COALESCE(SUM(reward_nano),0) FILTER (WHERE status IN ('pending','available','withdrawn')) AS total_earned_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status IN ('pending','available','pending_admin_review','withdrawn')) AS total_earned_nano,
               COALESCE(SUM(reward_nano),0) FILTER (WHERE status='pending') AS pending_nano,
               COALESCE(SUM(reward_nano),0) FILTER (WHERE status='available') AS available_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='pending_admin_review') AS in_review_nano,
               COALESCE(SUM(reward_nano),0) FILTER (WHERE status='withdrawn') AS withdrawn_nano
             FROM referral_rewards WHERE user_id=%s
         """, (user_id,))
-        row = cur.fetchone() or (0, 0, 0, 0)
-        return {"total_earned_nano": int(row[0] or 0), "pending_nano": int(row[1] or 0), "available_nano": int(row[2] or 0), "withdrawn_nano": int(row[3] or 0)}
+        row = cur.fetchone() or (0, 0, 0, 0, 0)
+        return {
+            "total_earned_nano": int(row[0] or 0),
+            "pending_nano": int(row[1] or 0),
+            "available_nano": int(row[2] or 0),
+            "in_review_nano": int(row[3] or 0),
+            "withdrawn_nano": int(row[4] or 0),
+        }
     except Exception as e:
-        print(f"get_user_referral_earnings_summary error: {e}"); return {"total_earned_nano": 0, "pending_nano": 0, "available_nano": 0, "withdrawn_nano": 0}
+        print(f"get_user_referral_earnings_summary error: {e}"); return {"total_earned_nano": 0, "pending_nano": 0, "available_nano": 0, "in_review_nano": 0, "withdrawn_nano": 0}
     finally:
         conn.close()
 

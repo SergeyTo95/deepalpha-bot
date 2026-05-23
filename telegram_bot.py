@@ -4468,8 +4468,7 @@ async def recap_preview_handler(message: types.Message):
 @dp.message_handler(commands=["ref_withdrawals"], state="*")
 async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
     await state.finish()
-    from bot.admin import is_admin
-    if not is_admin(message.from_user.id):
+    if not _is_admin(message.from_user.id):
         return
     rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
     if not rows:
@@ -6518,9 +6517,9 @@ async def referral_earnings_handler(message: types.Message, state: FSMContext):
     ref_link = f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}"
     user = get_user(uid) or {}
     text = (
-        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {user.get('total_referrals', 0)}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
+        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {user.get('total_referrals', 0)}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
         if lang == "ru" else
-        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {user.get('total_referrals', 0)}\n\n🔗 Your referral link:\n{ref_link}"
+        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nIn review: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {user.get('total_referrals', 0)}\n\n🔗 Your referral link:\n{ref_link}"
     )
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("📤 Вывести на TON кошелёк" if lang == "ru" else "📤 Withdraw to TON wallet", callback_data="earn_withdraw"))
