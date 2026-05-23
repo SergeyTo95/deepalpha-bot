@@ -24,6 +24,9 @@ from db.database import (
     get_referral_rewards_admin_stats, get_referral_reward_withdrawal_requests,
     mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
 )
+from services.moderation_service import (
+    get_moderation_tester_ids, set_moderation_tester_ids, get_user_lang_or_default,
+)
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
@@ -91,6 +94,7 @@ class SystemStates(StatesGroup):
     waiting_broadcast = State()
     waiting_notify_hour = State()
     waiting_channel_interval = State()
+    waiting_moderation_testers = State()
 
 
 class WatchlistStates(StatesGroup):
@@ -148,6 +152,49 @@ def admin_main_kb():
         InlineKeyboardButton("💸 Referral Rewards", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
+        InlineKeyboardButton("🚧 Bot moderation", callback_data="admin_bot_moderation"),
+    )
+    return kb
+
+
+def _admin_lang(user_id: int) -> str:
+    return get_user_lang_or_default(user_id)
+
+
+def bot_moderation_text(lang: str) -> str:
+    enabled = get_setting("bot_moderation_mode_enabled", "false") == "true"
+    testers = sorted(get_moderation_tester_ids())
+    testers_text = ", ".join(str(x) for x in testers) if testers else ("—" if lang == "ru" else "—")
+    if lang == "ru":
+        return (
+            "🚧 Модерация бота\n\n"
+            f"Статус: {'Включена' if enabled else 'Выключена'}\n\n"
+            f"Тестеры: {testers_text}\n\n"
+            "Когда режим включён:\n"
+            "обычные пользователи не могут пользоваться ботом и WebApp.\n"
+            "Админы (включая superadmin) и тестеры продолжают работать."
+        )
+    return (
+        "🚧 Bot moderation\n\n"
+        f"Status: {'Enabled' if enabled else 'Disabled'}\n\n"
+        f"Testers: {testers_text}\n\n"
+        "When enabled:\n"
+        "regular users cannot use the bot or WebApp.\n"
+        "Admins (including superadmins) and testers continue working."
+    )
+
+
+def bot_moderation_kb(lang: str) -> InlineKeyboardMarkup:
+    enabled = get_setting("bot_moderation_mode_enabled", "false") == "true"
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton(
+            ("❌ Выключить модерацию" if lang == "ru" else "❌ Disable moderation") if enabled else ("✅ Включить модерацию" if lang == "ru" else "✅ Enable moderation"),
+            callback_data="bot_moderation_toggle",
+        ),
+        InlineKeyboardButton("👥 Изменить тестеров" if lang == "ru" else "👥 Edit testers", callback_data="bot_moderation_edit_testers"),
+        InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_bot_moderation"),
+        InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="admin_back"),
     )
     return kb
 
@@ -1142,6 +1189,49 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "admin_back")
     async def back(callback: types.CallbackQuery):
         await callback.message.edit_text("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_bot_moderation")
+    async def admin_bot_moderation(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        await callback.message.edit_text(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "bot_moderation_toggle")
+    async def bot_moderation_toggle(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        enabled = get_setting("bot_moderation_mode_enabled", "false") == "true"
+        set_setting("bot_moderation_mode_enabled", "false" if enabled else "true")
+        await callback.answer("✅ Обновлено" if lang == "ru" else "✅ Updated")
+        await callback.message.edit_text(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "bot_moderation_edit_testers")
+    async def bot_moderation_edit_testers(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        await SystemStates.waiting_moderation_testers.set()
+        await callback.message.answer(
+            "Отправьте Telegram user_id тестеров через запятую.\nПример: 123456,789012\nОтправьте \"-\" чтобы очистить список."
+            if lang == "ru" else
+            "Send tester Telegram user_ids separated by commas.\nExample: 123456,789012\nSend \"-\" to clear the list."
+        )
+
+    @dp.message_handler(state=SystemStates.waiting_moderation_testers)
+    async def bot_moderation_save_testers(message: types.Message, state: FSMContext):
+        lang = _admin_lang(message.from_user.id)
+        raw = str(message.text or "").strip()
+        if raw == "-":
+            set_moderation_tester_ids([])
+            await state.finish()
+            await message.answer("✅ Список тестеров очищен." if lang == "ru" else "✅ Tester list cleared.")
+            await message.answer(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
+            return
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts or any(not p.isdigit() for p in parts):
+            await message.answer("❌ Неверный формат. Нужны только числовые user_id через запятую." if lang == "ru" else "❌ Invalid format. Use comma-separated numeric user_ids only.")
+            return
+        ids = sorted({int(p) for p in parts if int(p) > 0})
+        set_moderation_tester_ids(ids)
+        await state.finish()
+        await message.answer("✅ Тестеры обновлены." if lang == "ru" else "✅ Testers updated.")
+        await message.answer(bot_moderation_text(lang), reply_markup=bot_moderation_kb(lang))
 
     # === AI ===
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
