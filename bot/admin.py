@@ -20,6 +20,9 @@ from db.database import (
     get_top_authors_by_donations, get_donation_stats,
     get_pending_withdrawals, approve_withdrawal, reject_withdrawal,
     get_author_posts,
+    get_referral_reward_settings, update_referral_reward_settings,
+    get_referral_rewards_admin_stats, get_referral_reward_withdrawal_requests,
+    mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -120,6 +123,13 @@ class CryptoStates(StatesGroup):
     waiting_default_timeframe = State()
 
 
+class ReferralRewardsAdminStates(StatesGroup):
+    waiting_reward_percent = State()
+    waiting_unlock_hours = State()
+    waiting_min_withdrawal_ton = State()
+    waiting_daily_cap_ton = State()
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -135,6 +145,7 @@ def admin_main_kb():
         InlineKeyboardButton("🎯 Tracking Accuracy", callback_data="admin_tracking"),
         InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
         InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
+        InlineKeyboardButton("💸 Referral Rewards", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
@@ -1054,6 +1065,46 @@ def withdrawals_list_text() -> str:
             f"➡️ /wd_approve_{w['id']} или /wd_reject_{w['id']}\n\n"
         )
     return text
+
+
+def _nano_to_ton(nano: int) -> float:
+    return float(int(nano or 0)) / 1_000_000_000
+
+
+def referral_rewards_admin_text() -> str:
+    s = get_referral_reward_settings()
+    st = get_referral_rewards_admin_stats()
+    return (
+        "💸 Referral Rewards Admin\n\n"
+        f"Status: {'Enabled' if s['enabled'] else 'Disabled'}\n"
+        f"Reward percent: {s['reward_percent']}%\n"
+        f"Unlock delay: {s['unlock_hours']}h\n"
+        f"Minimum withdrawal: {_nano_to_ton(s['min_withdrawal_nano']):.2f} TON\n"
+        f"Daily withdrawal cap: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} TON\n\n"
+        "Stats:\n"
+        f"Pending rewards: {_nano_to_ton(st['pending_nano']):.4f} TON\n"
+        f"Available rewards: {_nano_to_ton(st['available_nano']):.4f} TON\n"
+        f"In review: {_nano_to_ton(st['in_review_nano']):.4f} TON\n"
+        f"Withdrawn: {_nano_to_ton(st['withdrawn_nano']):.4f} TON\n\n"
+        "Withdrawal requests:\n"
+        f"Pending requests: {st['pending_withdrawal_requests_count']}"
+    )
+
+
+def referral_rewards_admin_kb() -> InlineKeyboardMarkup:
+    s = get_referral_reward_settings()
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("❌ Disable" if s["enabled"] else "✅ Enable", callback_data="referral_rewards_toggle"),
+        InlineKeyboardButton("% Set reward percent", callback_data="referral_set_percent"),
+        InlineKeyboardButton("⏱ Set unlock hours", callback_data="referral_set_unlock_hours"),
+        InlineKeyboardButton("💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
+        InlineKeyboardButton("🧢 Set daily cap", callback_data="referral_set_daily_cap"),
+        InlineKeyboardButton("📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
+        InlineKeyboardButton("🔄 Refresh", callback_data="admin_referral_rewards"),
+        InlineKeyboardButton("⬅️ Back to admin", callback_data="admin_back"),
+    )
+    return kb
 
 
 # ═══════════════════════════════════════════
@@ -2245,6 +2296,122 @@ def register_admin(dp: Dispatcher):
         kb.add(InlineKeyboardButton("🔄", callback_data="wl_admin_stats"))
         kb.add(InlineKeyboardButton("⬅️", callback_data="admin_watchlist"))
         await callback.message.edit_text(watchlist_stats_text(), reply_markup=kb)
+
+    # === REFERRAL REWARDS ADMIN ===
+    @dp.callback_query_handler(lambda c: c.data == "admin_referral_rewards")
+    async def admin_referral_rewards(callback: types.CallbackQuery):
+        await callback.message.edit_text(referral_rewards_admin_text(), reply_markup=referral_rewards_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_rewards_toggle")
+    async def referral_rewards_toggle(callback: types.CallbackQuery):
+        s = get_referral_reward_settings()
+        update_referral_reward_settings(referral_rewards_enabled=("false" if s["enabled"] else "true"))
+        await callback.message.edit_text(referral_rewards_admin_text(), reply_markup=referral_rewards_admin_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_set_percent")
+    async def referral_set_percent(callback: types.CallbackQuery, state: FSMContext):
+        await ReferralRewardsAdminStates.waiting_reward_percent.set()
+        await callback.message.answer("Send reward percent, example: 10")
+
+    @dp.message_handler(state=ReferralRewardsAdminStates.waiting_reward_percent)
+    async def referral_save_percent(message: types.Message, state: FSMContext):
+        try:
+            value = float(message.text.strip().replace(",", "."))
+            if value < 0 or value > 50:
+                await message.answer("❌ Allowed range: 0-50")
+                return
+            update_referral_reward_settings(referral_reward_percent=str(value))
+            await state.finish()
+            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+        except ValueError:
+            await message.answer("❌ Number required")
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_set_unlock_hours")
+    async def referral_set_unlock_hours(callback: types.CallbackQuery, state: FSMContext):
+        await ReferralRewardsAdminStates.waiting_unlock_hours.set()
+        await callback.message.answer("Send unlock delay in hours, example: 48")
+
+    @dp.message_handler(state=ReferralRewardsAdminStates.waiting_unlock_hours)
+    async def referral_save_unlock_hours(message: types.Message, state: FSMContext):
+        try:
+            value = int(message.text.strip())
+            if value < 0 or value > 720:
+                await message.answer("❌ Allowed range: 0-720")
+                return
+            update_referral_reward_settings(referral_reward_unlock_hours=str(value))
+            await state.finish()
+            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+        except ValueError:
+            await message.answer("❌ Integer required")
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_set_min_withdrawal")
+    async def referral_set_min_withdrawal(callback: types.CallbackQuery, state: FSMContext):
+        await ReferralRewardsAdminStates.waiting_min_withdrawal_ton.set()
+        await callback.message.answer("Send minimum withdrawal in TON, example: 1")
+
+    @dp.message_handler(state=ReferralRewardsAdminStates.waiting_min_withdrawal_ton)
+    async def referral_save_min_withdrawal(message: types.Message, state: FSMContext):
+        try:
+            value = float(message.text.strip().replace(",", "."))
+            if value < 0 or value > 1_000_000:
+                await message.answer("❌ Invalid amount")
+                return
+            update_referral_reward_settings(referral_min_withdrawal_nano=str(int(value * 1_000_000_000)))
+            await state.finish()
+            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+        except ValueError:
+            await message.answer("❌ Number required")
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_set_daily_cap")
+    async def referral_set_daily_cap(callback: types.CallbackQuery, state: FSMContext):
+        await ReferralRewardsAdminStates.waiting_daily_cap_ton.set()
+        await callback.message.answer("Send daily withdrawal cap in TON, example: 50")
+
+    @dp.message_handler(state=ReferralRewardsAdminStates.waiting_daily_cap_ton)
+    async def referral_save_daily_cap(message: types.Message, state: FSMContext):
+        try:
+            value = float(message.text.strip().replace(",", "."))
+            if value < 0 or value > 1_000_000:
+                await message.answer("❌ Invalid amount")
+                return
+            update_referral_reward_settings(referral_daily_withdrawal_cap_nano=str(int(value * 1_000_000_000)))
+            await state.finish()
+            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+        except ValueError:
+            await message.answer("❌ Number required")
+
+    @dp.callback_query_handler(lambda c: c.data == "referral_pending_withdrawals")
+    async def referral_pending_withdrawals(callback: types.CallbackQuery):
+        rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
+        kb = InlineKeyboardMarkup(row_width=2)
+        lines = ["📤 Pending Referral Withdrawals", ""]
+        if not rows:
+            lines.append("No pending requests.")
+        for r in rows:
+            created = str(r.get("created_at") or "")[:16].replace("T", " ")
+            amount_ton = _nano_to_ton(int(r.get("amount_nano") or 0))
+            lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} TON | {created}")
+            kb.add(
+                InlineKeyboardButton(f"✅ Mark Paid #{r['id']}", callback_data=f"ref_withdraw_paid:{r['id']}"),
+                InlineKeyboardButton(f"❌ Reject #{r['id']}", callback_data=f"ref_withdraw_reject:{r['id']}"),
+            )
+        kb.add(InlineKeyboardButton("🔄 Refresh", callback_data="referral_pending_withdrawals"))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_referral_rewards"))
+        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_paid:"))
+    async def ref_withdraw_paid(callback: types.CallbackQuery):
+        request_id = int(callback.data.split(":")[1])
+        ok = mark_referral_withdrawal_request_paid(request_id, callback.from_user.id, tx_hash="manual_admin_paid")
+        await callback.answer("✅ Marked as paid" if ok else "❌ Cannot update", show_alert=True)
+        await referral_pending_withdrawals(callback)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_reject:"))
+    async def ref_withdraw_reject(callback: types.CallbackQuery):
+        request_id = int(callback.data.split(":")[1])
+        ok = reject_referral_withdrawal_request(request_id, callback.from_user.id, notes="Rejected by admin")
+        await callback.answer("✅ Rejected" if ok else "❌ Cannot update", show_alert=True)
+        await referral_pending_withdrawals(callback)
 
     # === AUTHORS ADMIN ===
     @dp.callback_query_handler(lambda c: c.data == "admin_authors")
