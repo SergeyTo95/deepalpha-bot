@@ -1071,9 +1071,30 @@ def _nano_to_ton(nano: int) -> float:
     return float(int(nano or 0)) / 1_000_000_000
 
 
-def referral_rewards_admin_text() -> str:
+def _get_lang(user_id: int) -> str:
+    user = get_user(user_id) or {}
+    return "ru" if str(user.get("language", "en")).lower() == "ru" else "en"
+
+
+def referral_rewards_admin_text(lang: str = "en") -> str:
     s = get_referral_reward_settings()
     st = get_referral_rewards_admin_stats()
+    if lang == "ru":
+        return (
+            "💸 Реферальные награды\n\n"
+            f"Статус: {'Включено' if s['enabled'] else 'Выключено'}\n"
+            f"Процент награды: {s['reward_percent']}%\n"
+            f"Задержка разблокировки: {s['unlock_hours']}ч\n"
+            f"Минимальный вывод: {_nano_to_ton(s['min_withdrawal_nano']):.2f} TON\n"
+            f"Дневной лимит: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} TON\n\n"
+            "Статистика:\n"
+            f"Ожидает: {_nano_to_ton(st['pending_nano']):.4f} TON\n"
+            f"Доступно: {_nano_to_ton(st['available_nano']):.4f} TON\n"
+            f"В обработке: {_nano_to_ton(st['in_review_nano']):.4f} TON\n"
+            f"Выведено: {_nano_to_ton(st['withdrawn_nano']):.4f} TON\n\n"
+            "Заявки на вывод:\n"
+            f"Ожидают: {st['pending_withdrawal_requests_count']}"
+        )
     return (
         "💸 Referral Rewards Admin\n\n"
         f"Status: {'Enabled' if s['enabled'] else 'Disabled'}\n"
@@ -1089,20 +1110,18 @@ def referral_rewards_admin_text() -> str:
         "Withdrawal requests:\n"
         f"Pending requests: {st['pending_withdrawal_requests_count']}"
     )
-
-
-def referral_rewards_admin_kb() -> InlineKeyboardMarkup:
+def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
     s = get_referral_reward_settings()
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("❌ Disable" if s["enabled"] else "✅ Enable", callback_data="referral_rewards_toggle"),
-        InlineKeyboardButton("% Set reward percent", callback_data="referral_set_percent"),
-        InlineKeyboardButton("⏱ Set unlock hours", callback_data="referral_set_unlock_hours"),
-        InlineKeyboardButton("💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
-        InlineKeyboardButton("🧢 Set daily cap", callback_data="referral_set_daily_cap"),
-        InlineKeyboardButton("📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
-        InlineKeyboardButton("🔄 Refresh", callback_data="admin_referral_rewards"),
-        InlineKeyboardButton("⬅️ Back to admin", callback_data="admin_back"),
+        InlineKeyboardButton(("❌ Выключить" if s["enabled"] else "✅ Включить") if lang == "ru" else ("❌ Disable" if s["enabled"] else "✅ Enable"), callback_data="referral_rewards_toggle"),
+        InlineKeyboardButton("% Изменить процент" if lang == "ru" else "% Set reward percent", callback_data="referral_set_percent"),
+        InlineKeyboardButton("⏱ Изменить unlock hours" if lang == "ru" else "⏱ Set unlock hours", callback_data="referral_set_unlock_hours"),
+        InlineKeyboardButton("💎 Изменить минимум вывода" if lang == "ru" else "💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
+        InlineKeyboardButton("🧢 Изменить дневной лимит" if lang == "ru" else "🧢 Set daily cap", callback_data="referral_set_daily_cap"),
+        InlineKeyboardButton("📤 Заявки на вывод" if lang == "ru" else "📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
+        InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_referral_rewards"),
+        InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back to admin", callback_data="admin_back"),
     )
     return kb
 
@@ -1456,7 +1475,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Sends per day: {value}")
         except ValueError:
-            await message.answer("❌ Integer required")
+            await message.answer("❌ Нужен целый формат" if _get_lang(message.from_user.id) == "ru" else "❌ Integer required")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_market_recap_auto_times")
     async def pricing_set_market_recap_auto_times(callback: types.CallbackQuery, state: FSMContext):
@@ -1500,7 +1519,7 @@ def register_admin(dp: Dispatcher):
             await state.finish()
             await message.answer(f"✅ Min market volume: {normalized}")
         except ValueError:
-            await message.answer("❌ Number required")
+            await message.answer("❌ Нужен числовой формат" if _get_lang(message.from_user.id) == "ru" else "❌ Number required")
 
     @dp.callback_query_handler(lambda c: c.data == "pricing_toggle_market_recap_audience")
     async def pricing_toggle_market_recap_audience(callback: types.CallbackQuery):
@@ -2300,18 +2319,21 @@ def register_admin(dp: Dispatcher):
     # === REFERRAL REWARDS ADMIN ===
     @dp.callback_query_handler(lambda c: c.data == "admin_referral_rewards")
     async def admin_referral_rewards(callback: types.CallbackQuery):
-        await callback.message.edit_text(referral_rewards_admin_text(), reply_markup=referral_rewards_admin_kb())
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.edit_text(referral_rewards_admin_text(lang), reply_markup=referral_rewards_admin_kb(lang))
 
     @dp.callback_query_handler(lambda c: c.data == "referral_rewards_toggle")
     async def referral_rewards_toggle(callback: types.CallbackQuery):
         s = get_referral_reward_settings()
         update_referral_reward_settings(referral_rewards_enabled=("false" if s["enabled"] else "true"))
-        await callback.message.edit_text(referral_rewards_admin_text(), reply_markup=referral_rewards_admin_kb())
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.edit_text(referral_rewards_admin_text(lang), reply_markup=referral_rewards_admin_kb(lang))
 
     @dp.callback_query_handler(lambda c: c.data == "referral_set_percent")
     async def referral_set_percent(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_reward_percent.set()
-        await callback.message.answer("Send reward percent, example: 10")
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.answer("Отправьте процент награды, например: 10" if lang == "ru" else "Send reward percent, example: 10")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_reward_percent)
     async def referral_save_percent(message: types.Message, state: FSMContext):
@@ -2322,14 +2344,16 @@ def register_admin(dp: Dispatcher):
                 return
             update_referral_reward_settings(referral_reward_percent=str(value))
             await state.finish()
-            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+            lang = _get_lang(message.from_user.id)
+            await message.answer("✅ Сохранено" if lang == "ru" else "✅ Saved", reply_markup=referral_rewards_admin_kb(lang))
         except ValueError:
-            await message.answer("❌ Number required")
+            await message.answer("❌ Нужен числовой формат" if _get_lang(message.from_user.id) == "ru" else "❌ Number required")
 
     @dp.callback_query_handler(lambda c: c.data == "referral_set_unlock_hours")
     async def referral_set_unlock_hours(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_unlock_hours.set()
-        await callback.message.answer("Send unlock delay in hours, example: 48")
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.answer("Отправьте задержку разблокировки в часах, например: 48" if lang == "ru" else "Send unlock delay in hours, example: 48")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_unlock_hours)
     async def referral_save_unlock_hours(message: types.Message, state: FSMContext):
@@ -2340,77 +2364,101 @@ def register_admin(dp: Dispatcher):
                 return
             update_referral_reward_settings(referral_reward_unlock_hours=str(value))
             await state.finish()
-            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+            lang = _get_lang(message.from_user.id)
+            await message.answer("✅ Сохранено" if lang == "ru" else "✅ Saved", reply_markup=referral_rewards_admin_kb(lang))
         except ValueError:
-            await message.answer("❌ Integer required")
+            await message.answer("❌ Нужен целый формат" if _get_lang(message.from_user.id) == "ru" else "❌ Integer required")
 
     @dp.callback_query_handler(lambda c: c.data == "referral_set_min_withdrawal")
     async def referral_set_min_withdrawal(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_min_withdrawal_ton.set()
-        await callback.message.answer("Send minimum withdrawal in TON, example: 1")
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.answer("Отправьте минимум вывода в TON, например: 1" if lang == "ru" else "Send minimum withdrawal in TON, example: 1")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_min_withdrawal_ton)
     async def referral_save_min_withdrawal(message: types.Message, state: FSMContext):
         try:
             value = float(message.text.strip().replace(",", "."))
             if value < 0 or value > 1_000_000:
-                await message.answer("❌ Invalid amount")
+                await message.answer("❌ Неверная сумма" if _get_lang(message.from_user.id) == "ru" else "❌ Invalid amount")
                 return
             update_referral_reward_settings(referral_min_withdrawal_nano=str(int(value * 1_000_000_000)))
             await state.finish()
-            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+            lang = _get_lang(message.from_user.id)
+            await message.answer("✅ Сохранено" if lang == "ru" else "✅ Saved", reply_markup=referral_rewards_admin_kb(lang))
         except ValueError:
-            await message.answer("❌ Number required")
+            await message.answer("❌ Нужен числовой формат" if _get_lang(message.from_user.id) == "ru" else "❌ Number required")
 
     @dp.callback_query_handler(lambda c: c.data == "referral_set_daily_cap")
     async def referral_set_daily_cap(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_daily_cap_ton.set()
-        await callback.message.answer("Send daily withdrawal cap in TON, example: 50")
+        lang = _get_lang(callback.from_user.id)
+        await callback.message.answer("Отправьте дневной лимит вывода в TON, например: 50" if lang == "ru" else "Send daily withdrawal cap in TON, example: 50")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_daily_cap_ton)
     async def referral_save_daily_cap(message: types.Message, state: FSMContext):
         try:
             value = float(message.text.strip().replace(",", "."))
             if value < 0 or value > 1_000_000:
-                await message.answer("❌ Invalid amount")
+                await message.answer("❌ Неверная сумма" if _get_lang(message.from_user.id) == "ru" else "❌ Invalid amount")
                 return
             update_referral_reward_settings(referral_daily_withdrawal_cap_nano=str(int(value * 1_000_000_000)))
             await state.finish()
-            await message.answer("✅ Saved", reply_markup=referral_rewards_admin_kb())
+            lang = _get_lang(message.from_user.id)
+            await message.answer("✅ Сохранено" if lang == "ru" else "✅ Saved", reply_markup=referral_rewards_admin_kb(lang))
         except ValueError:
-            await message.answer("❌ Number required")
+            await message.answer("❌ Нужен числовой формат" if _get_lang(message.from_user.id) == "ru" else "❌ Number required")
 
     @dp.callback_query_handler(lambda c: c.data == "referral_pending_withdrawals")
     async def referral_pending_withdrawals(callback: types.CallbackQuery):
+        lang = _get_lang(callback.from_user.id)
         rows = get_referral_reward_withdrawal_requests(status="pending", limit=20)
         kb = InlineKeyboardMarkup(row_width=2)
-        lines = ["📤 Pending Referral Withdrawals", ""]
+        lines = ["📤 Заявки на реферальный вывод" if lang == "ru" else "📤 Pending Referral Withdrawals", ""]
         if not rows:
-            lines.append("No pending requests.")
+            lines.append("Нет ожидающих заявок." if lang == "ru" else "No pending requests.")
         for r in rows:
             created = str(r.get("created_at") or "")[:16].replace("T", " ")
             amount_ton = _nano_to_ton(int(r.get("amount_nano") or 0))
             lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} TON | {created}")
             kb.add(
-                InlineKeyboardButton(f"✅ Mark Paid #{r['id']}", callback_data=f"ref_withdraw_paid:{r['id']}"),
-                InlineKeyboardButton(f"❌ Reject #{r['id']}", callback_data=f"ref_withdraw_reject:{r['id']}"),
+                InlineKeyboardButton(
+                    (f"✅ Отметить выплаченным #{r['id']}" if lang == "ru" else f"✅ Mark Paid #{r['id']}"),
+                    callback_data=f"ref_withdraw_paid:{r['id']}",
+                ),
+                InlineKeyboardButton(
+                    (f"❌ Отклонить #{r['id']}" if lang == "ru" else f"❌ Reject #{r['id']}"),
+                    callback_data=f"ref_withdraw_reject:{r['id']}",
+                ),
             )
-        kb.add(InlineKeyboardButton("🔄 Refresh", callback_data="referral_pending_withdrawals"))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_referral_rewards"))
+        kb.add(InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="referral_pending_withdrawals"))
+        kb.add(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="admin_referral_rewards"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_paid:"))
     async def ref_withdraw_paid(callback: types.CallbackQuery):
         request_id = int(callback.data.split(":")[1])
         ok = mark_referral_withdrawal_request_paid(request_id, callback.from_user.id, tx_hash="manual_admin_paid")
-        await callback.answer("✅ Marked as paid" if ok else "❌ Cannot update", show_alert=True)
+        lang = _get_lang(callback.from_user.id)
+        await callback.answer(
+            ("✅ Отмечено как выплаченное" if ok else "❌ Не удалось обновить")
+            if lang == "ru" else
+            ("✅ Marked as paid" if ok else "❌ Cannot update"),
+            show_alert=True
+        )
         await referral_pending_withdrawals(callback)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_reject:"))
     async def ref_withdraw_reject(callback: types.CallbackQuery):
         request_id = int(callback.data.split(":")[1])
         ok = reject_referral_withdrawal_request(request_id, callback.from_user.id, notes="Rejected by admin")
-        await callback.answer("✅ Rejected" if ok else "❌ Cannot update", show_alert=True)
+        lang = _get_lang(callback.from_user.id)
+        await callback.answer(
+            ("✅ Отклонено" if ok else "❌ Не удалось обновить")
+            if lang == "ru" else
+            ("✅ Rejected" if ok else "❌ Cannot update"),
+            show_alert=True
+        )
         await referral_pending_withdrawals(callback)
 
     # === AUTHORS ADMIN ===
