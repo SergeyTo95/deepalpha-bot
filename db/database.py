@@ -548,6 +548,7 @@ def _init_db_inner(conn, cursor):
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
     """)
+    cursor.execute("ALTER TABLE referral_rewards ADD COLUMN IF NOT EXISTS withdrawal_request_id BIGINT")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_user_id ON referral_rewards(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_source_user_id ON referral_rewards(source_user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_status ON referral_rewards(status)")
