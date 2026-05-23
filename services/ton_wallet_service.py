@@ -716,51 +716,90 @@ def reveal_referral_payout_wallet_seed_once(admin_user_id: int) -> dict:
 
 
 def send_referral_payout_from_wallet(request_id: int, admin_user_id: int) -> dict:
-    req = get_referral_withdrawal_request(int(request_id))
-    if not req or req.get("status") != "pending":
-        return {"ok": False, "error": "request_not_pending"}
-    user_wallet = get_or_create_user_ton_wallet(int(req["user_id"]))
-    destination = normalize_ton_address(str(user_wallet.get("wallet_address") or ""))
-    if not destination:
-        return {"ok": False, "error": "destination_unavailable"}
-    payout_wallet = get_active_referral_payout_wallet()
-    if not payout_wallet:
-        return {"ok": False, "error": "payout_wallet_not_found"}
-    amount_nano = int(req.get("amount_nano") or 0)
+    request_id = int(request_id)
+    admin_user_id = int(admin_user_id)
+    # Phase 1: preflight + transition pending -> processing under lock.
     conn = get_connection(); cur = conn.cursor()
+    req = None
+    payout_wallet = None
+    destination = ""
+    amount_nano = 0
+    user_id = 0
     try:
-        cur.execute("SELECT id FROM referral_reward_withdrawal_requests WHERE id=%s AND status='pending' FOR UPDATE", (int(request_id),))
-        if not cur.fetchone():
+        cur.execute("SELECT id,user_id,amount_nano,status FROM referral_reward_withdrawal_requests WHERE id=%s FOR UPDATE", (request_id,))
+        req = cur.fetchone()
+        if not req or str(req[3] or "") != "pending":
             conn.rollback(); return {"ok": False, "error": "request_not_pending"}
-        cur.execute("SELECT COALESCE(SUM(reward_nano),0) FROM referral_rewards WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (int(request_id),))
+        user_id = int(req[1])
+        amount_nano = int(req[2] or 0)
+        cur.execute("SELECT COALESCE(SUM(reward_nano),0) FROM referral_rewards WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (request_id,))
         expected = int((cur.fetchone() or [0])[0] or 0)
         if expected != amount_nano:
             conn.rollback(); return {"ok": False, "error": "amount_mismatch"}
+        payout_wallet = get_active_referral_payout_wallet()
+        if not payout_wallet:
+            conn.rollback(); return {"ok": False, "error": "payout_wallet_not_found"}
+        user_wallet = get_or_create_user_ton_wallet(user_id)
+        destination = normalize_ton_address(str(user_wallet.get("wallet_address") or ""))
+        if not destination:
+            conn.rollback(); return {"ok": False, "error": "destination_unavailable"}
+        cur.execute("UPDATE referral_reward_withdrawal_requests SET status='processing',processed_by=%s,notes=NULL WHERE id=%s AND status='pending'", (admin_user_id, request_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        return {"ok": False, "error": "preflight_failed"}
+    finally:
+        conn.close()
+
+    # Phase 2: on-chain send out of DB transaction/lock.
+    try:
         balance = get_ton_balance(str(payout_wallet["wallet_address"]))
         if balance < amount_nano + get_ton_send_fee_reserve_nano():
-            conn.rollback(); return {"ok": False, "error": "insufficient_balance"}
+            raise RuntimeError("insufficient_balance")
         seed_phrase = decrypt_secret(str(payout_wallet["seed_encrypted"]))
         wallet, _public_key, private_key, derived_address = _wallet_from_mnemonic(seed_phrase)
         if normalize_ton_address(derived_address) != normalize_ton_address(str(payout_wallet["wallet_address"])):
-            conn.rollback(); return {"ok": False, "error": "wallet_mismatch"}
+            raise RuntimeError("wallet_mismatch")
         seqno = get_wallet_seqno(str(payout_wallet["wallet_address"]))
         if seqno is None:
-            conn.rollback(); return {"ok": False, "error": "send_failed"}
+            raise RuntimeError("send_failed")
         transfer = _build_signed_transfer_message(wallet=wallet, private_key=private_key, destination_address=destination, amount_nano=amount_nano, seqno=seqno, comment="DeepAlpha referral payout")
         boc_base64 = _extract_boc_from_transfer(transfer)
         result = send_boc_return_hash(boc_base64)
         tx_hash = str(result.get("tx_hash") or "").strip()
         if not result.get("ok") or not tx_hash:
-            conn.rollback(); return {"ok": False, "error": "send_failed"}
-        cur.execute("UPDATE referral_reward_withdrawal_requests SET status='paid',processed_at=NOW(),processed_by=%s,tx_hash=%s WHERE id=%s", (int(admin_user_id), tx_hash, int(request_id)))
-        cur.execute("UPDATE referral_rewards SET status='withdrawn',withdrawn_at=NOW(),withdrawal_tx_hash=%s,updated_at=NOW() WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (tx_hash, int(request_id)))
+            raise RuntimeError("send_failed")
+    except Exception as e:
+        fail_reason = str(e)[:200]
+        conn = get_connection(); cur = conn.cursor()
+        try:
+            cur.execute("UPDATE referral_reward_withdrawal_requests SET status='pending',notes=%s WHERE id=%s AND status='processing'", (f"payout_send_failed:{fail_reason}", request_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+        return {"ok": False, "error": fail_reason if fail_reason in {"insufficient_balance", "wallet_mismatch"} else "send_failed"}
+
+    # Phase 3: finalize accounting in a new transaction.
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,status,user_id,amount_nano FROM referral_reward_withdrawal_requests WHERE id=%s FOR UPDATE", (request_id,))
+        row = cur.fetchone()
+        if not row or str(row[1] or "") != "processing":
+            conn.rollback()
+            logger.critical("referral_payout_finalize_inconsistent request_id=%s tx_hash=%s reason=request_not_processing", request_id, tx_hash)
+            return {"ok": False, "error": "finalize_failed", "tx_hash": tx_hash}
+        cur.execute("UPDATE referral_reward_withdrawal_requests SET status='paid',processed_at=NOW(),processed_by=%s,tx_hash=%s,notes=NULL WHERE id=%s", (admin_user_id, tx_hash, request_id))
+        cur.execute("UPDATE referral_rewards SET status='withdrawn',withdrawn_at=NOW(),withdrawal_tx_hash=%s,updated_at=NOW() WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (tx_hash, request_id))
         cur.execute("""INSERT INTO ton_wallet_transactions (user_id,wallet_address,direction,product_type,amount_nano,fee_nano,tx_hash,status,comment,created_at,updated_at)
                        VALUES (%s,%s,'incoming','referral_reward',%s,'0',%s,'submitted','DeepAlpha referral payout',NOW(),NOW())""",
-                    (int(req["user_id"]), destination, str(amount_nano), tx_hash))
+                    (int(row[2]), destination, str(int(row[3] or 0)), tx_hash))
         conn.commit()
-        return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination}
+        return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(int(row[3] or 0)), "destination_address": destination}
     except Exception:
         conn.rollback()
-        return {"ok": False, "error": "send_failed"}
+        logger.critical("referral_payout_finalize_failed request_id=%s tx_hash=%s", request_id, tx_hash)
+        return {"ok": False, "error": "finalize_failed", "tx_hash": tx_hash}
     finally:
         conn.close()
