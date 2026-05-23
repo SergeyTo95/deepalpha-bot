@@ -529,6 +529,29 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_user ON ton_purchase_intents(user_id, created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_status ON ton_purchase_intents(status)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ton_purchase_intents_tx_hash_unique ON ton_purchase_intents(tx_hash) WHERE tx_hash IS NOT NULL AND tx_hash <> ''")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS referral_rewards (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        source_user_id BIGINT NOT NULL,
+        purchase_type TEXT NOT NULL DEFAULT 'token_purchase',
+        purchase_ref TEXT,
+        purchase_amount_nano BIGINT NOT NULL DEFAULT 0,
+        reward_percent NUMERIC NOT NULL DEFAULT 0,
+        reward_nano BIGINT NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        unlock_at TIMESTAMP,
+        withdrawn_at TIMESTAMP,
+        withdrawal_tx_hash TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_user_id ON referral_rewards(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_source_user_id ON referral_rewards(source_user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_status ON referral_rewards(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_unlock_at ON referral_rewards(unlock_at)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_rewards_purchase_ref_user ON referral_rewards(purchase_ref, user_id) WHERE purchase_ref IS NOT NULL")
 
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
@@ -658,6 +681,20 @@ def _init_db_inner(conn, cursor):
             INSERT INTO settings (key, value, updated_at)
             VALUES (%s, %s, %s)
             """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+    referral_defaults = [
+        ("referral_rewards_enabled", "false"),
+        ("referral_reward_percent", "10"),
+        ("referral_reward_unlock_hours", "48"),
+        ("referral_min_withdrawal_nano", str(1_000_000_000)),
+        ("referral_daily_withdrawal_cap_nano", str(50_000_000_000)),
+        ("referral_payout_wallet_enabled", "false"),
+        ("referral_rewards_admin_approval_required", "false"),
+    ]
+    for key, value in referral_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO settings (key, value, updated_at) VALUES (%s, %s, %s)", (key, value, datetime.utcnow().isoformat()))
     conn.commit()
 
 # ═══════════════════════════════════════════
@@ -1381,6 +1418,102 @@ def get_top_referrers(limit: int = 10) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"get_top_referrers error: {e}")
         return []
+    finally:
+        conn.close()
+
+
+def get_referral_reward_settings() -> Dict[str, Any]:
+    return {
+        "enabled": str(get_setting("referral_rewards_enabled", "false")).lower() == "true",
+        "reward_percent": float(str(get_setting("referral_reward_percent", "10") or "10").replace(",", ".")),
+        "unlock_hours": int(str(get_setting("referral_reward_unlock_hours", "48") or "48")),
+        "min_withdrawal_nano": int(str(get_setting("referral_min_withdrawal_nano", str(1_000_000_000)) or "1000000000")),
+        "daily_withdrawal_cap_nano": int(str(get_setting("referral_daily_withdrawal_cap_nano", str(50_000_000_000)) or "50000000000")),
+        "admin_approval_required": str(get_setting("referral_rewards_admin_approval_required", "false")).lower() == "true",
+    }
+
+
+def update_referral_reward_settings(**kwargs) -> None:
+    for k, v in kwargs.items():
+        set_setting(k, str(v))
+
+
+def create_referral_reward(**kwargs) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("""
+            INSERT INTO referral_rewards (user_id,source_user_id,purchase_type,purchase_ref,purchase_amount_nano,reward_percent,reward_nano,status,unlock_at,updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            ON CONFLICT DO NOTHING
+            RETURNING *
+        """, (int(kwargs["user_id"]), int(kwargs["source_user_id"]), str(kwargs.get("purchase_type") or "token_purchase"),
+              kwargs.get("purchase_ref"), int(kwargs.get("purchase_amount_nano") or 0), kwargs.get("reward_percent") or 0,
+              int(kwargs.get("reward_nano") or 0), str(kwargs.get("status") or "pending"), kwargs.get("unlock_at")))
+        row = cur.fetchone(); conn.commit(); return dict(row) if row else None
+    except Exception as e:
+        print(f"create_referral_reward error: {e}"); conn.rollback(); return None
+    finally:
+        conn.close()
+
+
+def unlock_due_referral_rewards() -> int:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE referral_rewards SET status='available', updated_at=NOW() WHERE status='pending' AND unlock_at IS NOT NULL AND unlock_at<=NOW()")
+        n = cur.rowcount; conn.commit(); return int(n or 0)
+    except Exception as e:
+        print(f"unlock_due_referral_rewards error: {e}"); conn.rollback(); return 0
+    finally:
+        conn.close()
+
+
+def get_user_referral_earnings_summary(user_id: int) -> Dict[str, Any]:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status IN ('pending','available','withdrawn')) AS total_earned_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='pending') AS pending_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='available') AS available_nano,
+              COALESCE(SUM(reward_nano),0) FILTER (WHERE status='withdrawn') AS withdrawn_nano
+            FROM referral_rewards WHERE user_id=%s
+        """, (user_id,))
+        row = cur.fetchone() or (0, 0, 0, 0)
+        return {"total_earned_nano": int(row[0] or 0), "pending_nano": int(row[1] or 0), "available_nano": int(row[2] or 0), "withdrawn_nano": int(row[3] or 0)}
+    except Exception as e:
+        print(f"get_user_referral_earnings_summary error: {e}"); return {"total_earned_nano": 0, "pending_nano": 0, "available_nano": 0, "withdrawn_nano": 0}
+    finally:
+        conn.close()
+
+
+def list_user_referral_rewards(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM referral_rewards WHERE user_id=%s ORDER BY id DESC LIMIT %s OFFSET %s", (user_id, int(limit), int(offset)))
+        return [dict(r) for r in (cur.fetchall() or [])]
+    except Exception as e:
+        print(f"list_user_referral_rewards error: {e}"); return []
+    finally:
+        conn.close()
+
+
+def withdraw_available_referral_rewards_to_internal_wallet(user_id: int) -> Dict[str, Any]:
+    settings = get_referral_reward_settings()
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT COALESCE(SUM(reward_nano),0) FROM referral_rewards WHERE user_id=%s AND status='available'", (user_id,))
+        available = int((cur.fetchone() or [0])[0] or 0)
+        if available < int(settings["min_withdrawal_nano"]):
+            return {"ok": False, "error": "below_minimum", "available_nano": available, "minimum_nano": int(settings["min_withdrawal_nano"])}
+        cur.execute("SELECT COALESCE(SUM(reward_nano),0) FROM referral_rewards WHERE user_id=%s AND status='withdrawn' AND withdrawn_at >= NOW() - INTERVAL '1 day'", (user_id,))
+        daily = int((cur.fetchone() or [0])[0] or 0)
+        if daily + available > int(settings["daily_withdrawal_cap_nano"]):
+            return {"ok": False, "error": "daily_cap_exceeded", "available_nano": available}
+        cur.execute("UPDATE referral_rewards SET status='withdrawn', withdrawn_at=NOW(), updated_at=NOW(), withdrawal_tx_hash=%s WHERE user_id=%s AND status='available'", ("internal_ledger", user_id))
+        conn.commit()
+        return {"ok": True, "amount_nano": available, "tx_hash": "internal_ledger", "manual_review": True}
+    except Exception as e:
+        print(f"withdraw_available_referral_rewards_to_internal_wallet error: {e}"); conn.rollback(); return {"ok": False, "error": "withdraw_failed"}
     finally:
         conn.close()
 

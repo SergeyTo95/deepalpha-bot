@@ -323,11 +323,13 @@ def get_profile_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("👤 Профиль"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("✍️ Мои прогнозы"))
         kb.add(KeyboardButton("💰 Баланс автора"), KeyboardButton("👥 Рефералы"))
+        kb.add(KeyboardButton("💸 Заработать"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("✍️ My forecasts"))
         kb.add(KeyboardButton("💰 Author balance"), KeyboardButton("👥 Referrals"))
+        kb.add(KeyboardButton("💸 Earn"))
         kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
@@ -6482,6 +6484,55 @@ async def referrals_handler(message: types.Message, state: FSMContext):
 
     await message.answer(text, reply_markup=get_main_keyboard(uid))
     
+
+
+@dp.message_handler(lambda m: m.text in ["💸 Заработать", "💸 Earn"], state="*")
+async def referral_earnings_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    data = get_earnings_screen_data(uid)
+    summary = data.get("summary") or {}
+    settings = data.get("settings") or {}
+    ref_link = f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}"
+    user = get_user(uid) or {}
+    text = (
+        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {user.get('total_referrals', 0)}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
+        if lang == "ru" else
+        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {user.get('total_referrals', 0)}\n\n🔗 Your referral link:\n{ref_link}"
+    )
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("📤 Вывести на TON кошелёк" if lang == "ru" else "📤 Withdraw to TON wallet", callback_data="earn_withdraw"))
+    kb.add(InlineKeyboardButton("🏆 Топ рефереров" if lang == "ru" else "🏆 Top referrers", callback_data="earn_top_ref"), InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="earn_refresh"))
+    await message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data in ["earn_withdraw", "earn_top_ref", "earn_refresh"])
+async def earn_actions_cb(c: types.CallbackQuery):
+    uid = c.from_user.id
+    lang = get_user_lang(uid)
+    if c.data == "earn_withdraw":
+        res = withdraw_referral_rewards(uid)
+        if not res.get("ok"):
+            if res.get("error") == "below_minimum":
+                msg = (f"Минимальная сумма для вывода: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nСейчас доступно: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON." if lang == "ru" else f"Minimum withdrawal: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nCurrently available: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON.")
+            else:
+                msg = "Withdrawal request created. Admin will process it." if lang == "en" else "✅ Заявка на вывод создана. Админ обработает её вручную."
+        else:
+            msg = (f"✅ Реферальная награда отправлена на ваш внутренний TON кошелёк.\nСумма: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nTx: {res.get('tx_hash')}" if lang == "ru" else f"✅ Referral reward sent to your internal TON wallet.\nAmount: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nTx: {res.get('tx_hash')}")
+        await c.message.answer(msg)
+    elif c.data == "earn_top_ref":
+        refs = get_top_referrers(10)
+        lines = ["🏆 Топ рефереров" if lang == "ru" else "🏆 Top referrers"]
+        for i,r in enumerate(refs,1):
+            name = r.get("username") or r.get("first_name") or str(r.get("user_id"))
+            lines.append(f"{i}. @{name} — {int(r.get('total_referrals') or 0)}")
+        await c.message.answer("\n".join(lines))
+    else:
+        await c.message.answer("🔄 Refreshed." if lang == "en" else "🔄 Обновлено.")
+    await c.answer()
+
 @dp.message_handler(lambda m: m.text in ["📊 История", "📊 History", "📜 История", "📜 History"])
 async def history_handler(message: types.Message):
     _register_user(message)
@@ -7962,6 +8013,16 @@ async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMCon
     verify_ok = bool(verification.get("ok"))
     if verify_ok:
         fulfill_ton_purchase_intent(int(intent.get("id")))
+        try:
+            reward = process_token_purchase_referral_reward(buyer_user_id=uid, purchase_amount_nano=purchase_amount_nano, purchase_ref=str(intent.get("id")))
+            if reward and int(reward.get("user_id") or 0) > 0:
+                rid = int(reward.get("user_id"))
+                amount = nano_to_ton_display(int(reward.get("reward_nano") or 0))
+                rlang = get_user_lang(rid)
+                msg = (f"🔥 Вы получили referral reward: +{amount} TON\nНаграда станет доступна после проверки." if rlang == "ru" else f"🔥 You earned a referral reward: +{amount} TON\nIt will become available after the pending period.")
+                await bot.send_message(rid, msg)
+        except Exception as e:
+            print(f"referral reward hook error: {e}")
         link_ton_wallet_tx_to_intent(
             tx_hash=tx_hash,
             intent_id=int(intent.get("id")),
