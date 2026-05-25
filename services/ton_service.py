@@ -7,13 +7,36 @@ TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
 OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 
+def resolve_ton_purchase_project_wallet() -> str:
+    from db.database import get_setting, get_active_cashier_payment_wallet
+
+    cashier_wallet = get_active_cashier_payment_wallet()
+    if cashier_wallet and cashier_wallet.get("wallet_address"):
+        return cashier_wallet["wallet_address"]
+
+    env_wallet = (os.getenv("TON_PROJECT_WALLET", "") or "").strip()
+    if env_wallet:
+        return env_wallet
+
+    setting_wallet = (get_setting("ton_project_wallet", "") or "").strip()
+    if setting_wallet:
+        return setting_wallet
+
+    platform_wallet = (get_setting("ton_platform_wallet", "") or "").strip()
+    if platform_wallet:
+        return platform_wallet
+
+    return OWNER_ADDRESS
+
+
 def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
     """Получает последние входящие транзакции на адрес владельца."""
     try:
+        payment_wallet = resolve_ton_purchase_project_wallet()
         response = requests.get(
             f"{TONCENTER_API}/getTransactions",
             params={
-                "address": OWNER_ADDRESS,
+                "address": payment_wallet,
                 "limit": limit,
                 "api_key": TONCENTER_KEY,
             },
