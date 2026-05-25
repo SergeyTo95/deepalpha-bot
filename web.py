@@ -7,6 +7,7 @@ from db.database import (
     get_all_authors, get_author_profile, get_author_post,
     is_author, create_donation, add_pending,
 )
+from services.ton_wallet_service import resolve_ton_purchase_project_wallet
 
 PORT = int(os.getenv("PORT", 3000))
 
@@ -114,6 +115,7 @@ async def handle_user_api(request):
             "cached_price": get_setting("cached_signal_price_tokens", "5"),
             "subscription_price": get_setting("subscription_price_ton", "1"),
             "subscription_days": get_setting("subscription_days", "30"),
+            "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
             "packages": packages,
             "is_author": bool(user.get("is_author")),
             "author_balance_ton": user.get("author_balance_ton", 0) or 0,

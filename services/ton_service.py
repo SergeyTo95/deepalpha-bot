@@ -4,16 +4,18 @@ from typing import List, Dict, Any, Optional
 
 TONCENTER_API = "https://toncenter.com/api/v2"
 TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
-OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 
 def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
     """Получает последние входящие транзакции на адрес владельца."""
+    from services.ton_wallet_service import resolve_ton_purchase_project_wallet
+
     try:
+        owner_address = resolve_ton_purchase_project_wallet()
         response = requests.get(
             f"{TONCENTER_API}/getTransactions",
             params={
-                "address": OWNER_ADDRESS,
+                "address": owner_address,
                 "limit": limit,
                 "api_key": TONCENTER_KEY,
             },
@@ -26,6 +28,22 @@ def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"TON API ERROR: {e}")
         return []
+
+
+def get_wallet_balance(address: str) -> float:
+    try:
+        response = requests.get(
+            f"{TONCENTER_API}/getAddressBalance",
+            params={"address": address, "api_key": TONCENTER_KEY},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return 0.0
+        data = response.json()
+        nanotons = int(data.get("result", 0))
+        return nanotons / 1_000_000_000
+    except Exception:
+        return 0.0
 
 
 def parse_payment(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -4,6 +4,7 @@ from aiogram.dispatcher import Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
+import secrets
 from datetime import datetime, timedelta
 
 from db.database import (
@@ -20,6 +21,10 @@ from db.database import (
     get_top_authors_by_donations, get_donation_stats,
     get_pending_withdrawals, approve_withdrawal, reject_withdrawal,
     get_author_posts,
+)
+from services.ton_wallet_service import (
+    get_active_cashier_payment_wallet, create_cashier_payment_wallet,
+    reveal_cashier_payment_wallet_seed_once, get_cashier_payment_wallet_balance,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -130,6 +135,7 @@ def admin_main_kb():
         InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
         InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
         InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
+        InlineKeyboardButton("💼 Cashier wallet", callback_data="admin_cashier_wallet"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
     )
     return kb
@@ -952,6 +958,28 @@ def withdrawals_list_text() -> str:
 # ═══════════════════════════════════════════
 
 def register_admin(dp: Dispatcher):
+    def cashier_wallet_kb():
+        kb = InlineKeyboardMarkup(row_width=1)
+        kb.add(
+            InlineKeyboardButton("➕ Создать кошелёк кассы", callback_data="cashier_wallet_create"),
+            InlineKeyboardButton("🔄 Обновить баланс", callback_data="cashier_wallet_refresh"),
+            InlineKeyboardButton("🔐 Показать seed phrase", callback_data="cashier_wallet_seed"),
+            InlineKeyboardButton("⬅️ Назад", callback_data="admin_back"),
+        )
+        return kb
+
+    def cashier_wallet_text():
+        wallet = get_active_cashier_payment_wallet()
+        if not wallet:
+            return "💼 Кошелёк кассы\n\nСтатус: not created\n\nЭтот кошелёк используется для приёма оплат за покупку токенов."
+        balance = get_cashier_payment_wallet_balance()
+        return (
+            "💼 Кошелёк кассы\n\n"
+            "Статус: active\n"
+            f"Адрес:\n`{wallet['wallet_address']}`\n\n"
+            f"Баланс: {balance:.6f} TON\n\n"
+            "Этот кошелёк используется для приёма оплат за покупку токенов."
+        )
 
     @dp.message_handler(commands=["admin"])
     async def open_admin(message: types.Message):
@@ -962,6 +990,34 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "admin_back")
     async def back(callback: types.CallbackQuery):
         await callback.message.edit_text("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_cashier_wallet")
+    async def cashier_wallet_menu(callback: types.CallbackQuery):
+        await callback.message.edit_text(cashier_wallet_text(), reply_markup=cashier_wallet_kb(), parse_mode="Markdown")
+
+    @dp.callback_query_handler(lambda c: c.data == "cashier_wallet_create")
+    async def cashier_wallet_create(callback: types.CallbackQuery):
+        address = "UQ" + secrets.token_urlsafe(34)[:46]
+        seed = "seed:" + secrets.token_urlsafe(48)
+        create_cashier_payment_wallet(address, seed, callback.from_user.id)
+        await callback.answer("✅ Wallet created")
+        await callback.message.edit_text(cashier_wallet_text(), reply_markup=cashier_wallet_kb(), parse_mode="Markdown")
+
+    @dp.callback_query_handler(lambda c: c.data == "cashier_wallet_refresh")
+    async def cashier_wallet_refresh(callback: types.CallbackQuery):
+        await callback.answer("🔄 Refreshed")
+        await callback.message.edit_text(cashier_wallet_text(), reply_markup=cashier_wallet_kb(), parse_mode="Markdown")
+
+    @dp.callback_query_handler(lambda c: c.data == "cashier_wallet_seed")
+    async def cashier_wallet_seed(callback: types.CallbackQuery):
+        if callback.message.chat.type != "private":
+            await callback.answer("Seed only in private chat", show_alert=True)
+            return
+        seed = reveal_cashier_payment_wallet_seed_once(callback.from_user.id)
+        if not seed:
+            await callback.message.answer("❌ Seed unavailable or already revealed.")
+            return
+        await callback.message.answer(f"🔐 Seed phrase (one-time):\n`{seed}`", parse_mode="Markdown")
 
     # === AI ===
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
@@ -2688,4 +2744,3 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
-
