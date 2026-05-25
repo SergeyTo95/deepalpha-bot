@@ -197,6 +197,23 @@ def _init_db_inner(conn, cursor):
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cashier_payment_wallets (
+        id SERIAL PRIMARY KEY,
+        wallet_address TEXT NOT NULL,
+        seed_encrypted TEXT,
+        network TEXT NOT NULL DEFAULT 'MAINNET',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        seed_revealed_at TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cashier_payment_wallets_status ON cashier_payment_wallets(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS signal_history (
         id SERIAL PRIMARY KEY,
         user_id BIGINT,
@@ -1665,6 +1682,19 @@ def get_active_referral_payout_wallet() -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
     except Exception as e:
         print(f"get_active_referral_payout_wallet error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_active_cashier_payment_wallet() -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM cashier_payment_wallets WHERE status='active' ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_active_cashier_payment_wallet error: {e}")
         return None
     finally:
         conn.close()

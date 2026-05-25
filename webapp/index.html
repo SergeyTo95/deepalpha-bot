@@ -263,7 +263,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -300,7 +300,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -346,7 +346,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -472,7 +472,7 @@
         </div>
     </div>
     <script>
-        const OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
+        let OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
         const API_BASE = window.location.origin;
 
         let tg = window.Telegram.WebApp;
@@ -508,6 +508,15 @@
 
         let currentTab = "tokens";
         let specialMode = null;  // 'author_status' / 'donate' / 'watchlist_slots'
+
+        function applyTonPurchaseWallet(data) {
+            const wallet = data?.ton_purchase_wallet || data?.ton_payment_wallet || data?.ton_wallet?.ton_purchase_wallet || data?.ton_wallet?.ton_payment_wallet;
+            if (!wallet) return;
+            OWNER_ADDRESS = wallet;
+            document.querySelectorAll('[data-ton-project-wallet]').forEach((el) => {
+                el.textContent = wallet;
+            });
+        }
 
         tg.ready();
         tg.expand();
@@ -777,6 +786,7 @@
                     opp_price: data?.pricing?.opp_price ?? data?.opp_price,
                     is_subscribed: data?.subscription?.active ?? userData?.is_subscribed,
                 });
+                applyTonPurchaseWallet(data);
 
                 return data;
             } catch (e) {
@@ -846,6 +856,7 @@
                             renderPackages();
                         }
                         updateAvailableNowDisplay(data);
+                        applyTonPurchaseWallet(data);
 
                         return data;
                     }
