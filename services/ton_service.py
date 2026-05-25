@@ -4,16 +4,15 @@ from typing import List, Dict, Any, Optional
 
 TONCENTER_API = "https://toncenter.com/api/v2"
 TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
-OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 
 
-def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
-    """Получает последние входящие транзакции на адрес владельца."""
+def get_transactions(limit: int = 20, address: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Получает последние входящие транзакции на адрес проектного кошелька."""
     try:
         response = requests.get(
             f"{TONCENTER_API}/getTransactions",
             params={
-                "address": OWNER_ADDRESS,
+                "address": address or __import__("db.database", fromlist=["resolve_ton_purchase_project_wallet"]).resolve_ton_purchase_project_wallet(),
                 "limit": limit,
                 "api_key": TONCENTER_KEY,
             },

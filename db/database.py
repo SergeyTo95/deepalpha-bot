@@ -67,6 +67,23 @@ def init_db():
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cashier_payment_wallets (
+        id SERIAL PRIMARY KEY,
+        wallet_address TEXT NOT NULL,
+        seed_encrypted TEXT NOT NULL,
+        network TEXT NOT NULL DEFAULT 'MAINNET',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        seed_revealed_at TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cashier_wallets_status ON cashier_payment_wallets(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_cashier_wallets_address_uniq ON cashier_payment_wallets(wallet_address)")
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
         username TEXT,
@@ -418,6 +435,45 @@ def set_setting(key: str, value: str) -> None:
         conn.close()
 
 
+
+
+def get_active_cashier_payment_wallet() -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT * FROM cashier_payment_wallets
+        WHERE status = 'active'
+        ORDER BY id DESC
+        LIMIT 1
+        """)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_active_cashier_payment_wallet error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def resolve_ton_purchase_project_wallet() -> str:
+    wallet = get_active_cashier_payment_wallet()
+    if wallet and wallet.get("wallet_address"):
+        return str(wallet["wallet_address"]).strip()
+
+    env_wallet = (os.getenv("TON_PROJECT_WALLET", "") or "").strip()
+    if env_wallet:
+        return env_wallet
+
+    settings_wallet = (get_setting("ton_project_wallet", "") or "").strip()
+    if settings_wallet:
+        return settings_wallet
+
+    platform_wallet = (get_setting("ton_platform_wallet", "") or "").strip()
+    if platform_wallet:
+        return platform_wallet
+
+    return "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
 # ═══════════════════════════════════════════
 # USERS
 # ═══════════════════════════════════════════
