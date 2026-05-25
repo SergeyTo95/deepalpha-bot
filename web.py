@@ -30,6 +30,7 @@ from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_t
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
+    resolve_ton_purchase_project_wallet,
     verify_ton_purchase_onchain,
 )
 from services.referral_rewards_service import process_token_purchase_referral_reward
@@ -191,6 +192,8 @@ async def handle_user_api(request):
             "watchlist_extra_slots_count": get_setting("watchlist_extra_slots_count", "5"),
             "watchlist_limit_regular": get_setting("watchlist_limit_regular", "10"),
             "watchlist_limit_vip": get_setting("watchlist_limit_vip", "50"),
+            "ton_purchase_wallet": resolve_ton_purchase_project_wallet(),
+            "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
         }
 
         return _json_response(data)
@@ -627,6 +630,8 @@ async def handle_webapp_summary(request):
             "enabled": str(get_setting("web_ton_enabled", "off")).lower() == "on",
             "network": get_ton_runtime_network(),
             "token_purchase_enabled": is_ton_wallet_token_purchase_enabled(),
+            "ton_purchase_wallet": resolve_ton_purchase_project_wallet(),
+            "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
         },
     })
 
@@ -1007,13 +1012,7 @@ async def handle_wallet_ton_buy_tokens(request):
     min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
     if amount_tokens < min_tokens:
         return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
-    project_wallet = (
-        os.getenv("TON_PROJECT_WALLET", "")
-        or get_setting("ton_project_wallet", "")
-        or get_setting("ton_platform_wallet", "")
-        or default_purchase_wallet
-    ).strip()
+    project_wallet = resolve_ton_purchase_project_wallet()
     if not validate_ton_address(project_wallet):
         return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
     price_per_token = get_ton_token_price_per_internal_token_nano()

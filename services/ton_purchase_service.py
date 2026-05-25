@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from db.database import get_connection, get_setting, submit_ton_purchase_intent
+from db.database import get_active_cashier_payment_wallet, get_connection, get_setting, submit_ton_purchase_intent
 from services.ton_chain_service import normalize_ton_address, resolve_recent_ton_tx_hash, ton_to_nano
 
 
@@ -30,12 +30,15 @@ def _parse_feature_flag_value(raw_value):
 
 def resolve_ton_purchase_project_wallet() -> str:
     default_purchase_wallet = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv"
-    return (
-        os.getenv("TON_PROJECT_WALLET", "")
+    cashier_wallet = get_active_cashier_payment_wallet() or {}
+    resolved = (
+        str(cashier_wallet.get("wallet_address") or "").strip()
+        or os.getenv("TON_PROJECT_WALLET", "")
         or get_setting("ton_project_wallet", "")
         or get_setting("ton_platform_wallet", "")
         or default_purchase_wallet
     ).strip()
+    return resolved or default_purchase_wallet
 
 
 def is_ton_wallet_token_purchase_enabled() -> bool:
