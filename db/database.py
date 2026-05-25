@@ -478,6 +478,94 @@ def resolve_ton_purchase_project_wallet() -> str:
 # USERS
 # ═══════════════════════════════════════════
 
+
+
+def _get_wallet_seed_cipher():
+    from cryptography.fernet import Fernet
+    key = (os.getenv("WALLET_SEED_ENCRYPTION_KEY", "") or "").strip()
+    if not key:
+        raise RuntimeError("WALLET_SEED_ENCRYPTION_KEY is missing")
+    return Fernet(key.encode() if isinstance(key, str) else key)
+
+
+def create_cashier_payment_wallet(admin_user_id: int) -> Dict[str, Any]:
+    from tonsdk.crypto import mnemonic_new
+    from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT id FROM cashier_payment_wallets WHERE status='active' LIMIT 1")
+        existing = cursor.fetchone()
+        if existing:
+            raise RuntimeError("Active cashier wallet already exists")
+
+        mnemo = mnemonic_new()
+        _, pub_k, _, wallet = Wallets.from_mnemonics(mnemo, version=WalletVersionEnum.v4r2, workchain=0)
+        address = wallet.address.to_string(True, True, True)
+        seed = " ".join(mnemo)
+        encrypted = _get_wallet_seed_cipher().encrypt(seed.encode("utf-8")).decode("utf-8")
+
+        cursor.execute("""
+        INSERT INTO cashier_payment_wallets
+        (wallet_address, seed_encrypted, network, status, created_by, created_at, updated_at, seed_reveal_used, seed_revealed_at)
+        VALUES (%s, %s, 'MAINNET', 'active', %s, NOW(), NOW(), FALSE, NULL)
+        RETURNING *
+        """, (address, encrypted, admin_user_id))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def reveal_cashier_payment_wallet_seed_once(admin_user_id: int) -> Dict[str, Any]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+        SELECT * FROM cashier_payment_wallets
+        WHERE status='active'
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE
+        """)
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError("Cashier wallet not created")
+        if row.get('seed_reveal_used'):
+            raise RuntimeError("Seed phrase already revealed")
+
+        cursor.execute("""
+        UPDATE cashier_payment_wallets
+        SET seed_reveal_used=TRUE, seed_revealed_at=NOW(), updated_at=NOW()
+        WHERE id=%s AND seed_reveal_used=FALSE
+        """, (row['id'],))
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError("Seed reveal already used")
+
+        seed = _get_wallet_seed_cipher().decrypt((row['seed_encrypted'] or '').encode('utf-8')).decode('utf-8')
+        conn.commit()
+        return {"wallet_address": row['wallet_address'], "seed_phrase": seed, "revealed_by": admin_user_id}
+    finally:
+        conn.close()
+
+
+def get_cashier_payment_wallet_balance() -> float:
+    import requests
+    wallet = get_active_cashier_payment_wallet()
+    if not wallet:
+        return 0.0
+    api = "https://toncenter.com/api/v2/getAddressBalance"
+    params = {"address": wallet['wallet_address']}
+    key = (os.getenv("TONCENTER_API_KEY", "") or "").strip()
+    if key:
+        params['api_key'] = key
+    r = requests.get(api, params=params, timeout=15)
+    data = r.json() if r.status_code == 200 else {}
+    value = int(data.get('result', 0) or 0)
+    return value / 1_000_000_000
 def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: Optional[int] = None) -> None:
     conn = get_connection()
     cursor = conn.cursor()
