@@ -4,7 +4,6 @@ from aiogram.dispatcher import Dispatcher
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
-import secrets
 from datetime import datetime, timedelta
 
 from db.database import (
@@ -971,14 +970,18 @@ def register_admin(dp: Dispatcher):
     def cashier_wallet_text():
         wallet = get_active_cashier_payment_wallet()
         if not wallet:
-            return "💼 Кошелёк кассы\n\nСтатус: not created\n\nЭтот кошелёк используется для приёма оплат за покупку токенов."
+            return (
+                "💼 Cashier payment wallet\n\n"
+                "Статус / Status: not created\n\n"
+                "This wallet is used to receive token purchase payments."
+            )
         balance = get_cashier_payment_wallet_balance()
         return (
-            "💼 Кошелёк кассы\n\n"
-            "Статус: active\n"
-            f"Адрес:\n`{wallet['wallet_address']}`\n\n"
-            f"Баланс: {balance:.6f} TON\n\n"
-            "Этот кошелёк используется для приёма оплат за покупку токенов."
+            "💼 Cashier payment wallet\n\n"
+            "Статус / Status: active\n"
+            f"Адрес / Address:\n`{wallet['wallet_address']}`\n\n"
+            f"Баланс / Balance: {balance:.6f} TON\n\n"
+            "This wallet is used to receive token purchase payments."
         )
 
     @dp.message_handler(commands=["admin"])
@@ -997,9 +1000,11 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "cashier_wallet_create")
     async def cashier_wallet_create(callback: types.CallbackQuery):
-        address = "UQ" + secrets.token_urlsafe(34)[:46]
-        seed = "seed:" + secrets.token_urlsafe(48)
-        create_cashier_payment_wallet(address, seed, callback.from_user.id)
+        result = create_cashier_payment_wallet(callback.from_user.id)
+        if not result.get("ok"):
+            await callback.answer("❌ Failed", show_alert=True)
+            await callback.message.answer(f"Ошибка / Error: {result.get('error', 'unknown')}")
+            return
         await callback.answer("✅ Wallet created")
         await callback.message.edit_text(cashier_wallet_text(), reply_markup=cashier_wallet_kb(), parse_mode="Markdown")
 
@@ -1013,11 +1018,17 @@ def register_admin(dp: Dispatcher):
         if callback.message.chat.type != "private":
             await callback.answer("Seed only in private chat", show_alert=True)
             return
-        seed = reveal_cashier_payment_wallet_seed_once(callback.from_user.id)
-        if not seed:
-            await callback.message.answer("❌ Seed unavailable or already revealed.")
+        seed_result = reveal_cashier_payment_wallet_seed_once(callback.from_user.id)
+        if not seed_result.get("ok"):
+            await callback.message.answer(f"❌ Seed unavailable: {seed_result.get('error')}")
             return
-        await callback.message.answer(f"🔐 Seed phrase (one-time):\n`{seed}`", parse_mode="Markdown")
+        warning = (
+            "⚠️ Эта seed-фраза управляет кошельком кассы.\n"
+            "Сохраните её офлайн. Никому не передавайте. Она показывается только один раз.\n\n"
+            "⚠️ This seed controls the cashier payment wallet.\n"
+            "Store it offline. Do not share it. It is shown only once."
+        )
+        await callback.message.answer(f"{warning}\n\n`{seed_result['seed_phrase']}`", parse_mode="Markdown")
 
     # === AI ===
     @dp.callback_query_handler(lambda c: c.data == "admin_ai")
