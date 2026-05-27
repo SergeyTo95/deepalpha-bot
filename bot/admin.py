@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from db.database import (
     get_setting, set_setting,
-    get_user, get_all_users, set_user_ban, set_user_vip,
+    get_user, get_all_users, get_users_page, count_users, search_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
     get_user_analyses, get_connection, get_referrals, get_referral_count,
     get_top_referrers,
@@ -136,6 +136,30 @@ class ReferralRewardsAdminStates(StatesGroup):
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
+
+def _users_page_kb(page: int, total_pages: int, users: list, lang: str = "ru") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"))
+    kb.add(InlineKeyboardButton("🏆 Top referrers" if lang == "en" else "🏆 Топ рефереров", callback_data="user_top_refs"))
+    for u in users:
+        name = u.get("username") or u.get("first_name") or str(u["user_id"])
+        status = "🚫" if u.get("is_banned") else ("👑" if u.get("is_vip") else "👤")
+        token_label = "tokens" if lang == "en" else "токенов"
+        kb.add(InlineKeyboardButton(
+            f"{status} {name} | {u['token_balance']} {token_label}",
+            callback_data=f"user_view_{u['user_id']}"
+        ))
+    kb.row(
+        InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_page:{max(1, page - 1)}"),
+        InlineKeyboardButton("➡️ Next", callback_data=f"admin_users_page:{min(total_pages, page + 1)}"),
+    )
+    kb.row(
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_users_page:{page}"),
+        InlineKeyboardButton("🔍 Search", callback_data="user_find"),
+    )
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+    return kb
 
 
 def admin_main_kb():
@@ -1850,21 +1874,38 @@ def register_admin(dp: Dispatcher):
     # === USERS ===
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
-        users = get_all_users(limit=50)
-        kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(InlineKeyboardButton("🔍 Найти пользователя", callback_data="user_find"))
-        kb.add(InlineKeyboardButton("🏆 Топ рефереров", callback_data="user_top_refs"))
-        for u in users[:10]:
-            name = u.get("username") or u.get("first_name") or str(u["user_id"])
-            status = "🚫" if u["is_banned"] else ("👑" if u["is_vip"] else "👤")
-            kb.add(InlineKeyboardButton(
-                f"{status} {name} | {u['token_balance']} токенов",
-                callback_data=f"user_view_{u['user_id']}"
-            ))
-        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+        lang = _admin_lang(callback.from_user.id)
+        page = 1
+        per_page = 10
+        total = count_users()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        users = get_users_page(limit=per_page, offset=0)
+        page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
+        total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
+        title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await callback.message.edit_text(
-            f"👤 Users\n\nВсего: {len(users)}",
-            reply_markup=kb
+            f"{title}\n\n{total_text}\n{page_text}",
+            reply_markup=_users_page_kb(page, total_pages, users, lang),
+        )
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
+    async def users_page(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        per_page = 10
+        total = count_users()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        try:
+            page = int(callback.data.split(":", 1)[1])
+        except Exception:
+            page = 1
+        page = max(1, min(total_pages, page))
+        users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
+        page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
+        total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
+        title = "👤 Users" if lang == "en" else "👤 Пользователи"
+        await callback.message.edit_text(
+            f"{title}\n\n{total_text}\n{page_text}",
+            reply_markup=_users_page_kb(page, total_pages, users, lang),
         )
 
     @dp.callback_query_handler(lambda c: c.data == "user_top_refs")
@@ -1883,21 +1924,50 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "user_find")
     async def find_user_start(callback: types.CallbackQuery, state: FSMContext):
+        lang = _admin_lang(callback.from_user.id)
         await UserStates.waiting_find_user.set()
-        await callback.message.answer("Введи Telegram ID:")
+        await callback.message.answer(
+            "Send Telegram ID, username, or user name:" if lang == "en"
+            else "Введите Telegram ID, username или имя пользователя:"
+        )
 
     @dp.message_handler(state=UserStates.waiting_find_user)
     async def find_user_result(message: types.Message, state: FSMContext):
-        try:
-            uid = int(message.text.strip())
-            user = get_user(uid)
-            await state.finish()
-            if not user:
-                await message.answer("❌ Не найден")
-                return
-            await message.answer(format_user_info(user), reply_markup=user_kb(uid))
-        except ValueError:
-            await message.answer("❌ ID должен быть числом")
+        lang = _admin_lang(message.from_user.id)
+        query = (message.text or "").strip()
+        users = []
+        if query.isdigit():
+            user = get_user(int(query))
+            if user:
+                users = [user]
+            else:
+                users = search_users(query, limit=20)
+        else:
+            users = search_users(query, limit=20)
+
+        await state.finish()
+        if not users:
+            await message.answer("❌ User not found" if lang == "en" else "❌ Пользователь не найден")
+            return
+        if len(users) == 1:
+            uid = int(users[0]["user_id"])
+            await message.answer(format_user_info(users[0]), reply_markup=user_kb(uid))
+            return
+
+        kb = InlineKeyboardMarkup(row_width=1)
+        for u in users[:20]:
+            name = u.get("username") or u.get("first_name") or str(u["user_id"])
+            status = "🚫" if u.get("is_banned") else ("👑" if u.get("is_vip") else "👤")
+            token_label = "tokens" if lang == "en" else "токенов"
+            kb.add(InlineKeyboardButton(
+                f"{status} {name} | {u['token_balance']} {token_label}",
+                callback_data=f"user_view_{u['user_id']}"
+            ))
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
+        await message.answer(
+            ("🔎 Search results:" if lang == "en" else "🔎 Результаты поиска:"),
+            reply_markup=kb
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("user_view_"))
     async def view_user(callback: types.CallbackQuery):

@@ -857,6 +857,72 @@ def get_all_users(limit: int = 1000) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_users_page(limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            "SELECT * FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (limit, offset),
+        )
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"get_users_page error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def count_users() -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users")
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"count_users error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def search_users(query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        q = (query or "").strip()
+        if not q:
+            return []
+        if q.isdigit():
+            cursor.execute(
+                "SELECT * FROM users WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                (int(q), limit),
+            )
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+
+        like_q = f"%{q}%"
+        cursor.execute(
+            """
+            SELECT * FROM users
+            WHERE COALESCE(username, '') ILIKE %s
+               OR COALESCE(first_name, '') ILIKE %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (like_q, like_q, limit),
+        )
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"search_users error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def _hash_session_token(raw_session_token: str) -> str:
     return hashlib.sha256(raw_session_token.encode("utf-8")).hexdigest()
 
