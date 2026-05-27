@@ -1441,6 +1441,38 @@ def fail_ton_purchase_intent(intent_id: int, reason: str) -> Optional[Dict[str, 
 # REFERRALS
 # ═══════════════════════════════════════════
 
+
+
+def get_referral_count(user_id: int) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by = %s", (user_id,))
+        row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception as e:
+        print(f"get_referral_count error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def sync_user_total_referrals(user_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users
+        SET total_referrals = (
+            SELECT COUNT(*) FROM users u2 WHERE u2.referred_by = users.user_id
+        )
+        WHERE user_id = %s
+        """, (user_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"sync_user_total_referrals error: {e}")
+    finally:
+        conn.close()
 def get_referrals(user_id: int) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

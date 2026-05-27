@@ -25,7 +25,7 @@ from agents.top_analysis.top_analysis_agent import TopAnalysisAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
     ensure_user, is_user_banned, get_user, get_setting,
-    add_tokens, increment_user_stat, get_referrals,
+    add_tokens, increment_user_stat, get_referrals, get_referral_count,
     is_subscribed, get_subscription_until, set_subscription,
     check_daily_limit, increment_daily, get_daily_usage,
     add_to_signal_history, get_signal_history,
@@ -3863,7 +3863,7 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"📊 Статистика\n"
             f"Анализов: {user['total_analyses']}\n"
             f"Сигналов: {user['total_opportunities']}\n"
-            f"Рефералов: {user.get('total_referrals', 0)}\n"
+            f"Рефералов: {get_referral_count(uid)}\n"
             f"\n🔗 Реферальная ссылка:\n"
             f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
@@ -3894,7 +3894,7 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"📊 Stats\n"
             f"Analyses: {user['total_analyses']}\n"
             f"Signals: {user['total_opportunities']}\n"
-            f"Referrals: {user.get('total_referrals', 0)}\n"
+            f"Referrals: {get_referral_count(uid)}\n"
             f"\n🔗 Referral link:\n"
             f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
@@ -6650,7 +6650,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
         text = (
             f"👥 Рефералы\n\n"
             f"Ссылка:\n`{ref_link}`\n\n"
-            f"Приглашено: {user['total_referrals'] if user else 0}\n"
+            f"Приглашено: {get_referral_count(uid)}\n"
             f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
             f"Ты получаешь {ref_percent}% с покупок рефералов\n\n"
         )
@@ -6663,7 +6663,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
         text = (
             f"👥 Referrals\n\n"
             f"Link:\n`{ref_link}`\n\n"
-            f"Invited: {user['total_referrals'] if user else 0}\n"
+            f"Invited: {get_referral_count(uid)}\n"
             f"Earned: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
             f"You get {ref_percent}% from each referral purchase\n\n"
         )
@@ -6685,10 +6685,11 @@ async def send_referral_earnings_screen(target, user_id: int):
     settings = data.get("settings") or {}
     ref_link = f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{user_id}"
     user = get_user(user_id) or {}
+    referral_count = get_referral_count(user_id)
     text = (
-        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {user.get('total_referrals', 0)}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
+        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {referral_count}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
         if lang == "ru" else
-        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nIn review: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {user.get('total_referrals', 0)}\n\n🔗 Your referral link:\n{ref_link}"
+        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nIn review: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {referral_count}\n\n🔗 Your referral link:\n{ref_link}"
     )
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("📤 Вывести на TON кошелёк" if lang == "ru" else "📤 Withdraw to TON wallet", callback_data="earn_withdraw"))
