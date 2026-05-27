@@ -5,6 +5,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
 from datetime import datetime, timedelta
+import logging
 
 from db.database import (
     get_setting, set_setting,
@@ -30,6 +31,7 @@ from services.moderation_service import (
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+logger = logging.getLogger(__name__)
 
 MODELS = {
     "gemini": {
@@ -1875,20 +1877,42 @@ def register_admin(dp: Dispatcher):
     async def render_admin_users_page(message: types.Message, admin_user_id: int, page: int = 1):
         lang = _admin_lang(admin_user_id)
         per_page = 10
+        requested_page = page
         total = count_users()
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page = max(1, min(total_pages, page))
-        users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
-        if not users and total > 0 and page > 1:
-            page = total_pages
-            users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
 
-        page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
+        if total <= 0:
+            logger.debug(
+                "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
+                requested_page, 1, total, 1, 0,
+            )
+            page_text = "Page 1/1" if lang == "en" else "Страница 1/1"
+            total_text = "Total: 0" if lang == "en" else "Всего: 0"
+            title = "👤 Users" if lang == "en" else "👤 Пользователи"
+            await message.edit_text(
+                f"{title}\n\n{total_text}\n{page_text}",
+                reply_markup=_users_page_kb(1, 1, [], lang),
+            )
+            return
+
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        corrected_page = max(1, min(total_pages, requested_page))
+        users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
+
+        if not users:
+            corrected_page = total_pages
+            users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
+
+        logger.debug(
+            "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
+            requested_page, corrected_page, total, total_pages, len(users),
+        )
+
+        page_text = f"Page {corrected_page}/{total_pages}" if lang == "en" else f"Страница {corrected_page}/{total_pages}"
         total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await message.edit_text(
             f"{title}\n\n{total_text}\n{page_text}",
-            reply_markup=_users_page_kb(page, total_pages, users, lang),
+            reply_markup=_users_page_kb(corrected_page, total_pages, users, lang),
         )
 
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
