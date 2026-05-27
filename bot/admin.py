@@ -140,12 +140,14 @@ def is_admin(user_id):
 
 def _users_page_kb(page: int, total_pages: int, users: list, lang: str = "ru") -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Search", callback_data="user_find"))
+    kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"))
     kb.add(InlineKeyboardButton("🏆 Top referrers" if lang == "en" else "🏆 Топ рефереров", callback_data="user_top_refs"))
     for u in users:
         name = u.get("username") or u.get("first_name") or str(u["user_id"])
+        status = "🚫" if u.get("is_banned") else ("👑" if u.get("is_vip") else "👤")
+        token_label = "tokens" if lang == "en" else "токенов"
         kb.add(InlineKeyboardButton(
-            f"👤 {name} | {u['token_balance']} tokens",
+            f"{status} {name} | {u['token_balance']} {token_label}",
             callback_data=f"user_view_{u['user_id']}"
         ))
     kb.row(
@@ -1955,8 +1957,10 @@ def register_admin(dp: Dispatcher):
         kb = InlineKeyboardMarkup(row_width=1)
         for u in users[:20]:
             name = u.get("username") or u.get("first_name") or str(u["user_id"])
+            status = "🚫" if u.get("is_banned") else ("👑" if u.get("is_vip") else "👤")
+            token_label = "tokens" if lang == "en" else "токенов"
             kb.add(InlineKeyboardButton(
-                f"👤 {name} | {u['token_balance']} tokens",
+                f"{status} {name} | {u['token_balance']} {token_label}",
                 callback_data=f"user_view_{u['user_id']}"
             ))
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
