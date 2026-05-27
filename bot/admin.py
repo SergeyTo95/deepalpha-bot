@@ -1872,44 +1872,36 @@ def register_admin(dp: Dispatcher):
             await message.answer("❌")
 
     # === USERS ===
-    @dp.callback_query_handler(lambda c: c.data == "admin_users")
-    async def users_menu(callback: types.CallbackQuery):
-        lang = _admin_lang(callback.from_user.id)
-        page = 1
+    async def render_admin_users_page(message: types.Message, admin_user_id: int, page: int = 1):
+        lang = _admin_lang(admin_user_id)
         per_page = 10
         total = count_users()
         total_pages = max(1, (total + per_page - 1) // per_page)
-        users = get_users_page(limit=per_page, offset=0)
-        page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
-        total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
-        title = "👤 Users" if lang == "en" else "👤 Пользователи"
-        await callback.message.edit_text(
-            f"{title}\n\n{total_text}\n{page_text}",
-            reply_markup=_users_page_kb(page, total_pages, users, lang),
-        )
-
-    @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
-    async def users_page(callback: types.CallbackQuery):
-        lang = _admin_lang(callback.from_user.id)
-        per_page = 10
-        total = count_users()
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        try:
-            page = int(callback.data.split(":", 1)[1])
-        except Exception:
-            page = 1
         page = max(1, min(total_pages, page))
         users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
         if not users and total > 0 and page > 1:
             page = total_pages
             users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
+
         page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
         total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
-        await callback.message.edit_text(
+        await message.edit_text(
             f"{title}\n\n{total_text}\n{page_text}",
             reply_markup=_users_page_kb(page, total_pages, users, lang),
         )
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_users")
+    async def users_menu(callback: types.CallbackQuery):
+        await render_admin_users_page(callback.message, callback.from_user.id, page=1)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
+    async def users_page(callback: types.CallbackQuery):
+        try:
+            page = int(callback.data.split(":", 1)[1])
+        except Exception:
+            page = 1
+        await render_admin_users_page(callback.message, callback.from_user.id, page=page)
 
     @dp.callback_query_handler(lambda c: c.data == "user_top_refs")
     async def top_referrers(callback: types.CallbackQuery):
