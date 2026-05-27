@@ -1881,7 +1881,7 @@ def register_admin(dp: Dispatcher):
         total = count_users()
 
         if total <= 0:
-            logger.info(
+            logger.debug(
                 "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
                 requested_page, 1, total, 1, 0,
             )
@@ -1902,7 +1902,7 @@ def register_admin(dp: Dispatcher):
             corrected_page = total_pages
             users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
 
-        logger.info(
+        logger.debug(
             "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
             requested_page, corrected_page, total, total_pages, len(users),
         )
