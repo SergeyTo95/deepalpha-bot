@@ -858,6 +858,8 @@ def get_all_users(limit: int = 1000) -> List[Dict[str, Any]]:
 
 
 def get_users_page(limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:

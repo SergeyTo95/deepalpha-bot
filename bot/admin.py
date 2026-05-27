@@ -1900,6 +1900,9 @@ def register_admin(dp: Dispatcher):
             page = 1
         page = max(1, min(total_pages, page))
         users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
+        if not users and total > 0 and page > 1:
+            page = total_pages
+            users = get_users_page(limit=per_page, offset=(page - 1) * per_page)
         page_text = f"Page {page}/{total_pages}" if lang == "en" else f"Страница {page}/{total_pages}"
         total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
