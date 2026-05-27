@@ -10,7 +10,7 @@ from db.database import (
     get_setting, set_setting,
     get_user, get_all_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
-    get_user_analyses, get_connection, get_referrals,
+    get_user_analyses, get_connection, get_referrals, get_referral_count,
     get_top_referrers,
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
@@ -458,7 +458,7 @@ def format_user_info(user: dict) -> str:
         f"Подписка: {sub_text}\n"
         f"Анализов: {user['total_analyses']}\n"
         f"Сигналов: {user['total_opportunities']}\n"
-        f"Рефералов: {user.get('total_referrals', 0)}\n"
+        f"Рефералов: {get_referral_count(user['user_id'])}\n"
         f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} TON\n"
         f"🎁 Пробных анализов: {trial['analyses_used']}/{trial['analyses_limit']}\n"
         f"🎁 Пробных сигналов: {trial['opportunities_used']}/{trial['opportunities_limit']}\n"
