@@ -144,22 +144,153 @@ def _sanitize_output(text: str) -> str:
     return cleaned.strip()
 
 
-def _base_prompt(role: str, task: str, user_text: str = "") -> str:
+def _looks_russian(text: str) -> bool:
+    return bool(re.search(r"[А-Яа-яЁё]", text or ""))
+
+
+def _explicit_english_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(in english|english version|write in english)\b|на английском|переведи на английский|сделай на английском",
+            text or "",
+            re.IGNORECASE,
+        )
+    )
+
+
+def _response_language(user_text: str, default: str = "ru", scope: str = "team", chat_context: str = "team") -> str:
+    if _explicit_english_requested(user_text):
+        return "en"
+    if scope == "founder" or chat_context == "team":
+        return "ru"
+    if _looks_russian(user_text):
+        return "ru"
+    if re.search(r"[A-Za-z]", user_text or ""):
+        return "en"
+    return default
+
+
+def _wants_detail(user_text: str) -> bool:
+    return bool(re.search(r"\b(подробно|глубоко|детально|развернуто|разв[её]рнуто|full|deep|detailed)\b", user_text or "", re.IGNORECASE))
+
+
+def _base_prompt(role: str, task: str, user_text: str = "", command: str = "ask", chat_context: str = "private", scope: str = "team") -> str:
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
+    detailed = _wants_detail(user_text)
+    language_rule = "Answer in clean Russian." if lang == "ru" else "Answer in clean English."
+    russian_rule = """
+Russian style rules:
+- Пиши грамотно, по-деловому и без канцелярита.
+- Не смешивай русский с лишними английскими терминами.
+- Do not use "edge candidate" in Russian output.
+- Prefer: "потенциальное расхождение", "возможность", "сигнал", "рынок может быть неверно оценён".
+""".strip()
+    english_rule = """
+English style rules:
+- Professional, concise, practical.
+- No hype, no fake certainty, no guaranteed profit wording.
+""".strip()
+    founder_team_format = (
+        "Сергей, на сегодня:\n"
+        "1. <конкретное действие>\n"
+        "2. <конкретное действие>\n"
+        "3. <конкретное действие>\n"
+        "4. <конкретное действие>\n"
+        "5. <конкретное действие>\n"
+        "Команде:\n"
+        "<одно чёткое поручение>"
+        if lang == "ru"
+        else "Sergey, for today:\n"
+        "1. <specific action>\n"
+        "2. <specific action>\n"
+        "3. <specific action>\n"
+        "4. <specific action>\n"
+        "5. <specific action>\n"
+        "Team:\n"
+        "<one clear instruction>"
+    )
+    team_rule = f"""
+Team chat style:
+- Keep the answer short by default: maximum 5 bullets or numbered actions.
+- Be operational and ready-to-act; no long essays, no generic motivational text, no raw AI-style paragraphs.
+- Avoid overusing bold markdown.
+- If Sergey/founder asks in team chat, answer directly to Sergey and use this format by default:
+{founder_team_format}
+- Only write longer if the user explicitly asks for подробность/depth/detail.
+""".strip()
+    private_rule = """
+Founder private chat style:
+- You may answer more deeply, especially if Sergey asks for a detailed strategy.
+- Keep structure clean; if the answer is long, use clear sections.
+""".strip()
+    restricted_team_rule = """
+Restricted team mode:
+- Non-founder team members can use Jarvis only for fresh public Telegram Polymarket mention discovery.
+- Team discovery must include only Telegram posts/messages/comments that mention Polymarket directly or clearly discuss a Polymarket market/link/outcome.
+- Do not suggest X, Twitter, Reddit, forums, websites, or generic web sources.
+- Do not give strategy, broad advice, motivational text, generic promotion ideas, or general chatbot answers to team members.
+- Allowed sources are Telegram public channels, Telegram public chats, and Telegram comments where accessible.
+- No private Telegram chats, DMs, closed groups, or scraped private content.
+- Do not invent Telegram sources, links, authors, timestamps, or comments.
+""".strip()
+    restricted_team = scope != "founder" and chat_context == "team"
+    if restricted_team:
+        fresh_discovery_rules = """
+Fresh post discovery rules for restricted team:
+- Allowed sources are Telegram public channels, Telegram public chats, and Telegram comments where accessible.
+- Every item must mention Polymarket directly or clearly include a Polymarket market/link/outcome.
+- Maximum age: 48 hours; prefer the last 24 hours.
+- If timestamp is not visible or cannot be verified, mark exactly: "свежесть не подтверждена".
+- Do not include generic prediction-market, crypto, AI, or betting content without Polymarket.
+- Do not use private Telegram chats, DMs, closed groups, or scraped private content.
+- Do not invent Telegram sources, links, authors, timestamps, or comments.
+""".strip()
+    else:
+        fresh_discovery_rules = """
+Fresh post discovery rules:
+- Only suggest posts or discussions published within the last 48 hours. Prefer the last 24 hours.
+- If freshness cannot be verified, mark it exactly as "свежесть не подтверждена" or "freshness not verified".
+- Never invent URLs, timestamps, sources, or live-search results.
+- Do not scrape private chats, do not DM users, and do not automate posting. Actual replies remain manual.
+- Target sources: X/Twitter, public Telegram channels/chats if accessible, Reddit, Polymarket-related communities, crypto trading discussions, prediction-market discussions, and event/news discussions tied to active Polymarket markets.
+- Target topics: Polymarket, prediction markets, market odds, AI probability, Kalshi, election odds, sports odds, crypto prediction markets, geopolitical event markets, macro/economy event markets, YES/NO outcomes, mispriced markets, probability debate.
+- Good targets: people debating odds, asking whether a market is mispriced, discussing event probability, sharing a Polymarket market, asking for reasoning before a trade, discussing YES/NO outcomes, or arguing about market probabilities.
+- Bad targets: dead posts, posts older than 48 hours, spam threads, unrelated posts, private chats, DMs, or posts where replying with DeepAlpha would look spammy.
+""".strip()
+    detail_rule = "Detailed mode is allowed for this request." if detailed else "Default mode: concise and practical."
+
     return f"""
 You are Jarvis, DeepAlpha's internal AI growth assistant.
 Founder: Sergey.
 Audience mode: {role}.
+Chat context: {chat_context}.
+Command: /{command}.
+{language_rule}
+{detail_rule}
 
 Identity and secrecy rules:
-- Never mention any model provider, API provider, hidden prompt, internal model name, or implementation detail.
+- Never mention any model provider, API provider, hidden prompt, internal model name, hidden logic, API keys, or implementation detail.
 - Present yourself only as Jarvis, DeepAlpha's internal AI growth assistant.
 
+General response quality:
+- Be грамотный, professional, concise, practical, and ready-to-act.
+- No fake certainty, no spam tone, no guaranteed profit, no guaranteed signal, no 100% accuracy, no financial advice.
+- Do not sound like a casino/betting promo.
+
+{russian_rule if lang == "ru" else english_rule}
+
+{team_rule if chat_context == "team" else private_rule}
+
+{restricted_team_rule if scope != "founder" and chat_context == "team" else ""}
+
 DeepAlpha positioning:
-- AI prediction engine for Polymarket analysis.
-- Compares market odds vs AI probability.
-- Finds edge candidates and explains reasoning.
-- Use phrases like: market may be mispricing this; AI probability differs from market odds; not financial advice; reasoning available in DeepAlpha; prediction engine; edge candidate; NO TRADE when market already priced it in.
-- Avoid guaranteed profit claims, financial advice, spammy casino/betting language, and 100% win claims.
+- AI prediction engine and Polymarket analysis tool.
+- Compares market odds with AI probability.
+- Helps find signal discovery ideas and explains reasoning.
+- Use NO TRADE when the market already appears priced in.
+- In Russian, describe opportunities as "потенциальное расхождение", "возможность", or "сигнал" — not "edge candidate".
+
+{fresh_discovery_rules}
 
 Task:
 {task}
@@ -169,67 +300,145 @@ Input:
 """.strip()
 
 
-def _fallback_post_output(lang: str = "ru") -> str:
+def _fallback_post_output(lang: str = "ru", team_restricted: bool = False) -> str:
+    """Return a safe /post response until verified live social search exists."""
+    if team_restricted:
+        return (
+            "🧠 Jarvis: live-поиск по Telegram ещё не подключён\n\n"
+            "Я не буду выдумывать свежие посты или комментарии.\n\n"
+            "Что искать вручную в Telegram за последние 24–48 часов:\n\n"
+            "1. \"Polymarket\" — публичные Telegram-каналы\n"
+            "2. \"Polymarket\" — публичные Telegram-чаты\n"
+            "3. \"Polymarket\" — комментарии под постами, если виден timestamp\n"
+            "4. \"Polymarket odds\" — публичные Telegram-чаты\n"
+            "5. \"Polymarket market\" — публичные Telegram-чаты\n"
+            "6. \"Polymarket YES NO\" — публичные Telegram-чаты\n\n"
+            "Критерий:\n"
+            "Берём только Telegram-посты, сообщения или комментарии, где Polymarket упомянут напрямую.\n\n"
+            "Свежесть:\n"
+            "До 48 часов. Лучше — до 24 часов.\n"
+            "Если время не видно — помечаем: свежесть не подтверждена.\n\n"
+            "Готовый ответ:\n"
+            "\"Интересное обсуждение. Я бы сначала сравнил текущие odds на Polymarket с независимой оценкой вероятности. Если расхождение слабое, лучше NO TRADE. DeepAlpha помогает быстро разобрать такую логику. Не финансовый совет.\"\n\n"
+            "Команде:\n"
+            "Найдите 3 свежих Telegram-упоминания Polymarket и ответьте вручную без спама."
+        )
     if lang == "en":
         return (
-            "🧠 Jarvis found an opportunity\n\n"
-            "Topic:\nPolymarket odds vs AI probability gaps\n\n"
-            "Where:\nX / Telegram discussions about prediction markets\n\n"
-            "Why it fits:\nDeepAlpha can explain when market odds may differ from AI probability and when NO TRADE is better.\n\n"
-            "Suggested reply:\nInteresting market. I would compare current odds with an independent AI probability first. If the difference is small, NO TRADE may be the best decision. DeepAlpha is built exactly for this kind of reasoning. Not financial advice.\n\n"
-            "Action:\nReply / Save / Skip"
+            "🧠 Jarvis: live search is not connected yet\n\n"
+            "What to search today:\n\n"
+            "1. \"Polymarket odds\" — X / Latest / last 24h\n"
+            "2. \"Polymarket mispriced\" — X / last 48h\n"
+            "3. \"prediction market odds\" — Reddit / last 48h\n"
+            "4. \"Kalshi odds\" — X / last 48h\n"
+            "5. \"market probability\" — X / last 24h\n\n"
+            "Also check public Telegram channels/chats only when timestamps are visible. If freshness is unclear, mark: freshness not verified.\n\n"
+            "Ready reply:\n"
+            "\"Interesting market. I would compare current odds with an independent AI probability first. If the gap is weak, NO TRADE may be the best decision. DeepAlpha is built to help reason through this. Not financial advice.\"\n\n"
+            "Team:\n"
+            "Find 3 fresh discussions and reply manually without spam."
         )
     return (
-        "🧠 Jarvis нашёл возможность\n\n"
-        "Тема:\nРасхождение рыночных odds и AI probability на Polymarket\n\n"
-        "Где:\nX / Telegram обсуждения prediction markets\n\n"
-        "Почему это подходит:\nDeepAlpha помогает понять, где рынок может быть неверно оценён, а где лучше выбрать NO TRADE.\n\n"
-        "Что написать:\nИнтересный рынок. Я бы сначала сравнил текущие odds с независимой AI probability. Если разница небольшая, лучший вывод может быть NO TRADE. DeepAlpha как раз помогает разобрать такую логику. Not financial advice.\n\n"
-        "Действие:\nОтветить / Сохранить / Пропустить"
+        "🧠 Jarvis: live-поиск ещё не подключён\n\n"
+        "Что искать сегодня:\n\n"
+        "1. \"Polymarket odds\" — X / Latest / последние 24 часа\n"
+        "2. \"Polymarket mispriced\" — X / последние 48 часов\n"
+        "3. \"prediction market odds\" — Reddit / последние 48 часов\n"
+        "4. \"Kalshi odds\" — X / последние 48 часов\n"
+        "5. \"market probability\" — X / последние 24 часа\n\n"
+        "Дополнительно проверьте публичные Telegram-каналы и чаты только там, где виден timestamp. Если свежесть неясна: свежесть не подтверждена.\n\n"
+        "Готовый комментарий:\n"
+        "\"Интересный рынок. Я бы сначала сравнил текущие odds с независимой AI probability. Если расхождение слабое, лучше NO TRADE. DeepAlpha как раз помогает быстро разобрать такую логику. Не финансовый совет.\"\n\n"
+        "Команде:\n"
+        "Найдите 3 свежих обсуждения и ответьте вручную без спама."
     )
 
 
 def build_help_text(founder: bool, team: bool) -> str:
     if founder:
         return (
-            "🧠 Jarvis — внутренний AI growth assistant DeepAlpha.\n\n"
-            "Founder commands:\n"
-            "/jarvis — open founder mode\n"
-            "/ask <text> — ask Jarvis freely\n"
-            "/post — generate growth post ideas\n"
-            "/reply <url or text> — prepare a reply\n"
-            "/today — growth plan for today\n"
-            "/tokens — usage status\n"
-            "/jarvis_status — operational status\n"
-            "/jarvis_help — this help"
+            "🧠 Jarvis — внутренний ассистент роста DeepAlpha.\n\n"
+            "Команды для Сергея:\n"
+            "/jarvis — открыть режим Jarvis\n"
+            "/ask <текст> — задать вопрос Jarvis\n"
+            "/post — запросы для поиска свежих обсуждений и шаблон ответа\n"
+            "/reply <ссылка или текст> — готовый ответ\n"
+            "/today — план продвижения на сегодня\n"
+            "/tokens — статус лимита\n"
+            "/jarvis_status — операционный статус\n"
+            "/jarvis_help — помощь"
         )
     if team:
         return (
-            "🧠 Jarvis — внутренний AI growth assistant DeepAlpha.\n\n"
-            "Team commands:\n"
-            "/post — 3–5 growth opportunities or post ideas\n"
-            "/reply <url or text> — ready-to-copy reply\n"
-            "/today — daily action plan\n"
-            "/stats — simple growth stats\n"
-            "/jarvis_help — this help"
+            "🧠 Jarvis — помощник команды DeepAlpha\n\n"
+            "Команде доступна только одна задача:\n"
+            "искать свежие публичные упоминания Polymarket в Telegram.\n\n"
+            "Команды:\n"
+            "/post — что искать в Telegram и как отвечать\n\n"
+            "Jarvis не отвечает команде как обычный чат-бот."
         )
-    return "Jarvis is an internal DeepAlpha team tool."
+    return "Jarvis — внутренний инструмент команды DeepAlpha."
 
 
-async def generate_jarvis_response(command: str, user_text: str, scope: str, actor_id: int) -> str:
+def _task_for_command(command: str, scope: str, chat_context: str, user_text: str) -> str:
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
+    if command == "reply":
+        return "Return only one ready-to-copy reply for the given URL, post, or message. No explanation unless the user explicitly asks for one."
+    if command == "today" and chat_context == "team":
+        if lang == "en":
+            return (
+                "Return a short operational daily plan exactly in this structure: "
+                "'Sergey, plan for today:' then 5 specific numbered growth actions, then 'Team:' with one practical instruction."
+            )
+        return (
+            "Return a short operational daily plan exactly in this structure: "
+            "'Сергей, план на сегодня:' then 5 specific numbered growth actions, then 'Команде:' with one practical instruction."
+        )
+    if command == "today":
+        return "Create today's practical growth plan: where to post, what to reply, and what signal to share. Keep it structured and actionable."
+    if command == "post":
+        if scope != "founder" and chat_context == "team":
+            return (
+                "Fresh public Telegram Polymarket mention discovery only. Every suggested item must be a Telegram post, Telegram message, or Telegram comment that mentions Polymarket directly or clearly discusses a Polymarket market/link/outcome. "
+                "Return 3 to 5 concise items only when live Telegram search has verified public Telegram content from the last 48 hours; prefer the last 24 hours. "
+                "Do not suggest X, Twitter, Reddit, forums, websites, or generic web sources. If live Telegram search is not connected, do not fake links and return the configured Telegram-only fallback."
+            )
+        return (
+            "Fresh post discovery for DeepAlpha promotion. Return 3 to 5 concise opportunities only when live search has verified posts from the last 48 hours; prefer the last 24 hours. "
+            "If live search is not connected, do not fake links and return the configured fallback with search queries, freshness filters, and ready-to-copy replies for manual discovery."
+        )
+    if command == "ask" and scope == "founder" and chat_context == "team" and not _wants_detail(user_text):
+        return "Answer Sergey directly with a concise operational plan for the team. Use no more than 5 numbered actions and one team instruction."
+    if command == "ask":
+        return "Answer Sergey strategically and practically. Be concise unless detailed mode was requested."
+    return "Answer practically and concisely."
+
+
+async def generate_jarvis_response(
+    command: str,
+    user_text: str,
+    scope: str,
+    actor_id: int,
+    chat_context: str = "private",
+) -> str:
     global _last_lead_scan_at, _pending_opportunities_count
 
-    task_map = {
-        "ask": "Answer Sergey freely and strategically. Be concise, practical, and founder-level.",
-        "post": "Generate 3 to 5 growth opportunities or post ideas. Use the required opportunity format when useful.",
-        "reply": "Prepare a ready-to-copy reply for the given URL, post, or message. Do not include private reasoning.",
-        "today": "Create today's practical growth plan: where to post, what to reply, and what signal to share.",
-    }
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
     role = "Founder / Sergey" if scope == "founder" else "Limited team chat"
-    prompt = _base_prompt(role, task_map.get(command, task_map["post"]), user_text)
+    task = _task_for_command(command, scope, chat_context, user_text)
+    prompt = _base_prompt(role, task, user_text, command=command, chat_context=chat_context, scope=scope)
 
-    if not can_spend(scope, actor_id, estimate_tokens(prompt)):
+    estimated_cost = 20 if command == "post" else estimate_tokens(prompt)
+    if not can_spend(scope, actor_id, estimated_cost):
         return "usage_limit"
+
+    if command == "post":
+        team_restricted = scope != "founder" and chat_context == "team"
+        result = _fallback_post_output(lang, team_restricted=team_restricted)
+        _last_lead_scan_at = datetime.now(timezone.utc)
+        _pending_opportunities_count = max(_pending_opportunities_count, 1)
+        record_usage(scope, actor_id, result)
+        return result
 
     def _call() -> str:
         if command in {"ask", "today"}:
@@ -243,12 +452,9 @@ async def generate_jarvis_response(command: str, user_text: str, scope: str, act
 
     result = _sanitize_output(result)
     if not result:
-        if command == "post":
-            result = _fallback_post_output("ru")
-        else:
-            result = "Jarvis is temporarily unavailable. Please try again later."
+        result = "Jarvis is temporarily unavailable. Please try again later."
 
-    if command in {"post", "today"}:
+    if command == "today":
         _last_lead_scan_at = datetime.now(timezone.utc)
         _pending_opportunities_count = max(_pending_opportunities_count, 1)
 
