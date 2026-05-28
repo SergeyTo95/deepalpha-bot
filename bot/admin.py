@@ -163,7 +163,10 @@ def _users_page_kb(shown_limit: int, total: int, users: list, session_id: str, l
                 callback_data=f"admin_users_more:{next_limit}:{session_id}",
             )
         )
-    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+    kb.row(
+        InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"),
+        InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
+    )
     return kb
 
 
