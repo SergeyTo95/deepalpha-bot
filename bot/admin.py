@@ -1,3 +1,4 @@
+from __future__ import annotations
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher import Dispatcher
