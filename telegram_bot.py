@@ -94,6 +94,7 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
+BOT_ID = int(BOT_TOKEN.split(":", 1)[0]) if BOT_TOKEN.split(":", 1)[0].isdigit() else None
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://deepalpha-bot-production.up.railway.app")
 
 bot = Bot(token=BOT_TOKEN)
@@ -4553,6 +4554,36 @@ def _jarvis_team_allowed(message: types.Message, command: str) -> bool:
     return False
 
 
+def _is_reply_to_current_bot(message: types.Message) -> bool:
+    replied = message.reply_to_message
+    replied_user = replied.from_user if replied else None
+    if not replied_user or not getattr(replied_user, "is_bot", False):
+        return False
+    if BOT_ID is not None:
+        return replied_user.id == BOT_ID
+    bot_username = (BOT_USERNAME or "").lstrip("@").lower()
+    replied_username = (getattr(replied_user, "username", "") or "").lstrip("@").lower()
+    return bool(bot_username and replied_username == bot_username)
+
+
+def _jarvis_founder_direct_reply(message: types.Message) -> bool:
+    if not message.text or (message.text or "").startswith("/"):
+        return False
+    if not message.from_user or not is_founder_user(message.from_user.id):
+        return False
+    if not (message.chat.type == "private" or is_team_chat(message.chat.id)):
+        return False
+    return _is_reply_to_current_bot(message)
+
+
+def _jarvis_reply_context_args(message: types.Message) -> str:
+    current_text = (message.text or "").strip()
+    previous_text = (getattr(message.reply_to_message, "text", "") or getattr(message.reply_to_message, "caption", "") or "").strip()
+    if not previous_text:
+        return current_text
+    return f"Previous Jarvis message:\n{previous_text[:1200]}\n\nSergey reply:\n{current_text}"
+
+
 def _format_jarvis_status(actor_id: int, founder: bool) -> str:
     status = get_jarvis_status(actor_id, founder=founder)
     enabled = "включён" if status["enabled"] else "выключен"
@@ -4685,6 +4716,16 @@ async def jarvis_command_handler(message: types.Message, state: FSMContext):
         return
 
     await _run_jarvis_llm_command(message, command, args, scope or "team")
+
+
+
+@dp.message_handler(lambda m: _jarvis_founder_direct_reply(m), state="*")
+async def jarvis_founder_reply_to_bot_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not is_jarvis_enabled():
+        await message.answer("🧠 Jarvis выключен. Чтобы включить, установите JARVIS_ENABLED=true.")
+        return
+    await _run_jarvis_llm_command(message, "ask", _jarvis_reply_context_args(message), "founder")
 
 
 @dp.message_handler(lambda m: m.chat.type == "private" and m.text and not (m.text or "").startswith("/") and m.from_user and is_founder_user(m.from_user.id) and re.search(r"\b(jarvis|джарвис)\b", m.text, re.IGNORECASE), state="*")
