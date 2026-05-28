@@ -80,6 +80,11 @@ from services.moderation_service import (
     is_moderation_allowed, is_moderation_enabled,
     get_moderation_message, get_moderation_alert,
 )
+from services.jarvis_service import (
+    build_help_text, can_spend, generate_jarvis_response, get_jarvis_settings,
+    get_status as get_jarvis_status, get_usage_limit, get_usage_today,
+    is_founder_user, is_jarvis_enabled, is_team_chat,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4489,6 +4494,180 @@ async def admin_handler_any_state(message: types.Message, state: FSMContext):
     await message.answer("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
 
 
+
+# ═══════════════════════════════════════════
+# JARVIS INTERNAL GROWTH ASSISTANT
+# ═══════════════════════════════════════════
+
+JARVIS_TEAM_COMMANDS = {"post", "reply", "today", "stats", "jarvis_help"}
+
+
+def _jarvis_command_name(message: types.Message) -> str:
+    text = (message.text or "").strip()
+    if not text.startswith("/"):
+        return ""
+    return text.split(maxsplit=1)[0].split("@", 1)[0].lstrip("/").lower()
+
+
+
+def _jarvis_team_allowed(message: types.Message, command: str) -> bool:
+    if not is_team_chat(message.chat.id):
+        return False
+    if command in JARVIS_TEAM_COMMANDS:
+        return True
+    if message.reply_to_message and command in JARVIS_TEAM_COMMANDS:
+        return True
+    return False
+
+
+def _format_jarvis_status(actor_id: int, founder: bool) -> str:
+    status = get_jarvis_status(actor_id, founder=founder)
+    enabled = "enabled" if status["enabled"] else "disabled"
+    team_chat_id = status["team_chat_id"] if status["team_chat_id"] is not None else "not set"
+    return (
+        "🧠 Jarvis status\n\n"
+        f"Status: {enabled}\n"
+        f"Team chat id: {team_chat_id}\n"
+        f"Approx usage today: {status['usage_today']} / {status['usage_limit']}\n"
+        f"Last lead scan time: {status['last_lead_scan_at']}\n"
+        f"Pending opportunities count: {status['pending_opportunities_count']}"
+    )
+
+
+def _format_jarvis_tokens(actor_id: int, founder: bool) -> str:
+    scope = "founder" if founder else "team"
+    return (
+        "🧠 Jarvis usage\n\n"
+        f"Approx usage today: {get_usage_today(scope, actor_id)} / {get_usage_limit(scope)}\n"
+        "Usage is an MVP in-memory estimate and resets daily."
+    )
+
+
+def _format_jarvis_stats() -> str:
+    return (
+        "📊 Jarvis growth stats\n\n"
+        "Saved opportunities: MVP stateless mode\n"
+        "Used opportunities: MVP stateless mode\n"
+        "Next step: use /post or /today to prepare growth actions."
+    )
+
+
+async def _jarvis_alert_founders(message: types.Message, reason: str) -> None:
+    settings = get_jarvis_settings()
+    if not settings.alerts_enabled:
+        return
+    safe_reason = (reason or "Jarvis error")[:80]
+    for founder_id in settings.founder_ids:
+        try:
+            await bot.send_message(founder_id, f"🧠 Jarvis alert: {safe_reason}")
+        except Exception:
+            logger.info(
+                "jarvis_alert_failed user_id=%s chat_id=%s",
+                founder_id,
+                message.chat.id if message.chat else None,
+            )
+
+
+async def _run_jarvis_llm_command(message: types.Message, command: str, args: str, scope: str) -> None:
+    actor_id = message.from_user.id if message.from_user else 0
+    if not can_spend(scope, actor_id, 20):
+        logger.info("jarvis_command command=%s user_id=%s chat_id=%s success=false error=usage_limit", command, actor_id, message.chat.id)
+        if scope == "founder":
+            await message.answer("🧠 Jarvis usage limit reached for today. You can raise the Jarvis daily limit in environment settings.")
+        else:
+            await message.answer("🧠 Jarvis reached today’s team usage limit. Please ask Sergey if this should be increased.")
+        await _jarvis_alert_founders(message, "usage limit reached")
+        return
+
+    try:
+        text = await generate_jarvis_response(command, args, scope, actor_id)
+        if text == "usage_limit":
+            if scope == "founder":
+                await message.answer("🧠 Jarvis usage limit reached for today. You can raise the Jarvis daily limit in environment settings.")
+            else:
+                await message.answer("🧠 Jarvis reached today’s team usage limit. Please ask Sergey if this should be increased.")
+            await _jarvis_alert_founders(message, "usage limit reached")
+            return
+        await message.answer(text)
+        logger.info("jarvis_command command=%s user_id=%s chat_id=%s success=true", command, actor_id, message.chat.id)
+    except Exception as exc:
+        logger.info(
+            "jarvis_command command=%s user_id=%s chat_id=%s success=false error=%s",
+            command,
+            actor_id,
+            message.chat.id,
+            exc.__class__.__name__,
+        )
+        await message.answer("🧠 Jarvis is temporarily unavailable. Please try again later.")
+        await _jarvis_alert_founders(message, exc.__class__.__name__)
+
+
+@dp.message_handler(commands=["jarvis", "jarvis_help", "post", "reply", "today", "jarvis_status", "ask", "tokens", "stats"], state="*")
+async def jarvis_command_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    command = _jarvis_command_name(message)
+    args = message.get_args() or ""
+    founder = bool(message.from_user and is_founder_user(message.from_user.id))
+    team = is_team_chat(message.chat.id)
+    scope = "founder" if founder else "team" if team else None
+
+    if command in {"jarvis_status", "tokens"} and not founder:
+        return
+    if command in {"jarvis", "ask"} and not founder:
+        return
+    if not founder and not _jarvis_team_allowed(message, command):
+        return
+
+    if command in {"jarvis", "jarvis_help"}:
+        await message.answer(build_help_text(founder=founder, team=team))
+        return
+
+    if command == "jarvis_status":
+        await message.answer(_format_jarvis_status(message.from_user.id, founder=True))
+        return
+
+    if command == "tokens":
+        await message.answer(_format_jarvis_tokens(message.from_user.id, founder=True))
+        return
+
+    if command == "stats":
+        if founder or team:
+            await message.answer(_format_jarvis_stats())
+        return
+
+    if not is_jarvis_enabled():
+        if founder:
+            await message.answer("🧠 Jarvis is disabled. Set JARVIS_ENABLED=true to enable it.")
+        return
+
+    if command == "ask" and not args.strip():
+        await message.answer("Ask Jarvis with: /ask <text>")
+        return
+    if command == "reply" and not args.strip():
+        await message.answer("Send: /reply <url or text>")
+        return
+
+    await _run_jarvis_llm_command(message, command, args, scope or "team")
+
+
+@dp.message_handler(lambda m: m.chat.type == "private" and m.text and not (m.text or "").startswith("/") and m.from_user and is_founder_user(m.from_user.id) and re.search(r"\b(jarvis|джарвис)\b", m.text, re.IGNORECASE), state="*")
+async def jarvis_founder_private_chat_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not is_jarvis_enabled():
+        await message.answer("🧠 Jarvis is disabled. Set JARVIS_ENABLED=true to enable it.")
+        return
+    await _run_jarvis_llm_command(message, "ask", message.text or "", "founder")
+
+
+@dp.message_handler(lambda m: is_team_chat(m.chat.id) and m.text and not (m.text or "").startswith("/") and re.search(r"\b(jarvis|джарвис)\b", m.text, re.IGNORECASE), state="*")
+async def jarvis_team_mention_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if message.from_user and is_founder_user(message.from_user.id) and is_jarvis_enabled():
+        await _run_jarvis_llm_command(message, "ask", message.text or "", "founder")
+        return
+    await message.answer("🧠 Jarvis responds in team chat via commands: /post, /reply, /today, /stats, /jarvis_help")
+
+
 @dp.message_handler(commands=["recap_preview"], state="*")
 async def recap_preview_handler(message: types.Message):
     from bot.admin import is_admin
@@ -7436,6 +7615,14 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         )
     except Exception as e:
         print(f"answer_inline_query error: {e}")
+
+
+
+@dp.message_handler(lambda m: is_team_chat(m.chat.id) and m.text and not (m.text or "").startswith("/"), state="*")
+async def jarvis_team_plain_message_ignore_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    # Jarvis is command-gated in the internal team chat. Normal team discussion is ignored.
+    return
 
 
 # ═══════════════════════════════════════════
