@@ -225,9 +225,37 @@ Founder private chat style:
 """.strip()
     restricted_team_rule = """
 Restricted team mode:
-- Non-founder team members can use Jarvis only for fresh public Polymarket mention discovery.
+- Non-founder team members can use Jarvis only for fresh public Telegram Polymarket mention discovery.
+- Team discovery must include only Telegram posts/messages/comments that mention Polymarket directly or clearly discuss a Polymarket market/link/outcome.
+- Do not suggest X, Twitter, Reddit, forums, websites, or generic web sources.
 - Do not give strategy, broad advice, motivational text, generic promotion ideas, or general chatbot answers to team members.
-- Team discovery must include only posts/messages/discussions that mention Polymarket directly or clearly discuss a Polymarket market/link/outcome.
+- Allowed sources are Telegram public channels, Telegram public chats, and Telegram comments where accessible.
+- No private Telegram chats, DMs, closed groups, or scraped private content.
+- Do not invent Telegram sources, links, authors, timestamps, or comments.
+""".strip()
+    restricted_team = scope != "founder" and chat_context == "team"
+    if restricted_team:
+        fresh_discovery_rules = """
+Fresh post discovery rules for restricted team:
+- Allowed sources are Telegram public channels, Telegram public chats, and Telegram comments where accessible.
+- Every item must mention Polymarket directly or clearly include a Polymarket market/link/outcome.
+- Maximum age: 48 hours; prefer the last 24 hours.
+- If timestamp is not visible or cannot be verified, mark exactly: "свежесть не подтверждена".
+- Do not include generic prediction-market, crypto, AI, or betting content without Polymarket.
+- Do not use private Telegram chats, DMs, closed groups, or scraped private content.
+- Do not invent Telegram sources, links, authors, timestamps, or comments.
+""".strip()
+    else:
+        fresh_discovery_rules = """
+Fresh post discovery rules:
+- Only suggest posts or discussions published within the last 48 hours. Prefer the last 24 hours.
+- If freshness cannot be verified, mark it exactly as "свежесть не подтверждена" or "freshness not verified".
+- Never invent URLs, timestamps, sources, or live-search results.
+- Do not scrape private chats, do not DM users, and do not automate posting. Actual replies remain manual.
+- Target sources: X/Twitter, public Telegram channels/chats if accessible, Reddit, Polymarket-related communities, crypto trading discussions, prediction-market discussions, and event/news discussions tied to active Polymarket markets.
+- Target topics: Polymarket, prediction markets, market odds, AI probability, Kalshi, election odds, sports odds, crypto prediction markets, geopolitical event markets, macro/economy event markets, YES/NO outcomes, mispriced markets, probability debate.
+- Good targets: people debating odds, asking whether a market is mispriced, discussing event probability, sharing a Polymarket market, asking for reasoning before a trade, discussing YES/NO outcomes, or arguing about market probabilities.
+- Bad targets: dead posts, posts older than 48 hours, spam threads, unrelated posts, private chats, DMs, or posts where replying with DeepAlpha would look spammy.
 """.strip()
     detail_rule = "Detailed mode is allowed for this request." if detailed else "Default mode: concise and practical."
 
@@ -262,15 +290,7 @@ DeepAlpha positioning:
 - Use NO TRADE when the market already appears priced in.
 - In Russian, describe opportunities as "потенциальное расхождение", "возможность", or "сигнал" — not "edge candidate".
 
-Fresh post discovery rules:
-- Only suggest posts or discussions published within the last 48 hours. Prefer the last 24 hours.
-- If freshness cannot be verified, mark it exactly as "свежесть не подтверждена" or "freshness not verified".
-- Never invent URLs, timestamps, sources, or live-search results.
-- Do not scrape private chats, do not DM users, and do not automate posting. Actual replies remain manual.
-- Target sources: X/Twitter, public Telegram channels/chats if accessible, Reddit, Polymarket-related communities, crypto trading discussions, prediction-market discussions, and event/news discussions tied to active Polymarket markets.
-- Target topics: Polymarket, prediction markets, market odds, AI probability, Kalshi, election odds, sports odds, crypto prediction markets, geopolitical event markets, macro/economy event markets, YES/NO outcomes, mispriced markets, probability debate.
-- Good targets: people debating odds, asking whether a market is mispriced, discussing event probability, sharing a Polymarket market, asking for reasoning before a trade, discussing YES/NO outcomes, or arguing about market probabilities.
-- Bad targets: dead posts, posts older than 48 hours, spam threads, unrelated posts, private chats, DMs, or posts where replying with DeepAlpha would look spammy.
+{fresh_discovery_rules}
 
 Task:
 {task}
@@ -284,21 +304,24 @@ def _fallback_post_output(lang: str = "ru", team_restricted: bool = False) -> st
     """Return a safe /post response until verified live social search exists."""
     if team_restricted:
         return (
-            "🧠 Jarvis: live-поиск ещё не подключён\n\n"
-            "Я не буду выдумывать свежие посты.\n\n"
-            "Что искать вручную за последние 24–48 часов:\n\n"
-            "1. \"Polymarket\" — X / Latest\n"
-            "2. \"Polymarket odds\" — X / Latest\n"
-            "3. \"Polymarket market\" — X / Latest\n"
-            "4. \"Polymarket YES NO\" — X / Latest\n"
-            "5. \"Polymarket\" — Reddit / последние 48 часов\n"
-            "6. \"Polymarket\" — публичные Telegram-каналы, только если виден timestamp\n\n"
+            "🧠 Jarvis: live-поиск по Telegram ещё не подключён\n\n"
+            "Я не буду выдумывать свежие посты или комментарии.\n\n"
+            "Что искать вручную в Telegram за последние 24–48 часов:\n\n"
+            "1. \"Polymarket\" — публичные Telegram-каналы\n"
+            "2. \"Polymarket\" — публичные Telegram-чаты\n"
+            "3. \"Polymarket\" — комментарии под постами, если виден timestamp\n"
+            "4. \"Polymarket odds\" — публичные Telegram-чаты\n"
+            "5. \"Polymarket market\" — публичные Telegram-чаты\n"
+            "6. \"Polymarket YES NO\" — публичные Telegram-чаты\n\n"
             "Критерий:\n"
-            "Берём только свежие посты, где Polymarket упомянут напрямую.\n\n"
+            "Берём только Telegram-посты, сообщения или комментарии, где Polymarket упомянут напрямую.\n\n"
+            "Свежесть:\n"
+            "До 48 часов. Лучше — до 24 часов.\n"
+            "Если время не видно — помечаем: свежесть не подтверждена.\n\n"
             "Готовый ответ:\n"
             "\"Интересное обсуждение. Я бы сначала сравнил текущие odds на Polymarket с независимой оценкой вероятности. Если расхождение слабое, лучше NO TRADE. DeepAlpha помогает быстро разобрать такую логику. Не финансовый совет.\"\n\n"
             "Команде:\n"
-            "Найдите 3 свежих упоминания Polymarket и ответьте вручную без спама."
+            "Найдите 3 свежих Telegram-упоминания Polymarket и ответьте вручную без спама."
         )
     if lang == "en":
         return (
@@ -349,9 +372,9 @@ def build_help_text(founder: bool, team: bool) -> str:
         return (
             "🧠 Jarvis — помощник команды DeepAlpha\n\n"
             "Команде доступна только одна задача:\n"
-            "искать свежие публичные упоминания Polymarket.\n\n"
+            "искать свежие публичные упоминания Polymarket в Telegram.\n\n"
             "Команды:\n"
-            "/post — показать, что искать и как отвечать\n\n"
+            "/post — что искать в Telegram и как отвечать\n\n"
             "Jarvis не отвечает команде как обычный чат-бот."
         )
     return "Jarvis — внутренний инструмент команды DeepAlpha."
@@ -376,9 +399,9 @@ def _task_for_command(command: str, scope: str, chat_context: str, user_text: st
     if command == "post":
         if scope != "founder" and chat_context == "team":
             return (
-                "Fresh public Polymarket mention discovery only. Every suggested item must mention Polymarket directly or clearly discuss a Polymarket market/link/outcome. "
-                "Return 3 to 5 concise items only when live search has verified public posts from the last 48 hours; prefer the last 24 hours. "
-                "If live search is not connected, do not fake links and return the configured Polymarket-only fallback."
+                "Fresh public Telegram Polymarket mention discovery only. Every suggested item must be a Telegram post, Telegram message, or Telegram comment that mentions Polymarket directly or clearly discusses a Polymarket market/link/outcome. "
+                "Return 3 to 5 concise items only when live Telegram search has verified public Telegram content from the last 48 hours; prefer the last 24 hours. "
+                "Do not suggest X, Twitter, Reddit, forums, websites, or generic web sources. If live Telegram search is not connected, do not fake links and return the configured Telegram-only fallback."
             )
         return (
             "Fresh post discovery for DeepAlpha promotion. Return 3 to 5 concise opportunities only when live search has verified posts from the last 48 hours; prefer the last 24 hours. "

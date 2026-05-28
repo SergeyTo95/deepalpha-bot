@@ -4529,9 +4529,9 @@ JARVIS_TEAM_COMMANDS = {"post", "stats", "jarvis_help"}
 
 def _jarvis_team_restricted_message() -> str:
     return (
-        "🧠 Jarvis доступен команде только для поиска свежих упоминаний Polymarket.\n\n"
+        "🧠 Jarvis доступен команде только для поиска свежих упоминаний Polymarket в Telegram.\n\n"
         "Используйте:\n"
-        "/post — найти свежие обсуждения Polymarket"
+        "/post — найти свежие Telegram-обсуждения Polymarket"
     )
 
 
@@ -4579,9 +4579,9 @@ def _format_jarvis_tokens(actor_id: int, founder: bool) -> str:
 def _format_jarvis_stats() -> str:
     return (
         "📊 Статус поиска Jarvis\n\n"
-        "Свежие упоминания Polymarket: MVP без постоянного хранилища\n"
+        "Свежие Telegram-упоминания Polymarket: MVP без постоянного хранилища\n"
         "Использованные обсуждения: MVP без постоянного хранилища\n"
-        "Следующий шаг: используйте /post для ручного поиска свежих упоминаний Polymarket."
+        "Следующий шаг: используйте /post для ручного поиска свежих Telegram-упоминаний Polymarket."
     )
 
 
