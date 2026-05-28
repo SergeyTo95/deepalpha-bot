@@ -7620,7 +7620,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 
 @dp.message_handler(lambda m: is_team_chat(m.chat.id) and m.text and not (m.text or "").startswith("/"), state="*")
 async def jarvis_team_plain_message_ignore_handler(message: types.Message, state: FSMContext):
-    await state.finish()
     # Jarvis is command-gated in the internal team chat. Normal team discussion is ignored.
     return
 
