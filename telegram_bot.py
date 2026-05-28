@@ -303,6 +303,18 @@ dp.middleware.setup(ModerationGuardMiddleware())
 # KEYBOARDS
 # ═══════════════════════════════════════════
 
+def is_private_chat(message: types.Message) -> bool:
+    return bool(message.chat and message.chat.type == "private")
+
+
+def private_reply_markup(message: types.Message, markup):
+    if is_private_chat(message):
+        return markup
+    if isinstance(markup, ReplyKeyboardMarkup):
+        return types.ReplyKeyboardRemove()
+    return markup
+
+
 def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -4455,7 +4467,7 @@ async def start_handler(message: types.Message):
 
     if show_profile_of:
         text = _format_profile(message.from_user.id, target_user_id=show_profile_of)
-        await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
         return
 
     text = t(message.from_user.id, "start")
@@ -4468,7 +4480,7 @@ async def start_handler(message: types.Message):
         )
         text += ref_text
 
-    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
 
 
 @dp.message_handler(commands=["cancel"], state="*")
@@ -4476,7 +4488,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
-    await message.answer(t(uid, "action_cancelled"), reply_markup=get_main_keyboard(uid))
+    await message.answer(t(uid, "action_cancelled"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["start"], state="*")
@@ -4493,6 +4505,20 @@ async def admin_handler_any_state(message: types.Message, state: FSMContext):
         return
     await message.answer("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
 
+
+@dp.message_handler(commands=["chatid"], state="*")
+async def chatid_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not is_founder_user(message.from_user.id):
+        return
+
+    title = message.chat.title or "private"
+    await message.answer(
+        "🆔 Chat info\n\n"
+        f"Chat ID:\n{message.chat.id}\n\n"
+        f"Chat type:\n{message.chat.type}\n\n"
+        f"User ID:\n{message.from_user.id}\n\n"
+        f"Title:\n{title}"
+    )
 
 
 # ═══════════════════════════════════════════
@@ -4995,7 +5021,7 @@ async def watchlist_command(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 @dp.message_handler(
     lambda m: m.text in ["📘 Как читать анализ", "📘 How to read the analysis"],
@@ -5006,7 +5032,7 @@ async def analysis_guide_handler(message: types.Message, state: FSMContext):
     uid = message.from_user.id
     lang = get_user_lang(uid)
     text = get_analysis_guide(lang)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 @dp.message_handler(
     lambda m: m.text in ["🪙 Крипто анализ", "🪙 Crypto Analysis"],
@@ -5078,7 +5104,7 @@ async def authors_command(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_authors_list(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["my_subscriptions"])
@@ -5086,7 +5112,7 @@ async def my_subscriptions_command(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_subscriptions(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["my_posts"])
@@ -5101,7 +5127,7 @@ async def my_posts_command(message: types.Message):
         return
 
     text = _format_my_posts(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["become_author"])
@@ -5206,7 +5232,7 @@ async def save_bio(message: types.Message, state: FSMContext):
     await state.finish()
 
     msg = f"✅ Bio обновлено!" if lang == "ru" else f"✅ Bio updated!"
-    await message.answer(msg, reply_markup=get_main_keyboard(uid))
+    await message.answer(msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["set_wallet"])
@@ -5256,7 +5282,7 @@ async def save_wallet(message: types.Message, state: FSMContext):
     await state.finish()
 
     msg = "✅ Кошелёк сохранён" if lang == "ru" else "✅ Wallet saved"
-    await message.answer(msg, reply_markup=get_main_keyboard(uid))
+    await message.answer(msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(commands=["withdraw"])
@@ -5549,7 +5575,7 @@ async def watchlist_button_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_watchlist_list(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["📣 Авторы", "📣 Authors", "📢 Авторы", "📢 Authors"])
@@ -5557,7 +5583,7 @@ async def authors_button_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_authors_list(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["📰 Подписки", "📰 Subscriptions"])
@@ -5565,7 +5591,7 @@ async def subscriptions_button_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     text = _format_subscriptions(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["✍️ Мои прогнозы", "✍️ My posts", "✍️ My forecasts"])
@@ -5580,7 +5606,7 @@ async def my_posts_button_handler(message: types.Message):
         return
 
     text = _format_my_posts(uid)
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["💰 Баланс автора", "💰 Author balance"])
@@ -5672,7 +5698,7 @@ async def language_handler(message: types.Message):
     _register_user(message)
     await message.answer(
         t(message.from_user.id, "choose_language"),
-        reply_markup=get_language_keyboard(),
+        reply_markup=private_reply_markup(message, get_language_keyboard()),
     )
 
 
@@ -5682,7 +5708,7 @@ async def set_russian_handler(message: types.Message):
     set_lang(message.from_user.id, "ru")
     await message.answer(
         t(message.from_user.id, "language_changed_ru"),
-        reply_markup=get_main_keyboard(message.from_user.id),
+        reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)),
     )
 
 
@@ -5692,7 +5718,7 @@ async def set_english_handler(message: types.Message):
     set_lang(message.from_user.id, "en")
     await message.answer(
         t(message.from_user.id, "language_changed_en"),
-        reply_markup=get_main_keyboard(message.from_user.id),
+        reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)),
     )
 
 
@@ -6131,13 +6157,13 @@ async def _publish_post_with_comment(message: types.Message, state: FSMContext, 
 
     if not analysis:
         msg = "❌ Анализ устарел" if lang == "ru" else "❌ Analysis expired"
-        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        await message.answer(msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     market_slug = analysis.get("market_slug", "") or _extract_slug_from_url(analysis.get("url", ""))
     if not market_slug:
         msg = "❌ Не удалось определить рынок" if lang == "ru" else "❌ Cannot detect market"
-        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        await message.answer(msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     # Создаём пост
@@ -6157,7 +6183,7 @@ async def _publish_post_with_comment(message: types.Message, state: FSMContext, 
 
     if not post_id:
         msg = "❌ Ошибка публикации" if lang == "ru" else "❌ Publish error"
-        await message.answer(msg, reply_markup=get_main_keyboard(uid))
+        await message.answer(msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     if lang == "ru":
@@ -6173,7 +6199,7 @@ async def _publish_post_with_comment(message: types.Message, state: FSMContext, 
             f"👥 Subscribers notified"
         )
 
-    await message.answer(success_msg, reply_markup=get_main_keyboard(uid))
+    await message.answer(success_msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
     # Рассылаем подписчикам
     subscribers = get_author_subscribers(uid, notifications_only=True)
@@ -6298,9 +6324,9 @@ async def analyze_prompt_handler(message: types.Message):
 
     if can_use_free_trial(uid, "analyses"):
         trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 Free trial available!"
-        await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=get_main_keyboard(uid))
+        await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
     else:
-        await message.answer(t(uid, "send_link"), reply_markup=get_main_keyboard(uid))
+        await message.answer(t(uid, "send_link"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 _MAIN_MENU_BUTTONS = {
@@ -6341,21 +6367,21 @@ async def other_analyses_menu_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     title = "🧩 Другие анализы" if get_user_lang(uid) == "ru" else "🧩 Other Analyses"
-    await message.answer(title, reply_markup=get_other_analyses_keyboard(uid))
+    await message.answer(title, reply_markup=private_reply_markup(message, get_other_analyses_keyboard(uid)))
 
 
 async def _show_analysis_menu(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    await message.answer("🔍 Анализ" if lang == "ru" else "🔍 Analysis", reply_markup=get_analysis_keyboard(uid))
+    await message.answer("🔍 Анализ" if lang == "ru" else "🔍 Analysis", reply_markup=private_reply_markup(message, get_analysis_keyboard(uid)))
 
 
 async def _show_main_menu(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
-    await message.answer("🏠 Главное меню" if lang == "ru" else "🏠 Main menu", reply_markup=get_main_keyboard(uid))
+    await message.answer("🏠 Главное меню" if lang == "ru" else "🏠 Main menu", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["⬅️ Назад к анализу", "⬅️ Back to analysis"], state="*")
@@ -6379,14 +6405,14 @@ async def analysis_menu_handler(message: types.Message):
 async def checks_submenu_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("🎁", reply_markup=get_checks_keyboard(uid))
+    await message.answer("🎁", reply_markup=private_reply_markup(message, get_checks_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["💳 Касса", "💳 Cashier"])
 async def cashier_menu_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("💳", reply_markup=get_cashier_keyboard(uid))
+    await message.answer("💳", reply_markup=private_reply_markup(message, get_cashier_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["👤 Профиль", "👤 Profile"])
@@ -6401,7 +6427,7 @@ async def profile_menu_handler(message: types.Message):
 async def more_menu_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
-    await message.answer("⚙️", reply_markup=get_more_keyboard(uid))
+    await message.answer("⚙️", reply_markup=private_reply_markup(message, get_more_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["✅ Активировать чек", "✅ Activate Check"])
@@ -6409,7 +6435,7 @@ async def activate_check_hint_handler(message: types.Message):
     uid = message.from_user.id
     lang = get_user_lang(uid)
     text = "Отправьте ссылку на чек (или откройте её), чтобы активировать." if lang == "ru" else "Send (or open) a check link to activate it."
-    await message.answer(text, reply_markup=get_checks_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_checks_keyboard(uid)))
 
 async def _escape_state_and_route_main_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -6472,7 +6498,7 @@ async def top_analysis_prompt_handler(message: types.Message):
 
     if not _is_top_analysis_enabled():
         text = "🔥 Top Analysis сейчас недоступен." if lang == "ru" else "🔥 Top Analysis is currently unavailable."
-        await message.answer(text, reply_markup=get_main_keyboard(uid))
+        await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     await AnalysisStates.waiting_for_top_analysis_link.set()
@@ -6489,7 +6515,7 @@ async def top_analysis_prompt_handler(message: types.Message):
             "Send a Polymarket link for extended analysis.\n\n"
             f"Price: {price} tokens."
         )
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["💡 Сигнал часа", "💡 Signal of the hour"])
@@ -6507,11 +6533,11 @@ async def signal_of_hour_handler(message: types.Message):
     if subscribed or (user and user.get("is_vip")):
         if not check_daily_limit(uid, "opportunities"):
             if paid_mode == "on" and not _check_tokens(uid, "cached_signal_price_tokens", "5"):
-                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+                await message.answer(t(uid, "limit_opportunities"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
                 return
     elif paid_mode == "on":
         if not _check_tokens(uid, "cached_signal_price_tokens", "5"):
-            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
 
     await message.answer(t(uid, "choose_category"), reply_markup=get_category_keyboard(uid))
@@ -6607,14 +6633,14 @@ async def personal_signal_handler(message: types.Message):
     if not check_credit and (subscribed or (user and user.get("is_vip"))):
         if not check_daily_limit(uid, "opportunities"):
             if not _check_tokens(uid, "opportunity_price_tokens", "20"):
-                await message.answer(t(uid, "limit_opportunities"), reply_markup=get_main_keyboard(uid))
+                await message.answer(t(uid, "limit_opportunities"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
                 return
             use_tokens = True
     elif not check_credit:
         if can_use_free_trial(uid, "opportunities"):
             use_free = True
         elif not _check_tokens(uid, "opportunity_price_tokens", "20"):
-            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
         else:
             use_tokens = True
@@ -6636,7 +6662,7 @@ async def personal_signal_handler(message: types.Message):
             pass
 
         if not result or result.get("question") == "No strong opportunity found":
-            await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
+            await message.answer(t(uid, "no_opportunities"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
 
         if result.get("question"):
@@ -6653,14 +6679,14 @@ async def personal_signal_handler(message: types.Message):
 
         increment_user_stat(uid, "total_opportunities")
         text = _format_opportunity(result, uid, cached=False)
-        await message.answer(text, reply_markup=get_main_keyboard(uid), parse_mode="HTML")
+        await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)), parse_mode="HTML")
 
     except Exception as e:
         try:
             await status_msg.delete()
         except Exception:
             pass
-        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
+        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["💰 Баланс", "💰 Balance"])
@@ -6740,7 +6766,7 @@ async def balance_handler(message: types.Message):
             f"Personal: {opp_price} | Watchlist: {watchlist_price}"
         )
 
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["💎 Купить токены", "💎 Buy tokens"])
@@ -6852,7 +6878,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
                 name = r.get("username") or r.get("first_name") or str(r["user_id"])
                 text += f"• @{name} — {r['total_analyses']} analyses\n"
 
-    await message.answer(text, reply_markup=get_main_keyboard(uid))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
     
 
 
@@ -6926,7 +6952,7 @@ async def history_handler(message: types.Message):
     uid = message.from_user.id
     records = get_recent_analyses(limit=5)
     if not records:
-        await message.answer(t(uid, "no_history"), reply_markup=get_main_keyboard(uid))
+        await message.answer(t(uid, "no_history"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     lang = get_user_lang(uid)
@@ -6940,7 +6966,7 @@ async def history_handler(message: types.Message):
         lines.append(f"  {label_prob}: {r['system_probability']}")
         lines.append(f"  📅 {r['created_at'][:10] if r['created_at'] else 'н/д'}")
         lines.append("")
-    await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
+    await message.answer("\n".join(lines), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: m.text in ["🏆 Топ", "🏆 Top"])
@@ -6949,7 +6975,7 @@ async def top_handler(message: types.Message):
     uid = message.from_user.id
     records = get_top_opportunities(limit=5)
     if not records:
-        await message.answer(t(uid, "no_opportunities"), reply_markup=get_main_keyboard(uid))
+        await message.answer(t(uid, "no_opportunities"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     lang = get_user_lang(uid)
@@ -6961,7 +6987,7 @@ async def top_handler(message: types.Message):
         lines.append(f"   Score: {score} {score_bar}")
         lines.append(f"   {r['confidence']}")
         lines.append("")
-    await message.answer("\n".join(lines), reply_markup=get_main_keyboard(uid))
+    await message.answer("\n".join(lines), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 # Lightweight in-memory dedup for Telegram duplicate updates / double handler hits.
@@ -7005,14 +7031,14 @@ async def _run_normal_polymarket_analysis(message: types.Message):
     if not check_credit and (subscribed or (user and user.get("is_vip"))):
         if not check_daily_limit(uid, "analyses"):
             if not _check_tokens(uid, "analysis_price_tokens", "10"):
-                await message.answer(t(uid, "limit_analyses"), reply_markup=get_main_keyboard(uid))
+                await message.answer(t(uid, "limit_analyses"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
                 return
             use_tokens = True
     elif not check_credit:
         if can_use_free_trial(uid, "analyses"):
             use_free = True
         elif not _check_tokens(uid, "analysis_price_tokens", "10"):
-            await message.answer(t(uid, "not_enough_tokens"), reply_markup=get_main_keyboard(uid))
+            await message.answer(t(uid, "not_enough_tokens"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
         else:
             use_tokens = True
@@ -7029,7 +7055,7 @@ async def _run_normal_polymarket_analysis(message: types.Message):
         agent = ChiefAgent()
         result = agent.run(url, lang=lang, user_id=uid)
         if not result:
-            await message.answer(t(uid, "no_answer"), reply_markup=get_main_keyboard(uid))
+            await message.answer(t(uid, "no_answer"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
 
         if check_credit:
@@ -7075,7 +7101,7 @@ async def _run_normal_polymarket_analysis(message: types.Message):
             pass
         return
     except Exception as e:
-        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=get_main_keyboard(uid))
+        await message.answer(f"{t(uid, 'error')} {e}", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
 async def _build_polymarket_analysis_context_for_top_analysis(
@@ -7299,7 +7325,7 @@ async def top_analysis_state_link_handler(message: types.Message, state: FSMCont
 
     if not ready:
         await state.finish()
-        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=get_main_keyboard(uid))
+        await message.answer(_get_top_analysis_maintenance_message(lang), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
 
     requested_url = (message.text or "").strip()
@@ -7364,7 +7390,7 @@ async def top_analysis_state_link_handler(message: types.Message, state: FSMCont
                 else "🔧 Top Analysis is temporarily unavailable.\n"
                 "Could not prepare market data for the extended analysis. No tokens were charged. Please try again later."
             )
-            await message.answer(maintenance_msg, reply_markup=get_main_keyboard(uid))
+            await message.answer(maintenance_msg, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
             return
 
     await _run_top_analysis_for_user(uid, lang, analysis, message.answer)
@@ -7639,7 +7665,7 @@ async def analysis_state_non_polymarket_handler(message: types.Message):
         if lang == "ru"
         else "Send a Polymarket link for analysis."
     )
-    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
 
 
 @dp.message_handler(
@@ -7653,7 +7679,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
         if lang == "ru"
         else "Send a Polymarket link for Top Analysis."
     )
-    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
 
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m) and (m.text or "").strip() not in ["💎 TON кошелёк", "💎 TON Wallet"] and not (m.from_user and m.from_user.id in TON_SEND_PENDING))
@@ -7672,11 +7698,11 @@ async def fallback_handler(message: types.Message):
             if lang == "ru"
             else "Send a Polymarket link for Top Analysis."
         )
-        await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
         return
     await message.answer(
         t(message.from_user.id, "fallback"),
-        reply_markup=get_main_keyboard(message.from_user.id),
+        reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)),
     )
 
 def _cleanup_pending_check_creations() -> None:
