@@ -4525,7 +4525,14 @@ async def chatid_handler(message: types.Message, state: FSMContext):
 # JARVIS INTERNAL GROWTH ASSISTANT
 # ═══════════════════════════════════════════
 
-JARVIS_TEAM_COMMANDS = {"post", "reply", "today", "stats", "jarvis_help"}
+JARVIS_TEAM_COMMANDS = {"post", "stats", "jarvis_help"}
+
+def _jarvis_team_restricted_message() -> str:
+    return (
+        "🧠 Jarvis доступен команде только для поиска свежих упоминаний Polymarket.\n\n"
+        "Используйте:\n"
+        "/post — найти свежие обсуждения Polymarket"
+    )
 
 
 def _jarvis_command_name(message: types.Message) -> str:
@@ -4571,10 +4578,10 @@ def _format_jarvis_tokens(actor_id: int, founder: bool) -> str:
 
 def _format_jarvis_stats() -> str:
     return (
-        "📊 Статус роста Jarvis\n\n"
-        "Сохранённые возможности: MVP без постоянного хранилища\n"
-        "Использованные возможности: MVP без постоянного хранилища\n"
-        "Следующий шаг: используйте /post или /today для подготовки действий."
+        "📊 Статус поиска Jarvis\n\n"
+        "Свежие упоминания Polymarket: MVP без постоянного хранилища\n"
+        "Использованные обсуждения: MVP без постоянного хранилища\n"
+        "Следующий шаг: используйте /post для ручного поиска свежих упоминаний Polymarket."
     )
 
 
@@ -4638,6 +4645,9 @@ async def jarvis_command_handler(message: types.Message, state: FSMContext):
     team = is_team_chat(message.chat.id)
     scope = "founder" if founder else "team" if team else None
 
+    if team and not founder and command not in JARVIS_TEAM_COMMANDS:
+        await message.answer(_jarvis_team_restricted_message())
+        return
     if command in {"jarvis_status", "tokens"} and not founder:
         return
     if command in {"jarvis", "ask"} and not founder:
@@ -4692,7 +4702,7 @@ async def jarvis_team_mention_handler(message: types.Message, state: FSMContext)
     if message.from_user and is_founder_user(message.from_user.id) and is_jarvis_enabled():
         await _run_jarvis_llm_command(message, "ask", message.text or "", "founder")
         return
-    await message.answer("🧠 В командном чате Jarvis отвечает через команды: /post, /reply, /today, /stats, /jarvis_help")
+    await message.answer(_jarvis_team_restricted_message())
 
 
 @dp.message_handler(commands=["recap_preview"], state="*")

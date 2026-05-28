@@ -223,6 +223,12 @@ Founder private chat style:
 - You may answer more deeply, especially if Sergey asks for a detailed strategy.
 - Keep structure clean; if the answer is long, use clear sections.
 """.strip()
+    restricted_team_rule = """
+Restricted team mode:
+- Non-founder team members can use Jarvis only for fresh public Polymarket mention discovery.
+- Do not give strategy, broad advice, motivational text, generic promotion ideas, or general chatbot answers to team members.
+- Team discovery must include only posts/messages/discussions that mention Polymarket directly or clearly discuss a Polymarket market/link/outcome.
+""".strip()
     detail_rule = "Detailed mode is allowed for this request." if detailed else "Default mode: concise and practical."
 
     return f"""
@@ -246,6 +252,8 @@ General response quality:
 {russian_rule if lang == "ru" else english_rule}
 
 {team_rule if chat_context == "team" else private_rule}
+
+{restricted_team_rule if scope != "founder" and chat_context == "team" else ""}
 
 DeepAlpha positioning:
 - AI prediction engine and Polymarket analysis tool.
@@ -272,8 +280,26 @@ Input:
 """.strip()
 
 
-def _fallback_post_output(lang: str = "ru") -> str:
+def _fallback_post_output(lang: str = "ru", team_restricted: bool = False) -> str:
     """Return a safe /post response until verified live social search exists."""
+    if team_restricted:
+        return (
+            "🧠 Jarvis: live-поиск ещё не подключён\n\n"
+            "Я не буду выдумывать свежие посты.\n\n"
+            "Что искать вручную за последние 24–48 часов:\n\n"
+            "1. \"Polymarket\" — X / Latest\n"
+            "2. \"Polymarket odds\" — X / Latest\n"
+            "3. \"Polymarket market\" — X / Latest\n"
+            "4. \"Polymarket YES NO\" — X / Latest\n"
+            "5. \"Polymarket\" — Reddit / последние 48 часов\n"
+            "6. \"Polymarket\" — публичные Telegram-каналы, только если виден timestamp\n\n"
+            "Критерий:\n"
+            "Берём только свежие посты, где Polymarket упомянут напрямую.\n\n"
+            "Готовый ответ:\n"
+            "\"Интересное обсуждение. Я бы сначала сравнил текущие odds на Polymarket с независимой оценкой вероятности. Если расхождение слабое, лучше NO TRADE. DeepAlpha помогает быстро разобрать такую логику. Не финансовый совет.\"\n\n"
+            "Команде:\n"
+            "Найдите 3 свежих упоминания Polymarket и ответьте вручную без спама."
+        )
     if lang == "en":
         return (
             "🧠 Jarvis: live search is not connected yet\n\n"
@@ -321,13 +347,12 @@ def build_help_text(founder: bool, team: bool) -> str:
         )
     if team:
         return (
-            "🧠 Jarvis — внутренний ассистент роста DeepAlpha.\n\n"
-            "Команды для команды:\n"
-            "/post — запросы для поиска свежих обсуждений и шаблон ответа\n"
-            "/reply <ссылка или текст> — готовый ответ\n"
-            "/today — план действий на день\n"
-            "/stats — простой MVP-статус\n"
-            "/jarvis_help — помощь"
+            "🧠 Jarvis — помощник команды DeepAlpha\n\n"
+            "Команде доступна только одна задача:\n"
+            "искать свежие публичные упоминания Polymarket.\n\n"
+            "Команды:\n"
+            "/post — показать, что искать и как отвечать\n\n"
+            "Jarvis не отвечает команде как обычный чат-бот."
         )
     return "Jarvis — внутренний инструмент команды DeepAlpha."
 
@@ -349,6 +374,12 @@ def _task_for_command(command: str, scope: str, chat_context: str, user_text: st
     if command == "today":
         return "Create today's practical growth plan: where to post, what to reply, and what signal to share. Keep it structured and actionable."
     if command == "post":
+        if scope != "founder" and chat_context == "team":
+            return (
+                "Fresh public Polymarket mention discovery only. Every suggested item must mention Polymarket directly or clearly discuss a Polymarket market/link/outcome. "
+                "Return 3 to 5 concise items only when live search has verified public posts from the last 48 hours; prefer the last 24 hours. "
+                "If live search is not connected, do not fake links and return the configured Polymarket-only fallback."
+            )
         return (
             "Fresh post discovery for DeepAlpha promotion. Return 3 to 5 concise opportunities only when live search has verified posts from the last 48 hours; prefer the last 24 hours. "
             "If live search is not connected, do not fake links and return the configured fallback with search queries, freshness filters, and ready-to-copy replies for manual discovery."
@@ -379,7 +410,8 @@ async def generate_jarvis_response(
         return "usage_limit"
 
     if command == "post":
-        result = _fallback_post_output(lang)
+        team_restricted = scope != "founder" and chat_context == "team"
+        result = _fallback_post_output(lang, team_restricted=team_restricted)
         _last_lead_scan_at = datetime.now(timezone.utc)
         _pending_opportunities_count = max(_pending_opportunities_count, 1)
         record_usage(scope, actor_id, result)
