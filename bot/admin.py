@@ -6,6 +6,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
 from datetime import datetime, timedelta
 import logging
+from typing import Optional
 
 from db.database import (
     get_setting, set_setting,
@@ -1884,7 +1885,7 @@ def register_admin(dp: Dispatcher):
         message: types.Message,
         admin_user_id: int,
         page: int = 1,
-        session_id: str | None = None,
+        session_id: Optional[str] = None,
         new_session: bool = False,
     ):
         lang = _admin_lang(admin_user_id)
