@@ -6,6 +6,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 import os
 from datetime import datetime, timedelta
 import logging
+from typing import Optional
 
 from db.database import (
     get_setting, set_setting,
@@ -32,6 +33,7 @@ from services.moderation_service import (
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 logger = logging.getLogger(__name__)
+ADMIN_USERS_SESSIONS: dict[int, str] = {}
 
 MODELS = {
     "gemini": {
@@ -140,7 +142,7 @@ def is_admin(user_id):
     return user_id == ADMIN_ID
 
 
-def _users_page_kb(page: int, total_pages: int, users: list, lang: str = "ru") -> InlineKeyboardMarkup:
+def _users_page_kb(page: int, total_pages: int, users: list, session_id: str, lang: str = "ru") -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"))
     kb.add(InlineKeyboardButton("🏆 Top referrers" if lang == "en" else "🏆 Топ рефереров", callback_data="user_top_refs"))
@@ -153,11 +155,11 @@ def _users_page_kb(page: int, total_pages: int, users: list, lang: str = "ru") -
             callback_data=f"user_view_{u['user_id']}"
         ))
     kb.row(
-        InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_page:{max(1, page - 1)}"),
-        InlineKeyboardButton("➡️ Next", callback_data=f"admin_users_page:{min(total_pages, page + 1)}"),
+        InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_page:{max(1, page - 1)}:{session_id}"),
+        InlineKeyboardButton("➡️ Next", callback_data=f"admin_users_page:{min(total_pages, page + 1)}:{session_id}"),
     )
     kb.row(
-        InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_users_page:{page}"),
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_users_page:{page}:{session_id}"),
         InlineKeyboardButton("🔍 Search", callback_data="user_find"),
     )
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
@@ -1874,8 +1876,21 @@ def register_admin(dp: Dispatcher):
             await message.answer("❌")
 
     # === USERS ===
-    async def render_admin_users_page(message: types.Message, admin_user_id: int, page: int = 1):
+    def _new_admin_users_session(admin_user_id: int) -> str:
+        session_id = str(int(datetime.utcnow().timestamp() * 1000))
+        ADMIN_USERS_SESSIONS[admin_user_id] = session_id
+        return session_id
+
+    async def render_admin_users_page(
+        message: types.Message,
+        admin_user_id: int,
+        page: int = 1,
+        session_id: Optional[str] = None,
+        new_session: bool = False,
+    ):
         lang = _admin_lang(admin_user_id)
+        if new_session or not session_id:
+            session_id = _new_admin_users_session(admin_user_id)
         per_page = 10
         requested_page = page
         total = count_users()
@@ -1890,7 +1905,7 @@ def register_admin(dp: Dispatcher):
             title = "👤 Users" if lang == "en" else "👤 Пользователи"
             await message.edit_text(
                 f"{title}\n\n{total_text}\n{page_text}",
-                reply_markup=_users_page_kb(1, 1, [], lang),
+                reply_markup=_users_page_kb(1, 1, [], session_id, lang),
             )
             return
 
@@ -1912,20 +1927,50 @@ def register_admin(dp: Dispatcher):
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await message.edit_text(
             f"{title}\n\n{total_text}\n{page_text}",
-            reply_markup=_users_page_kb(corrected_page, total_pages, users, lang),
+            reply_markup=_users_page_kb(corrected_page, total_pages, users, session_id, lang),
         )
 
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
-        await render_admin_users_page(callback.message, callback.from_user.id, page=1)
+        await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
     async def users_page(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        parts = callback.data.split(":")
+        if len(parts) == 2:
+            await callback.answer(
+                "Refresh users list" if lang == "en" else "Обновите список пользователей",
+                show_alert=True,
+            )
+            await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
+            return
+
         try:
-            page = int(callback.data.split(":", 1)[1])
+            page = int(parts[1])
+            session_id = parts[2]
         except Exception:
-            page = 1
-        await render_admin_users_page(callback.message, callback.from_user.id, page=page)
+            await callback.answer(
+                "Refresh users list" if lang == "en" else "Обновите список пользователей",
+                show_alert=True,
+            )
+            await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
+            return
+
+        active_session_id = ADMIN_USERS_SESSIONS.get(callback.from_user.id)
+        if session_id != active_session_id:
+            await callback.answer(
+                "Refresh users list" if lang == "en" else "Обновите список пользователей",
+                show_alert=True,
+            )
+            return
+
+        await render_admin_users_page(
+            callback.message,
+            callback.from_user.id,
+            page=page,
+            session_id=active_session_id,
+        )
 
     @dp.callback_query_handler(lambda c: c.data == "user_top_refs")
     async def top_referrers(callback: types.CallbackQuery):
