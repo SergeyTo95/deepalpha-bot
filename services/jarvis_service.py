@@ -148,7 +148,21 @@ def _looks_russian(text: str) -> bool:
     return bool(re.search(r"[А-Яа-яЁё]", text or ""))
 
 
-def _response_language(user_text: str, default: str = "ru") -> str:
+def _explicit_english_requested(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(in english|english version|write in english)\b|на английском|переведи на английский|сделай на английском",
+            text or "",
+            re.IGNORECASE,
+        )
+    )
+
+
+def _response_language(user_text: str, default: str = "ru", scope: str = "team", chat_context: str = "team") -> str:
+    if _explicit_english_requested(user_text):
+        return "en"
+    if scope == "founder" or chat_context == "team":
+        return "ru"
     if _looks_russian(user_text):
         return "ru"
     if re.search(r"[A-Za-z]", user_text or ""):
@@ -160,8 +174,8 @@ def _wants_detail(user_text: str) -> bool:
     return bool(re.search(r"\b(подробно|глубоко|детально|развернуто|разв[её]рнуто|full|deep|detailed)\b", user_text or "", re.IGNORECASE))
 
 
-def _base_prompt(role: str, task: str, user_text: str = "", command: str = "ask", chat_context: str = "private") -> str:
-    lang = _response_language(user_text)
+def _base_prompt(role: str, task: str, user_text: str = "", command: str = "ask", chat_context: str = "private", scope: str = "team") -> str:
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
     detailed = _wants_detail(user_text)
     language_rule = "Answer in clean Russian." if lang == "ru" else "Answer in clean English."
     russian_rule = """
@@ -294,32 +308,32 @@ def _fallback_post_output(lang: str = "ru") -> str:
 def build_help_text(founder: bool, team: bool) -> str:
     if founder:
         return (
-            "🧠 Jarvis — внутренний AI growth assistant DeepAlpha.\n\n"
-            "Founder commands:\n"
-            "/jarvis — open founder mode\n"
-            "/ask <text> — ask Jarvis freely\n"
-            "/post — fresh post discovery queries and reply templates\n"
-            "/reply <url or text> — prepare a reply\n"
-            "/today — growth plan for today\n"
-            "/tokens — usage status\n"
-            "/jarvis_status — operational status\n"
-            "/jarvis_help — this help"
+            "🧠 Jarvis — внутренний ассистент роста DeepAlpha.\n\n"
+            "Команды для Сергея:\n"
+            "/jarvis — открыть режим Jarvis\n"
+            "/ask <текст> — задать вопрос Jarvis\n"
+            "/post — запросы для поиска свежих обсуждений и шаблон ответа\n"
+            "/reply <ссылка или текст> — готовый ответ\n"
+            "/today — план продвижения на сегодня\n"
+            "/tokens — статус лимита\n"
+            "/jarvis_status — операционный статус\n"
+            "/jarvis_help — помощь"
         )
     if team:
         return (
-            "🧠 Jarvis — внутренний AI growth assistant DeepAlpha.\n\n"
-            "Team commands:\n"
-            "/post — fresh discovery queries and reply templates\n"
-            "/reply <url or text> — ready-to-copy reply\n"
-            "/today — daily action plan\n"
-            "/stats — simple growth stats\n"
-            "/jarvis_help — this help"
+            "🧠 Jarvis — внутренний ассистент роста DeepAlpha.\n\n"
+            "Команды для команды:\n"
+            "/post — запросы для поиска свежих обсуждений и шаблон ответа\n"
+            "/reply <ссылка или текст> — готовый ответ\n"
+            "/today — план действий на день\n"
+            "/stats — простой MVP-статус\n"
+            "/jarvis_help — помощь"
         )
-    return "Jarvis is an internal DeepAlpha team tool."
+    return "Jarvis — внутренний инструмент команды DeepAlpha."
 
 
 def _task_for_command(command: str, scope: str, chat_context: str, user_text: str) -> str:
-    lang = _response_language(user_text)
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
     if command == "reply":
         return "Return only one ready-to-copy reply for the given URL, post, or message. No explanation unless the user explicitly asks for one."
     if command == "today" and chat_context == "team":
@@ -355,10 +369,10 @@ async def generate_jarvis_response(
 ) -> str:
     global _last_lead_scan_at, _pending_opportunities_count
 
-    lang = _response_language(user_text)
+    lang = _response_language(user_text, scope=scope, chat_context=chat_context)
     role = "Founder / Sergey" if scope == "founder" else "Limited team chat"
     task = _task_for_command(command, scope, chat_context, user_text)
-    prompt = _base_prompt(role, task, user_text, command=command, chat_context=chat_context)
+    prompt = _base_prompt(role, task, user_text, command=command, chat_context=chat_context, scope=scope)
 
     estimated_cost = 20 if command == "post" else estimate_tokens(prompt)
     if not can_spend(scope, actor_id, estimated_cost):
