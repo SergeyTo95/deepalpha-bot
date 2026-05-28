@@ -142,7 +142,7 @@ def is_admin(user_id):
     return user_id == ADMIN_ID
 
 
-def _users_page_kb(page: int, total_pages: int, users: list, session_id: str, lang: str = "ru") -> InlineKeyboardMarkup:
+def _users_page_kb(shown_limit: int, total: int, users: list, session_id: str, lang: str = "ru") -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"))
     kb.add(InlineKeyboardButton("🏆 Top referrers" if lang == "en" else "🏆 Топ рефереров", callback_data="user_top_refs"))
@@ -154,14 +154,15 @@ def _users_page_kb(page: int, total_pages: int, users: list, session_id: str, la
             f"{status} {name} | {u['token_balance']} {token_label}",
             callback_data=f"user_view_{u['user_id']}"
         ))
-    kb.row(
-        InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_page:{max(1, page - 1)}:{session_id}"),
-        InlineKeyboardButton("➡️ Next", callback_data=f"admin_users_page:{min(total_pages, page + 1)}:{session_id}"),
-    )
-    kb.row(
-        InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_users_page:{page}:{session_id}"),
-        InlineKeyboardButton("🔍 Search", callback_data="user_find"),
-    )
+    shown_count = min(total, shown_limit)
+    if shown_count < total:
+        next_limit = shown_limit + 10
+        kb.add(
+            InlineKeyboardButton(
+                "⬇️ Load more" if lang == "en" else "⬇️ Показать ещё",
+                callback_data=f"admin_users_more:{next_limit}:{session_id}",
+            )
+        )
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
     return kb
 
@@ -1884,92 +1885,86 @@ def register_admin(dp: Dispatcher):
     async def render_admin_users_page(
         message: types.Message,
         admin_user_id: int,
-        page: int = 1,
+        shown_limit: int = 10,
         session_id: Optional[str] = None,
         new_session: bool = False,
     ):
         lang = _admin_lang(admin_user_id)
         if new_session or not session_id:
             session_id = _new_admin_users_session(admin_user_id)
-        per_page = 10
-        requested_page = page
         total = count_users()
+        shown_limit = max(10, shown_limit)
 
         if total <= 0:
-            logger.debug(
-                "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
-                requested_page, 1, total, 1, 0,
-            )
-            page_text = "Page 1/1" if lang == "en" else "Страница 1/1"
             total_text = "Total: 0" if lang == "en" else "Всего: 0"
+            shown_text = "Showing: 0/0" if lang == "en" else "Показано: 0/0"
             title = "👤 Users" if lang == "en" else "👤 Пользователи"
             await message.edit_text(
-                f"{title}\n\n{total_text}\n{page_text}",
-                reply_markup=_users_page_kb(1, 1, [], session_id, lang),
+                f"{title}\n\n{total_text}\n{shown_text}",
+                reply_markup=_users_page_kb(10, 0, [], session_id, lang),
             )
             return
 
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        corrected_page = max(1, min(total_pages, requested_page))
-        users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
-
-        if not users:
-            corrected_page = total_pages
-            users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
+        shown_limit = min(shown_limit, total)
+        users = get_users_page(limit=shown_limit, offset=0)
+        shown_count = len(users)
 
         logger.debug(
-            "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
-            requested_page, corrected_page, total, total_pages, len(users),
+            "ADMIN USERS: shown_limit=%s total=%s users_count=%s",
+            shown_limit, total, shown_count,
         )
 
-        page_text = f"Page {corrected_page}/{total_pages}" if lang == "en" else f"Страница {corrected_page}/{total_pages}"
         total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
+        shown_text = f"Showing: {shown_count}/{total}" if lang == "en" else f"Показано: {shown_count}/{total}"
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await message.edit_text(
-            f"{title}\n\n{total_text}\n{page_text}",
-            reply_markup=_users_page_kb(corrected_page, total_pages, users, session_id, lang),
+            f"{title}\n\n{total_text}\n{shown_text}",
+            reply_markup=_users_page_kb(shown_limit, total, users, session_id, lang),
         )
 
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
-        await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
+        await render_admin_users_page(callback.message, callback.from_user.id, shown_limit=10, new_session=True)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_more:"))
+    async def users_more(callback: types.CallbackQuery):
+        lang = _admin_lang(callback.from_user.id)
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(
+                "Users list is outdated. Open again." if lang == "en" else "Список пользователей устарел. Откройте заново.",
+                show_alert=True,
+            )
+            return
+        try:
+            shown_limit = int(parts[1])
+            session_id = parts[2]
+        except Exception:
+            await callback.answer(
+                "Users list is outdated. Open again." if lang == "en" else "Список пользователей устарел. Откройте заново.",
+                show_alert=True,
+            )
+            return
+        active_session_id = ADMIN_USERS_SESSIONS.get(callback.from_user.id)
+        if session_id != active_session_id:
+            await callback.answer(
+                "Users list is outdated. Open again." if lang == "en" else "Список пользователей устарел. Откройте заново.",
+                show_alert=True,
+            )
+            return
+        await render_admin_users_page(
+            callback.message,
+            callback.from_user.id,
+            shown_limit=shown_limit,
+            session_id=active_session_id,
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
     async def users_page(callback: types.CallbackQuery):
         lang = _admin_lang(callback.from_user.id)
-        parts = callback.data.split(":")
-        if len(parts) == 2:
-            await callback.answer(
-                "Refresh users list" if lang == "en" else "Обновите список пользователей",
-                show_alert=True,
-            )
-            await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
-            return
-
-        try:
-            page = int(parts[1])
-            session_id = parts[2]
-        except Exception:
-            await callback.answer(
-                "Refresh users list" if lang == "en" else "Обновите список пользователей",
-                show_alert=True,
-            )
-            await render_admin_users_page(callback.message, callback.from_user.id, page=1, new_session=True)
-            return
-
-        active_session_id = ADMIN_USERS_SESSIONS.get(callback.from_user.id)
-        if session_id != active_session_id:
-            await callback.answer(
-                "Refresh users list" if lang == "en" else "Обновите список пользователей",
-                show_alert=True,
-            )
-            return
-
-        await render_admin_users_page(
-            callback.message,
-            callback.from_user.id,
-            page=page,
-            session_id=active_session_id,
+        await callback.answer(
+            "Users list is outdated. Open again." if lang == "en" else "Список пользователей устарел. Откройте заново.",
+            show_alert=True,
         )
 
     @dp.callback_query_handler(lambda c: c.data == "user_top_refs")
