@@ -1927,6 +1927,7 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "admin_users")
     async def users_menu(callback: types.CallbackQuery):
+        await callback.answer()
         await render_admin_users_page(callback.message, callback.from_user.id, shown_limit=10, new_session=True)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_more:"))
@@ -1955,12 +1956,20 @@ def register_admin(dp: Dispatcher):
                 show_alert=True,
             )
             return
-        await render_admin_users_page(
-            callback.message,
-            callback.from_user.id,
-            shown_limit=shown_limit,
-            session_id=active_session_id,
-        )
+        try:
+            await callback.answer()
+            await render_admin_users_page(
+                callback.message,
+                callback.from_user.id,
+                shown_limit=shown_limit,
+                session_id=active_session_id,
+            )
+        except Exception:
+            logger.exception("ADMIN USERS LOAD MORE FAILED")
+            await callback.answer(
+                "Failed to load users" if lang == "en" else "Ошибка загрузки пользователей",
+                show_alert=True,
+            )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_users_page:"))
     async def users_page(callback: types.CallbackQuery):
