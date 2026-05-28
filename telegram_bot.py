@@ -4596,6 +4596,7 @@ async def _jarvis_alert_founders(message: types.Message, reason: str) -> None:
 
 async def _run_jarvis_llm_command(message: types.Message, command: str, args: str, scope: str) -> None:
     actor_id = message.from_user.id if message.from_user else 0
+    chat_context = "team" if is_team_chat(message.chat.id) else "private"
     if not can_spend(scope, actor_id, 20):
         logger.info("jarvis_command command=%s user_id=%s chat_id=%s success=false error=usage_limit", command, actor_id, message.chat.id)
         if scope == "founder":
@@ -4606,7 +4607,7 @@ async def _run_jarvis_llm_command(message: types.Message, command: str, args: st
         return
 
     try:
-        text = await generate_jarvis_response(command, args, scope, actor_id)
+        text = await generate_jarvis_response(command, args, scope, actor_id, chat_context=chat_context)
         if text == "usage_limit":
             if scope == "founder":
                 await message.answer("🧠 Jarvis usage limit reached for today. You can raise the Jarvis daily limit in environment settings.")
