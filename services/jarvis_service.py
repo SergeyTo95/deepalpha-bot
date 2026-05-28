@@ -3,7 +3,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Set
 
 from services.llm_service import generate_decision_text, generate_text
 
@@ -22,8 +22,8 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _parse_ids(raw: str) -> set[int]:
-    ids: set[int] = set()
+def _parse_ids(raw: str) -> Set[int]:
+    ids: Set[int] = set()
     for item in (raw or "").split(","):
         item = item.strip()
         if item.lstrip("-").isdigit():
@@ -35,7 +35,7 @@ def _parse_ids(raw: str) -> set[int]:
 class JarvisSettings:
     enabled: bool
     team_chat_id: Optional[int]
-    founder_ids: set[int]
+    founder_ids: Set[int]
     team_daily_limit: int
     founder_daily_limit: int
     alerts_enabled: bool
