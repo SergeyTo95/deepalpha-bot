@@ -158,8 +158,17 @@ DeepAlpha positioning:
 - AI prediction engine for Polymarket analysis.
 - Compares market odds vs AI probability.
 - Finds edge candidates and explains reasoning.
+- Preferred positioning: DeepAlpha helps compare market odds with AI probability and understand whether there is a potential gap.
 - Use phrases like: market may be mispricing this; AI probability differs from market odds; not financial advice; reasoning available in DeepAlpha; prediction engine; edge candidate; NO TRADE when market already priced it in.
 - Avoid guaranteed profit claims, financial advice, spammy casino/betting language, and 100% win claims.
+
+Fresh post discovery rules:
+- Only suggest posts or discussions published within the last 48 hours. Prefer the last 24 hours.
+- If freshness cannot be verified, mark it exactly as "свежесть не подтверждена" or "freshness not verified".
+- Never invent URLs, timestamps, sources, or live-search results.
+- Do not scrape private chats, do not DM users, and do not automate posting. Actual replies remain manual.
+- Good targets: Polymarket odds debates, mispriced market questions, probability/event discussions, shared Polymarket markets, YES/NO outcome arguments, and users asking for reasoning before a trade.
+- Bad targets: spam threads, dead posts, posts older than 48 hours, unrelated posts, and places where a DeepAlpha mention would look spammy.
 
 Task:
 {task}
@@ -170,24 +179,60 @@ Input:
 
 
 def _fallback_post_output(lang: str = "ru") -> str:
+    """Return a safe /post response until verified live social search exists.
+
+    Jarvis must not pretend it found fresh posts. This fallback gives the team
+    search queries, freshness filters, and ready replies they can use manually.
+    """
     if lang == "en":
         return (
-            "🧠 Jarvis found an opportunity\n\n"
-            "Topic:\nPolymarket odds vs AI probability gaps\n\n"
-            "Where:\nX / Telegram discussions about prediction markets\n\n"
-            "Why it fits:\nDeepAlpha can explain when market odds may differ from AI probability and when NO TRADE is better.\n\n"
-            "Suggested reply:\nInteresting market. I would compare current odds with an independent AI probability first. If the difference is small, NO TRADE may be the best decision. DeepAlpha is built exactly for this kind of reasoning. Not financial advice.\n\n"
-            "Action:\nReply / Save / Skip"
+            "🧠 Jarvis: live search is not connected yet\n\n"
+            "I can prepare reply templates and a query list for manual search.\n"
+            "Do not treat any result as fresh unless the source timestamp confirms it is within the last 48 hours; prefer the last 24 hours.\n\n"
+            "What to search today:\n\n"
+            "1. \"Polymarket odds\" — Latest / last 24 hours\n"
+            "2. \"Polymarket mispriced\" — Latest / last 48 hours\n"
+            "3. \"prediction market odds\" — last 24 hours\n"
+            "4. \"Kalshi odds\" — last 48 hours\n"
+            "5. \"Polymarket YES NO\" — Latest / last 48 hours\n\n"
+            "Where to search manually:\n"
+            "X / Twitter, public Telegram channels or chats, Reddit, Polymarket-related communities, crypto trading discussions, prediction market discussions, and event/news threads tied to active Polymarket markets.\n\n"
+            "Freshness filters:\n"
+            "- Latest\n"
+            "- last 24 hours\n"
+            "- last 48 hours\n"
+            "- If timestamp is missing, mark it: freshness not verified\n\n"
+            "Good targets:\n"
+            "- People debating Polymarket odds or YES/NO outcomes\n"
+            "- Users asking whether a market is mispriced\n"
+            "- Threads discussing event probability before a trade\n\n"
+            "Ready reply:\n"
+            "Interesting market. I would compare current odds with an independent AI probability first. If the gap is weak, NO TRADE may be better. DeepAlpha helps compare market odds with AI probability and understand whether there is a potential mismatch. Not financial advice."
         )
     return (
-        "🧠 Jarvis нашёл возможность\n\n"
-        "Тема:\nРасхождение рыночных odds и AI probability на Polymarket\n\n"
-        "Где:\nX / Telegram обсуждения prediction markets\n\n"
-        "Почему это подходит:\nDeepAlpha помогает понять, где рынок может быть неверно оценён, а где лучше выбрать NO TRADE.\n\n"
-        "Что написать:\nИнтересный рынок. Я бы сначала сравнил текущие odds с независимой AI probability. Если разница небольшая, лучший вывод может быть NO TRADE. DeepAlpha как раз помогает разобрать такую логику. Not financial advice.\n\n"
-        "Действие:\nОтветить / Сохранить / Пропустить"
+        "🧠 Jarvis: live-поиск ещё не подключён\n\n"
+        "Сейчас live-поиск ещё не подключён. Могу подготовить шаблоны ответов и список запросов для ручного поиска.\n"
+        "Не считайте пост свежим, пока timestamp источника не подтверждает публикацию за последние 48 часов; приоритет — последние 24 часа.\n\n"
+        "Что искать сегодня:\n\n"
+        "1. \"Polymarket odds\" — фильтр Latest / последние 24 часа\n"
+        "2. \"Polymarket mispriced\" — Latest / последние 48 часов\n"
+        "3. \"prediction market odds\" — последние 24 часа\n"
+        "4. \"Kalshi odds\" — последние 48 часов\n"
+        "5. \"Polymarket YES NO\" — Latest / последние 48 часов\n\n"
+        "Где искать вручную:\n"
+        "X / Twitter, публичные Telegram-каналы и чаты, Reddit, Polymarket-related communities, crypto trading discussions, prediction market discussions, event/news threads по активным Polymarket markets.\n\n"
+        "Фильтры свежести:\n"
+        "- Latest\n"
+        "- последние 24 часа\n"
+        "- последние 48 часов\n"
+        "- если timestamp не виден, помечать: свежесть не подтверждена\n\n"
+        "Хорошие цели:\n"
+        "- люди спорят про Polymarket odds или YES/NO outcomes\n"
+        "- спрашивают, не mispriced ли рынок\n"
+        "- обсуждают вероятность события перед входом в trade\n\n"
+        "Готовый комментарий:\n"
+        "Интересный рынок. Я бы сначала сравнил текущие odds с независимой AI probability. Если расхождение слабое, лучше NO TRADE. DeepAlpha помогает сравнить рыночные odds с AI probability и понять, есть ли потенциальное расхождение. Не финансовый совет."
     )
-
 
 def build_help_text(founder: bool, team: bool) -> str:
     if founder:
@@ -196,7 +241,7 @@ def build_help_text(founder: bool, team: bool) -> str:
             "Founder commands:\n"
             "/jarvis — open founder mode\n"
             "/ask <text> — ask Jarvis freely\n"
-            "/post — generate growth post ideas\n"
+            "/post — fresh post discovery queries and reply templates\n"
             "/reply <url or text> — prepare a reply\n"
             "/today — growth plan for today\n"
             "/tokens — usage status\n"
@@ -207,7 +252,7 @@ def build_help_text(founder: bool, team: bool) -> str:
         return (
             "🧠 Jarvis — внутренний AI growth assistant DeepAlpha.\n\n"
             "Team commands:\n"
-            "/post — 3–5 growth opportunities or post ideas\n"
+            "/post — fresh discovery queries and reply templates\n"
             "/reply <url or text> — ready-to-copy reply\n"
             "/today — daily action plan\n"
             "/stats — simple growth stats\n"
@@ -221,15 +266,23 @@ async def generate_jarvis_response(command: str, user_text: str, scope: str, act
 
     task_map = {
         "ask": "Answer Sergey freely and strategically. Be concise, practical, and founder-level.",
-        "post": "Generate 3 to 5 growth opportunities or post ideas. Use the required opportunity format when useful.",
+        "post": "Fresh post discovery for DeepAlpha promotion. Return 3 to 5 concise opportunities only when live search has verified posts from the last 48 hours; prefer the last 24 hours. If live search is not connected, do not fake links and return search queries, freshness filters, and ready-to-copy replies for manual discovery.",
         "reply": "Prepare a ready-to-copy reply for the given URL, post, or message. Do not include private reasoning.",
         "today": "Create today's practical growth plan: where to post, what to reply, and what signal to share.",
     }
     role = "Founder / Sergey" if scope == "founder" else "Limited team chat"
     prompt = _base_prompt(role, task_map.get(command, task_map["post"]), user_text)
 
-    if not can_spend(scope, actor_id, estimate_tokens(prompt)):
+    estimated_cost = 20 if command == "post" else estimate_tokens(prompt)
+    if not can_spend(scope, actor_id, estimated_cost):
         return "usage_limit"
+
+    if command == "post":
+        result = _fallback_post_output("ru")
+        _last_lead_scan_at = datetime.now(timezone.utc)
+        _pending_opportunities_count = max(_pending_opportunities_count, 1)
+        record_usage(scope, actor_id, result)
+        return result
 
     def _call() -> str:
         if command in {"ask", "today"}:
