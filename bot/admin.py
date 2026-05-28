@@ -11,7 +11,7 @@ from typing import Optional
 
 from db.database import (
     get_setting, set_setting,
-    get_user, get_all_users, get_users_page, count_users, search_users, set_user_ban, set_user_vip,
+    get_user, get_all_users, get_users_page_with_total, search_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
     get_user_analyses, get_connection, get_referrals, get_referral_count,
     get_top_referrers,
@@ -1894,12 +1894,12 @@ def register_admin(dp: Dispatcher):
             session_id = _new_admin_users_session(admin_user_id)
         per_page = 10
         requested_page = page
-        total = count_users()
+        users, total = get_users_page_with_total(limit=per_page, offset=(max(1, requested_page) - 1) * per_page)
 
         if total <= 0:
             logger.debug(
-                "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
-                requested_page, 1, total, 1, 0,
+                "ADMIN USERS: page=%s total=%s fetched_count=%s",
+                1, total, 0,
             )
             page_text = "Page 1/1" if lang == "en" else "Страница 1/1"
             total_text = "Total: 0" if lang == "en" else "Всего: 0"
@@ -1912,15 +1912,16 @@ def register_admin(dp: Dispatcher):
 
         total_pages = max(1, (total + per_page - 1) // per_page)
         corrected_page = max(1, min(total_pages, requested_page))
-        users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
+        if corrected_page != max(1, requested_page):
+            users, _ = get_users_page_with_total(limit=per_page, offset=(corrected_page - 1) * per_page)
 
-        if not users:
+        if not users and total > 0:
             corrected_page = total_pages
-            users = get_users_page(limit=per_page, offset=(corrected_page - 1) * per_page)
+            users, _ = get_users_page_with_total(limit=per_page, offset=(corrected_page - 1) * per_page)
 
         logger.debug(
-            "ADMIN USERS: requested_page=%s corrected_page=%s total=%s total_pages=%s users_count=%s",
-            requested_page, corrected_page, total, total_pages, len(users),
+            "ADMIN USERS: page=%s total=%s fetched_count=%s",
+            corrected_page, total, len(users),
         )
 
         page_text = f"Page {corrected_page}/{total_pages}" if lang == "en" else f"Страница {corrected_page}/{total_pages}"
