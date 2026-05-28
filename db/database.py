@@ -4,7 +4,7 @@ import time
 import secrets
 import hashlib
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
@@ -876,6 +876,28 @@ def get_users_page(limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
         conn.close()
 
 
+
+
+def get_users_page_with_total(limit: int = 10, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT COUNT(*) AS total FROM users")
+        row = cursor.fetchone()
+        total = int(row["total"]) if row and row.get("total") is not None else 0
+        cursor.execute(
+            "SELECT * FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (limit, offset),
+        )
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows], total
+    except Exception as e:
+        print(f"get_users_page_with_total error: {e}")
+        return [], 0
+    finally:
+        conn.close()
 def count_users() -> int:
     conn = get_connection()
     cursor = conn.cursor()
