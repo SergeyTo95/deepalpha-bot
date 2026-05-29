@@ -85,6 +85,10 @@ from services.jarvis_service import (
     get_status as get_jarvis_status, get_usage_limit, get_usage_today,
     is_founder_user, is_jarvis_enabled, is_team_chat,
 )
+from services.jarvis_chief_service import (
+    build_chief_report, build_metrics_report, build_report as build_chief_executive_report,
+    build_team_task_draft,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4630,6 +4634,56 @@ async def _jarvis_alert_founders(message: types.Message, reason: str) -> None:
                 founder_id,
                 message.chat.id if message.chat else None,
             )
+
+
+def _chief_access_allowed(message: types.Message) -> bool:
+    return bool(message.from_user and is_founder_user(message.from_user.id))
+
+
+def _parse_chief_days(message: types.Message, default: int = 7) -> int:
+    args = (message.get_args() or "").strip()
+    if not args:
+        return default
+    first = args.split()[0].strip()
+    if first.isdigit():
+        return max(1, min(int(first), 365))
+    return default
+
+
+def _chief_help_text() -> str:
+    return (
+        "🧠 Jarvis Chief — команды основателя\n\n"
+        "/chief — короткий founder snapshot за 7 дней\n"
+        "/report — executive report по пользователям, продукту, росту и доходу\n"
+        "/metrics — числовой отчёт и список недостающих метрик\n"
+        "/taskdraft <текст> — черновик задачи для команды без автопостинга\n\n"
+        "Можно указать период первым аргументом: /chief 14 или /metrics 30.\n"
+        "Если данных нет, Jarvis честно пишет: Данных пока недостаточно."
+    )
+
+
+@dp.message_handler(commands=["chief", "report", "metrics", "chief_help", "taskdraft"], state="*")
+async def jarvis_chief_command_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not _chief_access_allowed(message):
+        await message.answer("Команда доступна только основателю.")
+        return
+
+    command = _jarvis_command_name(message)
+    actor_id = message.from_user.id
+    if command == "chief_help":
+        await message.answer(_chief_help_text())
+        return
+    if command == "metrics":
+        await message.answer(build_metrics_report(actor_id, days=_parse_chief_days(message)))
+        return
+    if command == "report":
+        await message.answer(build_chief_executive_report(actor_id, days=_parse_chief_days(message)))
+        return
+    if command == "taskdraft":
+        await message.answer(build_team_task_draft(message.get_args() or "", actor_id))
+        return
+    await message.answer(build_chief_report(actor_id, days=_parse_chief_days(message)))
 
 
 async def _run_jarvis_llm_command(message: types.Message, command: str, args: str, scope: str) -> None:
