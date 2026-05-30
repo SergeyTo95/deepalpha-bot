@@ -33,8 +33,18 @@ def _empty_snapshot(days: int, reason: str) -> Dict[str, Any]:
         "watchlist_count": None,
         "watchlist_active_count": None,
         "top_user_actions": None,
+        "activation_rate_days": None,
+        "new_user_growth_rate_days": None,
+        "analysis_conversion_days": None,
+        "analyses_per_user_days": None,
+        "analyses_per_active_user_days": None,
+        "purchase_conversion_days": None,
+        "revenue_per_user_days": None,
+        "revenue_per_active_user_days": None,
+        "referral_ratio": None,
+        "growth_quality": None,
     }
-    return {
+    snapshot = {
         "period_days": days,
         "generated_at": datetime.utcnow().isoformat(),
         "metrics": metrics,
@@ -42,6 +52,9 @@ def _empty_snapshot(days: int, reason: str) -> Dict[str, Any]:
         "notes": [reason],
         "errors": [],
     }
+    _add_derived_metrics(snapshot)
+    snapshot["missing_metrics"] = sorted(snapshot["missing_metrics"])
+    return snapshot
 
 
 def _table_exists(cursor, table_name: str) -> bool:
@@ -108,6 +121,58 @@ def _safe_metric(snapshot: Dict[str, Any], key: str, func) -> None:
         snapshot["errors"].append({"metric": key, "error": exc.__class__.__name__})
 
 
+def _ratio(numerator: Any, denominator: Any, multiplier: float = 1.0, precision: int = 2) -> Optional[float]:
+    if numerator is None or denominator is None:
+        return None
+    try:
+        denominator_value = float(denominator)
+        if denominator_value == 0:
+            return None
+        return round((float(numerator) / denominator_value) * multiplier, precision)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _growth_quality(metrics: Dict[str, Any]) -> Optional[str]:
+    total_users = metrics.get("total_users")
+    new_users = metrics.get("new_users_days")
+    activation_rate = metrics.get("activation_rate_days")
+    analyses = metrics.get("analyses_days")
+    referral_ratio = metrics.get("referral_ratio")
+
+    if total_users is None or new_users is None:
+        return None
+    if total_users == 0:
+        return "no_user_base"
+    if new_users == 0:
+        return "no_new_users"
+    if activation_rate is not None and activation_rate < 10:
+        return "low_quality_growth_activation_bottleneck"
+    if analyses is not None and analyses <= 1 and total_users >= 10:
+        return "low_quality_growth_first_value_bottleneck"
+    if referral_ratio is not None and referral_ratio >= 0.3:
+        return "organic_growth_signal"
+    return "early_growth_signal"
+
+
+def _add_derived_metrics(snapshot: Dict[str, Any]) -> None:
+    metrics = snapshot.get("metrics") or {}
+    derived = {
+        "activation_rate_days": _ratio(metrics.get("active_users_days"), metrics.get("total_users"), 100, 1),
+        "new_user_growth_rate_days": _ratio(metrics.get("new_users_days"), metrics.get("total_users"), 100, 1),
+        "analysis_conversion_days": _ratio(metrics.get("analyses_days"), metrics.get("total_users"), 100, 1),
+        "analyses_per_user_days": _ratio(metrics.get("analyses_days"), metrics.get("total_users"), 1, 2),
+        "analyses_per_active_user_days": _ratio(metrics.get("analyses_days"), metrics.get("active_users_days"), 1, 2),
+        "purchase_conversion_days": _ratio(metrics.get("token_purchases_days"), metrics.get("total_users"), 100, 1),
+        "revenue_per_user_days": _ratio(metrics.get("revenue_ton_days"), metrics.get("total_users"), 1, 2),
+        "revenue_per_active_user_days": _ratio(metrics.get("revenue_ton_days"), metrics.get("active_users_days"), 1, 2),
+        "referral_ratio": _ratio(metrics.get("referrals_days"), metrics.get("new_users_days"), 1, 2),
+    }
+    for key, value in derived.items():
+        _set_metric(snapshot, key, value)
+    _set_metric(snapshot, "growth_quality", _growth_quality(metrics))
+
+
 def _add_action(actions: List[Dict[str, Any]], name: str, total: Optional[int], in_period: Optional[int]) -> None:
     if total is None and in_period is None:
         return
@@ -148,6 +213,16 @@ def get_project_metrics_snapshot(days: int = 7) -> Dict[str, Any]:
         "watchlist_count": None,
         "watchlist_active_count": None,
         "top_user_actions": None,
+        "activation_rate_days": None,
+        "new_user_growth_rate_days": None,
+        "analysis_conversion_days": None,
+        "analyses_per_user_days": None,
+        "analyses_per_active_user_days": None,
+        "purchase_conversion_days": None,
+        "revenue_per_user_days": None,
+        "revenue_per_active_user_days": None,
+        "referral_ratio": None,
+        "growth_quality": None,
     }
     snapshot: Dict[str, Any] = {
         "period_days": safe_days,
@@ -297,6 +372,7 @@ def get_project_metrics_snapshot(days: int = 7) -> Dict[str, Any]:
         else:
             snapshot["notes"].append("Событийная аналитика пока не подключена.")
 
+        _add_derived_metrics(snapshot)
         snapshot["missing_metrics"] = sorted(snapshot["missing_metrics"])
         return snapshot
     except Exception as exc:
