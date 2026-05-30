@@ -209,8 +209,8 @@ TEXTS = {
         "choose_category": "Выбери категорию сигнала:",
         "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nОбычно занимает 1-2 минуты.",
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки",
-        "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
-        "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
+        "free_trial_analysis": "🎁 Используется доступный анализ!",
+        "free_trial_signal": "🎁 Используется доступный сигнал!",
         "action_cancelled": "✅ Действие отменено.",
     },
     "en": {
@@ -239,8 +239,8 @@ TEXTS = {
         "choose_category": "Choose signal category:",
         "cache_empty": "⏳ Signal is being prepared...\n\nUsually takes 1-2 minutes.",
         "deep_signal_searching": "🧠 Searching personal signal...",
-        "free_trial_analysis": "🎁 Using free trial analysis!",
-        "free_trial_signal": "🎁 Using free trial signal!",
+        "free_trial_analysis": "🎁 Using available analysis!",
+        "free_trial_signal": "🎁 Using available signal!",
         "action_cancelled": "✅ Action cancelled.",
     }
 }
@@ -4570,7 +4570,16 @@ async def start_handler(message: types.Message):
     await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
     if is_private_chat(message):
         lang = get_user_lang(message.from_user.id)
-        cta_text = "🔥 Показать пример AI-сигнала" if lang == "ru" else "🔥 Show example AI signal"
+        if lang == "ru":
+            cta_text = (
+                "Хочешь быстро понять ценность DeepAlpha?\n"
+                "Посмотри демо AI-сигнала — это займёт 20 секунд."
+            )
+        else:
+            cta_text = (
+                "Want to quickly understand DeepAlpha’s value?\n"
+                "Watch an AI signal demo — it takes about 20 seconds."
+            )
         await message.answer(cta_text, reply_markup=get_onboarding_demo_keyboard(message.from_user.id))
 
 
@@ -6573,7 +6582,7 @@ async def analyze_prompt_handler(message: types.Message):
     lang = get_user_lang(uid)
 
     if can_use_free_trial(uid, "analyses"):
-        trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 Free trial available!"
+        trial_text = "🎁 Анализ доступен." if lang == "ru" else "🎁 Analysis is available."
         await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
     else:
         await message.answer(t(uid, "send_link"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
