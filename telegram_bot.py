@@ -185,9 +185,10 @@ CATEGORY_LABELS = {
 TEXTS = {
     "ru": {
         "start": (
-            "🚀 DeepAlpha AI\n\n"
-            "Отправь ссылку Polymarket или используй кнопки ниже.\n\n"
-            "🎁 Тебе доступен бесплатный пробный анализ и сигнал!"
+            "DeepAlpha AI — анализ Polymarket через вероятности, а не догадки.\n\n"
+            "Я сравниваю market odds с AI probability, объясняю reasoning и показываю, "
+            "где может быть edge, а где лучше NO TRADE.\n\n"
+            "Начни с демо — за 20 секунд будет понятно, как это работает."
         ),
         "choose_language": "Выбери язык:",
         "language_changed_ru": "Язык переключен на русский",
@@ -208,15 +209,16 @@ TEXTS = {
         "choose_category": "Выбери категорию сигнала:",
         "cache_empty": "⏳ Сигнал по этой категории ещё готовится...\n\nОбычно занимает 1-2 минуты.",
         "deep_signal_searching": "🧠 Ищу персональный сигнал...\n\n⏱ Анализирую рынки",
-        "free_trial_analysis": "🎁 Используется бесплатный пробный анализ!",
-        "free_trial_signal": "🎁 Используется бесплатный пробный сигнал!",
+        "free_trial_analysis": "🎁 Используется доступный анализ!",
+        "free_trial_signal": "🎁 Используется доступный сигнал!",
         "action_cancelled": "✅ Действие отменено.",
     },
     "en": {
         "start": (
-            "🚀 DeepAlpha AI\n\n"
-            "Send a Polymarket link or use the buttons below.\n\n"
-            "🎁 You have a free trial analysis and signal!"
+            "DeepAlpha AI — Polymarket analysis through probabilities, not guesses.\n\n"
+            "I compare market odds with AI probability, explain the reasoning, and show "
+            "where there may be edge — or where NO TRADE is better.\n\n"
+            "Start with a demo — it takes about 20 seconds to see how it works."
         ),
         "choose_language": "Choose language:",
         "language_changed_ru": "Язык переключен на русский",
@@ -237,8 +239,8 @@ TEXTS = {
         "choose_category": "Choose signal category:",
         "cache_empty": "⏳ Signal is being prepared...\n\nUsually takes 1-2 minutes.",
         "deep_signal_searching": "🧠 Searching personal signal...",
-        "free_trial_analysis": "🎁 Using free trial analysis!",
-        "free_trial_signal": "🎁 Using free trial signal!",
+        "free_trial_analysis": "🎁 Using available analysis!",
+        "free_trial_signal": "🎁 Using available signal!",
         "action_cancelled": "✅ Action cancelled.",
     }
 }
@@ -338,6 +340,86 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("⚙️ More"))
     return kb
+
+
+def get_onboarding_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    label = "🔥 Показать пример AI-сигнала" if lang == "ru" else "🔥 Show example AI signal"
+    kb.add(InlineKeyboardButton(label, callback_data="onboarding_demo_signal"))
+    return kb
+
+
+def get_onboarding_after_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    if lang == "ru":
+        kb.add(InlineKeyboardButton("📎 Отправить ссылку Polymarket", callback_data="onboarding_send_link"))
+        kb.add(InlineKeyboardButton("🔍 Как это работает?", callback_data="onboarding_how_it_works"))
+    else:
+        kb.add(InlineKeyboardButton("📎 Send a Polymarket link", callback_data="onboarding_send_link"))
+        kb.add(InlineKeyboardButton("🔍 How it works", callback_data="onboarding_how_it_works"))
+    return kb
+
+
+def get_onboarding_demo_text(lang: str) -> str:
+    if lang == "ru":
+        return (
+            "🔥 <b>Демо AI-сигнала DeepAlpha</b>\n\n"
+            "<b>Рынок:</b>\n"
+            "Произойдёт примерное событие?\n\n"
+            "<b>Market odds:</b>\n"
+            "YES 62%\n\n"
+            "<b>AI probability:</b>\n"
+            "54%\n\n"
+            "<b>Разница:</b>\n"
+            "-8%\n\n"
+            "<b>Вывод:</b>\n"
+            "NO TRADE\n\n"
+            "<b>Почему:</b>\n"
+            "Рынок уже слишком уверенно смотрит в одну сторону, но данных для сильного edge пока недостаточно. "
+            "В такой ситуации DeepAlpha не пытается “притянуть сигнал”, а показывает, что лучше пропустить рынок.\n\n"
+            "<b>Что важно:</b>\n"
+            "DeepAlpha сравнивает market odds с независимой оценкой вероятности и помогает понять, "
+            "где может быть edge, а где рынок уже всё учёл.\n\n"
+            "Не финансовый совет.\n\n"
+            "Теперь можешь отправить ссылку Polymarket — я разберу твой рынок."
+        )
+    return (
+        "🔥 <b>DeepAlpha AI Signal Demo</b>\n\n"
+        "<b>Market:</b>\n"
+        "Will the example event happen?\n\n"
+        "<b>Market odds:</b>\n"
+        "YES 62%\n\n"
+        "<b>AI probability:</b>\n"
+        "54%\n\n"
+        "<b>Difference:</b>\n"
+        "-8%\n\n"
+        "<b>Conclusion:</b>\n"
+        "NO TRADE\n\n"
+        "<b>Why:</b>\n"
+        "The market is already leaning strongly in one direction, while the available data does not show enough edge. "
+        "DeepAlpha does not force a signal in this situation — it shows when skipping the market is better.\n\n"
+        "<b>What matters:</b>\n"
+        "DeepAlpha compares market odds with an independent probability estimate and helps identify "
+        "where there may be edge — or where the market has already priced it in.\n\n"
+        "Not financial advice.\n\n"
+        "Now send a Polymarket link — I’ll analyze your market."
+    )
+
+
+def _log_onboarding_event(event_name: str, callback: types.CallbackQuery) -> None:
+    # Lightweight event trail for Jarvis Chief until durable product analytics exists.
+    try:
+        logger.info(
+            "onboarding_event event=%s user_id=%s chat_id=%s chat_type=%s",
+            event_name,
+            callback.from_user.id if callback.from_user else None,
+            callback.message.chat.id if callback.message and callback.message.chat else None,
+            callback.message.chat.type if callback.message and callback.message.chat else None,
+        )
+    except Exception:
+        pass
 
 
 def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
@@ -4486,6 +4568,77 @@ async def start_handler(message: types.Message):
         text += ref_text
 
     await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
+    if is_private_chat(message):
+        lang = get_user_lang(message.from_user.id)
+        if lang == "ru":
+            cta_text = (
+                "Хочешь быстро понять ценность DeepAlpha?\n"
+                "Посмотри демо AI-сигнала — это займёт 20 секунд."
+            )
+        else:
+            cta_text = (
+                "Want to quickly understand DeepAlpha’s value?\n"
+                "Watch an AI signal demo — it takes about 20 seconds."
+            )
+        await message.answer(cta_text, reply_markup=get_onboarding_demo_keyboard(message.from_user.id))
+
+
+@dp.callback_query_handler(lambda c: c.data == "onboarding_demo_signal")
+async def onboarding_demo_signal_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    _log_onboarding_event("onboarding_demo_clicked", callback)
+
+    if not callback.message or callback.message.chat.type != "private":
+        await callback.answer("Откройте демо в личном чате с ботом." if lang == "ru" else "Open the demo in a private chat with the bot.", show_alert=True)
+        return
+
+    await callback.answer()
+    _log_onboarding_event("onboarding_demo_viewed", callback)
+    await callback.message.answer(
+        get_onboarding_demo_text(lang),
+        parse_mode="HTML",
+        reply_markup=get_onboarding_after_demo_keyboard(uid),
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == "onboarding_send_link")
+async def onboarding_send_link_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    _log_onboarding_event("onboarding_send_link_clicked", callback)
+
+    if not callback.message or callback.message.chat.type != "private":
+        await callback.answer("Отправьте ссылку в личном чате с ботом." if lang == "ru" else "Send the link in a private chat with the bot.", show_alert=True)
+        return
+
+    await callback.answer()
+    await AnalysisStates.waiting_for_link.set()
+    text = (
+        "Пришли ссылку на рынок Polymarket одним сообщением — я сделаю анализ."
+        if lang == "ru"
+        else "Send a Polymarket market link in one message — I’ll analyze it."
+    )
+    await callback.message.answer(text, reply_markup=get_main_keyboard(uid))
+
+
+@dp.callback_query_handler(lambda c: c.data == "onboarding_how_it_works")
+async def onboarding_how_it_works_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    _log_onboarding_event("onboarding_how_it_works_clicked", callback)
+
+    if not callback.message or callback.message.chat.type != "private":
+        await callback.answer("Откройте это в личном чате с ботом." if lang == "ru" else "Open this in a private chat with the bot.", show_alert=True)
+        return
+
+    await callback.answer()
+    text = (
+        "DeepAlpha смотрит на market odds, контекст события, вероятность, сценарии и разницу между рынком и AI-моделью."
+        if lang == "ru"
+        else "DeepAlpha looks at market odds, event context, probability, scenarios, and the difference between the market and the AI model."
+    )
+    await callback.message.answer(text, reply_markup=get_onboarding_after_demo_keyboard(uid))
 
 
 @dp.message_handler(commands=["cancel"], state="*")
@@ -6429,7 +6582,7 @@ async def analyze_prompt_handler(message: types.Message):
     lang = get_user_lang(uid)
 
     if can_use_free_trial(uid, "analyses"):
-        trial_text = "🎁 У тебя есть бесплатный пробный анализ!" if lang == "ru" else "🎁 Free trial available!"
+        trial_text = "🎁 Анализ доступен." if lang == "ru" else "🎁 Analysis is available."
         await message.answer(f"{trial_text}\n\n{t(uid, 'send_link')}", reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
     else:
         await message.answer(t(uid, "send_link"), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
