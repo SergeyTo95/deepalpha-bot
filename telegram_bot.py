@@ -5530,7 +5530,8 @@ async def user_help_handler(message: types.Message, state: FSMContext):
             "🔍 Анализ — отправь ссылку Polymarket, чтобы получить вероятностный разбор.\n\n"
             "🧠 Live Analyst\n"
             "Диалоговый режим после анализа. Можно задать вопросы по рынку, отправить скрин, "
-            "уточнить риски и понять, почему вывод EDGE / NO TRADE.\n\n"
+            "уточнить риски и понять, почему вывод EDGE / NO TRADE. "
+            "Для полноценного нового анализа используй 🔍 Анализ и ссылку Polymarket.\n\n"
             "Команды Live Analyst: /live, /live_status, /reset_live, /exit_live.\n\n"
             "Не финансовый совет."
         )
@@ -5539,8 +5540,8 @@ async def user_help_handler(message: types.Message, state: FSMContext):
             "❓ DeepAlpha Help\n\n"
             "🔍 Analysis — send a Polymarket link for probability-based analysis.\n\n"
             "🧠 Live Analyst\n"
-            "A discussion mode after analysis. Ask market questions, send screenshots, "
-            "clarify risks, and understand EDGE / NO TRADE reasoning.\n\n"
+            "A discussion mode after analysis. Send a market question, screenshot, or follow-up "
+            "to your latest analysis. For a full new market analysis, tap 🔍 Analysis and send a Polymarket link.\n\n"
             "Live Analyst commands: /live, /live_status, /reset_live, /exit_live.\n\n"
             "Not financial advice."
         )
@@ -7592,7 +7593,8 @@ async def _activate_live_mode(message: types.Message, analysis: Optional[dict] =
     else:
         text = (
             "🧠 Live Analyst включён.\n\n"
-            "Отправь вопрос, ссылку Polymarket или скрин. Я сохраню контекст внутри этой Live-сессии.\n\n"
+            "Отправь вопрос по рынку, скрин или уточнение к последнему анализу.\n"
+            "Для полноценного нового анализа нажми 🔍 Анализ и отправь ссылку Polymarket.\n\n"
             "Не финансовый совет."
         )
     await message.answer(text, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
