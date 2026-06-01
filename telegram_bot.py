@@ -7916,6 +7916,8 @@ async def live_memory_handler(message: types.Message, state: FSMContext):
 async def live_image_handler(message: types.Message, state: FSMContext):
     if not _is_private_live_message(message):
         return
+    if not message.from_user or not is_live_session_active(message.from_user.id):
+        return
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
@@ -7927,6 +7929,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         return
     cost = get_live_request_cost("image")
     if not can_user_afford_live_request(uid, cost):
+        logger.warning("live_image_blocked_insufficient_tokens user_id=%s cost=%s", uid, cost)
         await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
         return
     daily_limit = get_max_daily_live_messages()
@@ -7967,6 +7970,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         return
     summary = result.get("summary") or ""
     if not charge_live_request(uid, cost, "live_analyst_image"):
+        logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
         await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
         return
     save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
@@ -7978,6 +7982,8 @@ async def live_image_handler(message: types.Message, state: FSMContext):
 @dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool((m.text or "").strip()) and not (m.text or "").startswith("/") and (m.text or "").strip() not in LIVE_ANALYST_CONTROL_TEXTS and (m.text or "").strip() not in _MAIN_MENU_BUTTONS, state="*")
 async def live_text_handler(message: types.Message, state: FSMContext):
     if not _is_private_live_message(message):
+        return
+    if not message.from_user or not is_live_session_active(message.from_user.id):
         return
     await state.finish()
     _register_user(message)
@@ -8677,6 +8683,9 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
 
 @dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m) and (m.text or "").strip() not in ["💎 TON кошелёк", "💎 TON Wallet"] and not (m.from_user and m.from_user.id in TON_SEND_PENDING))
 async def fallback_handler(message: types.Message):
+    if message.from_user and is_private_chat(message) and is_live_session_active(message.from_user.id):
+        return
+
     # Polymarket URLs are handled by the dedicated polymarket.com handler above.
     # Without this guard, one user URL can trigger both handlers and start analysis twice.
     if message.text and "polymarket.com" in message.text.lower():
