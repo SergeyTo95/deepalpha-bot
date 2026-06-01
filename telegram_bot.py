@@ -89,6 +89,9 @@ from services.jarvis_chief_service import (
     build_chief_report, build_metrics_report, build_report as build_chief_executive_report,
     build_team_task_draft,
 )
+from services.jarvis_task_service import (
+    clear_pending_task, create_pending_task, get_pending_task, is_pending_task_expired,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4814,6 +4817,189 @@ def _chief_help_text() -> str:
         "Если данных нет, Jarvis честно пишет: Данных пока недостаточно."
     )
 
+
+
+
+def _jarvis_task_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("✅ Отправить команде", callback_data=f"jarvis_task_approve:{task_id}"),
+        InlineKeyboardButton("❌ Отменить", callback_data=f"jarvis_task_cancel:{task_id}"),
+    )
+    return keyboard
+
+
+def _jarvis_task_callback_task_id(data: str) -> Optional[str]:
+    parts = (data or "").split(":", 1)
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1].strip()
+    return None
+
+
+async def _send_jarvis_task_approval_message(message: types.Message, task: dict) -> None:
+    text = (
+        "🧠 Jarvis подготовил задачу\n\n"
+        f"{task['formatted_task']}\n\n"
+        "Отправить в командный чат?"
+    )
+    markup = _jarvis_task_keyboard(task["id"])
+    founder_id = message.from_user.id if message.from_user else None
+
+    if message.chat.type == "private" or founder_id is None:
+        await message.answer(text, reply_markup=markup)
+        return
+
+    try:
+        await bot.send_message(founder_id, text, reply_markup=markup)
+        await message.answer("Готовлю задачу для команды. Отправил подтверждение в личный чат.")
+    except Exception:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _approve_jarvis_task_for_founder(founder_id: int, task_id: Optional[str]) -> str:
+    task = get_pending_task(founder_id, task_id)
+    if not task:
+        return "missing"
+    if is_pending_task_expired(task):
+        clear_pending_task(founder_id, task.get("id"))
+        return "expired"
+
+    settings = get_jarvis_settings()
+    if settings.team_chat_id is None:
+        return "missing_team_chat"
+
+    try:
+        await bot.send_message(
+            settings.team_chat_id,
+            "🧠 Новая задача\n\n"
+            f"{task['formatted_task']}\n\n"
+            "Команде:\n"
+            "Отпишитесь в чате, кто берёт задачу и какой срок реальный.",
+        )
+    except Exception:
+        logger.exception("JARVIS TASK POST FAILED")
+        return "send_failed"
+
+    clear_pending_task(founder_id, task.get("id"))
+    logger.info(
+        "jarvis_task_approved creator_id=%s task_id=%s team_chat_id=%s",
+        founder_id,
+        task.get("id"),
+        settings.team_chat_id,
+    )
+    return "sent"
+
+
+async def _cancel_jarvis_task_for_founder(founder_id: int, task_id: Optional[str]) -> str:
+    task = get_pending_task(founder_id, task_id)
+    if not task:
+        return "missing"
+    if is_pending_task_expired(task):
+        clear_pending_task(founder_id, task.get("id"))
+        return "expired"
+    clear_pending_task(founder_id, task.get("id"))
+    logger.info("jarvis_task_cancelled creator_id=%s task_id=%s", founder_id, task.get("id"))
+    return "cancelled"
+
+
+@dp.message_handler(commands=["task"], state="*")
+async def jarvis_task_command_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not message.from_user or not is_founder_user(message.from_user.id):
+        await message.answer("Команда доступна только основателю.")
+        return
+
+    args = message.get_args() or ""
+    if not args.strip():
+        await message.answer("Напишите задачу так: /task <текст>")
+        return
+
+    task = create_pending_task(message.from_user.id, message.chat.id, args)
+    logger.info("jarvis_task_created creator_id=%s task_id=%s", message.from_user.id, task.get("id"))
+    if get_jarvis_settings().team_chat_id is None:
+        await message.answer(
+            "🧠 Jarvis подготовил задачу\n\n"
+            f"{task['formatted_task']}\n\n"
+            "Не настроен JARVIS_TEAM_CHAT_ID. Я подготовил задачу, но не могу отправить её в командный чат."
+        )
+        return
+    await _send_jarvis_task_approval_message(message, task)
+
+
+@dp.message_handler(commands=["task_send"], state="*")
+async def jarvis_task_send_command_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not message.from_user or not is_founder_user(message.from_user.id):
+        await message.answer("Команда доступна только основателю.")
+        return
+
+    result = await _approve_jarvis_task_for_founder(message.from_user.id, None)
+    if result == "sent":
+        await message.answer("Готово. Отправил задачу в командный чат.")
+    elif result == "missing_team_chat":
+        await message.answer("Не настроен JARVIS_TEAM_CHAT_ID. Я подготовил задачу, но не могу отправить её в командный чат.")
+    elif result == "send_failed":
+        await message.answer("Не смог отправить задачу в командный чат. Проверь JARVIS_TEAM_CHAT_ID и права бота.")
+    else:
+        await message.answer("Задача устарела. Создай её заново через /task.")
+
+
+@dp.message_handler(commands=["task_cancel"], state="*")
+async def jarvis_task_cancel_command_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    if not message.from_user or not is_founder_user(message.from_user.id):
+        await message.answer("Команда доступна только основателю.")
+        return
+
+    result = await _cancel_jarvis_task_for_founder(message.from_user.id, None)
+    if result == "cancelled":
+        await message.answer("❌ Задача отменена.")
+    else:
+        await message.answer("Задача устарела. Создай её заново через /task.")
+
+
+@dp.callback_query_handler(lambda c: c.data and (c.data == "jarvis_task_approve" or c.data.startswith("jarvis_task_approve:")))
+async def jarvis_task_approve_callback(callback: types.CallbackQuery):
+    if not callback.from_user or not is_founder_user(callback.from_user.id):
+        await callback.answer("Эта задача недоступна или устарела.", show_alert=True)
+        return
+
+    task_id = _jarvis_task_callback_task_id(callback.data or "")
+    result = await _approve_jarvis_task_for_founder(callback.from_user.id, task_id)
+    if result == "sent":
+        await callback.answer("Готово. Отправил задачу в командный чат.", show_alert=True)
+        if callback.message:
+            await callback.message.edit_text("✅ Задача отправлена в командный чат.")
+    elif result == "missing_team_chat":
+        await callback.answer("Не настроен JARVIS_TEAM_CHAT_ID.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Не настроен JARVIS_TEAM_CHAT_ID. Я подготовил задачу, но не могу отправить её в командный чат.")
+    elif result == "send_failed":
+        await callback.answer("Не смог отправить задачу в командный чат.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Не смог отправить задачу в командный чат. Проверь JARVIS_TEAM_CHAT_ID и права бота.")
+    else:
+        await callback.answer("Эта задача недоступна или устарела.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Задача устарела. Создай её заново через /task.")
+
+
+@dp.callback_query_handler(lambda c: c.data and (c.data == "jarvis_task_cancel" or c.data.startswith("jarvis_task_cancel:")))
+async def jarvis_task_cancel_callback(callback: types.CallbackQuery):
+    if not callback.from_user or not is_founder_user(callback.from_user.id):
+        await callback.answer("Эта задача недоступна или устарела.", show_alert=True)
+        return
+
+    task_id = _jarvis_task_callback_task_id(callback.data or "")
+    result = await _cancel_jarvis_task_for_founder(callback.from_user.id, task_id)
+    if result == "cancelled":
+        await callback.answer("Задача отменена.", show_alert=True)
+        if callback.message:
+            await callback.message.edit_text("❌ Задача отменена.")
+    else:
+        await callback.answer("Эта задача недоступна или устарела.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Задача устарела. Создай её заново через /task.")
 
 @dp.message_handler(commands=["chief", "report", "metrics", "chief_help", "taskdraft"], state="*")
 async def jarvis_chief_command_handler(message: types.Message, state: FSMContext):
