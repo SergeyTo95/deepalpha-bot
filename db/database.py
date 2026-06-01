@@ -213,6 +213,8 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cashier_payment_wallets_status ON cashier_payment_wallets(status)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
 
+    _init_live_analyst_tables(cursor)
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS signal_history (
         id SERIAL PRIMARY KEY,
@@ -4028,5 +4030,348 @@ def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[s
     except Exception as e:
         print(f"get_web_analysis_history_item error: {e}")
         return None
+    finally:
+        conn.close()
+
+# ═══════════════════════════════════════════
+# LIVE ANALYST MODE
+# ═══════════════════════════════════════════
+
+def init_live_analyst_tables() -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _init_live_analyst_tables(cursor)
+        conn.commit()
+    except Exception as e:
+        print(f"init_live_analyst_tables error: {e}")
+    finally:
+        conn.close()
+
+
+def _init_live_analyst_tables(cursor) -> None:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS live_analyst_sessions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        status TEXT DEFAULT 'active',
+        current_market_url TEXT NULL,
+        current_market_title TEXT NULL,
+        last_analysis_summary TEXT NULL,
+        last_image_summary TEXT NULL,
+        memory_summary TEXT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        closed_at TIMESTAMP NULL
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_analyst_sessions_user_status ON live_analyst_sessions(user_id, status)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS live_analyst_messages (
+        id SERIAL PRIMARY KEY,
+        session_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        role TEXT NOT NULL,
+        message_type TEXT NOT NULL,
+        content TEXT,
+        image_file_id TEXT NULL,
+        tokens_charged INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW()
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_analyst_messages_session_created ON live_analyst_messages(session_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_analyst_messages_user_created ON live_analyst_messages(user_id, created_at)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS live_analyst_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW()
+    )
+    """)
+
+    defaults = [
+        ("live_enabled", "true"),
+        ("text_request_cost", "1"),
+        ("image_request_cost", "3"),
+        ("memory_message_limit", "12"),
+        ("max_daily_live_messages", "20"),
+        ("image_analysis_enabled", "true"),
+        ("max_image_size_mb", "8"),
+    ]
+    for key, value in defaults:
+        cursor.execute("""
+        INSERT INTO live_analyst_settings (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO NOTHING
+        """, (key, value))
+
+
+def _ensure_live_analyst_tables(conn, cursor) -> None:
+    try:
+        _init_live_analyst_tables(cursor)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_live_analyst_setting(key: str, default: str = "") -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("SELECT value FROM live_analyst_settings WHERE key = %s", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+    except Exception as e:
+        print(f"get_live_analyst_setting error: {e}")
+        return default
+    finally:
+        conn.close()
+
+
+def set_live_analyst_setting(key: str, value: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        INSERT INTO live_analyst_settings (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+        """, (key, value))
+        conn.commit()
+    except Exception as e:
+        print(f"set_live_analyst_setting error: {e}")
+    finally:
+        conn.close()
+
+
+def get_live_analyst_active_session(user_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        SELECT * FROM live_analyst_sessions
+        WHERE user_id = %s AND status = 'active'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        """, (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_live_analyst_active_session error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def create_live_analyst_session(user_id: int) -> Dict[str, Any]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        INSERT INTO live_analyst_sessions (user_id, status, created_at, updated_at)
+        VALUES (%s, 'active', NOW(), NOW())
+        RETURNING *
+        """, (user_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row) if row else {"user_id": user_id, "status": "active"}
+    except Exception as e:
+        print(f"create_live_analyst_session error: {e}")
+        return {"user_id": user_id, "status": "active"}
+    finally:
+        conn.close()
+
+
+def update_live_analyst_session(session_id: int, **fields) -> bool:
+    allowed = {
+        "status", "current_market_url", "current_market_title", "last_analysis_summary",
+        "last_image_summary", "memory_summary", "closed_at",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return False
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        parts = ["updated_at = NOW()"]
+        values: List[Any] = []
+        for key, value in updates.items():
+            parts.append(f"{key} = %s")
+            values.append(value)
+        values.append(session_id)
+        cursor.execute(f"UPDATE live_analyst_sessions SET {', '.join(parts)} WHERE id = %s", tuple(values))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"update_live_analyst_session error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def close_live_analyst_session(session_id: int) -> bool:
+    return update_live_analyst_session(session_id, status="closed", closed_at=datetime.utcnow())
+
+
+def append_live_analyst_message(
+    session_id: int,
+    user_id: int,
+    role: str,
+    message_type: str,
+    content: str,
+    image_file_id: Optional[str] = None,
+    tokens_charged: int = 0,
+) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        INSERT INTO live_analyst_messages
+        (session_id, user_id, role, message_type, content, image_file_id, tokens_charged, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+        RETURNING *
+        """, (session_id, user_id, role, message_type, content, image_file_id, int(tokens_charged or 0)))
+        row = cursor.fetchone()
+        cursor.execute("UPDATE live_analyst_sessions SET updated_at = NOW() WHERE id = %s", (session_id,))
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"append_live_analyst_message error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_live_analyst_recent_messages(session_id: int, limit: int = 12) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        safe_limit = max(1, min(int(limit or 12), 50))
+        cursor.execute("""
+        SELECT * FROM (
+            SELECT * FROM live_analyst_messages
+            WHERE session_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+        ) recent
+        ORDER BY created_at ASC, id ASC
+        """, (session_id, safe_limit))
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"get_live_analyst_recent_messages error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def count_live_analyst_messages_today(user_id: int, role: Optional[str] = None) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        if role:
+            cursor.execute("""
+            SELECT COUNT(*) FROM live_analyst_messages
+            WHERE user_id = %s AND role = %s AND created_at >= CURRENT_DATE
+            """, (user_id, role))
+        else:
+            cursor.execute("""
+            SELECT COUNT(*) FROM live_analyst_messages
+            WHERE user_id = %s AND created_at >= CURRENT_DATE
+            """, (user_id,))
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"count_live_analyst_messages_today error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def charge_user_tokens_if_enough(user_id: int, amount: int) -> bool:
+    if int(amount or 0) <= 0:
+        return True
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE users
+        SET token_balance = token_balance - %s, updated_at = %s
+        WHERE user_id = %s AND token_balance >= %s
+        """, (int(amount), datetime.utcnow().isoformat(), user_id, int(amount)))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"charge_user_tokens_if_enough error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_live_analyst_stats() -> Dict[str, Any]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("SELECT COUNT(*) AS total_sessions FROM live_analyst_sessions")
+        total_sessions = int((cursor.fetchone() or {}).get("total_sessions") or 0)
+        cursor.execute("SELECT COUNT(*) AS active_sessions FROM live_analyst_sessions WHERE status = 'active'")
+        active_sessions = int((cursor.fetchone() or {}).get("active_sessions") or 0)
+        cursor.execute("""
+        SELECT
+            COUNT(*) AS total_messages,
+            SUM(CASE WHEN message_type = 'text' AND role = 'user' THEN 1 ELSE 0 END) AS text_requests,
+            SUM(CASE WHEN message_type = 'image' AND role = 'user' THEN 1 ELSE 0 END) AS image_requests,
+            COALESCE(SUM(tokens_charged), 0) AS tokens_spent
+        FROM live_analyst_messages
+        """)
+        message_stats = dict(cursor.fetchone() or {})
+        cursor.execute("""
+        SELECT user_id, COUNT(*) AS messages, COALESCE(SUM(tokens_charged), 0) AS tokens_spent
+        FROM live_analyst_messages
+        WHERE role = 'user'
+        GROUP BY user_id
+        ORDER BY messages DESC, tokens_spent DESC
+        LIMIT 5
+        """)
+        top_users = [dict(r) for r in cursor.fetchall()]
+        cursor.execute("""
+        SELECT
+            SUM(CASE WHEN message_type = 'text' AND role = 'user' THEN 1 ELSE 0 END) AS live_text_requests_7d,
+            SUM(CASE WHEN message_type = 'image' AND role = 'user' THEN 1 ELSE 0 END) AS live_image_requests_7d,
+            COALESCE(SUM(tokens_charged), 0) AS live_tokens_spent_7d,
+            COUNT(DISTINCT CASE WHEN role = 'user' THEN user_id ELSE NULL END) AS users_using_live_7d
+        FROM live_analyst_messages
+        WHERE created_at >= NOW() - INTERVAL '7 days'
+        """)
+        weekly = dict(cursor.fetchone() or {})
+        return {
+            "total_sessions": total_sessions,
+            "active_sessions": active_sessions,
+            "total_messages": int(message_stats.get("total_messages") or 0),
+            "text_requests": int(message_stats.get("text_requests") or 0),
+            "image_requests": int(message_stats.get("image_requests") or 0),
+            "tokens_spent": int(message_stats.get("tokens_spent") or 0),
+            "top_users": top_users,
+            "live_sessions_total": total_sessions,
+            "live_messages_total": int(message_stats.get("total_messages") or 0),
+            "live_text_requests_7d": int(weekly.get("live_text_requests_7d") or 0),
+            "live_image_requests_7d": int(weekly.get("live_image_requests_7d") or 0),
+            "live_tokens_spent_7d": int(weekly.get("live_tokens_spent_7d") or 0),
+            "users_using_live_7d": int(weekly.get("users_using_live_7d") or 0),
+        }
+    except Exception as e:
+        print(f"get_live_analyst_stats error: {e}")
+        return {}
     finally:
         conn.close()
