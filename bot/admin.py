@@ -183,6 +183,7 @@ def admin_main_kb():
         InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
         InlineKeyboardButton("💸 Referral Rewards", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
+        InlineKeyboardButton("🧠 Live Admin", callback_data="live_admin_panel"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
         InlineKeyboardButton("🚧 Bot moderation", callback_data="admin_bot_moderation"),
     )
