@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
@@ -13,6 +14,8 @@ from services.live_analyst_billing_service import (
     get_live_request_cost,
 )
 from services.live_analyst_memory_service import (
+    extract_market_title,
+    extract_polymarket_url,
     get_or_create_active_session,
     get_recent_context,
     save_message,
@@ -23,6 +26,7 @@ from db.database import count_live_analyst_messages_today
 LIVE_UNAVAILABLE_MESSAGE = "Live Analyst временно недоступен. Токены за этот запрос не списаны."
 LIVE_DISABLED_MESSAGE = "Live Analyst сейчас отключён администратором. Попробуйте позже."
 LIVE_DAILY_LIMIT_MESSAGE = "Дневной лимит сообщений Live Analyst исчерпан. Попробуйте завтра."
+logger = logging.getLogger(__name__)
 
 
 def _safe(text: Any, limit: int = 1200) -> str:
@@ -98,10 +102,16 @@ def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
         return {"ok": False, "message": LIVE_DAILY_LIMIT_MESSAGE, "charged": False}
 
     session = get_or_create_active_session(user_id)
-    session = update_context_from_user_text(session, text)
+    prompt_session = dict(session)
+    url = extract_polymarket_url(text)
+    if url and url != prompt_session.get("current_market_url"):
+        prompt_session["current_market_url"] = url
+        title = extract_market_title(text)
+        if title:
+            prompt_session["current_market_title"] = title
     memory_limit = get_memory_message_limit()
     recent = get_recent_context(int(session["id"]), memory_limit)
-    prompt = _build_live_prompt(session, recent, text)
+    prompt = _build_live_prompt(prompt_session, recent, text)
 
     try:
         answer = (generate_decision_text(prompt) or "").strip()
@@ -111,8 +121,10 @@ def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
         return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
 
     if not charge_live_request(user_id, cost, "live_analyst_text"):
+        logger.warning("live_text_charge_failed_after_analysis user_id=%s cost=%s", user_id, cost)
         return {"ok": False, "message": INSUFFICIENT_LIVE_TOKENS_MESSAGE, "charged": False}
 
+    session = update_context_from_user_text(session, text)
     save_message(int(session["id"]), user_id, "user", "text", text, tokens_charged=cost)
     save_message(int(session["id"]), user_id, "assistant", "text", answer, tokens_charged=0)
     return {"ok": True, "message": answer, "charged": True, "cost": cost, "session": session}
