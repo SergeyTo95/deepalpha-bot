@@ -5,6 +5,7 @@ import html
 import logging
 import json
 import time
+from io import BytesIO
 from datetime import datetime
 from urllib.parse import quote
 from typing import Dict, List, Optional
@@ -92,6 +93,26 @@ from services.jarvis_chief_service import (
 from services.jarvis_task_service import (
     clear_pending_task, create_pending_task, get_pending_task, is_pending_task_expired,
 )
+
+from services.live_analyst_admin_service import (
+    format_live_admin_text, get_max_daily_live_messages, get_settings_snapshot,
+    get_stats_snapshot, is_image_analysis_enabled, is_live_enabled,
+    set_live_setting,
+)
+from services.live_analyst_billing_service import (
+    INSUFFICIENT_LIVE_TOKENS_MESSAGE, charge_live_request,
+    can_user_afford_live_request, get_billing_snapshot, get_live_request_cost,
+)
+from services.live_analyst_image_service import analyze_image_bytes
+from services.live_analyst_memory_service import (
+    exit_session as exit_live_session, get_or_create_active_session, is_active as is_live_session_active,
+    reset_session as reset_live_session, save_message as save_live_message,
+    start_session as start_live_session, update_last_image_summary,
+)
+from services.live_analyst_service import (
+    LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
+)
+from db.database import count_live_analyst_messages_today
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -430,16 +451,28 @@ def get_analysis_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("⚡️ Быстрый анализ"), KeyboardButton("💡 Сигнал часа"))
-        kb.add(KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("🧠 Live Analyst"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("➕ Другие анализы"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("⚡️ Quick Analysis"), KeyboardButton("💡 Signal of the hour"))
-        kb.add(KeyboardButton("🏁 Market Recap"))
+        kb.add(KeyboardButton("🧠 Live Analyst"), KeyboardButton("🏁 Market Recap"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("➕ Other Analyses"))
         kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
+
+
+def get_live_analyst_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    if lang == "ru":
+        kb.add(KeyboardButton("🔄 Reset Live context"))
+        kb.add(KeyboardButton("⬅️ Exit Live Mode"))
+    else:
+        kb.add(KeyboardButton("🔄 Reset Live context"))
+        kb.add(KeyboardButton("⬅️ Exit Live Mode"))
+    return kb
 
 def get_checks_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
@@ -618,11 +651,14 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
         watchlist_label = f"⭐ В Watchlist ({watchlist_price} ток.)"
         share_label = "📤 Поделиться"
         open_label = "🔗 Polymarket"
+        live_label = "🧠 Обсудить результат в Live Analyst"
     else:
         watchlist_label = f"⭐ Watchlist ({watchlist_price} tok.)"
         share_label = "📤 Share"
         open_label = "🔗 Polymarket"
+        live_label = "🧠 Discuss in Live Analyst"
 
+    kb.add(InlineKeyboardButton(live_label, callback_data=f"live_discuss_{user_id}"))
     kb.add(InlineKeyboardButton(watchlist_label, callback_data=f"wl_add_{user_id}"))
     kb.add(InlineKeyboardButton(share_label, url=share_url))
     if url:
@@ -5479,6 +5515,38 @@ async def analysis_guide_handler(message: types.Message, state: FSMContext):
     text = get_analysis_guide(lang)
     await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
+
+
+@dp.message_handler(commands=["help"], state="*")
+@dp.message_handler(lambda m: m.text in ["❓ Помощь", "❓ Help"], state="*")
+async def user_help_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    if lang == "ru":
+        text = (
+            "❓ Помощь DeepAlpha\n\n"
+            "🔍 Анализ — отправь ссылку Polymarket, чтобы получить вероятностный разбор.\n\n"
+            "🧠 Live Analyst\n"
+            "Диалоговый режим после анализа. Можно задать вопросы по рынку, отправить скрин, "
+            "уточнить риски и понять, почему вывод EDGE / NO TRADE. "
+            "Для полноценного нового анализа используй 🔍 Анализ и ссылку Polymarket.\n\n"
+            "Команды Live Analyst: /live, /live_status, /reset_live, /exit_live.\n\n"
+            "Не финансовый совет."
+        )
+    else:
+        text = (
+            "❓ DeepAlpha Help\n\n"
+            "🔍 Analysis — send a Polymarket link for probability-based analysis.\n\n"
+            "🧠 Live Analyst\n"
+            "A discussion mode after analysis. Send a market question, screenshot, or follow-up "
+            "to your latest analysis. For a full new market analysis, tap 🔍 Analysis and send a Polymarket link.\n\n"
+            "Live Analyst commands: /live, /live_status, /reset_live, /exit_live.\n\n"
+            "Not financial advice."
+        )
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+
 @dp.message_handler(
     lambda m: m.text in ["🪙 Крипто анализ", "🪙 Crypto Analysis"],
     state="*",
@@ -6775,8 +6843,12 @@ async def analyze_prompt_handler(message: types.Message):
 
 
 _MAIN_MENU_BUTTONS = {
-    "🔍 Анализ", "🔍 Analyze",
+    "🔍 Анализ", "🔍 Analysis", "🔍 Analyze",
+    "⚡️ Быстрый анализ", "⚡️ Quick Analysis",
+    "💎 TON кошелёк", "💎 TON Wallet",
+    "🎁 Чеки", "🎁 Checks",
     "💡 Сигнал часа", "💡 Signal of the hour",
+    "🧠 Live Analyst", "🔄 Reset Live context", "⬅️ Exit Live Mode",
     "🪙 Крипто анализ", "🪙 Crypto Analysis",
     "📘 Как читать анализ", "📘 How to read the analysis",
     "🔮 Личный сигнал", "🔮 Personal signal",
@@ -6787,7 +6859,7 @@ _MAIN_MENU_BUTTONS = {
     "📣 Авторы", "📣 Authors", "📢 Авторы", "📢 Authors",
     "✍️ Мои прогнозы", "✍️ My posts", "✍️ My forecasts",
     "💰 Баланс автора", "💰 Author balance",
-    "📊 История", "📊 History",
+    "📜 История", "📜 History", "📊 История", "📊 History",
     "💰 Баланс", "💰 Balance",
     "💎 Купить токены", "💎 Buy tokens",
     "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active",
@@ -7439,6 +7511,346 @@ async def top_handler(message: types.Message):
 # Prevents the same user+Polymarket URL from starting analysis twice within a short window.
 _RECENT_ANALYSIS_REQUESTS = {}
 _ANALYSIS_DEDUP_TTL_SEC = 45
+
+
+# ═══════════════════════════════════════════
+# LIVE ANALYST MODE
+# ═══════════════════════════════════════════
+
+LIVE_ANALYST_CONTROL_TEXTS = {
+    "🧠 Live Analyst",
+    "🔄 Reset Live context",
+    "⬅️ Exit Live Mode",
+}
+
+
+def _build_live_analysis_summary(analysis: dict) -> str:
+    if not isinstance(analysis, dict):
+        return ""
+    for key in ("canonical_text", "telegram_text", "copy_text", "full_analysis"):
+        value = analysis.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:3500]
+    pieces = []
+    for label, key in [
+        ("Рынок", "question"),
+        ("Прогноз", "display_prediction"),
+        ("Market probability", "market_probability"),
+        ("Категория", "category"),
+        ("Вывод", "conclusion"),
+        ("Reasoning", "reasoning"),
+    ]:
+        value = analysis.get(key)
+        if value:
+            pieces.append(f"{label}: {value}")
+    return "\n".join(pieces)[:3500]
+
+
+def _live_status_text(uid: int) -> str:
+    session = get_or_create_active_session(uid) if is_live_session_active(uid) else None
+    settings = get_settings_snapshot()
+    billing = get_billing_snapshot(uid)
+    used_today = count_live_analyst_messages_today(uid, role="user")
+    daily_limit = get_max_daily_live_messages()
+    remaining = "∞" if daily_limit <= 0 else str(max(0, daily_limit - used_today))
+    if session:
+        mode = "active"
+        market = session.get("current_market_title") or session.get("current_market_url") or "—"
+    else:
+        mode = "inactive"
+        market = "—"
+    return (
+        "🧠 Live Analyst Status\n\n"
+        f"Mode: {mode}\n"
+        f"System: {'enabled' if settings.get('enabled') else 'disabled'}\n"
+        f"Current market: {market}\n"
+        f"Remaining today: {remaining}\n"
+        f"Text cost: {billing['text_cost']} tokens\n"
+        f"Image cost: {billing['image_cost']} tokens\n"
+        f"Balance: {billing['balance']} tokens"
+    )
+
+
+async def _activate_live_mode(message: types.Message, analysis: Optional[dict] = None) -> None:
+    _register_user(message)
+    uid = message.from_user.id
+    if _check_banned(message):
+        await message.answer(t(uid, "banned"))
+        return
+    if not is_live_enabled():
+        await message.answer(LIVE_DISABLED_MESSAGE, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+        return
+    market_url = ""
+    market_title = ""
+    summary = ""
+    if isinstance(analysis, dict):
+        market_url = str(analysis.get("url") or "")
+        market_title = str(analysis.get("question") or analysis.get("title") or "")
+        summary = _build_live_analysis_summary(analysis)
+    start_live_session(uid, market_url=market_url, market_title=market_title, analysis_summary=summary)
+    if summary:
+        text = "Live Analyst включён. Можешь спросить, где риск, почему NO TRADE или что может изменить вероятность."
+    else:
+        text = (
+            "🧠 Live Analyst включён.\n\n"
+            "Отправь вопрос по рынку, скрин или уточнение к последнему анализу.\n"
+            "Для полноценного нового анализа нажми 🔍 Анализ и отправь ссылку Polymarket.\n\n"
+            "Не финансовый совет."
+        )
+    await message.answer(text, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
+
+
+@dp.message_handler(commands=["live"], state="*")
+async def live_command_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    await _activate_live_mode(message)
+
+
+@dp.message_handler(lambda m: (m.text or "") == "🧠 Live Analyst", state="*")
+async def live_button_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    await _activate_live_mode(message)
+
+
+@dp.message_handler(commands=["exit_live"], state="*")
+@dp.message_handler(lambda m: (m.text or "") == "⬅️ Exit Live Mode", state="*")
+async def exit_live_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    was_active = exit_live_session(uid)
+    text = "Live Analyst выключен." if was_active else "Live Analyst уже не активен."
+    await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+
+
+@dp.message_handler(commands=["reset_live"], state="*")
+@dp.message_handler(lambda m: (m.text or "") == "🔄 Reset Live context", state="*")
+async def reset_live_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    reset_live_session(uid)
+    await message.answer(
+        "Live Analyst context очищен. Начинаем новую Live-сессию.",
+        reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),
+    )
+
+
+@dp.message_handler(commands=["live_status"], state="*")
+async def live_status_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    _register_user(message)
+    await message.answer(_live_status_text(message.from_user.id), reply_markup=private_reply_markup(message, get_live_analyst_keyboard(message.from_user.id) if is_live_session_active(message.from_user.id) else get_main_keyboard(message.from_user.id)))
+
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("live_discuss_"), state="*")
+async def live_discuss_callback(callback: types.CallbackQuery, state: FSMContext):
+    if not _is_private_live_callback(callback):
+        await callback.answer()
+        return
+    await state.finish()
+    uid = callback.from_user.id
+    if str(uid) != callback.data.replace("live_discuss_", ""):
+        await callback.answer("Недоступно.", show_alert=True)
+        return
+    analysis = last_analysis_cache.get(uid) or {}
+    if not is_live_enabled():
+        await callback.answer(LIVE_DISABLED_MESSAGE, show_alert=True)
+        return
+    start_live_session(
+        uid,
+        market_url=str(analysis.get("url") or ""),
+        market_title=str(analysis.get("question") or analysis.get("title") or ""),
+        analysis_summary=_build_live_analysis_summary(analysis),
+    )
+    await callback.message.answer(
+        "Live Analyst включён. Можешь спросить, где риск, почему NO TRADE или что может изменить вероятность.",
+        reply_markup=get_live_analyst_keyboard(uid),
+    )
+    await callback.answer("Live Analyst включён")
+
+
+def _require_live_admin(uid: int) -> bool:
+    return _is_admin(uid) or is_founder_user(uid)
+
+
+def _is_private_live_message(message: types.Message) -> bool:
+    return bool(message and is_private_chat(message))
+
+
+def _is_private_live_callback(callback: types.CallbackQuery) -> bool:
+    return bool(callback and callback.message and callback.message.chat and callback.message.chat.type == "private")
+
+
+@dp.message_handler(commands=["live_admin", "live_stats"], state="*")
+async def live_admin_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    if (message.get_command() or "").lstrip("/") == "live_stats":
+        stats = get_stats_snapshot()
+        await message.answer(
+            "🧠 Live Mode Stats\n\n"
+            f"Sessions: {stats.get('total_sessions', 0)}\n"
+            f"Active sessions: {stats.get('active_sessions', 0)}\n"
+            f"Messages: {stats.get('total_messages', 0)}\n"
+            f"Text requests: {stats.get('text_requests', 0)}\n"
+            f"Image requests: {stats.get('image_requests', 0)}\n"
+            f"Tokens spent: {stats.get('tokens_spent', 0)}\n"
+            f"7d text: {stats.get('live_text_requests_7d', 0)}\n"
+            f"7d images: {stats.get('live_image_requests_7d', 0)}\n"
+            f"7d users: {stats.get('users_using_live_7d', 0)}"
+        )
+        return
+    await message.answer(format_live_admin_text())
+
+
+@dp.message_handler(commands=["live_on", "live_off", "live_image_on", "live_image_off"], state="*")
+async def live_admin_toggle_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    cmd = (message.get_command() or "").lstrip("/")
+    if cmd == "live_on":
+        set_live_setting("live_enabled", "true")
+        await message.answer("Live Analyst включён.")
+    elif cmd == "live_off":
+        set_live_setting("live_enabled", "false")
+        await message.answer("Live Analyst выключен.")
+    elif cmd == "live_image_on":
+        set_live_setting("image_analysis_enabled", "true")
+        await message.answer("Image analysis включён.")
+    else:
+        set_live_setting("image_analysis_enabled", "false")
+        await message.answer("Image analysis выключен.")
+
+
+@dp.message_handler(commands=["live_price"], state="*")
+async def live_price_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    parts = (message.text or "").split()
+    if len(parts) != 3 or parts[1] not in {"text", "image"}:
+        await message.answer("Формат: /live_price text <tokens> или /live_price image <tokens>")
+        return
+    try:
+        price = max(0, int(parts[2]))
+    except Exception:
+        await message.answer("Цена должна быть числом.")
+        return
+    key = "text_request_cost" if parts[1] == "text" else "image_request_cost"
+    set_live_setting(key, str(price))
+    await message.answer(f"Live price updated: {parts[1]} = {price} tokens")
+
+
+@dp.message_handler(commands=["live_memory"], state="*")
+async def live_memory_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    parts = (message.text or "").split()
+    if len(parts) != 2:
+        await message.answer("Формат: /live_memory <count>")
+        return
+    try:
+        count = max(1, min(50, int(parts[1])))
+    except Exception:
+        await message.answer("Count должен быть числом.")
+        return
+    set_live_setting("memory_message_limit", str(count))
+    await message.answer(f"Live memory updated: last {count} messages")
+
+
+@dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool(m.photo or (m.document and (m.document.mime_type or '').startswith('image/'))), content_types=["photo", "document"], state="*")
+async def live_image_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    if not is_live_enabled():
+        await message.answer(LIVE_DISABLED_MESSAGE)
+        return
+    if not is_image_analysis_enabled():
+        await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
+        return
+    cost = get_live_request_cost("image")
+    if not can_user_afford_live_request(uid, cost):
+        await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
+        return
+    daily_limit = get_max_daily_live_messages()
+    if daily_limit > 0 and count_live_analyst_messages_today(uid, role="user") >= daily_limit:
+        await message.answer("Дневной лимит сообщений Live Analyst исчерпан. Попробуйте завтра.")
+        return
+    session = get_or_create_active_session(uid)
+    file_id = ""
+    mime_type = "image/jpeg"
+    file_size = 0
+    if message.photo:
+        photo = message.photo[-1]
+        file_id = photo.file_id
+        file_size = int(photo.file_size or 0)
+        mime_type = "image/jpeg"
+    elif message.document:
+        file_id = message.document.file_id
+        file_size = int(message.document.file_size or 0)
+        mime_type = message.document.mime_type or ""
+    if file_size and file_size > get_settings_snapshot().get("max_image_size_mb", 8) * 1024 * 1024:
+        await message.answer("Изображение слишком большое для Live Analyst. Отправь меньший скрин.")
+        return
+    status_msg = await message.answer("🧠 Анализирую изображение...")
+    try:
+        tg_file = await bot.get_file(file_id)
+        buffer = BytesIO()
+        await bot.download_file(tg_file.file_path, buffer)
+        image_bytes = buffer.getvalue()
+        result = analyze_image_bytes(image_bytes, mime_type, context_text=build_image_context(session))
+    except Exception:
+        result = {"ok": False, "error": "vision_unavailable"}
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    if not result.get("ok"):
+        await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
+        return
+    summary = result.get("summary") or ""
+    if not charge_live_request(uid, cost, "live_analyst_image"):
+        await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
+        return
+    save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
+    save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
+    update_last_image_summary(int(session["id"]), summary)
+    await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
+
+
+@dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool((m.text or "").strip()) and not (m.text or "").startswith("/") and (m.text or "").strip() not in LIVE_ANALYST_CONTROL_TEXTS and (m.text or "").strip() not in _MAIN_MENU_BUTTONS, state="*")
+async def live_text_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    result = process_live_text(uid, message.text or "")
+    await message.answer(
+        result.get("message") or LIVE_UNAVAILABLE_MESSAGE,
+        reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),
+    )
 
 # ═══════════════════════════════════════════
 # URL ANALYSIS
