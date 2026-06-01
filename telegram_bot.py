@@ -4904,11 +4904,11 @@ async def _cancel_jarvis_task_for_founder(founder_id: int, task_id: Optional[str
 
 @dp.message_handler(commands=["task"], state="*")
 async def jarvis_task_command_handler(message: types.Message, state: FSMContext):
-    await state.finish()
     if not message.from_user or not is_founder_user(message.from_user.id):
         await message.answer("Команда доступна только основателю.")
         return
 
+    await state.finish()
     args = message.get_args() or ""
     if not args.strip():
         await message.answer("Напишите задачу так: /task <текст>")
@@ -4928,11 +4928,11 @@ async def jarvis_task_command_handler(message: types.Message, state: FSMContext)
 
 @dp.message_handler(commands=["task_send"], state="*")
 async def jarvis_task_send_command_handler(message: types.Message, state: FSMContext):
-    await state.finish()
     if not message.from_user or not is_founder_user(message.from_user.id):
         await message.answer("Команда доступна только основателю.")
         return
 
+    await state.finish()
     result = await _approve_jarvis_task_for_founder(message.from_user.id, None)
     if result == "sent":
         await message.answer("Готово. Отправил задачу в командный чат.")
@@ -4946,11 +4946,11 @@ async def jarvis_task_send_command_handler(message: types.Message, state: FSMCon
 
 @dp.message_handler(commands=["task_cancel"], state="*")
 async def jarvis_task_cancel_command_handler(message: types.Message, state: FSMContext):
-    await state.finish()
     if not message.from_user or not is_founder_user(message.from_user.id):
         await message.answer("Команда доступна только основателю.")
         return
 
+    await state.finish()
     result = await _cancel_jarvis_task_for_founder(message.from_user.id, None)
     if result == "cancelled":
         await message.answer("❌ Задача отменена.")
