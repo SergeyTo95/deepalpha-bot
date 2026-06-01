@@ -1,6 +1,7 @@
 from typing import Dict
 
-from db.database import charge_user_tokens_if_enough, get_user
+from db.database import get_user
+from services.check_service import try_deduct_tokens
 from services.live_analyst_admin_service import get_live_setting_int
 
 INSUFFICIENT_LIVE_TOKENS_MESSAGE = (
@@ -29,9 +30,11 @@ def can_user_afford_live_request(user_id: int, cost: int) -> bool:
 def charge_live_request(user_id: int, cost: int, reason: str) -> bool:
     if int(cost or 0) <= 0:
         return True
-    # reason is intentionally not persisted yet; live message rows store charged tokens.
+    # Canonical internal token balance is users.token_balance. Reuse the
+    # existing check_service.try_deduct_tokens helper, which atomically debits
+    # that column with WHERE token_balance >= amount and fails closed.
     _ = reason
-    return charge_user_tokens_if_enough(user_id, int(cost))
+    return try_deduct_tokens(user_id, int(cost))
 
 
 def get_billing_snapshot(user_id: int) -> Dict[str, int]:

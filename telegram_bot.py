@@ -6842,7 +6842,10 @@ async def analyze_prompt_handler(message: types.Message):
 
 
 _MAIN_MENU_BUTTONS = {
-    "🔍 Анализ", "🔍 Analyze",
+    "🔍 Анализ", "🔍 Analysis", "🔍 Analyze",
+    "⚡️ Быстрый анализ", "⚡️ Quick Analysis",
+    "💎 TON кошелёк", "💎 TON Wallet",
+    "🎁 Чеки", "🎁 Checks",
     "💡 Сигнал часа", "💡 Signal of the hour",
     "🧠 Live Analyst", "🔄 Reset Live context", "⬅️ Exit Live Mode",
     "🪙 Крипто анализ", "🪙 Crypto Analysis",
@@ -6855,7 +6858,7 @@ _MAIN_MENU_BUTTONS = {
     "📣 Авторы", "📣 Authors", "📢 Авторы", "📢 Authors",
     "✍️ Мои прогнозы", "✍️ My posts", "✍️ My forecasts",
     "💰 Баланс автора", "💰 Author balance",
-    "📊 История", "📊 History",
+    "📜 История", "📜 History", "📊 История", "📊 History",
     "💰 Баланс", "💰 Balance",
     "💎 Купить токены", "💎 Buy tokens",
     "🔔 Подписка", "✅ Подписка активна", "🔔 Subscribe", "✅ Subscription active",
@@ -7597,12 +7600,16 @@ async def _activate_live_mode(message: types.Message, analysis: Optional[dict] =
 
 @dp.message_handler(commands=["live"], state="*")
 async def live_command_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     await _activate_live_mode(message)
 
 
 @dp.message_handler(lambda m: (m.text or "") == "🧠 Live Analyst", state="*")
 async def live_button_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     await _activate_live_mode(message)
 
@@ -7610,6 +7617,8 @@ async def live_button_handler(message: types.Message, state: FSMContext):
 @dp.message_handler(commands=["exit_live"], state="*")
 @dp.message_handler(lambda m: (m.text or "") == "⬅️ Exit Live Mode", state="*")
 async def exit_live_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
@@ -7621,6 +7630,8 @@ async def exit_live_handler(message: types.Message, state: FSMContext):
 @dp.message_handler(commands=["reset_live"], state="*")
 @dp.message_handler(lambda m: (m.text or "") == "🔄 Reset Live context", state="*")
 async def reset_live_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
@@ -7633,6 +7644,8 @@ async def reset_live_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=["live_status"], state="*")
 async def live_status_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     _register_user(message)
     await message.answer(_live_status_text(message.from_user.id), reply_markup=private_reply_markup(message, get_live_analyst_keyboard(message.from_user.id) if is_live_session_active(message.from_user.id) else get_main_keyboard(message.from_user.id)))
@@ -7640,6 +7653,9 @@ async def live_status_handler(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("live_discuss_"), state="*")
 async def live_discuss_callback(callback: types.CallbackQuery, state: FSMContext):
+    if not _is_private_live_callback(callback):
+        await callback.answer()
+        return
     await state.finish()
     uid = callback.from_user.id
     if str(uid) != callback.data.replace("live_discuss_", ""):
@@ -7666,12 +7682,20 @@ def _require_live_admin(uid: int) -> bool:
     return _is_admin(uid) or is_founder_user(uid)
 
 
+def _is_private_live_message(message: types.Message) -> bool:
+    return bool(message and is_private_chat(message))
+
+
+def _is_private_live_callback(callback: types.CallbackQuery) -> bool:
+    return bool(callback and callback.message and callback.message.chat and callback.message.chat.type == "private")
+
+
 @dp.message_handler(commands=["live_admin", "live_stats"], state="*")
 async def live_admin_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    if not _require_live_admin(message.from_user.id):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
         return
+    await state.finish()
     if (message.get_command() or "").lstrip("/") == "live_stats":
         stats = get_stats_snapshot()
         await message.answer(
@@ -7692,10 +7716,10 @@ async def live_admin_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=["live_on", "live_off", "live_image_on", "live_image_off"], state="*")
 async def live_admin_toggle_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    if not _require_live_admin(message.from_user.id):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
         return
+    await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     if cmd == "live_on":
         set_live_setting("live_enabled", "true")
@@ -7713,10 +7737,10 @@ async def live_admin_toggle_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=["live_price"], state="*")
 async def live_price_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    if not _require_live_admin(message.from_user.id):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
         return
+    await state.finish()
     parts = (message.text or "").split()
     if len(parts) != 3 or parts[1] not in {"text", "image"}:
         await message.answer("Формат: /live_price text <tokens> или /live_price image <tokens>")
@@ -7733,10 +7757,10 @@ async def live_price_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=["live_memory"], state="*")
 async def live_memory_handler(message: types.Message, state: FSMContext):
-    await state.finish()
-    if not _require_live_admin(message.from_user.id):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
         return
+    await state.finish()
     parts = (message.text or "").split()
     if len(parts) != 2:
         await message.answer("Формат: /live_memory <count>")
@@ -7750,8 +7774,10 @@ async def live_memory_handler(message: types.Message, state: FSMContext):
     await message.answer(f"Live memory updated: last {count} messages")
 
 
-@dp.message_handler(lambda m: bool(m.from_user and is_live_session_active(m.from_user.id)) and bool(m.photo or (m.document and (m.document.mime_type or '').startswith('image/'))), content_types=["photo", "document"], state="*")
+@dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool(m.photo or (m.document and (m.document.mime_type or '').startswith('image/'))), content_types=["photo", "document"], state="*")
 async def live_image_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
@@ -7811,8 +7837,10 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
 
 
-@dp.message_handler(lambda m: bool(m.from_user and is_live_session_active(m.from_user.id)) and bool((m.text or "").strip()) and not (m.text or "").startswith("/") and (m.text or "").strip() not in LIVE_ANALYST_CONTROL_TEXTS, state="*")
+@dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool((m.text or "").strip()) and not (m.text or "").startswith("/") and (m.text or "").strip() not in LIVE_ANALYST_CONTROL_TEXTS and (m.text or "").strip() not in _MAIN_MENU_BUTTONS, state="*")
 async def live_text_handler(message: types.Message, state: FSMContext):
+    if not _is_private_live_message(message):
+        return
     await state.finish()
     _register_user(message)
     uid = message.from_user.id

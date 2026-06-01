@@ -40,6 +40,7 @@ def init_db():
 
 
 def _init_db_inner(conn, cursor):
+    global _live_analyst_tables_ready
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS analyses (
         id SERIAL PRIMARY KEY,
@@ -214,6 +215,7 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
 
     _init_live_analyst_tables(cursor)
+    _live_analyst_tables_ready = True
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS signal_history (
@@ -4037,12 +4039,16 @@ def get_web_analysis_history_item(user_id: int, item_id: int) -> Optional[Dict[s
 # LIVE ANALYST MODE
 # ═══════════════════════════════════════════
 
+_live_analyst_tables_ready = False
+
 def init_live_analyst_tables() -> None:
+    global _live_analyst_tables_ready
     conn = get_connection()
     cursor = conn.cursor()
     try:
         _init_live_analyst_tables(cursor)
         conn.commit()
+        _live_analyst_tables_ready = True
     except Exception as e:
         print(f"init_live_analyst_tables error: {e}")
     finally:
@@ -4109,9 +4115,13 @@ def _init_live_analyst_tables(cursor) -> None:
 
 
 def _ensure_live_analyst_tables(conn, cursor) -> None:
+    global _live_analyst_tables_ready
+    if _live_analyst_tables_ready:
+        return
     try:
         _init_live_analyst_tables(cursor)
         conn.commit()
+        _live_analyst_tables_ready = True
     except Exception:
         conn.rollback()
         raise
@@ -4297,25 +4307,6 @@ def count_live_analyst_messages_today(user_id: int, role: Optional[str] = None) 
     finally:
         conn.close()
 
-
-def charge_user_tokens_if_enough(user_id: int, amount: int) -> bool:
-    if int(amount or 0) <= 0:
-        return True
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-        UPDATE users
-        SET token_balance = token_balance - %s, updated_at = %s
-        WHERE user_id = %s AND token_balance >= %s
-        """, (int(amount), datetime.utcnow().isoformat(), user_id, int(amount)))
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        print(f"charge_user_tokens_if_enough error: {e}")
-        return False
-    finally:
-        conn.close()
 
 
 def get_live_analyst_stats() -> Dict[str, Any]:
