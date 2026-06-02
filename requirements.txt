@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 psycopg2-binary==2.9.9
 tonsdk
 cryptography
+Pillow>=10.0.0,<11.0.0
