@@ -1,10 +1,11 @@
 import base64
 import importlib.util
 import json
+import logging
 import os
 import re
 from io import BytesIO
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import requests
 
@@ -16,6 +17,8 @@ else:
 
 from services.live_analyst_admin_service import get_max_image_size_bytes
 
+
+logger = logging.getLogger(__name__)
 
 LIVE_IMAGE_POLYMARKET_CTA = "Нажми 🔍 Анализ и отправь ссылку — я сравню цены с AI-вероятностью и дам вывод EDGE / NO TRADE."
 LIVE_IMAGE_GENERIC_CTA = "Если хочешь, отправь вопрос по этому скрину или дай больше контекста."
@@ -156,14 +159,102 @@ def _is_polymarket_payload(payload: Dict[str, Any], raw_text: str, context_text:
     return any(marker in haystack for marker in ("polymarket", "prediction market", "odds", "outcomes", "yes/no"))
 
 
+def _payload_text(payload: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _clean_live_image_text(payload.get(key), 220)
+        if value:
+            return value
+    return ""
+
+
+def _is_fallback_polymarket_market(market: str) -> bool:
+    normalized = _clean_live_image_text(market, 180).lower()
+    if not normalized:
+        return True
+    fallback_markers = (
+        "точное название не извлечено",
+        "название не читается",
+        "название рынка не читается",
+        "точное название не читается",
+        "не удалось извлечь",
+        "polymarket-рынок",
+        "polymarket рынок",
+    )
+    return any(marker in normalized for marker in fallback_markers)
+
+
+def _has_specific_market_signal(text: str) -> bool:
+    normalized = (text or "").lower()
+    if re.search(r"(?:\d+\s*%|[$₽€]|\b(?:yes|no)\b|\d+\s*(?:¢|cents?))", normalized, re.IGNORECASE):
+        return True
+    return any(marker in normalized for marker in ("около", "кандидат", "лидер", "объём", "объем", "вероятност", "исход"))
+
+
+def _is_generic_polymarket_visible(visible: str) -> bool:
+    normalized = _clean_live_image_text(visible, 240).lower()
+    if not normalized:
+        return True
+    generic_visible_markers = (
+        "исходы/цены",
+        "исходы, график",
+        "кнопки yes/no",
+        "точные значения читаются не полностью",
+        "часть текста мелкая",
+        "видны исходы",
+        "график вероятностей",
+    )
+    marker_hits = sum(1 for marker in generic_visible_markers if marker in normalized)
+    return marker_hits >= 2 and not re.search(r"(?:\d+\s*%|[$₽€]|\d+\s*(?:¢|cents?))", normalized, re.IGNORECASE)
+
+
+def _is_useful_polymarket_payload(payload: Dict[str, Any]) -> bool:
+    market = _payload_text(payload, "market", "title", "event")
+    visible = _payload_text(payload, "visible", "what_visible", "details")
+    if _is_fallback_polymarket_market(market) or len(market) <= 8:
+        return False
+    if _is_generic_polymarket_visible(visible):
+        return False
+    return _has_specific_market_signal(visible) or len(visible) >= 35
+
+
+def _is_specific_text(text: str) -> bool:
+    cleaned = _clean_live_image_text(text, 240)
+    return bool(cleaned) and not _is_generic_polymarket_visible(cleaned) and (_has_specific_market_signal(cleaned) or len(cleaned) >= 35)
+
+
+def _merge_polymarket_payloads(base: Dict[str, Any], crop: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base or {})
+    merged["screen_type"] = "polymarket"
+
+    base_market = _payload_text(merged, "market", "title", "event")
+    crop_market = _payload_text(crop, "market", "title", "event")
+    if crop_market and (not base_market or _is_fallback_polymarket_market(base_market) or len(base_market) <= 8):
+        if not _is_fallback_polymarket_market(crop_market) and len(crop_market) > 8:
+            merged["market"] = crop_market
+
+    base_visible = _payload_text(merged, "visible", "what_visible", "details")
+    crop_visible = _payload_text(crop, "visible", "what_visible", "details")
+    if crop_visible and _is_specific_text(crop_visible):
+        if not _is_specific_text(base_visible) or len(crop_visible) > len(base_visible) + 15 or _has_specific_market_signal(crop_visible):
+            merged["visible"] = crop_visible
+
+    base_takeaway = _payload_text(merged, "takeaway", "benefit")
+    crop_takeaway = _payload_text(crop, "takeaway", "benefit")
+    if crop_takeaway and _is_specific_text(crop_takeaway):
+        if not _is_specific_text(base_takeaway) or len(crop_takeaway) > len(base_takeaway) + 10:
+            merged["takeaway"] = crop_takeaway
+
+    return merged
+
+
 def _format_polymarket_summary(payload: Dict[str, Any], raw_text: str = "") -> str:
     market = _clean_live_image_text(payload.get("market") or payload.get("title") or payload.get("event"), 150)
     visible = _clean_live_image_text(payload.get("visible") or payload.get("what_visible") or payload.get("details"), 220)
     takeaway = _clean_live_image_text(payload.get("takeaway") or payload.get("benefit"), 180)
 
-    if not market:
+    if not market or _is_fallback_polymarket_market(market):
         raw_hint = _clean_live_image_text(raw_text, 120)
-        market = raw_hint if raw_hint and not _looks_incomplete(raw_hint) else "Polymarket-рынок; точное название не извлечено"
+        market = raw_hint if raw_hint and not _looks_incomplete(raw_hint) and not _is_fallback_polymarket_market(raw_hint) else "Polymarket-рынок"
     if not visible:
         visible = "Видны исходы, график вероятностей и кнопки YES/NO; часть текста мелкая"
     if not takeaway:
@@ -257,17 +348,129 @@ def _prepare_image_for_vision(image_bytes: bytes, mime_type: str) -> Tuple[bytes
 
 
 def _is_generic_polymarket_extraction(payload: Dict[str, Any]) -> bool:
-    market = _clean_live_image_text(payload.get("market") or payload.get("title") or payload.get("event"), 120).lower()
-    visible = _clean_live_image_text(payload.get("visible") or payload.get("what_visible") or payload.get("details"), 180).lower()
-    fallback_markets = {"", "polymarket-рынок; точное название не извлечено", "название рынка не читается"}
-    generic_visible_markers = (
-        "исходы/цены",
-        "исходы, график",
-        "кнопки yes/no",
-        "точные значения читаются не полностью",
-        "часть текста мелкая",
+    return not _is_useful_polymarket_payload(payload)
+
+
+def _encode_crop_image(img: Any) -> Tuple[bytes, str]:
+    if img.mode not in {"RGB", "L"}:
+        img = img.convert("RGB")
+
+    output = BytesIO()
+    img.save(output, format="PNG", optimize=True)
+    crop_bytes = output.getvalue()
+    if len(crop_bytes) <= get_max_image_size_bytes():
+        return crop_bytes, "image/png"
+
+    output = BytesIO()
+    img.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
+    crop_bytes = output.getvalue()
+    if len(crop_bytes) <= get_max_image_size_bytes():
+        return crop_bytes, "image/jpeg"
+
+    return b"", ""
+
+
+def _build_polymarket_vision_crops(image_bytes: bytes, mime_type: str) -> List[Tuple[str, bytes, str]]:
+    if Image is None or ImageOps is None:
+        return []
+    if (mime_type or "").lower() not in {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}:
+        return []
+
+    crop_specs = (
+        ("header", 0.0, 0.0, 1.0, 0.28),
+        ("chart", 0.0, 0.12, 1.0, 0.45),
+        ("outcomes", 0.0, 0.38, 1.0, 0.85),
+        ("left_top_text", 0.0, 0.0, 0.70, 0.35),
     )
-    return market in fallback_markets or not visible or any(marker in visible for marker in generic_visible_markers)
+    crops: List[Tuple[str, bytes, str]] = []
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            width, height = img.size
+            logger.info("live_image_original_size width=%s height=%s", width, height)
+            if width <= 0 or height <= 0:
+                return []
+
+            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+            for label, x1p, y1p, x2p, y2p in crop_specs:
+                left = max(0, min(width, int(round(width * x1p))))
+                top = max(0, min(height, int(round(height * y1p))))
+                right = max(0, min(width, int(round(width * x2p))))
+                bottom = max(0, min(height, int(round(height * y2p))))
+                if right - left < 80 or bottom - top < 60:
+                    continue
+
+                crop = img.crop((left, top, right, bottom))
+                crop_width, crop_height = crop.size
+                scale = 2.0
+                if crop_width < VISION_IMAGE_TARGET_MIN_WIDTH:
+                    scale = min(3.0, max(scale, VISION_IMAGE_TARGET_MIN_WIDTH / float(crop_width)))
+                new_width = min(VISION_IMAGE_MAX_SIDE, max(1, int(crop_width * scale)))
+                new_height = min(VISION_IMAGE_MAX_SIDE, max(1, int(crop_height * scale)))
+                if new_width * new_height > VISION_IMAGE_MAX_PIXELS:
+                    shrink = (VISION_IMAGE_MAX_PIXELS / float(new_width * new_height)) ** 0.5
+                    new_width = max(1, int(new_width * shrink))
+                    new_height = max(1, int(new_height * shrink))
+                if (new_width, new_height) != crop.size:
+                    crop = crop.resize((new_width, new_height), resampling)
+
+                crop_bytes, crop_mime = _encode_crop_image(crop)
+                if crop_bytes and crop_mime:
+                    crops.append((label, crop_bytes, crop_mime))
+    except Exception:
+        return crops
+
+    return crops
+
+
+def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int) -> Tuple[str, str]:
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1},
+    }
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        return "", ""
+    data = response.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        return "", ""
+    candidate = candidates[0]
+    content_parts = candidate.get("content", {}).get("parts", [])
+    text = "".join(str(p.get("text", "")) for p in content_parts if isinstance(p, dict)).strip()
+    return text, str(candidate.get("finishReason", ""))
+
+
+def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str) -> Dict[str, Any]:
+    if not crops:
+        return {}
+
+    prompt = (
+        "Верни только JSON без markdown. Это увеличенные зоны Polymarket-скриншота. "
+        "Фокусируйся только на читаемом тексте в crops. Извлеки точный заголовок рынка, если виден; "
+        "верхние видимые исходы/кандидатов; примерные видимые цены/вероятности с кнопок или легенды, например 80%, 19%, <1%; "
+        "видимый объём, если читается; график/тренд опиши очень кратко. "
+        "Если текст частично виден, верни полезный частичный текст вместо пустоты. Не выдумывай данные. "
+        "Не давай buy/sell инструкции, финальный EDGE / NO TRADE и фразу 'Не финансовый совет.'. "
+        "Required JSON: {\"screen_type\":\"polymarket\",\"market\":\"...\",\"visible\":\"...\",\"takeaway\":\"...\",\"confidence\":\"high|medium|low\"}. "
+        "Все значения компактно на русском. "
+        f"Контекст, если есть: {context_text[:500]}"
+    )
+    parts: List[Dict[str, Any]] = [{"text": prompt}]
+    for label, crop_bytes, crop_mime in crops[:4]:
+        parts.append({"text": f"Crop: {label}"})
+        parts.append({"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}})
+
+    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 384)
+    payload = _extract_json_object(text)
+    if payload:
+        payload["screen_type"] = "polymarket"
+    return payload
 
 
 def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> Tuple[str, str]:
@@ -313,6 +516,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         return {"ok": False, "error": "vision_unavailable"}
 
     prepared_bytes, prepared_mime_type = _prepare_image_for_vision(image_bytes, mime_type)
+    logger.info("live_image_prepared mime=%s bytes=%s", prepared_mime_type, len(prepared_bytes))
 
     prompt = (
         "Ты — vision-модель для Live Analyst. Верни только валидный JSON без markdown и лишнего текста. "
@@ -341,7 +545,8 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
             return {"ok": False, "error": "empty_response"}
 
         payload = _extract_json_object(text)
-        if _is_polymarket_payload(payload, text, context_text) and _is_generic_polymarket_extraction(payload):
+        is_polymarket = _is_polymarket_payload(payload, text, context_text)
+        if is_polymarket and not _is_useful_polymarket_payload(payload):
             second_prompt = (
                 "Carefully extract readable text from this Polymarket mobile screenshot. "
                 "Zoom into the top market title and first outcome rows, including visible YES/NO prices, percentages, chart legend and volume. "
@@ -352,9 +557,23 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                 api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 256
             )
             second_payload = _extract_json_object(second_text)
-            if second_text and second_payload and not _is_generic_polymarket_extraction(second_payload):
+            if second_text and second_payload and _is_useful_polymarket_payload(second_payload):
                 text = second_text
                 finish_reason = second_finish_reason
+                payload = second_payload
+
+        if is_polymarket and not _is_useful_polymarket_payload(payload):
+            crops = _build_polymarket_vision_crops(prepared_bytes, prepared_mime_type)
+            logger.info("live_image_crops_built count=%s", len(crops))
+            if crops:
+                logger.info("live_image_crop_extraction_attempted")
+                crop_payload = _extract_polymarket_from_crops(api_key, model, timeout, crops, context_text)
+                merged_payload = _merge_polymarket_payloads(payload, crop_payload)
+                if _is_useful_polymarket_payload(merged_payload) and merged_payload != payload:
+                    logger.info("live_image_crop_extraction_improved")
+                    payload = merged_payload
+                    text = json.dumps(payload, ensure_ascii=False)
+                    finish_reason = ""
 
         summary = _format_live_image_summary(text, context_text=context_text, finish_reason=finish_reason)
         return {"ok": True, "summary": summary}
