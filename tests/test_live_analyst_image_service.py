@@ -63,3 +63,46 @@ def test_format_live_image_summary_limit_and_required_sections():
     assert "Рынок:" in summary
     assert "Быстрый вывод" in summary
     assert "🔍 Анализ" in summary
+
+
+def test_failed_or_empty_full_extraction_short_max_tokens_payload_empty():
+    assert svc._is_failed_or_empty_full_extraction({}, "abc", "MAX_TOKENS") is True
+
+
+def test_failed_or_empty_full_extraction_empty_raw_and_payload():
+    assert svc._is_failed_or_empty_full_extraction({}, "", "") is True
+
+
+def test_failed_or_empty_full_extraction_useful_polymarket_payload():
+    payload = {"screen_type": "polymarket", "market": "X", "visible": "Tariff 51%"}
+
+    assert svc._is_failed_or_empty_full_extraction(payload, "...", "") is False
+
+
+def test_crop_trigger_allows_failed_max_tokens_without_polymarket_marker():
+    payload = {}
+    text = "abc"
+    finish_reason = "MAX_TOKENS"
+    context_text = ""
+
+    failed_full_extraction = svc._is_failed_or_empty_full_extraction(payload, text, finish_reason)
+    attempt_crops = failed_full_extraction or svc._should_attempt_crop_extraction(payload, text, context_text)
+
+    assert failed_full_extraction is True
+    assert attempt_crops is True
+
+
+def test_crop_trigger_preserves_useful_polymarket_behavior():
+    payload = {
+        "screen_type": "polymarket",
+        "market": "What will Dr. Oz say during the next White House press briefing?",
+        "visible": "Tariff 51%, Health care 54%, видны YES/NO цены",
+    }
+    text = '{"screen_type":"polymarket","market":"What will Dr. Oz say during the next White House press briefing?","visible":"Tariff 51%, Health care 54%, видны YES/NO цены"}'
+    context_text = ""
+
+    failed_full_extraction = svc._is_failed_or_empty_full_extraction(payload, text, "")
+    attempt_crops = failed_full_extraction or svc._should_attempt_crop_extraction(payload, text, context_text)
+
+    assert failed_full_extraction is False
+    assert attempt_crops is True
