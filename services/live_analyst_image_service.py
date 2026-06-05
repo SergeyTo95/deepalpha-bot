@@ -461,6 +461,27 @@ def _has_strong_visible_values(text: str) -> bool:
     return any(marker in normalized.lower() for marker in candidate_markers)
 
 
+def _is_failed_or_empty_full_extraction(payload: Dict[str, Any], raw_text: str, finish_reason: str) -> bool:
+    payload = payload or {}
+    text = (raw_text or "").strip()
+    normalized_finish = (finish_reason or "").upper()
+
+    if not payload:
+        return True
+    if not text:
+        return True
+    if len(text) < 40 and not payload:
+        return True
+    if normalized_finish in {"MAX_TOKENS", "LENGTH"} and not payload:
+        return True
+
+    screen_type = _payload_text(payload, "screen_type", "type")
+    market = _payload_text(payload, "market", "title", "event")
+    visible = _payload_text(payload, "visible", "what_visible", "details")
+    summary = _payload_text(payload, "summary")
+    return not any((screen_type, market, visible, summary))
+
+
 def _should_attempt_crop_extraction(payload: Dict[str, Any], raw_text: str, context_text: str) -> bool:
     screen_type = str((payload or {}).get("screen_type") or (payload or {}).get("type") or "").lower()
     market = _payload_text(payload or {}, "market", "title", "event")
@@ -804,8 +825,8 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
     )
     try:
         text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 448)
-        if not text:
-            return {"ok": False, "error": "empty_response"}
+        full_finish_reason = finish_reason
+        full_raw_len = len(text or "")
 
         payload = _extract_json_object(text)
         source = "full"
@@ -816,6 +837,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                 text = json.dumps(payload, ensure_ascii=False)
                 source = "fallback"
         is_polymarket = _is_polymarket_payload(payload, text, context_text)
+        failed_full_extraction = _is_failed_or_empty_full_extraction(payload, text, full_finish_reason)
         logger.info(
             "live_image_full_payload screen_type=%s market_present=%s visible_len=%s useful=%s",
             payload.get("screen_type") or payload.get("type") or "",
@@ -824,28 +846,53 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
             _is_useful_polymarket_payload(payload) if is_polymarket else bool(payload),
         )
         _log_live_image_debug_fields("live_image_full_payload_debug", payload)
-        if is_polymarket and not _is_useful_polymarket_payload(payload):
-            second_prompt = (
-                "Carefully extract readable text from this Polymarket mobile screenshot. "
-                "Zoom into the top market title and first outcome rows, including visible YES/NO prices, percentages, chart legend and volume. "
-                "Return JSON only with fields: screen_type='polymarket', market, visible, takeaway, summary. "
-                "Use approximate 'около X%' only when the number is clearly visible. Do not invent data. Russian language only."
-            )
+        if (is_polymarket and not _is_useful_polymarket_payload(payload)) or failed_full_extraction:
+            if is_polymarket:
+                second_prompt = (
+                    "Carefully extract readable text from this Polymarket mobile screenshot. "
+                    "Zoom into the top market title and first outcome rows, including visible YES/NO prices, percentages, chart legend and volume. "
+                    "Return JSON only with fields: screen_type='polymarket', market, visible, takeaway, summary. "
+                    "Use approximate 'около X%' only when the number is clearly visible. Do not invent data. Russian language only."
+                )
+            else:
+                second_prompt = (
+                    "Extract readable text and screen type from this screenshot. If it is a Polymarket or prediction-market screen, "
+                    "return JSON with screen_type='polymarket', market, visible, takeaway, summary. If not, return screen_type='generic' "
+                    "and summary. Return JSON only. Keep it compact."
+                )
             second_text, second_finish_reason = _call_gemini_vision(
                 api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 256
             )
             second_payload = _extract_json_object(second_text) or _payload_from_unstructured_vision_text(second_text)
-            second_improved = bool(second_text and second_payload and _is_useful_polymarket_payload(second_payload))
+            second_is_polymarket = _is_polymarket_payload(second_payload, second_text, context_text)
+            second_improved = bool(
+                second_text
+                and second_payload
+                and (
+                    _is_useful_polymarket_payload(second_payload)
+                    if second_is_polymarket
+                    else bool(_payload_text(second_payload, "screen_type", "type") or _payload_text(second_payload, "summary"))
+                )
+            )
             logger.info("live_image_second_pass attempted=%s improved=%s", True, second_improved)
             if second_improved:
                 text = json.dumps(second_payload, ensure_ascii=False)
                 finish_reason = second_finish_reason
                 payload = second_payload
+                is_polymarket = second_is_polymarket
                 source = "second_pass"
         else:
             logger.info("live_image_second_pass attempted=%s improved=%s", False, False)
 
-        attempt_crops = _should_attempt_crop_extraction(payload, text, context_text)
+        should_attempt_crops = _should_attempt_crop_extraction(payload, text, context_text)
+        attempt_crops = failed_full_extraction or should_attempt_crops
+        logger.info(
+            "live_image_crop_trigger failed_full=%s should_attempt=%s finish=%s raw_len=%s",
+            failed_full_extraction,
+            should_attempt_crops,
+            full_finish_reason,
+            full_raw_len,
+        )
         if attempt_crops:
             crops = _build_polymarket_vision_crops(prepared_bytes, prepared_mime_type)
             crop_labels = [label for label, _crop_bytes, _crop_mime in crops[:6]]
