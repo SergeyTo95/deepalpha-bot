@@ -1,4 +1,5 @@
 import base64
+import copy
 import importlib.util
 import json
 import logging
@@ -31,6 +32,58 @@ VISION_IMAGE_MAX_PIXELS = 6_000_000
 
 _DISCLAIMER_RE = re.compile(r"\s*Не\s+финансовый\s+совет\.?\s*", re.IGNORECASE)
 _WORD_END_RE = re.compile(r"[\s\n.,!?…:;—-]+")
+
+
+def _get_live_image_vision_models(primary_model: str) -> List[str]:
+    primary = (primary_model or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    models: List[str] = [primary]
+    for fallback in ("gemini-2.5-flash-lite", "gemini-2.0-flash"):
+        if fallback not in models:
+            models.append(fallback)
+    return models
+
+
+def _is_gemini_25_model(model: str) -> bool:
+    return "gemini-2.5" in (model or "").lower()
+
+
+def _is_unsupported_thinking_config_response(status_code: int, response_text: str) -> bool:
+    if status_code != 400:
+        return False
+    lowered = (response_text or "").lower()
+    return "thinkingconfig" in lowered or ("thinking" in lowered and ("unsupported" in lowered or "unknown" in lowered or "invalid" in lowered))
+
+
+def _is_retryable_empty_max_tokens(finish_reason: str, text: str, payload: Dict[str, Any] | None = None) -> bool:
+    if (finish_reason or "").upper() not in {"MAX_TOKENS", "LENGTH"}:
+        return False
+    if len(text or "") >= 40:
+        return False
+    parsed_payload = payload or _extract_json_object(text or "") or _payload_from_unstructured_vision_text(text or "")
+    if parsed_payload and (
+        _is_useful_polymarket_payload(parsed_payload)
+        or bool(_payload_text(parsed_payload, "screen_type", "type", "summary", "market", "visible", "takeaway"))
+    ):
+        return False
+    return True
+
+
+def _replace_first_prompt_text(payload: Dict[str, Any], prompt: str) -> Dict[str, Any]:
+    fallback_payload = copy.deepcopy(payload)
+    contents = fallback_payload.get("contents")
+    if not isinstance(contents, list):
+        return fallback_payload
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and "text" in part:
+                part["text"] = prompt
+                return fallback_payload
+    return fallback_payload
 
 
 def is_supported_image_mime(mime_type: str) -> bool:
@@ -585,9 +638,10 @@ def _build_polymarket_vision_crops(image_bytes: bytes, mime_type: str) -> List[T
 def _post_gemini_generate_content(
     api_key: str, model: str, timeout: int, payload: Dict[str, Any], max_tokens: int, allow_json_mode: bool = True
 ) -> Tuple[str, str]:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    compact_prompt = "Extract visible text from this screenshot. Return compact JSON only with screen_type, market, visible, takeaway."
 
-    def _post(request_payload: Dict[str, Any]) -> requests.Response:
+    def _post(request_model: str, request_payload: Dict[str, Any]) -> requests.Response:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{request_model}:generateContent?key={api_key}"
         return requests.post(
             url,
             headers={"Content-Type": "application/json"},
@@ -595,70 +649,141 @@ def _post_gemini_generate_content(
             timeout=timeout,
         )
 
-    request_payload = dict(payload)
-    generation_config = dict(request_payload.get("generationConfig") or {})
-    generation_config.setdefault("maxOutputTokens", max_tokens)
-    generation_config.setdefault("temperature", 0.1)
-    if allow_json_mode:
-        generation_config["responseMimeType"] = "application/json"
-    request_payload["generationConfig"] = generation_config
+    def _build_request(base_payload: Dict[str, Any], json_mode: bool, thinking_off: bool) -> Dict[str, Any]:
+        request_payload = copy.deepcopy(base_payload)
+        generation_config = dict(request_payload.get("generationConfig") or {})
+        generation_config.setdefault("maxOutputTokens", max_tokens)
+        generation_config.setdefault("temperature", 0.1)
+        if json_mode:
+            generation_config["responseMimeType"] = "application/json"
+        else:
+            generation_config.pop("responseMimeType", None)
+        if thinking_off:
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+        else:
+            generation_config.pop("thinkingConfig", None)
+        request_payload["generationConfig"] = generation_config
+        return request_payload
 
-    contents = request_payload.get("contents") if isinstance(request_payload.get("contents"), list) else []
-    part_count = sum(len(content.get("parts") or []) for content in contents if isinstance(content, dict))
-    logger.info("live_image_gemini_request parts=%s max_tokens=%s", part_count, max_tokens)
+    def _request_part_count(request_payload: Dict[str, Any]) -> int:
+        contents = request_payload.get("contents") if isinstance(request_payload.get("contents"), list) else []
+        return sum(len(content.get("parts") or []) for content in contents if isinstance(content, dict))
 
-    response = _post(request_payload)
-    logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
-    if response.status_code != 200 and allow_json_mode:
-        logger.info("live_image_gemini_json_mode_fallback status=%s", response.status_code)
-        fallback_payload = dict(request_payload)
-        fallback_config = dict(fallback_payload.get("generationConfig") or {})
-        fallback_config.pop("responseMimeType", None)
-        fallback_payload["generationConfig"] = fallback_config
-        response = _post(fallback_payload)
-        logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
+    def _parse_response(response: requests.Response, request_model: str, json_mode: bool, thinking_off: bool) -> Tuple[str, str, bool]:
+        if response.status_code != 200:
+            logger.info(
+                "live_image_gemini_non_200 status=%s body_preview=%s",
+                response.status_code,
+                _safe_gemini_preview(response.text, 300, api_key),
+            )
+            return "", "", False
+        try:
+            data = response.json()
+        except Exception:
+            logger.info(
+                "live_image_gemini_result model=%s json_mode=%s thinking_off=%s candidates=%s finish=%s parts=%s text_len=%s block_reason=%s",
+                request_model,
+                json_mode,
+                thinking_off,
+                0,
+                "",
+                0,
+                0,
+                "json_parse_error",
+            )
+            if LIVE_IMAGE_DEBUG_LOGS:
+                logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(response.text, 300, api_key))
+            return "", "", True
 
-    if response.status_code != 200:
-        logger.info(
-            "live_image_gemini_non_200 status=%s body_preview=%s",
-            response.status_code,
-            _safe_gemini_preview(response.text, 300, api_key),
-        )
-        return "", ""
-
-    try:
-        data = response.json()
-    except Exception:
-        logger.info("live_image_gemini_result candidates=%s finish=%s text_len=%s block_reason=%s", 0, "", 0, "json_parse_error")
-        if LIVE_IMAGE_DEBUG_LOGS:
-            logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(response.text, 300, api_key))
-        return "", ""
-
-    candidates = data.get("candidates", []) if isinstance(data, dict) else []
-    prompt_feedback = data.get("promptFeedback", {}) if isinstance(data, dict) else {}
-    candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else (data if isinstance(data, dict) else {})
-    finish_reason = str(candidate.get("finishReason", ""))
-    block_reason = ""
-    if isinstance(prompt_feedback, dict):
-        block_reason = str(prompt_feedback.get("blockReason") or "")
-    safety_meta = candidate.get("safetyRatings") or (prompt_feedback.get("safetyRatings") if isinstance(prompt_feedback, dict) else None)
-    if safety_meta and not block_reason:
-        block_reason = "safety_metadata_present"
-    text = _extract_text_from_gemini_candidate(candidate) if candidate else ""
-    logger.info(
-        "live_image_gemini_result candidates=%s finish=%s text_len=%s block_reason=%s",
-        len(candidates) if isinstance(candidates, list) else 0,
-        finish_reason,
-        len(text),
-        block_reason,
-    )
-    if candidate and not text:
+        candidates = data.get("candidates", []) if isinstance(data, dict) else []
+        prompt_feedback = data.get("promptFeedback", {}) if isinstance(data, dict) else {}
+        candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else (data if isinstance(data, dict) else {})
+        finish_reason = str(candidate.get("finishReason", ""))
+        block_reason = ""
+        if isinstance(prompt_feedback, dict):
+            block_reason = str(prompt_feedback.get("blockReason") or "")
+        safety_meta = candidate.get("safetyRatings") or (prompt_feedback.get("safetyRatings") if isinstance(prompt_feedback, dict) else None)
+        if safety_meta and not block_reason:
+            block_reason = "safety_metadata_present"
+        candidate_keys = sorted(candidate.keys()) if isinstance(candidate, dict) else []
         content = candidate.get("content") if isinstance(candidate, dict) else {}
         content_keys = sorted(content.keys()) if isinstance(content, dict) else []
-        logger.info("live_image_gemini_empty_text finish=%s content_keys=%s", finish_reason, content_keys)
-    if LIVE_IMAGE_DEBUG_LOGS and text:
-        logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(text, 300, api_key))
-    return text, finish_reason
+        parts = content.get("parts") if isinstance(content, dict) else []
+        parts_count = len(parts) if isinstance(parts, list) else 0
+        text = _extract_text_from_gemini_candidate(candidate) if candidate else ""
+        logger.info("live_image_gemini_candidate_metadata model=%s candidate_keys=%s content_keys=%s", request_model, candidate_keys, content_keys)
+        logger.info(
+            "live_image_gemini_result model=%s json_mode=%s thinking_off=%s candidates=%s finish=%s parts=%s text_len=%s block_reason=%s",
+            request_model,
+            json_mode,
+            thinking_off,
+            len(candidates) if isinstance(candidates, list) else 0,
+            finish_reason,
+            parts_count,
+            len(text),
+            block_reason,
+        )
+        if candidate and not text:
+            logger.info("live_image_gemini_empty_text finish=%s content_keys=%s", finish_reason, content_keys)
+        if LIVE_IMAGE_DEBUG_LOGS and text:
+            logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(text, 300, api_key))
+        return text, finish_reason, True
+
+    best_text = ""
+    best_finish = ""
+    models = _get_live_image_vision_models(model)
+    for index, request_model in enumerate(models):
+        thinking_off = _is_gemini_25_model(request_model)
+        if thinking_off:
+            logger.info("live_image_gemini_thinking_disabled enabled=%s", True)
+        request_payload = _build_request(payload, allow_json_mode, thinking_off)
+        logger.info(
+            "live_image_gemini_request model=%s parts=%s max_tokens=%s json_mode=%s thinking_off=%s",
+            request_model,
+            _request_part_count(request_payload),
+            max_tokens,
+            allow_json_mode,
+            thinking_off,
+        )
+        response = _post(request_model, request_payload)
+        logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
+        if thinking_off and _is_unsupported_thinking_config_response(response.status_code, response.text):
+            logger.info("live_image_gemini_retry_without_thinking_config")
+            thinking_off = False
+            request_payload = _build_request(payload, allow_json_mode, thinking_off)
+            response = _post(request_model, request_payload)
+            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
+
+        if response.status_code != 200 and allow_json_mode:
+            logger.info("live_image_gemini_json_mode_fallback status=%s", response.status_code)
+            no_json_payload = _build_request(payload, False, thinking_off)
+            response = _post(request_model, no_json_payload)
+            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
+
+        text, finish_reason, parsed = _parse_response(response, request_model, allow_json_mode, thinking_off)
+        if parsed:
+            best_text, best_finish = text, finish_reason
+
+        if allow_json_mode and _is_retryable_empty_max_tokens(finish_reason, text):
+            logger.info("live_image_gemini_retry_without_json_mode reason=max_tokens_empty")
+            no_json_base = _replace_first_prompt_text(payload, compact_prompt)
+            no_json_payload = _build_request(no_json_base, False, thinking_off)
+            response = _post(request_model, no_json_payload)
+            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
+            text, finish_reason, parsed = _parse_response(response, request_model, False, thinking_off)
+            if parsed:
+                best_text, best_finish = text, finish_reason
+
+        if _is_retryable_empty_max_tokens(best_finish, best_text) and index + 1 < len(models):
+            logger.info(
+                "live_image_gemini_model_retry from_model=%s to_model=%s reason=max_tokens_empty",
+                request_model,
+                models[index + 1],
+            )
+            continue
+        return best_text, best_finish
+
+    return best_text, best_finish
 
 
 def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int) -> Tuple[str, str]:
@@ -676,26 +801,18 @@ def _extract_polymarket_from_crop_batch(
         return {}
 
     prompt = (
-        "Верни только JSON без markdown. Это увеличенные зоны Polymarket-скриншота, возможно мобильный браузер. "
-        "Фокусируйся только на читаемом тексте в crops. Extract: exact market question/title; first 5 visible outcomes; "
-        "right-side displayed percentages if visible; green/red YES/NO button prices if visible; visible volume if readable. "
-        "Do not confuse right-side large percentages with button prices, green 'Купить Yes 87¢' with probability percentage, "
-        "or browser URL with market title. Верхние visible rows пиши компактно, например: "
-        "Tariff 51%, Health / Health care 54%, Alien / Alien.gov 53%, No Qualifying Event 52%, "
-        "President 30+ times 54%; видны YES/NO цены. "
-        "takeaway пример: Большинство исходов около 50–55%, рынок выглядит неопределённым; для вывода нужен полный анализ по ссылке. "
-        "Если текст частично виден, верни полезный частичный текст вместо пустоты. Не выдумывай данные. "
-        "Не давай buy/sell инструкции, финальный EDGE / NO TRADE и фразу 'Не финансовый совет.'. "
-        "Required JSON: {\"screen_type\":\"polymarket\",\"market\":\"...\",\"visible\":\"...\",\"takeaway\":\"...\",\"confidence\":\"high|medium|low\"}. "
-        "Все значения компактно на русском, но видимые английские названия рынков/исходов сохраняй как на скрине. "
-        f"Контекст, если есть: {context_text[:500]}"
+        'Return JSON only: {"screen_type":"polymarket|generic","market":"","visible":"","takeaway":"","confidence":"high|medium|low"}. '
+        "Task: Read visible text from Polymarket screenshot crops. "
+        "Extract market title, first visible outcomes, percentages/prices, volume. "
+        "Use partial readable text. No trading advice. No EDGE/NO TRADE. No disclaimer. "
+        f"Context: {context_text[:300]}"
     )
     parts: List[Dict[str, Any]] = [{"text": prompt}]
     for label, crop_bytes, crop_mime in crops[:3]:
         parts.append({"text": f"Crop: {label}"})
         parts.append({"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}})
 
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 320)
+    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -709,17 +826,16 @@ def _extract_polymarket_from_single_crop(
     label, crop_bytes, crop_mime = crop
     logger.info("live_image_per_crop_attempt label=%s", label)
     prompt = (
-        "Extract readable Polymarket text from this crop. Return JSON only. "
-        "Required JSON: {\"screen_type\":\"polymarket\",\"market\":\"...\",\"visible\":\"...\","
-        "\"takeaway\":\"...\",\"confidence\":\"high|medium|low\"}. "
-        "Do not invent unreadable values. Keep visible English market/outcome names as shown. Russian takeaway only. "
-        f"Context if useful: {context_text[:300]}"
+        "Return JSON only. Read this crop. "
+        "If it shows Polymarket title/outcomes/percentages, extract them. "
+        "Fields: screen_type, market, visible, takeaway, confidence. Keep values short. "
+        f"Context: {context_text[:200]}"
     )
     parts: List[Dict[str, Any]] = [
         {"text": prompt},
         {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
     ]
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 220)
+    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 768)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -824,7 +940,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         f"Контекст Live Analyst, если есть:\n{context_text[:1200]}"
     )
     try:
-        text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 448)
+        text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 1024)
         full_finish_reason = finish_reason
         full_raw_len = len(text or "")
 
@@ -861,7 +977,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                     "and summary. Return JSON only. Keep it compact."
                 )
             second_text, second_finish_reason = _call_gemini_vision(
-                api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 256
+                api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 1024
             )
             second_payload = _extract_json_object(second_text) or _payload_from_unstructured_vision_text(second_text)
             second_is_polymarket = _is_polymarket_payload(second_payload, second_text, context_text)
