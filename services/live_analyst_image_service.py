@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from io import BytesIO
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -54,7 +54,7 @@ def _is_unsupported_thinking_config_response(status_code: int, response_text: st
     return "thinkingconfig" in lowered or ("thinking" in lowered and ("unsupported" in lowered or "unknown" in lowered or "invalid" in lowered))
 
 
-def _is_retryable_empty_max_tokens(finish_reason: str, text: str, payload: Dict[str, Any] | None = None) -> bool:
+def _is_retryable_empty_max_tokens(finish_reason: str, text: str, payload: Optional[Dict[str, Any]] = None) -> bool:
     if (finish_reason or "").upper() not in {"MAX_TOKENS", "LENGTH"}:
         return False
     if len(text or "") >= 40:
