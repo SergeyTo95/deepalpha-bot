@@ -106,3 +106,100 @@ def test_crop_trigger_preserves_useful_polymarket_behavior():
 
     assert failed_full_extraction is False
     assert attempt_crops is True
+
+
+class _GeminiResponse:
+    def __init__(self, status_code, data=None, text=""):
+        self.status_code = status_code
+        self._data = data
+        self.text = text or ("{}" if data is not None else "")
+
+    def json(self):
+        if self._data is None:
+            raise ValueError("no json")
+        return self._data
+
+
+def _max_tokens_candidate(text=""):
+    parts = [] if text == "" else [{"text": text}]
+    return {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"role": "model", "parts": parts}}]}
+
+
+def test_get_live_image_vision_models_primary_first_no_duplicates():
+    models = svc._get_live_image_vision_models("gemini-2.5-flash")
+
+    assert models[0] == "gemini-2.5-flash"
+    assert "gemini-2.5-flash-lite" in models
+    assert "gemini-2.0-flash" in models
+    assert len(models) == len(set(models))
+
+
+def test_retryable_empty_max_tokens_response_detection():
+    assert svc._is_retryable_empty_max_tokens("MAX_TOKENS", "{}") is True
+    assert svc._is_retryable_empty_max_tokens("STOP", "{}") is False
+    assert svc._is_retryable_empty_max_tokens("MAX_TOKENS", "x" * 40) is False
+
+
+def test_json_mode_fallback_selected_for_max_tokens_empty(monkeypatch):
+    calls = []
+    responses = [
+        _GeminiResponse(200, _max_tokens_candidate("")),
+        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"polymarket","market":"M","visible":"Tariff 51%","takeaway":"T"}'}]}}]}),
+    ]
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(json)
+        return responses.pop(0)
+
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    text, finish = svc._call_gemini_vision("key", "gemini-2.0-flash", 10, "long prompt", b"abc", "image/png", 1024)
+
+    assert finish == "STOP"
+    assert "Tariff 51%" in text
+    assert calls[0]["generationConfig"].get("responseMimeType") == "application/json"
+    assert "responseMimeType" not in calls[1]["generationConfig"]
+    assert calls[1]["contents"][0]["parts"][0]["text"].startswith("Extract visible text")
+
+
+def test_thinking_config_retry_path_unsupported(monkeypatch):
+    calls = []
+    responses = [
+        _GeminiResponse(400, {"error": "unsupported thinkingConfig"}, "unsupported thinkingConfig"),
+        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"generic","summary":"ok"}'}]}}]}),
+    ]
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(json)
+        return responses.pop(0)
+
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024)
+
+    assert finish == "STOP"
+    assert "generic" in text
+    assert "thinkingConfig" in calls[0]["generationConfig"]
+    assert "thinkingConfig" not in calls[1]["generationConfig"]
+
+
+def test_model_fallback_retries_after_max_tokens_empty(monkeypatch):
+    urls = []
+    responses = [
+        _GeminiResponse(200, _max_tokens_candidate("")),
+        _GeminiResponse(200, _max_tokens_candidate("")),
+        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"polymarket","market":"M","visible":"Health 54%","takeaway":"T"}'}]}}]}),
+    ]
+
+    def fake_post(url, headers, json, timeout):
+        urls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024)
+
+    assert finish == "STOP"
+    assert "Health 54%" in text
+    assert "models/gemini-2.5-flash:generateContent" in urls[0]
+    assert "models/gemini-2.5-flash-lite:generateContent" in urls[-1]
