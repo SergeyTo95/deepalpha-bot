@@ -486,6 +486,59 @@ def _add_unique_query(queries: List[Tuple[str, str]], variant: str, query: str) 
     queries.append((variant, cleaned))
 
 
+def _visible_outcome_terms(visible: str, limit: int = 5) -> List[str]:
+    terms: List[str] = []
+    for chunk in re.split(r"[,;\n•]+", visible or ""):
+        cleaned = re.sub(r"\b\d+(?:\.\d+)?\s*%\b", " ", chunk)
+        cleaned = re.sub(r"\b(?:yes|no|price|odds|chance)\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—:/")
+        if not cleaned:
+            continue
+        # Keep only the first alias before slash for compact search, but preserve useful words.
+        parts = [part.strip() for part in re.split(r"/", cleaned) if part.strip()]
+        for part in parts[:2]:
+            normalized = _normalize_market_title_for_resolution(part)
+            if len(normalized) < 3:
+                continue
+            display = " ".join(word.capitalize() if word.islower() else word for word in normalized.split()[:3])
+            if display and display not in terms:
+                terms.append(display)
+            if len(terms) >= limit:
+                return terms
+    return terms
+
+
+def build_polymarket_screenshot_search_variants(title: str, visible: str = "") -> List[str]:
+    variants: List[str] = []
+
+    def add(query: str) -> None:
+        query = re.sub(r"\s+", " ", (query or "").strip())
+        normalized = _normalize_market_title_for_resolution(query)
+        if not normalized:
+            return
+        if all(_normalize_market_title_for_resolution(existing) != normalized for existing in variants):
+            variants.append(query)
+
+    expanded = _expand_multilingual_title_terms(title)
+    compact = _compact_title_query(title)
+    outcomes = _visible_outcome_terms(visible, limit=5)
+
+    if compact:
+        add(compact)
+    if compact and outcomes:
+        add(f"{compact} {' '.join(outcomes[:3])}")
+    if expanded:
+        add(expanded)
+    if title:
+        add(title)
+    title_tokens = _market_title_tokens(expanded or title)
+    if title_tokens and outcomes:
+        add(" ".join(title_tokens[:5] + [term for outcome in outcomes[:3] for term in outcome.split()[:2]]))
+    if outcomes:
+        add(" ".join(outcomes[:5]))
+    return variants
+
+
 def _score_market_candidates(title: str, candidates: List[Dict[str, Any]]) -> List[Tuple[float, Dict[str, Any]]]:
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for candidate in candidates:
@@ -574,6 +627,81 @@ async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str,
     resolved = _normalize_resolved_market(best, best_confidence)
     logger.info(
         "live_image_market_resolve_result found=%s confidence=%s",
+        bool(resolved),
+        round(float(best_confidence), 4),
+    )
+    return resolved
+
+
+async def resolve_polymarket_market_from_screenshot(title: str, visible: str = "") -> Optional[Dict[str, Any]]:
+    logger.info(
+        "live_image_screenshot_market_resolve_attempt title_len=%s visible_len=%s visible_present=%s",
+        len(title or ""),
+        len(visible or ""),
+        bool(visible),
+    )
+    if _is_too_generic_market_title(title) and not _visible_outcome_terms(visible, limit=3):
+        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, 0.0)
+        return None
+
+    raw_variants = build_polymarket_screenshot_search_variants(title, visible)
+    queries: List[Tuple[str, str]] = []
+    for index, variant in enumerate(raw_variants):
+        _add_unique_query(queries, f"screenshot_{index}", variant)
+
+    if not queries:
+        return await resolve_polymarket_market_from_title(title)
+
+    candidates: List[Dict[str, Any]] = []
+    seen = set()
+    best_scored: List[Tuple[float, Dict[str, Any]]] = []
+    scoring_title = " ".join(part for part in (title, " ".join(_visible_outcome_terms(visible, limit=5))) if part)
+    for variant, query in queries:
+        logger.info("polymarket_screenshot_resolve_search_variant variant=%s query_len=%s", variant, len(query or ""))
+        for item in _search_events_for_title(query, limit=20) + list_markets(search=query, limit=20):
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item))
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(item)
+
+        scored = _score_market_candidates(title, candidates)
+        if scoring_title and scoring_title != title:
+            combined_scored = _score_market_candidates(scoring_title, candidates)
+            combined_by_key = {
+                str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item)): score
+                for score, item in combined_scored
+            }
+            rescored = []
+            for score, item in scored:
+                key = str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item))
+                rescored.append((max(score, combined_by_key.get(key, 0.0)), item))
+            scored = sorted(rescored, key=lambda item: (item[0], 1 if _is_market_open(item[1]) else 0), reverse=True)
+        if scored and (not best_scored or scored[0][0] > best_scored[0][0]):
+            best_scored = scored
+        if scored and scored[0][0] >= 0.82 and not _is_ambiguous_title_match(scored, threshold=0.70):
+            break
+
+    scored = best_scored or _score_market_candidates(title, candidates)
+    if not scored:
+        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, 0.0)
+        return None
+
+    best_confidence, best = scored[0]
+    if _is_ambiguous_title_match(scored, threshold=0.70):
+        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
+        return None
+
+    threshold = 0.70
+    if best_confidence < threshold:
+        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
+        return None
+
+    resolved = _normalize_resolved_market(best, best_confidence)
+    logger.info(
+        "live_image_screenshot_market_resolve_result found=%s confidence=%s",
         bool(resolved),
         round(float(best_confidence), 4),
     )

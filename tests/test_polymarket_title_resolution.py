@@ -77,3 +77,49 @@ def test_resolve_polymarket_market_from_title_low_confidence_returns_none(monkey
     result = asyncio.run(svc.resolve_polymarket_market_from_title("Will it rain in Paris tomorrow?"))
 
     assert result is None
+
+
+def test_screenshot_search_variants_include_title_and_visible_outcomes():
+    title = "Что скажет доктор Оз во время следующего брифинга Белого дома?"
+    visible = "Tariff — 51%, Health / Healthcare — 54%, Alien / Alien.gov — 53%, No Qualifying Event — 52%, President 30+ times — 54%."
+
+    variants = svc.build_polymarket_screenshot_search_variants(title, visible)
+    joined = " | ".join(variants)
+
+    assert "Dr Oz White House press briefing" in joined
+    assert "Tariff" in joined
+    assert "Health" in joined
+    assert "Alien" in joined
+
+
+def test_resolve_polymarket_market_from_screenshot_uses_visible_outcome_queries(monkeypatch):
+    queries = []
+
+    def fake_list_markets(search="", limit=10, offset=0):
+        queries.append(search)
+        if "tariff" in (search or "").lower() or "health" in (search or "").lower() or "alien" in (search or "").lower():
+            return [
+                {
+                    "id": "123",
+                    "question": "What will Dr. Oz say during the next White House press briefing?",
+                    "slug": "what-will-dr-oz-say-during-the-next-white-house-press-briefing",
+                    "eventSlug": "what-will-dr-oz-say-during-the-next-white-house-press-briefing",
+                    "active": True,
+                    "closed": False,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(svc, "list_markets", fake_list_markets)
+    monkeypatch.setattr(svc, "_search_events_for_title", lambda query, limit=20: [])
+
+    result = asyncio.run(
+        svc.resolve_polymarket_market_from_screenshot(
+            "Что скажет доктор Оз во время следующего брифинга Белого дома?",
+            visible="Tariff — 51%, Health / Healthcare — 54%, Alien / Alien.gov — 53%.",
+        )
+    )
+
+    assert result is not None
+    assert result["confidence"] >= 0.82
+    assert any("tariff" in query.lower() for query in queries)

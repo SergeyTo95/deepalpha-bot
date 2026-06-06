@@ -21,7 +21,7 @@ from services.live_analyst_admin_service import get_max_image_size_bytes
 
 logger = logging.getLogger(__name__)
 
-LIVE_IMAGE_POLYMARKET_CTA = "Нажми 🔍 Анализ и отправь ссылку — я сравню цены с AI-вероятностью и дам вывод EDGE / NO TRADE."
+LIVE_IMAGE_POLYMARKET_CTA = "Отправь ссылку или попробуй поиск по скрину ещё раз."
 LIVE_IMAGE_GENERIC_CTA = "Если хочешь, отправь вопрос по этому скрину или дай больше контекста."
 LIVE_IMAGE_SUMMARY_LIMIT = 700
 LIVE_IMAGE_DEBUG_LOGS = os.getenv("LIVE_IMAGE_DEBUG_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}
