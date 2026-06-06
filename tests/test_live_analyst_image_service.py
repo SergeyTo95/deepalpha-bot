@@ -65,6 +65,47 @@ def test_format_live_image_summary_limit_and_required_sections():
     assert "🔍 Анализ" in summary
 
 
+def test_polymarket_screenshot_card_normalizes_visible_and_local_takeaway():
+    visible = (
+        "Tariff 51% (Buy Yes 87c, Buy No 86c); "
+        "Health / Healthcare 54% (Buy Yes 91c, Buy No 84c); "
+        "Alien / Alien.gov 53% (Buy Yes 91c, Buy No 86c); "
+        "-No Qualifying Event- 52% (Buy Yes 94c, Buy No 91c); "
+        "President 30+ times 54%"
+    )
+    raw_takeaway = (
+        "The market is 'What will Dr. Oz say during the next White House press briefing?'. "
+        "The first visible исход is 'Tariff' at 51%, with 'Buy Yes' at 87c and 'Buy No' at 86c. Other…"
+    )
+    raw = (
+        '{"screen_type":"polymarket",'
+        '"market":"What will Dr. Oz say during the next White House press briefing?",'
+        '"visible":"' + visible + '",'
+        '"takeaway":"' + raw_takeaway + '"}'
+    )
+
+    summary = svc._format_live_image_summary(raw)
+
+    assert "Tariff — 51%" in summary
+    assert "Health / Healthcare — 54%" in summary
+    assert "Alien / Alien.gov — 53%" in summary
+    assert "No Qualifying Event — 52%" in summary
+    assert "President 30+ times — 54%" in summary
+    assert "Buy Yes" not in summary
+    assert "Buy No" not in summary
+    assert "Other…" not in summary
+    assert "The market is" not in summary
+    assert "Видимые исходы держатся около 50–55%" in summary
+    assert raw_takeaway not in summary
+    assert "Что видно" in summary
+    assert "Быстрый вывод" in summary
+    assert "Что проверить" in summary
+    assert "Что дальше" in summary
+    assert "🔍 Анализ" in summary
+    assert "EDGE / NO TRADE" in summary
+    assert len(summary) <= svc.LIVE_IMAGE_SUMMARY_LIMIT
+
+
 def test_failed_or_empty_full_extraction_short_max_tokens_payload_empty():
     assert svc._is_failed_or_empty_full_extraction({}, "abc", "MAX_TOKENS") is True
 
