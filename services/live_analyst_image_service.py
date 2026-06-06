@@ -606,6 +606,37 @@ def _format_live_image_summary(raw_text: str, context_text: str = "", finish_rea
     return _format_generic_summary(payload, raw_text)
 
 
+def _build_live_image_metadata(payload: Dict[str, Any], raw_text: str, context_text: str, summary: str) -> Dict[str, Any]:
+    if not _is_polymarket_payload(payload or {}, raw_text, context_text):
+        return {"screen_type": "generic"}
+
+    market = _clean_live_image_text((payload or {}).get("market") or (payload or {}).get("title") or (payload or {}).get("event"), 240)
+    visible = _clean_polymarket_visible_text((payload or {}).get("visible") or (payload or {}).get("what_visible") or (payload or {}).get("details"))
+    takeaway = _clean_live_image_text((payload or {}).get("takeaway") or (payload or {}).get("benefit"), 300)
+
+    if not market or _is_fallback_polymarket_market(market):
+        match = re.search(r"•\s*Рынок:\s*([^\n]+)", summary or "")
+        if match:
+            market = _clean_live_image_text(match.group(1), 240)
+    if not visible:
+        visible_match = re.search(r"Что видно:\s*(?:\n|.)*?•\s*Рынок:[^\n]*\n•\s*([^\n]+)", summary or "")
+        if visible_match:
+            visible = _clean_live_image_text(visible_match.group(1), 240)
+    if not takeaway:
+        takeaway_match = re.search(r"Быстрый вывод:\s*\n•\s*([^\n]+)", summary or "")
+        if takeaway_match:
+            takeaway = _clean_live_image_text(takeaway_match.group(1), 300)
+
+    metadata: Dict[str, Any] = {"screen_type": "polymarket"}
+    if market and not _is_fallback_polymarket_market(market):
+        metadata["market"] = market
+    if visible:
+        metadata["visible"] = visible
+    if takeaway:
+        metadata["takeaway"] = takeaway
+    return metadata
+
+
 def _prepare_image_for_vision(image_bytes: bytes, mime_type: str) -> Tuple[bytes, str]:
     """Optionally upscale small screenshots for vision OCR while keeping failures non-fatal."""
     normalized_mime = (mime_type or "").lower()
@@ -1214,6 +1245,8 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         )
         summary = _format_live_image_summary(text, context_text=context_text, finish_reason=finish_reason)
         logger.info("live_image_final_summary_len=%s", len(summary))
-        return {"ok": True, "summary": summary}
+        result: Dict[str, Any] = {"ok": True, "summary": summary}
+        result.update(_build_live_image_metadata(payload, text, context_text, summary))
+        return result
     except Exception:
         return {"ok": False, "error": "vision_unavailable"}

@@ -244,3 +244,53 @@ def test_model_fallback_retries_after_max_tokens_empty(monkeypatch):
     assert "Health 54%" in text
     assert "models/gemini-2.5-flash:generateContent" in urls[0]
     assert "models/gemini-2.5-flash-lite:generateContent" in urls[-1]
+
+
+def test_live_image_metadata_for_polymarket_payload():
+    payload = {
+        "screen_type": "polymarket",
+        "market": "What will Dr. Oz say during the next White House press briefing?",
+        "visible": "Tariff 51%, Health care 54%",
+        "takeaway": "Нужен полный анализ.",
+    }
+    raw = '{"screen_type":"polymarket"}'
+    summary = svc._format_polymarket_summary(payload)
+
+    metadata = svc._build_live_image_metadata(payload, raw, "", summary)
+
+    assert metadata["screen_type"] == "polymarket"
+    assert metadata["market"] == payload["market"]
+    assert "Tariff" in metadata["visible"]
+    assert metadata["takeaway"]
+
+
+def test_new_live_image_callback_data_under_telegram_limit():
+    callbacks = [
+        "live_img_run_full_analysis",
+        "live_img_full_analysis_help",
+        "live_img_explain_edge",
+        "live_img_risks",
+    ]
+
+    assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
+
+
+def test_live_image_keyboard_source_gates_auto_run_to_strong_confidence():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+
+    assert "LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD = 0.82" in source
+    assert "LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD = 0.70" in source
+    assert "_is_live_image_strong_market_match(resolved_market)" in source
+    medium_branch = source.split('elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):', 1)[1]
+    medium_branch = medium_branch.split("else:", 1)[0]
+    assert "LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK" not in medium_branch
+    assert "LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK" in medium_branch
+
+
+def test_live_image_keyboard_source_shows_auto_run_for_strong_confidence():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+
+    strong_branch = source.split('if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):', 1)[1]
+    strong_branch = strong_branch.split("elif resolved_market", 1)[0]
+    assert "LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK" in strong_branch
+    assert "Открыть рынок" in strong_branch
