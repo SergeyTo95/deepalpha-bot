@@ -393,19 +393,146 @@ def _merge_polymarket_payloads(base: Dict[str, Any], crop: Dict[str, Any]) -> Di
     return merged
 
 
-def _format_polymarket_summary(payload: Dict[str, Any], raw_text: str = "") -> str:
-    market = _clean_live_image_text(payload.get("market") or payload.get("title") or payload.get("event"), 150)
-    visible = _clean_live_image_text(payload.get("visible") or payload.get("what_visible") or payload.get("details"), 220)
-    takeaway = _clean_live_image_text(payload.get("takeaway") or payload.get("benefit"), 180)
+def _remove_polymarket_direct_advice(text: str) -> str:
+    cleaned = text or ""
+    direct_patterns = (
+        r'\b(?:buy|sell)\b[^.;!?"]*',
+        r"\bprofit\b",
+        r"\bставь\w*\b",
+        r"\bкуп(?:и|ить|ите|ляй|лять)\w*\b",
+        r"\bпрод(?:ай|ать|айте|авай|авать)\w*\b",
+        r"\bгарантированн\w*\b",
+    )
+    for pattern in direct_patterns:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
-    if not market or _is_fallback_polymarket_market(market):
-        raw_hint = _clean_live_image_text(raw_text, 120)
-        market = raw_hint if raw_hint and not _looks_incomplete(raw_hint) and not _is_fallback_polymarket_market(raw_hint) else "Polymarket-рынок"
-    if not visible:
-        visible = "Видны исходы, график вероятностей и кнопки YES/NO; часть текста мелкая"
-    if not takeaway:
-        takeaway = "Скрин даёт визуальный контекст, но для точного вывода нужна ссылка"
 
+def _polymarket_percent_values(text: str) -> List[int]:
+    values: List[int] = []
+    for match in re.finditer(r"(?<!\d)(\d{1,3})\s*%", text or ""):
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            continue
+        if 0 <= value <= 100:
+            values.append(value)
+    return values
+
+
+def _clean_polymarket_outcome_name(name: str) -> str:
+    cleaned = name or ""
+    cleaned = re.sub(r"[\s:;,()]+$", "", cleaned)
+    cleaned = re.sub(r"^[\s:;,()•\-–—]+", "", cleaned)
+    cleaned = re.sub(r"\b(?:first visible|visible|исход|outcome|outcomes|is|at)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^[\s\'"]+|[\s\'"]+$', "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—")
+    return cleaned
+
+
+def _clean_polymarket_visible_text(visible: str) -> str:
+    text = str(visible or "")
+    text = _DISCLAIMER_RE.sub(" ", text)
+    text = re.sub(r"(?<!\w)-([A-Za-zА-Яа-яЁё0-9][^-]{2,80}?)-(?!\w)", r"\1", text)
+    text = re.sub(r"\bBuy\s+Yes\b", "YES", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bBuy\s+No\b", "NO", text, flags=re.IGNORECASE)
+    text = _normalize_market_terms(text)
+    text = re.sub(r"\bOther\s*(?:\.\.\.|…)", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bOther\s*(?:\.\.\.|…)?", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:^|[.!?]\s+)The market is[^.!?]*(?:[.!?]|$)", " ", text, flags=re.IGNORECASE)
+    text = _remove_polymarket_direct_advice(text)
+    text = re.sub(r"[`*_#>]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t\n\r-–—•:;.,")
+
+    percent_matches = list(re.finditer(r"([^;()]+?)\s*[—-]?\s*(\d{1,3})\s*%", text))
+    outcomes: List[str] = []
+    seen: set = set()
+    for match in percent_matches:
+        name = _clean_polymarket_outcome_name(match.group(1))
+        if not name:
+            continue
+        try:
+            value = int(match.group(2))
+        except ValueError:
+            continue
+        if not 0 <= value <= 100:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        outcomes.append(f"{name} — {value}%")
+        if len(outcomes) >= 5:
+            break
+    if outcomes:
+        return ", ".join(outcomes) + "."
+
+    text = re.sub(r"\([^)]*\b(?:YES|NO)\b[^)]*\)", " ", text, flags=re.IGNORECASE)
+    price_parts: List[str] = []
+    for part in re.split(r"[;\n]+", text):
+        cleaned = re.sub(r"\s+", " ", part).strip(" \t\n\r-–—•:;.,")
+        if cleaned and re.search(r"\b(?:YES|NO)\b|\d+\s*(?:c|¢|cents?)", cleaned, re.IGNORECASE):
+            price_parts.append(cleaned)
+        if len(price_parts) >= 3:
+            break
+    if price_parts:
+        return "; ".join(price_parts) + "."
+    return _clean_live_image_text(text, 180)
+
+
+def _raw_polymarket_takeaway_is_unsafe(raw_takeaway: str, market: str) -> bool:
+    raw = _clean_live_image_text(raw_takeaway, 240)
+    if not raw:
+        return True
+    lowered = raw.lower()
+    if len(raw) > 180 or "the market is" in lowered or "other…" in lowered or "other..." in lowered:
+        return True
+    if market and market.lower() in lowered:
+        return True
+    latin_words = re.findall(r"\b[a-zA-Z]{3,}\b", raw)
+    cyrillic_words = re.findall(r"[А-Яа-яЁё]{3,}", raw)
+    if len(latin_words) > len(cyrillic_words):
+        return True
+    if re.search(r"\b(?:buy|sell|profit)\b", lowered) or re.search(r"\b(?:куп|прод|ставь|гарантированн)", lowered):
+        return True
+    return False
+
+
+def _build_polymarket_screenshot_takeaway(market: str, visible: str, raw_takeaway: str) -> str:
+    values = _polymarket_percent_values(visible)
+    if values:
+        if max(values) >= 75:
+            return (
+                "Один исход сильно лидирует, поэтому важно проверить, не заложил ли рынок уже основную информацию. "
+                "Edge возможен только если AI-вероятность заметно отличается от цены."
+            )
+        if len(values) >= 2 and min(values) >= 45 and max(values) <= 60:
+            return (
+                "Видимые исходы держатся около 50–55%, значит рынок выглядит неопределённым. "
+                "Потенциальный edge зависит от новостей, правил resolution и точной цены входа."
+            )
+        return (
+            "По видимым ценам рынок не даёт готового вывода: edge появляется только там, "
+            "где AI-вероятность заметно расходится с текущей ценой."
+        )
+
+    if not _raw_polymarket_takeaway_is_unsafe(raw_takeaway, market):
+        return _remove_polymarket_direct_advice(_clean_live_image_text(raw_takeaway, 150))
+    return "По одному скрину нельзя оценить edge: нужны ссылка, правила resolution, ликвидность и актуальные цены."
+
+
+def _build_polymarket_screenshot_checks(market: str, visible: str) -> str:
+    values = _polymarket_percent_values(visible)
+    if values and max(values) >= 75:
+        return "Проверь, почему цена так высока: если причина уже очевидна рынку, вход может быть поздним."
+    if len(values) >= 2 and min(values) >= 45 and max(values) <= 60:
+        return "Что именно засчитывается в правилах рынка и есть ли свежие новости, которые рынок ещё не полностью учёл."
+    if values:
+        return "Сравни цену с AI-вероятностью и проверь ликвидность: без заметного расхождения edge обычно нет."
+    return "Проверь ссылку, правила рынка и актуальную ликвидность — по одному скрину нельзя оценить edge."
+
+
+def _compose_polymarket_card(market: str, visible: str, takeaway: str, checks: str) -> str:
     text = (
         "🧠 Polymarket-скрин\n\n"
         "Что видно:\n"
@@ -413,9 +540,45 @@ def _format_polymarket_summary(payload: Dict[str, Any], raw_text: str = "") -> s
         f"• {visible}\n\n"
         "Быстрый вывод:\n"
         f"• {takeaway}\n\n"
+        "Что проверить:\n"
+        f"• {checks}\n\n"
         "Что дальше:\n"
         f"• {LIVE_IMAGE_POLYMARKET_CTA}"
     )
+    return text
+
+
+def _format_polymarket_summary(payload: Dict[str, Any], raw_text: str = "") -> str:
+    market = _clean_live_image_text(payload.get("market") or payload.get("title") or payload.get("event"), 150)
+    visible = _clean_polymarket_visible_text(payload.get("visible") or payload.get("what_visible") or payload.get("details"))
+    raw_takeaway = _clean_live_image_text(payload.get("takeaway") or payload.get("benefit"), 220)
+
+    if not market or _is_fallback_polymarket_market(market):
+        raw_hint = _clean_live_image_text(raw_text, 120)
+        market = raw_hint if raw_hint and not _looks_incomplete(raw_hint) and not _is_fallback_polymarket_market(raw_hint) else "Polymarket-рынок"
+    if not visible:
+        visible = "Исходы и цены видны не полностью."
+
+    takeaway = _build_polymarket_screenshot_takeaway(market, visible, raw_takeaway)
+    checks = _build_polymarket_screenshot_checks(market, visible)
+
+    text = _compose_polymarket_card(market, visible, takeaway, checks)
+    if len(text) <= LIVE_IMAGE_SUMMARY_LIMIT:
+        return text
+
+    checks = _clean_live_image_text(checks, 105)
+    text = _compose_polymarket_card(market, visible, takeaway, checks)
+    if len(text) <= LIVE_IMAGE_SUMMARY_LIMIT:
+        return text
+
+    visible = _clean_live_image_text(visible, 150)
+    text = _compose_polymarket_card(market, visible, takeaway, checks)
+    if len(text) <= LIVE_IMAGE_SUMMARY_LIMIT:
+        return text
+
+    checks = "Проверь правила, новости, ликвидность и актуальные цены."
+    visible = _clean_live_image_text(visible, 110)
+    text = _compose_polymarket_card(market, visible, takeaway, checks)
     return _safe_trim_preserving_cta(text, cta=LIVE_IMAGE_POLYMARKET_CTA)
 
 
