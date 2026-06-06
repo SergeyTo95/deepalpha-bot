@@ -108,6 +108,22 @@ def update_context_from_user_text(session: Dict[str, Any], text: str) -> Dict[st
     return session
 
 
+def update_current_market_context(
+    session: Dict[str, Any],
+    market_url: str = "",
+    market_title: str = "",
+) -> Dict[str, Any]:
+    updates: Dict[str, Any] = {}
+    if market_url and market_url != session.get("current_market_url"):
+        updates["current_market_url"] = market_url[:1000]
+    if market_title and market_title != session.get("current_market_title"):
+        updates["current_market_title"] = market_title[:500]
+    if updates:
+        update_live_analyst_session(int(session["id"]), **updates)
+        session.update(updates)
+    return session
+
+
 def update_last_image_summary(session_id: int, summary: str) -> None:
     update_live_analyst_session(session_id, last_image_summary=(summary or "")[:4000])
 

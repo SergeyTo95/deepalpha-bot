@@ -104,15 +104,16 @@ from services.live_analyst_billing_service import (
     can_user_afford_live_request, get_billing_snapshot, get_live_request_cost,
 )
 from services.live_analyst_image_service import analyze_image_bytes
+from services.polymarket_service import resolve_polymarket_market_from_title
 from services.live_analyst_memory_service import (
     exit_session as exit_live_session, get_or_create_active_session, is_active as is_live_session_active,
     reset_session as reset_live_session, save_message as save_live_message,
-    start_session as start_live_session, update_last_image_summary,
+    start_session as start_live_session, update_current_market_context, update_last_image_summary,
 )
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
 )
-from db.database import count_live_analyst_messages_today
+from db.database import count_live_analyst_messages_today, get_live_analyst_active_session
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -703,6 +704,33 @@ def get_live_admin_keyboard() -> InlineKeyboardMarkup:
     kb.add(InlineKeyboardButton("🧠 Memory limit", callback_data="live_admin_set_memory_limit"))
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
     return kb
+
+
+
+
+LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK = "live_img_run_full_analysis"
+LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK = "live_img_full_analysis_help"
+LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK = "live_img_explain_edge"
+LIVE_IMAGE_RISKS_CALLBACK = "live_img_risks"
+LIVE_IMAGE_PRIVATE_CHAT_ALERT = "Live Analyst доступен только в личном чате с ботом."
+
+
+def get_live_image_keyboard(resolved_market: dict = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    if resolved_market and resolved_market.get("url"):
+        kb.add(InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url")))
+    else:
+        kb.add(InlineKeyboardButton("🔍 Как запустить полный анализ?", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+    kb.add(
+        InlineKeyboardButton("🧠 Объясни edge", callback_data=LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK),
+        InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK),
+    )
+    return kb
+
+
+def _is_private_callback(callback: types.CallbackQuery) -> bool:
+    return bool(callback.message and callback.message.chat and callback.message.chat.type == "private")
 
 
 def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -7973,10 +8001,28 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
         await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
         return
+
+    resolved_market = None
+    if result.get("screen_type") == "polymarket" and result.get("market"):
+        try:
+            resolved_market = await resolve_polymarket_market_from_title(result.get("market") or "")
+        except Exception as exc:
+            logger.warning("live_image_market_resolve_failed user_id=%s reason=%s", uid, type(exc).__name__)
+            resolved_market = None
+        if resolved_market and resolved_market.get("url"):
+            session = update_current_market_context(
+                session,
+                market_url=resolved_market.get("url") or "",
+                market_title=resolved_market.get("title") or result.get("market") or "",
+            )
+
     save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
     save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
     update_last_image_summary(int(session["id"]), summary)
-    await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
+    if result.get("screen_type") == "polymarket":
+        await message.answer(summary, reply_markup=get_live_image_keyboard(resolved_market))
+    else:
+        await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
 
 
 @dp.message_handler(lambda m: is_private_chat(m) and bool(m.from_user and is_live_session_active(m.from_user.id)) and bool((m.text or "").strip()) and not (m.text or "").startswith("/") and (m.text or "").strip() not in LIVE_ANALYST_CONTROL_TEXTS and (m.text or "").strip() not in _MAIN_MENU_BUTTONS, state="*")
@@ -7994,18 +8040,89 @@ async def live_text_handler(message: types.Message, state: FSMContext):
         reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),
     )
 
+
+
+@dp.callback_query_handler(lambda c: c.data in {
+    LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK,
+    LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK,
+    LIVE_IMAGE_RISKS_CALLBACK,
+})
+async def live_image_educational_callback(callback: types.CallbackQuery):
+    if not _is_private_callback(callback):
+        await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
+        return
+
+    if callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK:
+        text = (
+            "🔍 Для полного анализа отправь ссылку Polymarket через раздел «🔍 Анализ».\n\n"
+            "Я проверю:\n"
+            "• market odds;\n"
+            "• AI-вероятность;\n"
+            "• разницу между ценой и вероятностью;\n"
+            "• риски;\n"
+            "• итог EDGE / NO TRADE."
+        )
+    elif callback.data == LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK:
+        text = (
+            "🧠 Edge — это разница между рыночной ценой и твоей оценкой вероятности.\n\n"
+            "Пример:\n"
+            "если рынок даёт исходу 51%, а анализ показывает 60%, появляется потенциальное преимущество.\n"
+            "Но нужно проверить правила resolution, новости, ликвидность и цену входа."
+        )
+    else:
+        text = (
+            "⚠️ Главные риски:\n"
+            "• неправильно понять resolution;\n"
+            "• войти слишком поздно;\n"
+            "• переоценить скрин без полной страницы;\n"
+            "• не учесть liquidity/spread;\n"
+            "• спутать рыночную цену с реальной вероятностью."
+        )
+
+    await callback.answer()
+    await callback.message.answer(text)
+
+
+@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
+async def live_image_run_full_analysis_callback(callback: types.CallbackQuery):
+    if not _is_private_callback(callback):
+        await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
+        return
+    if not callback.from_user or not callback.message:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+
+    uid = callback.from_user.id
+    session = get_live_analyst_active_session(uid)
+    if not session:
+        await callback.answer()
+        await callback.message.answer("🧠 Включи Live Analyst, чтобы продолжить разбор.")
+        return
+
+    market_url = (session.get("current_market_url") or "").strip()
+    if not market_url:
+        await callback.answer()
+        await callback.message.answer(
+            "Я не нашёл надёжную ссылку на рынок. Нажми 🔍 Анализ и отправь ссылку Polymarket вручную."
+        )
+        return
+
+    await callback.answer("Запускаю полный анализ…")
+    await _run_normal_polymarket_analysis(callback.message, url_override=market_url, user_id_override=uid)
+
 # ═══════════════════════════════════════════
 # URL ANALYSIS
 # ═══════════════════════════════════════════
 
-async def _run_normal_polymarket_analysis(message: types.Message):
-    _register_user(message)
-    uid = message.from_user.id
-    if _check_banned(message):
+async def _run_normal_polymarket_analysis(message: types.Message, url_override: str = "", user_id_override: int = 0):
+    if not user_id_override:
+        _register_user(message)
+    uid = int(user_id_override or message.from_user.id)
+    if is_user_banned(uid):
         await message.answer(t(uid, "banned"))
         return
 
-    url_for_dedup = (message.text or "").strip()
+    url_for_dedup = (url_override or message.text or "").strip()
     dedup_key = f"{uid}:{url_for_dedup}"
     now_ts = __import__("time").time()
 
@@ -8050,7 +8167,7 @@ async def _run_normal_polymarket_analysis(message: types.Message):
     await message.answer(t(uid, "analyzing"))
 
     try:
-        url = message.text.strip()
+        url = (url_override or message.text or "").strip()
         agent = ChiefAgent()
         result = agent.run(url, lang=lang, user_id=uid)
         if not result:
@@ -8089,11 +8206,11 @@ async def _run_normal_polymarket_analysis(message: types.Message):
         )
         try:
             save_analysis_to_web_history(
-                user_id=message.from_user.id,
+                user_id=uid,
                 analysis_type="quick",
                 market_url=url,
                 raw_result=result if isinstance(result, dict) else {},
-                lang=get_user_lang(message.from_user.id),
+                lang=get_user_lang(uid),
                 status="success",
             )
         except Exception:

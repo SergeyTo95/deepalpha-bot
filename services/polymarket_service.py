@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,8 @@ import requests
 GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 CLOB_BASE_URL = "https://clob.polymarket.com"
 REQUEST_TIMEOUT = 30
+
+logger = logging.getLogger(__name__)
 
 
 def extract_slug_from_url(url: str) -> str:
@@ -322,6 +325,163 @@ def normalize_related_markets(items: List[Dict[str, Any]], main_question: str) -
 
     return result
 
+
+
+def _normalize_market_title_for_resolution(title: str) -> str:
+    text = (title or "").lower()
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\b(?:polymarket|market|рынок|скрин|screenshot|question|title)\b", " ", text)
+    text = re.sub(r"[\W_]+", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _market_title_tokens(title: str) -> List[str]:
+    normalized = _normalize_market_title_for_resolution(title)
+    stopwords = {
+        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "will", "what",
+        "during", "next", "this", "that", "by", "with", "at", "is", "are", "be",
+        "что", "кто", "где", "когда", "рынок", "исход", "будет", "скажет",
+    }
+    return [token for token in normalized.split() if len(token) >= 2 and token not in stopwords]
+
+
+def _market_title_similarity(extracted_title: str, candidate_title: str) -> float:
+    extracted = _normalize_market_title_for_resolution(extracted_title)
+    candidate = _normalize_market_title_for_resolution(candidate_title)
+    if not extracted or not candidate:
+        return 0.0
+    if extracted == candidate:
+        return 1.0
+    if len(extracted) >= 12 and extracted in candidate:
+        return 0.92
+    if len(candidate) >= 12 and candidate in extracted:
+        return 0.88
+
+    extracted_tokens = set(_market_title_tokens(extracted))
+    candidate_tokens = set(_market_title_tokens(candidate))
+    if not extracted_tokens or not candidate_tokens:
+        return 0.0
+    overlap = len(extracted_tokens & candidate_tokens)
+    containment = overlap / float(max(1, len(extracted_tokens)))
+    jaccard = overlap / float(max(1, len(extracted_tokens | candidate_tokens)))
+    return max(jaccard, containment * 0.86)
+
+
+def _is_too_generic_market_title(title: str) -> bool:
+    normalized = _normalize_market_title_for_resolution(title)
+    if len(normalized) < 12:
+        return True
+    tokens = _market_title_tokens(normalized)
+    if len(tokens) < 3:
+        return True
+    generic = {"yes", "no", "price", "odds", "outcome", "outcomes", "volume", "chart"}
+    return len([token for token in tokens if token not in generic]) < 3
+
+
+def _candidate_market_title(candidate: Dict[str, Any]) -> str:
+    return str(candidate.get("question") or candidate.get("title") or candidate.get("name") or "").strip()
+
+
+def _is_market_open(candidate: Dict[str, Any]) -> bool:
+    if candidate.get("closed") is True:
+        return False
+    if candidate.get("active") is False:
+        return False
+    return True
+
+
+
+def _search_events_for_title(query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    params = {
+        "limit": limit,
+        "active": "true",
+        "closed": "false",
+        "search": query,
+    }
+    try:
+        response = requests.get(f"{GAMMA_BASE_URL}/events", params=params, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        events = data if isinstance(data, list) else data.get("data", [])
+        return [event for event in events if isinstance(event, dict)]
+    except Exception:
+        return []
+
+def _normalize_resolved_market(candidate: Dict[str, Any], confidence: float) -> Optional[Dict[str, Any]]:
+    title = _candidate_market_title(candidate)
+    url = build_market_url(candidate)
+    slug = str(candidate.get("slug") or candidate.get("eventSlug") or candidate.get("event_slug") or "")
+    market_id = str(candidate.get("id") or candidate.get("conditionId") or candidate.get("condition_id") or "")
+    if not title or not url:
+        return None
+    return {
+        "title": title,
+        "url": url,
+        "slug": slug,
+        "market_id": market_id,
+        "confidence": round(float(confidence), 4),
+    }
+
+
+async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str, Any]]:
+    logger.info("live_image_market_resolve_attempt title_len=%s", len(title or ""))
+    if _is_too_generic_market_title(title):
+        logger.info("live_image_market_resolve_result found=%s confidence=%s", False, 0.0)
+        return None
+
+    queries: List[str] = []
+    cleaned = _normalize_market_title_for_resolution(title)
+    if cleaned:
+        queries.append(cleaned)
+    tokens = _market_title_tokens(title)
+    if tokens:
+        queries.append(" ".join(tokens[:8]))
+        if len(tokens) > 4:
+            queries.append(" ".join(tokens[:4]))
+
+    candidates: List[Dict[str, Any]] = []
+    seen = set()
+    for query in queries:
+        for item in _search_events_for_title(query, limit=20) + list_markets(search=query, limit=20):
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item))
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(item)
+
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for candidate in candidates:
+        candidate_title = _candidate_market_title(candidate)
+        confidence = _market_title_similarity(title, candidate_title)
+        if _is_market_open(candidate):
+            confidence = min(1.0, confidence + 0.03)
+        scored.append((confidence, candidate))
+
+    scored.sort(key=lambda item: (item[0], 1 if _is_market_open(item[1]) else 0), reverse=True)
+    if not scored:
+        logger.info("live_image_market_resolve_result found=%s confidence=%s", False, 0.0)
+        return None
+
+    best_confidence, best = scored[0]
+    second_confidence = scored[1][0] if len(scored) > 1 else 0.0
+    threshold = 0.78
+    ambiguous = second_confidence >= threshold and (best_confidence - second_confidence) < 0.05
+    if best_confidence < threshold or ambiguous:
+        logger.info("live_image_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
+        return None
+
+    resolved = _normalize_resolved_market(best, best_confidence)
+    logger.info(
+        "live_image_market_resolve_result found=%s confidence=%s",
+        bool(resolved),
+        round(float(best_confidence), 4),
+    )
+    return resolved
 
 def get_market_trend_context(token_id: str) -> Dict[str, Any]:
     if not token_id:
