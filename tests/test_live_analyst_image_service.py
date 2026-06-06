@@ -62,7 +62,7 @@ def test_format_live_image_summary_limit_and_required_sections():
     assert len(summary) <= 700
     assert "Рынок:" in summary
     assert "Быстрый вывод" in summary
-    assert "🔍 Анализ" in summary
+    assert "поиск по скрину" in summary
 
 
 def test_polymarket_screenshot_card_normalizes_visible_and_local_takeaway():
@@ -101,8 +101,7 @@ def test_polymarket_screenshot_card_normalizes_visible_and_local_takeaway():
     assert "Быстрый вывод" in summary
     assert "Что проверить" in summary
     assert "Что дальше" in summary
-    assert "🔍 Анализ" in summary
-    assert "EDGE / NO TRADE" in summary
+    assert "поиск по скрину" in summary
     assert len(summary) <= svc.LIVE_IMAGE_SUMMARY_LIMIT
 
 
@@ -270,6 +269,8 @@ def test_new_live_image_callback_data_under_telegram_limit():
         "live_img_full_analysis_help",
         "live_img_explain_edge",
         "live_img_risks",
+        "live_img_confirm_candidate_analysis",
+        "live_img_retry_market_resolution",
     ]
 
     assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
@@ -284,7 +285,9 @@ def test_live_image_keyboard_source_gates_auto_run_to_strong_confidence():
     medium_branch = source.split('elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):', 1)[1]
     medium_branch = medium_branch.split("else:", 1)[0]
     assert "LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK" not in medium_branch
-    assert "LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK" in medium_branch
+    assert "LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK" in medium_branch
+    assert "Да, анализировать этот рынок" in medium_branch
+    assert "Искать ещё раз" in medium_branch
 
 
 def test_live_image_keyboard_source_shows_auto_run_for_strong_confidence():
@@ -294,3 +297,37 @@ def test_live_image_keyboard_source_shows_auto_run_for_strong_confidence():
     strong_branch = strong_branch.split("elif resolved_market", 1)[0]
     assert "LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK" in strong_branch
     assert "Открыть рынок" in strong_branch
+
+
+
+def test_live_image_keyboard_source_no_match_retry_and_manual_link_help():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+
+    no_match_branch = source.split("else:\n        kb.add(InlineKeyboardButton(\"🔎 Искать по скрину ещё раз\"", 1)[1]
+    no_match_branch = no_match_branch.split("kb.add(\n        InlineKeyboardButton(\"🧠 Объясни edge\"", 1)[0]
+    assert "LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK" in no_match_branch
+    assert "Как отправить ссылку" in no_match_branch
+
+
+def test_live_image_confirm_candidate_callback_guards_and_uses_normal_analysis():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    handler = source.split("async def live_image_confirm_candidate_analysis_callback", 1)[1]
+    handler = handler.split("@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)", 1)[0]
+
+    assert "get_live_analyst_active_session(uid)" in handler
+    assert "if not session:" in handler
+    assert "if not candidate_url:" in handler
+    assert "candidate_confidence < LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD" in handler
+    assert "_is_polymarket_url(candidate_url)" in handler
+    assert "_run_normal_polymarket_analysis(callback.message, url_override=candidate_url" in handler
+
+
+def test_live_image_medium_candidate_not_stored_as_current_market_until_confirmed():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    image_handler = source.split("async def live_image_handler", 1)[1]
+    image_handler = image_handler.split("@dp.message_handler(lambda m: is_private_chat(m)", 1)[0]
+    medium_branch = image_handler.split('elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):', 1)[1]
+    medium_branch = medium_branch.split("else:", 1)[0]
+
+    assert "_remember_live_image_candidate(uid, resolved_market)" in medium_branch
+    assert "update_current_market_context" not in medium_branch
