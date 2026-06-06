@@ -713,13 +713,48 @@ LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK = "live_img_full_analysis_help"
 LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK = "live_img_explain_edge"
 LIVE_IMAGE_RISKS_CALLBACK = "live_img_risks"
 LIVE_IMAGE_PRIVATE_CHAT_ALERT = "Live Analyst доступен только в личном чате с ботом."
+LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD = 0.82
+LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD = 0.70
+LIVE_IMAGE_STRONG_MARKET_CONFIDENCE: Dict[int, float] = {}
+
+
+def _live_image_resolved_confidence(resolved_market: dict = None) -> float:
+    if not resolved_market:
+        return 0.0
+    try:
+        return float(resolved_market.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_live_image_strong_market_match(resolved_market: dict = None) -> bool:
+    return _live_image_resolved_confidence(resolved_market) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD
+
+
+def _is_live_image_medium_market_match(resolved_market: dict = None) -> bool:
+    confidence = _live_image_resolved_confidence(resolved_market)
+    return LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD <= confidence < LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD
+
+
+def format_live_image_resolution_notice(resolved_market: dict = None) -> str:
+    if not resolved_market or not resolved_market.get("title"):
+        return ""
+    title = str(resolved_market.get("title") or "").strip()[:300]
+    if _is_live_image_strong_market_match(resolved_market):
+        return f"Я нашёл похожий рынок:\n{title}"
+    if _is_live_image_medium_market_match(resolved_market):
+        return f"Я нашёл похожий рынок, но совпадение не 100%. Лучше отправь ссылку вручную:\n{title}"
+    return ""
 
 
 def get_live_image_keyboard(resolved_market: dict = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
-    if resolved_market and resolved_market.get("url"):
+    if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
         kb.add(InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK))
         kb.add(InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url")))
+    elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):
+        kb.add(InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url")))
+        kb.add(InlineKeyboardButton("🔍 Как запустить полный анализ?", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
     else:
         kb.add(InlineKeyboardButton("🔍 Как запустить полный анализ?", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
     kb.add(
@@ -8009,18 +8044,25 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         except Exception as exc:
             logger.warning("live_image_market_resolve_failed user_id=%s reason=%s", uid, type(exc).__name__)
             resolved_market = None
-        if resolved_market and resolved_market.get("url"):
+        if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
             session = update_current_market_context(
                 session,
                 market_url=resolved_market.get("url") or "",
                 market_title=resolved_market.get("title") or result.get("market") or "",
             )
+            LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+        else:
+            LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
+    elif result.get("screen_type") == "polymarket":
+        LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
 
     save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
     save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
     update_last_image_summary(int(session["id"]), summary)
     if result.get("screen_type") == "polymarket":
-        await message.answer(summary, reply_markup=get_live_image_keyboard(resolved_market))
+        resolution_notice = format_live_image_resolution_notice(resolved_market)
+        response_text = f"{summary}\n\n{resolution_notice}" if resolution_notice else summary
+        await message.answer(response_text, reply_markup=get_live_image_keyboard(resolved_market))
     else:
         await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
 
@@ -8097,6 +8139,14 @@ async def live_image_run_full_analysis_callback(callback: types.CallbackQuery):
     if not session:
         await callback.answer()
         await callback.message.answer("🧠 Включи Live Analyst, чтобы продолжить разбор.")
+        return
+
+    stored_confidence = LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid)
+    if stored_confidence is None or stored_confidence < LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD:
+        await callback.answer()
+        await callback.message.answer(
+            "Я не уверен, что найден правильный рынок. Нажми 🔍 Анализ и отправь ссылку Polymarket вручную."
+        )
         return
 
     market_url = (session.get("current_market_url") or "").strip()

@@ -20,6 +20,21 @@ def test_market_title_similarity_low_confidence():
     assert svc._market_title_similarity("Will it rain in Paris tomorrow?", "NBA Finals winner") < 0.78
 
 
+def test_expand_multilingual_title_terms_dr_oz_white_house():
+    expanded = svc._expand_multilingual_title_terms("Что скажет доктор Оз во время следующего брифинга Белого дома?")
+
+    assert "dr oz" in expanded
+    assert "white house" in expanded
+    assert "press briefing" in expanded
+
+
+def test_market_title_similarity_strong_for_translated_dr_oz_title():
+    extracted = "Что скажет доктор Оз во время следующего брифинга Белого дома?"
+    candidate = "What will Dr. Oz say during the next White House press briefing?"
+
+    assert svc._market_title_similarity(extracted, candidate) >= 0.82
+
+
 def test_resolve_polymarket_market_from_title_confident_match(monkeypatch):
     def fake_list_markets(search="", limit=10, offset=0):
         return [
@@ -40,7 +55,7 @@ def test_resolve_polymarket_market_from_title_confident_match(monkeypatch):
 
     assert result is not None
     assert result["market_id"] == "123"
-    assert result["confidence"] >= 0.78
+    assert result["confidence"] >= 0.82
     assert result["url"].startswith("https://polymarket.com/event/")
 
 

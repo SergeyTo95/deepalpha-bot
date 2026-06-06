@@ -327,6 +327,29 @@ def normalize_related_markets(items: List[Dict[str, Any]], main_question: str) -
 
 
 
+def _expand_multilingual_title_terms(title: str) -> str:
+    text = (title or "").lower()
+    replacements = (
+        (r"\b(?:доктор|доктор\.|др|др\.)\s+оз\b", " dr oz "),
+        (r"\bоз\b", " oz "),
+        (r"брифинг(?:а|е|у|ом)?\s+белого\s+дома", " white house press briefing "),
+        (r"бел(?:ого|ый|ом|ому)\s+дом(?:а|е|ом|у)?", " white house "),
+        (r"что\s+скажет", " what will say "),
+        (r"следующ(?:его|ий|ем|ая|ую|ее)", " next "),
+        (r"президентск(?:ие|их|ая|ой|ую)\s+выбор(?:ы|ов|ах)?", " presidential election "),
+        (r"колумби(?:и|я|ю|ей)", " colombia "),
+        (r"биткоин(?:а|у|ом|е)?", " bitcoin "),
+        (r"эфириум(?:а|у|ом|е)?", " ethereum "),
+        (r"тариф(?:ы|ов|ам|ами|е|а)?", " tariff "),
+        (r"здравоохранени(?:е|я|ю|ем|и)", " health healthcare "),
+        (r"медикер", " medicare "),
+        (r"медикейд", " medicaid "),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return _normalize_market_title_for_resolution(text)
+
+
 def _normalize_market_title_for_resolution(title: str) -> str:
     text = (title or "").lower()
     text = re.sub(r"https?://\S+", " ", text)
@@ -340,13 +363,14 @@ def _market_title_tokens(title: str) -> List[str]:
     normalized = _normalize_market_title_for_resolution(title)
     stopwords = {
         "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "will", "what",
-        "during", "next", "this", "that", "by", "with", "at", "is", "are", "be",
-        "что", "кто", "где", "когда", "рынок", "исход", "будет", "скажет",
+        "during", "next", "this", "that", "by", "with", "at", "is", "are", "be", "say",
+        "что", "кто", "где", "когда", "исход", "будет", "скажет", "во", "время",
+        "во время", "следующего", "следующий", "следующем", "дома", "дом",
     }
     return [token for token in normalized.split() if len(token) >= 2 and token not in stopwords]
 
 
-def _market_title_similarity(extracted_title: str, candidate_title: str) -> float:
+def _market_title_similarity_basic(extracted_title: str, candidate_title: str) -> float:
     extracted = _normalize_market_title_for_resolution(extracted_title)
     candidate = _normalize_market_title_for_resolution(candidate_title)
     if not extracted or not candidate:
@@ -368,11 +392,22 @@ def _market_title_similarity(extracted_title: str, candidate_title: str) -> floa
     return max(jaccard, containment * 0.86)
 
 
+def _market_title_similarity(extracted_title: str, candidate_title: str) -> float:
+    variants = [_normalize_market_title_for_resolution(extracted_title)]
+    expanded = _expand_multilingual_title_terms(extracted_title)
+    if expanded and expanded not in variants:
+        variants.append(expanded)
+    scores = [_market_title_similarity_basic(variant, candidate_title) for variant in variants if variant]
+    return max(scores) if scores else 0.0
+
+
 def _is_too_generic_market_title(title: str) -> bool:
     normalized = _normalize_market_title_for_resolution(title)
-    if len(normalized) < 12:
+    expanded = _expand_multilingual_title_terms(title)
+    combined = " ".join(part for part in (normalized, expanded) if part)
+    if len(combined) < 12:
         return True
-    tokens = _market_title_tokens(normalized)
+    tokens = _market_title_tokens(combined)
     if len(tokens) < 3:
         return True
     generic = {"yes", "no", "price", "odds", "outcome", "outcomes", "volume", "chart"}
@@ -389,7 +424,6 @@ def _is_market_open(candidate: Dict[str, Any]) -> bool:
     if candidate.get("active") is False:
         return False
     return True
-
 
 
 def _search_events_for_title(query: str, limit: int = 20) -> List[Dict[str, Any]]:
@@ -410,6 +444,7 @@ def _search_events_for_title(query: str, limit: int = 20) -> List[Dict[str, Any]
     except Exception:
         return []
 
+
 def _normalize_resolved_market(candidate: Dict[str, Any], confidence: float) -> Optional[Dict[str, Any]]:
     title = _candidate_market_title(candidate)
     url = build_market_url(candidate)
@@ -426,25 +461,86 @@ def _normalize_resolved_market(candidate: Dict[str, Any], confidence: float) -> 
     }
 
 
+def _compact_title_query(title: str) -> str:
+    expanded = _expand_multilingual_title_terms(title)
+    normalized = _normalize_market_title_for_resolution(title)
+    haystack = " ".join([expanded, normalized])
+    parts: List[str] = []
+    if "dr oz" in haystack or re.search(r"\boz\b", haystack):
+        parts.append("Dr Oz")
+    if "white house" in haystack:
+        parts.append("White House")
+    if "press briefing" in haystack or "briefing" in haystack:
+        parts.append("press briefing")
+    compact = " ".join(parts).strip()
+    return compact if len(parts) >= 2 else ""
+
+
+def _add_unique_query(queries: List[Tuple[str, str]], variant: str, query: str) -> None:
+    cleaned = _normalize_market_title_for_resolution(query)
+    if not cleaned:
+        return
+    for _variant, existing in queries:
+        if existing == cleaned:
+            return
+    queries.append((variant, cleaned))
+
+
+def _score_market_candidates(title: str, candidates: List[Dict[str, Any]]) -> List[Tuple[float, Dict[str, Any]]]:
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for candidate in candidates:
+        candidate_title = _candidate_market_title(candidate)
+        confidence = _market_title_similarity(title, candidate_title)
+        if _is_market_open(candidate):
+            confidence = min(1.0, confidence + 0.03)
+        scored.append((confidence, candidate))
+    scored.sort(key=lambda item: (item[0], 1 if _is_market_open(item[1]) else 0), reverse=True)
+    return scored
+
+
+def _is_ambiguous_title_match(scored: List[Tuple[float, Dict[str, Any]]], threshold: float = 0.70) -> bool:
+    if len(scored) < 2:
+        return False
+    best_confidence, best = scored[0]
+    second_confidence, second = scored[1]
+    if second_confidence < threshold or (best_confidence - second_confidence) >= 0.08:
+        return False
+    best_title = _normalize_market_title_for_resolution(_candidate_market_title(best))
+    second_title = _normalize_market_title_for_resolution(_candidate_market_title(second))
+    return best_title != second_title
+
+
 async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str, Any]]:
     logger.info("live_image_market_resolve_attempt title_len=%s", len(title or ""))
     if _is_too_generic_market_title(title):
         logger.info("live_image_market_resolve_result found=%s confidence=%s", False, 0.0)
         return None
 
-    queries: List[str] = []
+    queries: List[Tuple[str, str]] = []
     cleaned = _normalize_market_title_for_resolution(title)
-    if cleaned:
-        queries.append(cleaned)
+    _add_unique_query(queries, "original", cleaned)
     tokens = _market_title_tokens(title)
     if tokens:
-        queries.append(" ".join(tokens[:8]))
+        _add_unique_query(queries, "original_tokens", " ".join(tokens[:8]))
         if len(tokens) > 4:
-            queries.append(" ".join(tokens[:4]))
+            _add_unique_query(queries, "original_tokens_short", " ".join(tokens[:4]))
+
+    expanded = _expand_multilingual_title_terms(title)
+    if expanded and expanded != cleaned:
+        _add_unique_query(queries, "expanded", expanded)
+        expanded_tokens = _market_title_tokens(expanded)
+        if expanded_tokens:
+            _add_unique_query(queries, "expanded_tokens", " ".join(expanded_tokens[:8]))
+
+    compact = _compact_title_query(title)
+    if compact:
+        _add_unique_query(queries, "compact_entities", compact)
 
     candidates: List[Dict[str, Any]] = []
     seen = set()
-    for query in queries:
+    best_scored: List[Tuple[float, Dict[str, Any]]] = []
+    for variant, query in queries:
+        logger.info("polymarket_title_resolve_search_variant variant=%s query_len=%s", variant, len(query or ""))
         for item in _search_events_for_title(query, limit=20) + list_markets(search=query, limit=20):
             if not isinstance(item, dict):
                 continue
@@ -454,24 +550,24 @@ async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str,
             seen.add(key)
             candidates.append(item)
 
-    scored: List[Tuple[float, Dict[str, Any]]] = []
-    for candidate in candidates:
-        candidate_title = _candidate_market_title(candidate)
-        confidence = _market_title_similarity(title, candidate_title)
-        if _is_market_open(candidate):
-            confidence = min(1.0, confidence + 0.03)
-        scored.append((confidence, candidate))
+        scored = _score_market_candidates(title, candidates)
+        if scored and (not best_scored or scored[0][0] > best_scored[0][0]):
+            best_scored = scored
+        if scored and scored[0][0] >= 0.82 and not _is_ambiguous_title_match(scored, threshold=0.70):
+            break
 
-    scored.sort(key=lambda item: (item[0], 1 if _is_market_open(item[1]) else 0), reverse=True)
+    scored = best_scored or _score_market_candidates(title, candidates)
     if not scored:
         logger.info("live_image_market_resolve_result found=%s confidence=%s", False, 0.0)
         return None
 
     best_confidence, best = scored[0]
-    second_confidence = scored[1][0] if len(scored) > 1 else 0.0
-    threshold = 0.78
-    ambiguous = second_confidence >= threshold and (best_confidence - second_confidence) < 0.05
-    if best_confidence < threshold or ambiguous:
+    if _is_ambiguous_title_match(scored, threshold=0.70):
+        logger.info("live_image_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
+        return None
+
+    threshold = 0.70
+    if best_confidence < threshold:
         logger.info("live_image_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
         return None
 
@@ -482,6 +578,7 @@ async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str,
         round(float(best_confidence), 4),
     )
     return resolved
+
 
 def get_market_trend_context(token_id: str) -> Dict[str, Any]:
     if not token_id:
