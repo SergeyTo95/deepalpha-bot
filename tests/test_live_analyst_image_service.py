@@ -1,6 +1,7 @@
 import ast
 import sys
 import types
+from io import BytesIO
 
 sys.modules.setdefault("requests", types.SimpleNamespace(post=lambda *args, **kwargs: None))
 sys.modules.setdefault(
@@ -147,6 +148,57 @@ def test_crop_trigger_preserves_useful_polymarket_behavior():
 
     assert failed_full_extraction is False
     assert attempt_crops is True
+
+
+def test_generic_live_image_payload_detects_old_fallback_phrase():
+    summary = "Содержимое видно не полностью, поэтому точные детали лучше уточнить вопросом или текстом."
+
+    assert svc._is_generic_live_image_payload({"screen_type": "generic", "summary": summary}, summary) is True
+
+
+def test_generic_live_image_payload_keeps_specific_polymarket_payload():
+    payload = {
+        "screen_type": "polymarket",
+        "market": "What will Dr. Oz say during the next White House press briefing?",
+        "visible": "Tariff — 51%, Health — 54%",
+    }
+
+    assert svc._is_generic_live_image_payload(payload, "") is False
+
+
+def test_build_nested_screenshot_crops_returns_labeled_png_crops_when_pillow_available():
+    if svc.Image is None:
+        return
+
+    image = svc.Image.new("RGB", (1000, 1600), "white")
+    output = BytesIO()
+    image.save(output, format="PNG")
+
+    crops = svc._build_nested_screenshot_crops(output.getvalue(), "image/png")
+    labels = [label for label, _crop_bytes, crop_mime in crops if crop_mime == "image/png"]
+
+    assert "nested_right_preview" in labels
+    assert "nested_upper_media" in labels
+    assert "nested_center_media" in labels
+    assert "nested_full_without_chat_header" in labels
+
+
+def test_generic_fallback_copy_points_to_original_polymarket_or_link():
+    summary = svc._format_live_image_summary('{"screen_type":"generic","summary":"Содержимое видно не полностью, поэтому точные детали лучше уточнить вопросом или текстом."}')
+
+    assert "оригинальный скрин Polymarket" in summary or "ссылку на рынок" in summary
+
+
+def test_existing_polymarket_formatter_keeps_required_card_sections_and_edge_copy():
+    raw = '{"screen_type":"polymarket","market":"What will Dr. Oz say during the next White House press briefing?","visible":"Tariff — 51%, Health — 54%","takeaway":"Видимые исходы около середины диапазона."}'
+
+    summary = svc._format_live_image_summary(raw)
+
+    assert "Что видно" in summary
+    assert "Быстрый вывод" in summary
+    assert "Что проверить" in summary
+    assert "Что дальше" in summary
+    assert "EDGE / NO TRADE" in summary
 
 
 class _GeminiResponse:
