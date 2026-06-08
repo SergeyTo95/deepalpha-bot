@@ -22,8 +22,8 @@ from services.skill_loader_service import get_live_screenshot_skill_context
 
 logger = logging.getLogger(__name__)
 
-LIVE_IMAGE_POLYMARKET_CTA = "Отправь ссылку или попробуй поиск по скрину ещё раз."
-LIVE_IMAGE_GENERIC_CTA = "Если хочешь, отправь вопрос по этому скрину или дай больше контекста."
+LIVE_IMAGE_POLYMARKET_CTA = "Для EDGE / NO TRADE отправь ссылку или попробуй поиск по скрину ещё раз."
+LIVE_IMAGE_GENERIC_CTA = "Отправь оригинальный скрин Polymarket без интерфейса Telegram или ссылку на рынок."
 LIVE_IMAGE_SUMMARY_LIMIT = 700
 LIVE_IMAGE_DEBUG_LOGS = os.getenv("LIVE_IMAGE_DEBUG_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}
 VISION_IMAGE_TARGET_MIN_WIDTH = 1600
@@ -585,8 +585,16 @@ def _format_polymarket_summary(payload: Dict[str, Any], raw_text: str = "") -> s
 
 def _format_generic_summary(payload: Dict[str, Any], raw_text: str = "") -> str:
     summary = _clean_live_image_text(payload.get("summary") or payload.get("visible") or raw_text, 220)
+    generic_phrases = (
+        "Содержимое видно не полностью",
+        "точные детали лучше уточнить",
+        "дай больше контекста",
+        "Вижу на скрине",
+    )
+    if any(phrase.lower() in summary.lower() for phrase in generic_phrases):
+        summary = ""
     if not summary:
-        summary = "Содержимое видно не полностью, поэтому точные детали лучше уточнить вопросом или текстом."
+        summary = "Я вижу изображение, но не смог надёжно извлечь рынок. Лучше отправь оригинальный скрин Polymarket без интерфейса Telegram или ссылку на рынок."
     text = (
         "🧠 Вижу на скрине\n\n"
         "Что видно:\n"
@@ -690,6 +698,42 @@ def _prepare_image_for_vision(image_bytes: bytes, mime_type: str) -> Tuple[bytes
 
 def _is_generic_polymarket_extraction(payload: Dict[str, Any]) -> bool:
     return not _is_useful_polymarket_payload(payload)
+
+
+def _is_generic_live_image_payload(payload: Dict[str, Any], summary_text: str = "") -> bool:
+    payload = payload or {}
+    screen_type = _payload_text(payload, "screen_type", "type").lower()
+    market = _payload_text(payload, "market", "title", "event")
+    visible = _payload_text(payload, "visible", "what_visible", "details")
+    summary = " ".join([_payload_text(payload, "summary", "takeaway"), summary_text or ""])
+    haystack = " ".join([screen_type, market, visible, summary]).lower()
+
+    if _is_useful_polymarket_payload(payload):
+        return False
+
+    has_numeric_or_marker = bool(
+        re.search(r"(?:\d+\s*%|[$₽€]|\d+\s*(?:¢|cents?)|\b(?:yes|no)\b)", haystack, re.IGNORECASE)
+        or any(marker in haystack for marker in ("polymarket", "prediction market", "исход", "outcome", "volume", "объём", "объем"))
+    )
+    generic_screen = not screen_type or screen_type in {"generic", "other", "non_market", "not_market"}
+    empty_fields = not market and not visible
+    generic_phrases = (
+        "содержимое видно не полностью",
+        "точные детали лучше уточнить",
+        "дай больше контекста",
+        "вижу на скрине",
+        "не смог надёжно извлечь рынок",
+        "не смог надежно извлечь рынок",
+    )
+    has_generic_phrase = any(phrase in haystack for phrase in generic_phrases)
+
+    if generic_screen and empty_fields:
+        return True
+    if has_generic_phrase and not has_numeric_or_marker:
+        return True
+    if generic_screen and not market and not _has_strong_visible_values(visible):
+        return True
+    return False
 
 
 def _has_strong_visible_values(text: str) -> bool:
@@ -826,6 +870,81 @@ def _build_polymarket_vision_crops(image_bytes: bytes, mime_type: str) -> List[T
                     crops.append((label, crop_bytes, crop_mime))
     except Exception:
         return crops
+
+    return crops
+
+
+def _encode_png_crop_under_limit(img: Any) -> bytes:
+    if img.mode not in {"RGB", "L"}:
+        img = img.convert("RGB")
+
+    output = BytesIO()
+    img.save(output, format="PNG", optimize=True)
+    crop_bytes = output.getvalue()
+    if len(crop_bytes) <= get_max_image_size_bytes():
+        return crop_bytes
+
+    try:
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+        width, height = img.size
+        for factor in (0.85, 0.7, 0.55, 0.4):
+            resized = img.resize((max(1, int(width * factor)), max(1, int(height * factor))), resampling)
+            output = BytesIO()
+            resized.save(output, format="PNG", optimize=True)
+            crop_bytes = output.getvalue()
+            if len(crop_bytes) <= get_max_image_size_bytes():
+                return crop_bytes
+    except Exception:
+        return b""
+    return b""
+
+
+def _build_nested_screenshot_crops(image_bytes: bytes, mime_type: str) -> List[Tuple[str, bytes, str]]:
+    if Image is None or ImageOps is None:
+        return []
+    if (mime_type or "").lower() not in {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}:
+        return []
+
+    crop_specs = (
+        ("nested_right_preview", 0.45, 0.12, 1.0, 0.68),
+        ("nested_upper_media", 0.35, 0.10, 1.0, 0.72),
+        ("nested_center_media", 0.20, 0.10, 1.0, 0.78),
+        ("nested_full_without_chat_header", 0.0, 0.10, 1.0, 0.78),
+    )
+    crops: List[Tuple[str, bytes, str]] = []
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            width, height = img.size
+            if width <= 0 or height <= 0:
+                return []
+
+            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+            for label, x1p, y1p, x2p, y2p in crop_specs:
+                left = max(0, min(width, int(round(width * x1p))))
+                top = max(0, min(height, int(round(height * y1p))))
+                right = max(0, min(width, int(round(width * x2p))))
+                bottom = max(0, min(height, int(round(height * y2p))))
+                if right - left < 120 or bottom - top < 120:
+                    continue
+
+                crop = img.crop((left, top, right, bottom))
+                crop_width, crop_height = crop.size
+                scale = 2.0 if max(crop_width, crop_height) < VISION_IMAGE_MAX_SIDE else 1.0
+                new_width = min(VISION_IMAGE_MAX_SIDE, max(1, int(crop_width * scale)))
+                new_height = min(VISION_IMAGE_MAX_SIDE, max(1, int(crop_height * scale)))
+                if new_width * new_height > VISION_IMAGE_MAX_PIXELS:
+                    shrink = (VISION_IMAGE_MAX_PIXELS / float(new_width * new_height)) ** 0.5
+                    new_width = max(1, int(new_width * shrink))
+                    new_height = max(1, int(new_height * shrink))
+                if (new_width, new_height) != crop.size:
+                    crop = crop.resize((new_width, new_height), resampling)
+
+                crop_bytes = _encode_png_crop_under_limit(crop)
+                if crop_bytes:
+                    crops.append((label, crop_bytes, "image/png"))
+    except Exception:
+        return []
 
     return crops
 
@@ -1078,6 +1197,53 @@ def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops
     return merged_payload
 
 
+def _nested_crop_prompt(context_text: str) -> str:
+    return (
+        'Return JSON only: {"screen_type":"polymarket|generic","market":"","visible":"","takeaway":"","confidence":"high|medium|low"}. '
+        "Task: This image may be a screenshot of Telegram/chat containing another screenshot inside it. "
+        "Ignore Telegram UI. Look for an embedded Polymarket or prediction-market screenshot. "
+        "If found, extract market title, first visible outcomes, percentages/prices, and volume. "
+        "If not found, return generic. No trading advice. No EDGE/NO TRADE. No disclaimer. "
+        f"Context: {context_text[:200]}"
+    )
+
+
+def _extract_polymarket_from_nested_crops(
+    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str
+) -> Dict[str, Any]:
+    if not crops:
+        return {}
+
+    best_payload: Dict[str, Any] = {}
+    prompt = _nested_crop_prompt(context_text)
+    for label, crop_bytes, crop_mime in crops[:4]:
+        parts: List[Dict[str, Any]] = [
+            {"text": prompt},
+            {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
+        ]
+        crop_text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024)
+        crop_payload = _extract_json_object(crop_text) or _payload_from_unstructured_vision_text(crop_text)
+        if crop_payload:
+            crop_payload["_source"] = "nested_crop"
+            crop_payload["_source_crop_label"] = label
+        crop_is_polymarket = _is_polymarket_payload(crop_payload, crop_text, context_text)
+        useful = _is_useful_polymarket_payload(crop_payload) if crop_is_polymarket else False
+        logger.info(
+            "live_image_nested_crop_payload screen_type=%s market_present=%s visible_len=%s useful=%s",
+            (crop_payload or {}).get("screen_type") or (crop_payload or {}).get("type") or "",
+            bool(_payload_text(crop_payload, "market", "title", "event")),
+            len(_payload_text(crop_payload, "visible", "what_visible", "details")),
+            useful,
+        )
+        _log_live_image_debug_fields("live_image_nested_crop_payload_debug", crop_payload)
+        if useful:
+            return crop_payload
+        if crop_is_polymarket and not best_payload:
+            best_payload = crop_payload
+
+    return best_payload
+
+
 def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> Tuple[str, str]:
     payload = {
         "contents": [{
@@ -1238,6 +1404,64 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                     source = str(crop_payload.get("_source") or "crop_batch")
         else:
             logger.info("live_image_crops_built count=%s labels=%s", 0, [])
+
+        generic_before_nested = _is_generic_live_image_payload(payload, text)
+        failed_after_passes = _is_failed_or_empty_full_extraction(payload, text, finish_reason)
+        if generic_before_nested or failed_after_passes:
+            nested_crops = _build_nested_screenshot_crops(prepared_bytes, prepared_mime_type)
+            nested_labels = [label for label, _crop_bytes, _crop_mime in nested_crops]
+            logger.info("live_image_nested_crops_built count=%s labels=%s", len(nested_crops), nested_labels)
+            logger.info(
+                "live_image_nested_crop_extraction_attempted generic_before=%s failed_full=%s",
+                generic_before_nested,
+                failed_full_extraction,
+            )
+            nested_improved = False
+            nested_source = ""
+            nested_payload = _extract_polymarket_from_nested_crops(api_key, model, timeout, nested_crops, context_text)
+            nested_is_polymarket = _is_polymarket_payload(nested_payload, json.dumps(nested_payload, ensure_ascii=False), context_text)
+            if nested_is_polymarket:
+                if _is_useful_polymarket_payload(nested_payload):
+                    payload = nested_payload
+                    text = json.dumps(payload, ensure_ascii=False)
+                    finish_reason = ""
+                    is_polymarket = True
+                    source = str(nested_payload.get("_source") or "nested_crop")
+                    nested_improved = True
+                    nested_source = source
+                else:
+                    source_label = str(nested_payload.get("_source_crop_label") or "")
+                    best_nested_crop = None
+                    for crop in nested_crops:
+                        if crop[0] == source_label:
+                            best_nested_crop = crop
+                            break
+                    if best_nested_crop is None and nested_crops:
+                        best_nested_crop = nested_crops[0]
+                    if best_nested_crop is not None:
+                        inner_crops = _build_polymarket_vision_crops(best_nested_crop[1], best_nested_crop[2])
+                        inner_labels = [label for label, _crop_bytes, _crop_mime in inner_crops[:6]]
+                        logger.info("live_image_crops_built count=%s labels=%s", len(inner_crops), inner_labels)
+                        inner_payload = _extract_polymarket_from_crops(api_key, model, timeout, inner_crops[:6], context_text)
+                        logger.info(
+                            "live_image_nested_crop_payload screen_type=%s market_present=%s visible_len=%s useful=%s",
+                            inner_payload.get("screen_type") or inner_payload.get("type") or "",
+                            bool(_payload_text(inner_payload, "market", "title", "event")),
+                            len(_payload_text(inner_payload, "visible", "what_visible", "details")),
+                            _is_useful_polymarket_payload(inner_payload),
+                        )
+                        merged_inner = _merge_polymarket_payloads(nested_payload, inner_payload)
+                        if _is_useful_polymarket_payload(merged_inner):
+                            payload = merged_inner
+                            text = json.dumps(payload, ensure_ascii=False)
+                            finish_reason = ""
+                            is_polymarket = True
+                            source = "nested_inner_crop"
+                            nested_improved = True
+                            nested_source = source
+            logger.info("live_image_nested_crop_improved improved=%s source=%s", nested_improved, nested_source)
+        else:
+            logger.info("live_image_nested_crops_built count=%s labels=%s", 0, [])
 
         logger.info(
             "live_image_final_payload screen_type=%s market_present=%s visible_len=%s useful=%s source=%s",
