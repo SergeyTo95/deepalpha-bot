@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, List
 
 from services.llm_service import generate_decision_text
+from services.skill_loader_service import load_skills
 from services.live_analyst_admin_service import (
     get_max_daily_live_messages,
     get_memory_message_limit,
@@ -33,6 +34,25 @@ def _safe(text: Any, limit: int = 1200) -> str:
     return str(text or "").strip()[:limit]
 
 
+def _live_text_skill_names(user_text: str) -> List[str]:
+    text = (user_text or "").lower()
+    names = []
+    if any(term in text for term in ("edge", "эдж", "преимуществ", "value", "вероятност", "цена", "price")):
+        names.append("edge_education")
+    if any(term in text for term in ("risk", "риск", "опас", "ликвид", "spread", "спред", "resolution", "правил")):
+        names.append("risk_coach")
+    if any(term in text for term in ("вход", "зайти", "став", "trade", "no trade", "нет преимуществ", "покуп", "enter")):
+        names.append("no_trade_discipline")
+    return names
+
+
+def _build_live_text_skill_context(user_text: str) -> str:
+    names = _live_text_skill_names(user_text)
+    if not names:
+        return ""
+    return load_skills(names)[:2600]
+
+
 def _format_recent_messages(messages: List[Dict[str, Any]]) -> str:
     lines = []
     for msg in messages:
@@ -45,6 +65,8 @@ def _format_recent_messages(messages: List[Dict[str, Any]]) -> str:
 
 
 def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str) -> str:
+    skill_context = _build_live_text_skill_context(user_text)
+    skill_block = f"\nInternal DeepAlpha skills for this follow-up:\n{skill_context}\n" if skill_context else ""
     return f"""
 Ты — Live Analyst DeepAlpha, публичный режим обсуждения Polymarket и prediction markets.
 Отвечай по-русски, кратко и как аналитик вероятностей.
@@ -69,7 +91,7 @@ Memory summary: {_safe(session.get('memory_summary'), 1200) or '—'}
 
 Новое сообщение пользователя:
 {_safe(user_text, 3000)}
-
+{skill_block}
 Формат ответа:
 Короткий вывод:
 ...
