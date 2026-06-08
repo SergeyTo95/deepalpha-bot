@@ -1,3 +1,4 @@
+import ast
 import sys
 import types
 
@@ -308,22 +309,79 @@ def test_live_image_keyboard_source_no_match_retry_and_manual_link_help():
     assert "Как отправить ссылку" in no_match_branch
 
 
+def test_live_image_keyboard_callback_names_remain_unchanged():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    keyboard = source.split("def get_live_image_keyboard", 1)[1]
+    keyboard = keyboard.split("def _is_private_callback", 1)[0]
+
+    assert 'InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url"))' in keyboard
+    assert 'InlineKeyboardButton("✅ Да, анализировать этот рынок", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🔎 Искать ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🔎 Искать по скрину ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🔍 Как отправить ссылку", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🧠 Объясни edge", callback_data=LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK)' in keyboard
+
+
 def test_live_image_educational_callback_copy_is_polished_russian():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
     handler = source.split("async def live_image_educational_callback", 1)[1]
     handler = handler.split(
         "@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)", 1
     )[0]
+    edge_text = (
+        "🧠 Edge — это разница между ценой рынка и твоей оценкой вероятности.\n\n"
+        "Пример:\n"
+        "рынок даёт 51%, а анализ даёт 60% — появляется потенциальное преимущество.\n\n"
+        "Но перед выводом нужно проверить правила, новости, ликвидность и спред.\n\n"
+        "Финальный вывод EDGE / NO TRADE нужен только после полного анализа."
+    )
+    risk_text = (
+        "⚠️ Главные риски Polymarket:\n\n"
+        "• правила рынка можно понять неправильно;\n"
+        "• новость может быть уже заложена в цену;\n"
+        "• спред и ликвидность могут съесть edge;\n"
+        "• скрин не показывает весь контекст.\n\n"
+        "Поэтому по одному скрину нельзя честно дать EDGE / NO TRADE — нужна ссылка и полный анализ."
+    )
+    full_analysis_help_text = (
+        "🔍 Для полного анализа отправь ссылку на рынок Polymarket.\n\n"
+        "Тогда я проверю:\n"
+        "• правила рынка;\n"
+        "• текущие цены;\n"
+        "• ликвидность и спред;\n"
+        "• свежие новости;\n"
+        "• разницу между ценой и AI-вероятностью.\n\n"
+        "После этого можно дать вывод: EDGE или NO TRADE."
+    )
 
-    assert "The market is" not in handler
-    assert "headline risk" not in handler
-    assert "screenshot limitations" not in handler
-    assert "late entry / overconfidence" not in handler
-    assert "resolution ambiguity" not in handler
-    assert "EDGE / NO TRADE" in handler
-    assert "EDGE или NO TRADE" in handler
-    assert "правила resolution" in handler
-    assert "переоценить скрин" in handler
+    assert len(edge_text) <= 500
+    assert len(risk_text) <= 450
+    assert len(full_analysis_help_text) <= 450
+    tree = ast.parse(source)
+    callback_texts = [
+        node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "text" for target in node.targets)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    ]
+
+    assert edge_text in callback_texts
+    assert risk_text in callback_texts
+    assert full_analysis_help_text in callback_texts
+    assert "EDGE / NO TRADE" in edge_text
+    assert "EDGE / NO TRADE" in risk_text
+    assert "EDGE или NO TRADE" in full_analysis_help_text
+    for forbidden in (
+        "headline risk",
+        "screenshot limitations",
+        "resolution ambiguity",
+        "slippage",
+    ):
+        assert forbidden not in handler
 
 
 def test_live_image_confirm_candidate_callback_guards_and_uses_normal_analysis():
