@@ -299,7 +299,6 @@ def test_live_image_keyboard_source_shows_auto_run_for_strong_confidence():
     assert "Открыть рынок" in strong_branch
 
 
-
 def test_live_image_keyboard_source_no_match_retry_and_manual_link_help():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
 
@@ -307,6 +306,24 @@ def test_live_image_keyboard_source_no_match_retry_and_manual_link_help():
     no_match_branch = no_match_branch.split("kb.add(\n        InlineKeyboardButton(\"🧠 Объясни edge\"", 1)[0]
     assert "LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK" in no_match_branch
     assert "Как отправить ссылку" in no_match_branch
+
+
+def test_live_image_educational_callback_copy_is_polished_russian():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    handler = source.split("async def live_image_educational_callback", 1)[1]
+    handler = handler.split(
+        "@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)", 1
+    )[0]
+
+    assert "The market is" not in handler
+    assert "headline risk" not in handler
+    assert "screenshot limitations" not in handler
+    assert "late entry / overconfidence" not in handler
+    assert "resolution ambiguity" not in handler
+    assert "EDGE / NO TRADE" in handler
+    assert "EDGE или NO TRADE" in handler
+    assert "правила resolution" in handler
+    assert "переоценить скрин" in handler
 
 
 def test_live_image_confirm_candidate_callback_guards_and_uses_normal_analysis():
