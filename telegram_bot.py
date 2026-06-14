@@ -715,12 +715,14 @@ LIVE_IMAGE_RISKS_CALLBACK = "live_img_risks"
 LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK = "live_img_confirm_candidate_analysis"
 LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK = "live_img_retry_market_resolution"
 LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK = "live_img_run_premium_analysis"
+LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK = "live_img_screenshot_only_analysis"
 LIVE_IMAGE_PRIVATE_CHAT_ALERT = "Live Analyst доступен только в личном чате с ботом."
 LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD = 0.82
 LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD = 0.70
 LIVE_IMAGE_STRONG_MARKET_CONFIDENCE: Dict[int, float] = {}
 LIVE_IMAGE_CANDIDATE_MARKETS: Dict[int, Dict[str, Any]] = {}
 LIVE_IMAGE_SCREENSHOT_RESOLUTION_CONTEXT: Dict[int, Dict[str, str]] = {}
+LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT: Dict[int, Dict[str, Any]] = {}
 
 
 def _live_image_resolved_confidence(resolved_market: dict = None) -> float:
@@ -754,6 +756,93 @@ def _remember_live_image_resolution_context(user_id: int, title: str = "", visib
     }
 
 
+
+def _visible_price_lines_from_items(prices: list, lang: str = "ru") -> list:
+    lines = []
+    for item in (prices or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("outcome_original") or item.get("outcome_canonical") or "").strip()
+        try:
+            probability = float(item.get("probability"))
+        except (TypeError, ValueError):
+            continue
+        if not name:
+            continue
+        value = int(probability) if probability.is_integer() else probability
+        lines.append(f"• {name} — {value}%")
+    return lines
+
+
+def _recognized_no_match_payload_from_result(result: dict, lang: str = "ru", reason: str = "no_validated_candidate") -> dict:
+    result = result or {}
+    prices = result.get("visible_prices") if isinstance(result.get("visible_prices"), list) else []
+    title_original = str(result.get("market_title_original") or result.get("market") or "").strip()[:500]
+    title_canonical = str(result.get("market_title_canonical") or title_original).strip()[:500]
+    return {
+        "market_title_original": title_original,
+        "market_title_canonical": title_canonical,
+        "outcomes_original": result.get("outcomes_original") or [],
+        "outcomes_canonical": result.get("outcomes_canonical") or [],
+        "visible_prices": prices,
+        "ui_language": result.get("ui_language") or lang,
+        "category": result.get("category_canonical") or result.get("category_original") or "",
+        "no_match_reason": reason,
+        "timestamp": int(time.time()),
+    }
+
+
+def _is_recognized_no_match_payload(payload: dict) -> bool:
+    if not payload:
+        return False
+    title = str(payload.get("market_title_original") or payload.get("market_title_canonical") or "").strip()
+    prices = payload.get("visible_prices") if isinstance(payload.get("visible_prices"), list) else []
+    return bool(title and prices)
+
+
+def _store_live_screenshot_no_match_payload(user_id: int, payload: dict) -> None:
+    if not _is_recognized_no_match_payload(payload):
+        LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(user_id, None)
+        return
+    LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT[user_id] = payload
+    logger.info("live_screenshot_no_match_payload_stored user_id=%s title=%s visible_prices=%s", user_id, payload.get("market_title_original") or payload.get("market_title_canonical") or "", payload.get("visible_prices") or [])
+
+
+def build_screenshot_only_analysis_text(payload: dict, lang: str = "ru") -> str:
+    is_ru = lang != "en"
+    payload = payload or {}
+    title = str(payload.get("market_title_original") or payload.get("market_title_canonical") or ("Без названия" if is_ru else "Untitled")).strip()
+    prices = [p for p in (payload.get("visible_prices") or []) if isinstance(p, dict)]
+    def prob(item):
+        try:
+            return float(item.get("probability"))
+        except (TypeError, ValueError):
+            return -1.0
+    ranked = sorted(prices, key=prob, reverse=True)
+    visible = "\n".join(_visible_price_lines_from_items(ranked, lang)) or ("• нет видимых цен" if is_ru else "• no visible prices")
+    names = [str(x.get("outcome_original") or x.get("outcome_canonical") or "").strip() for x in ranked]
+    probs = [prob(x) for x in ranked]
+    top = ", ".join([n for n in names[:4] if n])
+    interpretation = ""
+    lower_note = ""
+    if len(ranked) >= 4 and names[0].lower() in {"испания", "spain"} and names[1].lower() in {"франция", "france"}:
+        interpretation = "По видимым ценам рынок выглядит конкурентным: Испания и Франция почти равны, Португалия и Англия заметно ниже, но всё ещё в группе лидеров. Это не даёт готового edge само по себе — нужно сравнить эти цены с независимой AI-оценкой и проверить полный список исходов." if is_ru else "Based on visible prices, the market looks competitive: Spain and France are very close, while Portugal and England are lower but still among the visible leaders. This does not create a final edge by itself — it requires an independent AI probability and the full outcome list."
+    elif probs and probs[0] >= max(probs[1:] or [0]) + 8:
+        interpretation = (f"По видимым ценам есть явный видимый фаворит: {names[0]}." if is_ru else f"The visible prices show a clear visible favorite: {names[0]}.")
+    elif len(probs) >= 2 and probs[0] - probs[1] <= 3:
+        interpretation = (f"По видимым ценам рынок конкурентный: лидеры близко друг к другу ({top})." if is_ru else f"The visible prices look competitive: the leaders are close ({top}).")
+    elif probs and max(probs) < 20:
+        interpretation = ("По видимым ценам рынок широкий/фрагментированный: вероятно, часть исходов не видна ниже на скрине." if is_ru else "The visible market looks broad/fragmented; more outcomes are likely below the fold.")
+    else:
+        interpretation = (f"Видимые лидеры на скрине: {top}." if is_ru else f"Visible leaders in the screenshot: {top}.")
+    title_l = title.lower()
+    category_l = str(payload.get("category") or "").lower()
+    if ("world cup" in title_l or "куб" in title_l) and ("football" in category_l or "sport" in category_l or "фут" in title_l or "победитель" in title_l):
+        lower_note = " Это outright/рынок победителя турнира: цены отражают долгосрочные ожидания и могут двигаться после матчей, новостей и травм." if is_ru else " This is an outright/tournament-winner market: prices reflect long-term expectations and can move after matches, news, and injuries."
+    if is_ru:
+        return f"🧠 Анализ по скрину\n\nРынок:\n{title}\n\nВидимые цены:\n{visible}\n\nКак читать:\n• Эти проценты — текущая рыночная оценка вероятности по видимым исходам.\n• Фавориты на скрине: {top or 'не определены'}.\n• Чем выше цена, тем больше рынок оценивает вероятность этого исхода.\n\nЧто можно сказать по скрину:\n• По одному скрину нельзя дать финальный EDGE / NO TRADE.\n• Edge появляется только если AI-вероятность заметно отличается от рыночной цены.\n• Для полного анализа нужна ссылка, чтобы проверить все исходы, ликвидность, правила рынка и текущие цены.\n\nПредварительный вывод:\n{interpretation}{lower_note}\n\nДля полного EDGE / NO TRADE отправь ссылку на рынок."
+    return f"🧠 Screenshot analysis\n\nMarket:\n{title}\n\nVisible prices:\n{visible}\n\nHow to read it:\n• These percentages are market-implied probabilities for the visible outcomes.\n• Visible leaders: {top or 'not clear'}.\n• The higher the price, the more likely the market considers that outcome.\n\nWhat can be said from the screenshot:\n• A screenshot alone cannot produce a final EDGE / NO TRADE.\n• Edge only exists when AI probability differs meaningfully from market price.\n• Full analysis needs the link to verify all outcomes, liquidity, rules, and current prices.\n\nPreliminary view:\n{interpretation}{lower_note}\n\nSend the market link for full EDGE / NO TRADE analysis."
+
 def _remember_live_image_candidate(user_id: int, resolved_market: dict = None) -> None:
     if not resolved_market or not resolved_market.get("url"):
         LIVE_IMAGE_CANDIDATE_MARKETS.pop(user_id, None)
@@ -772,20 +861,7 @@ def _clear_live_image_market_resolution(user_id: int) -> None:
 
 
 def _format_visible_prices_for_notice(resolved_market: dict = None, lang: str = "ru") -> str:
-    prices = (resolved_market or {}).get("visible_prices") or []
-    lines = []
-    for item in prices[:8]:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("outcome_original") or item.get("outcome_canonical") or "").strip()
-        try:
-            probability = float(item.get("probability"))
-        except (TypeError, ValueError):
-            continue
-        if not name:
-            continue
-        value = int(probability) if probability.is_integer() else probability
-        lines.append(f"• {name} — {value}%")
+    lines = _visible_price_lines_from_items((resolved_market or {}).get("visible_prices") or [], lang)
     if not lines:
         return ""
     header = "Видимые цены:" if lang == "ru" else "Visible prices:"
@@ -799,16 +875,32 @@ def format_live_image_resolution_notice(resolved_market: dict = None, lang: str 
         prices = _format_visible_prices_for_notice(resolved_market, "ru" if is_ru else "en") if resolved_market else ""
         if is_ru and (recognized_title or prices):
             return (
-                "✅ Я распознал рынок на скрине:\n"
+                "🧠 Polymarket-скрин\n\n"
+                "Я распознал рынок:\n"
                 f"{recognized_title or 'Без названия'}"
                 f"{prices}\n\n"
-                "⚠️ Но я не смог надёжно сопоставить его с Polymarket API.\n"
-                "Отправь ссылку на рынок или нажми «Искать ещё раз»."
+                "⚠️ Я не смог надёжно сопоставить этот рынок с Polymarket API, поэтому полный EDGE / NO TRADE анализ пока недоступен.\n\n"
+                "Что можно сделать:\n"
+                "• разобрать рынок по видимым ценам;\n"
+                "• попробовать найти рынок ещё раз;\n"
+                "• отправить ссылку для полного анализа."
             )
         if is_ru:
             return (
                 "🔎 Скрин распознан, но рынок не удалось сопоставить с Polymarket.\n\n"
                 "Отправь ссылку на рынок или попробуй поиск по скрину ещё раз."
+            )
+        if recognized_title or prices:
+            return (
+                "🧠 Polymarket screenshot\n\n"
+                "I recognized this market:\n"
+                f"{recognized_title or 'Untitled'}"
+                f"{prices}\n\n"
+                "⚠️ I could not reliably match this screenshot to a Polymarket API market, so full EDGE / NO TRADE analysis is not available yet.\n\n"
+                "You can:\n"
+                "• analyze the visible prices from the screenshot;\n"
+                "• try searching again;\n"
+                "• send the market link for full analysis."
             )
         return (
             "🔎 I recognized the screenshot, but could not match it to a Polymarket market.\n\n"
@@ -875,8 +967,10 @@ def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> I
         kb.add(InlineKeyboardButton(open_label, url=resolved_market.get("url")))
         kb.add(InlineKeyboardButton(search_other, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
     else:
-        kb.add(InlineKeyboardButton("🔎 Искать по скрину ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
-        kb.add(InlineKeyboardButton("🔍 Как отправить ссылку", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+        if resolved_market and _is_recognized_no_match_payload(resolved_market):
+            kb.add(InlineKeyboardButton("⚡ Разобрать по скрину" if is_ru else "⚡ Analyze screenshot", callback_data=LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton("🔎 Искать ещё раз" if is_ru else "🔎 Search again", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+        kb.add(InlineKeyboardButton("🔗 Как отправить ссылку" if is_ru else "🔗 How to send link", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
     kb.add(
         InlineKeyboardButton("🧠 Объясни edge", callback_data=LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK),
         InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK),
@@ -8160,6 +8254,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     if result.get("screen_type") == "polymarket":
         logger.info("screenshot_context_reset_for_new_image user_id=%s", uid)
         _clear_live_image_market_resolution(uid)
+        LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
         _remember_live_image_resolution_context(uid, result.get("market_title_canonical") or result.get("market") or "", result.get("visible") or "", result)
         if result.get("market"):
             try:
@@ -8178,14 +8273,17 @@ async def live_image_handler(message: types.Message, state: FSMContext):
             if result.get("visible_prices"):
                 resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
+            LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
         elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):
             LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
             if result.get("visible_prices"):
                 resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
+            LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
         else:
             logger.warning("screenshot_current_market_context_not_stored reason=%s", "no_validated_candidate")
             _clear_live_image_market_resolution(uid)
+            _store_live_screenshot_no_match_payload(uid, _recognized_no_match_payload_from_result(result, get_user_lang(uid), "no_validated_candidate"))
 
     save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
     save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
@@ -8196,12 +8294,15 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         if not notice_market:
             notice_market = {
                 "recognized_title": result.get("market_title_original") or result.get("market_title_canonical") or result.get("market") or "",
+                "market_title_original": result.get("market_title_original") or result.get("market_title_canonical") or result.get("market") or "",
+                "market_title_canonical": result.get("market_title_canonical") or result.get("market_title_original") or result.get("market") or "",
                 "visible_prices": result.get("visible_prices") or [],
             }
         resolution_notice = format_live_image_resolution_notice(notice_market, lang)
         response_text = f"{summary}\n\n{resolution_notice}" if resolution_notice else summary
-        await message.answer(response_text, reply_markup=get_live_image_keyboard(resolved_market, lang))
+        await message.answer(response_text, reply_markup=get_live_image_keyboard(notice_market, lang))
     else:
+        LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
         await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
 
 
@@ -8226,13 +8327,23 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK,
     LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK,
     LIVE_IMAGE_RISKS_CALLBACK,
+    LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK,
 })
 async def live_image_educational_callback(callback: types.CallbackQuery):
     if not _is_private_callback(callback):
         await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
         return
 
-    if callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK:
+    if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK:
+        uid = callback.from_user.id if callback.from_user else 0
+        payload = LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.get(uid) or {}
+        logger.info("live_screenshot_only_analysis_requested user_id=%s has_payload=%s", uid, bool(payload))
+        if not _is_recognized_no_match_payload(payload):
+            await callback.answer()
+            await callback.message.answer("Не вижу сохранённых данных скрина. Отправь скрин ещё раз или пришли ссылку Polymarket.")
+            return
+        text = build_screenshot_only_analysis_text(payload, get_user_lang(uid))
+    elif callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK:
         text = (
             "🔍 Для полного анализа отправь ссылку на рынок Polymarket.\n\n"
             "Тогда я проверю:\n"
@@ -8262,7 +8373,8 @@ async def live_image_educational_callback(callback: types.CallbackQuery):
         )
 
     await callback.answer()
-    await callback.message.answer(text)
+    reply_markup = get_live_image_keyboard(None, get_user_lang(callback.from_user.id)) if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK and callback.from_user else None
+    await callback.message.answer(text, reply_markup=reply_markup)
 
 
 @dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)
@@ -8318,9 +8430,18 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
 
     logger.warning("screenshot_current_market_context_not_stored reason=%s", "retry_no_validated_candidate")
     _clear_live_image_market_resolution(uid)
+    retry_payload = {
+        "market_title_original": title,
+        "market_title_canonical": title,
+        "visible_prices": context.get("visible_prices") or [],
+        "ui_language": get_user_lang(uid),
+        "no_match_reason": "retry_no_validated_candidate",
+        "timestamp": int(time.time()),
+    }
+    _store_live_screenshot_no_match_payload(uid, retry_payload)
     await callback.message.answer(
-        "🔎 Я всё ещё не смог надёжно найти этот рынок. Отправь ссылку Polymarket вручную — тогда запущу полный анализ.",
-        reply_markup=get_live_image_keyboard(None, get_user_lang(uid)),
+        format_live_image_resolution_notice({"recognized_title": title, "market_title_original": title, "market_title_canonical": title, "visible_prices": context.get("visible_prices") or []}, get_user_lang(uid)),
+        reply_markup=get_live_image_keyboard(retry_payload, get_user_lang(uid)),
     )
 
 

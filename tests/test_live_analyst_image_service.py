@@ -355,8 +355,9 @@ def test_live_image_keyboard_source_shows_auto_run_for_strong_confidence():
 def test_live_image_keyboard_source_no_match_retry_and_manual_link_help():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
 
-    no_match_branch = source.split("else:\n        kb.add(InlineKeyboardButton(\"🔎 Искать по скрину ещё раз\"", 1)[1]
-    no_match_branch = no_match_branch.split("kb.add(\n        InlineKeyboardButton(\"🧠 Объясни edge\"", 1)[0]
+    no_match_branch = source.split("else:\n        if resolved_market and _is_recognized_no_match_payload(resolved_market):", 1)[1]
+    no_match_branch = no_match_branch.split('kb.add(\n        InlineKeyboardButton("🧠 Объясни edge"', 1)[0]
+    assert "LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK" in no_match_branch
     assert "LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK" in no_match_branch
     assert "Как отправить ссылку" in no_match_branch
 
@@ -370,8 +371,9 @@ def test_live_image_keyboard_callback_names_remain_unchanged():
     assert 'InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url"))' in keyboard
     assert 'InlineKeyboardButton("✅ Да, анализировать этот рынок", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK)' in keyboard
     assert 'InlineKeyboardButton("🔎 Искать ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)' in keyboard
-    assert 'InlineKeyboardButton("🔎 Искать по скрину ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)' in keyboard
-    assert 'InlineKeyboardButton("🔍 Как отправить ссылку", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK)' in keyboard
+    assert 'LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK' in keyboard
+    assert 'InlineKeyboardButton("🔎 Искать ещё раз" if is_ru else "🔎 Search again", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)' in keyboard
+    assert 'InlineKeyboardButton("🔗 Как отправить ссылку" if is_ru else "🔗 How to send link", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK)' in keyboard
     assert 'InlineKeyboardButton("🧠 Объясни edge", callback_data=LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK)' in keyboard
     assert 'InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK)' in keyboard
 
@@ -485,3 +487,116 @@ def test_build_live_image_metadata_normalizes_localized_polymarket_payload():
     assert metadata["market_title_canonical"] == "2026 FIFA World Cup Winner"
     assert metadata["outcomes_canonical"][:4] == ["Spain", "France", "Portugal", "England"]
     assert metadata["visible_prices"][0]["probability"] == 16.7
+
+
+
+def _load_telegram_bot_screenshot_helpers():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    segment = source.split("def _visible_price_lines_from_items", 1)[1]
+    segment = "def _visible_price_lines_from_items" + segment.split("def _remember_live_image_candidate", 1)[0]
+    ns = {
+        "time": types.SimpleNamespace(time=lambda: 123),
+        "logger": types.SimpleNamespace(info=lambda *args, **kwargs: None),
+        "LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT": {},
+    }
+    exec(segment, ns)
+    return ns
+
+
+def test_recognized_no_match_screenshot_has_screenshot_only_cta_and_no_open_market():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    keyboard = source.split("def get_live_image_keyboard", 1)[1].split("def _is_private_callback", 1)[0]
+
+    assert "LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK" in keyboard
+    assert "⚡ Разобрать по скрину" in keyboard
+    assert "⚡ Analyze screenshot" in keyboard
+    no_match_branch = keyboard.split("if resolved_market and _is_recognized_no_match_payload(resolved_market):", 1)[1]
+    no_match_branch = no_match_branch.split("kb.add(\n        InlineKeyboardButton(\"🧠 Объясни edge\"", 1)[0]
+    assert "Открыть рынок" not in no_match_branch
+
+
+def test_generic_no_match_keyboard_does_not_show_screenshot_only_cta():
+    ns = _load_telegram_bot_screenshot_helpers()
+
+    assert ns["_is_recognized_no_match_payload"](None) is False
+    assert ns["_is_recognized_no_match_payload"]({}) is False
+
+
+def test_provider_unavailable_keyboard_does_not_show_screenshot_only_cta():
+    ns = _load_telegram_bot_screenshot_helpers()
+
+    assert ns["_is_recognized_no_match_payload"]({"market_title_original": "Победитель Кубка мира"}) is False
+
+
+def test_screenshot_only_analysis_uses_payload_and_avoids_final_trading_advice():
+    ns = _load_telegram_bot_screenshot_helpers()
+
+    text = ns["build_screenshot_only_analysis_text"](
+        {
+            "market_title_original": "Победитель Кубка мира",
+            "category": "Sports/Football",
+            "visible_prices": [
+                {"outcome_original": "Испания", "probability": 16.7},
+                {"outcome_original": "Франция", "probability": 16.4},
+                {"outcome_original": "Португалия", "probability": 11.8},
+                {"outcome_original": "Англия", "probability": 9.7},
+            ],
+        },
+        "ru",
+    )
+
+    assert "Победитель Кубка мира" in text
+    assert "Испания — 16.7%" in text
+    assert "Франция — 16.4%" in text
+    assert "Португалия — 11.8%" in text
+    assert "Англия — 9.7%" in text
+    assert "Для полного анализа нужна ссылка" in text
+    assert "Испания и Франция почти равны" in text
+    assert "Португалия и Англия заметно ниже" in text
+    assert "не даёт готового edge" in text
+    lowered = text.lower()
+    assert "покупай" not in lowered
+    assert "продавай" not in lowered
+    assert "ставь" not in lowered
+    assert "buy" not in lowered
+    assert "sell" not in lowered
+
+
+def test_recognized_no_match_notice_has_single_send_link_try_search_block_and_decimals():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    notice = source.split("def format_live_image_resolution_notice", 1)[1].split("def get_live_image_keyboard", 1)[0]
+
+    assert notice.count("• отправить ссылку для полного анализа.") == 1
+    assert notice.count("• попробовать найти рынок ещё раз;") == 1
+    assert "Отправь ссылку на рынок или нажми" not in notice
+    ns = _load_telegram_bot_screenshot_helpers()
+    lines = ns["_visible_price_lines_from_items"]([
+        {"outcome_original": "Испания", "probability": 16.7},
+        {"outcome_original": "Франция", "probability": 16.4},
+        {"outcome_original": "Португалия", "probability": 11.8},
+        {"outcome_original": "Англия", "probability": 9.7},
+    ])
+    assert "• Испания — 16.7%" in lines
+    assert "• Франция — 16.4%" in lines
+    assert "• Португалия — 11.8%" in lines
+    assert "• Англия — 9.7%" in lines
+
+
+def test_strong_match_keyboard_unchanged_and_medium_confirmation_gated():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    keyboard = source.split("def get_live_image_keyboard", 1)[1].split("def _is_private_callback", 1)[0]
+
+    assert "LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK" in keyboard
+    assert "LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK" in keyboard
+    assert "Открыть рынок" in keyboard
+    assert "LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK" in keyboard
+
+
+def test_screenshot_only_callback_does_not_reference_current_market_context():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    handler = source.split("if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK:", 1)[1]
+    handler = handler.split("elif callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK", 1)[0]
+
+    assert "LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT" in handler
+    assert "current_market_context" not in handler
+    assert "_run_top_analysis_for_user" not in handler
