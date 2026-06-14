@@ -1,4 +1,8 @@
 import asyncio
+import sys
+import types
+
+sys.modules.setdefault("requests", types.SimpleNamespace(get=lambda *args, **kwargs: None, post=lambda *args, **kwargs: None))
 
 from services import polymarket_service as svc
 
@@ -123,3 +127,56 @@ def test_resolve_polymarket_market_from_screenshot_uses_visible_outcome_queries(
     assert result is not None
     assert result["confidence"] >= 0.82
     assert any("tariff" in query.lower() for query in queries)
+
+
+def test_screenshot_candidate_scoring_strong_world_cup_overlap():
+    score, overlap = svc._screenshot_candidate_score(
+        {
+            "question": "2026 FIFA World Cup Winner",
+            "outcomes": ["Spain", "France", "Portugal", "England", "Brazil"],
+            "active": True,
+            "closed": False,
+        },
+        "2026 FIFA World Cup Winner",
+        ["Spain", "France", "Portugal", "England"],
+        "Sports · Football",
+    )
+
+    assert overlap == 4
+    assert score >= 0.82
+
+
+def test_resolve_polymarket_market_from_screenshot_accepts_localized_payload(monkeypatch):
+    def fake_list_markets(search="", limit=10, offset=0):
+        if "world cup" in (search or "").lower():
+            return [
+                {
+                    "id": "wc",
+                    "question": "2026 FIFA World Cup Winner",
+                    "slug": "2026-fifa-world-cup-winner",
+                    "eventSlug": "2026-fifa-world-cup-winner",
+                    "outcomes": ["Spain", "France", "Portugal", "England", "Brazil"],
+                    "active": True,
+                    "closed": False,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(svc, "list_markets", fake_list_markets)
+    monkeypatch.setattr(svc, "_search_events_for_title", lambda query, limit=20: [])
+
+    result = asyncio.run(
+        svc.resolve_polymarket_market_from_screenshot(
+            {
+                "screen_type": "polymarket_market",
+                "ui_language": "ru",
+                "market_title_original": "Победитель Кубка мира",
+                "outcomes_original": ["Испания", "Франция", "Португалия", "Англия"],
+                "visible": "Испания 16.7%, Франция 16.4%, Португалия 11.8%, Англия 9.7%",
+            }
+        )
+    )
+
+    assert result is not None
+    assert result["confidence"] >= 0.82
+    assert result["url"].startswith("https://polymarket.com/event/")

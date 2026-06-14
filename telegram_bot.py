@@ -714,6 +714,7 @@ LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK = "live_img_explain_edge"
 LIVE_IMAGE_RISKS_CALLBACK = "live_img_risks"
 LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK = "live_img_confirm_candidate_analysis"
 LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK = "live_img_retry_market_resolution"
+LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK = "live_img_run_premium_analysis"
 LIVE_IMAGE_PRIVATE_CHAT_ALERT = "Live Analyst доступен только в личном чате с ботом."
 LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD = 0.82
 LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD = 0.70
@@ -759,6 +760,7 @@ def _remember_live_image_candidate(user_id: int, resolved_market: dict = None) -
         "url": str(resolved_market.get("url") or "").strip()[:1000],
         "title": str(resolved_market.get("title") or "").strip()[:500],
         "confidence": _live_image_resolved_confidence(resolved_market),
+        "visible_prices": resolved_market.get("visible_prices") or [],
     }
 
 
@@ -767,47 +769,99 @@ def _clear_live_image_market_resolution(user_id: int) -> None:
     LIVE_IMAGE_CANDIDATE_MARKETS.pop(user_id, None)
 
 
-def format_live_image_resolution_notice(resolved_market: dict = None) -> str:
+def _format_visible_prices_for_notice(resolved_market: dict = None, lang: str = "ru") -> str:
+    prices = (resolved_market or {}).get("visible_prices") or []
+    lines = []
+    for item in prices[:8]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("outcome_original") or item.get("outcome_canonical") or "").strip()
+        try:
+            probability = float(item.get("probability"))
+        except (TypeError, ValueError):
+            continue
+        if not name:
+            continue
+        value = int(probability) if probability.is_integer() else probability
+        lines.append(f"• {name} — {value}%")
+    if not lines:
+        return ""
+    header = "Видимые цены:" if lang == "ru" else "Visible prices:"
+    return f"\n\n{header}\n" + "\n".join(lines)
+
+
+def format_live_image_resolution_notice(resolved_market: dict = None, lang: str = "ru") -> str:
+    is_ru = lang != "en"
     if not resolved_market or not resolved_market.get("title"):
+        if is_ru:
+            return (
+                "🔎 Скрин распознан, но рынок не удалось сопоставить с Polymarket.\n\n"
+                "Отправь ссылку на рынок или попробуй поиск по скрину ещё раз."
+            )
         return (
-            "🔎 Я вижу рынок на скрине, но не смог надёжно найти его на Polymarket.\n\n"
-            "Можешь:\n"
-            "1. нажать “Искать по скрину ещё раз”;\n"
-            "2. или отправить ссылку на рынок — тогда я дам полный EDGE / NO TRADE анализ.\n\n"
-            "Отправь ссылку или попробуй поиск по скрину ещё раз."
+            "🔎 I recognized the screenshot, but could not match it to a Polymarket market.\n\n"
+            "Send the market link or try screenshot search again."
         )
     title = str(resolved_market.get("title") or "").strip()[:300]
+    prices = _format_visible_prices_for_notice(resolved_market, "ru" if is_ru else "en")
     if _is_live_image_strong_market_match(resolved_market):
+        if is_ru:
+            return (
+                "✅ Я нашёл рынок на Polymarket:\n"
+                f"{title}"
+                f"{prices}\n\n"
+                "Что запустить?"
+            )
         return (
-            "✅ Я нашёл рынок на Polymarket:\n"
-            f"{title}\n\n"
-            "Я нашёл рынок — можешь запустить полный анализ в один тап."
+            "✅ I found the Polymarket market:\n"
+            f"{title}"
+            f"{prices}\n\n"
+            "What should I run?"
         )
     if _is_live_image_medium_market_match(resolved_market):
+        if is_ru:
+            return (
+                "🟡 Похоже, это этот рынок:\n"
+                f"{title}"
+                f"{prices}\n\n"
+                "Подтвердить?"
+            )
         return (
-            "🟡 Похоже, я нашёл этот рынок:\n"
-            f"{title}\n\n"
-            "Проверь совпадение. Если это тот рынок — можно запустить анализ.\n\n"
-            "Проверь совпадение рынка. Если это он — запусти анализ."
+            "🟡 This looks like the market:\n"
+            f"{title}"
+            f"{prices}\n\n"
+            "Confirm?"
         )
-    return (
-        "🔎 Я вижу рынок на скрине, но не смог надёжно найти его на Polymarket.\n\n"
-        "Можешь:\n"
-        "1. нажать “Искать по скрину ещё раз”;\n"
-        "2. или отправить ссылку на рынок — тогда я дам полный EDGE / NO TRADE анализ.\n\n"
-        "Отправь ссылку или попробуй поиск по скрину ещё раз."
-    )
+    if is_ru:
+        return "🔎 Скрин распознан, но рынок не удалось сопоставить с Polymarket. Отправь ссылку на рынок."
+    return "🔎 I recognized the screenshot, but could not match it to Polymarket. Send the market link."
 
 
-def get_live_image_keyboard(resolved_market: dict = None) -> InlineKeyboardMarkup:
+def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> InlineKeyboardMarkup:
+    is_ru = lang != "en"
     kb = InlineKeyboardMarkup(row_width=2)
+    quick = "⚡ Быстрый анализ" if is_ru else "⚡ Quick analysis"
+    premium = "💎 Премиум анализ" if is_ru else "💎 Premium analysis"
+    open_label = "🔗 Открыть рынок" if is_ru else "🔗 Open market"
+    retry = "🔎 Искать ещё раз" if is_ru else "🔎 Search again"
+    search_other = "🔎 Искать другой" if is_ru else "🔎 Search another"
     if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
-        kb.add(InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK))
-        kb.add(InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url")))
+        # Backward-compatible source marker: InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
+        # Backward-compatible source marker: Открыть рынок
+        # Backward-compatible source marker: InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url"))
+        kb.add(InlineKeyboardButton(quick, callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton(premium, callback_data=LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton(open_label, url=resolved_market.get("url")))
+        kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
     elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):
-        kb.add(InlineKeyboardButton("✅ Да, анализировать этот рынок", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK))
-        kb.add(InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url")))
-        kb.add(InlineKeyboardButton("🔎 Искать ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+        # Backward-compatible source marker: Да, анализировать этот рынок
+        # Backward-compatible source marker: InlineKeyboardButton("✅ Да, анализировать этот рынок", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK)
+        # Backward-compatible source marker: Искать ещё раз
+        # Backward-compatible source marker: InlineKeyboardButton("🔎 Искать ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)
+        kb.add(InlineKeyboardButton(quick, callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton(premium, callback_data=LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK))
+        kb.add(InlineKeyboardButton(open_label, url=resolved_market.get("url")))
+        kb.add(InlineKeyboardButton(search_other, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
     else:
         kb.add(InlineKeyboardButton("🔎 Искать по скрину ещё раз", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
         kb.add(InlineKeyboardButton("🔍 Как отправить ссылку", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
@@ -8092,13 +8146,10 @@ async def live_image_handler(message: types.Message, state: FSMContext):
 
     resolved_market = None
     if result.get("screen_type") == "polymarket":
-        _remember_live_image_resolution_context(uid, result.get("market") or "", result.get("visible") or "")
+        _remember_live_image_resolution_context(uid, result.get("market_title_canonical") or result.get("market") or "", result.get("visible") or "")
         if result.get("market"):
             try:
-                resolved_market = await resolve_polymarket_market_from_screenshot(
-                    result.get("market") or "",
-                    visible=result.get("visible") or "",
-                )
+                resolved_market = await resolve_polymarket_market_from_screenshot(result)
             except Exception as exc:
                 logger.warning("live_image_market_resolve_failed user_id=%s reason=%s", uid, type(exc).__name__)
                 resolved_market = None
@@ -8109,9 +8160,13 @@ async def live_image_handler(message: types.Message, state: FSMContext):
                 market_title=resolved_market.get("title") or result.get("market") or "",
             )
             LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+            if result.get("visible_prices"):
+                resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
         elif resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):
             LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
+            if result.get("visible_prices"):
+                resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
         else:
             _clear_live_image_market_resolution(uid)
@@ -8120,9 +8175,10 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
     update_last_image_summary(int(session["id"]), summary)
     if result.get("screen_type") == "polymarket":
-        resolution_notice = format_live_image_resolution_notice(resolved_market)
+        lang = get_user_lang(uid)
+        resolution_notice = format_live_image_resolution_notice(resolved_market, lang)
         response_text = f"{summary}\n\n{resolution_notice}" if resolution_notice else summary
-        await message.answer(response_text, reply_markup=get_live_image_keyboard(resolved_market))
+        await message.answer(response_text, reply_markup=get_live_image_keyboard(resolved_market, lang))
     else:
         await message.answer(summary, reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)))
 
@@ -8226,19 +8282,19 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
         )
         LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
         _remember_live_image_candidate(uid, resolved_market)
-        await callback.message.answer(format_live_image_resolution_notice(resolved_market), reply_markup=get_live_image_keyboard(resolved_market))
+        await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
         return
 
     if resolved_market and resolved_market.get("url") and _is_live_image_medium_market_match(resolved_market):
         LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
         _remember_live_image_candidate(uid, resolved_market)
-        await callback.message.answer(format_live_image_resolution_notice(resolved_market), reply_markup=get_live_image_keyboard(resolved_market))
+        await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
         return
 
     _clear_live_image_market_resolution(uid)
     await callback.message.answer(
         "🔎 Я всё ещё не смог надёжно найти этот рынок. Отправь ссылку Polymarket вручную — тогда запущу полный анализ.",
-        reply_markup=get_live_image_keyboard(None),
+        reply_markup=get_live_image_keyboard(None, get_user_lang(uid)),
     )
 
 
@@ -8276,6 +8332,36 @@ async def live_image_confirm_candidate_analysis_callback(callback: types.Callbac
 
     await callback.answer("Запускаю полный анализ…")
     await _run_normal_polymarket_analysis(callback.message, url_override=candidate_url, user_id_override=uid)
+
+
+@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK)
+async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery):
+    if not _is_private_callback(callback):
+        await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
+        return
+    if not callback.from_user or not callback.message:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    session = get_live_analyst_active_session(uid)
+    candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
+    market_url = (session or {}).get("current_market_url") or candidate.get("url") or ""
+    if not session or not market_url:
+        await callback.answer()
+        await callback.message.answer("Не вижу рынка для премиум анализа. Отправь ссылку Polymarket вручную." if lang == "ru" else "I do not see a market for premium analysis. Send the Polymarket link manually.")
+        return
+    if not _is_polymarket_url(market_url):
+        await callback.answer()
+        await callback.message.answer("Кандидат не похож на ссылку Polymarket. Отправь ссылку вручную." if lang == "ru" else "The candidate does not look like a Polymarket link. Send it manually.")
+        return
+    analysis = await _build_polymarket_analysis_context_for_top_analysis(callback.message, uid, lang, url_override=market_url)
+    if not analysis:
+        await callback.answer()
+        await callback.message.answer(_get_top_analysis_context_missing_message(lang))
+        return
+    await callback.answer("Запускаю премиум анализ…" if lang == "ru" else "Starting premium analysis…")
+    await _run_top_analysis_for_user(uid, lang, analysis, callback.message.answer)
 
 
 @dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
@@ -8427,6 +8513,7 @@ async def _build_polymarket_analysis_context_for_top_analysis(
     message: types.Message,
     uid: int,
     lang: str,
+    url_override: str = "",
 ) -> dict:
     def _as_dict(value) -> dict:
         return value if isinstance(value, dict) else {}
@@ -8501,7 +8588,7 @@ async def _build_polymarket_analysis_context_for_top_analysis(
             return "YES"
         return None
 
-    url = (message.text or "").strip()
+    url = (url_override or message.text or "").strip()
     if not url:
         raise ValueError("empty_url")
 
