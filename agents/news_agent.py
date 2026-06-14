@@ -1,12 +1,18 @@
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from services.llm_service import generate_news_text
+from services.llm_service import (
+    generate_news_text,
+    get_gemini_provider_cooldown_error,
+)
 from services.news_service import (
     build_news_query,
     search_google_news,
     summarize_news_items,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════
@@ -246,10 +252,17 @@ class NewsAgent:
         )
 
         news_items = search_google_news(news_query, limit=7)
+        if news_items is None:
+            logger.warning(
+                "news_agent_empty_result provider=%s query_count=%s",
+                "google_news",
+                1,
+            )
+            news_items = []
 
-        twitter_items = _fetch_twitter_signals(news_query, limit=4)
+        twitter_items = _fetch_twitter_signals(news_query, limit=4) or []
         if not twitter_items:
-            twitter_items = _fetch_twitter_via_google(news_query, limit=3)
+            twitter_items = _fetch_twitter_via_google(news_query, limit=3) or []
 
         seen_titles = {item.get("title", "")[:50] for item in news_items}
         unique_twitter = [
@@ -259,6 +272,24 @@ class NewsAgent:
 
         all_items = news_items + unique_twitter
         live_news_summary = summarize_news_items(all_items[:8])
+
+        provider_error = get_gemini_provider_cooldown_error()
+        if provider_error:
+            logger.info(
+                "signal_cache_skipped_llm_provider_unavailable error_type=%s",
+                provider_error,
+            )
+            key_signals = _extract_key_signals("", all_items)
+            return self._fallback_news(
+                question=question,
+                category=category,
+                date_context=date_context,
+                related_markets=related_markets,
+                live_news_summary=live_news_summary,
+                news_query=news_query,
+                news_items=all_items[:6],
+                key_signals=key_signals,
+            )
 
         prompt = self._build_prompt(
             question=question,
