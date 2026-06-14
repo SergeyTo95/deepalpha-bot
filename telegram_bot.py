@@ -745,10 +745,12 @@ def _is_polymarket_url(url: str) -> bool:
     return bool(re.match(r"^https?://([^/]+\.)?polymarket\.com/", (url or "").strip(), flags=re.IGNORECASE))
 
 
-def _remember_live_image_resolution_context(user_id: int, title: str = "", visible: str = "") -> None:
+def _remember_live_image_resolution_context(user_id: int, title: str = "", visible: str = "", payload: dict = None) -> None:
+    payload = payload or {}
     LIVE_IMAGE_SCREENSHOT_RESOLUTION_CONTEXT[user_id] = {
         "title": (title or "").strip()[:500],
         "visible": (visible or "").strip()[:1200],
+        "visible_prices": payload.get("visible_prices") or [],
     }
 
 
@@ -793,6 +795,16 @@ def _format_visible_prices_for_notice(resolved_market: dict = None, lang: str = 
 def format_live_image_resolution_notice(resolved_market: dict = None, lang: str = "ru") -> str:
     is_ru = lang != "en"
     if not resolved_market or not resolved_market.get("title"):
+        recognized_title = str((resolved_market or {}).get("recognized_title") or "").strip()[:300]
+        prices = _format_visible_prices_for_notice(resolved_market, "ru" if is_ru else "en") if resolved_market else ""
+        if is_ru and (recognized_title or prices):
+            return (
+                "✅ Я распознал рынок на скрине:\n"
+                f"{recognized_title or 'Без названия'}"
+                f"{prices}\n\n"
+                "⚠️ Но я не смог надёжно сопоставить его с Polymarket API.\n"
+                "Отправь ссылку на рынок или нажми «Искать ещё раз»."
+            )
         if is_ru:
             return (
                 "🔎 Скрин распознан, но рынок не удалось сопоставить с Polymarket.\n\n"
@@ -8146,7 +8158,9 @@ async def live_image_handler(message: types.Message, state: FSMContext):
 
     resolved_market = None
     if result.get("screen_type") == "polymarket":
-        _remember_live_image_resolution_context(uid, result.get("market_title_canonical") or result.get("market") or "", result.get("visible") or "")
+        logger.info("screenshot_context_reset_for_new_image user_id=%s", uid)
+        _clear_live_image_market_resolution(uid)
+        _remember_live_image_resolution_context(uid, result.get("market_title_canonical") or result.get("market") or "", result.get("visible") or "", result)
         if result.get("market"):
             try:
                 resolved_market = await resolve_polymarket_market_from_screenshot(result)
@@ -8160,6 +8174,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
                 market_title=resolved_market.get("title") or result.get("market") or "",
             )
             LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+            logger.info("screenshot_current_market_context_stored market_id=%s source=screenshot_resolution", resolved_market.get("market_id"))
             if result.get("visible_prices"):
                 resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
@@ -8169,6 +8184,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
                 resolved_market["visible_prices"] = result.get("visible_prices")
             _remember_live_image_candidate(uid, resolved_market)
         else:
+            logger.warning("screenshot_current_market_context_not_stored reason=%s", "no_validated_candidate")
             _clear_live_image_market_resolution(uid)
 
     save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
@@ -8176,7 +8192,13 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     update_last_image_summary(int(session["id"]), summary)
     if result.get("screen_type") == "polymarket":
         lang = get_user_lang(uid)
-        resolution_notice = format_live_image_resolution_notice(resolved_market, lang)
+        notice_market = resolved_market
+        if not notice_market:
+            notice_market = {
+                "recognized_title": result.get("market_title_original") or result.get("market_title_canonical") or result.get("market") or "",
+                "visible_prices": result.get("visible_prices") or [],
+            }
+        resolution_notice = format_live_image_resolution_notice(notice_market, lang)
         response_text = f"{summary}\n\n{resolution_notice}" if resolution_notice else summary
         await message.answer(response_text, reply_markup=get_live_image_keyboard(resolved_market, lang))
     else:
@@ -8262,6 +8284,8 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
     context = LIVE_IMAGE_SCREENSHOT_RESOLUTION_CONTEXT.get(uid) or {}
     title = (context.get("title") or "").strip()
     visible = (context.get("visible") or "").strip()
+    logger.info("screenshot_context_reset_for_new_image user_id=%s", uid)
+    _clear_live_image_market_resolution(uid)
     if not title and not visible:
         await callback.answer()
         await callback.message.answer("Не вижу данных скрина для повторного поиска. Отправь ссылку Polymarket вручную.")
@@ -8281,6 +8305,7 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
             market_title=resolved_market.get("title") or title,
         )
         LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+        logger.info("screenshot_current_market_context_stored market_id=%s source=screenshot_resolution", resolved_market.get("market_id"))
         _remember_live_image_candidate(uid, resolved_market)
         await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
         return
@@ -8291,6 +8316,7 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
         await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
         return
 
+    logger.warning("screenshot_current_market_context_not_stored reason=%s", "retry_no_validated_candidate")
     _clear_live_image_market_resolution(uid)
     await callback.message.answer(
         "🔎 Я всё ещё не смог надёжно найти этот рынок. Отправь ссылку Polymarket вручную — тогда запущу полный анализ.",
@@ -8346,7 +8372,7 @@ async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery
     lang = get_user_lang(uid)
     session = get_live_analyst_active_session(uid)
     candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
-    market_url = (session or {}).get("current_market_url") or candidate.get("url") or ""
+    market_url = candidate.get("url") or ((session or {}).get("current_market_url") if LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid, 0) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD else "") or ""
     if not session or not market_url:
         await callback.answer()
         await callback.message.answer("Не вижу рынка для премиум анализа. Отправь ссылку Polymarket вручную." if lang == "ru" else "I do not see a market for premium analysis. Send the Polymarket link manually.")
