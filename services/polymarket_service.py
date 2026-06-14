@@ -698,6 +698,66 @@ def _screenshot_candidate_score(
     return min(1.0, score), outcome_overlap
 
 
+def _normalized_outcome_overlap(screenshot_outcomes: List[str], candidate_outcomes: List[str]) -> int:
+    shot = {_normalize_market_title_for_resolution(x) for x in screenshot_outcomes if str(x).strip()}
+    cand = {_normalize_market_title_for_resolution(x) for x in candidate_outcomes if str(x).strip()}
+    shot.discard("")
+    cand.discard("")
+    return len(shot & cand)
+
+
+def _is_generic_binary_candidate(candidate: Dict[str, Any]) -> bool:
+    outcomes = {_normalize_market_title_for_resolution(x) for x in _candidate_outcomes(candidate)}
+    outcomes.discard("")
+    return bool(outcomes) and outcomes.issubset({"yes", "no"})
+
+
+def _screenshot_payload_is_world_cup_football(payload: Dict[str, Any]) -> bool:
+    title = _normalize_market_title_for_resolution(
+        str(payload.get("market_title_canonical") or payload.get("market_title_original") or payload.get("market") or "")
+    )
+    category = _normalize_market_title_for_resolution(str(payload.get("category_canonical") or payload.get("category") or ""))
+    has_title_signal = any(term in title for term in ("world cup", "fifa", " cup", "winner", "champion"))
+    has_sport_signal = "sport" in category and ("football" in category or "soccer" in category)
+    return has_title_signal and (has_sport_signal or "world cup" in title)
+
+
+def _screenshot_title_category_contradiction(payload: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+    if not _screenshot_payload_is_world_cup_football(payload):
+        return False
+    title = _normalize_market_title_for_resolution(_candidate_market_title(candidate))
+    relevant_terms = ("world cup", "fifa", "cup", "winner", "football", "soccer", "champion")
+    if any(term in title for term in relevant_terms):
+        return False
+    screenshot_outcomes = [str(x) for x in (payload.get("outcomes_canonical") or []) if str(x).strip()]
+    return _normalized_outcome_overlap(screenshot_outcomes, _candidate_outcomes(candidate)) < 3
+
+
+def _validate_screenshot_candidate_consistency(
+    screenshot_payload: Dict[str, Any],
+    candidate: Dict[str, Any],
+    score: float,
+    source: Optional[str] = None,
+) -> Tuple[bool, str]:
+    screenshot_outcomes = [str(x).strip() for x in (screenshot_payload.get("outcomes_canonical") or []) if str(x).strip()]
+    candidate_outcomes = _candidate_outcomes(candidate)
+    overlap = _normalized_outcome_overlap(screenshot_outcomes, candidate_outcomes)
+    if len(screenshot_outcomes) >= 2 and candidate_outcomes:
+        if overlap == 0:
+            return False, "outcome_overlap_zero"
+        if _is_generic_binary_candidate(candidate):
+            return False, "outcome_overlap_binary_outright"
+    if _screenshot_title_category_contradiction(screenshot_payload, candidate):
+        return False, "title_category_contradiction"
+    if candidate_outcomes and len(screenshot_outcomes) >= 2 and overlap == 1 and score >= 0.82:
+        return True, "downgrade_outcome_overlap_one"
+    if candidate_outcomes and len(screenshot_outcomes) >= 3 and score >= 0.82 and overlap < 2:
+        return False, "outcome_overlap_strong_lt_2"
+    if candidate_outcomes and _screenshot_payload_is_world_cup_football(screenshot_payload) and score >= 0.82 and overlap < 3:
+        return True, "downgrade_world_cup_overlap_lt_3"
+    return True, "ok"
+
+
 async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visible: str = "") -> Optional[Dict[str, Any]]:
     if isinstance(payload_or_title, dict):
         payload = normalize_polymarket_screenshot_payload(payload_or_title)
@@ -730,12 +790,15 @@ async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visib
 
     if visible_url:
         slug = extract_slug_from_url(visible_url)
-        if slug:
+        valid_full_slug = bool(slug and len(slug) >= 6 and "..." not in slug and not slug.endswith("…") and re.search(r"[a-z0-9]-[a-z0-9]", slug, flags=re.IGNORECASE))
+        if slug and valid_full_slug:
             direct = get_primary_market_from_url(visible_url if visible_url.startswith("http") else f"https://polymarket.com/event/{slug}")
             if direct:
                 add_candidate("url", direct)
             for item in search_markets_by_slug(slug, limit=10):
                 add_candidate("url", item)
+        elif slug:
+            logger.warning("screenshot_url_hint_rejected reason=%s visible_url=%s", "partial_or_invalid_slug", visible_url[:120])
 
     queries: List[Tuple[str, str]] = []
     for candidate_title in market_title_candidates(title, str(payload.get("ui_language") or "")):
@@ -753,10 +816,21 @@ async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visib
     scored: List[Tuple[float, int, str, Dict[str, Any]]] = []
     for source, item in candidates:
         score, overlap = _screenshot_candidate_score(item, title, canonical_outcomes, category_hint, source)
+        valid, reason = _validate_screenshot_candidate_consistency(payload, item, score, source)
+        if not valid:
+            if source == "url":
+                logger.warning("screenshot_url_hint_rejected reason=%s visible_url=%s", reason, visible_url[:120])
+            logger.info(
+                "screenshot_market_candidate_rejected title=%s score=%.2f outcome_overlap=%s source=%s reason=%s",
+                _candidate_market_title(item)[:120], score, overlap, source, reason,
+            )
+            continue
+        if reason.startswith("downgrade_"):
+            score = min(score, 0.8199)
         if len(scored) < 10 or score >= 0.65:
             logger.info(
-                "screenshot_market_candidate_score title=%s score=%.2f outcome_overlap=%s source=%s",
-                _candidate_market_title(item)[:120], score, overlap, source,
+                "screenshot_market_candidate_score title=%s score=%.2f outcome_overlap=%s source=%s reason=%s",
+                _candidate_market_title(item)[:120], score, overlap, source, reason,
             )
         scored.append((score, overlap, source, item))
     scored.sort(key=lambda row: (row[0], row[1], 1 if _is_market_open(row[3]) else 0), reverse=True)
