@@ -458,3 +458,30 @@ def test_live_image_medium_candidate_not_stored_as_current_market_until_confirme
 
     assert "_remember_live_image_candidate(uid, resolved_market)" in medium_branch
     assert "update_current_market_context" not in medium_branch
+
+
+def test_polymarket_decimal_visible_values_are_not_split():
+    visible = "Испания 16.7%; Франция 16.4%; Португалия 11.8%; Англия 9.7%"
+
+    cleaned = svc._clean_polymarket_visible_text(visible)
+
+    assert "Испания — 16.7%" in cleaned
+    assert "Франция — 16.4%" in cleaned
+    assert "16. — 7%" not in cleaned
+
+
+def test_build_live_image_metadata_normalizes_localized_polymarket_payload():
+    payload = {
+        "screen_type": "polymarket_market",
+        "ui_language": "ru",
+        "market_title_original": "Победитель Кубка мира",
+        "outcomes_original": ["Испания", "Франция", "Португалия", "Англия"],
+        "visible": "Испания 16.7%, Франция 16.4%",
+    }
+
+    metadata = svc._build_live_image_metadata(payload, "", "", "")
+
+    assert metadata["screen_type"] == "polymarket"
+    assert metadata["market_title_canonical"] == "2026 FIFA World Cup Winner"
+    assert metadata["outcomes_canonical"][:4] == ["Spain", "France", "Portugal", "England"]
+    assert metadata["visible_prices"][0]["probability"] == 16.7

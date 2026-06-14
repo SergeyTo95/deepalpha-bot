@@ -18,6 +18,7 @@ else:
 
 from services.live_analyst_admin_service import get_max_image_size_bytes
 from services.skill_loader_service import get_live_screenshot_skill_context
+from services.polymarket_localized_normalizer import normalize_polymarket_screenshot_payload
 
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,7 @@ def _is_polymarket_payload(payload: Dict[str, Any], raw_text: str, context_text:
     screen_type = str(payload.get("screen_type") or payload.get("type") or "").lower()
     if screen_type in {"generic", "other", "non_market", "not_market"}:
         return False
-    if screen_type in {"polymarket", "prediction_market", "prediction-market"}:
+    if screen_type in {"polymarket", "polymarket_market", "prediction_market", "prediction-market"}:
         return True
     haystack = " ".join([raw_text or "", context_text or ""]).lower()
     return any(marker in haystack for marker in ("polymarket", "prediction market", "odds", "outcomes", "yes/no"))
@@ -445,7 +446,7 @@ def _clean_polymarket_visible_text(visible: str) -> str:
     text = re.sub(r"[`*_#>]+", "", text)
     text = re.sub(r"\s+", " ", text).strip(" \t\n\r-–—•:;.,")
 
-    percent_matches = list(re.finditer(r"([^;()]+?)\s*[—-]?\s*(\d{1,3})\s*%", text))
+    percent_matches = list(re.finditer(r"([^;()]+?)\s*[—-]?\s*(\d{1,3}(?:[.,]\d+)?)\s*%", text))
     outcomes: List[str] = []
     seen: set = set()
     for match in percent_matches:
@@ -453,7 +454,7 @@ def _clean_polymarket_visible_text(visible: str) -> str:
         if not name:
             continue
         try:
-            value = int(match.group(2))
+            value = float(match.group(2).replace(",", "."))
         except ValueError:
             continue
         if not 0 <= value <= 100:
@@ -462,7 +463,8 @@ def _clean_polymarket_visible_text(visible: str) -> str:
         if key in seen:
             continue
         seen.add(key)
-        outcomes.append(f"{name} — {value}%")
+        display_value = int(value) if float(value).is_integer() else value
+        outcomes.append(f"{name} — {display_value}%")
         if len(outcomes) >= 5:
             break
     if outcomes:
@@ -637,13 +639,16 @@ def _build_live_image_metadata(payload: Dict[str, Any], raw_text: str, context_t
             takeaway = _clean_live_image_text(takeaway_match.group(1), 300)
 
     metadata: Dict[str, Any] = {"screen_type": "polymarket"}
+    for key in ("ui_language", "visible_url", "market_title_original", "market_title_canonical", "outcomes_original", "outcomes_canonical", "visible_prices", "category_original", "category_canonical"):
+        if (payload or {}).get(key) is not None:
+            metadata[key] = (payload or {}).get(key)
     if market and not _is_fallback_polymarket_market(market):
         metadata["market"] = market
     if visible:
         metadata["visible"] = visible
     if takeaway:
         metadata["takeaway"] = takeaway
-    return metadata
+    return normalize_polymarket_screenshot_payload(metadata)
 
 
 def _prepare_image_for_vision(image_bytes: bytes, mime_type: str) -> Tuple[bytes, str]:
@@ -781,7 +786,7 @@ def _should_attempt_crop_extraction(payload: Dict[str, Any], raw_text: str, cont
     haystack = " ".join([raw_text or "", context_text or ""]).lower()
 
     polymarket_detected = (
-        screen_type in {"polymarket", "prediction_market", "prediction-market"}
+        screen_type in {"polymarket", "polymarket_market", "prediction_market", "prediction-market"}
         or "polymarket" in haystack
         or "prediction market" in haystack
         or "yes/no" in haystack
@@ -790,7 +795,7 @@ def _should_attempt_crop_extraction(payload: Dict[str, Any], raw_text: str, cont
         return False
 
     return (
-        screen_type in {"polymarket", "prediction_market", "prediction-market"}
+        screen_type in {"polymarket", "polymarket_market", "prediction_market", "prediction-market"}
         or "polymarket" in haystack
         or "yes/no" in haystack
         or _is_generic_polymarket_visible(visible)
@@ -1290,6 +1295,10 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         "зелёные/красные кнопки YES/NO и видимый текст объёма. "
         "Для Polymarket screen_type='polymarket'; иначе screen_type='generic'. "
         "Для Polymarket обязательные поля JSON: screen_type, market, visible, takeaway, summary. "
+        "Если это экран рынка Polymarket, дополнительно верни по возможности: ui_language ('ru','en','unknown'), visible_url, "
+        "market_title_original, market_title_canonical на английском или null, outcomes_original, outcomes_canonical на английском, "
+        "visible_prices как массив {outcome_original,outcome_canonical,probability}, category_original, category_canonical, market_present, useful. "
+        "Сохраняй десятичные проценты точно: 16.7% -> probability 16.7, 16.4% -> 16.4, 11.8% -> 11.8, 9.7% -> 9.7. "
         "market: видимый заголовок/событие. Никогда не говори, что title не читается, если видна хотя бы часть заголовка; "
         "верни полезный частичный заголовок. "
         "visible: перечисли верхние видимые исходы/кандидатов, примерные цены/вероятности с кнопок или легенды, график и объём, если читаются. "
@@ -1331,7 +1340,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                 second_prompt = (
                     "Carefully extract readable text from this Polymarket mobile screenshot. "
                     "Zoom into the top market title and first outcome rows, including visible YES/NO prices, percentages, chart legend and volume. "
-                    "Return JSON only with fields: screen_type='polymarket', market, visible, takeaway, summary. "
+                    "Return JSON only with fields: screen_type='polymarket', market, visible, takeaway, summary, ui_language, visible_url, market_title_original, market_title_canonical, outcomes_original, outcomes_canonical, visible_prices. Preserve decimal percentages exactly. "
                     "Use approximate 'около X%' only when the number is clearly visible. Do not invent data. Russian language only."
                 )
             else:

@@ -4,6 +4,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from services.polymarket_localized_normalizer import (
+    canonicalize_visible_url,
+    market_title_candidates,
+    normalize_polymarket_screenshot_payload,
+)
+
 import requests
 
 
@@ -342,6 +348,16 @@ def _expand_multilingual_title_terms(title: str) -> str:
         (r"эфириум(?:а|у|ом|е)?", " ethereum "),
         (r"тариф(?:ы|ов|ам|ами|е|а)?", " tariff "),
         (r"здравоохранени(?:е|я|ю|ем|и)", " health healthcare "),
+        (r"победитель\s+кубка\s+мира", " 2026 FIFA World Cup Winner "),
+        (r"куб(?:ок|ка)\s+мира", " World Cup "),
+        (r"победител(?:ь|я|ю|ем|и)", " Winner "),
+        (r"испани(?:я|и|ю|ей)", " Spain "),
+        (r"франци(?:я|и|ю|ей)", " France "),
+        (r"португали(?:я|и|ю|ей)", " Portugal "),
+        (r"англи(?:я|и|ю|ей)", " England "),
+        (r"бразили(?:я|и|ю|ей)", " Brazil "),
+        (r"аргентин(?:а|ы|у|ой)", " Argentina "),
+        (r"германи(?:я|и|ю|ей)", " Germany "),
         (r"медикер", " medicare "),
         (r"медикейд", " medicaid "),
     )
@@ -472,6 +488,10 @@ def _compact_title_query(title: str) -> str:
         parts.append("White House")
     if "press briefing" in haystack or "briefing" in haystack:
         parts.append("press briefing")
+    if "world cup" in haystack:
+        parts.append("World Cup")
+    if "winner" in haystack:
+        parts.append("Winner")
     compact = " ".join(parts).strip()
     return compact if len(parts) >= 2 else ""
 
@@ -489,7 +509,7 @@ def _add_unique_query(queries: List[Tuple[str, str]], variant: str, query: str) 
 def _visible_outcome_terms(visible: str, limit: int = 5) -> List[str]:
     terms: List[str] = []
     for chunk in re.split(r"[,;\n•]+", visible or ""):
-        cleaned = re.sub(r"\b\d+(?:\.\d+)?\s*%\b", " ", chunk)
+        cleaned = re.sub(r"(?<!\d)\d{1,3}(?:[.,]\d+)?\s*%", " ", chunk)
         cleaned = re.sub(r"\b(?:yes|no|price|odds|chance)\b", " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—:/")
         if not cleaned:
@@ -633,78 +653,127 @@ async def resolve_polymarket_market_from_title(title: str) -> Optional[Dict[str,
     return resolved
 
 
-async def resolve_polymarket_market_from_screenshot(title: str, visible: str = "") -> Optional[Dict[str, Any]]:
+def _candidate_outcomes(candidate: Dict[str, Any]) -> List[str]:
+    outcomes = _normalize_options(candidate.get("outcomes"))
+    if not outcomes and isinstance(candidate.get("markets"), list):
+        for market in candidate.get("markets") or []:
+            outcomes.extend(_normalize_options((market or {}).get("outcomes")))
+    return [str(x) for x in outcomes if str(x or "").strip()]
+
+
+def _screenshot_candidate_score(
+    candidate: Dict[str, Any],
+    canonical_title: str = "",
+    canonical_outcomes: Optional[List[str]] = None,
+    category_hint: str = "",
+    source: str = "search",
+) -> Tuple[float, int]:
+    canonical_outcomes = [str(x).strip() for x in (canonical_outcomes or []) if str(x).strip()]
+    candidate_title = _candidate_market_title(candidate)
+    title_score = _market_title_similarity(canonical_title, candidate_title) if canonical_title else 0.0
+    cand_norm_outcomes = {_normalize_market_title_for_resolution(x) for x in _candidate_outcomes(candidate)}
+    shot_norm_outcomes = {_normalize_market_title_for_resolution(x) for x in canonical_outcomes}
+    outcome_overlap = len(cand_norm_outcomes & shot_norm_outcomes) if cand_norm_outcomes and shot_norm_outcomes else 0
+    score = title_score * 0.68
+    if title_score >= 0.94:
+        score = max(score, 0.82)
+    if outcome_overlap:
+        score += min(0.24, 0.08 * outcome_overlap)
+    title_norm = _normalize_market_title_for_resolution(candidate_title)
+    shot_title_norm = _normalize_market_title_for_resolution(canonical_title)
+    if "world cup" in shot_title_norm and "winner" in shot_title_norm and "world cup" in title_norm and "winner" in title_norm and outcome_overlap >= 3:
+        score = max(score, 0.90)
+    if source == "url":
+        score = max(score, 0.94)
+    if _is_market_open(candidate):
+        score += 0.03
+    if category_hint and category_hint.lower() in str(candidate).lower():
+        score += 0.02
+    try:
+        volume = float(str(candidate.get("volume") or candidate.get("volume24hr") or 0).replace(",", ""))
+    except Exception:
+        volume = 0.0
+    if volume > 0:
+        score += 0.01
+    return min(1.0, score), outcome_overlap
+
+
+async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visible: str = "") -> Optional[Dict[str, Any]]:
+    if isinstance(payload_or_title, dict):
+        payload = normalize_polymarket_screenshot_payload(payload_or_title)
+    else:
+        payload = normalize_polymarket_screenshot_payload({"market": payload_or_title, "visible": visible})
+    title = str(payload.get("market_title_canonical") or payload.get("market_title_original") or payload.get("market") or "")
+    visible = str(payload.get("visible") or visible or "")
+    canonical_outcomes = [str(x) for x in (payload.get("outcomes_canonical") or []) if str(x)]
+    visible_url = canonicalize_visible_url(str(payload.get("visible_url_hint") or payload.get("visible_url") or ""))
+    category_hint = str(payload.get("category_canonical") or "")
     logger.info(
-        "live_image_screenshot_market_resolve_attempt title_len=%s visible_len=%s visible_present=%s",
-        len(title or ""),
-        len(visible or ""),
-        bool(visible),
+        "screenshot_market_resolution_started has_visible_url=%s canonical_title=%s canonical_outcomes=%s",
+        bool(visible_url), title[:120], canonical_outcomes[:8],
     )
-    if _is_too_generic_market_title(title) and not _visible_outcome_terms(visible, limit=3):
-        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, 0.0)
+    if _is_too_generic_market_title(title) and len(canonical_outcomes) < 2 and not _visible_outcome_terms(visible, limit=3):
+        logger.info("screenshot_market_resolution_failed reason=%s", "generic_payload")
         return None
 
-    raw_variants = build_polymarket_screenshot_search_variants(title, visible)
-    queries: List[Tuple[str, str]] = []
-    for index, variant in enumerate(raw_variants):
-        _add_unique_query(queries, f"screenshot_{index}", variant)
-
-    if not queries:
-        return await resolve_polymarket_market_from_title(title)
-
-    candidates: List[Dict[str, Any]] = []
+    candidates: List[Tuple[str, Dict[str, Any]]] = []
     seen = set()
-    best_scored: List[Tuple[float, Dict[str, Any]]] = []
-    scoring_title = " ".join(part for part in (title, " ".join(_visible_outcome_terms(visible, limit=5))) if part)
-    for variant, query in queries:
-        logger.info("polymarket_screenshot_resolve_search_variant variant=%s query_len=%s", variant, len(query or ""))
+
+    def add_candidate(source: str, item: Dict[str, Any]) -> None:
+        if not isinstance(item, dict):
+            return
+        key = str(item.get("id") or item.get("conditionId") or item.get("slug") or item.get("eventSlug") or _candidate_market_title(item))
+        if not key or key in seen:
+            return
+        seen.add(key)
+        candidates.append((source, item))
+
+    if visible_url:
+        slug = extract_slug_from_url(visible_url)
+        if slug:
+            direct = get_primary_market_from_url(visible_url if visible_url.startswith("http") else f"https://polymarket.com/event/{slug}")
+            if direct:
+                add_candidate("url", direct)
+            for item in search_markets_by_slug(slug, limit=10):
+                add_candidate("url", item)
+
+    queries: List[Tuple[str, str]] = []
+    for candidate_title in market_title_candidates(title, str(payload.get("ui_language") or "")):
+        _add_unique_query(queries, "canonical_title", candidate_title)
+    for variant in build_polymarket_screenshot_search_variants(title, visible):
+        _add_unique_query(queries, "screenshot", variant)
+    if canonical_outcomes:
+        _add_unique_query(queries, "outcomes", " ".join(canonical_outcomes[:5]))
+
+    for source, query in queries:
+        logger.info("polymarket_screenshot_resolve_search_variant variant=%s query_len=%s", source, len(query or ""))
         for item in _search_events_for_title(query, limit=20) + list_markets(search=query, limit=20):
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item))
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            candidates.append(item)
+            add_candidate(source, item)
 
-        scored = _score_market_candidates(title, candidates)
-        if scoring_title and scoring_title != title:
-            combined_scored = _score_market_candidates(scoring_title, candidates)
-            combined_by_key = {
-                str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item)): score
-                for score, item in combined_scored
-            }
-            rescored = []
-            for score, item in scored:
-                key = str(item.get("id") or item.get("conditionId") or item.get("slug") or _candidate_market_title(item))
-                rescored.append((max(score, combined_by_key.get(key, 0.0)), item))
-            scored = sorted(rescored, key=lambda item: (item[0], 1 if _is_market_open(item[1]) else 0), reverse=True)
-        if scored and (not best_scored or scored[0][0] > best_scored[0][0]):
-            best_scored = scored
-        if scored and scored[0][0] >= 0.82 and not _is_ambiguous_title_match(scored, threshold=0.70):
-            break
-
-    scored = best_scored or _score_market_candidates(title, candidates)
+    scored: List[Tuple[float, int, str, Dict[str, Any]]] = []
+    for source, item in candidates:
+        score, overlap = _screenshot_candidate_score(item, title, canonical_outcomes, category_hint, source)
+        if len(scored) < 10 or score >= 0.65:
+            logger.info(
+                "screenshot_market_candidate_score title=%s score=%.2f outcome_overlap=%s source=%s",
+                _candidate_market_title(item)[:120], score, overlap, source,
+            )
+        scored.append((score, overlap, source, item))
+    scored.sort(key=lambda row: (row[0], row[1], 1 if _is_market_open(row[3]) else 0), reverse=True)
     if not scored:
-        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, 0.0)
+        logger.info("screenshot_market_resolution_failed reason=%s", "no_candidates")
         return None
-
-    best_confidence, best = scored[0]
-    if _is_ambiguous_title_match(scored, threshold=0.70):
-        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
+    best_score, overlap, source, best = scored[0]
+    if best_score < 0.62:
+        logger.info("screenshot_market_resolution_failed reason=%s", "low_score")
         return None
-
-    threshold = 0.70
-    if best_confidence < threshold:
-        logger.info("live_image_screenshot_market_resolve_result found=%s confidence=%s", False, round(float(best_confidence), 4))
-        return None
-
-    resolved = _normalize_resolved_market(best, best_confidence)
-    logger.info(
-        "live_image_screenshot_market_resolve_result found=%s confidence=%s",
-        bool(resolved),
-        round(float(best_confidence), 4),
-    )
+    resolved = _normalize_resolved_market(best, best_score)
+    if resolved:
+        resolved["match_strength"] = "strong" if best_score >= 0.82 else "medium"
+        logger.info(
+            "screenshot_market_resolved confidence=%s market_id=%s slug=%s",
+            resolved.get("confidence"), resolved.get("market_id"), resolved.get("slug"),
+        )
     return resolved
 
 
