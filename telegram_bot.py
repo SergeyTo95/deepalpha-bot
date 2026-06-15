@@ -762,11 +762,23 @@ def _visible_price_lines_from_items(prices: list, lang: str = "ru") -> list:
     for item in (prices or [])[:8]:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("outcome_original") or item.get("outcome_canonical") or "").strip()
+        name = str(
+            item.get("outcome_original")
+            or item.get("outcome_canonical")
+            or item.get("outcome")
+            or item.get("name")
+            or ""
+        ).strip()
+        raw_probability = item.get("probability")
+        if raw_probability is None:
+            raw_probability = item.get("price")
         try:
-            probability = float(item.get("probability"))
+            probability = float(raw_probability)
         except (TypeError, ValueError):
             continue
+        if 0 < probability <= 1:
+            probability *= 100
+        probability = round(probability, 2)
         if not name:
             continue
         value = int(probability) if probability.is_integer() else probability
@@ -814,13 +826,19 @@ def build_screenshot_only_analysis_text(payload: dict, lang: str = "ru") -> str:
     title = str(payload.get("market_title_original") or payload.get("market_title_canonical") or ("Без названия" if is_ru else "Untitled")).strip()
     prices = [p for p in (payload.get("visible_prices") or []) if isinstance(p, dict)]
     def prob(item):
+        raw_probability = item.get("probability")
+        if raw_probability is None:
+            raw_probability = item.get("price")
         try:
-            return float(item.get("probability"))
+            probability = float(raw_probability)
         except (TypeError, ValueError):
             return -1.0
+        if 0 < probability <= 1:
+            probability *= 100
+        return round(probability, 2)
     ranked = sorted(prices, key=prob, reverse=True)
     visible = "\n".join(_visible_price_lines_from_items(ranked, lang)) or ("• нет видимых цен" if is_ru else "• no visible prices")
-    names = [str(x.get("outcome_original") or x.get("outcome_canonical") or "").strip() for x in ranked]
+    names = [str(x.get("outcome_original") or x.get("outcome_canonical") or x.get("outcome") or x.get("name") or "").strip() for x in ranked]
     probs = [prob(x) for x in ranked]
     top = ", ".join([n for n in names[:4] if n])
     interpretation = ""
@@ -976,6 +994,55 @@ def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> I
         InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK),
     )
     return kb
+
+
+def get_live_screenshot_only_followup_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    is_ru = lang != "en"
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("🔎 Искать ещё раз" if is_ru else "🔎 Search again", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+    kb.add(InlineKeyboardButton("🔗 Как отправить ссылку" if is_ru else "🔗 How to send link", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+    kb.add(
+        InlineKeyboardButton("🧠 Объясни edge", callback_data=LIVE_IMAGE_EXPLAIN_EDGE_CALLBACK),
+        InlineKeyboardButton("⚠️ Риски", callback_data=LIVE_IMAGE_RISKS_CALLBACK),
+    )
+    return kb
+
+
+def _split_telegram_text(text: str, limit: int = 3900) -> list:
+    text = str(text or "")
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    rest = text
+    while rest:
+        if len(rest) <= limit:
+            chunks.append(rest)
+            break
+        cut = rest.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = rest.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    return [chunk for chunk in chunks if chunk]
+
+
+async def _send_or_edit_live_screenshot_only_analysis(callback, text, keyboard):
+    chunks = _split_telegram_text(text)
+    message = callback.message if callback else None
+    if not message:
+        return "answer"
+    if len(chunks) > 1:
+        for idx, chunk in enumerate(chunks):
+            await message.answer(chunk, reply_markup=keyboard if idx == len(chunks) - 1 else None)
+        return "split"
+    try:
+        await message.edit_text(chunks[0], reply_markup=keyboard)
+        return "edit"
+    except Exception:
+        await message.answer(chunks[0], reply_markup=keyboard)
+        return "answer"
 
 def _is_private_callback(callback: types.CallbackQuery) -> bool:
     return bool(callback.message and callback.message.chat and callback.message.chat.type == "private")
@@ -8337,12 +8404,28 @@ async def live_image_educational_callback(callback: types.CallbackQuery):
     if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK:
         uid = callback.from_user.id if callback.from_user else 0
         payload = LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.get(uid) or {}
-        logger.info("live_screenshot_only_analysis_requested user_id=%s has_payload=%s", uid, bool(payload))
-        if not _is_recognized_no_match_payload(payload):
-            await callback.answer()
-            await callback.message.answer("Не вижу сохранённых данных скрина. Отправь скрин ещё раз или пришли ссылку Polymarket.")
+        has_payload = _is_recognized_no_match_payload(payload)
+        logger.info("live_screenshot_only_analysis_requested user_id=%s has_payload=%s", uid, bool(has_payload))
+        try:
+            lang = get_user_lang(uid)
+            if not has_payload:
+                fallback = "Скрин уже устарел. Отправь его ещё раз или нажми поиск по скрину." if lang != "en" else "The screenshot context expired. Please send the screenshot again or search again."
+                if callback.message:
+                    await callback.message.answer(fallback, reply_markup=get_live_screenshot_only_followup_keyboard(lang))
+                return
+            text = build_screenshot_only_analysis_text(payload, lang)
+            logger.info("live_screenshot_only_analysis_text_built user_id=%s text_len=%s", uid, len(text or ""))
+            mode = await _send_or_edit_live_screenshot_only_analysis(callback, text, get_live_screenshot_only_followup_keyboard(lang))
+            logger.info("live_screenshot_only_analysis_sent user_id=%s mode=%s", uid, mode)
             return
-        text = build_screenshot_only_analysis_text(payload, get_user_lang(uid))
+        except Exception:
+            logger.exception("live_screenshot_only_analysis_failed user_id=%s has_payload=%s", uid, bool(has_payload))
+            fallback = "Не удалось показать анализ по скрину. Попробуй отправить скрин ещё раз." if get_user_lang(uid) != "en" else "Could not show the screenshot analysis. Please send the screenshot again."
+            if callback.message:
+                await callback.message.answer(fallback)
+            return
+        finally:
+            await callback.answer()
     elif callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK:
         text = (
             "🔍 Для полного анализа отправь ссылку на рынок Polymarket.\n\n"
@@ -8373,8 +8456,7 @@ async def live_image_educational_callback(callback: types.CallbackQuery):
         )
 
     await callback.answer()
-    reply_markup = get_live_image_keyboard(None, get_user_lang(callback.from_user.id)) if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK and callback.from_user else None
-    await callback.message.answer(text, reply_markup=reply_markup)
+    await callback.message.answer(text)
 
 
 @dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK)
