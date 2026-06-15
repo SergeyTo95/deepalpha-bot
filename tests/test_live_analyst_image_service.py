@@ -600,3 +600,64 @@ def test_screenshot_only_callback_does_not_reference_current_market_context():
     assert "LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT" in handler
     assert "current_market_context" not in handler
     assert "_run_top_analysis_for_user" not in handler
+
+
+def test_screenshot_only_payload_shape_variants_produce_visible_rows():
+    ns = _load_telegram_bot_screenshot_helpers()
+
+    text = ns["build_screenshot_only_analysis_text"](
+        {
+            "market_title_original": "Variant market",
+            "visible_prices": [
+                {"outcome_original": "Испания", "probability": 16.7},
+                {"outcome_canonical": "France", "probability": 16.4},
+                {"outcome": "Portugal", "price": 0.118},
+                {"name": "England", "probability": 9.7},
+                {"name": "Broken"},
+            ],
+        },
+        "ru",
+    )
+
+    assert "Испания — 16.7%" in text
+    assert "France — 16.4%" in text
+    assert "Portugal — 11.8%" in text
+    assert "England — 9.7%" in text
+    assert "Broken" not in text
+
+
+def test_screenshot_only_callback_source_has_robust_send_answer_and_logging():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    handler = source.split("if callback.data == LIVE_ANALYST_SCREENSHOT_ONLY_ANALYSIS_CALLBACK:", 1)[1]
+    handler = handler.split("elif callback.data == LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK", 1)[0]
+    helper = source.split("async def _send_or_edit_live_screenshot_only_analysis", 1)[1]
+    helper = helper.split("def _is_private_callback", 1)[0]
+
+    assert "build_screenshot_only_analysis_text(payload, lang)" in handler
+    assert "live_screenshot_only_analysis_requested user_id=%s has_payload=%s" in handler
+    assert "live_screenshot_only_analysis_text_built user_id=%s text_len=%s" in handler
+    assert "live_screenshot_only_analysis_sent user_id=%s mode=%s" in handler
+    assert "logger.exception(\"live_screenshot_only_analysis_failed user_id=%s has_payload=%s\"" in handler
+    assert "finally:" in handler
+    assert "await callback.answer()" in handler
+    assert "Скрин уже устарел. Отправь его ещё раз или нажми поиск по скрину." in handler
+    assert "Не удалось показать анализ по скрину. Попробуй отправить скрин ещё раз." in handler
+    assert "message.edit_text" in helper
+    assert "message.answer" in helper
+    assert "return \"edit\"" in helper
+    assert "return \"answer\"" in helper
+    assert "return \"split\"" in helper
+
+
+def test_screenshot_only_followup_keyboard_has_no_market_or_premium_buttons():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    keyboard = source.split("def get_live_screenshot_only_followup_keyboard", 1)[1]
+    keyboard = keyboard.split("def _split_telegram_text", 1)[0]
+
+    assert "Искать ещё раз" in keyboard
+    assert "Как отправить ссылку" in keyboard
+    assert "Объясни edge" in keyboard
+    assert "Риски" in keyboard
+    assert "Открыть рынок" not in keyboard
+    assert "Премиум анализ" not in keyboard
+    assert "Разобрать по скрину" not in keyboard
