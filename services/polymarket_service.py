@@ -733,6 +733,102 @@ def _screenshot_title_category_contradiction(payload: Dict[str, Any], candidate:
     return _normalized_outcome_overlap(screenshot_outcomes, _candidate_outcomes(candidate)) < 3
 
 
+
+_OUTRIGHT_TITLE_SIGNALS = (
+    "winner", " win", "champion", "world cup", "finals", "president",
+    "election winner", "победитель", "выиграет",
+)
+_OUTRIGHT_EVENT_SIGNALS = ("world cup", "fifa", "cup", "finals", "election", "president", "champion", "winner", " win")
+_OUTRIGHT_REJECT_CONTEXT = ("rihanna", "gta", "bitcoin", "btc", "crypto", "album")
+
+
+def _payload_visible_price_entities(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    prices = payload.get("visible_prices") if isinstance(payload.get("visible_prices"), list) else []
+    rows: List[Dict[str, Any]] = []
+    original_by_canon: Dict[str, str] = {}
+    for original, canonical in zip(payload.get("outcomes_original") or [], payload.get("outcomes_canonical") or []):
+        if str(canonical).strip():
+            original_by_canon[_normalize_market_title_for_resolution(str(canonical))] = str(original).strip()
+    for item in prices:
+        if not isinstance(item, dict):
+            continue
+        canonical = str(item.get("outcome_canonical") or item.get("canonical") or item.get("outcome") or item.get("name") or "").strip()
+        original = str(item.get("outcome_original") or item.get("original") or canonical).strip()
+        if not canonical:
+            continue
+        try:
+            probability = float(item.get("probability") if item.get("probability") is not None else item.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if 0 < probability <= 1:
+            probability *= 100
+        rows.append({"entity_canonical": canonical, "entity_original": original_by_canon.get(_normalize_market_title_for_resolution(canonical), original), "visible_probability": round(probability, 2)})
+    if rows:
+        return rows
+    # Tests and older payloads may only have outcomes plus a visible string.
+    visible = str(payload.get("visible") or "")
+    canon = [str(x).strip() for x in payload.get("outcomes_canonical") or [] if str(x).strip()]
+    orig = [str(x).strip() for x in payload.get("outcomes_original") or []]
+    for i, entity in enumerate(canon):
+        if re.search(rf"{re.escape(entity)}.*?\d{{1,3}}(?:[.,]\d+)?\s*%", visible, flags=re.IGNORECASE):
+            rows.append({"entity_canonical": entity, "entity_original": orig[i] if i < len(orig) and orig[i] else entity, "visible_probability": None})
+    return rows
+
+
+def _is_entity_like_outcome(value: str) -> bool:
+    text = str(value or "").strip()
+    norm = _normalize_market_title_for_resolution(text)
+    if not norm or norm in {"yes", "no", "other", "none"}:
+        return False
+    tokens = norm.split()
+    return 1 <= len(tokens) <= 4 and any(len(t) >= 3 for t in tokens)
+
+
+def _is_outright_event_screenshot(payload: Dict[str, Any]) -> bool:
+    payload = normalize_polymarket_screenshot_payload(payload or {})
+    title = " ".join(str(payload.get(k) or "") for k in ("market_title_canonical", "market_title_original", "market"))
+    title_norm = " ".join([_normalize_market_title_for_resolution(title), _expand_multilingual_title_terms(title)])
+    if not any(sig.strip() in title_norm or sig in title.lower() for sig in _OUTRIGHT_TITLE_SIGNALS):
+        return False
+    rows = _payload_visible_price_entities(payload)
+    entities = [r["entity_canonical"] for r in rows if _is_entity_like_outcome(r.get("entity_canonical", ""))]
+    return len(set(_normalize_market_title_for_resolution(x) for x in entities)) >= 2
+
+
+def _candidate_title_has_event_context(payload: Dict[str, Any], candidate_title: str) -> bool:
+    cand = _normalize_market_title_for_resolution(candidate_title)
+    expanded_payload = _expand_multilingual_title_terms(str(payload.get("market_title_canonical") or payload.get("market_title_original") or payload.get("market") or ""))
+    shot = " ".join([_normalize_market_title_for_resolution(str(payload.get("market_title_canonical") or payload.get("market_title_original") or payload.get("market") or "")), expanded_payload])
+    if any(bad in cand for bad in _OUTRIGHT_REJECT_CONTEXT) and not any(bad in shot for bad in _OUTRIGHT_REJECT_CONTEXT):
+        return False
+    cand_signals = {sig.strip() for sig in _OUTRIGHT_EVENT_SIGNALS if sig.strip() and sig.strip() in cand}
+    shot_signals = {sig.strip() for sig in _OUTRIGHT_EVENT_SIGNALS if sig.strip() and sig.strip() in shot}
+    if not cand_signals:
+        return False
+    if "world cup" in shot or "fifa" in shot:
+        return bool({"world cup", "fifa", "cup"} & cand_signals)
+    if "election" in shot or "president" in shot:
+        return bool({"election", "president", "winner", "win"} & cand_signals)
+    return bool(cand_signals & shot_signals) or ("winner" in shot and "win" in cand_signals)
+
+
+def _candidate_matches_screenshot_entity(payload: Dict[str, Any], candidate: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    if not _is_outright_event_screenshot(payload):
+        return False, None
+    title = _candidate_market_title(candidate)
+    title_norm = _normalize_market_title_for_resolution(title)
+    if not _candidate_title_has_event_context(payload, title):
+        return False, None
+    if _screenshot_title_category_contradiction(payload, candidate):
+        return False, None
+    for row in _payload_visible_price_entities(normalize_polymarket_screenshot_payload(payload)):
+        entity = str(row.get("entity_canonical") or "").strip()
+        ent_norm = _normalize_market_title_for_resolution(entity)
+        if ent_norm and re.search(rf"(^|\s){re.escape(ent_norm)}(\s|$)", title_norm):
+            return True, entity
+    return False, None
+
+
 def _validate_screenshot_candidate_consistency(
     screenshot_payload: Dict[str, Any],
     candidate: Dict[str, Any],
@@ -835,10 +931,18 @@ async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visib
         scored.append((score, overlap, source, item))
     scored.sort(key=lambda row: (row[0], row[1], 1 if _is_market_open(row[3]) else 0), reverse=True)
     if not scored:
+        bundle = await resolve_outright_event_bundle_from_screenshot(payload)
+        if bundle:
+            logger.info("screenshot_event_bundle_resolved confidence=%s matched=%s", bundle.get("confidence"), bundle.get("matched_entities_count"))
+            return bundle
         logger.info("screenshot_market_resolution_failed reason=%s", "no_candidates")
         return None
     best_score, overlap, source, best = scored[0]
     if best_score < 0.62:
+        bundle = await resolve_outright_event_bundle_from_screenshot(payload)
+        if bundle:
+            logger.info("screenshot_event_bundle_resolved confidence=%s matched=%s", bundle.get("confidence"), bundle.get("matched_entities_count"))
+            return bundle
         logger.info("screenshot_market_resolution_failed reason=%s", "low_score")
         return None
     resolved = _normalize_resolved_market(best, best_score)
@@ -850,6 +954,125 @@ async def resolve_polymarket_market_from_screenshot(payload_or_title: Any, visib
         )
     return resolved
 
+
+
+def _event_bundle_search_queries(payload: Dict[str, Any]) -> List[str]:
+    title = str(payload.get("market_title_canonical") or payload.get("market_title_original") or payload.get("market") or "")
+    expanded = _expand_multilingual_title_terms(title) or title
+    title_norm = _normalize_market_title_for_resolution(expanded)
+    event_core = "2026 FIFA World Cup" if "world cup" in title_norm else " ".join(_market_title_tokens(expanded)[:5])
+    queries: List[str] = []
+    def add(q: str) -> None:
+        q = re.sub(r"\s+", " ", (q or "").strip())
+        if q and _normalize_market_title_for_resolution(q) not in {_normalize_market_title_for_resolution(x) for x in queries}:
+            queries.append(q)
+    for row in _payload_visible_price_entities(payload):
+        entity = row.get("entity_canonical") or ""
+        add(f"Will {entity} win the {event_core}?" if event_core else str(entity))
+        add(f"{entity} {event_core}".strip())
+        add(f"{entity} World Cup winner")
+    add(f"{event_core} winner" if event_core else expanded)
+    add("World Cup winner" if "world cup" in title_norm else expanded)
+    return queries[:16]
+
+
+def _candidate_current_probability(candidate: Dict[str, Any]) -> Optional[float]:
+    prices = candidate.get("outcomePrices") or candidate.get("outcome_prices")
+    opts = _candidate_outcomes(candidate)
+    try:
+        vals = _normalize_options(prices)
+        if vals:
+            idx = 0
+            norm_opts = [_normalize_market_title_for_resolution(x) for x in opts]
+            if "yes" in norm_opts:
+                idx = norm_opts.index("yes")
+            prob = float(vals[idx])
+            if 0 < prob <= 1:
+                prob *= 100
+            return round(prob, 2)
+    except Exception:
+        return None
+    return None
+
+
+def _candidate_event_url(candidate: Dict[str, Any]) -> str:
+    event_slug = str(candidate.get("eventSlug") or candidate.get("event_slug") or "")
+    event = candidate.get("event") if isinstance(candidate.get("event"), dict) else {}
+    if not event_slug and event:
+        event_slug = str(event.get("slug") or "")
+    if event_slug:
+        return f"https://polymarket.com/event/{_clean_slug(event_slug)}"
+    raw_url = str(candidate.get("url") or candidate.get("marketUrl") or candidate.get("market_url") or "")
+    return raw_url if _is_polymarket_event_url(raw_url) else ""
+
+
+async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = normalize_polymarket_screenshot_payload(payload or {})
+    if not _is_outright_event_screenshot(payload):
+        return None
+    rows_by_entity = {_normalize_market_title_for_resolution(r["entity_canonical"]): r for r in _payload_visible_price_entities(payload)}
+    seen = set()
+    matches: Dict[str, Dict[str, Any]] = {}
+    for query in _event_bundle_search_queries(payload):
+        for item in _search_events_for_title(query, limit=20) + list_markets(search=query, limit=20):
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("markets") if isinstance(item.get("markets"), list) else [item]
+            for candidate in nested:
+                if not isinstance(candidate, dict):
+                    continue
+                if item is not candidate and item.get("slug") and not candidate.get("eventSlug"):
+                    candidate = dict(candidate)
+                    candidate["eventSlug"] = item.get("slug")
+                key = str(candidate.get("id") or candidate.get("conditionId") or candidate.get("slug") or _candidate_market_title(candidate))
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                ok, entity = _candidate_matches_screenshot_entity(payload, candidate)
+                if not ok or not entity or not _is_market_open(candidate):
+                    continue
+                ent_key = _normalize_market_title_for_resolution(entity)
+                row = rows_by_entity.get(ent_key, {"entity_canonical": entity, "entity_original": entity, "visible_probability": None})
+                market_url = build_market_url(candidate)
+                matches.setdefault(ent_key, {
+                    "entity_original": row.get("entity_original") or entity,
+                    "entity_canonical": entity,
+                    "visible_probability": row.get("visible_probability"),
+                    "candidate_title": _candidate_market_title(candidate),
+                    "market_id": str(candidate.get("id") or candidate.get("conditionId") or candidate.get("condition_id") or ""),
+                    "market_url": market_url,
+                    "current_probability": _candidate_current_probability(candidate),
+                    "event_url": _candidate_event_url(candidate),
+                })
+    count = len(matches)
+    if count < 2:
+        return None
+    title = str(payload.get("market_title_canonical") or payload.get("market_title_original") or "Event")
+    expanded = _expand_multilingual_title_terms(title)
+    if "world cup" in _normalize_market_title_for_resolution(expanded or title):
+        event_title = "2026 FIFA World Cup Winner"
+    else:
+        event_title = title
+    confidence = "strong" if count >= 3 else "medium"
+    event_urls = [m.get("event_url") for m in matches.values() if m.get("event_url") and _is_polymarket_event_url(m.get("event_url"))]
+    shared_event_url = event_urls[0] if event_urls and all(u == event_urls[0] for u in event_urls) else None
+    return {
+        "type": "event_bundle",
+        "confidence": confidence,
+        "match_strength": confidence,
+        "event_title": event_title,
+        "title": event_title,
+        "market_url": shared_event_url,
+        "url": shared_event_url or "",
+        "markets": list(matches.values()),
+        "matched_entities_count": count,
+        "visible_prices": payload.get("visible_prices") or [],
+        "original_screenshot_title": payload.get("market_title_original") or title,
+    }
+
+
+def _is_polymarket_event_url(url: str) -> bool:
+    return bool(re.match(r"^https://polymarket\.com/event/[a-z0-9][a-z0-9-]+$", str(url or ""), flags=re.IGNORECASE))
 
 def get_market_trend_context(token_id: str) -> Dict[str, Any]:
     if not token_id:
