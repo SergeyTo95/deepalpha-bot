@@ -723,13 +723,19 @@ LIVE_IMAGE_STRONG_MARKET_CONFIDENCE: Dict[int, float] = {}
 LIVE_IMAGE_CANDIDATE_MARKETS: Dict[int, Dict[str, Any]] = {}
 LIVE_IMAGE_SCREENSHOT_RESOLUTION_CONTEXT: Dict[int, Dict[str, str]] = {}
 LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT: Dict[int, Dict[str, Any]] = {}
+LIVE_IMAGE_EVENT_BUNDLE_CONTEXT: Dict[int, Dict[str, Any]] = {}
 
 
 def _live_image_resolved_confidence(resolved_market: dict = None) -> float:
     if not resolved_market:
         return 0.0
+    confidence = resolved_market.get("confidence")
+    if confidence == "strong":
+        return 0.90
+    if confidence == "medium":
+        return 0.75
     try:
-        return float(resolved_market.get("confidence") or 0.0)
+        return float(confidence or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
@@ -861,6 +867,13 @@ def build_screenshot_only_analysis_text(payload: dict, lang: str = "ru") -> str:
         return f"🧠 Анализ по скрину\n\nРынок:\n{title}\n\nВидимые цены:\n{visible}\n\nКак читать:\n• Эти проценты — текущая рыночная оценка вероятности по видимым исходам.\n• Фавориты на скрине: {top or 'не определены'}.\n• Чем выше цена, тем больше рынок оценивает вероятность этого исхода.\n\nЧто можно сказать по скрину:\n• По одному скрину нельзя дать финальный EDGE / NO TRADE.\n• Edge появляется только если AI-вероятность заметно отличается от рыночной цены.\n• Для полного анализа нужна ссылка, чтобы проверить все исходы, ликвидность, правила рынка и текущие цены.\n\nПредварительный вывод:\n{interpretation}{lower_note}\n\nДля полного EDGE / NO TRADE отправь ссылку на рынок."
     return f"🧠 Screenshot analysis\n\nMarket:\n{title}\n\nVisible prices:\n{visible}\n\nHow to read it:\n• These percentages are market-implied probabilities for the visible outcomes.\n• Visible leaders: {top or 'not clear'}.\n• The higher the price, the more likely the market considers that outcome.\n\nWhat can be said from the screenshot:\n• A screenshot alone cannot produce a final EDGE / NO TRADE.\n• Edge only exists when AI probability differs meaningfully from market price.\n• Full analysis needs the link to verify all outcomes, liquidity, rules, and current prices.\n\nPreliminary view:\n{interpretation}{lower_note}\n\nSend the market link for full EDGE / NO TRADE analysis."
 
+def _remember_live_image_event_bundle(user_id: int, bundle: dict = None) -> None:
+    if not bundle or bundle.get("type") != "event_bundle":
+        LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.pop(user_id, None)
+        return
+    LIVE_IMAGE_EVENT_BUNDLE_CONTEXT[user_id] = {**bundle, "timestamp": int(time.time())}
+
+
 def _remember_live_image_candidate(user_id: int, resolved_market: dict = None) -> None:
     if not resolved_market or not resolved_market.get("url"):
         LIVE_IMAGE_CANDIDATE_MARKETS.pop(user_id, None)
@@ -876,6 +889,7 @@ def _remember_live_image_candidate(user_id: int, resolved_market: dict = None) -
 def _clear_live_image_market_resolution(user_id: int) -> None:
     LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(user_id, None)
     LIVE_IMAGE_CANDIDATE_MARKETS.pop(user_id, None)
+    LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.pop(user_id, None)
 
 
 def _format_visible_prices_for_notice(resolved_market: dict = None, lang: str = "ru") -> str:
@@ -886,8 +900,37 @@ def _format_visible_prices_for_notice(resolved_market: dict = None, lang: str = 
     return f"\n\n{header}\n" + "\n".join(lines)
 
 
+def _format_event_bundle_lines(bundle: dict, lang: str = "ru") -> str:
+    lines = []
+    for market in (bundle or {}).get("markets", [])[:8]:
+        original = str(market.get("entity_original") or market.get("entity_canonical") or "").strip()
+        canonical = str(market.get("entity_canonical") or original).strip()
+        prob = market.get("visible_probability")
+        try:
+            prob_f = float(prob)
+            prob_s = str(int(prob_f)) if prob_f.is_integer() else str(prob_f).rstrip("0").rstrip(".")
+            prefix = f"{original} — {prob_s}%"
+        except (TypeError, ValueError):
+            prefix = original
+        if lang != "en":
+            lines.append(f"• {prefix} → найден рынок {canonical}")
+        else:
+            lines.append(f"• {prefix} → found {canonical} market")
+    return "\n".join(lines)
+
+
 def format_live_image_resolution_notice(resolved_market: dict = None, lang: str = "ru") -> str:
     is_ru = lang != "en"
+    if resolved_market and resolved_market.get("type") == "event_bundle":
+        title = str(resolved_market.get("event_title") or resolved_market.get("title") or "Event").strip()[:300]
+        lines = _format_event_bundle_lines(resolved_market, "ru" if is_ru else "en")
+        if resolved_market.get("confidence") == "medium":
+            if is_ru:
+                return f"Похоже, я нашёл связанные рынки для этого события:\n{title}\n\nСовпало:\n" + "\n".join(f"• {m.get('entity_canonical')}" for m in (resolved_market.get('markets') or [])[:8]) + "\n\nНо совпадение не полное. Подтвердить?"
+            return f"I found related markets for this event:\n{title}\n\nMatched:\n" + "\n".join(f"• {m.get('entity_canonical')}" for m in (resolved_market.get('markets') or [])[:8]) + "\n\nThe match is incomplete. Confirm?"
+        if is_ru:
+            return f"✅ Я нашёл связанное событие на Polymarket:\n{title}\n\nВидимые рынки:\n{lines}\n\nЭто выглядит как event/outright рынок: Polymarket может хранить каждый исход как отдельный Yes/No рынок.\n\nЧто запустить?"
+        return f"✅ I found a related Polymarket event:\n{title}\n\nVisible markets:\n{lines}\n\nThis looks like an event/outright market: Polymarket may store each outcome as a separate Yes/No market.\n\nWhat should I run?"
     if not resolved_market or not resolved_market.get("title"):
         recognized_title = str((resolved_market or {}).get("recognized_title") or "").strip()[:300]
         prices = _format_visible_prices_for_notice(resolved_market, "ru" if is_ru else "en") if resolved_market else ""
@@ -967,7 +1010,21 @@ def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> I
     open_label = "🔗 Открыть рынок" if is_ru else "🔗 Open market"
     retry = "🔎 Искать ещё раз" if is_ru else "🔎 Search again"
     search_other = "🔎 Искать другой" if is_ru else "🔎 Search another"
-    if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
+    if resolved_market and resolved_market.get("type") == "event_bundle":
+        if resolved_market.get("confidence") == "strong":
+            kb.add(InlineKeyboardButton("⚡ Быстрый анализ события" if is_ru else "⚡ Quick event analysis", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK))
+            kb.add(InlineKeyboardButton("💎 Премиум анализ события" if is_ru else "💎 Premium event analysis", callback_data=LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK))
+            if resolved_market.get("market_url") and _is_polymarket_url(resolved_market.get("market_url")):
+                kb.add(InlineKeyboardButton("🔗 Открыть событие" if is_ru else "🔗 Open event", url=resolved_market.get("market_url")))
+            else:
+                kb.add(InlineKeyboardButton("🔗 Список найденных рынков" if is_ru else "🔗 Found markets list", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+            kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+        else:
+            kb.add(InlineKeyboardButton("✅ Да, анализировать событие" if is_ru else "✅ Yes, analyze event", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK))
+            kb.add(InlineKeyboardButton("🔗 Показать найденные рынки" if is_ru else "🔗 Show found markets", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+            kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+            kb.add(InlineKeyboardButton("🔗 Как отправить ссылку" if is_ru else "🔗 How to send link", callback_data=LIVE_IMAGE_FULL_ANALYSIS_HELP_CALLBACK))
+    elif resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
         # Backward-compatible source marker: InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
         # Backward-compatible source marker: Открыть рынок
         # Backward-compatible source marker: InlineKeyboardButton("🔗 Открыть рынок", url=resolved_market.get("url"))
@@ -1007,6 +1064,29 @@ def get_live_screenshot_only_followup_keyboard(lang: str = "ru") -> InlineKeyboa
     )
     return kb
 
+
+
+def _build_event_bundle_quick_analysis_text(bundle: dict, lang: str = "ru") -> str:
+    is_ru = lang != "en"
+    title = str(bundle.get("event_title") or bundle.get("title") or "Event")
+    rows = []
+    for m in (bundle.get("markets") or [])[:4]:
+        entity = str(m.get("entity_canonical") or "")
+        visible = m.get("visible_probability")
+        current = m.get("current_probability")
+        try:
+            visible_s = f"{float(visible):g}%"
+        except (TypeError, ValueError):
+            visible_s = "n/a"
+        try:
+            current_s = f"{float(current):g}%"
+        except (TypeError, ValueError):
+            current_s = "n/a"
+        rows.append(f"• {entity}: screenshot {visible_s} / Polymarket Yes {current_s}")
+    body = "\n".join(rows) or ("• Нет данных" if is_ru else "• No data")
+    if is_ru:
+        return f"🧠 Предварительный event-level analysis\n\nСобытие: {title}\n\n{body}\n\nЭто не single-market EDGE-вызов: каждый исход хранится отдельным Yes/No рынком. Без полного per-market контекста вывод безопасный: NO TRADE / наблюдать."
+    return f"🧠 Preliminary event-level analysis\n\nEvent: {title}\n\n{body}\n\nThis is not a single-market EDGE call: each outcome is a separate Yes/No market. Without full per-market context, the safe view is NO TRADE / watch."
 
 def _split_telegram_text(text: str, limit: int = 3900) -> list:
     text = str(text or "")
@@ -8329,7 +8409,15 @@ async def live_image_handler(message: types.Message, state: FSMContext):
             except Exception as exc:
                 logger.warning("live_image_market_resolve_failed user_id=%s reason=%s", uid, type(exc).__name__)
                 resolved_market = None
-        if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
+        if resolved_market and resolved_market.get("type") == "event_bundle" and _is_live_image_strong_market_match(resolved_market):
+            LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+            _remember_live_image_event_bundle(uid, resolved_market)
+            LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
+        elif resolved_market and resolved_market.get("type") == "event_bundle" and _is_live_image_medium_market_match(resolved_market):
+            LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
+            _remember_live_image_event_bundle(uid, resolved_market)
+            LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT.pop(uid, None)
+        elif resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
             session = update_current_market_context(
                 session,
                 market_url=resolved_market.get("url") or "",
@@ -8492,6 +8580,18 @@ async def live_image_retry_market_resolution_callback(callback: types.CallbackQu
         logger.warning("live_image_market_retry_resolve_failed user_id=%s reason=%s", uid, type(exc).__name__)
         resolved_market = None
 
+    if resolved_market and resolved_market.get("type") == "event_bundle" and _is_live_image_strong_market_match(resolved_market):
+        LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(resolved_market)
+        _remember_live_image_event_bundle(uid, resolved_market)
+        await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
+        return
+
+    if resolved_market and resolved_market.get("type") == "event_bundle" and _is_live_image_medium_market_match(resolved_market):
+        LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.pop(uid, None)
+        _remember_live_image_event_bundle(uid, resolved_market)
+        await callback.message.answer(format_live_image_resolution_notice(resolved_market, get_user_lang(uid)), reply_markup=get_live_image_keyboard(resolved_market, get_user_lang(uid)))
+        return
+
     if resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
         session = update_current_market_context(
             session,
@@ -8543,6 +8643,13 @@ async def live_image_confirm_candidate_analysis_callback(callback: types.Callbac
         await callback.message.answer("🧠 Включи Live Analyst, чтобы продолжить разбор.")
         return
 
+    bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
+    if bundle.get("type") == "event_bundle" and _live_image_resolved_confidence(bundle) >= LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD:
+        LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(bundle)
+        await callback.answer("Запускаю event-анализ…")
+        await callback.message.answer(_build_event_bundle_quick_analysis_text(bundle, get_user_lang(uid)))
+        return
+
     candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
     candidate_url = (candidate.get("url") or "").strip()
     candidate_confidence = _live_image_resolved_confidence(candidate)
@@ -8574,6 +8681,12 @@ async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery
     uid = callback.from_user.id
     lang = get_user_lang(uid)
     session = get_live_analyst_active_session(uid)
+    bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
+    if bundle.get("type") == "event_bundle":
+        await callback.answer()
+        names = ", ".join(str(m.get("entity_canonical") or "") for m in (bundle.get("markets") or [])[:4])
+        await callback.message.answer(("Премиум-анализ для события пока требует выбрать один Yes/No рынок. Найденные рынки: " if lang == "ru" else "Premium event analysis currently requires selecting one Yes/No market. Found markets: ") + names)
+        return
     candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
     market_url = candidate.get("url") or ((session or {}).get("current_market_url") if LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid, 0) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD else "") or ""
     if not session or not market_url:
@@ -8607,6 +8720,12 @@ async def live_image_run_full_analysis_callback(callback: types.CallbackQuery):
     if not session:
         await callback.answer()
         await callback.message.answer("🧠 Включи Live Analyst, чтобы продолжить разбор.")
+        return
+
+    bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
+    if bundle.get("type") == "event_bundle" and _live_image_resolved_confidence(bundle) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD:
+        await callback.answer("Запускаю event-анализ…")
+        await callback.message.answer(_build_event_bundle_quick_analysis_text(bundle, get_user_lang(uid)))
         return
 
     stored_confidence = LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid)
