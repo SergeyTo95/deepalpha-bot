@@ -661,3 +661,39 @@ def test_screenshot_only_followup_keyboard_has_no_market_or_premium_buttons():
     assert "Открыть рынок" not in keyboard
     assert "Премиум анализ" not in keyboard
     assert "Разобрать по скрину" not in keyboard
+
+
+def test_event_bundle_keyboard_has_event_and_market_list_without_manual_link_cta():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    keyboard = source.split("def get_live_image_keyboard", 1)[1].split("def get_live_screenshot_only_followup_keyboard", 1)[0]
+    event_branch = keyboard.split('if resolved_market and resolved_market.get("type") == "event_bundle":', 1)[1]
+    event_branch = event_branch.split('elif resolved_market and resolved_market.get("url")', 1)[0]
+
+    assert "Открыть событие Polymarket" in event_branch
+    assert "LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK" in event_branch
+    assert "Список найденных рынков" in event_branch
+    assert "Как отправить ссылку" not in event_branch
+
+
+def test_event_bundle_notice_says_bundle_found_not_manual_link():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    notice = source.split("def format_live_image_resolution_notice", 1)[1].split("def get_live_image_keyboard", 1)[0]
+
+    assert "Я нашёл связанное событие и отдельные Yes/No рынки по исходам" in notice
+    assert "Для полного анализа отправь ссылку" not in notice
+
+
+def test_event_bundle_quick_and_premium_callbacks_use_stored_context():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    quick_handler = source.split("async def live_image_run_full_analysis_callback", 1)[1]
+    quick_handler = quick_handler.split("stored_confidence =", 1)[0]
+    premium_handler = source.split("async def live_image_run_premium_analysis_callback", 1)[1]
+    premium_handler = premium_handler.split("candidate = LIVE_IMAGE_CANDIDATE_MARKETS", 1)[0]
+
+    assert "LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid)" in quick_handler
+    assert "_build_event_bundle_quick_analysis_text(bundle" in quick_handler
+    assert "live_screenshot_event_bundle_quick_analysis_started" in quick_handler
+    assert "live_screenshot_event_bundle_quick_analysis_sent" in quick_handler
+    assert "выбери один конкретный Yes/No рынок" in premium_handler
+    assert "Вручную вставлять ссылку не нужно" in premium_handler
+    assert "Отправь ссылку" not in premium_handler

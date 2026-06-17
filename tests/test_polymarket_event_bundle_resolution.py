@@ -72,6 +72,17 @@ def test_event_bundle_strong(monkeypatch):
     assert result["confidence"] == "strong"
     assert result["matched_entities_count"] == 4
     assert [m["visible_probability"] for m in result["markets"]] == [16.7, 16.4, 11.8, 9.7]
+    assert result["event_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
+    assert result["market_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
+    for market in result["markets"]:
+        assert market["entity"]
+        assert market["outcome_name"]
+        assert market["candidate_title"].startswith("Will ")
+        assert market["candidate_slug"].startswith("will-")
+        assert market["market_url"].startswith("https://polymarket.com/market/")
+        assert market["current_probability"] == 15.0
+        assert market["event_slug"] == "2026-fifa-world-cup-winner"
+        assert market["event_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
 
 
 def test_event_bundle_medium(monkeypatch):

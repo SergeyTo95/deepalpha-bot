@@ -995,15 +995,30 @@ def _candidate_current_probability(candidate: Dict[str, Any]) -> Optional[float]
     return None
 
 
-def _candidate_event_url(candidate: Dict[str, Any]) -> str:
+def _candidate_event_slug(candidate: Dict[str, Any]) -> str:
     event_slug = str(candidate.get("eventSlug") or candidate.get("event_slug") or "")
     event = candidate.get("event") if isinstance(candidate.get("event"), dict) else {}
     if not event_slug and event:
         event_slug = str(event.get("slug") or "")
+    return _clean_slug(event_slug) if event_slug else ""
+
+
+def _candidate_event_url(candidate: Dict[str, Any]) -> str:
+    event_slug = _candidate_event_slug(candidate)
     if event_slug:
-        return f"https://polymarket.com/event/{_clean_slug(event_slug)}"
+        return f"https://polymarket.com/event/{event_slug}"
     raw_url = str(candidate.get("url") or candidate.get("marketUrl") or candidate.get("market_url") or "")
     return raw_url if _is_polymarket_event_url(raw_url) else ""
+
+
+def _candidate_market_url(candidate: Dict[str, Any]) -> str:
+    raw_url = str(candidate.get("url") or candidate.get("marketUrl") or candidate.get("market_url") or "")
+    if raw_url.startswith("https://polymarket.com"):
+        return raw_url
+    slug = _clean_slug(str(candidate.get("slug") or ""))
+    if slug:
+        return f"https://polymarket.com/market/{slug}"
+    return build_market_url(candidate)
 
 
 async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1033,16 +1048,23 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
                     continue
                 ent_key = _normalize_market_title_for_resolution(entity)
                 row = rows_by_entity.get(ent_key, {"entity_canonical": entity, "entity_original": entity, "visible_probability": None})
-                market_url = build_market_url(candidate)
+                event_slug = _candidate_event_slug(candidate)
+                event_url = _candidate_event_url(candidate)
+                market_slug = _clean_slug(str(candidate.get("slug") or ""))
+                market_url = _candidate_market_url(candidate)
                 matches.setdefault(ent_key, {
+                    "entity": entity,
+                    "outcome_name": row.get("entity_original") or entity,
                     "entity_original": row.get("entity_original") or entity,
                     "entity_canonical": entity,
                     "visible_probability": row.get("visible_probability"),
                     "candidate_title": _candidate_market_title(candidate),
+                    "candidate_slug": market_slug,
                     "market_id": str(candidate.get("id") or candidate.get("conditionId") or candidate.get("condition_id") or ""),
                     "market_url": market_url,
                     "current_probability": _candidate_current_probability(candidate),
-                    "event_url": _candidate_event_url(candidate),
+                    "event_slug": event_slug,
+                    "event_url": event_url,
                 })
     count = len(matches)
     if count < 2:
@@ -1055,13 +1077,23 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
         event_title = title
     confidence = "strong" if count >= 3 else "medium"
     event_urls = [m.get("event_url") for m in matches.values() if m.get("event_url") and _is_polymarket_event_url(m.get("event_url"))]
-    shared_event_url = event_urls[0] if event_urls and all(u == event_urls[0] for u in event_urls) else None
+    event_slugs = [m.get("event_slug") for m in matches.values() if m.get("event_slug")]
+    shared_event_url = None
+    if event_urls and len(event_urls) >= 2 and all(u == event_urls[0] for u in event_urls):
+        shared_event_url = event_urls[0]
+    elif event_slugs and len(event_slugs) >= 2 and all(s == event_slugs[0] for s in event_slugs):
+        shared_event_url = f"https://polymarket.com/event/{event_slugs[0]}"
+    if shared_event_url:
+        logger.info("event_bundle_url_validated event_url=%s matched=%s", shared_event_url, count)
+    else:
+        logger.info("event_bundle_url_missing_using_individual_market_urls matched=%s", count)
     return {
         "type": "event_bundle",
         "confidence": confidence,
         "match_strength": confidence,
         "event_title": event_title,
         "title": event_title,
+        "event_url": shared_event_url,
         "market_url": shared_event_url,
         "url": shared_event_url or "",
         "markets": list(matches.values()),
