@@ -670,6 +670,9 @@ def test_event_bundle_keyboard_has_event_and_market_list_without_manual_link_cta
     event_branch = event_branch.split('elif resolved_market and resolved_market.get("url")', 1)[0]
 
     assert "Открыть событие Polymarket" in event_branch
+    assert "event_bundle_event_url_button_sent" in event_branch
+    assert "event_bundle_outcome_links_suppressed" in event_branch
+    assert "market.get(\"market_url\")" not in event_branch
     assert "LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK" in event_branch
     assert "Список найденных рынков" in event_branch
     assert "Как отправить ссылку" not in event_branch
@@ -679,7 +682,9 @@ def test_event_bundle_notice_says_bundle_found_not_manual_link():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
     notice = source.split("def format_live_image_resolution_notice", 1)[1].split("def get_live_image_keyboard", 1)[0]
 
-    assert "Я нашёл связанное событие и отдельные Yes/No рынки по исходам" in notice
+    assert "Я нашёл событие на Polymarket" in notice
+    assert "Ссылка на событие" in notice
+    assert "Найденные связанные Yes/No рынки используются для анализа" in notice
     assert "Для полного анализа отправь ссылку" not in notice
 
 
@@ -696,4 +701,27 @@ def test_event_bundle_quick_and_premium_callbacks_use_stored_context():
     assert "live_screenshot_event_bundle_quick_analysis_sent" in quick_handler
     assert "выбери один конкретный Yes/No рынок" in premium_handler
     assert "Вручную вставлять ссылку не нужно" in premium_handler
+    assert "_event_bundle_outcome_choice_keyboard(bundle" in premium_handler
     assert "Отправь ссылку" not in premium_handler
+
+
+def test_event_bundle_markets_list_is_text_without_url_buttons():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    list_keyboard = source.split("def _event_bundle_markets_keyboard", 1)[1].split("def _event_bundle_outcome_choice_keyboard", 1)[0]
+    list_text = source.split("def _event_bundle_markets_text", 1)[1].split("def _build_event_bundle_quick_analysis_text", 1)[0]
+
+    assert "url=" not in list_keyboard
+    assert "market_url" not in list_keyboard
+    assert "Список найденных рынков" in list_text
+    assert "_format_event_bundle_lines" in list_text
+    assert "отдельные ссылки на исходы не показываются" in list_text
+
+
+def test_premium_event_bundle_outcome_buttons_are_callbacks_not_urls():
+    source = __import__("pathlib").Path("telegram_bot.py").read_text()
+    choice_keyboard = source.split("def _event_bundle_outcome_choice_keyboard", 1)[1].split("def _event_bundle_markets_text", 1)[0]
+
+    assert "callback_data" in choice_keyboard
+    assert "live_img_event_bundle_outcome:" in choice_keyboard
+    assert "url=" not in choice_keyboard
+    assert "market_url" not in choice_keyboard

@@ -930,9 +930,12 @@ def format_live_image_resolution_notice(resolved_market: dict = None, lang: str 
             if is_ru:
                 return f"Похоже, я нашёл связанные рынки для этого события:\n{title}\n\nСовпало:\n" + "\n".join(f"• {m.get('entity_canonical')}" for m in (resolved_market.get('markets') or [])[:8]) + "\n\nНо совпадение не полное. Подтвердить?"
             return f"I found related markets for this event:\n{title}\n\nMatched:\n" + "\n".join(f"• {m.get('entity_canonical')}" for m in (resolved_market.get('markets') or [])[:8]) + "\n\nThe match is incomplete. Confirm?"
+        event_url = str(resolved_market.get("event_url") or "").strip()
         if is_ru:
-            return f"✅ Я нашёл связанное событие и отдельные Yes/No рынки по исходам.\n\nСобытие:\n{title}\n\nВидимые рынки:\n{lines}\n\nЭто event-bundle scan, не один single market.\n\nЧто запустить?"
-        return f"✅ I found a related event and separate Yes/No markets for its outcomes.\n\nEvent:\n{title}\n\nVisible markets:\n{lines}\n\nThis is an event-bundle scan, not one single market.\n\nWhat should I run?"
+            link = f"\n\n🔗 Ссылка на событие:\n{event_url}" if event_url else ""
+            return f"✅ Я нашёл событие на Polymarket:\n{title}{link}\n\nВидимые исходы:\n{lines}\n\nНайденные связанные Yes/No рынки используются для анализа, но открывать нужно общий event-рынок.\n\nЧто запустить?"
+        link = f"\n\n🔗 Event link:\n{event_url}" if event_url else ""
+        return f"✅ I found a Polymarket event:\n{title}{link}\n\nVisible outcomes:\n{lines}\n\nMatched Yes/No markets are used for analysis, but the shared event market should be opened.\n\nWhat should I run?"
     if not resolved_market or not resolved_market.get("title"):
         recognized_title = str((resolved_market or {}).get("recognized_title") or "").strip()[:300]
         prices = _format_visible_prices_for_notice(resolved_market, "ru" if is_ru else "en") if resolved_market else ""
@@ -1018,7 +1021,9 @@ def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> I
             kb.add(InlineKeyboardButton("💎 Премиум анализ события" if is_ru else "💎 Premium event analysis", callback_data=LIVE_IMAGE_RUN_PREMIUM_ANALYSIS_CALLBACK))
             if resolved_market.get("event_url") and _is_polymarket_url(resolved_market.get("event_url")):
                 kb.add(InlineKeyboardButton("🔗 Открыть событие Polymarket" if is_ru else "🔗 Open Polymarket event", url=resolved_market.get("event_url")))
+                logger.info("event_bundle_event_url_button_sent event_url=%s", resolved_market.get("event_url"))
             kb.add(InlineKeyboardButton("🔗 Список найденных рынков" if is_ru else "🔗 Found markets list", callback_data=LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK))
+            logger.info("event_bundle_outcome_links_suppressed matched=%s", len(resolved_market.get("markets") or []))
             kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
         else:
             kb.add(InlineKeyboardButton("✅ Да, анализировать событие" if is_ru else "✅ Yes, analyze event", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK))
@@ -1068,14 +1073,18 @@ def get_live_screenshot_only_followup_keyboard(lang: str = "ru") -> InlineKeyboa
 
 
 def _event_bundle_markets_keyboard(bundle: dict, lang: str = "ru") -> InlineKeyboardMarkup:
-    is_ru = lang != "en"
     kb = InlineKeyboardMarkup(row_width=1)
-    for market in (bundle or {}).get("markets", [])[:12]:
-        url = str(market.get("market_url") or "").strip()
-        if not url or not _is_polymarket_url(url):
-            continue
+    logger.info("event_bundle_outcome_links_suppressed matched=%s", len((bundle or {}).get("markets") or []))
+    return kb
+
+
+def _event_bundle_outcome_choice_keyboard(bundle: dict, lang: str = "ru") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    for idx, market in enumerate((bundle or {}).get("markets", [])[:8]):
         entity = str(market.get("entity_original") or market.get("entity_canonical") or market.get("entity") or "Market").strip()
-        kb.add(InlineKeyboardButton(f"{entity} — " + ("Open market" if is_ru else "Open market"), url=url))
+        if entity:
+            kb.insert(InlineKeyboardButton(entity, callback_data=f"live_img_event_bundle_outcome:{idx}"))
+    logger.info("event_bundle_outcome_links_suppressed matched=%s", len((bundle or {}).get("markets") or []))
     return kb
 
 
@@ -1083,9 +1092,10 @@ def _event_bundle_markets_text(bundle: dict, lang: str = "ru") -> str:
     is_ru = lang != "en"
     title = str((bundle or {}).get("event_title") or (bundle or {}).get("title") or "Event").strip()
     count = len((bundle or {}).get("markets") or [])
+    lines = _format_event_bundle_lines(bundle, lang)
     if is_ru:
-        return f"🔗 Найденные Yes/No рынки\n\nСобытие: {title}\nНайдено рынков: {count}\n\nОткрой нужный рынок кнопкой ниже."
-    return f"🔗 Found Yes/No markets\n\nEvent: {title}\nMatched markets: {count}\n\nOpen a market with the buttons below."
+        return f"🔗 Список найденных рынков\n\nСобытие: {title}\nНайдено рынков: {count}\n\n{lines}\n\nЭто текстовый список: отдельные ссылки на исходы не показываются."
+    return f"🔗 Found markets list\n\nEvent: {title}\nMatched markets: {count}\n\n{lines}\n\nThis is a text list: separate outcome links are not shown."
 
 def _build_event_bundle_quick_analysis_text(bundle: dict, lang: str = "ru") -> str:
     is_ru = lang != "en"
@@ -8727,7 +8737,7 @@ async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery
     if bundle.get("type") == "event_bundle":
         await callback.answer()
         text = ("💎 Премиум анализ события: выбери один конкретный Yes/No рынок из найденных. Вручную вставлять ссылку не нужно." if lang == "ru" else "💎 Premium event analysis: choose one specific matched Yes/No market. You do not need to paste a link manually.")
-        await callback.message.answer(text, reply_markup=_event_bundle_markets_keyboard(bundle, lang))
+        await callback.message.answer(text, reply_markup=_event_bundle_outcome_choice_keyboard(bundle, lang))
         return
     candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
     market_url = candidate.get("url") or ((session or {}).get("current_market_url") if LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid, 0) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD else "") or ""

@@ -1003,12 +1003,28 @@ def _candidate_event_slug(candidate: Dict[str, Any]) -> str:
     return _clean_slug(event_slug) if event_slug else ""
 
 
-def _candidate_event_url(candidate: Dict[str, Any]) -> str:
+def _event_url_from_slug(event_slug: str, locale: str = "") -> str:
+    slug = _clean_slug(event_slug)
+    if not slug:
+        return ""
+    if str(locale or "").lower() == "ru":
+        return f"https://polymarket.com/ru/event/{slug}"
+    return f"https://polymarket.com/event/{slug}"
+
+
+def _candidate_event_url(candidate: Dict[str, Any], locale: str = "") -> str:
     event_slug = _candidate_event_slug(candidate)
     if event_slug:
-        return f"https://polymarket.com/event/{event_slug}"
+        return _event_url_from_slug(event_slug, locale)
     raw_url = str(candidate.get("url") or candidate.get("marketUrl") or candidate.get("market_url") or "")
     return raw_url if _is_polymarket_event_url(raw_url) else ""
+
+
+def _known_outright_event_slug(title: str) -> str:
+    norm = _normalize_market_title_for_resolution(_expand_multilingual_title_terms(str(title or "")) or title)
+    if norm in {"world cup winner", "2026 fifa world cup winner"}:
+        return "world-cup-winner"
+    return ""
 
 
 def _candidate_market_url(candidate: Dict[str, Any]) -> str:
@@ -1026,6 +1042,7 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
     if not _is_outright_event_screenshot(payload):
         return None
     rows_by_entity = {_normalize_market_title_for_resolution(r["entity_canonical"]): r for r in _payload_visible_price_entities(payload)}
+    locale = "ru" if str(payload.get("ui_language") or payload.get("language") or "").lower() == "ru" else ""
     seen = set()
     matches: Dict[str, Dict[str, Any]] = {}
     for query in _event_bundle_search_queries(payload):
@@ -1049,7 +1066,7 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
                 ent_key = _normalize_market_title_for_resolution(entity)
                 row = rows_by_entity.get(ent_key, {"entity_canonical": entity, "entity_original": entity, "visible_probability": None})
                 event_slug = _candidate_event_slug(candidate)
-                event_url = _candidate_event_url(candidate)
+                event_url = _candidate_event_url(candidate, locale)
                 market_slug = _clean_slug(str(candidate.get("slug") or ""))
                 market_url = _candidate_market_url(candidate)
                 matches.setdefault(ent_key, {
@@ -1076,17 +1093,24 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
     else:
         event_title = title
     confidence = "strong" if count >= 3 else "medium"
-    event_urls = [m.get("event_url") for m in matches.values() if m.get("event_url") and _is_polymarket_event_url(m.get("event_url"))]
     event_slugs = [m.get("event_slug") for m in matches.values() if m.get("event_slug")]
     shared_event_url = None
-    if event_urls and len(event_urls) >= 2 and all(u == event_urls[0] for u in event_urls):
-        shared_event_url = event_urls[0]
-    elif event_slugs and len(event_slugs) >= 2 and all(s == event_slugs[0] for s in event_slugs):
-        shared_event_url = f"https://polymarket.com/event/{event_slugs[0]}"
+    shared_event_slug = ""
+    if event_slugs and len(event_slugs) >= 2:
+        slug_counts = {slug: event_slugs.count(slug) for slug in set(event_slugs)}
+        shared_event_slug, shared_count = max(slug_counts.items(), key=lambda item: item[1])
+        if shared_count >= 2:
+            shared_event_url = _event_url_from_slug(shared_event_slug, locale)
+    if not shared_event_url:
+        fallback_slug = _known_outright_event_slug(title)
+        if fallback_slug:
+            shared_event_slug = fallback_slug
+            shared_event_url = _event_url_from_slug(fallback_slug, locale)
+            logger.info("event_bundle_known_title_slug_fallback_used title=%s event_slug=%s", title, fallback_slug)
     if shared_event_url:
-        logger.info("event_bundle_url_validated event_url=%s matched=%s", shared_event_url, count)
+        logger.info("event_bundle_shared_event_url_selected event_url=%s event_slug=%s matched=%s", shared_event_url, shared_event_slug, count)
     else:
-        logger.info("event_bundle_url_missing_using_individual_market_urls matched=%s", count)
+        logger.info("event_bundle_url_missing_no_shared_event_url matched=%s", count)
     return {
         "type": "event_bundle",
         "confidence": confidence,
@@ -1104,7 +1128,7 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
 
 
 def _is_polymarket_event_url(url: str) -> bool:
-    return bool(re.match(r"^https://polymarket\.com/event/[a-z0-9][a-z0-9-]+$", str(url or ""), flags=re.IGNORECASE))
+    return bool(re.match(r"^https://polymarket\.com/(?:[a-z]{2}/)?event/[a-z0-9][a-z0-9-]+$", str(url or ""), flags=re.IGNORECASE))
 
 def get_market_trend_context(token_id: str) -> Dict[str, Any]:
     if not token_id:
