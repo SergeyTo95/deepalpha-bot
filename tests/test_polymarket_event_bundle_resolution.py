@@ -13,6 +13,7 @@ WORLD_CUP_PAYLOAD = {
     "outcomes_original": ["Испания", "Франция", "Португалия", "Англия"],
     "outcomes_canonical": ["Spain", "France", "Portugal", "England"],
     "category_canonical": "Sports · Football",
+    "ui_language": "ru",
     "visible_prices": [
         {"outcome_original": "Испания", "outcome_canonical": "Spain", "probability": 16.7},
         {"outcome_original": "Франция", "outcome_canonical": "France", "probability": 16.4},
@@ -72,8 +73,8 @@ def test_event_bundle_strong(monkeypatch):
     assert result["confidence"] == "strong"
     assert result["matched_entities_count"] == 4
     assert [m["visible_probability"] for m in result["markets"]] == [16.7, 16.4, 11.8, 9.7]
-    assert result["event_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
-    assert result["market_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
+    assert result["event_url"] == "https://polymarket.com/ru/event/2026-fifa-world-cup-winner"
+    assert result["market_url"] == "https://polymarket.com/ru/event/2026-fifa-world-cup-winner"
     for market in result["markets"]:
         assert market["entity"]
         assert market["outcome_name"]
@@ -82,7 +83,7 @@ def test_event_bundle_strong(monkeypatch):
         assert market["market_url"].startswith("https://polymarket.com/market/")
         assert market["current_probability"] == 15.0
         assert market["event_slug"] == "2026-fifa-world-cup-winner"
-        assert market["event_url"] == "https://polymarket.com/event/2026-fifa-world-cup-winner"
+        assert market["event_url"] == "https://polymarket.com/ru/event/2026-fifa-world-cup-winner"
 
 
 def test_event_bundle_medium(monkeypatch):
@@ -116,11 +117,22 @@ def test_single_market_behavior_unchanged(monkeypatch):
     assert result["match_strength"] == "strong"
 
 
-def test_no_invented_event_url_without_shared_event_slug(monkeypatch):
+def test_known_world_cup_title_fallback_uses_russian_event_url(monkeypatch):
     a = _market("Spain"); a.pop("eventSlug"); a.pop("slug")
     b = _market("France"); b.pop("eventSlug"); b.pop("slug")
     monkeypatch.setattr(svc, "_search_events_for_title", lambda *a, **k: [])
     monkeypatch.setattr(svc, "list_markets", lambda *args, **k: [a, b])
     result = asyncio.run(svc.resolve_outright_event_bundle_from_screenshot(WORLD_CUP_PAYLOAD))
+    assert result["event_url"] == "https://polymarket.com/ru/event/world-cup-winner"
+    assert result["market_url"] == "https://polymarket.com/ru/event/world-cup-winner"
+
+
+def test_no_invented_event_url_without_shared_event_slug_for_unknown_title(monkeypatch):
+    payload = {**WORLD_CUP_PAYLOAD, "market_title_original": "Победитель турнира", "market_title_canonical": "Tournament Winner"}
+    a = _market("Spain"); a.pop("eventSlug"); a.pop("slug")
+    b = _market("France"); b.pop("eventSlug"); b.pop("slug")
+    monkeypatch.setattr(svc, "_search_events_for_title", lambda *a, **k: [])
+    monkeypatch.setattr(svc, "list_markets", lambda *args, **k: [a, b])
+    result = asyncio.run(svc.resolve_outright_event_bundle_from_screenshot(payload))
     assert result["market_url"] is None
     assert result["url"] == ""
