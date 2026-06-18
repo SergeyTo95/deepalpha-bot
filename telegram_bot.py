@@ -872,8 +872,23 @@ def _remember_live_image_event_bundle(user_id: int, bundle: dict = None) -> None
     if not bundle or bundle.get("type") != "event_bundle":
         LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.pop(user_id, None)
         return
-    LIVE_IMAGE_EVENT_BUNDLE_CONTEXT[user_id] = {**bundle, "timestamp": int(time.time())}
-    logger.info("live_screenshot_event_bundle_context_stored user_id=%s matched=%s event_url=%s", user_id, bundle.get("matched_entities_count"), bundle.get("event_url") or bundle.get("market_url"))
+    event_url = str(bundle.get("event_url") or bundle.get("market_url") or bundle.get("url") or "").strip()
+    stored = {
+        **bundle,
+        "type": "event_bundle",
+        "event_title": bundle.get("event_title") or bundle.get("title") or "Event",
+        "event_url": event_url,
+        "market_url": event_url,
+        "url": event_url,
+        "original_screenshot_title": bundle.get("original_screenshot_title") or bundle.get("market_title_original") or bundle.get("event_title") or bundle.get("title") or "",
+        "visible_prices": bundle.get("visible_prices") or [],
+        "markets": bundle.get("markets") or [],
+        "ui_language": bundle.get("ui_language") or get_user_lang(user_id),
+        "source": "event_bundle",
+        "timestamp": int(time.time()),
+    }
+    LIVE_IMAGE_EVENT_BUNDLE_CONTEXT[user_id] = stored
+    logger.info("live_screenshot_event_bundle_context_stored event_url=%s matched=%s user_id=%s", event_url, stored.get("matched_entities_count") or len(stored.get("markets") or []), user_id)
 
 
 def _remember_live_image_candidate(user_id: int, resolved_market: dict = None) -> None:
@@ -1022,13 +1037,15 @@ def get_live_image_keyboard(resolved_market: dict = None, lang: str = "ru") -> I
             if resolved_market.get("event_url") and _is_polymarket_url(resolved_market.get("event_url")):
                 kb.add(InlineKeyboardButton("🔗 Открыть событие Polymarket" if is_ru else "🔗 Open Polymarket event", url=resolved_market.get("event_url")))
                 logger.info("event_bundle_event_url_button_sent event_url=%s", resolved_market.get("event_url"))
-            kb.add(InlineKeyboardButton("🔗 Список найденных рынков" if is_ru else "🔗 Found markets list", callback_data=LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK))
             logger.info("event_bundle_outcome_links_suppressed matched=%s", len(resolved_market.get("markets") or []))
-            kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+            kb.add(InlineKeyboardButton("🔍 Искать ещё раз" if is_ru else "🔍 Search again", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
         else:
             kb.add(InlineKeyboardButton("✅ Да, анализировать событие" if is_ru else "✅ Yes, analyze event", callback_data=LIVE_IMAGE_CONFIRM_CANDIDATE_ANALYSIS_CALLBACK))
-            kb.add(InlineKeyboardButton("🔗 Список найденных рынков" if is_ru else "🔗 Found markets list", callback_data=LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK))
-            kb.add(InlineKeyboardButton(retry, callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
+            if resolved_market.get("event_url") and _is_polymarket_url(resolved_market.get("event_url")):
+                kb.add(InlineKeyboardButton("🔗 Открыть событие Polymarket" if is_ru else "🔗 Open Polymarket event", url=resolved_market.get("event_url")))
+                logger.info("event_bundle_event_url_button_sent event_url=%s", resolved_market.get("event_url"))
+            logger.info("event_bundle_outcome_links_suppressed matched=%s", len(resolved_market.get("markets") or []))
+            kb.add(InlineKeyboardButton("🔍 Искать ещё раз" if is_ru else "🔍 Search again", callback_data=LIVE_IMAGE_RETRY_MARKET_RESOLUTION_CALLBACK))
     elif resolved_market and resolved_market.get("url") and _is_live_image_strong_market_match(resolved_market):
         # Backward-compatible source marker: InlineKeyboardButton("🔍 Запустить полный анализ", callback_data=LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
         # Backward-compatible source marker: Открыть рынок
@@ -1116,14 +1133,14 @@ def _build_event_bundle_quick_analysis_text(bundle: dict, lang: str = "ru") -> s
             diff = float(current) - float(visible)
             diff_s = f"{diff:+.2f} п.п." if is_ru else f"{diff:+.2f} pp"
             if abs(diff) >= 3:
-                note = "potential discrepancy / worth reviewing" if not is_ru else "potential discrepancy / стоит проверить"
+                note = "potential discrepancy / worth reviewing" if not is_ru else "расхождение / потенциально стоит проверить"
         except (TypeError, ValueError):
             pass
         rows.append(f"• {entity}: скрин {fmt(visible)} / текущий Yes {fmt(current)} / разница {diff_s} — {note}" if is_ru else f"• {entity}: screenshot {fmt(visible)} / current Yes {fmt(current)} / difference {diff_s} — {note}")
     body = "\n".join(rows) or ("• Нет данных" if is_ru else "• No data")
     count = len(bundle.get("markets") or [])
     if is_ru:
-        return f"🧠 Быстрый анализ события\n\nНайденное событие/bundle: {title}\nСовпавших рынков: {count}\n\n{body}\n\nЭто event-bundle scan, а не single-market анализ. Формулировки нейтральные: potential discrepancy / worth reviewing / no clear discrepancy; это не финансовая рекомендация."
+        return f"🧠 Быстрый анализ события\n\nНайденное событие/bundle: {title}\nСовпавших рынков: {count}\n\n{body}\n\nЭто event-bundle scan, а не single-market анализ. Формулировки нейтральные: расхождение / потенциально стоит проверить / без явного расхождения; это не финансовая рекомендация."
     return f"🧠 Quick event analysis\n\nFound event/bundle: {title}\nMatched markets: {count}\n\n{body}\n\nThis is an event-bundle scan, not a single-market analysis. Wording is neutral: potential discrepancy / worth reviewing / no clear discrepancy; this is not financial advice."
 
 def _split_telegram_text(text: str, limit: int = 3900) -> list:
@@ -8695,11 +8712,16 @@ async def live_image_confirm_candidate_analysis_callback(callback: types.Callbac
 
     bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
     if bundle.get("type") == "event_bundle" and _live_image_resolved_confidence(bundle) >= LIVE_IMAGE_MEDIUM_CONFIDENCE_THRESHOLD:
+        event_url = str(bundle.get("event_url") or "").strip()
+        if not event_url:
+            await callback.answer()
+            await callback.message.answer("Я нашёл событие, но не смог подтвердить ссылку. Попробуй открыть событие или отправить ссылку вручную.")
+            return
         LIVE_IMAGE_STRONG_MARKET_CONFIDENCE[uid] = _live_image_resolved_confidence(bundle)
         await callback.answer("Запускаю event-анализ…")
-        logger.info("live_screenshot_event_bundle_quick_analysis_started user_id=%s matched=%s", uid, bundle.get("matched_entities_count"))
+        logger.info("live_screenshot_event_bundle_quick_analysis_started event_url=%s user_id=%s matched=%s", event_url, uid, bundle.get("matched_entities_count"))
         await callback.message.answer(_build_event_bundle_quick_analysis_text(bundle, get_user_lang(uid)))
-        logger.info("live_screenshot_event_bundle_quick_analysis_sent user_id=%s matched=%s", uid, bundle.get("matched_entities_count"))
+        logger.info("live_screenshot_event_bundle_quick_analysis_sent event_url=%s user_id=%s matched=%s", event_url, uid, bundle.get("matched_entities_count"))
         return
 
     candidate = LIVE_IMAGE_CANDIDATE_MARKETS.get(uid) or {}
@@ -8735,7 +8757,13 @@ async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery
     session = get_live_analyst_active_session(uid)
     bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
     if bundle.get("type") == "event_bundle":
+        event_url = str(bundle.get("event_url") or "").strip()
+        if not event_url:
+            await callback.answer()
+            await callback.message.answer("Я нашёл событие, но не смог подтвердить ссылку. Попробуй открыть событие или отправить ссылку вручную." if lang == "ru" else "I found the event, but could not confirm the link. Try opening the event or send the link manually.")
+            return
         await callback.answer()
+        logger.info("live_screenshot_event_bundle_premium_started event_url=%s user_id=%s matched=%s", event_url, uid, bundle.get("matched_entities_count"))
         text = ("💎 Премиум анализ события: выбери один конкретный Yes/No рынок из найденных. Вручную вставлять ссылку не нужно." if lang == "ru" else "💎 Premium event analysis: choose one specific matched Yes/No market. You do not need to paste a link manually.")
         await callback.message.answer(text, reply_markup=_event_bundle_outcome_choice_keyboard(bundle, lang))
         return
@@ -8758,6 +8786,56 @@ async def live_image_run_premium_analysis_callback(callback: types.CallbackQuery
     await _run_top_analysis_for_user(uid, lang, analysis, callback.message.answer)
 
 
+@dp.callback_query_handler(lambda c: str(c.data or "").startswith("live_img_event_bundle_outcome:"))
+async def live_image_event_bundle_outcome_callback(callback: types.CallbackQuery):
+    if not _is_private_callback(callback):
+        await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
+        return
+    if not callback.from_user or not callback.message:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
+    event_url = str(bundle.get("event_url") or "").strip()
+    if bundle.get("type") != "event_bundle" or not event_url:
+        await callback.answer()
+        await callback.message.answer("Я нашёл событие, но не смог подтвердить ссылку. Попробуй открыть событие или отправить ссылку вручную." if lang == "ru" else "I found the event, but could not confirm the link. Try opening the event or send the link manually.")
+        return
+    try:
+        idx = int(str(callback.data or "").split(":", 1)[1])
+    except (TypeError, ValueError, IndexError):
+        idx = -1
+    markets = bundle.get("markets") or []
+    if idx < 0 or idx >= len(markets):
+        await callback.answer("Исход недоступен" if lang == "ru" else "Outcome unavailable", show_alert=True)
+        return
+    market = markets[idx] or {}
+    outcome = str(market.get("entity_original") or market.get("entity_canonical") or market.get("entity") or "Outcome").strip()
+    logger.info("live_screenshot_event_bundle_premium_outcome_selected event_url=%s outcome=%s user_id=%s", event_url, outcome, uid)
+    visible = market.get("visible_probability")
+    current = market.get("current_probability")
+    def fmt(v):
+        try:
+            return f"{float(v):g}%"
+        except (TypeError, ValueError):
+            return "n/a"
+    if lang == "ru":
+        text = (
+            f"💎 Премиум анализ события\n\nСобытие: {bundle.get('event_title') or 'Event'}\nСсылка: {event_url}\n"
+            f"Выбранный исход: {outcome}\nСкрин: {fmt(visible)}\nТекущий Yes: {fmt(current)}\n\n"
+            "Использую общий event_url и найденные метаданные этого Yes/No рынка. Формулировки остаются нейтральными: расхождение, потенциально стоит проверить, без явного расхождения."
+        )
+    else:
+        text = (
+            f"💎 Premium event analysis\n\nEvent: {bundle.get('event_title') or 'Event'}\nURL: {event_url}\n"
+            f"Selected outcome: {outcome}\nScreenshot: {fmt(visible)}\nCurrent Yes: {fmt(current)}\n\n"
+            "Using the shared event_url and the matched Yes/No metadata for this outcome. Wording remains neutral: discrepancy, potentially worth reviewing, no clear discrepancy."
+        )
+    await callback.answer()
+    await callback.message.answer(text)
+
+
 @dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)
 async def live_image_run_full_analysis_callback(callback: types.CallbackQuery):
     if not _is_private_callback(callback):
@@ -8776,10 +8854,15 @@ async def live_image_run_full_analysis_callback(callback: types.CallbackQuery):
 
     bundle = LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid) or {}
     if bundle.get("type") == "event_bundle" and _live_image_resolved_confidence(bundle) >= LIVE_IMAGE_STRONG_CONFIDENCE_THRESHOLD:
+        event_url = str(bundle.get("event_url") or "").strip()
+        if not event_url:
+            await callback.answer()
+            await callback.message.answer("Я нашёл событие, но не смог подтвердить ссылку. Попробуй открыть событие или отправить ссылку вручную.")
+            return
         await callback.answer("Запускаю event-анализ…")
-        logger.info("live_screenshot_event_bundle_quick_analysis_started user_id=%s matched=%s", uid, bundle.get("matched_entities_count"))
+        logger.info("live_screenshot_event_bundle_quick_analysis_started event_url=%s user_id=%s matched=%s", event_url, uid, bundle.get("matched_entities_count"))
         await callback.message.answer(_build_event_bundle_quick_analysis_text(bundle, get_user_lang(uid)))
-        logger.info("live_screenshot_event_bundle_quick_analysis_sent user_id=%s matched=%s", uid, bundle.get("matched_entities_count"))
+        logger.info("live_screenshot_event_bundle_quick_analysis_sent event_url=%s user_id=%s matched=%s", event_url, uid, bundle.get("matched_entities_count"))
         return
 
     stored_confidence = LIVE_IMAGE_STRONG_MARKET_CONFIDENCE.get(uid)
