@@ -663,18 +663,21 @@ def test_screenshot_only_followup_keyboard_has_no_market_or_premium_buttons():
     assert "Разобрать по скрину" not in keyboard
 
 
-def test_event_bundle_keyboard_has_event_and_market_list_without_manual_link_cta():
+def test_event_bundle_keyboard_has_event_actions_without_market_list_or_manual_link_cta():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
     keyboard = source.split("def get_live_image_keyboard", 1)[1].split("def get_live_screenshot_only_followup_keyboard", 1)[0]
     event_branch = keyboard.split('if resolved_market and resolved_market.get("type") == "event_bundle":', 1)[1]
     event_branch = event_branch.split('elif resolved_market and resolved_market.get("url")', 1)[0]
 
+    assert "Быстрый анализ события" in event_branch
+    assert "Премиум анализ события" in event_branch
     assert "Открыть событие Polymarket" in event_branch
+    assert "🔍 Искать ещё раз" in event_branch
     assert "event_bundle_event_url_button_sent" in event_branch
     assert "event_bundle_outcome_links_suppressed" in event_branch
     assert "market.get(\"market_url\")" not in event_branch
-    assert "LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK" in event_branch
-    assert "Список найденных рынков" in event_branch
+    assert "LIVE_IMAGE_EVENT_BUNDLE_MARKETS_CALLBACK" not in event_branch
+    assert "Список найденных рынков" not in event_branch
     assert "Как отправить ссылку" not in event_branch
 
 
@@ -696,13 +699,15 @@ def test_event_bundle_quick_and_premium_callbacks_use_stored_context():
     premium_handler = premium_handler.split("candidate = LIVE_IMAGE_CANDIDATE_MARKETS", 1)[0]
 
     assert "LIVE_IMAGE_EVENT_BUNDLE_CONTEXT.get(uid)" in quick_handler
+    assert "event_url = str(bundle.get(\"event_url\")" in quick_handler
     assert "_build_event_bundle_quick_analysis_text(bundle" in quick_handler
     assert "live_screenshot_event_bundle_quick_analysis_started" in quick_handler
     assert "live_screenshot_event_bundle_quick_analysis_sent" in quick_handler
+    assert "event_url=%s" in quick_handler
     assert "выбери один конкретный Yes/No рынок" in premium_handler
     assert "Вручную вставлять ссылку не нужно" in premium_handler
     assert "_event_bundle_outcome_choice_keyboard(bundle" in premium_handler
-    assert "Отправь ссылку" not in premium_handler
+    assert "live_screenshot_event_bundle_premium_started" in premium_handler
 
 
 def test_event_bundle_markets_list_is_text_without_url_buttons():
@@ -720,8 +725,11 @@ def test_event_bundle_markets_list_is_text_without_url_buttons():
 def test_premium_event_bundle_outcome_buttons_are_callbacks_not_urls():
     source = __import__("pathlib").Path("telegram_bot.py").read_text()
     choice_keyboard = source.split("def _event_bundle_outcome_choice_keyboard", 1)[1].split("def _event_bundle_markets_text", 1)[0]
+    outcome_handler = source.split("async def live_image_event_bundle_outcome_callback", 1)[1].split("@dp.callback_query_handler(lambda c: c.data == LIVE_IMAGE_RUN_FULL_ANALYSIS_CALLBACK)", 1)[0]
 
     assert "callback_data" in choice_keyboard
     assert "live_img_event_bundle_outcome:" in choice_keyboard
     assert "url=" not in choice_keyboard
     assert "market_url" not in choice_keyboard
+    assert "live_screenshot_event_bundle_premium_outcome_selected" in outcome_handler
+    assert "event_url" in outcome_handler

@@ -1124,6 +1124,8 @@ async def resolve_outright_event_bundle_from_screenshot(payload: Dict[str, Any])
         "matched_entities_count": count,
         "visible_prices": payload.get("visible_prices") or [],
         "original_screenshot_title": payload.get("market_title_original") or title,
+        "ui_language": payload.get("ui_language") or payload.get("language") or "",
+        "source": "event_bundle",
     }
 
 
