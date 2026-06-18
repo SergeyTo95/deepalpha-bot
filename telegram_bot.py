@@ -104,6 +104,7 @@ from services.live_analyst_billing_service import (
     can_user_afford_live_request, get_billing_snapshot, get_live_request_cost,
 )
 from services.live_analyst_image_service import analyze_image_bytes
+from services.live_router_agent import LiveRouterAgent
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
 from services.live_analyst_memory_service import (
     exit_session as exit_live_session, get_or_create_active_session, is_active as is_live_session_active,
@@ -725,7 +726,114 @@ LIVE_IMAGE_CANDIDATE_MARKETS: Dict[int, Dict[str, Any]] = {}
 LIVE_IMAGE_SCREENSHOT_RESOLUTION_CONTEXT: Dict[int, Dict[str, str]] = {}
 LIVE_IMAGE_SCREENSHOT_NO_MATCH_CONTEXT: Dict[int, Dict[str, Any]] = {}
 LIVE_IMAGE_EVENT_BUNDLE_CONTEXT: Dict[int, Dict[str, Any]] = {}
+LIVE_ROUTER_CONTEXT: Dict[int, Dict[str, Any]] = {}
 
+LIVE_ROUTER_CRYPTO_QUICK_CALLBACK = "live_router_crypto_quick"
+LIVE_ROUTER_CRYPTO_PREMIUM_CALLBACK = "live_router_crypto_premium"
+LIVE_ROUTER_CRYPTO_RETRY_CALLBACK = "live_router_crypto_retry"
+LIVE_ROUTER_SPORTS_QUICK_CALLBACK = "live_router_sports_quick"
+LIVE_ROUTER_SPORTS_PREMIUM_CALLBACK = "live_router_sports_premium"
+LIVE_ROUTER_SPORTS_RETRY_CALLBACK = "live_router_sports_retry"
+LIVE_ROUTER_CLARIFY_POLYMARKET_CALLBACK = "live_router_clarify_polymarket"
+LIVE_ROUTER_CLARIFY_CRYPTO_CALLBACK = "live_router_clarify_crypto"
+LIVE_ROUTER_CLARIFY_SPORTS_CALLBACK = "live_router_clarify_sports"
+
+
+
+def _live_router_entity_summary(router_result: Dict[str, Any]) -> str:
+    entities = router_result.get("entities") or {}
+    parts = []
+    if entities.get("asset"):
+        parts.append(str(entities.get("asset")))
+    if entities.get("timeframe"):
+        parts.append(str(entities.get("timeframe")))
+    if entities.get("exchange"):
+        parts.append(str(entities.get("exchange")))
+    if entities.get("teams"):
+        parts.append(" vs ".join(str(team) for team in entities.get("teams") or []))
+    if entities.get("market"):
+        parts.append(f"рынок {entities.get('market')}")
+    if entities.get("odds"):
+        parts.append(f"odds {entities.get('odds')}")
+    if entities.get("score"):
+        parts.append(f"score {entities.get('score')}")
+    return " / ".join(parts) if parts else "ключевые признаки экрана"
+
+
+def get_live_router_crypto_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("⚡ Быстрый crypto-анализ", callback_data=LIVE_ROUTER_CRYPTO_QUICK_CALLBACK))
+    kb.add(InlineKeyboardButton("💎 Премиум crypto-анализ", callback_data=LIVE_ROUTER_CRYPTO_PREMIUM_CALLBACK))
+    kb.add(InlineKeyboardButton("🔍 Искать ещё раз", callback_data=LIVE_ROUTER_CRYPTO_RETRY_CALLBACK))
+    return kb
+
+
+def get_live_router_sports_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("⚡ Быстрый sports-анализ", callback_data=LIVE_ROUTER_SPORTS_QUICK_CALLBACK))
+    kb.add(InlineKeyboardButton("💎 Премиум sports-анализ", callback_data=LIVE_ROUTER_SPORTS_PREMIUM_CALLBACK))
+    kb.add(InlineKeyboardButton("🔍 Искать ещё раз", callback_data=LIVE_ROUTER_SPORTS_RETRY_CALLBACK))
+    return kb
+
+
+def get_live_router_clarification_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📊 Polymarket", callback_data=LIVE_ROUTER_CLARIFY_POLYMARKET_CALLBACK))
+    kb.add(InlineKeyboardButton("₿ Crypto", callback_data=LIVE_ROUTER_CLARIFY_CRYPTO_CALLBACK))
+    kb.add(InlineKeyboardButton("⚽ Sports", callback_data=LIVE_ROUTER_CLARIFY_SPORTS_CALLBACK))
+    return kb
+
+
+def _live_router_source_url(*values: str) -> str:
+    for value in values:
+        match = re.search(r"https?://\S+", value or "")
+        if match:
+            return match.group(0).rstrip(").,]")
+    return ""
+
+
+def _route_live_input(uid: int, user_text: str = "", visible_text: str = "", screenshot_payload: dict = None, source_url: str = "") -> Dict[str, Any]:
+    logger.info("live_router_started user_id=%s", uid)
+    result = LiveRouterAgent().route(
+        user_text=user_text,
+        visible_text=visible_text,
+        screenshot_payload=screenshot_payload or {},
+        source_url=source_url,
+        ui_language=get_user_lang(uid),
+    )
+    logger.info(
+        "live_router_result mode=%s screen_type=%s confidence=%s next_agent=%s",
+        result.get("mode"), result.get("screen_type"), result.get("confidence"), result.get("next_agent"),
+    )
+    return result
+
+
+async def _send_live_router_stub(message: types.Message, uid: int, router_result: Dict[str, Any]) -> bool:
+    mode = router_result.get("mode")
+    if mode == "crypto":
+        LIVE_ROUTER_CONTEXT[uid] = router_result
+        logger.info("live_router_crypto_detected user_id=%s", uid)
+        await message.answer(
+            f"Я распознал crypto live screen. Полный CryptoLiveAgent ещё не подключён. Я вижу: {_live_router_entity_summary(router_result)}. Следующий шаг — подключить crypto-анализ.",
+            reply_markup=get_live_router_crypto_keyboard(),
+        )
+        return True
+    if mode == "sports":
+        LIVE_ROUTER_CONTEXT[uid] = router_result
+        logger.info("live_router_sports_detected user_id=%s", uid)
+        await message.answer(
+            f"Я распознал sports live/odds screen. Полный SportsLiveAgent ещё не подключён. Я вижу: {_live_router_entity_summary(router_result)}. Следующий шаг — подключить live sports-анализ.",
+            reply_markup=get_live_router_sports_keyboard(),
+        )
+        return True
+    if mode == "unknown":
+        LIVE_ROUTER_CONTEXT[uid] = router_result
+        logger.info("live_router_unknown user_id=%s", uid)
+        logger.info("live_router_clarification_requested user_id=%s", uid)
+        await message.answer("Я не уверен, что это: Polymarket, крипта или спорт. Выбери режим:", reply_markup=get_live_router_clarification_keyboard())
+        return True
+    logger.info("live_router_polymarket_passthrough user_id=%s", uid)
+    return False
 
 def _live_image_resolved_confidence(resolved_market: dict = None) -> float:
     if not resolved_market:
@@ -8447,6 +8555,23 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return
     summary = result.get("summary") or ""
+    router_result = _route_live_input(
+        uid,
+        user_text=message.caption or "",
+        visible_text=result.get("visible") or summary,
+        screenshot_payload=result,
+        source_url=_live_router_source_url(message.caption or "", result.get("visible") or "", summary),
+    )
+    if router_result.get("mode") != "polymarket":
+        if not charge_live_request(uid, cost, "live_analyst_image"):
+            logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
+            await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
+            return
+        save_live_message(int(session["id"]), uid, "user", "image", "[image]", image_file_id=file_id, tokens_charged=cost)
+        save_live_message(int(session["id"]), uid, "assistant", "image", summary, tokens_charged=0)
+        update_last_image_summary(int(session["id"]), summary)
+        if await _send_live_router_stub(message, uid, router_result):
+            return
     if not charge_live_request(uid, cost, "live_analyst_image"):
         logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
         await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
@@ -8527,12 +8652,57 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
-    result = process_live_text(uid, message.text or "")
+    text = message.text or ""
+    router_result = _route_live_input(uid, user_text=text, source_url=_live_router_source_url(text))
+    if await _send_live_router_stub(message, uid, router_result):
+        return
+    result = process_live_text(uid, text)
     await message.answer(
         result.get("message") or LIVE_UNAVAILABLE_MESSAGE,
         reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),
     )
 
+
+
+
+@dp.callback_query_handler(lambda c: c.data in {
+    LIVE_ROUTER_CRYPTO_QUICK_CALLBACK,
+    LIVE_ROUTER_CRYPTO_PREMIUM_CALLBACK,
+    LIVE_ROUTER_CRYPTO_RETRY_CALLBACK,
+    LIVE_ROUTER_SPORTS_QUICK_CALLBACK,
+    LIVE_ROUTER_SPORTS_PREMIUM_CALLBACK,
+    LIVE_ROUTER_SPORTS_RETRY_CALLBACK,
+    LIVE_ROUTER_CLARIFY_POLYMARKET_CALLBACK,
+    LIVE_ROUTER_CLARIFY_CRYPTO_CALLBACK,
+    LIVE_ROUTER_CLARIFY_SPORTS_CALLBACK,
+}, state="*")
+async def live_router_callback(callback: types.CallbackQuery):
+    if not _is_private_callback(callback):
+        await callback.answer(LIVE_IMAGE_PRIVATE_CHAT_ALERT, show_alert=True)
+        return
+    data = callback.data or ""
+    if data in {LIVE_ROUTER_CRYPTO_QUICK_CALLBACK, LIVE_ROUTER_CRYPTO_PREMIUM_CALLBACK}:
+        await callback.answer()
+        await callback.message.answer("CryptoLiveAgent ещё не подключён. Следующий PR подключит анализ графика.")
+        return
+    if data in {LIVE_ROUTER_SPORTS_QUICK_CALLBACK, LIVE_ROUTER_SPORTS_PREMIUM_CALLBACK}:
+        await callback.answer()
+        await callback.message.answer("SportsLiveAgent ещё не подключён. Следующий PR подключит live odds-анализ.")
+        return
+    if data in {LIVE_ROUTER_CRYPTO_RETRY_CALLBACK, LIVE_ROUTER_SPORTS_RETRY_CALLBACK}:
+        await callback.answer()
+        await callback.message.answer("Отправь новый скрин, ссылку или текст — я попробую распознать режим ещё раз.")
+        return
+    if data == LIVE_ROUTER_CLARIFY_POLYMARKET_CALLBACK:
+        await callback.answer("Polymarket")
+        await callback.message.answer("Ок, режим Polymarket. Отправь ссылку или скрин Polymarket для Live Analyst.")
+        return
+    if data == LIVE_ROUTER_CLARIFY_CRYPTO_CALLBACK:
+        await callback.answer("Crypto")
+        await callback.message.answer("CryptoLiveAgent ещё не подключён. Следующий PR подключит анализ графика.")
+        return
+    await callback.answer("Sports")
+    await callback.message.answer("SportsLiveAgent ещё не подключён. Следующий PR подключит live odds-анализ.")
 
 
 @dp.callback_query_handler(lambda c: c.data in {
