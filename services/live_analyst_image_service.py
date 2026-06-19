@@ -955,8 +955,12 @@ def _build_nested_screenshot_crops(image_bytes: bytes, mime_type: str) -> List[T
 
 
 def _post_gemini_generate_content(
-    api_key: str, model: str, timeout: int, payload: Dict[str, Any], max_tokens: int, allow_json_mode: bool = True
+    api_key: str, model: str, timeout: int, payload: Dict[str, Any], max_tokens: int, allow_json_mode: bool = True,
+    user_id: int | None = None, access_checked: bool = False
 ) -> Tuple[str, str]:
+    if not access_checked:
+        logger.warning("gemini_call_blocked_access_not_checked user_id=%s", user_id)
+        return "", "access_not_checked"
     compact_prompt = "Extract visible text from this screenshot. Return compact JSON only with screen_type, market, visible, takeaway."
 
     def _post(request_model: str, request_payload: Dict[str, Any]) -> requests.Response:
@@ -1064,19 +1068,25 @@ def _post_gemini_generate_content(
             allow_json_mode,
             thinking_off,
         )
+        logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
         response = _post(request_model, request_payload)
+        logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
         logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
         if thinking_off and _is_unsupported_thinking_config_response(response.status_code, response.text):
             logger.info("live_image_gemini_retry_without_thinking_config")
             thinking_off = False
             request_payload = _build_request(payload, allow_json_mode, thinking_off)
+            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
             response = _post(request_model, request_payload)
+            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
             logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
 
         if response.status_code != 200 and allow_json_mode:
             logger.info("live_image_gemini_json_mode_fallback status=%s", response.status_code)
             no_json_payload = _build_request(payload, False, thinking_off)
+            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
             response = _post(request_model, no_json_payload)
+            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
             logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
 
         text, finish_reason, parsed = _parse_response(response, request_model, allow_json_mode, thinking_off)
@@ -1087,7 +1097,9 @@ def _post_gemini_generate_content(
             logger.info("live_image_gemini_retry_without_json_mode reason=max_tokens_empty")
             no_json_base = _replace_first_prompt_text(payload, compact_prompt)
             no_json_payload = _build_request(no_json_base, False, thinking_off)
+            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
             response = _post(request_model, no_json_payload)
+            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
             logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
             text, finish_reason, parsed = _parse_response(response, request_model, False, thinking_off)
             if parsed:
@@ -1105,16 +1117,16 @@ def _post_gemini_generate_content(
     return best_text, best_finish
 
 
-def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int) -> Tuple[str, str]:
+def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int, user_id: int | None = None, access_checked: bool = False) -> Tuple[str, str]:
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1},
     }
-    return _post_gemini_generate_content(api_key, model, timeout, payload, max_tokens)
+    return _post_gemini_generate_content(api_key, model, timeout, payload, max_tokens, user_id=user_id, access_checked=access_checked)
 
 
 def _extract_polymarket_from_crop_batch(
-    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str
+    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     if not crops:
         return {}
@@ -1131,7 +1143,7 @@ def _extract_polymarket_from_crop_batch(
         parts.append({"text": f"Crop: {label}"})
         parts.append({"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}})
 
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024)
+    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -1140,7 +1152,7 @@ def _extract_polymarket_from_crop_batch(
 
 
 def _extract_polymarket_from_single_crop(
-    api_key: str, model: str, timeout: int, crop: Tuple[str, bytes, str], context_text: str
+    api_key: str, model: str, timeout: int, crop: Tuple[str, bytes, str], context_text: str, user_id: int | None = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     label, crop_bytes, crop_mime = crop
     logger.info("live_image_per_crop_attempt label=%s", label)
@@ -1154,7 +1166,7 @@ def _extract_polymarket_from_single_crop(
         {"text": prompt},
         {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
     ]
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 768)
+    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 768, user_id=user_id, access_checked=access_checked)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -1169,7 +1181,7 @@ def _extract_polymarket_from_single_crop(
     return payload
 
 
-def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str) -> Dict[str, Any]:
+def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False) -> Dict[str, Any]:
     if not crops:
         return {}
 
@@ -1178,11 +1190,11 @@ def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops
     first_batch = [crop for crop in crops if crop[0] in first_labels][:2] or crops[:2]
     second_batch = [crop for crop in crops if crop[0] in second_labels][:2]
 
-    first_payload = _extract_polymarket_from_crop_batch(api_key, model, timeout, first_batch, context_text)
+    first_payload = _extract_polymarket_from_crop_batch(api_key, model, timeout, first_batch, context_text, user_id=user_id, access_checked=access_checked)
     if _is_useful_polymarket_payload(first_payload):
         return first_payload
 
-    second_payload = _extract_polymarket_from_crop_batch(api_key, model, timeout, second_batch, context_text)
+    second_payload = _extract_polymarket_from_crop_batch(api_key, model, timeout, second_batch, context_text, user_id=user_id, access_checked=access_checked)
     batch_payload = _merge_polymarket_payloads(first_payload, second_payload) if second_payload else first_payload
     if _is_useful_polymarket_payload(batch_payload):
         batch_payload["_source"] = "crop_batch"
@@ -1192,7 +1204,7 @@ def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops
     focused_crops = [crop for label in focused_order for crop in crops if crop[0] == label][:4]
     merged_payload = batch_payload or {}
     for crop in focused_crops:
-        crop_payload = _extract_polymarket_from_single_crop(api_key, model, timeout, crop, context_text)
+        crop_payload = _extract_polymarket_from_single_crop(api_key, model, timeout, crop, context_text, user_id=user_id, access_checked=access_checked)
         if not crop_payload:
             continue
         merged_payload = _merge_polymarket_payloads(merged_payload, crop_payload)
@@ -1214,7 +1226,7 @@ def _nested_crop_prompt(context_text: str) -> str:
 
 
 def _extract_polymarket_from_nested_crops(
-    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str
+    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     if not crops:
         return {}
@@ -1226,7 +1238,7 @@ def _extract_polymarket_from_nested_crops(
             {"text": prompt},
             {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
         ]
-        crop_text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024)
+        crop_text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked)
         crop_payload = _extract_json_object(crop_text) or _payload_from_unstructured_vision_text(crop_text)
         if crop_payload:
             crop_payload["_source"] = "nested_crop"
@@ -1249,7 +1261,7 @@ def _extract_polymarket_from_nested_crops(
     return best_payload
 
 
-def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> Tuple[str, str]:
+def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int, user_id: int | None = None, access_checked: bool = False) -> Tuple[str, str]:
     payload = {
         "contents": [{
             "parts": [
@@ -1259,10 +1271,13 @@ def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, ima
         }],
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1},
     }
-    return _post_gemini_generate_content(api_key, model, timeout, payload, max_tokens)
+    return _post_gemini_generate_content(api_key, model, timeout, payload, max_tokens, user_id=user_id, access_checked=access_checked)
 
 
-def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = "") -> Dict[str, str]:
+def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = "", user_id: int | None = None, access_checked: bool = False) -> Dict[str, str]:
+    if not access_checked:
+        logger.warning("gemini_call_blocked_access_not_checked user_id=%s", user_id)
+        return {"ok": False, "error": "access_not_checked"}
     if not image_bytes:
         return {"ok": False, "error": "empty"}
     if len(image_bytes) > get_max_image_size_bytes():
@@ -1313,7 +1328,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         f"{skill_prompt}"
     )
     try:
-        text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 1024)
+        text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 1024, user_id=user_id, access_checked=access_checked)
         full_finish_reason = finish_reason
         full_raw_len = len(text or "")
 
@@ -1350,7 +1365,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                     "and summary. Return JSON only. Keep it compact."
                 )
             second_text, second_finish_reason = _call_gemini_vision(
-                api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 1024
+                api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 1024, user_id=user_id, access_checked=access_checked
             )
             second_payload = _extract_json_object(second_text) or _payload_from_unstructured_vision_text(second_text)
             second_is_polymarket = _is_polymarket_payload(second_payload, second_text, context_text)
@@ -1389,7 +1404,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
             if crops:
                 useful_before = _is_useful_polymarket_payload(payload)
                 logger.info("live_image_crop_extraction_attempted useful_before=%s", useful_before)
-                crop_payload = _extract_polymarket_from_crops(api_key, model, timeout, crops[:6], context_text)
+                crop_payload = _extract_polymarket_from_crops(api_key, model, timeout, crops[:6], context_text, user_id=user_id, access_checked=access_checked)
                 logger.info(
                     "live_image_crop_payload market_present=%s visible_len=%s useful=%s confidence=%s",
                     bool(_payload_text(crop_payload, "market", "title", "event")),
@@ -1427,7 +1442,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
             )
             nested_improved = False
             nested_source = ""
-            nested_payload = _extract_polymarket_from_nested_crops(api_key, model, timeout, nested_crops, context_text)
+            nested_payload = _extract_polymarket_from_nested_crops(api_key, model, timeout, nested_crops, context_text, user_id=user_id, access_checked=access_checked)
             nested_is_polymarket = _is_polymarket_payload(nested_payload, json.dumps(nested_payload, ensure_ascii=False), context_text)
             if nested_is_polymarket:
                 if _is_useful_polymarket_payload(nested_payload):
@@ -1451,7 +1466,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
                         inner_crops = _build_polymarket_vision_crops(best_nested_crop[1], best_nested_crop[2])
                         inner_labels = [label for label, _crop_bytes, _crop_mime in inner_crops[:6]]
                         logger.info("live_image_crops_built count=%s labels=%s", len(inner_crops), inner_labels)
-                        inner_payload = _extract_polymarket_from_crops(api_key, model, timeout, inner_crops[:6], context_text)
+                        inner_payload = _extract_polymarket_from_crops(api_key, model, timeout, inner_crops[:6], context_text, user_id=user_id, access_checked=access_checked)
                         logger.info(
                             "live_image_nested_crop_payload screen_type=%s market_present=%s visible_len=%s useful=%s",
                             inner_payload.get("screen_type") or inner_payload.get("type") or "",

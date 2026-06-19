@@ -792,7 +792,7 @@ def set_setting(key: str, value: str) -> None:
 # USERS
 # ═══════════════════════════════════════════
 
-def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: Optional[int] = None) -> None:
+def ensure_user(user_id: int, username: str = "", first_name: str = "", referred_by: Optional[int] = None, source: str = "unknown") -> None:
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -827,6 +827,7 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
                 """, (referred_by,))
 
         conn.commit()
+        print(f"user_registered_or_updated user_id={user_id} source={source}")
     except Exception as e:
         print(f"ensure_user error: {e}")
     finally:
@@ -4097,6 +4098,18 @@ def _init_live_analyst_tables(cursor) -> None:
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS live_analyst_usage (
+        user_id BIGINT NOT NULL,
+        usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        gemini_vision_calls INTEGER NOT NULL DEFAULT 0,
+        live_analyst_calls INTEGER NOT NULL DEFAULT 0,
+        last_call_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (user_id, usage_date)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_analyst_usage_date ON live_analyst_usage(usage_date)")
+
     defaults = [
         ("live_enabled", "true"),
         ("text_request_cost", "1"),
@@ -4308,6 +4321,50 @@ def count_live_analyst_messages_today(user_id: int, role: Optional[str] = None) 
         conn.close()
 
 
+
+
+def count_live_analyst_usage_today(user_id: int) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        SELECT gemini_vision_calls FROM live_analyst_usage
+        WHERE user_id = %s AND usage_date = CURRENT_DATE
+        """, (user_id,))
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"count_live_analyst_usage_today error: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def record_live_analyst_usage(user_id: int, gemini_vision_calls: int = 1, live_analyst_calls: int = 1) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_live_analyst_tables(conn, cursor)
+        cursor.execute("""
+        INSERT INTO live_analyst_usage (user_id, usage_date, gemini_vision_calls, live_analyst_calls, last_call_at)
+        VALUES (%s, CURRENT_DATE, %s, %s, NOW())
+        ON CONFLICT (user_id, usage_date) DO UPDATE SET
+            gemini_vision_calls = live_analyst_usage.gemini_vision_calls + EXCLUDED.gemini_vision_calls,
+            live_analyst_calls = live_analyst_usage.live_analyst_calls + EXCLUDED.live_analyst_calls,
+            last_call_at = NOW()
+        RETURNING gemini_vision_calls
+        """, (user_id, int(gemini_vision_calls or 0), int(live_analyst_calls or 0)))
+        row = cursor.fetchone()
+        conn.commit()
+        calls_today = int(row[0]) if row else 0
+        print(f"gemini_usage_recorded user_id={user_id} calls_today={calls_today}")
+        return calls_today
+    except Exception as e:
+        print(f"record_live_analyst_usage error: {e}")
+        raise
+    finally:
+        conn.close()
 
 def get_live_analyst_stats() -> Dict[str, Any]:
     conn = get_connection()

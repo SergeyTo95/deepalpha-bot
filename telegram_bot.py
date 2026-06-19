@@ -104,6 +104,7 @@ from services.live_analyst_billing_service import (
     can_user_afford_live_request, get_billing_snapshot, get_live_request_cost,
 )
 from services.live_analyst_image_service import analyze_image_bytes
+from services.live_analyst_access import can_use_live_analyst
 from services.live_router_agent import LiveRouterAgent
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
 from services.live_analyst_memory_service import (
@@ -114,7 +115,7 @@ from services.live_analyst_memory_service import (
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
 )
-from db.database import count_live_analyst_messages_today, get_live_analyst_active_session
+from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1517,6 +1518,7 @@ def _register_user(message: types.Message, referred_by: int = None):
         username=message.from_user.username or "",
         first_name=message.from_user.first_name or "",
         referred_by=referred_by,
+        source="telegram",
     )
 
 
@@ -8513,6 +8515,17 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     if not is_image_analysis_enabled():
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return
+    access = can_use_live_analyst(uid, getattr(message.from_user, "username", None))
+    if not access.get("allowed"):
+        reason = str(access.get("reason") or "")
+        if reason == "disabled":
+            denial = "🔒 Live Analyst временно доступен только админам."
+        elif reason == "gemini_disabled":
+            denial = "🔒 Gemini Vision временно отключён."
+        else:
+            denial = "🔒 Live Analyst сейчас доступен по токенам или лимиту. Gemini-анализ скринов расходует ресурсы, поэтому бесплатный лимит исчерпан."
+        await message.answer(denial, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+        return
     cost = get_live_request_cost("image")
     if not can_user_afford_live_request(uid, cost):
         logger.warning("live_image_blocked_insufficient_tokens user_id=%s cost=%s", uid, cost)
@@ -8544,7 +8557,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         buffer = BytesIO()
         await bot.download_file(tg_file.file_path, buffer)
         image_bytes = buffer.getvalue()
-        result = analyze_image_bytes(image_bytes, mime_type, context_text=build_image_context(session))
+        result = analyze_image_bytes(image_bytes, mime_type, context_text=build_image_context(session), user_id=uid, access_checked=True)
     except Exception:
         result = {"ok": False, "error": "vision_unavailable"}
     try:
@@ -8554,6 +8567,10 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     if not result.get("ok"):
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return
+    try:
+        record_live_analyst_usage(uid)
+    except Exception:
+        logger.exception("gemini_usage_record_failed user_id=%s", uid)
     summary = result.get("summary") or ""
     router_result = _route_live_input(
         uid,
