@@ -136,7 +136,7 @@ def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
     prompt = _build_live_prompt(prompt_session, recent, text)
 
     try:
-        answer = (generate_decision_text(prompt) or "").strip()
+        answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
     except Exception:
         answer = ""
     if not answer:

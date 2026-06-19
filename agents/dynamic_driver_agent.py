@@ -19,7 +19,9 @@ class DynamicDriverAgent:
     def build(self, event_profile: Dict[str, Any], question: str, market_options: List[str]) -> Dict[str, Any]:
         try:
             prompt = self._build_prompt(event_profile=event_profile, question=question, market_options=market_options)
-            raw = generate_decision_text(prompt)
+            raw = generate_decision_text(prompt, feature="dynamic_driver_agent", is_background=True)
+            if not raw:
+                print("dynamic_driver_gemini_skipped reason=blocked_or_empty")
             parsed = self._safe_json_loads(raw)
             if not isinstance(parsed, dict):
                 print("DYNAMIC_DRIVER: invalid JSON payload type")

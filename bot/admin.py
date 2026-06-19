@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from db.database import (
-    get_setting, set_setting,
+    get_setting, set_setting, count_gemini_usage_today,
     get_user, get_all_users, get_users_page, count_users, search_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
     get_user_analyses, get_connection, get_referrals, get_referral_count,
@@ -232,6 +232,31 @@ def bot_moderation_kb(lang: str) -> InlineKeyboardMarkup:
     return kb
 
 
+
+def gemini_budget_diagnostics_text() -> str:
+    features = ["hot_news", "channel_news", "news_agent", "dynamic_driver_agent", "signal_generation"]
+    lines = ["🛡 Gemini budget guard", "", "Gemini usage today:"]
+    try:
+        lines.append(f"total calls: {count_gemini_usage_today()}")
+        lines.append(f"background calls: {count_gemini_usage_today(is_background=True)}")
+        for feature in features:
+            lines.append(f"{feature} calls: {count_gemini_usage_today(feature=feature)}")
+    except Exception as exc:
+        lines.append(f"usage unavailable: {exc}")
+    lines.extend(["", "Active flags:"])
+    for key in [
+        "GEMINI_ENABLED",
+        "GEMINI_DAILY_CALL_LIMIT",
+        "GEMINI_BACKGROUND_DAILY_CALL_LIMIT",
+        "HOT_NEWS_GEMINI_ENABLED",
+        "CHANNEL_NEWS_GEMINI_ENABLED",
+        "NEWS_AGENT_GEMINI_ENABLED",
+        "DYNAMIC_DRIVERS_GEMINI_ENABLED",
+        "SIGNAL_GENERATION_GEMINI_ENABLED",
+    ]:
+        lines.append(f"{key}={os.getenv(key, '')}")
+    return "\n".join(lines)
+
 def ai_menu_kb():
     current = get_setting("active_model", "gemini-2.5-flash")
     top_enabled = get_setting("top_analysis_enabled", "false")
@@ -271,6 +296,7 @@ def ai_menu_kb():
         ),
         InlineKeyboardButton(f"⏱ Timeout: {top_timeout} sec", callback_data="ai_top_set_timeout"),
     )
+    kb.add(InlineKeyboardButton("🛡 Gemini guard", callback_data="ai_gemini_guard"))
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
     return kb
 
@@ -1288,6 +1314,10 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "ai_top_noop")
     async def ai_top_noop(callback: types.CallbackQuery):
         await callback.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "ai_gemini_guard")
+    async def ai_gemini_guard(callback: types.CallbackQuery):
+        await callback.message.edit_text(gemini_budget_diagnostics_text(), reply_markup=ai_menu_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "ai_top_toggle_enabled")
     async def ai_top_toggle_enabled(callback: types.CallbackQuery):
