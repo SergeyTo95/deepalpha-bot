@@ -104,6 +104,7 @@ from services.live_analyst_billing_service import (
     can_user_afford_live_request, get_billing_snapshot, get_live_request_cost,
 )
 from services.live_analyst_image_service import analyze_image_bytes
+from services.live_analyst_access import can_use_live_analyst
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
 from services.live_analyst_memory_service import (
     exit_session as exit_live_session, get_or_create_active_session, is_active as is_live_session_active,
@@ -113,7 +114,7 @@ from services.live_analyst_memory_service import (
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
 )
-from db.database import count_live_analyst_messages_today, get_live_analyst_active_session
+from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1409,6 +1410,7 @@ def _register_user(message: types.Message, referred_by: int = None):
         username=message.from_user.username or "",
         first_name=message.from_user.first_name or "",
         referred_by=referred_by,
+        source="start" if (message.text or "").startswith("/start") else "telegram",
     )
 
 
@@ -8405,8 +8407,17 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     if not is_image_analysis_enabled():
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return
+    access = can_use_live_analyst(uid, message.from_user.username or None)
+    if not access.get("allowed"):
+        logger.warning("gemini_call_blocked_access_denied user_id=%s reason=%s", uid, access.get("reason"))
+        if access.get("reason") == "disabled" and os.getenv("LIVE_ANALYST_ADMIN_ONLY", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            denied_text = "🔒 Live Analyst временно доступен только админам."
+        else:
+            denied_text = "🔒 Live Analyst сейчас доступен только по токенам/лимиту.\nGemini-анализ скринов расходует ресурсы, поэтому бесплатный лимит исчерпан."
+        await message.answer(denied_text, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+        return
     cost = get_live_request_cost("image")
-    if not can_user_afford_live_request(uid, cost):
+    if not access.get("is_admin") and not can_user_afford_live_request(uid, cost) and int(access.get("remaining_free") or 0) <= 0:
         logger.warning("live_image_blocked_insufficient_tokens user_id=%s cost=%s", uid, cost)
         await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
         return
@@ -8436,7 +8447,7 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         buffer = BytesIO()
         await bot.download_file(tg_file.file_path, buffer)
         image_bytes = buffer.getvalue()
-        result = analyze_image_bytes(image_bytes, mime_type, context_text=build_image_context(session))
+        result = analyze_image_bytes(image_bytes, mime_type, context_text=build_image_context(session), user_id=uid, access_checked=True)
     except Exception:
         result = {"ok": False, "error": "vision_unavailable"}
     try:
@@ -8447,10 +8458,15 @@ async def live_image_handler(message: types.Message, state: FSMContext):
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return
     summary = result.get("summary") or ""
-    if not charge_live_request(uid, cost, "live_analyst_image"):
-        logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
-        await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
-        return
+    if not access.get("is_admin") and int(access.get("remaining_free") or 0) <= 0:
+        if not charge_live_request(uid, cost, "live_analyst_image"):
+            logger.warning("live_image_charge_failed_after_analysis user_id=%s cost=%s", uid, cost)
+            await message.answer(INSUFFICIENT_LIVE_TOKENS_MESSAGE)
+            return
+    try:
+        record_live_analyst_usage(uid, 1, 1)
+    except Exception as exc:
+        logger.warning("gemini_usage_record_failed user_id=%s error=%s", uid, type(exc).__name__)
 
     resolved_market = None
     if result.get("screen_type") == "polymarket":

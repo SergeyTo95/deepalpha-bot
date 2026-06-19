@@ -246,7 +246,7 @@ def test_json_mode_fallback_selected_for_max_tokens_empty(monkeypatch):
 
     monkeypatch.setattr(svc.requests, "post", fake_post)
 
-    text, finish = svc._call_gemini_vision("key", "gemini-2.0-flash", 10, "long prompt", b"abc", "image/png", 1024)
+    text, finish = svc._call_gemini_vision("key", "gemini-2.0-flash", 10, "long prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "Tariff 51%" in text
@@ -268,7 +268,7 @@ def test_thinking_config_retry_path_unsupported(monkeypatch):
 
     monkeypatch.setattr(svc.requests, "post", fake_post)
 
-    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024)
+    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "generic" in text
@@ -290,7 +290,7 @@ def test_model_fallback_retries_after_max_tokens_empty(monkeypatch):
 
     monkeypatch.setattr(svc.requests, "post", fake_post)
 
-    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024)
+    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "Health 54%" in text
@@ -733,3 +733,18 @@ def test_premium_event_bundle_outcome_buttons_are_callbacks_not_urls():
     assert "market_url" not in choice_keyboard
     assert "live_screenshot_event_bundle_premium_outcome_selected" in outcome_handler
     assert "event_url" in outcome_handler
+
+
+def test_direct_gemini_helper_blocks_without_access_check(monkeypatch):
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("Gemini should not be called")
+
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+    text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024, user_id=123)
+
+    assert text == ""
+    assert finish == "ACCESS_NOT_CHECKED"
+    assert calls == []
