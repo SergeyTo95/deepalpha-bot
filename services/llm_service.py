@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from services.gemini_budget_guard import can_call_gemini, record_gemini_call
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
@@ -83,7 +84,7 @@ def _call_model_once(prompt: str, model: str, max_tokens: int) -> tuple:
         return "", 0
 
 
-def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
+def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     """
     Вызывает Gemini с retry и fallback.
 
@@ -95,6 +96,12 @@ def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
 
     Если все модели исчерпаны — возвращает "".
     """
+    if not budget_checked:
+        guard = can_call_gemini(feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, admin_override=admin_override)
+        if not guard.get("allowed"):
+            print(f"gemini_call_blocked_by_budget_guard feature={feature} reason={guard.get('reason')} user_id={user_id} chat_id={chat_id} is_background={is_background}")
+            return ""
+
     if not GEMINI_API_KEY:
         print("LLM ERROR: GEMINI_API_KEY not set")
         return ""
@@ -110,6 +117,10 @@ def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
             if status == 200:
                 if attempt > 1:
                     print(f"LLM: success on attempt {attempt} with model={model}")
+                try:
+                    record_gemini_call(feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background)
+                except Exception as exc:
+                    print(f"gemini_usage_record_failed feature={feature} error={exc}")
                 return text
 
             if status == 404:
@@ -137,13 +148,13 @@ def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     return ""
 
 
-def generate_text(prompt: str) -> str:
-    return _call_gemini(prompt, max_tokens=512)
+def generate_text(prompt: str, feature: str = "signal_generation", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+    return _call_gemini(prompt, max_tokens=512, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
 
 
-def generate_decision_text(prompt: str) -> str:
-    return _call_gemini(prompt, max_tokens=1024)
+def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+    return _call_gemini(prompt, max_tokens=1024, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
 
 
-def generate_news_text(prompt: str) -> str:
-    return _call_gemini(prompt, max_tokens=768)
+def generate_news_text(prompt: str, feature: str = "news_agent", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+    return _call_gemini(prompt, max_tokens=768, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)

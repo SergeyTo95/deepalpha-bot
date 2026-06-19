@@ -804,7 +804,9 @@ class NewsAgent:
                 source_filter_reasons=filter_reasons,
         )
 
-        llm_result = generate_news_text(prompt)
+        llm_result = generate_news_text(prompt, feature="news_agent", is_background=True)
+        if not llm_result:
+            print("news_agent_gemini_skipped reason=blocked_or_empty")
         has_twitter = bool(unique_twitter)
 
         if llm_result and not llm_result.lower().startswith("llm service is not configured"):

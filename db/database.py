@@ -59,6 +59,24 @@ def _init_db_inner(conn, cursor):
     )
     """)
 
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS gemini_usage (
+        id SERIAL PRIMARY KEY,
+        usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        feature TEXT NOT NULL,
+        user_id BIGINT NULL,
+        chat_id BIGINT NULL,
+        is_background BOOLEAN NOT NULL DEFAULT FALSE,
+        calls INTEGER NOT NULL DEFAULT 0,
+        units INTEGER NOT NULL DEFAULT 0,
+        last_call_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (usage_date, feature, user_id, chat_id, is_background)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_usage_date ON gemini_usage(usage_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_usage_feature_date ON gemini_usage(feature, usage_date)")
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS opportunities (
         id SERIAL PRIMARY KEY,
@@ -4421,5 +4439,100 @@ def get_live_analyst_stats() -> Dict[str, Any]:
     except Exception as e:
         print(f"get_live_analyst_stats error: {e}")
         return {}
+    finally:
+        conn.close()
+
+_gemini_usage_table_ready = False
+
+
+def _init_gemini_usage_table(cursor) -> None:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS gemini_usage (
+        id SERIAL PRIMARY KEY,
+        usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        feature TEXT NOT NULL,
+        user_id BIGINT NULL,
+        chat_id BIGINT NULL,
+        is_background BOOLEAN NOT NULL DEFAULT FALSE,
+        calls INTEGER NOT NULL DEFAULT 0,
+        units INTEGER NOT NULL DEFAULT 0,
+        last_call_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (usage_date, feature, user_id, chat_id, is_background)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_usage_date ON gemini_usage(usage_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_usage_feature_date ON gemini_usage(feature, usage_date)")
+
+
+def _ensure_gemini_usage_table(conn, cursor) -> None:
+    global _gemini_usage_table_ready
+    if _gemini_usage_table_ready:
+        return
+    try:
+        _init_gemini_usage_table(cursor)
+        conn.commit()
+        _gemini_usage_table_ready = True
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def count_gemini_usage_today(feature: Optional[str] = None, is_background: Optional[bool] = None) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_gemini_usage_table(conn, cursor)
+        clauses = ["usage_date = CURRENT_DATE"]
+        params: List[Any] = []
+        if feature is not None:
+            clauses.append("feature = %s")
+            params.append(feature)
+        if is_background is not None:
+            clauses.append("is_background = %s")
+            params.append(bool(is_background))
+        cursor.execute(f"SELECT COALESCE(SUM(calls), 0) FROM gemini_usage WHERE {' AND '.join(clauses)}", tuple(params))
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"count_gemini_usage_today error: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def record_gemini_usage(feature, user_id=None, chat_id=None, is_background=False, units=1) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _ensure_gemini_usage_table(conn, cursor)
+        cursor.execute("""
+        SELECT id FROM gemini_usage
+        WHERE usage_date = CURRENT_DATE
+          AND feature = %s
+          AND user_id IS NOT DISTINCT FROM %s
+          AND chat_id IS NOT DISTINCT FROM %s
+          AND is_background = %s
+        LIMIT 1
+        """, (feature, user_id, chat_id, bool(is_background)))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("""
+            UPDATE gemini_usage
+            SET calls = calls + 1, units = units + %s, last_call_at = NOW()
+            WHERE id = %s
+            RETURNING calls
+            """, (int(units or 1), existing[0]))
+        else:
+            cursor.execute("""
+            INSERT INTO gemini_usage (usage_date, feature, user_id, chat_id, is_background, calls, units, last_call_at)
+            VALUES (CURRENT_DATE, %s, %s, %s, %s, 1, %s, NOW())
+            RETURNING calls
+            """, (feature, user_id, chat_id, bool(is_background), int(units or 1)))
+        row = cursor.fetchone()
+        conn.commit()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"record_gemini_usage error: {e}")
+        raise
     finally:
         conn.close()
