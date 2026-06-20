@@ -12,8 +12,8 @@ from db.database import (
     get_setting, set_setting, count_gemini_usage_today,
     get_user, get_all_users, get_users_page, count_users, search_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
-    get_user_analyses, get_connection, get_referrals, get_referral_count, get_database_diagnostics,
-    get_top_referrers,
+    get_user_analyses, get_connection, get_referrals, get_referral_count, get_database_diagnostics, get_user_source_diagnostics,
+    get_referral_diagnostics, sync_all_referral_counters, get_top_referrers,
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
     get_accuracy_stats, get_unresolved_predictions,
@@ -146,6 +146,7 @@ def _users_page_kb(shown_limit: int, total: int, users: list, session_id: str, l
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("🔍 Search" if lang == "en" else "🔍 Найти пользователя", callback_data="user_find"))
     kb.add(InlineKeyboardButton("🏆 Top referrers" if lang == "en" else "🏆 Топ рефереров", callback_data="user_top_refs"))
+    kb.add(InlineKeyboardButton("♻️ Sync referral counters" if lang == "en" else "♻️ Sync referral counters", callback_data="user_sync_refs"))
     for u in users:
         name = u.get("username") or u.get("first_name") or str(u["user_id"])
         status = "🚫" if u.get("is_banned") else ("👑" if u.get("is_vip") else "👤")
@@ -488,6 +489,7 @@ def user_kb(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("✏️ Установить баланс", callback_data=f"user_setbal_{user_id}"),
         InlineKeyboardButton("📊 История запросов", callback_data=f"user_history_{user_id}"),
         InlineKeyboardButton("👥 Рефералы юзера", callback_data=f"user_refs_{user_id}"),
+        InlineKeyboardButton("🔍 Диагностика рефов", callback_data=f"user_refdiag_{user_id}"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_users"),
     )
     return kb
@@ -1953,16 +1955,21 @@ def register_admin(dp: Dispatcher):
             shown_limit, total, shown_count,
         )
 
-        diag = get_database_diagnostics()
-        total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
-        shown_text = f"Showing: {shown_count}/{total}" if lang == "en" else f"Показано: {shown_count}/{total}"
-        diag_text = (
-            f"DB users: {diag.get('users_count', total)} | DB referrals: {diag.get('referrals_count', 0)}\n"
-            f"DB: {diag.get('database', 'unknown')}"
+        diag = get_user_source_diagnostics()
+        dbdiag = get_database_diagnostics()
+        project_sources = diag.get("other_user_like_tables", [])
+        project_count = max([total] + [int(t.get("count") or 0) for t in project_sources]) if project_sources else total
+        title = "👥 Users" if lang == "en" else "👥 Пользователи"
+        text = (
+            f"{title}\n\n"
+            f"- Bot users table: {total}\n"
+            f"- Project users source: {project_count}\n"
+            f"- Referral relationships: {dbdiag.get('referrals_count', 0)}\n"
+            f"- Showing: {shown_count}/{total}\n"
+            f"DB: {diag.get('db_identifier_redacted', 'unknown')}"
         )
-        title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await message.edit_text(
-            f"{title}\n\n{total_text}\n{shown_text}\n{diag_text}",
+            text,
             reply_markup=_users_page_kb(shown_limit, total, users, session_id, lang),
         )
 
@@ -2029,10 +2036,25 @@ def register_admin(dp: Dispatcher):
         lines = ["🏆 Топ рефереров\n"]
         for i, r in enumerate(referrers, 1):
             name = r.get("username") or r.get("first_name") or str(r["user_id"])
-            lines.append(f"{i}. @{name} — {r['total_referrals']} | {r['referral_earnings_ton']:.4f} TON")
+            warn = " ⚠️ legacy mismatch" if r.get("legacy_mismatch") else ""
+            balance = r.get("token_balance", 0) or 0
+            lines.append(f"{i}. @{name} — {r['total_referrals']} ({r.get('source_used')}) | {balance} tokens | {r.get('referral_earnings_ton', 0):.4f} TON{warn}")
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "user_sync_refs")
+    async def user_sync_refs(callback: types.CallbackQuery):
+        result = sync_all_referral_counters()
+        msg = (
+            f"♻️ Sync referral counters\n\n"
+            f"Source: {result.get('source')}\n"
+            f"Updated users: {result.get('updated', 0)}\n"
+            f"Cannot reconstruct exact referrals without historical relationship data: {result.get('cannot_reconstruct', 0)}"
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
+        await callback.message.edit_text(msg, reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "user_find")
     async def find_user_start(callback: types.CallbackQuery, state: FSMContext):
@@ -2197,6 +2219,29 @@ def register_admin(dp: Dispatcher):
             lines.append(f"• {r['question'][:50]}")
             lines.append(f"  {r['created_at'][:10]}")
             lines.append("")
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
+        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("user_refdiag_"))
+    async def user_refdiag(callback: types.CallbackQuery):
+        uid = int(callback.data.replace("user_refdiag_", ""))
+        d = get_referral_diagnostics(uid)
+        dbid = get_user_source_diagnostics().get("db_identifier_redacted", "unknown")
+        lines = [
+            "🔍 Диагностика рефов", "",
+            f"User ID: {uid}",
+            f"Username: @{d.get('username') or 'нет'}",
+            f"Legacy total_referrals: {d.get('legacy_total_referrals')}",
+            f"users.referred_by count: {d.get('users_referred_by_count')}",
+            f"referral table count: {d.get('referral_table_count')}",
+            f"Final referral count: {d.get('final_referral_count')}",
+            f"Source used: {d.get('source_used')}",
+            f"Mismatch: {'yes' if d.get('mismatch') else 'no'}",
+            f"DB identifier: {dbid}", "", "First 10 referred users:",
+        ]
+        refs = d.get("referred_users") or []
+        lines.extend([f"• {r.get('user_id')} @{r.get('username') or r.get('first_name') or 'нет'}" for r in refs[:10]] or ["—"])
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data=f"user_view_{uid}"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
