@@ -147,3 +147,70 @@ def test_source_update_does_not_change_referral_state(referral_db):
     database.ensure_user(user_id=200, source="inline_share")
 
     assert referral_db.referred_by(200) == 100
+
+
+def test_admin_users_count_uses_total_users_table_not_small_sample(referral_db):
+    for uid in range(1, 51):
+        database.ensure_user(user_id=uid, username=f"u{uid}")
+
+    assert database.count_users() == 50
+
+
+def test_admin_users_page_sample_does_not_change_total(referral_db):
+    for uid in range(1, 51):
+        database.ensure_user(user_id=uid, username=f"u{uid}")
+
+    page = database.get_users_page(limit=2, offset=0)
+
+    assert len(page) == 2
+    assert database.count_users() == 50
+
+
+def test_legacy_mismatch_diagnostics_reports_legacy_source(referral_db):
+    database.ensure_user(user_id=100, username="legacy")
+    referral_db.raw.execute("UPDATE users SET total_referrals = 3 WHERE user_id = 100")
+    referral_db.raw.commit()
+
+    d = database.get_referral_diagnostics(100)
+
+    assert d["users_referred_by_count"] == 0
+    assert d["legacy_total_referrals"] == 3
+    assert d["mismatch"] is True
+    assert d["final_referral_count"] == 3
+    assert d["source_used"] == "legacy_total_referrals"
+
+
+def test_referral_table_source_preferred_when_exists(referral_db):
+    referral_db.raw.execute(
+        "CREATE TABLE referral_relationships (referrer_id INTEGER, user_id INTEGER, created_at TEXT)"
+    )
+    database.ensure_user(user_id=100, username="referrer")
+    for uid in (201, 202, 203):
+        database.ensure_user(user_id=uid, username=f"u{uid}")
+        referral_db.raw.execute(
+            "INSERT INTO referral_relationships (referrer_id, user_id, created_at) VALUES (?, ?, 'now')",
+            (100, uid),
+        )
+    referral_db.raw.commit()
+
+    d = database.get_referral_diagnostics(100)
+
+    assert database.get_referral_count(100) == 3
+    assert d["users_referred_by_count"] == 0
+    assert d["referral_table_count"] == 3
+    assert d["final_referral_count"] == 3
+    assert d["source_used"] == "referral_table"
+
+
+def test_top_referrers_uses_final_count_not_stale_zero(referral_db):
+    database.ensure_user(user_id=100, username="referrer")
+    for uid in (201, 202, 203):
+        database.ensure_user(user_id=uid, referred_by=100)
+    referral_db.raw.execute("UPDATE users SET total_referrals = 0 WHERE user_id = 100")
+    referral_db.raw.commit()
+
+    rows = database.get_top_referrers(limit=10)
+
+    assert rows[0]["user_id"] == 100
+    assert rows[0]["total_referrals"] == 3
+    assert rows[0]["source_used"] == "users.referred_by"
