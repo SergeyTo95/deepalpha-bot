@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict
+from typing import Dict, Optional, Set
 
 from db.database import count_live_analyst_usage_today, get_user
 
@@ -21,7 +21,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _admin_ids() -> set[int]:
+def _admin_ids() -> Set[int]:
     ids = set()
     for part in (os.getenv("ADMIN_USER_IDS", "") or "").split(","):
         part = part.strip()
@@ -44,7 +44,7 @@ def _result(allowed: bool, reason: str, remaining_free: int, token_balance: int,
     }
 
 
-def can_use_live_analyst(user_id: int, username: str | None = None) -> dict:
+def can_use_live_analyst(user_id: int, username: Optional[str] = None) -> Dict[str, object]:
     logger.info("live_analyst_access_check_started user_id=%s username=%s", user_id, username or "")
     is_admin = int(user_id) in _admin_ids()
     free_limit = max(0, _env_int("LIVE_ANALYST_FREE_DAILY_LIMIT", 0))

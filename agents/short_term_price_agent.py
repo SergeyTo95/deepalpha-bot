@@ -378,7 +378,7 @@ def _fetch_btc_price_consensus() -> dict:
 
 
 def _fetch_start_price_from_klines(title: str) -> Tuple[Optional[float], str]:
-    """Returns (open_price, confidence). confidence: 'high' | 'medium' | None."""
+    """Returns (open_price, confidence). confidence: one of 'high', 'medium', or None."""
     month_map = {
         "january": 1, "february": 2, "march": 3, "april": 4,
         "may": 5, "june": 6, "july": 7, "august": 8,
