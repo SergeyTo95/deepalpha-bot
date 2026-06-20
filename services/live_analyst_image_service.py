@@ -956,7 +956,7 @@ def _build_nested_screenshot_crops(image_bytes: bytes, mime_type: str) -> List[T
 
 def _post_gemini_generate_content(
     api_key: str, model: str, timeout: int, payload: Dict[str, Any], max_tokens: int, allow_json_mode: bool = True,
-    user_id: int | None = None, access_checked: bool = False
+    user_id: Optional[int] = None, access_checked: bool = False
 ) -> Tuple[str, str]:
     if not access_checked:
         logger.warning("gemini_call_blocked_access_not_checked user_id=%s", user_id)
@@ -1117,7 +1117,7 @@ def _post_gemini_generate_content(
     return best_text, best_finish
 
 
-def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int, user_id: int | None = None, access_checked: bool = False) -> Tuple[str, str]:
+def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int, user_id: Optional[int] = None, access_checked: bool = False) -> Tuple[str, str]:
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1},
@@ -1126,7 +1126,7 @@ def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: Lis
 
 
 def _extract_polymarket_from_crop_batch(
-    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False
+    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: Optional[int] = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     if not crops:
         return {}
@@ -1152,7 +1152,7 @@ def _extract_polymarket_from_crop_batch(
 
 
 def _extract_polymarket_from_single_crop(
-    api_key: str, model: str, timeout: int, crop: Tuple[str, bytes, str], context_text: str, user_id: int | None = None, access_checked: bool = False
+    api_key: str, model: str, timeout: int, crop: Tuple[str, bytes, str], context_text: str, user_id: Optional[int] = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     label, crop_bytes, crop_mime = crop
     logger.info("live_image_per_crop_attempt label=%s", label)
@@ -1181,7 +1181,7 @@ def _extract_polymarket_from_single_crop(
     return payload
 
 
-def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False) -> Dict[str, Any]:
+def _extract_polymarket_from_crops(api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: Optional[int] = None, access_checked: bool = False) -> Dict[str, Any]:
     if not crops:
         return {}
 
@@ -1226,7 +1226,7 @@ def _nested_crop_prompt(context_text: str) -> str:
 
 
 def _extract_polymarket_from_nested_crops(
-    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: int | None = None, access_checked: bool = False
+    api_key: str, model: str, timeout: int, crops: List[Tuple[str, bytes, str]], context_text: str, user_id: Optional[int] = None, access_checked: bool = False
 ) -> Dict[str, Any]:
     if not crops:
         return {}
@@ -1261,7 +1261,7 @@ def _extract_polymarket_from_nested_crops(
     return best_payload
 
 
-def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int, user_id: int | None = None, access_checked: bool = False) -> Tuple[str, str]:
+def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, image_bytes: bytes, mime_type: str, max_tokens: int, user_id: Optional[int] = None, access_checked: bool = False) -> Tuple[str, str]:
     payload = {
         "contents": [{
             "parts": [
@@ -1274,7 +1274,7 @@ def _call_gemini_vision(api_key: str, model: str, timeout: int, prompt: str, ima
     return _post_gemini_generate_content(api_key, model, timeout, payload, max_tokens, user_id=user_id, access_checked=access_checked)
 
 
-def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = "", user_id: int | None = None, access_checked: bool = False) -> Dict[str, str]:
+def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = "", user_id: Optional[int] = None, access_checked: bool = False) -> Dict[str, str]:
     if not access_checked:
         logger.warning("gemini_call_blocked_access_not_checked user_id=%s", user_id)
         return {"ok": False, "error": "access_not_checked"}
