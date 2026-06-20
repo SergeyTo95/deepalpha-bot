@@ -47,7 +47,7 @@ def _result(allowed: bool, reason: str, feature: str, user_id: Optional[int], ch
     }
 
 
-def can_call_gemini(feature: str, user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, estimated_units: int = 1, admin_override: bool = False) -> Dict[str, Any]:
+def can_call_gemini(feature: str, user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, estimated_units: int = 1, admin_override: bool = False) -> Dict[str, Any]:
     feature = (feature or "").strip()
     estimated_units = max(1, int(estimated_units or 1))
     print(f"gemini_budget_guard_check_started feature={feature} user_id={user_id} chat_id={chat_id} is_background={is_background}")
@@ -96,7 +96,7 @@ def can_call_gemini(feature: str, user_id: int | None = None, chat_id: int | Non
         return _result(False, "db_error", feature, user_id, chat_id, is_background, 0)
 
 
-def record_gemini_call(feature: str, user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, units: int = 1) -> int:
+def record_gemini_call(feature: str, user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, units: int = 1) -> int:
     from db.database import record_gemini_usage
     calls_today = record_gemini_usage(feature, user_id=user_id, chat_id=chat_id, is_background=is_background, units=units)
     print(f"gemini_usage_recorded feature={feature} user_id={user_id} chat_id={chat_id} is_background={is_background} calls_today={calls_today}")
