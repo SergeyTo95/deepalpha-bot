@@ -3,6 +3,7 @@ import json
 import time
 import secrets
 import hashlib
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -815,34 +816,50 @@ def ensure_user(user_id: int, username: str = "", first_name: str = "", referred
     cursor = conn.cursor()
     try:
         now = datetime.utcnow().isoformat()
+        incoming_referrer = int(referred_by) if referred_by else None
         cursor.execute("SELECT user_id, referred_by FROM users WHERE user_id = %s", (user_id,))
         existing = cursor.fetchone()
 
+        if incoming_referrer == user_id:
+            print(f"referral_ignored_self user_id={user_id}")
+            incoming_referrer = None
+
         if existing:
+            existing_referred_by = existing[1]
             cursor.execute("""
             UPDATE users SET username = %s, first_name = %s, updated_at = %s
             WHERE user_id = %s
             """, (username, first_name, now, user_id))
 
-            if referred_by and not existing[1] and referred_by != user_id:
+            if existing_referred_by:
+                print(f"referral_preserved user_id={user_id} referred_by={existing_referred_by}")
+                if incoming_referrer and incoming_referrer != existing_referred_by:
+                    print(f"referral_ignored_existing user_id={user_id} existing_referred_by={existing_referred_by} incoming={incoming_referrer}")
+            elif incoming_referrer:
                 cursor.execute("""
                 UPDATE users SET referred_by = %s WHERE user_id = %s
-                """, (referred_by, user_id))
+                """, (incoming_referrer, user_id))
                 cursor.execute("""
-                UPDATE users SET total_referrals = COALESCE(total_referrals, 0) + 1
+                UPDATE users SET total_referrals = (
+                    SELECT COUNT(*) FROM users u2 WHERE u2.referred_by = users.user_id
+                )
                 WHERE user_id = %s
-                """, (referred_by,))
+                """, (incoming_referrer,))
+                print(f"referral_attached user_id={user_id} referred_by={incoming_referrer}")
         else:
             cursor.execute("""
             INSERT INTO users (user_id, username, first_name, referred_by, created_at, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s)
-            """, (user_id, username, first_name, referred_by, now, now))
+            """, (user_id, username, first_name, incoming_referrer, now, now))
 
-            if referred_by and referred_by != user_id:
+            if incoming_referrer:
                 cursor.execute("""
-                UPDATE users SET total_referrals = COALESCE(total_referrals, 0) + 1
+                UPDATE users SET total_referrals = (
+                    SELECT COUNT(*) FROM users u2 WHERE u2.referred_by = users.user_id
+                )
                 WHERE user_id = %s
-                """, (referred_by,))
+                """, (incoming_referrer,))
+                print(f"referral_attached user_id={user_id} referred_by={incoming_referrer}")
 
         conn.commit()
         print(f"user_registered_or_updated user_id={user_id} source={source}")
@@ -1534,6 +1551,33 @@ def fail_ton_purchase_intent(intent_id: int, reason: str) -> Optional[Dict[str, 
 
 
 
+
+def get_database_diagnostics() -> Dict[str, Any]:
+    parsed = urlparse(DATABASE_URL or "")
+    redacted_url = "missing"
+    if parsed.scheme or parsed.hostname or parsed.path:
+        name = (parsed.path or "").lstrip("/") or "unknown"
+        redacted_url = f"{parsed.scheme or 'db'}://{parsed.hostname or 'unknown'}/{name}"
+    return {
+        "database": redacted_url,
+        "users_count": count_users(),
+        "referrals_count": get_total_referral_relationships(),
+    }
+
+
+def get_total_referral_relationships() -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
+        row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception as e:
+        print(f"get_total_referral_relationships error: {e}")
+        return 0
+    finally:
+        conn.close()
+
 def get_referral_count(user_id: int) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -1564,6 +1608,8 @@ def sync_user_total_referrals(user_id: int) -> None:
         print(f"sync_user_total_referrals error: {e}")
     finally:
         conn.close()
+
+
 def get_referrals(user_id: int) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1586,9 +1632,14 @@ def get_top_referrers(limit: int = 10) -> List[Dict[str, Any]]:
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cursor.execute("""
-        SELECT user_id, username, first_name, total_referrals, referral_earnings_ton
-        FROM users WHERE total_referrals > 0
-        ORDER BY total_referrals DESC, referral_earnings_ton DESC LIMIT %s
+        SELECT
+            u.user_id, u.username, u.first_name, u.referral_earnings_ton,
+            COUNT(r.user_id)::INTEGER AS total_referrals
+        FROM users u
+        LEFT JOIN users r ON r.referred_by = u.user_id
+        GROUP BY u.user_id, u.username, u.first_name, u.referral_earnings_ton
+        HAVING COUNT(r.user_id) > 0
+        ORDER BY total_referrals DESC, u.referral_earnings_ton DESC LIMIT %s
         """, (limit,))
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
