@@ -12,7 +12,7 @@ from db.database import (
     get_setting, set_setting, count_gemini_usage_today,
     get_user, get_all_users, get_users_page, count_users, search_users, set_user_ban, set_user_vip,
     add_tokens, set_tokens, is_user_banned, is_user_vip,
-    get_user_analyses, get_connection, get_referrals, get_referral_count,
+    get_user_analyses, get_connection, get_referrals, get_referral_count, get_database_diagnostics,
     get_top_referrers,
     get_token_packages, get_token_package,
     create_token_package, update_token_package, delete_token_package,
@@ -1930,11 +1930,16 @@ def register_admin(dp: Dispatcher):
         shown_limit = max(10, shown_limit)
 
         if total <= 0:
+            diag = get_database_diagnostics()
             total_text = "Total: 0" if lang == "en" else "Всего: 0"
             shown_text = "Showing: 0/0" if lang == "en" else "Показано: 0/0"
+            diag_text = (
+                f"DB users: {diag.get('users_count', 0)} | DB referrals: {diag.get('referrals_count', 0)}\n"
+                f"DB: {diag.get('database', 'unknown')}"
+            )
             title = "👤 Users" if lang == "en" else "👤 Пользователи"
             await message.edit_text(
-                f"{title}\n\n{total_text}\n{shown_text}",
+                f"{title}\n\n{total_text}\n{shown_text}\n{diag_text}",
                 reply_markup=_users_page_kb(10, 0, [], session_id, lang),
             )
             return
@@ -1948,11 +1953,16 @@ def register_admin(dp: Dispatcher):
             shown_limit, total, shown_count,
         )
 
+        diag = get_database_diagnostics()
         total_text = f"Total: {total}" if lang == "en" else f"Всего: {total}"
         shown_text = f"Showing: {shown_count}/{total}" if lang == "en" else f"Показано: {shown_count}/{total}"
+        diag_text = (
+            f"DB users: {diag.get('users_count', total)} | DB referrals: {diag.get('referrals_count', 0)}\n"
+            f"DB: {diag.get('database', 'unknown')}"
+        )
         title = "👤 Users" if lang == "en" else "👤 Пользователи"
         await message.edit_text(
-            f"{title}\n\n{total_text}\n{shown_text}",
+            f"{title}\n\n{total_text}\n{shown_text}\n{diag_text}",
             reply_markup=_users_page_kb(shown_limit, total, users, session_id, lang),
         )
 
