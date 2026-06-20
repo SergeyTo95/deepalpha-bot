@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from typing import Optional
 from services.gemini_budget_guard import can_call_gemini, record_gemini_call
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -84,7 +85,7 @@ def _call_model_once(prompt: str, model: str, max_tokens: int) -> tuple:
         return "", 0
 
 
-def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     """
     Вызывает Gemini с retry и fallback.
 
@@ -148,13 +149,13 @@ def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent
     return ""
 
 
-def generate_text(prompt: str, feature: str = "signal_generation", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+def generate_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     return _call_gemini(prompt, max_tokens=512, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
 
 
-def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     return _call_gemini(prompt, max_tokens=1024, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
 
 
-def generate_news_text(prompt: str, feature: str = "news_agent", user_id: int | None = None, chat_id: int | None = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+def generate_news_text(prompt: str, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     return _call_gemini(prompt, max_tokens=768, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
