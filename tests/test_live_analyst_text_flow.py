@@ -5,6 +5,7 @@ sys.modules.setdefault("requests", types.SimpleNamespace(post=lambda *args, **kw
 sys.modules.setdefault("psycopg2", types.SimpleNamespace(connect=lambda *a, **k: None, extras=types.SimpleNamespace(RealDictCursor=object), errors=types.SimpleNamespace()))
 sys.modules.setdefault("psycopg2.extras", types.SimpleNamespace(RealDictCursor=object))
 
+from services import live_analyst_memory_service as memory_svc
 from services import live_analyst_service as svc
 
 
@@ -78,3 +79,41 @@ def test_failed_answer_does_not_charge_or_save(monkeypatch):
     assert result["ok"] is False
     assert charges == []
     assert saved == []
+
+
+def test_polymarket_empty_entities_do_not_overwrite_market_title(monkeypatch):
+    _saved, _charges = _patch_common(monkeypatch)
+    context_updates = []
+    monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(11, "дай премиум", router_result={"mode": "polymarket", "entities": {}})
+
+    assert result["ok"] is True
+    assert context_updates == []
+
+
+def test_crypto_entities_update_useful_context_title(monkeypatch):
+    _saved, _charges = _patch_common(monkeypatch)
+    context_updates = []
+    monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(12, "BTCUSDT 15m Binance", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "exchange": "Binance"}})
+
+    assert result["ok"] is True
+    assert len(context_updates) == 1
+    assert context_updates[0]["market_title"] == "pair=BTCUSDT; asset=BTC; timeframe=15m; exchange=Binance"
+
+
+def test_sports_entities_update_useful_context_title(monkeypatch):
+    _saved, _charges = _patch_common(monkeypatch)
+    context_updates = []
+    monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: DATA NEEDED\nDecision: DATA NEEDED")
+
+    result = svc.process_live_text(13, "Team A vs Team B odds 1.85", router_result={"mode": "sports", "entities": {"teams": ["Team A", "Team B"], "odds": 1.85}})
+
+    assert result["ok"] is True
+    assert len(context_updates) == 1
+    assert context_updates[0]["market_title"] == "teams=['Team A', 'Team B']; odds=1.85"

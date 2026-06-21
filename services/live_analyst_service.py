@@ -198,10 +198,12 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     session = update_context_from_user_text(session, text)
     mode = router_result.get("mode")
     entities = router_result.get("entities") or {}
+    entity_keys_by_mode = {
+        "crypto": ("pair", "asset", "timeframe", "exchange"),
+        "sports": ("sport", "teams", "market", "odds", "score", "minute"),
+    }
     context_bits = []
-    if mode:
-        context_bits.append(f"mode={mode}")
-    for key in ("asset", "pair", "timeframe", "exchange", "sport", "teams", "market", "odds", "score", "minute"):
+    for key in entity_keys_by_mode.get(mode, ()):
         if entities.get(key):
             context_bits.append(f"{key}={entities.get(key)}")
     if context_bits:
