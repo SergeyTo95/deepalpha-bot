@@ -149,3 +149,30 @@ def test_generic_crypto_watch_request_routes_crypto_missing_asset_or_pair():
     result = route(user_text="какую крипту посмотреть?")
     assert result["mode"] == "crypto"
     assert "asset_or_pair" in result["missing_data"]
+
+
+def test_natural_bitcoin_buy_question_needs_fresh_context():
+    from services.live_research_service import fresh_context_needed
+    result = route(user_text="биткоин сейчас покупать или не нужно?")
+    assert result["mode"] == "crypto"
+    assert fresh_context_needed("биткоин сейчас покупать или не нужно?", result["mode"], result["entities"]) is True
+
+
+def test_english_bitcoin_buy_question_needs_fresh_context():
+    from services.live_research_service import fresh_context_needed
+    result = route(user_text="should I buy bitcoin now?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "BTC"
+    assert fresh_context_needed("should I buy bitcoin now?", result["mode"], result["entities"]) is True
+
+
+def test_cashtag_hype_routes_crypto_asset():
+    result = route(user_text="$HYPE покупать?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "HYPE"
+
+
+def test_generic_sui_routes_crypto_asset():
+    result = route(user_text="что по SUI?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "SUI"

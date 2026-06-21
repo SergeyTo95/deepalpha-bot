@@ -94,7 +94,7 @@ class LiveRouterAgent:
     def _crypto_score(self, text: str) -> float:
         up = text.upper(); low = text.lower(); s = 0.0
         quote_assets = r"USDT|USDC|USD"
-        base_assets = r"BTC|ETH|SOL|TON|BNB|XRP|DOGE|PEPE|MEME"
+        base_assets = r"BTC|ETH|SOL|TON|BNB|XRP|DOGE|PEPE|MEME|SUI|HYPE|WIF|ARB|OP|INJ|APT"
         if re.search(rf"\b[A-Z]{{2,10}}(?:{quote_assets})\b", up):
             s += 0.7
         if re.search(rf"\b[A-Z]{{2,10}}\s*[/\- ]\s*(?:{quote_assets})\b", up):
@@ -103,6 +103,12 @@ class LiveRouterAgent:
             s += 0.2
         if self._crypto_asset_from_text(text):
             s += 0.42
+        if re.search(r"\$[A-Za-z]{2,12}\b", text):
+            s += 0.65
+        if self._generic_crypto_asset_from_text(text):
+            s += 0.5
+        if re.search(r"\b0x[a-fA-F0-9]{40}\b", text) or re.search(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text):
+            s += 0.45
         for p in ["BINANCE", "BYBIT", "OKX", "COINBASE", "TRADINGVIEW", "DEXSCREENER", "DEX SCREENER"]:
             if p in up: s += 0.25
         for p in ["crypto", "крипта", "крипту", "крипто", "монета", "coin", "token", "токен", "пара", "пару", "актив"]:
@@ -130,6 +136,27 @@ class LiveRouterAgent:
             for alias in aliases:
                 if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", low):
                     return asset
+        return self._generic_crypto_asset_from_text(text)
+
+    def _generic_crypto_asset_from_text(self, text: str) -> Optional[str]:
+        cashtag = re.search(r"\$([A-Za-z]{2,12})\b", text)
+        if cashtag:
+            return cashtag.group(1).upper()
+        low = text.lower()
+        crypto_intent = any(p in low for p in ["что по", "покуп", "купить", "buy", "entry", "вход", "coin", "token", "монета", "токен", "крипт", "держать", "выход", "risk", "риск", "pump", "dump", "памп", "дамп", "сейчас", "now", "today"])
+        if not crypto_intent:
+            return None
+        m = re.search(r"(?:монета|токен|coin|token)\s+([A-Za-z][A-Za-z0-9]{1,11})\b", text, re.I)
+        if m:
+            return m.group(1).upper()
+        candidates = re.findall(r"\b[A-Z][A-Z0-9]{1,11}\b", text)
+        ignore = {"TV", "USD", "USDT", "USDC", "RSI", "MACD", "EMA", "FDV", "OI"}
+        for candidate in candidates:
+            if candidate not in ignore:
+                return candidate
+        ru = re.search(r"что по\s+([A-Za-z][A-Za-z0-9]{1,11})\b", low, re.I)
+        if ru:
+            return ru.group(1).upper()
         return None
 
     def _crypto_requires_timeframe(self, text: str) -> bool:
@@ -165,6 +192,9 @@ class LiveRouterAgent:
         else:
             asset = self._crypto_asset_from_text(text)
             if asset: ent["asset"] = asset
+        contract = re.search(r"\b0x[a-fA-F0-9]{40}\b", text)
+        if contract:
+            ent["contract_address"] = contract.group(0)
         tf = re.search(r"\b(1m|5m|15m|1h|4h|1d)\b", text, re.I)
         if tf: ent["timeframe"] = tf.group(1)
         for ex in ["Binance", "Bybit", "OKX", "Coinbase", "TradingView", "Dexscreener"]:
