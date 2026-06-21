@@ -336,3 +336,22 @@ def test_crypto_prompt_research_failure_instructs_cautious_fallback_without_pret
     assert "answer cautiously with DATA NEEDED/WATCH" in prompt
     assert "do not pretend" in prompt.lower() or "не притворяйся" in prompt
     assert "Fresh search did not return sources / is disabled, so this is limited." in prompt
+
+
+def test_process_live_text_market_context_better_zone_in_prompt(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    prompts = []
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {"ok": True, "pair": "BTCUSDT", "timeframe": "1h", "price": 64050, "price_source": "mock", "support_levels": [63500], "resistance_levels": [64800], "local_high": 64800, "local_low": 63500, "volatility_note": "mock", "entry_context": {"better_zone": 63500, "current_entry_quality": "risky", "confirmation": "reaction", "invalidation": "below 63500"}, "sources": ["mock"], "error": ""})
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nDecision: WATCH")
+    result = svc.process_live_text(20, "биткоин сейчас покупать или не нужно?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="ru")
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert "63500" in prompts[0]
+    assert "use the derived price, support/resistance, better_zone" in prompts[0]
+
+
+def test_crypto_prompt_market_context_false_forbids_inventing_levels():
+    prompt = svc._build_live_prompt({"id": 1}, [], "BTC now buy?", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en", crypto_market_context={"ok": False, "error": "no data", "support_levels": [], "resistance_levels": []})
+    assert "do not invent entry levels" in prompt
+    assert "DATA NEEDED/WATCH" in prompt

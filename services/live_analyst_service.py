@@ -15,6 +15,8 @@ from services.live_analyst_billing_service import (
     get_live_request_cost,
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
+from services.live_understanding_service import understand_live_request
+from services.crypto_market_context_service import get_crypto_market_context
 from services.live_analyst_memory_service import (
     extract_market_title,
     extract_polymarket_url,
@@ -76,6 +78,38 @@ def _format_router_context(router_result: Dict[str, Any]) -> str:
         f"Missing data: {router_result.get('missing_data') or []}\n"
         f"Router reason: {router_result.get('reason') or '—'}"
     )
+
+
+def _format_understanding_context(understanding: Optional[Dict[str, Any]]) -> str:
+    if not understanding:
+        return "Live understanding: not available."
+    needs = understanding.get("needs") or {}
+    return "\n".join([
+        f"Mode: {understanding.get('mode') or 'unknown'}",
+        f"Intent: {understanding.get('intent') or 'unknown'}",
+        f"Asset/pair: {understanding.get('asset') or '—'} / {understanding.get('pair') or '—'}",
+        f"Timeframe/horizon: {understanding.get('timeframe') or '—'} / {understanding.get('horizon') or '—'}",
+        f"Needs: market_data={bool(needs.get('market_data'))} ohlcv={bool(needs.get('ohlcv'))} web_research={bool(needs.get('web_research'))} clarification={bool(needs.get('clarification'))}",
+        f"Missing: {understanding.get('missing') or []}",
+        f"Reason: {_safe(understanding.get('reason'), 500) or '—'}",
+    ])
+
+
+def _format_crypto_market_context(market_context: Optional[Dict[str, Any]]) -> str:
+    if not market_context:
+        return "Crypto market context: not requested."
+    return "\n".join([
+        f"Market context ok: {bool(market_context.get('ok'))}",
+        f"Pair/timeframe: {market_context.get('pair') or '—'} / {market_context.get('timeframe') or '—'}",
+        f"Price: {market_context.get('price') if market_context.get('price') is not None else '—'} ({market_context.get('price_source') or '—'})",
+        f"Support levels: {market_context.get('support_levels') or []}",
+        f"Resistance levels: {market_context.get('resistance_levels') or []}",
+        f"Local high/low: {market_context.get('local_high') or '—'} / {market_context.get('local_low') or '—'}",
+        f"Volatility: {_safe(market_context.get('volatility_note'), 500) or '—'}",
+        f"Entry context: {market_context.get('entry_context') or {}}",
+        f"Sources: {market_context.get('sources') or []}",
+        f"Error/fallback: {_safe(market_context.get('error'), 500) or '—'}",
+    ])
 
 
 def _format_research_context(research_context: Optional[Dict[str, Any]]) -> str:
@@ -161,7 +195,7 @@ Keep crypto answers complete and under 1200–1600 characters.
 """.strip()
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None) -> str:
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None) -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -181,6 +215,15 @@ def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, 
 
 Router context:
 {_format_router_context(router_result or {})}
+
+Live understanding context:
+{_format_understanding_context(understanding)}
+
+Crypto market context:
+{_format_crypto_market_context(crypto_market_context)}
+If Market context ok is true: use the derived price, support/resistance, better_zone, confirmation and invalidation to give an actionable scenario/zones. If a level is derived approximately, call it an approximate zone.
+If Market context ok is false: do not invent entry levels, support/resistance, invalidation, or current price from imagination; use DATA NEEDED/WATCH and ask for timeframe/chart if needed.
+If no timeframe is provided: ask for timeframe, but still give high-level WATCH/DATA NEEDED using available context.
 
 Research context:
 {_format_research_context(research_context)}
@@ -239,14 +282,24 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if router_result.get("mode") == "unknown":
         message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, a crypto asset/pair, or a sports event/line. Send a link, screenshot, ticker, timeframe, or odds.")
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
+    understanding = understand_live_request(text, router_result, prompt_session, ui_language=ui_language)
+    logger.info("live_understanding_result mode=%s intent=%s asset=%s pair=%s timeframe=%s missing=%s", understanding.get("mode"), understanding.get("intent"), understanding.get("asset"), understanding.get("pair"), understanding.get("timeframe"), understanding.get("missing"))
+    crypto_market_context = None
+    needs = understanding.get("needs") or {}
+    if understanding.get("mode") == "crypto" and (needs.get("market_data") or needs.get("ohlcv")):
+        try:
+            crypto_market_context = get_crypto_market_context(understanding.get("pair") or ((understanding.get("asset") or "") + "USDT"), understanding.get("timeframe") or "", understanding.get("horizon") or "")
+        except Exception as exc:
+            logger.warning("live_crypto_market_context_failed user_id=%s error=%s", user_id, exc)
+            crypto_market_context = {"ok": False, "pair": understanding.get("pair") or "", "timeframe": understanding.get("timeframe") or "", "error": str(exc), "support_levels": [], "resistance_levels": [], "entry_context": {}, "sources": []}
     research_context = None
-    if fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
+    if needs.get("web_research") or fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
         try:
             research_context = get_live_research_context(text, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results(), user_id=user_id)
         except Exception as exc:
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context)
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context)
 
     try:
         answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
