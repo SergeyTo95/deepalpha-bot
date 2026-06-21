@@ -28,7 +28,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 def live_research_enabled() -> bool:
-    return _env_bool("LIVE_WEB_RESEARCH_ENABLED", False)
+    raw = os.getenv("LIVE_WEB_RESEARCH_ENABLED")
+    if raw is not None:
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return bool(os.getenv("WEB_SEARCH_PROVIDER") and os.getenv("WEB_SEARCH_API_KEY"))
 
 
 def live_research_max_results() -> int:
@@ -65,18 +68,24 @@ def _build_research_queries(query: str, entities: Dict[str, Any]) -> List[str]:
     asset = str(entities.get("asset") or "").upper().strip()
     pair = str(entities.get("pair") or "").upper().strip()
     contract = str(entities.get("contract_address") or "").strip()
-    subject = pair or asset or contract or (query or "crypto")[:60]
+    subject = pair or asset
+    asset_key = asset or (pair.replace("USDT", "") if pair.endswith("USDT") else pair)
     queries = []
     if contract:
-        queries.append(f"{contract} crypto token price news today")
-        queries.append(f"{contract} Dexscreener liquidity market cap")
-    if subject:
-        queries.append(f"{subject} price today market news")
+        queries.append(f"{contract} token Dexscreener")
+        queries.append(f"{contract} crypto token liquidity market cap")
+    elif asset_key in {"BTC", "BITCOIN"}:
+        queries.extend(["BTC price today crypto market", "Bitcoin BTC latest market news today", "BTC USDT price trend today", "Bitcoin ETF flows crypto market today"])
+    elif asset_key in {"ETH", "ETHEREUM"}:
+        queries.extend(["ETH price today crypto market", "Ethereum latest market news today", "ETH USDT price trend today"])
+    elif subject:
+        queries.append(f"{subject} crypto price today")
         queries.append(f"{subject} latest crypto news today")
         queries.append(f"{subject} USDT price trend today")
-    cleaned = " ".join(re.findall(r"[$A-Za-z0-9А-Яа-яЁё]+", query or ""))[:90]
-    if cleaned:
-        queries.append(f"{cleaned} crypto market today")
+    else:
+        cleaned = " ".join(re.findall(r"[$A-Za-z0-9А-Яа-яЁё]+", query or ""))[:60]
+        if cleaned:
+            queries.append(f"{cleaned} crypto market today")
     deduped: List[str] = []
     seen = set()
     for item in queries:
@@ -139,18 +148,39 @@ def _summarize_sources(query: str, sources: List[Dict[str, str]]) -> str:
     return ("Existing web search returned fresh context for this crypto request. " + " | ".join(bits))[:1200]
 
 
+def _query_snippet(query: str, limit: int = 120) -> str:
+    return re.sub(r"\s+", " ", query or "").strip()[:limit]
+
+
+def _log_research(event: str, **fields: Any) -> None:
+    safe = " ".join(f"{k}={v}" for k, v in fields.items())
+    print(f"{event} {safe}".strip())
+
+
 def get_live_research_context(query: str, mode: str, entities: Dict[str, Any], ui_language: str, max_results: int = 5, user_id: Optional[int] = None, chat_id: Optional[int] = None) -> Dict[str, Any]:
-    provider_key = str(os.getenv("WEB_SEARCH_PROVIDER", "") or "disabled").strip().lower()
+    provider = str(os.getenv("WEB_SEARCH_PROVIDER", "") or "").strip().lower()
+    provider_key = provider or "disabled"
     key = ((query or "").strip().lower()[:160], mode or "", ui_language or "en", provider_key)
     cached = _CACHE.get(key)
     now = time.time()
     if cached and now - cached[0] < _TTL_SECONDS:
         return dict(cached[1])
-    if not live_research_enabled():
-        result = _fallback("LIVE_WEB_RESEARCH_ENABLED is disabled")
+    entities = entities or {}
+    enabled = live_research_enabled()
+    _log_research("live_research_started", mode=mode or "", asset=entities.get("asset") or "", pair=entities.get("pair") or "", provider=provider_key, enabled=enabled)
+    if not enabled:
+        reason = "LIVE_WEB_RESEARCH_ENABLED is disabled" if os.getenv("LIVE_WEB_RESEARCH_ENABLED") is not None else "WEB_SEARCH_PROVIDER/API key missing"
+        _log_research("live_research_fallback", reason=reason)
+        result = _fallback(reason)
+        _CACHE[key] = (now, result)
+        return dict(result)
+    if not (os.getenv("WEB_SEARCH_PROVIDER") and os.getenv("WEB_SEARCH_API_KEY")):
+        _log_research("live_research_fallback", reason="WEB_SEARCH_PROVIDER/API key missing")
+        result = _fallback("WEB_SEARCH_PROVIDER/API key missing")
         _CACHE[key] = (now, result)
         return dict(result)
     if not callable(search_web):
+        _log_research("live_research_fallback", reason="existing web search service is unavailable")
         result = _fallback("existing web search service is unavailable")
         _CACHE[key] = (now, result)
         return dict(result)
@@ -158,19 +188,26 @@ def get_live_research_context(query: str, mode: str, entities: Dict[str, Any], u
     limit = max(1, min(int(max_results or live_research_max_results()), live_research_max_results()))
     rows: List[Dict[str, Any]] = []
     try:
-        for search_query in _build_research_queries(query, entities or {}):
+        for search_query in _build_research_queries(query, entities):
             if len(rows) >= limit:
                 break
+            _log_research("live_research_query", query=_query_snippet(search_query))
             rows.extend(_run_existing_search(search_query, limit=max(1, limit - len(rows))))
+            _log_research("live_research_rows", count=len(rows))
     except Exception as exc:
-        result = _fallback(f"existing web search failed: {exc}")
+        reason = f"existing web search failed: {exc}"
+        _log_research("live_research_fallback", reason=reason)
+        result = _fallback(reason)
         _CACHE[key] = (now, result)
         return dict(result)
 
     sources = _normalize_sources(rows, limit)
+    _log_research("live_research_sources", count=len(sources))
     if not sources:
+        _log_research("live_research_fallback", reason="existing web search returned no sources")
         result = _fallback("existing web search returned no sources")
     else:
+        _log_research("live_research_success", sources=len(sources))
         result = {"ok": True, "summary": _summarize_sources(query, sources), "sources": sources, "freshness": "fresh web search context", "error": ""}
     _CACHE[key] = (now, result)
     return dict(result)

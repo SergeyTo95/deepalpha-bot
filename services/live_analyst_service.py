@@ -148,7 +148,8 @@ Router context:
 
 Research context:
 {_format_research_context(research_context)}
-If Fresh research ok is true, use it under “Свежий контекст” / “Fresh context” and cite source names/URLs briefly. If Fresh research ok is false, explicitly say live research/current data is unavailable and answer cautiously; never imply you have current data.
+If Fresh research ok is true: You DO have fresh web context. Use it in the “Свежий контекст” / “Fresh context” section and mention source names briefly. Do not claim “нет актуальных данных” / “no current data” / “fresh data unavailable”; you may only say chart/order book is unavailable if specifically missing.
+If Fresh research ok is false, explicitly say fresh search returned no sources/is disabled and the conclusion is limited; answer cautiously with DATA NEEDED/WATCH.
 
 Правила для этого запроса:
 {_consultant_rules_for_mode((router_result or {}).get("mode") or "polymarket", ui_language)}
@@ -166,8 +167,10 @@ Memory summary: {_safe(session.get('memory_summary'), 1200) or '—'}
 Новое сообщение пользователя:
 {_safe(user_text, 3000)}
 {skill_block}
-Формат для RU crypto: 🧠 Коротко: / Что вижу: / Свежий контекст: / Риск: / Что подтвердит/отменит идею: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Дальше могу: ...
-Format for EN crypto: 🧠 Short take: / What I see: / Fresh context: / Risk: / What would confirm/invalidate the idea: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Next step: ...
+Формат для RU crypto: 🧠 Коротко: / Свежий контекст: / Риск: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Дальше могу: ...
+RU: Ответ должен быть завершённым и не длиннее 1200–1600 символов. Не обрывай предложение.
+Format for EN crypto: 🧠 Short take: / Fresh context: / Risk: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Next step: ...
+EN: Keep the answer complete and under 1200–1600 characters. Do not end mid-sentence.
 For non-crypto keep the same safety framing and always include one relevant next analysis step.
 Не финансовый совет / Not financial advice.
 """.strip()
