@@ -225,15 +225,15 @@ def test_fresh_context_needed_crypto_asset_true():
     assert fresh_context_needed("биткоин сейчас покупать или не нужно?", "crypto", {"asset": "BTC"}) is True
 
 
-def test_live_research_mocked_provider_success(monkeypatch):
+def test_live_research_mocked_existing_search_success(monkeypatch):
     from services import live_research_service as research
     research._CACHE.clear()
     monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
-    monkeypatch.setenv("LIVE_WEB_RESEARCH_PROVIDER", "gemini")
-    monkeypatch.setattr(research, "_gemini_grounded_research", lambda *args, **kwargs: {"ok": True, "summary": "BTC fresh summary", "sources": [{"title": "Market", "url": "https://example.com", "source": "example", "published_at": "today"}], "freshness": "fresh", "error": ""})
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setattr(research, "_run_existing_search", lambda *args, **kwargs: [{"title": "BTC Market", "url": "https://example.com", "source": "example", "published": "today", "snippet": "BTC fresh summary"}])
     result = research.get_live_research_context("BTC now", "crypto", {"asset": "BTC"}, "en")
     assert result["ok"] is True
-    assert result["summary"] == "BTC fresh summary"
+    assert "BTC fresh summary" in result["summary"]
     assert result["sources"][0]["url"] == "https://example.com"
 
 
