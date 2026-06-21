@@ -176,3 +176,14 @@ def test_generic_sui_routes_crypto_asset():
     result = route(user_text="что по SUI?")
     assert result["mode"] == "crypto"
     assert result["entities"]["asset"] == "SUI"
+
+
+def test_contract_address_alone_routes_crypto():
+    result = route(user_text="0x0000000000000000000000000000000000000000")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["contract_address"] == "0x0000000000000000000000000000000000000000"
+
+
+def test_random_uppercase_without_crypto_intent_unknown():
+    result = route(user_text="NASA UPDATE")
+    assert result["mode"] == "unknown"

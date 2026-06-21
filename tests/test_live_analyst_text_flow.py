@@ -209,3 +209,55 @@ def test_ru_thinking_message_helper_returns_russian_text():
 def test_en_thinking_message_helper_returns_english_text():
     from services.live_language_service import get_live_thinking_message
     assert get_live_thinking_message("en") == "🧠 Thinking… checking fresh context, risk, and possible scenarios."
+
+
+def test_live_research_disabled_provider_returns_not_ok(monkeypatch):
+    from services import live_research_service as research
+    research._CACHE.clear()
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "false")
+    result = research.get_live_research_context("BTC now", "crypto", {"asset": "BTC"}, "en")
+    assert result["ok"] is False
+    assert result["sources"] == []
+
+
+def test_fresh_context_needed_crypto_asset_true():
+    from services.live_research_service import fresh_context_needed
+    assert fresh_context_needed("биткоин сейчас покупать или не нужно?", "crypto", {"asset": "BTC"}) is True
+
+
+def test_live_research_mocked_provider_success(monkeypatch):
+    from services import live_research_service as research
+    research._CACHE.clear()
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_PROVIDER", "gemini")
+    monkeypatch.setattr(research, "_gemini_grounded_research", lambda *args, **kwargs: {"ok": True, "summary": "BTC fresh summary", "sources": [{"title": "Market", "url": "https://example.com", "source": "example", "published_at": "today"}], "freshness": "fresh", "error": ""})
+    result = research.get_live_research_context("BTC now", "crypto", {"asset": "BTC"}, "en")
+    assert result["ok"] is True
+    assert result["summary"] == "BTC fresh summary"
+    assert result["sources"][0]["url"] == "https://example.com"
+
+
+def test_process_live_text_includes_research_summary_and_charges_once(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    prompts = []
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
+    monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: {"ok": True, "summary": "BTC fresh summary", "sources": [{"title": "Market", "url": "https://example.com", "source": "example", "published_at": "today"}], "freshness": "fresh", "error": ""})
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nFresh context: BTC fresh summary\nDecision: WATCH")
+    result = svc.process_live_text(18, "BTC now buy?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert "BTC fresh summary" in prompts[0]
+    assert len(saved) == 2
+
+
+def test_process_live_text_research_failure_still_charges_once(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    prompts = []
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
+    monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": "provider returned no sources"})
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: DATA NEEDED\nDecision: DATA NEEDED")
+    result = svc.process_live_text(19, "BTC now buy?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert "provider returned no sources" in prompts[0]
+    assert len(saved) == 2

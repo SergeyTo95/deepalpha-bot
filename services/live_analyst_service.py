@@ -148,6 +148,7 @@ Router context:
 
 Research context:
 {_format_research_context(research_context)}
+If Fresh research ok is true, use it under “Свежий контекст” / “Fresh context” and cite source names/URLs briefly. If Fresh research ok is false, explicitly say live research/current data is unavailable and answer cautiously; never imply you have current data.
 
 Правила для этого запроса:
 {_consultant_rules_for_mode((router_result or {}).get("mode") or "polymarket", ui_language)}
@@ -202,7 +203,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     research_context = None
     if fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
         try:
-            research_context = get_live_research_context(text, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results())
+            research_context = get_live_research_context(text, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results(), user_id=user_id)
         except Exception as exc:
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
