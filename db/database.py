@@ -22,11 +22,20 @@ def _db_identifier_redacted() -> str:
     return "missing"
 
 
+def _first_scalar(row, default=0):
+    if not row:
+        return default
+    if isinstance(row, dict):
+        values = list(row.values())
+        return values[0] if values else default
+    return row[0]
+
+
 def _table_exists(cursor, table: str) -> bool:
     try:
         cursor.execute("SELECT to_regclass(%s)", (table,))
         row = cursor.fetchone()
-        return bool(row and row[0])
+        return bool(_first_scalar(row))
     except Exception:
         try:
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
@@ -42,11 +51,11 @@ def _list_tables(cursor) -> List[str]:
             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
             ORDER BY table_name
         """)
-        return [str(r[0]) for r in cursor.fetchall()]
+        return [str(_first_scalar(r, "")) for r in cursor.fetchall()]
     except Exception:
         try:
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            return [str(r[0]) for r in cursor.fetchall()]
+            return [str(_first_scalar(r, "")) for r in cursor.fetchall()]
         except Exception:
             return []
 
@@ -54,9 +63,9 @@ def _list_tables(cursor) -> List[str]:
 def _count_table(cursor, table: str) -> int:
     if not table.replace("_", "").isalnum():
         return 0
-    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+    cursor.execute(f"SELECT COUNT(*) AS count FROM {table}")
     row = cursor.fetchone()
-    return int(row[0] or 0) if row else 0
+    return int(_first_scalar(row, 0) or 0)
 
 
 def _referral_relationship_table(cursor) -> Optional[Tuple[str, str, str]]:
@@ -1675,11 +1684,11 @@ def get_total_referral_relationships() -> int:
         rel = _referral_relationship_table(cursor)
         if rel:
             table, ref_col, user_col = rel
-            cursor.execute(f"SELECT COUNT(DISTINCT {ref_col} || ':' || {user_col}) FROM {table} WHERE {ref_col} IS NOT NULL AND {user_col} IS NOT NULL AND {ref_col} <> {user_col}")
+            cursor.execute(f"SELECT COUNT(DISTINCT {ref_col} || ':' || {user_col}) AS count FROM {table} WHERE {ref_col} IS NOT NULL AND {user_col} IS NOT NULL AND {ref_col} <> {user_col}")
         else:
-            cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
+            cursor.execute("SELECT COUNT(*) AS count FROM users WHERE referred_by IS NOT NULL")
         row = cursor.fetchone()
-        return int(row[0] or 0) if row else 0
+        return int(_first_scalar(row, 0) or 0)
     except Exception as e:
         print(f"get_total_referral_relationships error: {e}")
         return 0
@@ -1695,16 +1704,16 @@ def get_referral_diagnostics(user_id: int) -> Dict[str, Any]:
         user = cursor.fetchone() or {}
         if user and not isinstance(user, dict):
             user = dict(user)
-        cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by = %s", (user_id,))
-        users_count = int((cursor.fetchone() or [0])[0] or 0)
+        cursor.execute("SELECT COUNT(*) AS count FROM users WHERE referred_by = %s", (user_id,))
+        users_count = int(_first_scalar(cursor.fetchone(), 0) or 0)
         legacy = int(user.get("total_referrals") or 0) if user else 0
         referral_table_count = 0
         source = "users.referred_by"
         rel = _referral_relationship_table(cursor)
         if rel:
             table, ref_col, user_col = rel
-            cursor.execute(f"SELECT COUNT(DISTINCT {user_col}) FROM {table} WHERE {ref_col} = %s AND {user_col} IS NOT NULL AND {user_col} <> {ref_col}", (user_id,))
-            referral_table_count = int((cursor.fetchone() or [0])[0] or 0)
+            cursor.execute(f"SELECT COUNT(DISTINCT {user_col}) AS count FROM {table} WHERE {ref_col} = %s AND {user_col} IS NOT NULL AND {user_col} <> {ref_col}", (user_id,))
+            referral_table_count = int(_first_scalar(cursor.fetchone(), 0) or 0)
             if referral_table_count > 0:
                 source = "referral_table"
         final = referral_table_count if source == "referral_table" else users_count
@@ -1716,7 +1725,7 @@ def get_referral_diagnostics(user_id: int) -> Dict[str, Any]:
         return {"user_id": user_id, "username": (user.get("username") if user else None), "users_referred_by_count": users_count, "legacy_total_referrals": legacy, "referral_table_count": referral_table_count, "final_referral_count": final, "source_used": source if (final or source) else "unknown", "referred_users": refs, "mismatch": bool(mismatch)}
     except Exception as e:
         print(f"get_referral_diagnostics error: {e}")
-        return {"user_id": user_id, "username": None, "users_referred_by_count": 0, "legacy_total_referrals": 0, "referral_table_count": 0, "final_referral_count": 0, "source_used": "unknown", "referred_users": [], "mismatch": False}
+        return {"user_id": user_id, "username": None, "users_referred_by_count": 0, "legacy_total_referrals": 0, "referral_table_count": 0, "final_referral_count": 0, "source_used": "unknown", "referred_users": [], "mismatch": False, "error": str(e)}
     finally:
         conn.close()
 
@@ -1749,15 +1758,27 @@ def sync_all_referral_counters() -> Dict[str, Any]:
         ids = [int(r[0]) for r in cursor.fetchall()]
         updated = 0
         cannot = 0
+        skipped = 0
+        errors = []
         for uid in ids:
             d = get_referral_diagnostics(uid)
+            if d.get("error") or d.get("source_used") == "unknown":
+                skipped += 1
+                errors.append({"user_id": uid, "error": d.get("error", "unknown diagnostics source")})
+                continue
             if d["source_used"] == "legacy_total_referrals" and d["users_referred_by_count"] == 0 and d["referral_table_count"] == 0:
+                cannot += 1
+                continue
+            if int(d.get("legacy_total_referrals") or 0) > 0 and int(d.get("users_referred_by_count") or 0) == 0 and int(d.get("referral_table_count") or 0) == 0:
                 cannot += 1
                 continue
             cursor.execute("UPDATE users SET total_referrals = %s WHERE user_id = %s", (int(d["final_referral_count"]), uid))
             updated += 1
         conn.commit()
-        return {"updated": updated, "cannot_reconstruct": cannot, "source": "referral_table" if _referral_relationship_table(cursor) else "users.referred_by"}
+        result = {"updated": updated, "cannot_reconstruct": cannot, "skipped": skipped, "source": "referral_table" if _referral_relationship_table(cursor) else "users.referred_by"}
+        if errors:
+            result["warnings"] = errors
+        return result
     except Exception as e:
         print(f"sync_all_referral_counters error: {e}")
         return {"updated": 0, "cannot_reconstruct": 0, "source": "unknown", "error": str(e)}
