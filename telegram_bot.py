@@ -8696,7 +8696,10 @@ async def live_text_handler(message: types.Message, state: FSMContext):
             await thinking_message.edit_text(final_text, reply_markup=final_markup)
             return
         except Exception:
-            pass
+            try:
+                await thinking_message.delete()
+            except Exception:
+                pass
     await message.answer(final_text, reply_markup=final_markup)
 
 

@@ -108,7 +108,7 @@ class LiveRouterAgent:
         if self._generic_crypto_asset_from_text(text):
             s += 0.5
         if re.search(r"\b0x[a-fA-F0-9]{40}\b", text) or re.search(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text):
-            s += 0.45
+            s += 0.75
         for p in ["BINANCE", "BYBIT", "OKX", "COINBASE", "TRADINGVIEW", "DEXSCREENER", "DEX SCREENER"]:
             if p in up: s += 0.25
         for p in ["crypto", "крипта", "крипту", "крипто", "монета", "coin", "token", "токен", "пара", "пару", "актив"]:
