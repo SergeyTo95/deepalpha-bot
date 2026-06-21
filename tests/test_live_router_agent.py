@@ -65,3 +65,38 @@ def test_russian_sports_total_entities():
     assert result["entities"]["teams"] == ["Реал", "Барса"]
     assert result["entities"]["market"] == "тотал 2.5"
     assert result["entities"]["odds"] == 1.87
+
+
+def test_crypto_pair_timeframe_russian_entry():
+    result = route(user_text="BTCUSDT 15m есть вход?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["pair"] == "BTCUSDT"
+    assert result["entities"]["timeframe"] == "15m"
+
+
+def test_crypto_slash_pair_timeframe():
+    result = route(user_text="ETH/USDT 1h")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["pair"] == "ETHUSDT"
+    assert result["entities"]["asset"] == "ETH"
+    assert result["entities"]["timeframe"] == "1h"
+
+
+def test_crypto_dash_pair_timeframe():
+    result = route(user_text="SOL-USDT 4h")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["pair"] == "SOLUSDT"
+    assert result["entities"]["asset"] == "SOL"
+    assert result["entities"]["timeframe"] == "4h"
+
+
+def test_crypto_russian_pair_request_routes_to_crypto_with_missing_pair():
+    result = route(user_text="крипто пару")
+    assert result["mode"] == "crypto"
+    assert result["missing_data"] == ["pair"]
+
+
+def test_crypto_english_russian_pair_request_routes_to_crypto_with_missing_pair():
+    result = route(user_text="Crypto-пару")
+    assert result["mode"] == "crypto"
+    assert result["missing_data"] == ["pair"]
