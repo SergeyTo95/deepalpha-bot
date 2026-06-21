@@ -64,12 +64,51 @@ def _format_recent_messages(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(lines[-50:])
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str) -> str:
+def _format_router_context(router_result: Dict[str, Any]) -> str:
+    if not router_result:
+        return "Mode: polymarket\nEntities: {}"
+    return (
+        f"Mode: {router_result.get('mode') or 'unknown'}\n"
+        f"Screen/request type: {router_result.get('screen_type') or 'unknown'}\n"
+        f"Confidence: {router_result.get('confidence') or 0}\n"
+        f"Entities: {router_result.get('entities') or {}}\n"
+        f"Missing data: {router_result.get('missing_data') or []}\n"
+        f"Router reason: {router_result.get('reason') or '—'}"
+    )
+
+
+def _consultant_rules_for_mode(mode: str) -> str:
+    if mode == "crypto":
+        return """
+Режим: crypto consultant. Если нет live котировок/стакана/графика, НЕ говори просто «агент не подключён».
+Дай ограниченный, но полезный разбор только по тексту пользователя и памяти. Ясно отметь, что live external data сейчас не подтянута.
+Обязательно укажи, какие данные нужны для более сильного вывода: текущая цена, OHLCV/объём, уровни, funding/OI/liquidations, источник/биржа.
+Не говори buy/sell/long/short как команду; используй possible edge, watch, no trade, risk is high.
+Формат: Short conclusion / What I see / Risk / What would confirm/deny the idea / Decision: NO TRADE, WATCH, EDGE CANDIDATE или DATA NEEDED.
+""".strip()
+    if mode == "sports":
+        return """
+Режим: sports betting consultant. Если нет live статистики/линий букмекеров, НЕ говори просто «агент не подключён».
+Дай ограниченный, но полезный разбор только по тексту пользователя и памяти. Ясно отметь, что live external data сейчас не подтянута.
+Обязательно укажи, какие данные нужны для более сильного вывода: лига/составы, минута/счёт, xG/удары/темп, движение линии, маржа и альтернативные коэффициенты.
+Не обещай прибыль; используй possible edge, watch, no trade, risk is high.
+Формат: Short conclusion / What I see / Risk / What would confirm/deny the idea / Decision: NO TRADE, WATCH, EDGE CANDIDATE или DATA NEEDED.
+""".strip()
+    if mode == "unknown":
+        return """
+Режим неясен. Не списывай с пользователя ожидание полноценного анализа: коротко попроси уточнить рынок/матч/актив, но добавь 1-2 полезные гипотезы по уже написанному тексту.
+""".strip()
+    return """
+Режим: Polymarket/prediction-market consultant. Разбирай вероятности, цену рынка, edge/no trade, сценарии, риски и правила resolution.
+""".strip()
+
+
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None) -> str:
     skill_context = _build_live_text_skill_context(user_text)
     skill_block = f"\nInternal DeepAlpha skills for this follow-up:\n{skill_context}\n" if skill_context else ""
     return f"""
-Ты — Live Analyst DeepAlpha, публичный режим обсуждения Polymarket и prediction markets.
-Отвечай по-русски, кратко и как аналитик вероятностей.
+Ты — Live Analyst DeepAlpha, платный live-консультант по Polymarket, crypto и sports betting.
+Отвечай по-русски, кратко, профессионально и естественно как аналитик-консультант.
 
 Строгие правила:
 - Не являешься Jarvis и не упоминаешь внутренние режимы.
@@ -78,6 +117,12 @@ def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, 
 - Не используй формулировки "покупай", "продавай", "buy YES", "buy NO".
 - Разбирай market odds vs независимую вероятность, edge/no trade, сценарии, риски и неопределённость.
 - Если данных мало — так и скажи.
+
+Router context:
+{_format_router_context(router_result or {})}
+
+Правила для этого запроса:
+{_consultant_rules_for_mode((router_result or {}).get("mode") or "polymarket")}
 
 Контекст сессии:
 Текущий рынок URL: {_safe(session.get('current_market_url'), 500) or '—'}
@@ -111,7 +156,7 @@ NO TRADE / EDGE CANDIDATE / WATCHLIST / данных недостаточно
 """.strip()
 
 
-def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
+def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None) -> Dict[str, Any]:
     if not is_live_enabled():
         return {"ok": False, "message": LIVE_DISABLED_MESSAGE, "charged": False}
 
@@ -133,7 +178,11 @@ def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
             prompt_session["current_market_title"] = title
     memory_limit = get_memory_message_limit()
     recent = get_recent_context(int(session["id"]), memory_limit)
-    prompt = _build_live_prompt(prompt_session, recent, text)
+    router_result = router_result or {}
+    if router_result.get("mode") == "unknown":
+        message = "Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-пару или sports-матч/линию? Если есть цена/коэффициент, таймфрейм, минута матча или ссылка — пришли их одним сообщением."
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result)
 
     try:
         answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
@@ -147,6 +196,21 @@ def process_live_text(user_id: int, text: str) -> Dict[str, Any]:
         return {"ok": False, "message": INSUFFICIENT_LIVE_TOKENS_MESSAGE, "charged": False}
 
     session = update_context_from_user_text(session, text)
+    mode = router_result.get("mode")
+    entities = router_result.get("entities") or {}
+    context_bits = []
+    if mode:
+        context_bits.append(f"mode={mode}")
+    for key in ("asset", "pair", "timeframe", "exchange", "sport", "teams", "market", "odds", "score", "minute"):
+        if entities.get(key):
+            context_bits.append(f"{key}={entities.get(key)}")
+    if context_bits:
+        try:
+            from services.live_analyst_memory_service import update_current_market_context
+            title = "; ".join(str(x) for x in context_bits)[:500]
+            session = update_current_market_context(session, market_title=title)
+        except Exception:
+            pass
     save_message(int(session["id"]), user_id, "user", "text", text, tokens_charged=cost)
     save_message(int(session["id"]), user_id, "assistant", "text", answer, tokens_charged=0)
     return {"ok": True, "message": answer, "charged": True, "cost": cost, "session": session}
