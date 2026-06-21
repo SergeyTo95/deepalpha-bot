@@ -93,10 +93,59 @@ def test_crypto_dash_pair_timeframe():
 def test_crypto_russian_pair_request_routes_to_crypto_with_missing_pair():
     result = route(user_text="крипто пару")
     assert result["mode"] == "crypto"
-    assert result["missing_data"] == ["pair"]
+    assert "asset_or_pair" in result["missing_data"]
 
 
 def test_crypto_english_russian_pair_request_routes_to_crypto_with_missing_pair():
     result = route(user_text="Crypto-пару")
     assert result["mode"] == "crypto"
-    assert result["missing_data"] == ["pair"]
+    assert "asset_or_pair" in result["missing_data"]
+
+
+def test_natural_bitcoin_buy_question_routes_crypto_asset():
+    result = route(user_text="биткоин сейчас покупать или не нужно?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "BTC"
+    assert "timeframe" in result["missing_data"]
+
+
+def test_natural_btc_buy_question_routes_crypto_asset():
+    result = route(user_text="стоит брать BTC?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "BTC"
+
+
+def test_natural_bitok_question_routes_crypto_asset():
+    result = route(user_text="что по битку?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "BTC"
+
+
+def test_natural_eth_hold_exit_question_routes_crypto_asset():
+    result = route(user_text="ETH держать или выходить?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "ETH"
+
+
+def test_natural_efir_buy_question_routes_crypto_asset():
+    result = route(user_text="эфир сейчас покупать?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "ETH"
+
+
+def test_natural_sol_entry_question_routes_crypto_asset():
+    result = route(user_text="SOL норм для входа?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "SOL"
+
+
+def test_natural_ton_potential_question_routes_crypto_asset():
+    result = route(user_text="TON есть потенциал?")
+    assert result["mode"] == "crypto"
+    assert result["entities"]["asset"] == "TON"
+
+
+def test_generic_crypto_watch_request_routes_crypto_missing_asset_or_pair():
+    result = route(user_text="какую крипту посмотреть?")
+    assert result["mode"] == "crypto"
+    assert "asset_or_pair" in result["missing_data"]

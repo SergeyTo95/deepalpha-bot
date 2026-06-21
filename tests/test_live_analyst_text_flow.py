@@ -117,3 +117,44 @@ def test_sports_entities_update_useful_context_title(monkeypatch):
     assert result["ok"] is True
     assert len(context_updates) == 1
     assert context_updates[0]["market_title"] == "teams=['Team A', 'Team B']; odds=1.85"
+
+
+def test_crypto_asset_without_pair_still_uses_paid_consultant_path(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    prompts = []
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short conclusion: DATA NEEDED/WATCH\nDecision: DATA NEEDED\nNext step: пришли таймфрейм")
+
+    result = svc.process_live_text(
+        14,
+        "биткоин сейчас покупать или не нужно?",
+        router_result={"mode": "crypto", "entities": {"asset": "BTC"}, "missing_data": ["timeframe"]},
+    )
+
+    assert result["ok"] is True
+    assert result["charged"] is True
+    assert len(charges) == 1
+    assert len(saved) == 2
+    assert "crypto consultant" in prompts[0]
+    assert "DATA NEEDED/WATCH" in result["message"]
+    assert "asset': 'BTC" in prompts[0]
+
+
+def test_unknown_mode_asks_clarification_and_does_not_charge(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    called = False
+
+    def fake_llm(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "answer"
+
+    monkeypatch.setattr(svc, "generate_decision_text", fake_llm)
+
+    result = svc.process_live_text(15, "что думаешь?", router_result={"mode": "unknown"})
+
+    assert result["ok"] is False
+    assert result["charged"] is False
+    assert result["needs_clarification"] is True
+    assert called is False
+    assert charges == []
+    assert saved == []
