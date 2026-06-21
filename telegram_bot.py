@@ -8671,9 +8671,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     uid = message.from_user.id
     text = message.text or ""
     router_result = _route_live_input(uid, user_text=text, source_url=_live_router_source_url(text))
-    if await _send_live_router_stub(message, uid, router_result):
-        return
-    result = process_live_text(uid, text)
+    result = process_live_text(uid, text, router_result=router_result)
     await message.answer(
         result.get("message") or LIVE_UNAVAILABLE_MESSAGE,
         reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),

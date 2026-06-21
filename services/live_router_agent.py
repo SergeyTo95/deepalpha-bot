@@ -127,7 +127,7 @@ class LiveRouterAgent:
         if re.search(r"\b[\wА-Яа-я .'-]+\s+(vs|v)\s+[\wА-Яа-я .'-]+\b", text, re.I) or re.search(r"[А-Яа-яA-Za-z]+\s+-\s+[А-Яа-яA-Za-z]+", text): s += 0.35
         if re.search(r"\b\d+[-:]\d+\b|\b\d{1,3}'\b|\b[1-4]Q\b|\b(FT|HT)\b", text, re.I): s += 0.45
         if re.search(r"\b[12]\.[0-9]{2}\b|[+-]\d+(?:\.\d+)?", text): s += 0.25
-        for p in ["over", "under", "тотал", "фора", "обе забьют", "победа", "odds", "bet365", "stake", "1xbet", "melbet", "pin-up", "fonbet", "football", "soccer", "футбол", "tennis", "теннис", "basketball", "баскетбол", "hockey", "хоккей", "mma", "ufc", "shots on target"]:
+        for p in ["over", "under", "тотал", "фора", "обе забьют", "победа", "коэффициент", "кэф", "value", "odds", "bet365", "stake", "1xbet", "melbet", "pin-up", "fonbet", "football", "soccer", "футбол", "tennis", "теннис", "basketball", "баскетбол", "hockey", "хоккей", "mma", "ufc", "shots on target"]:
             if p in low: s += 0.15
         return min(s, 0.99)
 
@@ -148,11 +148,16 @@ class LiveRouterAgent:
         if m:
             second = re.split(r"\b(?:Over|Under|odds|\d+\s*minute)\b", m.group(2).strip(), flags=re.I)[0].strip()
             ent["teams"] = [m.group(1).strip(), second]
+        else:
+            dash = re.search(r"\b([A-Za-zА-Яа-я][A-Za-zА-Яа-я .'-]{1,30})\s+-\s+([A-Za-zА-Яа-я][A-Za-zА-Яа-я .'-]{1,30})\b", text)
+            if dash:
+                second = re.split(r"\b(?:over|under|тотал|фора|odds|коэффициент|кэф)\b", dash.group(2).strip(), flags=re.I)[0].strip()
+                ent["teams"] = [dash.group(1).strip(), second]
         score = re.search(r"\b\d+[-:]\d+\b", text)
         if score: ent["score"] = score.group(0)
         minute = re.search(r"\b(\d{1,3})(?:'|\s*minute\b)", text, re.I)
         if minute: ent["minute"] = minute.group(1)
-        market = re.search(r"\b(Over|Under)\s+\d+(?:\.\d+)?\b", text, re.I)
+        market = re.search(r"\b(Over|Under)\s+\d+(?:\.\d+)?\b", text, re.I) or re.search(r"\b(тотал|фора)\s*[+-]?\d+(?:\.\d+)?\b", text, re.I)
         if market: ent["market"] = market.group(0)
         odds = re.search(r"\bodds\s+([12]\.[0-9]{2})\b|\b([12]\.[0-9]{2})\b", text, re.I)
         if odds: ent["odds"] = float(odds.group(1) or odds.group(2))

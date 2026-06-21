@@ -57,3 +57,11 @@ def test_mixed_low_confidence_crypto_sports():
     result = route(user_text="BTC football")
     assert result["mode"] == "unknown"
     assert result["next_agent"] == "ClarificationAgent"
+
+
+def test_russian_sports_total_entities():
+    result = route(user_text="Реал - Барса тотал 2.5 коэффициент 1.87")
+    assert result["mode"] == "sports"
+    assert result["entities"]["teams"] == ["Реал", "Барса"]
+    assert result["entities"]["market"] == "тотал 2.5"
+    assert result["entities"]["odds"] == 1.87
