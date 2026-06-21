@@ -106,6 +106,7 @@ from services.live_analyst_billing_service import (
 from services.live_analyst_image_service import analyze_image_bytes
 from services.live_analyst_access import can_use_live_analyst
 from services.live_router_agent import LiveRouterAgent
+from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
 from services.live_analyst_memory_service import (
     exit_session as exit_live_session, get_or_create_active_session, is_active as is_live_session_active,
@@ -307,6 +308,12 @@ def t(user_id: int, key: str) -> str:
 
 def moderation_message(lang: str) -> str:
     return get_moderation_message(lang)
+
+
+def _detect_live_ui_language(message: types.Message, text: str) -> str:
+    stored = get_user_lang(message.from_user.id) if message.from_user else None
+    code = getattr(message.from_user, "language_code", None) if message.from_user else None
+    return detect_live_ui_language(text, stored_language=stored, telegram_language_code=code)
 
 
 def moderation_alert_text(lang: str) -> str:
@@ -8670,12 +8677,27 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     _register_user(message)
     uid = message.from_user.id
     text = message.text or ""
+    ui_language = _detect_live_ui_language(message, text)
     router_result = _route_live_input(uid, user_text=text, source_url=_live_router_source_url(text))
-    result = process_live_text(uid, text, router_result=router_result)
-    await message.answer(
-        result.get("message") or LIVE_UNAVAILABLE_MESSAGE,
-        reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),
-    )
+    try:
+        await bot.send_chat_action(message.chat.id, types.ChatActions.TYPING)
+    except Exception:
+        pass
+    thinking_message = None
+    try:
+        thinking_message = await message.answer(get_live_thinking_message(ui_language))
+    except Exception:
+        thinking_message = None
+    result = process_live_text(uid, text, router_result=router_result, ui_language=ui_language)
+    final_text = result.get("message") or LIVE_UNAVAILABLE_MESSAGE
+    final_markup = private_reply_markup(message, get_live_analyst_keyboard(uid))
+    if thinking_message is not None:
+        try:
+            await thinking_message.edit_text(final_text, reply_markup=final_markup)
+            return
+        except Exception:
+            pass
+    await message.answer(final_text, reply_markup=final_markup)
 
 
 

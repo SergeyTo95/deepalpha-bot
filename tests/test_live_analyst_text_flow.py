@@ -158,3 +158,54 @@ def test_unknown_mode_asks_clarification_and_does_not_charge(monkeypatch):
     assert called is False
     assert charges == []
     assert saved == []
+
+
+def test_ru_prompt_contains_russian_language_instruction():
+    prompt = svc._build_live_prompt({"id": 1}, [], "BTC", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="ru")
+    assert "Отвечай на русском." in prompt
+
+
+def test_en_prompt_contains_english_language_instruction():
+    prompt = svc._build_live_prompt({"id": 1}, [], "BTC", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
+    assert "Reply in English." in prompt
+
+
+def test_research_context_included_in_prompt():
+    prompt = svc._build_live_prompt(
+        {"id": 1}, [], "BTC now", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en",
+        research_context={"ok": True, "summary": "BTC spot ETF flow summary", "freshness": "fresh", "sources": [{"title": "Source", "url": "https://example.com", "published_at": "today"}]},
+    )
+    assert "BTC spot ETF flow summary" in prompt
+    assert "https://example.com" in prompt
+
+
+def test_research_failure_does_not_crash_answer_path(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
+    monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short take: limited\nDecision: DATA NEEDED\nNext step: send chart")
+    result = svc.process_live_text(16, "should I buy bitcoin now?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert len(saved) == 2
+
+
+def test_unknown_mode_english_clarification_and_does_not_charge(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "generate_decision_text", lambda *args, **kwargs: "answer")
+    result = svc.process_live_text(17, "what?", router_result={"mode": "unknown"}, ui_language="en")
+    assert result["ok"] is False
+    assert result["charged"] is False
+    assert "Please clarify" in result["message"]
+    assert charges == []
+    assert saved == []
+
+
+def test_ru_thinking_message_helper_returns_russian_text():
+    from services.live_language_service import get_live_thinking_message
+    assert get_live_thinking_message("ru") == "🧠 Думаю… проверяю свежий контекст, риск и возможные сценарии."
+
+
+def test_en_thinking_message_helper_returns_english_text():
+    from services.live_language_service import get_live_thinking_message
+    assert get_live_thinking_message("en") == "🧠 Thinking… checking fresh context, risk, and possible scenarios."

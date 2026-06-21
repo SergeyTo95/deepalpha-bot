@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.llm_service import generate_decision_text
 from services.skill_loader_service import load_skills
@@ -14,6 +14,7 @@ from services.live_analyst_billing_service import (
     charge_live_request,
     get_live_request_cost,
 )
+from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_analyst_memory_service import (
     extract_market_title,
     extract_polymarket_url,
@@ -77,7 +78,24 @@ def _format_router_context(router_result: Dict[str, Any]) -> str:
     )
 
 
-def _consultant_rules_for_mode(mode: str) -> str:
+def _format_research_context(research_context: Optional[Dict[str, Any]]) -> str:
+    if not research_context:
+        return "Fresh research: not requested."
+    sources = research_context.get("sources") or []
+    source_lines = []
+    for src in sources[:5]:
+        source_lines.append(f"- {src.get('title') or src.get('source') or 'source'}: {src.get('url') or ''} ({src.get('published_at') or 'date unknown'})")
+    return "\n".join([
+        f"Fresh research ok: {bool(research_context.get('ok'))}",
+        f"Freshness: {research_context.get('freshness') or 'unknown'}",
+        f"Summary: {_safe(research_context.get('summary'), 1600) or 'fresh context unavailable'}",
+        "Sources:",
+        "\n".join(source_lines) if source_lines else "—",
+        f"Error/fallback: {_safe(research_context.get('error'), 500) or '—'}",
+    ])
+
+
+def _consultant_rules_for_mode(mode: str, ui_language: str = "ru") -> str:
     if mode == "crypto":
         return """
 Режим: crypto consultant. Если нет live котировок/стакана/графика, НЕ говори просто «агент не подключён».
@@ -107,12 +125,15 @@ def _consultant_rules_for_mode(mode: str) -> str:
 """.strip()
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None) -> str:
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None) -> str:
+    ui_language = "ru" if ui_language == "ru" else "en"
+    language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
     skill_block = f"\nInternal DeepAlpha skills for this follow-up:\n{skill_context}\n" if skill_context else ""
     return f"""
 Ты — Live Analyst DeepAlpha, платный live-консультант по Polymarket, crypto и sports betting.
-Отвечай по-русски, кратко, профессионально и естественно как аналитик-консультант.
+{language_instruction}
+Отвечай кратко, профессионально и естественно как аналитик-консультант.
 
 Строгие правила:
 - Не являешься Jarvis и не упоминаешь внутренние режимы.
@@ -125,8 +146,11 @@ def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, 
 Router context:
 {_format_router_context(router_result or {})}
 
+Research context:
+{_format_research_context(research_context)}
+
 Правила для этого запроса:
-{_consultant_rules_for_mode((router_result or {}).get("mode") or "polymarket")}
+{_consultant_rules_for_mode((router_result or {}).get("mode") or "polymarket", ui_language)}
 
 Контекст сессии:
 Текущий рынок URL: {_safe(session.get('current_market_url'), 500) or '—'}
@@ -141,26 +165,14 @@ Memory summary: {_safe(session.get('memory_summary'), 1200) or '—'}
 Новое сообщение пользователя:
 {_safe(user_text, 3000)}
 {skill_block}
-Формат ответа:
-Короткий вывод:
-...
-
-Почему:
-1. ...
-2. ...
-3. ...
-
-Что может изменить оценку:
-...
-
-Decision:
-NO TRADE / EDGE CANDIDATE / WATCHLIST / данных недостаточно
-
-Не финансовый совет.
+Формат для RU crypto: 🧠 Коротко: / Что вижу: / Свежий контекст: / Риск: / Что подтвердит/отменит идею: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Дальше могу: ...
+Format for EN crypto: 🧠 Short take: / What I see: / Fresh context: / Risk: / What would confirm/invalidate the idea: / Decision: NO TRADE / WATCH / DATA NEEDED / EDGE CANDIDATE / Next step: ...
+For non-crypto keep the same safety framing and always include one relevant next analysis step.
+Не финансовый совет / Not financial advice.
 """.strip()
 
 
-def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None) -> Dict[str, Any]:
+def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     if not is_live_enabled():
         return {"ok": False, "message": LIVE_DISABLED_MESSAGE, "charged": False}
 
@@ -183,10 +195,18 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     memory_limit = get_memory_message_limit()
     recent = get_recent_context(int(session["id"]), memory_limit)
     router_result = router_result or {}
+    ui_language = "ru" if ui_language == "ru" else "en"
     if router_result.get("mode") == "unknown":
-        message = "Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-пару или sports-матч/линию? Если есть цена/коэффициент, таймфрейм, минута матча или ссылка — пришли их одним сообщением."
+        message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, a crypto asset/pair, or a sports event/line. Send a link, screenshot, ticker, timeframe, or odds.")
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result)
+    research_context = None
+    if fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
+        try:
+            research_context = get_live_research_context(text, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results())
+        except Exception as exc:
+            logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
+            research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context)
 
     try:
         answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
