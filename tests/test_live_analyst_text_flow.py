@@ -230,6 +230,7 @@ def test_live_research_mocked_existing_search_success(monkeypatch):
     research._CACHE.clear()
     monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
     monkeypatch.setattr(research, "_run_existing_search", lambda *args, **kwargs: [{"title": "BTC Market", "url": "https://example.com", "source": "example", "published": "today", "snippet": "BTC fresh summary"}])
     result = research.get_live_research_context("BTC now", "crypto", {"asset": "BTC"}, "en")
     assert result["ok"] is True
@@ -261,3 +262,40 @@ def test_process_live_text_research_failure_still_charges_once(monkeypatch):
     assert len(charges) == 1
     assert "provider returned no sources" in prompts[0]
     assert len(saved) == 2
+
+
+def test_live_research_enabled_auto_with_existing_web_config(monkeypatch):
+    from services import live_research_service as research
+    monkeypatch.delenv("LIVE_WEB_RESEARCH_ENABLED", raising=False)
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
+    assert research.live_research_enabled() is True
+
+
+def test_live_research_enabled_explicit_false_overrides_web_config(monkeypatch):
+    from services import live_research_service as research
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
+    assert research.live_research_enabled() is False
+
+
+def test_research_ok_prompt_forbids_no_current_data_claim():
+    prompt = svc._build_live_prompt(
+        {"id": 1}, [], "BTC now", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en",
+        research_context={"ok": True, "summary": "BTC fresh summary", "freshness": "fresh", "sources": [{"title": "Market Source", "url": "https://example.com", "source": "example", "published_at": "today"}]},
+    )
+    assert "You DO have fresh web context" in prompt
+    assert "Do not claim" in prompt
+    assert "no current data" in prompt
+
+
+def test_btc_research_queries_are_targeted():
+    from services.live_research_service import _build_research_queries
+    queries = _build_research_queries("биткоин сейчас покупать?", {"asset": "BTC"})
+    assert queries == [
+        "BTC price today crypto market",
+        "Bitcoin BTC latest market news today",
+        "BTC USDT price trend today",
+        "Bitcoin ETF flows crypto market today",
+    ]

@@ -1501,6 +1501,53 @@ async def _send_long_message(
 
 
 
+
+def split_telegram_text(text: str, max_len: int = 3500) -> List[str]:
+    text = str(text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_len:
+        return [text]
+    chunks: List[str] = []
+    remaining = text
+    sentence_breaks = (". ", "! ", "? ", "。", "\n\n", "\n")
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining.strip())
+            break
+        window = remaining[:max_len]
+        cut = -1
+        for sep in sentence_breaks:
+            pos = window.rfind(sep)
+            if pos > cut:
+                cut = pos + len(sep)
+        if cut < int(max_len * 0.55):
+            cut = window.rfind(" ")
+        if cut < int(max_len * 0.55):
+            cut = max_len
+        chunk = remaining[:cut].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[cut:].strip()
+    return chunks
+
+
+async def _send_live_final_chunks(message: types.Message, thinking_message, final_text: str, final_markup=None, max_len: int = 3500) -> None:
+    chunks = split_telegram_text(final_text or LIVE_UNAVAILABLE_MESSAGE, max_len=max_len) or [LIVE_UNAVAILABLE_MESSAGE]
+    start_idx = 0
+    if thinking_message is not None:
+        try:
+            await thinking_message.edit_text(chunks[0], reply_markup=final_markup if len(chunks) == 1 else None)
+            start_idx = 1
+        except Exception:
+            try:
+                await thinking_message.delete()
+            except Exception:
+                pass
+            start_idx = 0
+    for idx in range(start_idx, len(chunks)):
+        await message.answer(chunks[idx], reply_markup=final_markup if idx == len(chunks) - 1 else None)
+
 def _escape(text: str) -> str:
     return str(text).replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
 
@@ -8691,16 +8738,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     result = process_live_text(uid, text, router_result=router_result, ui_language=ui_language)
     final_text = result.get("message") or LIVE_UNAVAILABLE_MESSAGE
     final_markup = private_reply_markup(message, get_live_analyst_keyboard(uid))
-    if thinking_message is not None:
-        try:
-            await thinking_message.edit_text(final_text, reply_markup=final_markup)
-            return
-        except Exception:
-            try:
-                await thinking_message.delete()
-            except Exception:
-                pass
-    await message.answer(final_text, reply_markup=final_markup)
+    await _send_live_final_chunks(message, thinking_message, final_text, final_markup=final_markup)
 
 
 
