@@ -17,6 +17,7 @@ from services.live_analyst_billing_service import (
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
 from services.crypto_market_context_service import get_crypto_market_context
+from services.sports_context_service import get_sports_context
 from services.live_analyst_memory_service import (
     extract_market_title,
     extract_polymarket_url,
@@ -112,6 +113,33 @@ def _format_crypto_market_context(market_context: Optional[Dict[str, Any]]) -> s
     ])
 
 
+
+def _format_sports_context(sports_context: Optional[Dict[str, Any]]) -> str:
+    if not sports_context:
+        return "Sports data context: not requested."
+    sources = sports_context.get("sources") or []
+    source_lines = []
+    for src in sources[:6]:
+        source_lines.append(f"- {src.get('title') or src.get('source') or 'source'}: {src.get('url') or ''}")
+    return "\n".join([
+        f"Sports context ok: {bool(sports_context.get('ok'))}",
+        f"Partial: {bool(sports_context.get('partial'))}",
+        f"Sport/league: {sports_context.get('sport') or '—'} / {sports_context.get('league') or '—'}",
+        f"Teams: {sports_context.get('teams') or []}",
+        f"Event time/status/score: {sports_context.get('event_time') or '—'} / {sports_context.get('status') or 'unknown'} / {sports_context.get('score') or '—'}",
+        f"Participants: {sports_context.get('participants') or []}",
+        f"Lineups: {sports_context.get('lineups') or []}",
+        f"Injuries: {sports_context.get('injuries') or []}",
+        f"Odds: {sports_context.get('odds') or []}",
+        f"News summary: {_safe(sports_context.get('news_summary'), 1600) or '—'}",
+        f"Stats summary: {_safe(sports_context.get('stats_summary'), 900) or '—'}",
+        f"Polymarket markets: {sports_context.get('polymarket_markets') or []}",
+        "Sources:",
+        "\n".join(source_lines) if source_lines else "—",
+        f"Error/fallback: {_safe(sports_context.get('error'), 500) or '—'}",
+    ])
+
+
 def _format_research_context(research_context: Optional[Dict[str, Any]]) -> str:
     if not research_context:
         return "Fresh research: not requested."
@@ -195,7 +223,7 @@ Keep crypto answers complete and under 1200–1600 characters.
 """.strip()
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None) -> str:
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None) -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -224,6 +252,13 @@ Crypto market context:
 If Market context ok is true: use the derived price, support/resistance, better_zone, confirmation and invalidation to give an actionable scenario/zones. If a level is derived approximately, call it an approximate zone.
 If Market context ok is false: do not invent entry levels, support/resistance, invalidation, or current price from imagination; use DATA NEEDED/WATCH and ask for timeframe/chart if needed.
 If no timeframe is provided: ask for timeframe, but still give high-level WATCH/DATA NEEDED using available context.
+
+Sports understanding context:
+{_format_understanding_context(understanding) if (understanding or {}).get('mode') == 'sports' else 'Sports understanding: not requested.'}
+
+Sports data context:
+{_format_sports_context(sports_context)}
+Sports safety rules: If sports_context ok/partial and sources exist, use them. If data is missing, say what is missing. Do not invent kickoff time, players, lineups, odds, injuries, or score. For betting questions do not give a direct gambling command; use NO BET / WATCH / DATA NEEDED / EDGE CANDIDATE only if... Mention risk and what would change the view. RU schedule format: 🧠 Коротко: / Данные: / Дальше:. RU betting format: 🧠 Коротко: / Контекст: / Риск: / Decision: / Дальше:. EN equivalents: Short take / Context / Risk / Decision / Next.
 
 Research context:
 {_format_research_context(research_context)}
@@ -284,8 +319,17 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
     understanding = understand_live_request(text, router_result, prompt_session, ui_language=ui_language)
     logger.info("live_understanding_result mode=%s intent=%s asset=%s pair=%s timeframe=%s missing=%s", understanding.get("mode"), understanding.get("intent"), understanding.get("asset"), understanding.get("pair"), understanding.get("timeframe"), understanding.get("missing"))
+    if understanding.get("mode") == "sports":
+        logger.info("live_sports_understanding_result sport=%s intent=%s teams=%s market=%s missing=%s", understanding.get("sport"), understanding.get("intent"), understanding.get("teams"), understanding.get("market"), understanding.get("missing"))
     crypto_market_context = None
+    sports_context = None
     needs = understanding.get("needs") or {}
+    if understanding.get("mode") == "sports":
+        try:
+            sports_context = get_sports_context(understanding, ui_language=ui_language)
+        except Exception as exc:
+            logger.warning("live_sports_context_failed user_id=%s error=%s", user_id, exc)
+            sports_context = {"ok": False, "partial": True, "sources": [], "error": str(exc)}
     if understanding.get("mode") == "crypto" and (needs.get("market_data") or needs.get("ohlcv")):
         try:
             crypto_market_context = get_crypto_market_context(understanding.get("pair") or ((understanding.get("asset") or "") + "USDT"), understanding.get("timeframe") or "", understanding.get("horizon") or "")
@@ -299,7 +343,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         except Exception as exc:
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context)
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context)
 
     try:
         answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()

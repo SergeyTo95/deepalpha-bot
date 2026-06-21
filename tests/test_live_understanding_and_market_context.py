@@ -63,3 +63,46 @@ def test_market_context_does_not_invent_levels_on_error(monkeypatch):
     assert result["ok"] is False
     assert result["support_levels"] == []
     assert result["entry_context"] == {}
+
+
+def test_sports_schedule_france_iraq():
+    result = understand_live_request("Когда матч Франция — Ирак?", {"mode": "sports", "entities": {}}, {}, "ru")
+    assert result["mode"] == "sports"
+    assert result["intent"] == "schedule_check"
+    assert result["teams"] == ["France", "Iraq"]
+    assert result["sport"] == "football"
+    assert result["needs"]["sports_schedule"] is True
+    assert result["needs"]["web_research"] is True
+
+
+def test_sports_total_value_real_barca():
+    result = understand_live_request("Реал — Барса тотал 2.5, есть value?", {"mode": "sports", "entities": {}}, {}, "ru")
+    assert result["mode"] == "sports"
+    assert result["intent"] == "odds_value"
+    assert result["teams"] == ["Real", "Barcelona"]
+    assert result["market"] == "total"
+    assert result["line"] == "2.5"
+    assert result["needs"]["odds"] is True
+    assert result["needs"]["sports_stats"] is True
+    assert result["needs"]["sports_news"] is True
+
+
+def test_sports_betting_angle_england_ghana():
+    result = understand_live_request("На кого ставить Англия — Гана?", {"mode": "sports", "entities": {}}, {}, "ru")
+    assert result["intent"] == "betting_angle"
+    assert result["teams"] == ["England", "Ghana"]
+    assert result["needs"]["odds"] is True
+    assert result["needs"]["sports_news"] is True
+    assert result["needs"]["sports_stats"] is True
+
+
+def test_sports_participants_missing_tournament():
+    result = understand_live_request("Какие игроки в турнире?", {"mode": "sports", "entities": {}}, {}, "ru")
+    assert result["intent"] == "participants_check"
+    assert "tournament" in result["missing"]
+
+
+def test_sports_polymarket_market_need():
+    result = understand_live_request("Есть рынок Polymarket на этот матч?", {"mode": "sports", "entities": {}}, {}, "ru")
+    assert result["intent"] == "polymarket_sports_market"
+    assert result["needs"]["polymarket"] is True

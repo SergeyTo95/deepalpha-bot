@@ -355,3 +355,19 @@ def test_crypto_prompt_market_context_false_forbids_inventing_levels():
     prompt = svc._build_live_prompt({"id": 1}, [], "BTC now buy?", {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en", crypto_market_context={"ok": False, "error": "no data", "support_levels": [], "resistance_levels": []})
     assert "do not invent entry levels" in prompt
     assert "DATA NEEDED/WATCH" in prompt
+
+
+def test_sports_understanding_calls_context_and_prompt_includes_rules(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    prompts = []
+    called = []
+    monkeypatch.setattr(svc, "get_sports_context", lambda understanding, ui_language="ru": called.append(understanding) or {"ok": True, "partial": True, "sport": "football", "teams": understanding.get("teams"), "sources": [{"title": "source", "url": "https://example.com"}], "news_summary": "mock sports news"})
+    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "🧠 Коротко:\nWATCH\nDecision:\nWATCH")
+    result = svc.process_live_text(21, "Реал — Барса тотал 2.5, есть value?", router_result={"mode": "sports", "entities": {"teams": ["Real", "Barcelona"]}}, ui_language="ru")
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert called
+    assert "Sports data context" in prompts[0]
+    assert "Do not invent kickoff time" in prompts[0]
+    assert "NO BET / WATCH / DATA NEEDED / EDGE CANDIDATE" in prompts[0]
+    assert "mock sports news" in prompts[0]
