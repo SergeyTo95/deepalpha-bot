@@ -299,3 +299,40 @@ def test_btc_research_queries_are_targeted():
         "BTC USDT price trend today",
         "Bitcoin ETF flows crypto market today",
     ]
+
+
+def test_crypto_ru_prompt_enforces_consultant_decision_first_with_research_ok():
+    prompt = svc._build_live_prompt(
+        {"id": 1}, [], "биткоин сейчас покупать или не нужно?",
+        {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="ru",
+        research_context={"ok": True, "summary": "BTC trades near a range", "freshness": "fresh", "sources": [{"title": "CoinDesk", "url": "https://example.com", "published_at": "today"}]},
+    )
+    assert "не говори «невозможно принять решение» первым" in prompt
+    assert "Сначала короткий вывод" in prompt
+    assert "Decision-first" in prompt
+    assert "WATCH / DATA NEEDED / NO TRADE / EDGE CANDIDATE" in prompt
+    assert "Дальше" in prompt
+
+
+def test_crypto_en_prompt_enforces_consultant_decision_first_with_research_ok():
+    prompt = svc._build_live_prompt(
+        {"id": 1}, [], "should I buy bitcoin now?",
+        {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en",
+        research_context={"ok": True, "summary": "BTC fresh summary", "freshness": "fresh", "sources": [{"title": "Coinbase", "url": "https://example.com", "published_at": "today"}]},
+    )
+    assert "Decision-first" in prompt
+    assert "Fresh context" in prompt
+    assert "Next" in prompt
+    assert "WATCH / DATA NEEDED / NO TRADE / EDGE CANDIDATE" in prompt
+
+
+def test_crypto_prompt_research_failure_instructs_cautious_fallback_without_pretending_current_data():
+    prompt = svc._build_live_prompt(
+        {"id": 1}, [], "BTC now buy?",
+        {"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en",
+        research_context={"ok": False, "summary": "", "freshness": "fresh context unavailable", "sources": [], "error": "disabled"},
+    )
+    assert "fresh search returned no sources/is disabled" in prompt
+    assert "answer cautiously with DATA NEEDED/WATCH" in prompt
+    assert "do not pretend" in prompt.lower() or "не притворяйся" in prompt
+    assert "Fresh search did not return sources / is disabled, so this is limited." in prompt
