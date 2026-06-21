@@ -43,7 +43,8 @@ class LiveRouterAgent:
         if mode == "crypto":
             entities = self._crypto_entities(text)
             screen_type = self._crypto_screen_type(text)
-            return self._result(mode, screen_type, min(score, 0.99), self.CRYPTO_NEXT, entities, [], "Detected crypto market/chart signals.", "show_crypto_live_stub")
+            missing_data = self._crypto_missing_data(text, entities)
+            return self._result(mode, screen_type, min(score, 0.99), self.CRYPTO_NEXT, entities, missing_data, "Detected crypto market/chart signals.", "show_crypto_live_stub")
         entities = self._sports_entities(text)
         screen_type = self._sports_screen_type(text)
         return self._result(mode, screen_type, min(score, 0.99), self.SPORTS_NEXT, entities, [], "Detected sports, odds, or live-score signals.", "show_sports_live_stub")
@@ -92,13 +93,57 @@ class LiveRouterAgent:
 
     def _crypto_score(self, text: str) -> float:
         up = text.upper(); low = text.lower(); s = 0.0
-        if re.search(r"\b(BTC|ETH|SOL|TON|BNB|XRP|DOGE|PEPE|MEME)\b", up): s += 0.35
-        if re.search(r"\b[A-Z]{2,10}(USDT|USDC|USD)\b", up): s += 0.35
+        quote_assets = r"USDT|USDC|USD"
+        base_assets = r"BTC|ETH|SOL|TON|BNB|XRP|DOGE|PEPE|MEME"
+        if re.search(rf"\b[A-Z]{{2,10}}(?:{quote_assets})\b", up):
+            s += 0.7
+        if re.search(rf"\b[A-Z]{{2,10}}\s*[/\- ]\s*(?:{quote_assets})\b", up):
+            s += 0.7
+        if re.search(rf"\b(?:{base_assets})\b", up):
+            s += 0.2
+        if self._crypto_asset_from_text(text):
+            s += 0.42
         for p in ["BINANCE", "BYBIT", "OKX", "COINBASE", "TRADINGVIEW", "DEXSCREENER", "DEX SCREENER"]:
             if p in up: s += 0.25
-        for p in ["1m", "5m", "15m", "1h", "4h", "1d", "rsi", "macd", "ema", "volume", "funding", "open interest", "liquidation", "long", "short", "support", "resistance", "liquidity", "fdv", "market cap"]:
-            if re.search(rf"(?<!\w){re.escape(p)}(?!\w)", low): s += 0.12
+        for p in ["crypto", "крипта", "крипту", "крипто", "монета", "coin", "token", "токен", "пара", "пару", "актив"]:
+            if re.search(rf"(?<!\w){re.escape(p)}(?!\w)", low): s += 0.5
+        for p in ["1m", "5m", "15m", "1h", "4h", "1d", "rsi", "macd", "ema", "volume", "funding", "open interest", "liquidation", "long", "short", "support", "resistance", "liquidity", "fdv", "market cap", "вход", "цена", "график", "свеча", "свечи", "уровень", "уровни", "лонг", "шорт", "стоп", "тейк", "entry"]:
+            if re.search(rf"(?<!\w){re.escape(p)}(?!\w)", low): s += 0.15
+        for p in ["купить", "покупать", "брать", "войти", "входить", "держать", "продать", "продавать", "выходить", "сейчас", "стоит ли", "можно ли", "прогноз", "рост", "падение", "коррекция", "дно", "памп", "дамп", "hold", "exit", "buy", "sell", "цель", "риск", "потенциал", "растет", "растёт", "норм", "что по", "посмотреть"]:
+            if re.search(rf"(?<!\w){re.escape(p)}(?!\w)", low): s += 0.3
         return min(s, 0.99)
+
+    def _crypto_asset_from_text(self, text: str) -> Optional[str]:
+        low = text.lower()
+        alias_groups = [
+            ("BTC", ["bitcoin", "btc", "биткоин", "биток", "битка", "битку"]),
+            ("ETH", ["ethereum", "eth", "эфир", "эфира", "эфиру"]),
+            ("SOL", ["solana", "sol", "солана", "солану"]),
+            ("TON", ["toncoin", "ton", "тон"]),
+            ("BNB", ["bnb"]),
+            ("XRP", ["xrp"]),
+            ("DOGE", ["doge"]),
+            ("PEPE", ["pepe"]),
+            ("MEME", ["meme"]),
+        ]
+        for asset, aliases in alias_groups:
+            for alias in aliases:
+                if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", low):
+                    return asset
+        return None
+
+    def _crypto_requires_timeframe(self, text: str) -> bool:
+        low = text.lower()
+        timing_keywords = ["купить", "покупать", "брать", "вход", "войти", "входить", "держать", "продать", "продавать", "выходить", "сейчас", "стоит ли", "можно ли", "long", "short", "hold", "entry", "exit", "buy", "sell", "стоп", "тейк"]
+        return any(re.search(rf"(?<!\w){re.escape(p)}(?!\w)", low) for p in timing_keywords)
+
+    def _crypto_missing_data(self, text: str, entities: Dict[str, Any]) -> List[str]:
+        missing: List[str] = []
+        if not entities.get("pair") and not entities.get("asset"):
+            missing.append("asset_or_pair")
+        if (entities.get("pair") or entities.get("asset")) and not entities.get("timeframe") and self._crypto_requires_timeframe(text):
+            missing.append("timeframe")
+        return missing
 
     def _crypto_screen_type(self, text: str) -> str:
         low = text.lower()
@@ -110,12 +155,16 @@ class LiveRouterAgent:
     def _crypto_entities(self, text: str) -> Dict[str, Any]:
         up = text.upper(); ent = {}
         pair = re.search(r"\b([A-Z]{2,10}(?:USDT|USDC|USD))\b", up)
+        separated_pair = re.search(r"\b([A-Z]{2,10})\s*[/\- ]\s*(USDT|USDC|USD)\b", up)
         if pair:
             ent["pair"] = pair.group(1)
             ent["asset"] = re.sub(r"(USDT|USDC|USD)$", "", pair.group(1))
+        elif separated_pair:
+            ent["pair"] = f"{separated_pair.group(1)}{separated_pair.group(2)}"
+            ent["asset"] = separated_pair.group(1)
         else:
-            asset = re.search(r"\b(BTC|ETH|SOL|TON|BNB|XRP|DOGE|PEPE|MEME)\b", up)
-            if asset: ent["asset"] = asset.group(1)
+            asset = self._crypto_asset_from_text(text)
+            if asset: ent["asset"] = asset
         tf = re.search(r"\b(1m|5m|15m|1h|4h|1d)\b", text, re.I)
         if tf: ent["timeframe"] = tf.group(1)
         for ex in ["Binance", "Bybit", "OKX", "Coinbase", "TradingView", "Dexscreener"]:
