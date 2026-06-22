@@ -423,3 +423,91 @@ def test_process_live_text_uses_safe_fallback_when_repair_still_incomplete(monke
     assert "Decision:" in result["message"]
     assert len(calls) == 2
     assert len(charges) == 1
+
+
+def test_format_live_final_answer_normalizes_money_levels():
+    result = svc.format_live_final_answer(
+        "поддержки $64000.0 и сопротивления $64500.0\nDecision: WATCH",
+        {"mode": "polymarket", "recommended_decision_labels": ["WATCH"]},
+        ui_language="ru",
+    )
+    assert "$64,000" in result
+    assert "$64,500" in result
+    assert "$64000.0" not in result
+
+
+def test_format_live_final_answer_normalizes_decision_newline():
+    result = svc.format_live_final_answer(
+        "Коротко: ждать\nDecision:\nWATCH",
+        {"mode": "polymarket", "recommended_decision_labels": ["WATCH"]},
+        ui_language="ru",
+    )
+    assert "Decision: WATCH" in result
+    assert "Decision:\nWATCH" not in result
+
+
+def test_crypto_formatter_includes_final_decision_line():
+    result = svc.format_live_final_answer(
+        "Коротко: сейчас скорее ждать подтверждения.",
+        {"mode": "crypto", "recommended_decision_labels": ["WATCH"], "derived_facts": {}, "answer_policy": {"can_give_levels": False}},
+        ui_language="ru",
+    )
+    assert result.endswith("Decision: WATCH")
+    assert "Данные:" in result
+    assert "Сценарий:" in result
+    assert "Риск:" in result
+
+
+def test_crypto_formatter_does_not_invent_levels_without_evidence():
+    result = svc.format_live_final_answer(
+        "Коротко: BTC лучше наблюдать.\nDecision: WATCH",
+        {"mode": "crypto", "recommended_decision_labels": ["WATCH"], "derived_facts": {}, "answer_policy": {"can_give_levels": False}},
+        ui_language="ru",
+    )
+    assert "$64,000" not in result
+    assert "Поддержка:" not in result
+    assert "Сопротивление:" not in result
+    assert "подтверждённых уровней" in result
+
+
+def test_crypto_formatter_normalizes_raw_evidence_levels():
+    result = svc.format_live_final_answer(
+        "Коротко: поддержки $64000.0 и сопротивления 64500.0 USDT.\nDecision:\nWATCH",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {"current_price": 64200.0, "support_levels": [64000.0], "resistance_levels": [64500.0]},
+            "answer_policy": {"can_give_levels": True},
+        },
+        ui_language="ru",
+    )
+    assert "$64,000" in result
+    assert "$64,500" in result
+    assert "$64000.0" not in result
+
+
+def test_process_live_text_applies_final_formatter_before_saving(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {
+        "ok": True,
+        "pair": "BTCUSDT",
+        "timeframe": "15m",
+        "price": 64200.0,
+        "price_source": "mock",
+        "support_levels": [64000.0],
+        "resistance_levels": [64500.0],
+        "entry_context": {"better_zone": 64000.0, "confirmation": "reclaim", "invalidation": "below 64000"},
+        "sources": ["mock"],
+    })
+    monkeypatch.setattr(svc, "validate_live_answer_against_evidence", lambda answer, evidence_pack: {"ok": True, "severity": "none", "issues": []})
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Коротко: сейчас скорее WATCH, поддержки $64000.0 и сопротивления $64500.0, вход только после подтверждения реакции от уровня. Риск — ложный пробой и быстрый возврат в диапазон, поэтому без подтверждения лучше не форсировать сделку. Сценарий — дождаться реакции, затем оценить риск.\nDecision:\nWATCH")
+
+    result = svc.process_live_text(22, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert "$64,000" in result["message"]
+    assert "$64,500" in result["message"]
+    assert "Decision: WATCH" in result["message"]
+    assert saved[1][0][4] == result["message"]
+    assert len(charges) == 1
