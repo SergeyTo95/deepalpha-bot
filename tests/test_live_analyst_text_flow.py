@@ -511,3 +511,78 @@ def test_process_live_text_applies_final_formatter_before_saving(monkeypatch):
     assert "Decision: WATCH" in result["message"]
     assert saved[1][0][4] == result["message"]
     assert len(charges) == 1
+
+
+def test_crypto_formatter_evidence_levels_remove_missing_level_contradictions_and_stale_price():
+    result = svc.format_live_final_answer(
+        "Данные: текущая цена по CoinMarketCap $64,100.\nСценарий: отсутствуют уровни поддержки и сопротивления, нет оснований для входа.\nDecision: DATA NEEDED",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {
+                "current_price": 65536,
+                "support_levels": [65500, 63868],
+                "resistance_levels": [65590, 66000],
+                "better_zone": 65500,
+            },
+            "answer_policy": {"can_give_levels": True},
+        },
+        ui_language="ru",
+    )
+    assert "$65,536" in result
+    assert "Поддержка: $65,500 / $63,868" in result
+    assert "Сопротивление: $65,590 / $66,000" in result
+    assert "отсутствуют уровни" not in result.lower()
+    assert "$64,100" not in result
+    assert result.endswith("Decision: WATCH")
+
+
+def test_crypto_formatter_allows_missing_levels_phrase_when_evidence_lacks_levels():
+    result = svc.format_live_final_answer(
+        "Коротко: подтверждённых уровней нет.\nDecision: DATA NEEDED",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["DATA NEEDED"],
+            "derived_facts": {"current_price": 65536, "support_levels": [], "resistance_levels": []},
+            "answer_policy": {"can_give_levels": False},
+        },
+        ui_language="ru",
+    )
+    assert "$65,536" in result
+    assert "Поддержка:" not in result
+    assert "Сопротивление:" not in result
+    assert "подтверждённых уровней нет" in result.lower()
+
+
+def test_fact_list_joins_multiple_money_levels_with_slash():
+    assert svc._fact_list([65500, 63868]) == "$65,500 / $63,868"
+
+
+def test_process_live_text_saves_contradiction_free_crypto_answer(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {
+        "ok": True,
+        "pair": "BTCUSDT",
+        "timeframe": "15m",
+        "price": 65536,
+        "price_source": "mock",
+        "ohlcv": [1],
+        "support_levels": [65500, 63868],
+        "resistance_levels": [65590, 66000],
+        "entry_context": {"better_zone": 65500, "confirmation": "reaction", "invalidation": "below 63868"},
+        "sources": ["mock"],
+    })
+    monkeypatch.setattr(svc, "validate_live_answer_against_evidence", lambda answer, evidence_pack: {"ok": True, "severity": "none", "issues": []})
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Данные: текущая цена по CoinMarketCap $64,100.\nСценарий: отсутствуют уровни поддержки и сопротивления, нет оснований для входа.\nDecision: DATA NEEDED")
+
+    result = svc.process_live_text(23, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert "$65,536" in result["message"]
+    assert "Поддержка: $65,500 / $63,868" in result["message"]
+    assert "Сопротивление: $65,590 / $66,000" in result["message"]
+    assert "отсутствуют уровни" not in result["message"].lower()
+    assert "$64,100" not in result["message"]
+    assert saved[1][0][4] == result["message"]
+    assert len(charges) == 1

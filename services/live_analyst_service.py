@@ -136,18 +136,109 @@ def _fact_list(values: Any) -> str:
         return ""
     if not isinstance(values, (list, tuple)):
         values = [values]
-    return ", ".join(_format_money_value(v) for v in values if v is not None)
+    return " / ".join(_format_money_value(v) for v in values if v is not None)
+
+
+def _first_evidence_decision(evidence_pack: Dict[str, Any], fallback: str) -> str:
+    labels = (evidence_pack or {}).get("recommended_decision_labels") or []
+    for label in labels:
+        normalized = str(label or "").upper()
+        if normalized in _DECISION_LABELS:
+            return normalized
+    return fallback
+
+
+def _extract_section(answer: str, names: tuple[str, ...]) -> str:
+    pattern = r"(?ims)^\s*(?:" + "|".join(re.escape(name) for name in names) + r")\s*:\s*(.*?)(?=^\s*(?:🧠\s*)?(?:Коротко|Short take|Данные|Data|Сценарий|Scenario|Риск|Risk|Decision)\s*:|\Z)"
+    match = re.search(pattern, answer or "")
+    return (match.group(1).strip() if match else "")
+
+
+def _strip_decision_lines(text: str) -> str:
+    return re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)?\b\s*", "", text or "").strip()
+
+
+def _crypto_default_short(ui_language: str, can_levels: bool) -> str:
+    if ui_language == "ru":
+        return "WATCH: вход не подтверждён сейчас; лучше ждать реакции от evidence-уровней." if can_levels else "DATA NEEDED: подтверждённых технических уровней в evidence нет."
+    return "WATCH: entry is not confirmed now; wait for reaction at evidence levels." if can_levels else "DATA NEEDED: evidence has no confirmed technical levels."
+
+
+def _is_contradictory_crypto_text(text: str, has_levels: bool, has_entry_context: bool) -> bool:
+    low = (text or "").lower()
+    level_phrases = (
+        "не предоставляют уровней поддержки",
+        "нет уровней поддержки",
+        "отсутствует технический анализ",
+        "отсутствуют уровни поддержки",
+        "no support/resistance levels",
+        "no technical analysis",
+        "no basis for a trading scenario",
+        "нет оснований для формирования торгового сценария",
+    )
+    entry_phrases = ("невозможно определить конкретный вход", "cannot determine any entry")
+    if has_levels and any(phrase in low for phrase in level_phrases):
+        logger.info("live_final_formatter_conflict_removed type=contradictory_missing_levels")
+        return True
+    if has_entry_context and any(phrase in low for phrase in entry_phrases):
+        logger.info("live_final_formatter_conflict_removed type=contradictory_missing_levels")
+        return True
+    return False
+
+
+def _sentence_has_stale_web_price(sentence: str, evidence_price: Any) -> bool:
+    if evidence_price is None:
+        return False
+    low = (sentence or "").lower()
+    stale_markers = ("текущая цена", "current price", "колеблется", "around", "coinbase", "coindesk", "coinmarketcap")
+    if not any(marker in low for marker in stale_markers):
+        return False
+    evidence_text = _format_money_value(evidence_price)
+    if evidence_text in _normalize_live_money_levels(sentence) or str(evidence_price) in sentence:
+        return False
+    logger.info("live_final_formatter_conflict_removed type=stale_web_price")
+    return True
+
+
+def _clean_crypto_fragment(fragment: str, facts: Dict[str, Any], has_levels: bool, has_entry_context: bool) -> str:
+    if not fragment:
+        return ""
+    parts = re.split(r"(?<=[.!?。])\s+|\n+", fragment)
+    kept = []
+    for part in parts:
+        item = _strip_decision_lines(part).strip(" -\t")
+        if not item:
+            continue
+        if _is_contradictory_crypto_text(item, has_levels, has_entry_context):
+            continue
+        if _sentence_has_stale_web_price(item, facts.get("current_price")):
+            continue
+        kept.append(item)
+    return " ".join(kept).strip()
+
+
+def _format_resistance_range(values: Any) -> str:
+    if not isinstance(values, (list, tuple)):
+        values = [values] if values is not None else []
+    vals = [v for v in values if v is not None]
+    if len(vals) >= 2:
+        return f"{_format_money_value(vals[0])}–{_format_money_value(vals[-1])}"
+    return _fact_list(vals)
 
 
 def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
     facts = evidence_pack.get("derived_facts") or {}
     policy = evidence_pack.get("answer_policy") or {}
     can_levels = bool(policy.get("can_give_levels"))
-    if "данные:" in answer.lower() or "data:" in answer.lower():
-        return answer
-    short = re.split(r"\n\s*\n", answer.strip(), maxsplit=1)[0]
-    short = re.sub(r"(?i)^\s*(🧠\s*)?(Коротко|Short take)\s*:\s*", "", short).strip()
-    short = short or ("лучше ждать подтверждения, а не входить вслепую." if ui_language == "ru" else "wait for confirmation rather than forcing an entry.")
+    has_levels = bool(can_levels and (facts.get("support_levels") or facts.get("resistance_levels")))
+    has_entry_context = bool(facts.get("better_zone") is not None or facts.get("confirmation") or facts.get("support_levels") or facts.get("resistance_levels"))
+
+    short = _extract_section(answer, ("Коротко", "Short take"))
+    if not short:
+        short = re.split(r"\n\s*\n", answer.strip(), maxsplit=1)[0]
+    short = re.sub(r"(?i)^\s*(🧠\s*)?(Коротко|Short take)\s*:\s*", "", short or "").strip()
+    short = _clean_crypto_fragment(short, facts, has_levels, has_entry_context) or _crypto_default_short(ui_language, has_levels)
+
     data = []
     if facts.get("current_price") is not None:
         data.append(("Цена" if ui_language == "ru" else "Price", _format_money_value(facts.get("current_price"))))
@@ -155,53 +246,37 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
         data.append(("Поддержка" if ui_language == "ru" else "Support", _fact_list(facts.get("support_levels"))))
     if can_levels and facts.get("resistance_levels"):
         data.append(("Сопротивление" if ui_language == "ru" else "Resistance", _fact_list(facts.get("resistance_levels"))))
-    context_bits = []
     if can_levels and facts.get("better_zone") is not None:
-        context_bits.append(("better zone " if ui_language != "ru" else "зона лучше ") + _format_money_value(facts.get("better_zone")))
+        data.append(("Зона лучше" if ui_language == "ru" else "Better zone", _format_money_value(facts.get("better_zone"))))
     if facts.get("confirmation"):
-        context_bits.append(str(facts.get("confirmation")))
-    if context_bits:
-        data.append(("Контекст" if ui_language == "ru" else "Context", "; ".join(context_bits)))
-    invalidation = str(facts.get("invalidation") or "").strip()
-    scenario = str(facts.get("confirmation") or ("дождаться подтверждения от уровня/зоны." if ui_language == "ru" else "wait for confirmation from the level/zone.")).strip()
-    risk = invalidation or ("без подтверждения вход легко станет ложным сигналом." if ui_language == "ru" else "without confirmation the setup can become a false signal.")
+        data.append(("Подтверждение" if ui_language == "ru" else "Confirmation", str(facts.get("confirmation")).strip()))
+    if facts.get("invalidation"):
+        data.append(("Инвалидация" if ui_language == "ru" else "Invalidation", str(facts.get("invalidation")).strip()))
+
+    scenario = _clean_crypto_fragment(_extract_section(answer, ("Сценарий", "Scenario")), facts, has_levels, has_entry_context)
+    risk = _clean_crypto_fragment(_extract_section(answer, ("Риск", "Risk")), facts, has_levels, has_entry_context)
+    if has_levels and (facts.get("better_zone") is not None or facts.get("confirmation")):
+        if ui_language == "ru":
+            scenario = "Вход не подтверждён сейчас. Базовый сценарий — ждать реакции от %s или пробоя/ретеста сопротивления %s." % (_format_money_value(facts.get("better_zone") or (facts.get("support_levels") or [None])[0]), _format_resistance_range(facts.get("resistance_levels")))
+        else:
+            scenario = "Entry is not confirmed now. Base case is to wait for reaction near %s or breakout/retest of %s." % (_format_money_value(facts.get("better_zone") or (facts.get("support_levels") or [None])[0]), _format_resistance_range(facts.get("resistance_levels")))
+    elif not has_levels:
+        scenario = scenario or ("Подтверждённых уровней нет; нужен график/OHLCV и таймфрейм, чтобы собрать технический сценарий." if ui_language == "ru" else "No confirmed technical levels; chart/OHLCV and timeframe are needed to build a setup.")
+    else:
+        scenario = scenario or ("Ждать подтверждения у ближайших evidence-уровней." if ui_language == "ru" else "Wait for confirmation at the nearest evidence levels.")
+    risk = risk or str(facts.get("invalidation") or "").strip() or ("Без подтверждения вход легко станет ложным сигналом." if ui_language == "ru" else "Without confirmation the setup can become a false signal.")
+
     if ui_language == "ru":
-        data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Контекст: подтверждённых уровней в evidence нет."
+        data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Контекст: подтверждённых уровней нет."
         return f"🧠 Коротко:\n{short}\n\nДанные:\n{data_block}\n\nСценарий:\n{scenario}\n\nРиск:\n{risk}\n\nDecision: {decision}"
-    data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Context: evidence has no confirmed levels."
+    data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Context: no confirmed technical levels."
     return f"🧠 Short take:\n{short}\n\nData:\n{data_block}\n\nScenario:\n{scenario}\n\nRisk:\n{risk}\n\nDecision: {decision}"
 
 
 
 def _ensure_crypto_evidence_lines(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
-    facts = evidence_pack.get("derived_facts") or {}
-    policy = evidence_pack.get("answer_policy") or {}
-    can_levels = bool(policy.get("can_give_levels"))
-    lines = []
-    normalized_answer = _normalize_live_money_levels(answer)
-
-    def missing_value(value: Any) -> bool:
-        if value is None:
-            return False
-        return _format_money_value(value) not in normalized_answer and str(value) not in normalized_answer
-
-    if facts.get("current_price") is not None and missing_value(facts.get("current_price")):
-        lines.append(("Цена" if ui_language == "ru" else "Price", _format_money_value(facts.get("current_price"))))
-    if can_levels and facts.get("support_levels") and any(missing_value(v) for v in facts.get("support_levels") or []):
-        lines.append(("Поддержка" if ui_language == "ru" else "Support", _fact_list(facts.get("support_levels"))))
-    if can_levels and facts.get("resistance_levels") and any(missing_value(v) for v in facts.get("resistance_levels") or []):
-        lines.append(("Сопротивление" if ui_language == "ru" else "Resistance", _fact_list(facts.get("resistance_levels"))))
-    if can_levels and facts.get("better_zone") is not None and missing_value(facts.get("better_zone")):
-        label = "Контекст" if ui_language == "ru" else "Context"
-        prefix = "зона лучше " if ui_language == "ru" else "better zone "
-        lines.append((label, prefix + _format_money_value(facts.get("better_zone"))))
-    if not lines:
-        return answer
-    bullet_block = "\n".join(f"- {label}: {value}" for label, value in lines)
-    header_pattern = r"(?im)^(Данные|Data)\s*:\s*$"
-    if re.search(header_pattern, answer):
-        return re.sub(header_pattern, lambda m: f"{m.group(0)}\n{bullet_block}", answer, count=1)
     return answer
+
 
 def _trim_live_answer(text: str, limit: int = 1600) -> str:
     if len(text) <= limit:
@@ -218,9 +293,12 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     evidence_pack = evidence_pack or {}
     text = _normalize_live_money_levels(str(answer or "").strip())
     decision = _extract_decision(text, evidence_pack)
+    is_crypto = (evidence_pack.get("mode") or "").lower() == "crypto"
+    if is_crypto:
+        decision = _first_evidence_decision(evidence_pack, decision)
     text = _normalize_decision_lines(text, decision)
     text = _clean_live_spacing(text)
-    if (evidence_pack.get("mode") or "").lower() == "crypto":
+    if is_crypto:
         text = _crypto_structured_answer(text, evidence_pack, ui_language, decision)
         text = _ensure_crypto_evidence_lines(text, evidence_pack, ui_language)
         text = _normalize_live_money_levels(text)
