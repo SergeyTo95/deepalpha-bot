@@ -2,6 +2,12 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from services.llm_service import generate_decision_text
+from services.ai_control_center import (
+    build_ai_control_context,
+    choose_ai_provider,
+    record_ai_control_event,
+    score_ai_response_quality,
+)
 from services.skill_loader_service import load_skills
 from services.live_analyst_admin_service import (
     get_max_daily_live_messages,
@@ -284,7 +290,23 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
     ])
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None) -> str:
+def _format_ai_control_context(ai_control_context: Optional[Dict[str, Any]]) -> str:
+    if not ai_control_context:
+        return "AI Control Context: not built."
+    objective = ai_control_context.get("objective") or {}
+    economics = ai_control_context.get("economics") or {}
+    constraints = ai_control_context.get("quality_constraints") or {}
+    return "\n".join([
+        "AI Control Context (internal governance):",
+        f"Objective: {objective.get('name')} — {objective.get('description')}",
+        f"Economics hints: estimated_cost_tokens={economics.get('estimated_cost_tokens')} charge_tokens={economics.get('charge_tokens')} can_charge={economics.get('can_charge')} offer_upgrade={economics.get('should_offer_upgrade')}",
+        f"Quality requirements: must_use_evidence={constraints.get('must_use_evidence')} requires_decision_label={constraints.get('requires_decision_label')} requires_uncertainty={constraints.get('requires_uncertainty')}",
+        f"Hard constraints: {constraints.get('must_not_invent') or []}",
+        "Never optimize revenue by reducing honesty, safety, evidence quality, or user trust.",
+    ])
+
+
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None) -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -325,6 +347,13 @@ Research context:
 {_format_research_context(research_context)}
 
 {_format_live_evidence_pack(evidence_pack)}
+
+{_format_ai_control_context(ai_control_context)}
+AI Control Center rules:
+- Optimize only for long-term trust-adjusted token revenue: useful, honest, evidence-grounded paid usage.
+- Do not upsell when evidence quality is low. Do not pressure the user. Do not imply hidden charges or scarcity.
+- If quality/evidence is weak, be cautious and prefer DATA NEEDED/WATCH/NO TRADE.
+
 Evidence rules:
 - Use only facts from Live Evidence Pack for levels/time/odds.
 - If can_give_entry_zone=false, do not mention specific entry levels.
@@ -421,7 +450,10 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     logger.info("live_evidence_pack_built mode=%s intent=%s score=%s confidence=%s missing=%s", evidence_pack.get("mode"), evidence_pack.get("intent"), evidence_pack.get("data_quality_score"), evidence_pack.get("confidence_label"), evidence_pack.get("missing_data"))
     ep_policy = evidence_pack.get("answer_policy") or {}
     logger.info("live_evidence_policy can_give_levels=%s can_give_entry_zone=%s can_comment_on_odds=%s", ep_policy.get("can_give_levels"), ep_policy.get("can_give_entry_zone"), ep_policy.get("can_comment_on_odds"))
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack)
+    ai_control_context = build_ai_control_context(user_id, text, evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown", evidence_pack.get("intent") or understanding.get("intent") or "unknown", evidence_pack=evidence_pack, router_result=router_result, session=session)
+    provider_choice = choose_ai_provider("live_analyst", ai_control_context.get("mode") or "unknown")
+    logger.info("ai_control_provider_chosen user_id=%s mode=%s provider=%s model=%s reason=%s", user_id, ai_control_context.get("mode"), provider_choice.get("provider"), provider_choice.get("model"), provider_choice.get("reason"))
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context)
 
     try:
         answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
@@ -435,6 +467,17 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if validation.get("severity") == "major":
         answer = apply_validation_safety(answer, evidence_pack, validation, ui_language=ui_language)
         logger.info("live_answer_validation_safety_applied severity=major issues=%s", validation.get("issues"))
+
+    ai_quality = score_ai_response_quality(answer, evidence_pack, validation)
+    logger.info("ai_control_quality_scored user_id=%s mode=%s quality=%s penalties=%s bonuses=%s", user_id, ai_control_context.get("mode"), ai_quality.get("quality_score"), ai_quality.get("penalties"), ai_quality.get("bonuses"))
+    record_ai_control_event(
+        user_id=user_id, mode=ai_control_context.get("mode") or "unknown", intent=ai_control_context.get("intent") or "unknown",
+        provider=provider_choice.get("provider") or "gemini", model=provider_choice.get("model") or "",
+        estimated_cost_tokens=(ai_control_context.get("economics") or {}).get("estimated_cost_tokens") or 0, charged_tokens=cost,
+        data_quality_score=evidence_pack.get("data_quality_score"), confidence_label=evidence_pack.get("confidence_label") or "",
+        validation_severity=validation.get("severity") or "", quality_score=ai_quality.get("quality_score") or 0.0,
+        penalties=ai_quality.get("penalties"), bonuses=ai_quality.get("bonuses"), should_refund=bool(ai_quality.get("should_refund")),
+    )
 
     if not charge_live_request(user_id, cost, "live_analyst_text"):
         logger.warning("live_text_charge_failed_after_analysis user_id=%s cost=%s", user_id, cost)
