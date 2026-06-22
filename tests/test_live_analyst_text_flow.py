@@ -70,19 +70,18 @@ def test_insufficient_balance_blocks_before_llm_and_charge(monkeypatch):
     assert charges == []
 
 
-def test_failed_answer_uses_safe_fallback_and_charges_once(monkeypatch):
+def test_empty_model_failure_does_not_charge_or_save_assistant(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
     calls = []
     monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: calls.append(args) or "")
 
     result = svc.process_live_text(10, "Team A vs Team B odds 1.85", router_result={"mode": "sports"})
 
-    assert result["ok"] is True
-    assert result["charged"] is True
-    assert "Decision:" in result["message"]
+    assert result["ok"] is False
+    assert result["charged"] is False
     assert len(calls) == 2
-    assert len(charges) == 1
-    assert len(saved) == 2
+    assert charges == []
+    assert saved == []
 
 
 def test_polymarket_empty_entities_do_not_overwrite_market_title(monkeypatch):
@@ -410,12 +409,17 @@ def test_process_live_text_uses_safe_fallback_when_repair_still_incomplete(monke
     _patch_common(monkeypatch)
     charges = []
     calls = []
+    answers = iter([
+        "🧠 Коротко:\nBTCUSDT 15m сейчас выглядит как WATCH, но ответ был обрезан до сценария.\n\nС",
+        "",
+    ])
     monkeypatch.setattr(svc, "charge_live_request", lambda user_id, cost, reason: charges.append((user_id, cost, reason)) or True)
-    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: calls.append(prompt) or "🧠 Коротко:\nС")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: calls.append(prompt) or next(answers))
 
     result = svc.process_live_text(78, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
 
     assert result["ok"] is True
+    assert result["charged"] is True
     assert "Decision:" in result["message"]
     assert len(calls) == 2
     assert len(charges) == 1

@@ -423,6 +423,14 @@ def _is_incomplete_live_answer(answer: str, mode: str = "unknown", ui_language: 
     return False
 
 
+def _has_meaningful_partial_live_answer(answer: str) -> bool:
+    text = str(answer or "").strip()
+    if len(text) < 20:
+        return False
+    lower = text.lower()
+    return any(marker in lower for marker in ("коротко", "short", "watch", "data needed", "decision", "btc", "eth", "usdt"))
+
+
 def _compact_dict(data: Optional[Dict[str, Any]], limit: int = 1800) -> str:
     if not data:
         return "{}"
@@ -565,8 +573,12 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         answer = (generate_live_analyst_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
     except Exception:
         answer = ""
+    first_answer = answer.strip()
+    had_non_empty_first_answer = bool(first_answer)
     incomplete = _is_incomplete_live_answer(answer, mode, ui_language)
     logger.info("live_answer_generated chars=%s incomplete=%s", len(answer), incomplete)
+    if not had_non_empty_first_answer:
+        logger.warning("live_answer_empty_after_generation_no_charge user_id=%s mode=%s", user_id, mode)
     if incomplete:
         logger.warning("live_answer_incomplete_detected user_id=%s mode=%s chars=%s tail=%s", user_id, mode, len(answer), _safe(answer[-80:], 80))
         repair_prompt = _build_live_repair_prompt(text, evidence_pack, ai_control_context, validation=None, ui_language=ui_language)
@@ -578,9 +590,12 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         if not _is_incomplete_live_answer(repaired, mode, ui_language):
             answer = repaired
             logger.info("live_answer_repair_retry_success chars=%s", len(answer))
-        else:
+        elif had_non_empty_first_answer and _has_meaningful_partial_live_answer(first_answer):
             answer = _build_live_safe_fallback(evidence_pack, ui_language=ui_language)
-            logger.warning("live_answer_repair_retry_failed fallback_used=true user_id=%s mode=%s retry_chars=%s", user_id, mode, len(repaired))
+            logger.warning("live_answer_repair_retry_failed_fallback_used user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
+        else:
+            logger.warning("live_answer_repair_retry_failed_no_charge user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
+            return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
     if not answer:
         return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
 
