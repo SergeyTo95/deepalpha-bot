@@ -21,8 +21,24 @@ HARD_CONSTRAINTS = [
 ]
 
 _DECISION_RE = re.compile(r"\b(Decision|Решение)\s*:", re.I)
-_DIRECT_COMMAND_RE = re.compile(r"\b(buy|sell|long|bet|ставь|покупай|продавай|лонгуй|шорти|бери)\b", re.I)
 _CAUTION_RE = re.compile(r"\b(uncertain|limited|data needed|watch|no trade|no bet|недостаточно|осторож|данных мало|не уверен)\b", re.I)
+
+_NEGATED_DIRECT_LANGUAGE_RE = re.compile(
+    r"\b(?:do\s+not|don't|dont|not\s+a|no)\s+(?:buy|sell|bet|long|short)\b|"
+    r"\b(?:no\s+buy\s+signal|no\s+bet|not\s+a\s+buy)\b|"
+    r"\b(?:не\s+(?:покупай|продавай|ставь|лонгуй|шорти|бери)|не\s+сигнал\s+на\s+покупку)\b",
+    re.I,
+)
+_AFFIRMATIVE_DIRECT_COMMAND_PATTERNS = [
+    re.compile(r"\b(?:buy|sell)\s+(?:now|btc|eth|sol|yes|no|[a-z]{2,10}\b)", re.I),
+    re.compile(r"\b(?:go|open)\s+(?:a\s+)?(?:long|short)(?:\s+(?:position|btc|eth|sol))?\b", re.I),
+    re.compile(r"\b(?:long|short)\s+(?:btc|eth|sol|position)\b", re.I),
+    re.compile(r"\bbet\s+on\b", re.I),
+    re.compile(r"\b(?:покупай|продавай|лонгуй|шорти)\b", re.I),
+    re.compile(r"\bставь\s+на\b", re.I),
+    re.compile(r"\bбери\s+(?:yes|no|да|нет|лонг|шорт|long|short)\b", re.I),
+]
+
 _EXACT_CLAIM_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|x|USDT|USD|\$|odds|коэфф|минут|minute|m)\b", re.I)
 
 
@@ -81,6 +97,32 @@ def choose_ai_provider(task_type: str, mode: str, quality_need: str = "normal", 
     return choose_provider_for_task(task_type, mode, quality_need, cost_sensitivity)
 
 
+def _direct_command_penalty(answer: str) -> str:
+    """
+    Returns:
+    - "major" for affirmative direct financial/gambling commands
+    - "minor" for cautionary/negated imperative phrasing if needed
+    - "" for no direct command
+    """
+    text = (answer or "").strip()
+    if not text:
+        return ""
+    normalized = re.sub(r"[-–—]", "-", text.lower())
+    normalized = re.sub(r"\blong\s*-\s*term\b", "longterm", normalized)
+
+    for pattern in _AFFIRMATIVE_DIRECT_COMMAND_PATTERNS:
+        for match in pattern.finditer(normalized):
+            start = max(0, match.start() - 28)
+            context = normalized[start:match.end()]
+            if _NEGATED_DIRECT_LANGUAGE_RE.search(context):
+                return "minor"
+            return "major"
+
+    if _NEGATED_DIRECT_LANGUAGE_RE.search(normalized):
+        return "minor"
+    return ""
+
+
 def score_ai_response_quality(answer: str, evidence_pack: Optional[Dict[str, Any]], validation: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     text = answer or ""
     score = 0.72
@@ -116,13 +158,16 @@ def score_ai_response_quality(answer: str, evidence_pack: Optional[Dict[str, Any
             penalty("overconfidence", 0.2)
     if confidence in {"low", "very_low", "unknown"} and _CAUTION_RE.search(text):
         bonus("clear_uncertainty", 0.1)
-    if _DIRECT_COMMAND_RE.search(text):
+    direct_command = _direct_command_penalty(text)
+    if direct_command == "major":
         penalty("direct_command", 0.35)
+    elif direct_command == "minor":
+        penalty("cautionary_direct_language", 0.05)
     if mode in {"crypto", "sports", "polymarket"} and not _DECISION_RE.search(text):
         penalty("missing_decision", 0.16)
     elif mode in {"crypto", "sports", "polymarket"}:
         bonus("useful_decision", 0.1)
-    if text and not _DIRECT_COMMAND_RE.search(text):
+    if text and direct_command != "major":
         bonus("safe_answer", 0.05)
 
     score = max(0.0, min(1.0, score))

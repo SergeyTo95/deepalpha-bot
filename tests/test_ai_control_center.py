@@ -68,6 +68,40 @@ def test_direct_command_major_penalty():
     assert result["should_refund"] is True
 
 
+def _penalty_types(result):
+    return {p["type"] for p in result["penalties"]}
+
+
+def test_long_term_trend_not_direct_command():
+    result = score_ai_response_quality("Decision: WATCH. This is a long-term trend, not a trade command.", _pack(), {"ok": True, "severity": "none"})
+    assert "direct_command" not in _penalty_types(result)
+
+
+def test_do_not_buy_not_major_direct_command():
+    result = score_ai_response_quality("Decision: NO TRADE. Do not buy now.", _pack(), {"ok": True, "severity": "none"})
+    assert "direct_command" not in _penalty_types(result)
+
+
+def test_buy_btc_now_is_direct_command():
+    result = score_ai_response_quality("Decision: EDGE. Buy BTC now.", _pack(), {"ok": True, "severity": "none"})
+    assert "direct_command" in _penalty_types(result)
+
+
+def test_go_long_btc_now_is_direct_command():
+    result = score_ai_response_quality("Decision: EDGE. Go long BTC now.", _pack(), {"ok": True, "severity": "none"})
+    assert "direct_command" in _penalty_types(result)
+
+
+def test_negated_russian_bet_not_major_direct_command():
+    result = score_ai_response_quality("Decision: NO BET. Не ставь без коэффициентов.", _pack(mode="sports"), {"ok": True, "severity": "none"})
+    assert "direct_command" not in _penalty_types(result)
+
+
+def test_affirmative_russian_bet_is_direct_command():
+    result = score_ai_response_quality("Decision: EDGE. Ставь на Team A.", _pack(mode="sports"), {"ok": True, "severity": "none"})
+    assert "direct_command" in _penalty_types(result)
+
+
 def test_billing_service_not_changed_by_quality_scoring():
     result = score_ai_response_quality("Decision: BUY now", _pack(), {"ok": False, "severity": "major"})
     assert "should_refund" in result
