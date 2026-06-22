@@ -29,7 +29,7 @@ def _patch_common(monkeypatch, balance=True):
 def test_crypto_text_useful_answer_charges_once_and_saves_memory(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
     prompts = []
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short conclusion: WATCH\nWhat I see: BTCUSDT 15m\nRisk: high\nDecision: WATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short conclusion: WATCH\nWhat I see: BTCUSDT 15m\nRisk: high\nDecision: WATCH")
 
     result = svc.process_live_text(7, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}})
 
@@ -45,7 +45,7 @@ def test_crypto_text_useful_answer_charges_once_and_saves_memory(monkeypatch):
 
 def test_sports_text_useful_answer_path(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: DATA NEEDED\nWhat I see: odds 1.85\nRisk: missing live stats\nDecision: DATA NEEDED")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short conclusion: DATA NEEDED\nWhat I see: odds 1.85\nRisk: missing live stats\nDecision: DATA NEEDED")
 
     result = svc.process_live_text(8, "Team A vs Team B odds 1.85", router_result={"mode": "sports", "entities": {"teams": ["Team A", "Team B"], "odds": 1.85}})
 
@@ -61,7 +61,7 @@ def test_insufficient_balance_blocks_before_llm_and_charge(monkeypatch):
         nonlocal called
         called = True
         return "answer"
-    monkeypatch.setattr(svc, "generate_decision_text", fake_llm)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", fake_llm)
 
     result = svc.process_live_text(9, "BTCUSDT 15m", router_result={"mode": "crypto"})
 
@@ -70,22 +70,26 @@ def test_insufficient_balance_blocks_before_llm_and_charge(monkeypatch):
     assert charges == []
 
 
-def test_failed_answer_does_not_charge_or_save(monkeypatch):
+def test_failed_answer_uses_safe_fallback_and_charges_once(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda *args, **kwargs: "")
+    calls = []
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: calls.append(args) or "")
 
     result = svc.process_live_text(10, "Team A vs Team B odds 1.85", router_result={"mode": "sports"})
 
-    assert result["ok"] is False
-    assert charges == []
-    assert saved == []
+    assert result["ok"] is True
+    assert result["charged"] is True
+    assert "Decision:" in result["message"]
+    assert len(calls) == 2
+    assert len(charges) == 1
+    assert len(saved) == 2
 
 
 def test_polymarket_empty_entities_do_not_overwrite_market_title(monkeypatch):
     _saved, _charges = _patch_common(monkeypatch)
     context_updates = []
     monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
 
     result = svc.process_live_text(11, "дай премиум", router_result={"mode": "polymarket", "entities": {}})
 
@@ -97,7 +101,7 @@ def test_crypto_entities_update_useful_context_title(monkeypatch):
     _saved, _charges = _patch_common(monkeypatch)
     context_updates = []
     monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short conclusion: WATCH\nDecision: WATCH")
 
     result = svc.process_live_text(12, "BTCUSDT 15m Binance", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "exchange": "Binance"}})
 
@@ -110,7 +114,7 @@ def test_sports_entities_update_useful_context_title(monkeypatch):
     _saved, _charges = _patch_common(monkeypatch)
     context_updates = []
     monkeypatch.setattr(memory_svc, "update_current_market_context", lambda session, **kwargs: context_updates.append(kwargs) or session)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short conclusion: DATA NEEDED\nDecision: DATA NEEDED")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short conclusion: DATA NEEDED\nDecision: DATA NEEDED")
 
     result = svc.process_live_text(13, "Team A vs Team B odds 1.85", router_result={"mode": "sports", "entities": {"teams": ["Team A", "Team B"], "odds": 1.85}})
 
@@ -122,7 +126,7 @@ def test_sports_entities_update_useful_context_title(monkeypatch):
 def test_crypto_asset_without_pair_still_uses_paid_consultant_path(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
     prompts = []
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short conclusion: DATA NEEDED/WATCH\nDecision: DATA NEEDED\nNext step: пришли таймфрейм")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short conclusion: DATA NEEDED/WATCH\nDecision: DATA NEEDED\nNext step: пришли таймфрейм")
 
     result = svc.process_live_text(
         14,
@@ -135,7 +139,7 @@ def test_crypto_asset_without_pair_still_uses_paid_consultant_path(monkeypatch):
     assert len(charges) == 1
     assert len(saved) == 2
     assert "crypto consultant" in prompts[0]
-    assert "DATA NEEDED/WATCH" in result["message"]
+    assert "Decision:" in result["message"]
     assert "asset': 'BTC" in prompts[0]
 
 
@@ -148,7 +152,7 @@ def test_unknown_mode_asks_clarification_and_does_not_charge(monkeypatch):
         called = True
         return "answer"
 
-    monkeypatch.setattr(svc, "generate_decision_text", fake_llm)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", fake_llm)
 
     result = svc.process_live_text(15, "что думаешь?", router_result={"mode": "unknown"})
 
@@ -183,7 +187,7 @@ def test_research_failure_does_not_crash_answer_path(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
     monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
     monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Short take: limited\nDecision: DATA NEEDED\nNext step: send chart")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short take: limited\nDecision: DATA NEEDED\nNext step: send chart")
     result = svc.process_live_text(16, "should I buy bitcoin now?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
     assert result["ok"] is True
     assert len(charges) == 1
@@ -192,7 +196,7 @@ def test_research_failure_does_not_crash_answer_path(monkeypatch):
 
 def test_unknown_mode_english_clarification_and_does_not_charge(monkeypatch):
     saved, charges = _patch_common(monkeypatch)
-    monkeypatch.setattr(svc, "generate_decision_text", lambda *args, **kwargs: "answer")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "answer")
     result = svc.process_live_text(17, "what?", router_result={"mode": "unknown"}, ui_language="en")
     assert result["ok"] is False
     assert result["charged"] is False
@@ -243,7 +247,7 @@ def test_process_live_text_includes_research_summary_and_charges_once(monkeypatc
     prompts = []
     monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
     monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: {"ok": True, "summary": "BTC fresh summary", "sources": [{"title": "Market", "url": "https://example.com", "source": "example", "published_at": "today"}], "freshness": "fresh", "error": ""})
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nFresh context: BTC fresh summary\nDecision: WATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nFresh context: BTC fresh summary\nDecision: WATCH")
     result = svc.process_live_text(18, "BTC now buy?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
     assert result["ok"] is True
     assert len(charges) == 1
@@ -256,7 +260,7 @@ def test_process_live_text_research_failure_still_charges_once(monkeypatch):
     prompts = []
     monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: True)
     monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": "provider returned no sources"})
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: DATA NEEDED\nDecision: DATA NEEDED")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: DATA NEEDED\nDecision: DATA NEEDED")
     result = svc.process_live_text(19, "BTC now buy?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="en")
     assert result["ok"] is True
     assert len(charges) == 1
@@ -343,7 +347,7 @@ def test_process_live_text_market_context_better_zone_in_prompt(monkeypatch):
     prompts = []
     monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: False)
     monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {"ok": True, "pair": "BTCUSDT", "timeframe": "1h", "price": 64050, "price_source": "mock", "support_levels": [63500], "resistance_levels": [64800], "local_high": 64800, "local_low": 63500, "volatility_note": "mock", "entry_context": {"better_zone": 63500, "current_entry_quality": "risky", "confirmation": "reaction", "invalidation": "below 63500"}, "sources": ["mock"], "error": ""})
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nDecision: WATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Short take: WATCH\nDecision: WATCH")
     result = svc.process_live_text(20, "биткоин сейчас покупать или не нужно?", router_result={"mode": "crypto", "entities": {"asset": "BTC"}}, ui_language="ru")
     assert result["ok"] is True
     assert len(charges) == 1
@@ -362,7 +366,7 @@ def test_sports_understanding_calls_context_and_prompt_includes_rules(monkeypatc
     prompts = []
     called = []
     monkeypatch.setattr(svc, "get_sports_context", lambda understanding, ui_language="ru": called.append(understanding) or {"ok": True, "partial": True, "sport": "football", "teams": understanding.get("teams"), "sources": [{"title": "source", "url": "https://example.com"}], "news_summary": "mock sports news"})
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: prompts.append(prompt) or "🧠 Коротко:\nWATCH\nDecision:\nWATCH")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "🧠 Коротко:\nWATCH\nDecision:\nWATCH")
     result = svc.process_live_text(21, "Реал — Барса тотал 2.5, есть value?", router_result={"mode": "sports", "entities": {"teams": ["Real", "Barcelona"]}}, ui_language="ru")
     assert result["ok"] is True
     assert len(charges) == 1
@@ -371,3 +375,47 @@ def test_sports_understanding_calls_context_and_prompt_includes_rules(monkeypatc
     assert "Do not invent kickoff time" in prompts[0]
     assert "NO BET / WATCH / DATA NEEDED / EDGE CANDIDATE" in prompts[0]
     assert "mock sports news" in prompts[0]
+
+
+def test_incomplete_live_answer_detection():
+    assert svc._is_incomplete_live_answer("🧠 Коротко...\n\nС", mode="crypto", ui_language="ru") is True
+    complete = "🧠 Коротко:\n" + ("WATCH. " * 45) + "\n\nРиск:\nHigh.\n\nDecision: WATCH"
+    assert svc._is_incomplete_live_answer(complete, mode="crypto", ui_language="ru") is False
+    assert svc._is_incomplete_live_answer("Коротко:", mode="crypto", ui_language="ru") is True
+
+
+def test_process_live_text_repairs_truncated_answer_and_charges_once(monkeypatch):
+    _patch_common(monkeypatch)
+    charges = []
+    calls = []
+    research_calls = []
+    answers = iter([
+        "🧠 Коротко:\nТекущая позиция нейтральна.\n\nС",
+        "🧠 Коротко:\nWATCH: сейчас лучше ждать подтверждения, а не входить по рынку.\n\nДанные:\nЕсть только ограниченный контекст по BTCUSDT 15m; подтверждённых уровней для входа недостаточно. " + ("x" * 220) + "\n\nСценарий:\nЖдать реакции на уровень и прислать график.\n\nРиск:\nБез графика сигнал может быть ложным.\n\nDecision: WATCH",
+    ])
+    monkeypatch.setattr(svc, "charge_live_request", lambda user_id, cost, reason: charges.append((user_id, cost, reason)) or True)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: calls.append(prompt) or next(answers))
+    monkeypatch.setattr(svc, "get_live_research_context", lambda *args, **kwargs: research_calls.append(args) or {"ok": False, "summary": "", "sources": []})
+
+    result = svc.process_live_text(77, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert "Decision: WATCH" in result["message"]
+    assert len(calls) == 2
+    assert len(charges) == 1
+    assert len(research_calls) <= 1
+
+
+def test_process_live_text_uses_safe_fallback_when_repair_still_incomplete(monkeypatch):
+    _patch_common(monkeypatch)
+    charges = []
+    calls = []
+    monkeypatch.setattr(svc, "charge_live_request", lambda user_id, cost, reason: charges.append((user_id, cost, reason)) or True)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: calls.append(prompt) or "🧠 Коротко:\nС")
+
+    result = svc.process_live_text(78, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert "Decision:" in result["message"]
+    assert len(calls) == 2
+    assert len(charges) == 1

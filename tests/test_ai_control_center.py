@@ -127,7 +127,7 @@ def test_live_analyst_integration_scores_and_logs_without_extra_charge(monkeypat
     monkeypatch.setattr(live_svc, "update_context_from_user_text", lambda current, text: current)
     monkeypatch.setattr(live_svc, "save_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(live_svc, "charge_live_request", lambda user_id, cost, reason: charges.append((user_id, cost, reason)) or True)
-    monkeypatch.setattr(live_svc, "generate_decision_text", lambda prompt, **kwargs: "Short take: WATCH\nDecision: WATCH")
+    monkeypatch.setattr(live_svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Short take: WATCH\nDecision: WATCH")
     monkeypatch.setattr(live_svc, "record_ai_control_event", lambda **kwargs: events.append(kwargs))
     original = live_svc.score_ai_response_quality
     monkeypatch.setattr(live_svc, "score_ai_response_quality", lambda answer, evidence_pack, validation: qualities.append((answer, evidence_pack, validation)) or original(answer, evidence_pack, validation))

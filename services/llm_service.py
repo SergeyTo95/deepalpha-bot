@@ -58,10 +58,20 @@ def _call_model_once(prompt: str, model: str, max_tokens: int) -> tuple:
         if status == 200:
             data = response.json()
             candidates = data.get("candidates", [])
+            print(f"LLM RESPONSE: model={model} candidates={len(candidates)}")
             if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", ""), 200
+                candidate = candidates[0] or {}
+                finish_reason = candidate.get("finishReason")
+                parts = candidate.get("content", {}).get("parts", []) or []
+                text_parts = []
+                for part in parts:
+                    if isinstance(part, dict) and part.get("text"):
+                        text_parts.append(str(part.get("text")))
+                text = "\n".join(text_parts).strip()
+                print(f"LLM FINISH: model={model} finishReason={finish_reason} parts={len(parts)} chars={len(text)}")
+                if str(finish_reason or "").upper() in {"MAX_TOKENS", "LENGTH"}:
+                    print(f"LLM OUTPUT TRUNCATED_BY_MODEL model={model} max_tokens={max_tokens}")
+                return text, 200
             return "", 200
 
         elif status in (503, 429):
@@ -155,6 +165,11 @@ def generate_text(prompt: str, feature: str = "signal_generation", user_id: Opti
 
 def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     return _call_gemini(prompt, max_tokens=1024, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
+
+
+def generate_live_analyst_text(prompt: str, feature: str = "live_analyst", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+    max_tokens = int(os.getenv("LIVE_ANALYST_MAX_OUTPUT_TOKENS", "2200"))
+    return _call_gemini(prompt, max_tokens=max_tokens, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
 
 
 def generate_news_text(prompt: str, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:

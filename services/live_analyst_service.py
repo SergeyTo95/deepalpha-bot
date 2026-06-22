@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from services.llm_service import generate_decision_text
+from services.llm_service import generate_live_analyst_text
 from services.ai_control_center import (
     build_ai_control_context,
     choose_ai_provider,
@@ -389,6 +389,110 @@ For non-crypto keep the same safety framing and always include one relevant next
 """.strip()
 
 
+
+def _decision_label_present(answer: str) -> bool:
+    lower = (answer or "").lower()
+    return any(label in lower for label in ("decision:", "решение:", "решение", "decision"))
+
+
+def _is_incomplete_live_answer(answer: str, mode: str = "unknown", ui_language: str = "ru") -> bool:
+    text = str(answer or "").strip()
+    if not text:
+        return True
+    normalized_mode = (mode or "unknown").lower()
+    if normalized_mode in {"crypto", "sports", "polymarket"} and len(text) < 280:
+        return True
+    tail = text.rstrip()
+    if len(tail) >= 1 and tail[-1] in {"С", "Р", "D", "S"}:
+        before = tail[:-1]
+        if not before or before[-1].isspace() or before.endswith(("\n", ":")):
+            return True
+    unfinished_headers = (
+        "Сценарий:", "Риск:", "Decision:", "Данные:", "Контекст:",
+        "Fresh context:", "Scenario:", "Risk:", "Свежий контекст:", "Next:", "Дальше:",
+    )
+    if any(tail.endswith(header) for header in unfinished_headers):
+        return True
+    if normalized_mode in {"crypto", "sports", "polymarket"} and not _decision_label_present(text):
+        return True
+    lower = text.lower()
+    has_short = "коротко:" in lower or "🧠 коротко" in lower
+    has_followup = any(section.lower() in lower for section in ("данные:", "сценарий:", "риск:", "контекст:", "свежий контекст:", "fresh context:", "scenario:", "risk:"))
+    if has_short and not has_followup and not _decision_label_present(text):
+        return True
+    return False
+
+
+def _compact_dict(data: Optional[Dict[str, Any]], limit: int = 1800) -> str:
+    if not data:
+        return "{}"
+    return _safe(data, limit)
+
+
+def _build_live_repair_prompt(user_text: str, evidence_pack: Dict[str, Any], ai_control_context: Dict[str, Any], validation: Optional[Dict[str, Any]] = None, ui_language: str = "ru") -> str:
+    if ui_language == "ru":
+        return f"""
+Исправь обрезанный ответ Live Analyst.
+Отвечай только финальным ответом пользователю.
+Не выдумывай уровни/время/коэффициенты.
+Используй только Evidence Pack.
+
+Запрос пользователя: {_safe(user_text, 500)}
+Evidence Pack: {_compact_dict(evidence_pack, 2200)}
+AI Control Context: {_compact_dict(ai_control_context, 800)}
+Validation: {_compact_dict(validation, 500)}
+
+Формат:
+🧠 Коротко:
+...
+Данные:
+...
+Сценарий:
+...
+Риск:
+...
+Decision: WATCH / DATA NEEDED / NO TRADE / EDGE CANDIDATE
+
+Ответ должен быть завершённым, 1200–1400 символов максимум.
+""".strip()
+    return f"""
+Repair the truncated Live Analyst answer.
+Reply only with the final user-facing answer.
+Do not invent levels/times/odds.
+Use only the Evidence Pack.
+
+User request: {_safe(user_text, 500)}
+Evidence Pack: {_compact_dict(evidence_pack, 2200)}
+AI Control Context: {_compact_dict(ai_control_context, 800)}
+Validation: {_compact_dict(validation, 500)}
+
+Format:
+🧠 Short take:
+...
+Data:
+...
+Scenario:
+...
+Risk:
+...
+Decision: WATCH / DATA NEEDED / NO TRADE / EDGE CANDIDATE
+
+Keep it complete and under 1200–1400 characters.
+""".strip()
+
+
+def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
+    labels = evidence_pack.get("recommended_decision_labels") or [] if evidence_pack else []
+    decision = labels[0] if labels else "DATA NEEDED"
+    if decision not in {"WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE"}:
+        decision = "DATA NEEDED"
+    missing = ", ".join(str(x) for x in (evidence_pack.get("missing_data") or [])[:4]) if evidence_pack else "fresh data"
+    confidence = evidence_pack.get("confidence_label") if evidence_pack else "low"
+    if ui_language == "ru":
+        return f"🧠 Коротко:\n{decision}: данных недостаточно для уверенного входа; лучше дождаться подтверждения.\n\nДанные:\nКачество evidence: {confidence}. Не хватает: {missing or 'актуальных подтверждений'}.\n\nСценарий:\nРабочий вариант — WATCH до появления подтверждённых уровней/коэффициентов/контекста.\n\nРиск:\nБез недостающих данных легко получить ложный сигнал.\n\nDecision: {decision}"
+    return f"🧠 Short take:\n{decision}: data is not strong enough for a confident entry; wait for confirmation.\n\nData:\nEvidence quality: {confidence}. Missing: {missing or 'current confirmations'}.\n\nScenario:\nBase case is WATCH until confirmed levels/odds/context are available.\n\nRisk:\nWithout the missing data, the signal can be false.\n\nDecision: {decision}"
+
+
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     if not is_live_enabled():
         return {"ok": False, "message": LIVE_DISABLED_MESSAGE, "charged": False}
@@ -454,11 +558,29 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     provider_choice = choose_ai_provider("live_analyst", ai_control_context.get("mode") or "unknown")
     logger.info("ai_control_provider_chosen user_id=%s mode=%s provider=%s model=%s reason=%s", user_id, ai_control_context.get("mode"), provider_choice.get("provider"), provider_choice.get("model"), provider_choice.get("reason"))
     prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context)
+    logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
 
+    mode = evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown"
     try:
-        answer = (generate_decision_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
+        answer = (generate_live_analyst_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
     except Exception:
         answer = ""
+    incomplete = _is_incomplete_live_answer(answer, mode, ui_language)
+    logger.info("live_answer_generated chars=%s incomplete=%s", len(answer), incomplete)
+    if incomplete:
+        logger.warning("live_answer_incomplete_detected user_id=%s mode=%s chars=%s tail=%s", user_id, mode, len(answer), _safe(answer[-80:], 80))
+        repair_prompt = _build_live_repair_prompt(text, evidence_pack, ai_control_context, validation=None, ui_language=ui_language)
+        logger.info("live_answer_repair_retry_started user_id=%s mode=%s prompt_chars=%s", user_id, mode, len(repair_prompt))
+        try:
+            repaired = (generate_live_analyst_text(repair_prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
+        except Exception:
+            repaired = ""
+        if not _is_incomplete_live_answer(repaired, mode, ui_language):
+            answer = repaired
+            logger.info("live_answer_repair_retry_success chars=%s", len(answer))
+        else:
+            answer = _build_live_safe_fallback(evidence_pack, ui_language=ui_language)
+            logger.warning("live_answer_repair_retry_failed fallback_used=true user_id=%s mode=%s retry_chars=%s", user_id, mode, len(repaired))
     if not answer:
         return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
 
