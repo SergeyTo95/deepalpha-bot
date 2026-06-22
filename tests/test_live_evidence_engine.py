@@ -177,7 +177,7 @@ def test_process_live_text_passes_enriched_research_seed_and_charges_once(monkey
     monkeypatch.setattr(svc, "get_recent_context", lambda session_id, limit: [])
     monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {"ok": False, "ohlcv": [], "support_levels": [], "resistance_levels": [], "entry_context": {}})
     monkeypatch.setattr(svc, "get_live_research_context", lambda query, *args, **kwargs: research_calls.append(query) or {"ok": False, "sources": [], "summary": "", "freshness": "unknown"})
-    monkeypatch.setattr(svc, "generate_decision_text", lambda prompt, **kwargs: "Decision: DATA NEEDED")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Decision: DATA NEEDED")
     monkeypatch.setattr(svc, "charge_live_request", lambda user_id, cost, reason: charges.append((user_id, cost, reason)) or True)
     monkeypatch.setattr(svc, "update_context_from_user_text", lambda current, text: current)
     monkeypatch.setattr(svc, "save_message", lambda *args, **kwargs: saved.append((args, kwargs)))
