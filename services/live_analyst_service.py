@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from services.llm_service import generate_live_analyst_text
@@ -44,6 +45,189 @@ LIVE_UNAVAILABLE_MESSAGE = "Live Analyst временно недоступен. 
 LIVE_DISABLED_MESSAGE = "Live Analyst сейчас отключён администратором. Попробуйте позже."
 LIVE_DAILY_LIMIT_MESSAGE = "Дневной лимит сообщений Live Analyst исчерпан. Попробуйте завтра."
 logger = logging.getLogger(__name__)
+
+
+_DECISION_LABELS = ("WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE", "NO BET")
+
+
+def _format_money_value(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(number) >= 1000:
+        return "$%s" % format(round(number), ",")
+    if number.is_integer():
+        return "$%s" % int(number)
+    text = ("%.8f" % number).rstrip("0").rstrip(".")
+    return f"${text}"
+
+
+def _normalize_live_money_levels(text: str) -> str:
+    def repl_dollar(match: re.Match) -> str:
+        raw = match.group(1).replace(",", "")
+        try:
+            value = float(raw)
+        except ValueError:
+            return match.group(0)
+        if abs(value) < 1000:
+            return "$" + ("%.8f" % value).rstrip("0").rstrip(".")
+        return _format_money_value(value)
+
+    def repl_usdt(match: re.Match) -> str:
+        raw = match.group(1).replace(",", "")
+        try:
+            value = float(raw)
+        except ValueError:
+            return match.group(0)
+        if abs(value) >= 1000:
+            return _format_money_value(value)
+        return match.group(0)
+
+    text = re.sub(r"\$\s*([0-9][0-9,]*(?:\.\d+)?)", repl_dollar, text or "")
+    text = re.sub(r"(?<![$\w])([0-9][0-9,]*\.\d+)\s*(?:USDT|USD)\b", repl_usdt, text, flags=re.IGNORECASE)
+    return text
+
+
+def _extract_decision(answer: str, evidence_pack: Optional[Dict[str, Any]] = None) -> str:
+    text = answer or ""
+    pattern = r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1).upper()
+    for label in _DECISION_LABELS:
+        if re.search(r"\b" + re.escape(label) + r"\b", text, flags=re.IGNORECASE):
+            return label
+    labels = (evidence_pack or {}).get("recommended_decision_labels") or []
+    for label in labels:
+        normalized = str(label or "").upper()
+        if normalized in _DECISION_LABELS:
+            return normalized
+    return "DATA NEEDED"
+
+
+def _normalize_decision_lines(answer: str, decision: str) -> str:
+    text = re.sub(
+        r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b\s*\.?,?\s*$",
+        lambda m: f"Decision: {m.group(1).upper()}",
+        answer or "",
+    )
+    text = re.sub(r"(?im)^\s*Decision\s*:\s*$", f"Decision: {decision}", text)
+    return text
+
+
+def _clean_live_spacing(answer: str) -> str:
+    lines = [re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in (answer or "").splitlines()]
+    cleaned = []
+    blanks = 0
+    for line in lines:
+        if not line.strip():
+            blanks += 1
+            if blanks <= 1:
+                cleaned.append("")
+            continue
+        blanks = 0
+        cleaned.append(line.strip() if line.strip().startswith("-") else line)
+    return "\n".join(cleaned).strip()
+
+
+def _fact_list(values: Any) -> str:
+    if not values:
+        return ""
+    if not isinstance(values, (list, tuple)):
+        values = [values]
+    return ", ".join(_format_money_value(v) for v in values if v is not None)
+
+
+def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
+    facts = evidence_pack.get("derived_facts") or {}
+    policy = evidence_pack.get("answer_policy") or {}
+    can_levels = bool(policy.get("can_give_levels"))
+    if "данные:" in answer.lower() or "data:" in answer.lower():
+        return answer
+    short = re.split(r"\n\s*\n", answer.strip(), maxsplit=1)[0]
+    short = re.sub(r"(?i)^\s*(🧠\s*)?(Коротко|Short take)\s*:\s*", "", short).strip()
+    short = short or ("лучше ждать подтверждения, а не входить вслепую." if ui_language == "ru" else "wait for confirmation rather than forcing an entry.")
+    data = []
+    if facts.get("current_price") is not None:
+        data.append(("Цена" if ui_language == "ru" else "Price", _format_money_value(facts.get("current_price"))))
+    if can_levels and facts.get("support_levels"):
+        data.append(("Поддержка" if ui_language == "ru" else "Support", _fact_list(facts.get("support_levels"))))
+    if can_levels and facts.get("resistance_levels"):
+        data.append(("Сопротивление" if ui_language == "ru" else "Resistance", _fact_list(facts.get("resistance_levels"))))
+    context_bits = []
+    if can_levels and facts.get("better_zone") is not None:
+        context_bits.append(("better zone " if ui_language != "ru" else "зона лучше ") + _format_money_value(facts.get("better_zone")))
+    if facts.get("confirmation"):
+        context_bits.append(str(facts.get("confirmation")))
+    if context_bits:
+        data.append(("Контекст" if ui_language == "ru" else "Context", "; ".join(context_bits)))
+    invalidation = str(facts.get("invalidation") or "").strip()
+    scenario = str(facts.get("confirmation") or ("дождаться подтверждения от уровня/зоны." if ui_language == "ru" else "wait for confirmation from the level/zone.")).strip()
+    risk = invalidation or ("без подтверждения вход легко станет ложным сигналом." if ui_language == "ru" else "without confirmation the setup can become a false signal.")
+    if ui_language == "ru":
+        data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Контекст: подтверждённых уровней в evidence нет."
+        return f"🧠 Коротко:\n{short}\n\nДанные:\n{data_block}\n\nСценарий:\n{scenario}\n\nРиск:\n{risk}\n\nDecision: {decision}"
+    data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Context: evidence has no confirmed levels."
+    return f"🧠 Short take:\n{short}\n\nData:\n{data_block}\n\nScenario:\n{scenario}\n\nRisk:\n{risk}\n\nDecision: {decision}"
+
+
+
+def _ensure_crypto_evidence_lines(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
+    facts = evidence_pack.get("derived_facts") or {}
+    policy = evidence_pack.get("answer_policy") or {}
+    can_levels = bool(policy.get("can_give_levels"))
+    lines = []
+    normalized_answer = _normalize_live_money_levels(answer)
+
+    def missing_value(value: Any) -> bool:
+        if value is None:
+            return False
+        return _format_money_value(value) not in normalized_answer and str(value) not in normalized_answer
+
+    if facts.get("current_price") is not None and missing_value(facts.get("current_price")):
+        lines.append(("Цена" if ui_language == "ru" else "Price", _format_money_value(facts.get("current_price"))))
+    if can_levels and facts.get("support_levels") and any(missing_value(v) for v in facts.get("support_levels") or []):
+        lines.append(("Поддержка" if ui_language == "ru" else "Support", _fact_list(facts.get("support_levels"))))
+    if can_levels and facts.get("resistance_levels") and any(missing_value(v) for v in facts.get("resistance_levels") or []):
+        lines.append(("Сопротивление" if ui_language == "ru" else "Resistance", _fact_list(facts.get("resistance_levels"))))
+    if can_levels and facts.get("better_zone") is not None and missing_value(facts.get("better_zone")):
+        label = "Контекст" if ui_language == "ru" else "Context"
+        prefix = "зона лучше " if ui_language == "ru" else "better zone "
+        lines.append((label, prefix + _format_money_value(facts.get("better_zone"))))
+    if not lines:
+        return answer
+    bullet_block = "\n".join(f"- {label}: {value}" for label, value in lines)
+    header_pattern = r"(?im)^(Данные|Data)\s*:\s*$"
+    if re.search(header_pattern, answer):
+        return re.sub(header_pattern, lambda m: f"{m.group(0)}\n{bullet_block}", answer, count=1)
+    return answer
+
+def _trim_live_answer(text: str, limit: int = 1600) -> str:
+    if len(text) <= limit:
+        return text
+    decision = _extract_decision(text)
+    keep = max(0, limit - len(f"\n\nDecision: {decision}") - 1)
+    trimmed = text[:keep].rsplit("\n\n", 1)[0].strip() or text[:keep].rsplit(" ", 1)[0].strip()
+    return f"{trimmed}\n\nDecision: {decision}"
+
+
+def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
+    """Conservatively clean the final Live Analyst answer for Telegram delivery."""
+    ui_language = "ru" if ui_language == "ru" else "en"
+    evidence_pack = evidence_pack or {}
+    text = _normalize_live_money_levels(str(answer or "").strip())
+    decision = _extract_decision(text, evidence_pack)
+    text = _normalize_decision_lines(text, decision)
+    text = _clean_live_spacing(text)
+    if (evidence_pack.get("mode") or "").lower() == "crypto":
+        text = _crypto_structured_answer(text, evidence_pack, ui_language, decision)
+        text = _ensure_crypto_evidence_lines(text, evidence_pack, ui_language)
+        text = _normalize_live_money_levels(text)
+        text = _clean_live_spacing(text)
+    text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b\s*\.?,?\s*$", "", text).strip()
+    text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
+    return _trim_live_answer(text, 1600)
 
 
 def _safe(text: Any, limit: int = 1200) -> str:
@@ -354,6 +538,12 @@ AI Control Center rules:
 - Do not upsell when evidence quality is low. Do not pressure the user. Do not imply hidden charges or scarcity.
 - If quality/evidence is weak, be cautious and prefer DATA NEEDED/WATCH/NO TRADE.
 
+Final answer must be Telegram-ready:
+- short, structured, no raw JSON;
+- no decimal artifacts like $64000.0;
+- always include Decision line;
+- for crypto: include Data / Scenario / Risk when evidence allows.
+
 Evidence rules:
 - Use only facts from Live Evidence Pack for levels/time/odds.
 - If can_give_entry_zone=false, do not mention specific entry levels.
@@ -604,6 +794,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if validation.get("severity") == "major":
         answer = apply_validation_safety(answer, evidence_pack, validation, ui_language=ui_language)
         logger.info("live_answer_validation_safety_applied severity=major issues=%s", validation.get("issues"))
+
+    answer = format_live_final_answer(answer, evidence_pack, ui_language)
 
     ai_quality = score_ai_response_quality(answer, evidence_pack, validation)
     logger.info("ai_control_quality_scored user_id=%s mode=%s quality=%s penalties=%s bonuses=%s", user_id, ai_control_context.get("mode"), ai_quality.get("quality_score"), ai_quality.get("penalties"), ai_quality.get("bonuses"))
