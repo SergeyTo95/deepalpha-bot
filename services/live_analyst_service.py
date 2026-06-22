@@ -16,7 +16,12 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
-from services.live_evidence_engine import build_live_evidence_pack, validate_live_answer_against_evidence
+from services.live_evidence_engine import (
+    apply_validation_safety,
+    build_live_evidence_pack,
+    plan_live_research_queries,
+    validate_live_answer_against_evidence,
+)
 from services.crypto_market_context_service import get_crypto_market_context
 from services.sports_context_service import get_sports_context
 from services.live_analyst_memory_service import (
@@ -158,6 +163,30 @@ def _format_research_context(research_context: Optional[Dict[str, Any]]) -> str:
     ])
 
 
+def _research_seed_with_planned_queries(user_text: str, planned_queries: List[Dict[str, Any]]) -> str:
+    selected = sorted(planned_queries or [], key=lambda item: int(item.get("priority") or 0), reverse=True)[:5]
+    if not selected:
+        return user_text
+    lines = [str(item.get("query") or "").strip() for item in selected if str(item.get("query") or "").strip()]
+    if not lines:
+        return user_text
+    return (user_text or "") + "\n\nPlanned research queries:\n" + "\n".join(lines)
+
+
+def _should_use_planned_research(text: str, understanding: Dict[str, Any], router_result: Dict[str, Any], needs: Dict[str, Any], crypto_market_context: Optional[Dict[str, Any]], sports_context: Optional[Dict[str, Any]]) -> bool:
+    mode = (understanding or {}).get("mode") or (router_result or {}).get("mode") or "unknown"
+    if needs.get("web_research") or fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
+        return True
+    if mode == "crypto" and (not crypto_market_context or not crypto_market_context.get("ok")):
+        return True
+    if mode == "sports" and (not sports_context or not sports_context.get("sources")):
+        return True
+    if mode == "polymarket":
+        entities = router_result.get("entities") or {}
+        return not (entities.get("url") or entities.get("market_url") or entities.get("probability") or entities.get("polymarket_probability"))
+    return False
+
+
 def _consultant_rules_for_mode(mode: str, ui_language: str = "ru") -> str:
     if mode == "crypto":
         return """
@@ -233,6 +262,9 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
     item_lines = []
     for item in items[:6]:
         item_lines.append(f"- {item.get('type')}: {item.get('title')} | {item.get('summary')} | source={item.get('source')} {item.get('url')}")
+    planned_lines = []
+    for query in (evidence_pack.get("planned_queries") or [])[:5]:
+        planned_lines.append(f"- {query.get('purpose')}: {query.get('query')}")
     return "\n".join([
         "Live Evidence Pack:",
         f"Mode/intent: {evidence_pack.get('mode')} / {evidence_pack.get('intent')}",
@@ -245,6 +277,8 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
         f"Allowed claims: levels={policy.get('can_give_levels')} entry_zone={policy.get('can_give_entry_zone')} odds={policy.get('can_comment_on_odds')}",
         f"Forbidden claims: {policy.get('must_not_invent') or []}",
         f"Recommended decision labels: {evidence_pack.get('recommended_decision_labels') or []}",
+        "Planned research queries:",
+        "\n".join(planned_lines) if planned_lines else "- none",
         "Evidence items:",
         "\n".join(item_lines) if item_lines else "- none",
     ])
@@ -372,10 +406,14 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         except Exception as exc:
             logger.warning("live_crypto_market_context_failed user_id=%s error=%s", user_id, exc)
             crypto_market_context = {"ok": False, "pair": understanding.get("pair") or "", "timeframe": understanding.get("timeframe") or "", "error": str(exc), "support_levels": [], "resistance_levels": [], "entry_context": {}, "sources": []}
+    planned_queries = plan_live_research_queries(text, understanding)
+    logger.info("live_research_planned_queries mode=%s intent=%s count=%s", understanding.get("mode"), understanding.get("intent"), len(planned_queries or []))
     research_context = None
-    if needs.get("web_research") or fresh_context_needed(text, router_result.get("mode") or "", router_result.get("entities") or {}):
+    use_planned_research = _should_use_planned_research(text, understanding, router_result, needs, crypto_market_context, sports_context)
+    if use_planned_research:
         try:
-            research_context = get_live_research_context(text, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results(), user_id=user_id)
+            research_seed = _research_seed_with_planned_queries(text, planned_queries)
+            research_context = get_live_research_context(research_seed, router_result.get("mode") or "", router_result.get("entities") or {}, ui_language, max_results=live_research_max_results(), user_id=user_id)
         except Exception as exc:
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
@@ -395,9 +433,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     validation = validate_live_answer_against_evidence(answer, evidence_pack)
     logger.info("live_answer_validation ok=%s severity=%s issues=%s", validation.get("ok"), validation.get("severity"), validation.get("issues"))
     if validation.get("severity") == "major":
-        caution = "Данные ограничены; точные уровни/время не подтверждены." if ui_language == "ru" else "Data is limited; exact levels/times are not confirmed."
-        if caution not in answer:
-            answer = (answer.rstrip() + "\n\n" + caution).strip()
+        answer = apply_validation_safety(answer, evidence_pack, validation, ui_language=ui_language)
+        logger.info("live_answer_validation_safety_applied severity=major issues=%s", validation.get("issues"))
 
     if not charge_live_request(user_id, cost, "live_analyst_text"):
         logger.warning("live_text_charge_failed_after_analysis user_id=%s cost=%s", user_id, cost)

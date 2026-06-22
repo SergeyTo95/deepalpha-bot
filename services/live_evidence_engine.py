@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _as_list(value: Any) -> List[Any]:
@@ -32,6 +32,56 @@ def _add_item(items: List[Dict[str, Any]], typ: str, title: str, summary: str, s
     if not (title or summary or source or url):
         return
     items.append({"type": typ, "title": str(title or typ)[:180], "summary": str(summary or "")[:500], "source": str(source or "")[:120], "url": str(url or "")[:500], "freshness": freshness, "relevance": _clamp(relevance), "reliability": _clamp(reliability)})
+
+
+def _normalize_number(value: Any) -> str:
+    raw = str(value or "").strip().replace("$", "").replace("€", "").replace("₽", "")
+    raw = raw.replace(",", "").replace(" ", "")
+    try:
+        num = float(raw)
+        return str(int(round(num))) if abs(num - round(num)) < 0.000001 else ("%.8f" % num).rstrip("0").rstrip(".")
+    except Exception:
+        return raw
+
+
+def _extract_money_matches(text: str) -> List[Tuple[str, Tuple[int, int]]]:
+    matches: List[Tuple[str, Tuple[int, int]]] = []
+    pattern = re.compile(r"(?<!\w)(?:[$€₽]\s*)?(\d{1,3}(?:[ ,]\d{3})+(?:\.\d+)?|\d{4,7}(?:\.\d+)?)(?!\w)")
+    for match in pattern.finditer(text or ""):
+        matches.append((_normalize_number(match.group(1)), match.span()))
+    return matches
+
+
+def _extract_money_numbers(text: str) -> List[str]:
+    return [value for value, _span in _extract_money_matches(text)]
+
+
+def _is_level_context(text: str, match_span: Tuple[int, int]) -> bool:
+    low = (text or "").lower()
+    start, end = match_span
+    window = low[max(0, start - 60): min(len(low), end + 60)]
+    non_level_phrases = ("вход не подтверж", "без подтверждения вход", "no entry", "entry not confirmed", "no entry levels", "entry levels confirmed")
+    if any(phrase in window for phrase in non_level_phrases):
+        return False
+    level_terms = (
+        "вход", "entry", "buy zone", "зона", "support", "resistance", "поддержка", "поддержки",
+        "сопротивление", "сопротивления", "invalidation", "стоп", "stop", "target", "take profit",
+        " tp", "tp ", " sl", "sl ", "лонг", "шорт", "better zone", "уровень", "level",
+    )
+    return any(term in window for term in level_terms)
+
+
+def _is_current_price_context(text: str, match_span: Tuple[int, int]) -> bool:
+    low = (text or "").lower()
+    start, end = match_span
+    window = low[max(0, start - 60): min(len(low), end + 60)]
+    price_terms = ("current price", "сейчас", "текущая цена", "цена сейчас", "price around", "около", "примерно", "now")
+    return any(term in window for term in price_terms) and not _is_level_context(text, match_span)
+
+
+def _number_in_text(target: Any, text: str) -> bool:
+    normalized = _normalize_number(target)
+    return bool(normalized) and normalized in _extract_money_numbers(text)
 
 
 def plan_live_research_queries(user_text: str, understanding: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -70,15 +120,18 @@ def plan_live_research_queries(user_text: str, understanding: Dict[str, Any]) ->
 def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], router_result: Dict[str, Any], crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, research_context: Optional[Dict[str, Any]] = None, ui_language: str = "ru") -> Dict[str, Any]:
     understanding = understanding or {}; router_result = router_result or {}; research_context = research_context or {}
     mode = _mode(understanding, router_result); intent = str(understanding.get("intent") or "unknown")
+    planned_queries = plan_live_research_queries(user_text, understanding)
     items: List[Dict[str, Any]] = []; facts: Dict[str, Any] = {"support_levels": [], "resistance_levels": [], "odds": []}
     missing: List[str] = list(understanding.get("missing") or []); conflicts: List[str] = []
     policy = {"can_give_levels": False, "can_give_entry_zone": False, "can_comment_on_odds": True, "must_ask_clarification": bool((understanding.get("needs") or {}).get("clarification")), "must_not_invent": []}
     score = 0.0
     cm = crypto_market_context or {}
     if mode == "crypto":
+        if cm.get("ok") and _has(cm.get("price")):
+            facts["current_price"] = cm.get("price")
         if cm.get("ok") and _has(cm.get("price")) and _has(cm.get("support_levels")) and _has(cm.get("resistance_levels")):
             score += 0.4; policy["can_give_levels"] = True; policy["can_give_entry_zone"] = True
-            facts.update({"current_price": cm.get("price"), "support_levels": cm.get("support_levels") or [], "resistance_levels": cm.get("resistance_levels") or []})
+            facts.update({"support_levels": cm.get("support_levels") or [], "resistance_levels": cm.get("resistance_levels") or []})
             ec = cm.get("entry_context") or {}; facts.update({"better_zone": ec.get("better_zone"), "invalidation": ec.get("invalidation"), "confirmation": ec.get("confirmation")})
             _add_item(items, "market_data", str(cm.get("pair") or "crypto market"), "Price/levels derived from public OHLCV context.", str(cm.get("price_source") or "market provider"), freshness="live", relevance=0.95, reliability=0.85)
         if not _has(cm.get("ohlcv")):
@@ -118,25 +171,97 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
     policy["must_not_invent"] = ["price levels not present in evidence", "exact event times not present in evidence", "odds not present in evidence", "direct buy/sell/bet commands"]
     labels = ["WATCH", "DATA NEEDED"] if confidence == "low" else ["WATCH", "NO TRADE", "EDGE CANDIDATE"]
     if mode == "sports" and intent in ("betting_angle", "odds_value") and not policy["can_comment_on_odds"]: labels = ["NO BET", "WATCH", "DATA NEEDED"]
-    return {"ok": True, "mode": mode, "intent": intent, "evidence_items": items, "derived_facts": facts, "missing_data": missing, "conflicts": conflicts, "data_quality_score": score, "confidence_label": confidence, "answer_policy": policy, "recommended_decision_labels": labels, "reason": "Evidence pack built from live understanding plus available market/sports/research context."}
+    return {"ok": True, "mode": mode, "intent": intent, "planned_queries": planned_queries, "evidence_items": items, "derived_facts": facts, "missing_data": missing, "conflicts": conflicts, "data_quality_score": score, "confidence_label": confidence, "answer_policy": policy, "recommended_decision_labels": labels, "reason": "Evidence pack built from live understanding plus available market/sports/research context."}
+
+
+def _direct_command_issue(text: str) -> str:
+    low = (text or "").lower()
+    affirmative_patterns = [r"(?<!не\s)\bпокупай\b", r"(?<!не\s)\bставь\s+на\b", r"(?<!не\s)\bлонгуй\b", r"(?<!не\s)\bшорти\b", r"\bbuy\s+now\b", r"\bsell\s+now\b", r"\bbet\s+on\b"]
+    cautionary_patterns = [r"\bне\s+покупай\b", r"\bне\s+ставь\b", r"\bdon't\s+buy\b", r"\bdo\s+not\s+bet\b", r"\bне\s+лонгуй\b", r"\bне\s+шорти\b"]
+    if any(re.search(p, low) for p in affirmative_patterns):
+        if any(phrase in low for phrase in ("не могу сказать покупай", "нельзя сказать покупай", "not saying buy")):
+            return "minor"
+        return "major"
+    if any(re.search(p, low) for p in cautionary_patterns):
+        return "minor"
+    return ""
 
 
 def validate_live_answer_against_evidence(answer: str, evidence_pack: Dict[str, Any]) -> Dict[str, Any]:
     text = answer or ""; low = text.lower(); pack = evidence_pack or {}; policy = pack.get("answer_policy") or {}; facts = pack.get("derived_facts") or {}; missing = pack.get("missing_data") or []
     issues: List[str] = []
-    has_money_level = bool(re.search(r"[$€₽]?\b\d{2,3}[, ]?\d{3}(?:\.\d+)?\b|\$\s*\d+(?:\.\d+)?", text))
-    if has_money_level and not policy.get("can_give_levels"):
-        issues.append("answer_contains_price_levels_but_levels_not_allowed")
+    major_issues: List[str] = []
+    current_price = facts.get("current_price")
+    for normalized, span in _extract_money_matches(text):
+        is_current_price = _has(current_price) and _normalize_number(current_price) == normalized and _is_current_price_context(text, span)
+        if is_current_price:
+            continue
+        is_level = _is_level_context(text, span)
+        if is_level and not policy.get("can_give_levels"):
+            issue = "answer_contains_unsupported_trading_level"
+            issues.append(issue); major_issues.append(issue)
+        elif is_level and not policy.get("can_give_entry_zone") and any(term in low[max(0, span[0]-60):min(len(low), span[1]+60)] for term in ("вход", "entry", "buy zone", "зона", "лонг", "шорт")):
+            issue = "answer_contains_unsupported_entry_zone"
+            issues.append(issue); major_issues.append(issue)
+        elif not is_current_price and not policy.get("can_give_levels") and _is_level_context(text, span):
+            issue = "answer_contains_price_levels_but_levels_not_allowed"
+            issues.append(issue); major_issues.append(issue)
     if ("точное время" in low or "exact time" in low or re.search(r"\b\d{1,2}:\d{2}\b", text)) and "event_time" in missing and not facts.get("event_time"):
-        issues.append("answer_invents_or_asserts_event_time")
-    if re.search(r"\b(покупай|ставь|лонгуй|шорти|buy|sell|bet on)\b", low):
-        issues.append("answer_contains_direct_command")
+        issue = "answer_invents_or_asserts_event_time"
+        issues.append(issue); major_issues.append(issue)
+    command_severity = _direct_command_issue(text)
+    if command_severity == "major":
+        issue = "answer_contains_direct_command"
+        issues.append(issue); major_issues.append(issue)
+    elif command_severity == "minor":
+        issues.append("answer_contains_cautionary_imperative")
     if pack.get("mode") in ("crypto", "sports") and not re.search(r"\bDecision\s*:", text, flags=re.I):
         issues.append("answer_lacks_decision_label")
     if pack.get("confidence_label") == "low" and any(x in low for x in ("точно", "уверенно", "definitely", "certainly", "без риска")):
         issues.append("answer_too_certain_for_low_confidence")
-    if facts.get("better_zone") and str(facts.get("better_zone")) not in text:
+    if facts.get("better_zone") and not _number_in_text(facts.get("better_zone"), text):
         issues.append("answer_ignores_better_zone")
-    major_keys = {"answer_contains_price_levels_but_levels_not_allowed", "answer_invents_or_asserts_event_time", "answer_contains_direct_command"}
-    severity = "major" if any(i in major_keys for i in issues) else ("minor" if issues else "none")
+    severity = "major" if major_issues else ("minor" if issues else "none")
     return {"ok": not issues, "issues": issues, "severity": severity, "fixed_instruction": "Use only Live Evidence Pack facts; remove unsupported levels/times/odds and direct commands; if data is missing, label WATCH/DATA NEEDED."}
+
+
+def apply_validation_safety(answer: str, evidence_pack: Dict[str, Any], validation: Dict[str, Any], ui_language: str = "ru") -> str:
+    if (validation or {}).get("severity") != "major":
+        return answer
+    pack = evidence_pack or {}; facts = pack.get("derived_facts") or {}; policy = pack.get("answer_policy") or {}
+    missing = pack.get("missing_data") or []
+    issues = validation.get("issues") or []
+    fact_bits: List[str] = []
+    if _has(facts.get("current_price")):
+        fact_bits.append("current_price=%s" % facts.get("current_price"))
+    if policy.get("can_give_levels"):
+        if _has(facts.get("support_levels")):
+            fact_bits.append("support=%s" % facts.get("support_levels"))
+        if _has(facts.get("resistance_levels")):
+            fact_bits.append("resistance=%s" % facts.get("resistance_levels"))
+    if _has(facts.get("event_time")):
+        fact_bits.append("event_time=%s" % facts.get("event_time"))
+    if _has(facts.get("odds")) and policy.get("can_comment_on_odds"):
+        fact_bits.append("odds=%s" % facts.get("odds"))
+    if _has(facts.get("polymarket_probability")):
+        fact_bits.append("polymarket_probability=%s" % facts.get("polymarket_probability"))
+    available = "; ".join(fact_bits) if fact_bits else ("нет подтверждённых числовых фактов" if ui_language == "ru" else "no confirmed numeric facts")
+    missing_text = ", ".join(str(x) for x in missing) if missing else ("нет явных пропусков" if ui_language == "ru" else "no explicit gaps")
+    reason = ", ".join(str(x) for x in issues[:3])
+    if ui_language == "ru":
+        return "\n".join([
+            "🧠 Коротко: DATA NEEDED / WATCH",
+            "",
+            "Ответ был ограничен доказательствами: %s." % reason,
+            "Доступные данные: %s." % available,
+            "Чего не хватает: %s." % missing_text,
+            "Decision: DATA NEEDED",
+        ])
+    return "\n".join([
+        "🧠 Short take: DATA NEEDED / WATCH",
+        "",
+        "The answer was constrained by evidence: %s." % reason,
+        "Available data: %s." % available,
+        "Missing data: %s." % missing_text,
+        "Decision: DATA NEEDED",
+    ])
