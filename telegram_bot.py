@@ -8739,6 +8739,13 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     final_text = result.get("message") or LIVE_UNAVAILABLE_MESSAGE
     final_markup = private_reply_markup(message, get_live_analyst_keyboard(uid))
     await _send_live_final_chunks(message, thinking_message, final_text, final_markup=final_markup)
+    logger.info(
+        "live_text_handled_stop_propagation user_id=%s ok=%s charged=%s",
+        uid,
+        result.get("ok"),
+        result.get("charged"),
+    )
+    return
 
 
 
