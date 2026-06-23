@@ -136,3 +136,60 @@ def test_explicit_odds_still_parsed_in_production_path():
     assert "- Implied probability: 51.3%" in answer
     assert "- Edge: +6.7 pp" in answer
     assert "Decision: EDGE CANDIDATE" in answer
+
+
+def test_lakers_celtics_overrides_bad_mma_context_odds_without_estimate():
+    pack = {
+        "mode": "sports",
+        "intent": "betting_angle",
+        "derived_facts": {
+            "understanding": {
+                "intent": "betting_angle",
+                "teams": ["Lakers", "Celtics"],
+                "sport": "mma",
+                "league": "",
+                "market": "total",
+                "odds": "1.95",
+            },
+            "sports_context": {"sources": [], "teams": ["Lakers", "Celtics"], "sport": "mma"},
+        },
+        "missing_data": ["lineups/injuries"],
+    }
+    answer = format_live_final_answer("Lakers — Celtics total кэф 1.95\nDecision: DATA NEEDED", pack, "ru")
+    low = answer.lower()
+    assert "Спорт/лига: basketball / NBA" in answer
+    assert "style matchup: ударка/борьба" not in answer
+    assert "pace" in low or "rotation" in low
+    assert "Коэффициент: 1.95" in answer
+    assert "Implied probability: 51.3%" in answer
+    assert "Без коэффициента нельзя понять value" not in answer
+    assert "Коэффициент есть, implied probability посчитана" in answer
+    assert "Decision: DATA NEEDED" in answer
+
+
+def test_ufc_event_keeps_mma_key_factors_with_odds_no_estimate():
+    u = understand_live_request("UFC: Fighter A vs Fighter B, кэф 1.95, есть ставка?", {"mode": "sports"}, {}, "ru")
+    answer = format_live_final_answer("UFC: Fighter A vs Fighter B, кэф 1.95, есть ставка?\nDecision: DATA NEEDED", _pack(u, sources=False), "ru")
+    assert "Спорт/лига: mma / UFC" in answer
+    assert "style matchup" in answer or "ударка/борьба" in answer
+    assert "Спорт/лига: basketball" not in answer
+
+
+def test_lakers_celtics_missing_odds_keeps_no_odds_value_copy():
+    u = understand_live_request("На кого ставить Lakers — Celtics?", {"mode": "sports"}, {}, "ru")
+    answer = format_live_final_answer("На кого ставить Lakers — Celtics?\nDecision: DATA NEEDED", _pack(u, sources=False), "ru")
+    assert "Спорт/лига: basketball / NBA" in answer
+    assert "Коэффициент: не указан" in answer
+    assert "Без коэффициента нельзя понять value" in answer
+    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+
+
+def test_lakers_celtics_edge_candidate_with_estimated_probability():
+    u = understand_live_request("Lakers — Celtics, Lakers кэф 1.95, есть ставка?", {"mode": "sports"}, {}, "ru")
+    pack = _pack(u, estimated=0.58, sources=True)
+    answer = format_live_final_answer("Lakers — Celtics, Lakers кэф 1.95, есть ставка?\nDecision: DATA NEEDED", pack, "ru")
+    assert "Спорт/лига: basketball / NBA" in answer
+    assert "Implied probability: 51.3%" in answer
+    assert "Моя оценка: 58.0%" in answer
+    assert "Edge: +6.7 pp" in answer
+    assert "Decision: EDGE CANDIDATE" in answer
