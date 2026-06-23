@@ -158,6 +158,63 @@ def _strip_decision_lines(text: str) -> str:
     return re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)?\b\s*", "", text or "").strip()
 
 
+
+def _strip_live_section_heading(text: str) -> str:
+    """Remove duplicated section labels/Markdown from the start of an LLM section body."""
+    result = str(text or "").strip()
+    if not result:
+        return ""
+
+    def clean_markdown_markers(value: str) -> str:
+        value = re.sub(r"\*{2,}", "", value or "")
+        value = re.sub(r"__+", "", value)
+        return value.strip()
+
+    result = clean_markdown_markers(result)
+    labels = (
+        "Коротко",
+        "Short",
+        "Short take",
+        "Scenario",
+        "Сценарий",
+        "Risk",
+        "Риск",
+        "Decision",
+        "Решение",
+    )
+    label_pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
+    heading_pattern = re.compile(
+        rf"(?is)^\s*(?:[-–—•]*\s*)?(?:🧠\s*)?(?:{label_pattern})\s*[:：-]\s*"
+    )
+    previous = None
+    while result and result != previous:
+        previous = result
+        result = heading_pattern.sub("", result, count=1).strip()
+        result = clean_markdown_markers(result)
+    return result
+
+
+def _canonical_live_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[\W_]+", " ", (text or "").lower(), flags=re.UNICODE)).strip()
+
+
+def _crypto_risk_fallback(facts: Dict[str, Any], ui_language: str) -> str:
+    support_values = facts.get("support_levels") or []
+    resistance_values = facts.get("resistance_levels") or []
+    if not isinstance(support_values, (list, tuple)):
+        support_values = [support_values]
+    if not isinstance(resistance_values, (list, tuple)):
+        resistance_values = [resistance_values]
+    support = facts.get("better_zone") if facts.get("better_zone") is not None else (support_values[0] if support_values else None)
+    resistance = _format_resistance_range(resistance_values)
+    if ui_language == "ru":
+        if support is not None and resistance:
+            return "Вход без подтверждения реакции от %s или пробоя/ретеста %s повышает риск ложного движения или продолжения снижения." % (_format_money_value(support), resistance)
+        return "Вход без подтверждения повышает риск ложного движения; лучше дождаться реакции цены на ключевых уровнях."
+    if support is not None and resistance:
+        return "Entering without a confirmed reaction at %s or breakout/retest of %s raises the risk of a false move or continued downside." % (_format_money_value(support), resistance)
+    return "Entering without confirmation raises the risk of a false move; wait for price reaction at key levels."
+
 def _crypto_default_short(ui_language: str, can_levels: bool) -> str:
     if ui_language == "ru":
         return "WATCH: вход не подтверждён сейчас; лучше ждать реакции от ключевых уровней." if can_levels else "DATA NEEDED: подтверждённых технических уровней в данных нет."
@@ -288,8 +345,9 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
     short = _extract_section(answer, ("Коротко", "Short take"))
     if not short:
         short = re.split(r"\n\s*\n", answer.strip(), maxsplit=1)[0]
-    short = re.sub(r"(?i)^\s*(🧠\s*)?(Коротко|Short take)\s*:\s*", "", short or "").strip()
-    short = _localize_crypto_context_phrase(_clean_crypto_fragment(short, facts, has_levels, has_entry_context), ui_language) or _crypto_default_short(ui_language, has_levels)
+    short = _strip_live_section_heading(short)
+    short = _localize_crypto_context_phrase(_clean_crypto_fragment(short, facts, has_levels, has_entry_context), ui_language)
+    short = _strip_live_section_heading(short) or _crypto_default_short(ui_language, has_levels)
 
     data = []
     if facts.get("current_price") is not None:
@@ -300,13 +358,15 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
         data.append(("Сопротивление" if ui_language == "ru" else "Resistance", _fact_list(facts.get("resistance_levels"))))
     if can_levels and facts.get("better_zone") is not None:
         data.append(("Зона лучше" if ui_language == "ru" else "Better zone", _format_money_value(facts.get("better_zone"))))
-    if facts.get("confirmation"):
-        data.append(("Подтверждение" if ui_language == "ru" else "Confirmation", _localize_crypto_context_phrase(str(facts.get("confirmation")).strip(), ui_language)))
-    if facts.get("invalidation"):
-        data.append(("Инвалидация" if ui_language == "ru" else "Invalidation", _localize_crypto_context_phrase(str(facts.get("invalidation")).strip(), ui_language)))
+    confirmation = _strip_live_section_heading(_localize_crypto_context_phrase(str(facts.get("confirmation") or "").strip(), ui_language))
+    invalidation = _strip_live_section_heading(_localize_crypto_context_phrase(str(facts.get("invalidation") or "").strip(), ui_language))
+    if confirmation:
+        data.append(("Подтверждение" if ui_language == "ru" else "Confirmation", confirmation))
+    if invalidation:
+        data.append(("Инвалидация" if ui_language == "ru" else "Invalidation", invalidation))
 
-    scenario = _localize_crypto_context_phrase(_clean_crypto_fragment(_extract_section(answer, ("Сценарий", "Scenario")), facts, has_levels, has_entry_context), ui_language)
-    risk = _localize_crypto_context_phrase(_clean_crypto_fragment(_extract_section(answer, ("Риск", "Risk")), facts, has_levels, has_entry_context), ui_language)
+    scenario = _strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Сценарий", "Scenario"))), facts, has_levels, has_entry_context), ui_language))
+    risk = _strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Риск", "Risk"))), facts, has_levels, has_entry_context), ui_language))
     if has_levels and (facts.get("better_zone") is not None or facts.get("confirmation")):
         if ui_language == "ru":
             scenario = "Вход не подтверждён сейчас. Базовый сценарий — ждать реакции от %s или пробоя/ретеста сопротивления %s." % (_format_money_value(facts.get("better_zone") or (facts.get("support_levels") or [None])[0]), _format_resistance_range(facts.get("resistance_levels")))
@@ -316,7 +376,11 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
         scenario = scenario or ("Подтверждённых уровней нет; нужен график/OHLCV и таймфрейм, чтобы собрать технический сценарий." if ui_language == "ru" else "No confirmed technical levels; chart/OHLCV and timeframe are needed to build a setup.")
     else:
         scenario = scenario or ("Ждать подтверждения у ближайших ключевых уровней." if ui_language == "ru" else "Wait for confirmation at the nearest evidence levels.")
-    risk = risk or _localize_crypto_context_phrase(str(facts.get("invalidation") or "").strip(), ui_language) or ("Без подтверждения вход легко станет ложным сигналом." if ui_language == "ru" else "Without confirmation the setup can become a false signal.")
+    invalidation_text = invalidation or _strip_live_section_heading(_localize_crypto_context_phrase(str(facts.get("invalidation") or "").strip(), ui_language))
+    risk_too_weak = len(risk) < 20 or (invalidation_text and _canonical_live_text(risk) == _canonical_live_text(invalidation_text))
+    if risk_too_weak:
+        risk = _crypto_risk_fallback(facts, ui_language)
+    risk = risk or _crypto_risk_fallback(facts, ui_language)
 
     if ui_language == "ru":
         data_block = "\n".join(f"- {k}: {v}" for k, v in data) or "- Контекст: подтверждённых уровней нет."
@@ -357,6 +421,7 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = _normalize_raw_crypto_level_numbers(text, evidence_pack)
         text = _clean_live_spacing(text)
     text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b\s*\.?,?\s*$", "", text).strip()
+    text = re.sub(r"\*{2,}", "", text).strip()
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     return _trim_live_answer(text, 1600)
 
