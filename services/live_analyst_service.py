@@ -154,8 +154,22 @@ def _extract_section(answer: str, names: tuple[str, ...]) -> str:
     return (match.group(1).strip() if match else "")
 
 
+def _strip_leading_decision_label(text: str) -> str:
+    """Remove decision labels when an LLM puts them at the start of a section body."""
+    result = str(text or "").strip()
+    if not result:
+        return ""
+    label_pattern = r"WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET"
+    previous = None
+    while result and result != previous:
+        previous = result
+        result = re.sub(rf"(?is)^\s*Decision\s*:\s*(?:\n\s*)?(?:{label_pattern})\b\s*[:：.-]?\s*", "", result, count=1).strip()
+        result = re.sub(rf"(?is)^\s*(?:{label_pattern})\b\s*[:：.-]?\s*", "", result, count=1).strip()
+    return result
+
+
 def _strip_decision_lines(text: str) -> str:
-    return re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)?\b\s*", "", text or "").strip()
+    return _strip_leading_decision_label(re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)?\b\s*", "", text or "").strip())
 
 
 
@@ -217,8 +231,52 @@ def _crypto_risk_fallback(facts: Dict[str, Any], ui_language: str) -> str:
 
 def _crypto_default_short(ui_language: str, can_levels: bool) -> str:
     if ui_language == "ru":
-        return "WATCH: вход не подтверждён сейчас; лучше ждать реакции от ключевых уровней." if can_levels else "DATA NEEDED: подтверждённых технических уровней в данных нет."
-    return "WATCH: entry is not confirmed now; wait for reaction at evidence levels." if can_levels else "DATA NEEDED: evidence has no confirmed technical levels."
+        return "Вход не подтверждён сейчас; лучше ждать реакции от ключевых уровней." if can_levels else "Подтверждённых технических уровней в данных нет; нужны свежие OHLCV/график."
+    return "Entry is not confirmed now; wait for reaction at key levels." if can_levels else "Evidence has no confirmed technical levels; fresh OHLCV/chart data is needed."
+
+
+def _evidence_symbol_timeframe(facts: Dict[str, Any], evidence_pack: Dict[str, Any]) -> str:
+    symbol = facts.get("symbol") or facts.get("pair") or evidence_pack.get("symbol") or evidence_pack.get("pair")
+    timeframe = facts.get("timeframe") or evidence_pack.get("timeframe")
+    if not symbol:
+        for item in evidence_pack.get("evidence_items") or []:
+            if item.get("type") == "market_data" and item.get("title"):
+                symbol = item.get("title")
+                break
+    parts = [str(x).strip() for x in (symbol, timeframe) if str(x or "").strip()]
+    return " ".join(parts)
+
+
+def _crypto_evidence_short(facts: Dict[str, Any], evidence_pack: Dict[str, Any], ui_language: str, decision: str, can_levels: bool) -> str:
+    subject = _evidence_symbol_timeframe(facts, evidence_pack)
+    supports = facts.get("support_levels") or []
+    if not isinstance(supports, (list, tuple)):
+        supports = [supports]
+    support = facts.get("better_zone") if facts.get("better_zone") is not None else (supports[0] if supports else None)
+    resistance = _format_resistance_range(facts.get("resistance_levels"))
+    decision = (decision or "DATA NEEDED").upper()
+    prefix = f"{subject} " if subject else "Цена "
+    if ui_language == "ru":
+        if decision == "DATA NEEDED" or not can_levels:
+            return (f"{subject} требует больше данных" if subject else "Требуется больше данных") + ": подтверждённых уровней или свежего OHLCV недостаточно для сценария."
+        if decision == "NO TRADE":
+            return (f"{subject}: " if subject else "") + "условия для входа слабые; лучше не входить без подтверждения реакции цены."
+        if decision == "EDGE CANDIDATE":
+            return (f"{subject}: " if subject else "") + "есть потенциальный сценарий, но вход стоит рассматривать только после подтверждения на ключевых уровнях."
+        if support is not None and resistance:
+            return f"{prefix}держится рядом с поддержкой {_format_money_value(support)}. Входа пока нет: нужен отскок от поддержки или пробой/ретест {resistance}."
+        if support is not None:
+            return f"{prefix}держится рядом с поддержкой {_format_money_value(support)}. Входа пока нет: нужна подтверждённая реакция цены."
+        return _crypto_default_short(ui_language, can_levels)
+    if decision == "DATA NEEDED" or not can_levels:
+        return (f"{subject} needs more data" if subject else "More data is needed") + ": confirmed levels or fresh OHLCV are not enough for a setup."
+    if decision == "NO TRADE":
+        return (f"{subject}: " if subject else "") + "entry conditions are weak; avoid entering without confirmed price reaction."
+    if decision == "EDGE CANDIDATE":
+        return (f"{subject}: " if subject else "") + "there is a potential setup, but only after confirmation at key levels."
+    if support is not None and resistance:
+        return f"{prefix}is holding near support {_format_money_value(support)}. No entry yet: wait for a bounce or breakout/retest of {resistance}."
+    return _crypto_default_short(ui_language, can_levels)
 
 
 
@@ -345,9 +403,13 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
     short = _extract_section(answer, ("Коротко", "Short take"))
     if not short:
         short = re.split(r"\n\s*\n", answer.strip(), maxsplit=1)[0]
-    short = _strip_live_section_heading(short)
+    raw_short = _strip_live_section_heading(short)
+    had_leading_decision = raw_short != _strip_leading_decision_label(raw_short)
+    short = _strip_leading_decision_label(raw_short)
     short = _localize_crypto_context_phrase(_clean_crypto_fragment(short, facts, has_levels, has_entry_context), ui_language)
-    short = _strip_live_section_heading(short) or _crypto_default_short(ui_language, has_levels)
+    short = _strip_leading_decision_label(_strip_live_section_heading(short))
+    if had_leading_decision or not short:
+        short = _crypto_evidence_short(facts, evidence_pack, ui_language, decision, has_levels)
 
     data = []
     if facts.get("current_price") is not None:
@@ -365,8 +427,8 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
     if invalidation:
         data.append(("Инвалидация" if ui_language == "ru" else "Invalidation", invalidation))
 
-    scenario = _strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Сценарий", "Scenario"))), facts, has_levels, has_entry_context), ui_language))
-    risk = _strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Риск", "Risk"))), facts, has_levels, has_entry_context), ui_language))
+    scenario = _strip_leading_decision_label(_strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Сценарий", "Scenario"))), facts, has_levels, has_entry_context), ui_language)))
+    risk = _strip_leading_decision_label(_strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Риск", "Risk"))), facts, has_levels, has_entry_context), ui_language)))
     if has_levels and (facts.get("better_zone") is not None or facts.get("confirmation")):
         if ui_language == "ru":
             scenario = "Вход не подтверждён сейчас. Базовый сценарий — ждать реакции от %s или пробоя/ретеста сопротивления %s." % (_format_money_value(facts.get("better_zone") or (facts.get("support_levels") or [None])[0]), _format_resistance_range(facts.get("resistance_levels")))
