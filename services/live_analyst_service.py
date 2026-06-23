@@ -479,6 +479,49 @@ def _parse_decimal_odds(value: Any) -> Optional[float]:
         return None
 
 
+def _sports_norm_blob(sport: str, teams: list[str], user_text: str) -> str:
+    return " ".join([str(sport or ""), *(str(t or "") for t in (teams or [])), str(user_text or "")]).lower()
+
+
+def _has_any_token(blob: str, tokens: tuple[str, ...]) -> bool:
+    return any(re.search(r"(?<!\w)%s(?!\w)" % re.escape(token.lower()), blob, re.I) for token in tokens)
+
+
+def _normalize_sports_type(sport: str, teams: list[str], user_text: str) -> str:
+    """Final team/text-based sport sanity check; strong entity hints beat weak context."""
+    raw = str(sport or "").strip().lower()
+    blob = _sports_norm_blob("", teams, user_text)
+    checks = (
+        ("basketball", ("nba", "basketball", "баскет", "lakers", "celtics", "warriors", "bulls", "knicks", "heat", "nuggets", "mavericks", "mavs", "suns", "76ers", "sixers", "bucks", "clippers", "nets", "kings", "raptors", "cavaliers", "cavs", "lakers", "celtics")),
+        ("mma", ("ufc", "mma", "fighter", "fighters", "бой", "бойцы", "боец")),
+        ("hockey", ("nhl", "hockey", "хоккей", "goalie")),
+        ("tennis", ("atp", "wta", "tennis", "теннис", "sinner", "medvedev", "медведев", "djokovic", "джокович", "alcaraz", "алькарас")),
+        ("american_football", ("nfl", "american football", "американский футбол")),
+        ("baseball", ("mlb", "baseball", "бейсбол")),
+        ("esports", ("cs2", "dota", "dota2", "lol", "league of legends", "esports", "киберспорт", "кибер")),
+        ("football", ("football", "soccer", "футбол", "real", "barcelona", "barca", "барса", "арсенал", "arsenal", "man city", "mancity", "chelsea", "liverpool", "psg", "bayern", "juventus", "milan")),
+    )
+    for normalized, tokens in checks:
+        if _has_any_token(blob, tokens):
+            return normalized
+    aliases = {"soccer": "football", "basket": "basketball", "ice_hockey": "hockey", "american-football": "american_football"}
+    return aliases.get(raw, raw or "sport")
+
+
+def _infer_sports_league(sport: str, league: str, teams: list[str], user_text: str) -> str:
+    current = str(league or "").strip()
+    if current and current != "—":
+        return current
+    blob = _sports_norm_blob(sport, teams, user_text)
+    if _has_any_token(blob, ("nba", "lakers", "celtics", "warriors", "bulls", "knicks", "heat", "nuggets", "mavericks", "mavs", "suns", "76ers", "sixers", "bucks", "clippers", "nets", "kings", "raptors", "cavaliers", "cavs")):
+        return "NBA"
+    if _has_any_token(blob, ("ufc",)):
+        return "UFC"
+    if _has_any_token(blob, ("nhl", "goalie")) or sport == "hockey" and _has_any_token(blob, ("hockey", "хоккей")):
+        return "NHL"
+    return "—"
+
+
 def _sports_implied_probability(odds: Optional[float]) -> Optional[float]:
     return (1.0 / odds) if odds and odds > 1 else None
 
@@ -539,8 +582,9 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
     sc = sports_context or facts.get("sports_context") or {}
     teams = understanding.get("teams") or sc.get("teams") or []
     event = " — ".join(str(x) for x in teams[:2]) if len(teams) >= 2 else (understanding.get("user_question_normalized") or user_text)
-    sport = understanding.get("sport") or sc.get("sport") or "sport"
-    league = understanding.get("league") or sc.get("league") or "—"
+    raw_sport = understanding.get("sport") or sc.get("sport") or "sport"
+    sport = _normalize_sports_type(raw_sport, teams, user_text)
+    league = _infer_sports_league(sport, understanding.get("league") or sc.get("league") or "—", teams, user_text)
     market = understanding.get("market") or "moneyline"
     odds = _sports_user_odds(understanding, facts)
     implied = _sports_implied_probability(odds)
@@ -585,8 +629,15 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
         key = "map pool, patch/meta, roster changes, recent form, BO format"
 
     if ui_language == "ru":
-        short = ("Лучший кандидат есть только при value: %s, минимум кэф %s." % (event, fair_txt)) if decision == "EDGE CANDIDATE" else ("По спортивной логике можно сделать lean, но без достаточных коэффициентов/свежих данных это не ставка.")
-        value = "Коэффициент выше fair odds даёт value." if decision == "EDGE CANDIDATE" else ("Линия не playable: edge меньше буфера 2 pp." if decision == "NO EDGE" else "Без коэффициента нельзя понять value; пришли кэф — посчитаю implied probability и edge.")
+        short = ("Лучший кандидат есть только при value: %s, минимум кэф %s." % (event, fair_txt)) if decision == "EDGE CANDIDATE" else (("Кэф %.2f даёт implied probability %s, но без свежей оценки вероятности edge не доказан." % (odds, implied_txt)) if odds and not estimated else "По спортивной логике можно сделать lean, но без достаточных коэффициентов/свежих данных это не ставка.")
+        if decision == "EDGE CANDIDATE":
+            value = "Коэффициент выше fair odds даёт value."
+        elif decision == "NO EDGE":
+            value = "Линия не playable: edge меньше буфера 2 pp."
+        elif odds and not estimated:
+            value = "Коэффициент есть, implied probability посчитана, но без моей оценки вероятности и свежих данных edge не доказан."
+        else:
+            value = "Без коэффициента нельзя понять value; пришли кэф — посчитаю implied probability и edge."
         return _sanitize_sports_text(f"""🏟 Коротко:
 {short}
 
@@ -615,7 +666,7 @@ Value:
 {decision}: {'кандидат на value только при кэфе не ниже ' + fair_txt if decision == 'EDGE CANDIDATE' else 'данных/edge недостаточно для профессиональной ставки.'}
 
 Decision: {decision}""")
-    short = "There is an edge candidate only if market odds stay above fair odds." if decision == "EDGE CANDIDATE" else "Lean is not the same as a bet; odds/fresh data are needed to prove value."
+    short = "There is an edge candidate only if market odds stay above fair odds." if decision == "EDGE CANDIDATE" else (("Odds %.2f imply %s, but edge is not proven without a fresh estimated probability." % (odds, implied_txt)) if odds and not estimated else "Lean is not the same as a bet; odds/fresh data are needed to prove value.")
     return _sanitize_sports_text(f"""🏟 Short:
 {short}
 
@@ -635,7 +686,7 @@ Breakdown:
 This is probability versus price, not a guaranteed pick. H2H is secondary; current team news, style, rest and line movement matter more.
 
 Value:
-{'Playable only above fair odds.' if decision == 'EDGE CANDIDATE' else 'No proven value without odds / with an edge below the buffer.'}
+{'Playable only above fair odds.' if decision == 'EDGE CANDIDATE' else ('Line is not playable: edge is below the 2 pp buffer.' if decision == 'NO EDGE' else ('Odds are provided and implied probability is calculated, but edge is not proven without an estimated probability and fresh data.' if odds and not estimated else 'No odds are provided; send the odds and I will calculate implied probability and edge.'))}
 
 Risk:
 Lineups, injuries, motivation, travel/rest, late market movement and variance can remove the edge.
