@@ -794,3 +794,53 @@ def test_format_live_final_answer_strips_nested_emoji_bold_english_heading():
     assert "**" not in result
     assert not short_body.startswith("🧠")
     assert not short_body.startswith("Short take:")
+
+
+def test_crypto_short_summary_strips_watch_prefix_and_keeps_final_decision():
+    result = svc.format_live_final_answer(
+        "WATCH: вход не подтверждён сейчас; лучше ждать реакции от ключевых уровней.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    short_body = _section_body(result, "🧠 Коротко")
+    assert not short_body.startswith("WATCH:")
+    assert result.endswith("Decision: WATCH")
+
+
+def test_crypto_evidence_based_short_includes_support_and_resistance_range():
+    result = svc.format_live_final_answer(
+        "WATCH: вход не подтверждён сейчас; лучше ждать реакции от ключевых уровней.\nDecision: WATCH",
+        _crypto_evidence_with_levels({
+            "current_price": 62272,
+            "support_levels": [62000, 61938],
+            "resistance_levels": [62500, 63095],
+            "better_zone": 62000,
+            "timeframe": "15m",
+            "symbol": "BTCUSDT",
+        }),
+        ui_language="ru",
+    )
+    short_body = _section_body(result, "🧠 Коротко")
+    assert "$62,000" in short_body
+    assert "$62,500–$63,095" in short_body
+    assert not short_body.startswith("WATCH:")
+
+
+def test_crypto_data_needed_short_strips_duplicate_decision_label():
+    result = svc.format_live_final_answer(
+        "DATA NEEDED: подтверждённых уровней недостаточно.\nDecision: DATA NEEDED",
+        {"mode": "crypto", "recommended_decision_labels": ["DATA NEEDED"], "derived_facts": {"symbol": "BTCUSDT", "timeframe": "15m", "support_levels": [], "resistance_levels": []}, "answer_policy": {"can_give_levels": False}},
+        ui_language="ru",
+    )
+    short_body = _section_body(result, "🧠 Коротко")
+    assert not short_body.startswith("DATA NEEDED:")
+    assert result.endswith("Decision: DATA NEEDED")
+
+
+def test_crypto_existing_clean_short_remains_clean():
+    result = svc.format_live_final_answer(
+        "Коротко: BTCUSDT находится рядом с поддержкой $62,000.\nDecision: WATCH",
+        _crypto_evidence_with_levels({"support_levels": [62000], "resistance_levels": [62500], "better_zone": 62000}),
+        ui_language="ru",
+    )
+    assert _section_body(result, "🧠 Коротко") == "BTCUSDT находится рядом с поддержкой $62,000."
