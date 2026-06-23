@@ -58,8 +58,19 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # ═══════════════════════════════════════════
 
 def is_channel_posting_enabled() -> bool:
+    disabled_values = {"off", "false", "0", "no", "disabled"}
+    enabled_values = {"on", "true", "1", "yes", "enabled"}
+
+    env_value = str(os.getenv("CHANNEL_POSTING_DISABLED", "")).strip().lower()
+    if env_value in {"true", "1", "on", "yes", "disabled"}:
+        return False
+
     value = str(get_setting("channel_posting_enabled", "on")).strip().lower()
-    return value in ("on", "true", "1", "yes", "enabled")
+    if value in disabled_values:
+        return False
+    if value in enabled_values:
+        return True
+    return False
 
 
 async def post_to_channel(force: bool = False):
@@ -68,8 +79,9 @@ async def post_to_channel(force: bool = False):
         print("📢 CHANNEL_ID not set, skip")
         return {"ok": False, "reason": "no_channel"}
 
-    if not force and not is_channel_posting_enabled():
-        print("📢 Channel posting disabled in admin settings, skip")
+    if not is_channel_posting_enabled():
+        print(f"📢 Channel posting disabled in admin settings, skip force={force}")
+        print(f"channel_posting_blocked disabled force={force}")
         return {"ok": False, "reason": "disabled"}
 
     try:
