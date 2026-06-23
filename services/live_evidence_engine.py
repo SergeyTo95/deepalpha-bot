@@ -140,6 +140,7 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
         if not understanding.get("timeframe") and "timeframe" not in missing: missing.append("timeframe")
     sc = sports_context or {}
     if mode == "sports":
+        facts.update({"understanding": understanding, "sports_context": sc, "user_odds": understanding.get("odds")})
         if _has(sc.get("sources")):
             score += 0.25
         facts.update({"event_time": sc.get("event_time"), "odds": sc.get("odds") or [], "participants": sc.get("participants") or [], "lineups": sc.get("lineups") or [], "injuries": sc.get("injuries") or []})
