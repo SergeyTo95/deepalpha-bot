@@ -83,7 +83,7 @@ _TEAM_ALIASES = {
     "argentina": "Argentina", "austria": "Austria",
 }
 
-_SPORT_WORDS = ("матч", "турнир", "состав", "игрок", "тотал", "фора", "коэффициент", "кэф", "став", "футбол", "баскет", "теннис", "mma", "ufc", "финал", "фаворит", "гол", "голы", "команда", "лига", "football", "soccer", "basketball", "tennis", "odds", "lineup", "injury", "match", "final", "favorite", "value", "over", "under", "handicap")
+_SPORT_WORDS = ("матч", "турнир", "состав", "игрок", "тотал", "фора", "коэффициент", "кэф", "став", "футбол", "баскет", "теннис", "mma", "ufc", "бокс", "хоккей", "волейбол", "киберспорт", "экспресс", "ординар", "победа", "ничья", "обе забьют", "индивидуальный тотал", "финал", "фаворит", "гол", "голы", "команда", "лига", "football", "soccer", "basketball", "tennis", "hockey", "nhl", "mma", "ufc", "boxing", "baseball", "mlb", "nfl", "esports", "volleyball", "odds", "lineup", "injury", "match", "final", "favorite", "value", "edge", "moneyline", "spread", "props", "pick", "best bet", "over", "under", "over/under", "handicap")
 
 
 def _canonical_team(name: str) -> str:
@@ -121,10 +121,15 @@ def _sport(text: str, router_result: Dict[str, Any]) -> str:
     if ent.get("sport"):
         return str(ent.get("sport"))
     low = text.lower()
-    if any(x in low for x in ("basket", "баскет", "nba")): return "basketball"
-    if any(x in low for x in ("tennis", "теннис", "atp", "wta")): return "tennis"
-    if any(x in low for x in ("mma", "ufc", "бокс")): return "mma"
-    if any(x in low for x in ("esports", "кибер")): return "esports"
+    if any(x in low for x in ("basket", "баскет", "nba", "lakers", "celtics")): return "basketball"
+    if any(x in low for x in ("tennis", "теннис", "atp", "wta", "медведев", "синнер")): return "tennis"
+    if any(x in low for x in ("mma", "ufc")): return "mma"
+    if any(x in low for x in ("boxing", "бокс")): return "boxing"
+    if any(x in low for x in ("hockey", "хоккей", "nhl")): return "hockey"
+    if any(x in low for x in ("baseball", "mlb", "бейсбол")): return "baseball"
+    if any(x in low for x in ("nfl", "american football", "американский футбол")): return "american_football"
+    if any(x in low for x in ("esports", "кибер", "cs2", "dota", "lol")): return "esports"
+    if any(x in low for x in ("volleyball", "волейбол")): return "volleyball"
     return "football" if any(x in low for x in _SPORT_WORDS) or _extract_teams(text, router_result) else ""
 
 
@@ -135,8 +140,8 @@ def _sports_intent(text: str) -> str:
     if any(x in low for x in ("кто играет", "участник", "игроки в турнире", "participants")): return "participants_check"
     if any(x in low for x in ("состав", "травм", "lineup", "injur")): return "lineup_check"
     if any(x in low for x in ("счёт", "счет", "результат", "кто выиграл", "score", "result")): return "result_check"
-    if any(x in low for x in ("тотал", "total", "коэффициент", "кэф", "value", "линия", "odds")): return "odds_value"
-    if any(x in low for x in ("став", "брать побед", "на кого", "фаворит", "bet", "favorite")): return "betting_angle"
+    if any(x in low for x in ("лучший кэф", "коэффициент", "кэф", "value", "линия", "odds", "edge", "что по кэфу")): return "odds_value"
+    if any(x in low for x in ("на кого ставить", "кого брать", "что взять", "есть ставка", "прогноз на матч", "кто выиграет", "фора", "тотал", "обе забьют", "победа", "ничья", "индивидуальный тотал", "экспресс", "ординар", "став", "брать побед", "на кого", "фаворит", "who to bet on", "best bet", "pick", "moneyline", "spread", "total", "over/under", "props", "bet", "favorite")): return "betting_angle"
     if any(x in low for x in ("разбери", "что по", "preview", "финал")): return "match_preview"
     if any(x in low for x in ("объясни", "что такое", "правило", "explain")): return "explain"
     return "unknown"
@@ -144,10 +149,11 @@ def _sports_intent(text: str) -> str:
 
 def _sports_market(text: str) -> Dict[str, str]:
     low = text.lower(); market=""; line=""; odds=""
-    if "тотал" in low or "total" in low or "over" in low or "under" in low: market="total"
-    elif "фора" in low or "handicap" in low: market="handicap"
-    elif "обе заб" in low or "btts" in low: market="both_teams_to_score"
-    elif "побед" in low or "moneyline" in low or "winner" in low: market="moneyline"
+    if "обе заб" in low or "btts" in low: market="both_teams_to_score"
+    elif "тотал" in low or "total" in low or "over" in low or "under" in low: market="total"
+    elif "фора" in low or "handicap" in low or "spread" in low: market="handicap"
+    elif "prop" in low or "индивидуальный" in low: market="props"
+    elif "побед" in low or "moneyline" in low or "winner" in low or "на кого" in low or "кто выиграет" in low or "pick" in low: market="moneyline"
     m=re.search(r"(?:тотал|total|over|under|фора|handicap)\s*([0-9]+(?:[.,][0-9]+)?)", text, re.I)
     if m: line=m.group(1).replace(',', '.')
     o=re.search(r"(?:odds|коэффициент|кэф)\s*([0-9]+(?:[.,][0-9]+)?)|\b([1-9][0-9]?[.,][0-9]{2})\b", text, re.I)
@@ -185,7 +191,7 @@ def understand_live_request(text: str, router_result: Dict[str, Any], session: D
     router_result = router_result or {}
     text = _text(text)
     mode = router_result.get("mode") or "unknown"
-    if mode == "sports" or (mode == "unknown" and any(x in text.lower() for x in _SPORT_WORDS)):
+    if mode == "sports" or (mode == "unknown" and (any(x in text.lower() for x in _SPORT_WORDS) or re.search(r"\S+\s*(?:—|–|-|\bvs\b|\bv\b)\s*\S+", text, re.I))):
         return _sports_understanding(text, router_result)
     ap = _asset_and_pair(text, router_result)
     if mode == "unknown" and (ap.get("asset") or ap.get("pair")):

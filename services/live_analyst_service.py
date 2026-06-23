@@ -47,7 +47,8 @@ LIVE_DAILY_LIMIT_MESSAGE = "Дневной лимит сообщений Live An
 logger = logging.getLogger(__name__)
 
 
-_DECISION_LABELS = ("WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE", "NO BET")
+_DECISION_LABELS = ("WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE", "NO BET", "NO EDGE")
+_SPORTS_DECISION_LABELS = ("NO BET", "NO EDGE", "WATCH", "DATA NEEDED", "EDGE CANDIDATE")
 
 
 def _format_money_value(value: Any) -> str:
@@ -91,7 +92,7 @@ def _normalize_live_money_levels(text: str) -> str:
 
 def _extract_decision(answer: str, evidence_pack: Optional[Dict[str, Any]] = None) -> str:
     text = answer or ""
-    pattern = r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b"
+    pattern = r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b"
     match = re.search(pattern, text)
     if match:
         return match.group(1).upper()
@@ -108,7 +109,7 @@ def _extract_decision(answer: str, evidence_pack: Optional[Dict[str, Any]] = Non
 
 def _normalize_decision_lines(answer: str, decision: str) -> str:
     text = re.sub(
-        r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b\s*\.?,?\s*$",
+        r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$",
         lambda m: f"Decision: {m.group(1).upper()}",
         answer or "",
     )
@@ -159,7 +160,7 @@ def _strip_leading_decision_label(text: str) -> str:
     result = str(text or "").strip()
     if not result:
         return ""
-    label_pattern = r"WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET"
+    label_pattern = r"WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE"
     previous = None
     while result and result != previous:
         previous = result
@@ -169,7 +170,7 @@ def _strip_leading_decision_label(text: str) -> str:
 
 
 def _strip_decision_lines(text: str) -> str:
-    return _strip_leading_decision_label(re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)?\b\s*", "", text or "").strip())
+    return _strip_leading_decision_label(re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(?:WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)?\b\s*", "", text or "").strip())
 
 
 
@@ -465,6 +466,175 @@ def _trim_live_answer(text: str, limit: int = 1600) -> str:
     return f"{trimmed}\n\nDecision: {decision}"
 
 
+def _parse_decimal_odds(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    m = re.search(r"\b([1-9][0-9]?(?:[.,]\d{1,3})?)\b", str(value).replace("кэф", " "))
+    if not m:
+        return None
+    try:
+        odds = float(m.group(1).replace(",", "."))
+        return odds if odds > 1.0 else None
+    except ValueError:
+        return None
+
+
+def _sports_implied_probability(odds: Optional[float]) -> Optional[float]:
+    return (1.0 / odds) if odds and odds > 1 else None
+
+
+def _sports_estimated_probability(evidence_pack: Dict[str, Any]) -> Optional[float]:
+    facts = (evidence_pack or {}).get("derived_facts") or {}
+    for key in ("estimated_probability", "model_probability", "win_probability"):
+        value = facts.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            p = float(value)
+            return p / 100.0 if p > 1 else p
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _sanitize_sports_text(text: str) -> str:
+    banned = (
+        r"ставь\s+железно", r"железно\s+ставь", r"\b100\s*%\b", r"гаранти[яи]", r"\ball-?in\b",
+        r"точняк", r"точно\s+зайд[её]т", r"без\s+риска", r"бери\s+срочно",
+    )
+    out = text or ""
+    for pattern in banned:
+        out = re.sub(pattern, "профессионально: риск учитываем", out, flags=re.I)
+    return out
+
+
+def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any], evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
+    """Build a deterministic sports betting answer: value-first, no tout language."""
+    ui_language = "ru" if ui_language == "ru" else "en"
+    pack = evidence_pack or {}
+    facts = pack.get("derived_facts") or {}
+    understanding = facts.get("understanding") or pack.get("understanding") or {}
+    sc = sports_context or facts.get("sports_context") or {}
+    teams = understanding.get("teams") or sc.get("teams") or []
+    event = " — ".join(str(x) for x in teams[:2]) if len(teams) >= 2 else (understanding.get("user_question_normalized") or user_text)
+    sport = understanding.get("sport") or sc.get("sport") or "sport"
+    league = understanding.get("league") or sc.get("league") or "—"
+    market = understanding.get("market") or "moneyline"
+    odds = _parse_decimal_odds(understanding.get("odds") or facts.get("user_odds") or user_text)
+    implied = _sports_implied_probability(odds)
+    estimated = _sports_estimated_probability(pack)
+    sources = sc.get("sources") or []
+    fresh = "fresh/partial" if sources else "missing"
+    has_core = len(teams) >= 2 or bool(sc.get("participants"))
+    data_good = bool(sources) and not pack.get("missing_data")
+
+    decision = "DATA NEEDED"
+    edge = None
+    fair_odds = None
+    if odds and estimated:
+        edge = estimated - (implied or 0)
+        fair_odds = 1 / estimated if estimated > 0 else None
+        if edge < 0.02:
+            decision = "NO EDGE"
+        elif edge <= 0.04:
+            decision = "WATCH"
+        else:
+            decision = "EDGE CANDIDATE" if data_good or has_core else "WATCH"
+    elif odds and not estimated:
+        decision = "DATA NEEDED"
+    elif not odds:
+        decision = "DATA NEEDED" if not sources else "WATCH"
+
+    implied_txt = "%.1f%%" % (implied * 100) if implied else "—"
+    estimated_txt = "%.1f%%" % (estimated * 100) if estimated else "—"
+    edge_txt = ("%+.1f pp" % (edge * 100)) if edge is not None else "—"
+    fair_txt = ("%.2f" % fair_odds) if fair_odds else "—"
+    odds_txt = ("%.2f" % odds) if odds else "не указан" if ui_language == "ru" else "not provided"
+    key = "форма/составы, травмы, отдых, стиль матчапа, движение линии"
+    if sport == "tennis":
+        key = "покрытие, форма, подача/приём, усталость, риск травмы"
+    elif sport in ("mma", "boxing"):
+        key = "style matchup: ударка/борьба, кардио, весогонка, short notice, судейский риск"
+    elif sport == "basketball":
+        key = "pace, offense/defense rating, rest/back-to-back, injuries, rotation"
+    elif sport == "hockey":
+        key = "goalie status, back-to-back, special teams, shots/xG"
+    elif sport == "esports":
+        key = "map pool, patch/meta, roster changes, recent form, BO format"
+
+    if ui_language == "ru":
+        short = ("Лучший кандидат есть только при value: %s, минимум кэф %s." % (event, fair_txt)) if decision == "EDGE CANDIDATE" else ("По спортивной логике можно сделать lean, но без достаточных коэффициентов/свежих данных это не ставка.")
+        value = "Коэффициент выше fair odds даёт value." if decision == "EDGE CANDIDATE" else ("Линия не playable: edge меньше буфера 2 pp." if decision == "NO EDGE" else "Без коэффициента нельзя понять value; пришли кэф — посчитаю implied probability и edge.")
+        return _sanitize_sports_text(f"""🏟 Коротко:
+{short}
+
+Данные:
+- Событие: {event}
+- Спорт/лига: {sport} / {league}
+- Рынок: {market}
+- Коэффициент: {odds_txt}
+- Implied probability: {implied_txt}
+- Моя оценка: {estimated_txt}
+- Edge: {edge_txt}
+- Minimum playable odds: {fair_txt}
+- Ключевые факторы: {key}
+- Свежесть данных: {fresh}
+
+Разбор:
+Оцениваю не “кто точно выиграет”, а есть ли перевес против цены рынка. H2H — слабый фактор; важнее актуальные составы, форма, стиль и движение линии.
+
+Value:
+{value}
+
+Риск:
+Составы/травмы, мотивация, travel/rest, позднее движение линии и дисперсия рынка могут убрать edge. Если свежие новости не подтверждены, выбор лучше держать как WATCH/DATA NEEDED.
+
+Итог:
+{decision}: {'кандидат на value только при кэфе не ниже ' + fair_txt if decision == 'EDGE CANDIDATE' else 'данных/edge недостаточно для профессиональной ставки.'}
+
+Decision: {decision}""")
+    short = "There is an edge candidate only if market odds stay above fair odds." if decision == "EDGE CANDIDATE" else "Lean is not the same as a bet; odds/fresh data are needed to prove value."
+    return _sanitize_sports_text(f"""🏟 Short:
+{short}
+
+Data:
+- Event: {event}
+- Sport/league: {sport} / {league}
+- Market: {market}
+- Odds: {odds_txt}
+- Implied probability: {implied_txt}
+- My estimate: {estimated_txt}
+- Edge: {edge_txt}
+- Minimum playable odds: {fair_txt}
+- Key factors: {key}
+- Data freshness: {fresh}
+
+Breakdown:
+This is probability versus price, not a guaranteed pick. H2H is secondary; current team news, style, rest and line movement matter more.
+
+Value:
+{'Playable only above fair odds.' if decision == 'EDGE CANDIDATE' else 'No proven value without odds / with an edge below the buffer.'}
+
+Risk:
+Lineups, injuries, motivation, travel/rest, late market movement and variance can remove the edge.
+
+Final:
+{decision}
+
+Decision: {decision}""")
+
+
+def _sports_structured_answer(text: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
+    pack = dict(evidence_pack or {})
+    facts = pack.setdefault("derived_facts", {})
+    facts.setdefault("understanding", pack.get("understanding") or {})
+    if _sports_estimated_probability(pack) is not None or _parse_decimal_odds(str(text) + " " + str(facts.get("odds"))) or decision not in _SPORTS_DECISION_LABELS:
+        return build_sports_betting_analysis(text, facts.get("sports_context") or {}, pack, ui_language)
+    cleaned = _sanitize_sports_text(text)
+    sports_decision = decision if decision in _SPORTS_DECISION_LABELS else "DATA NEEDED"
+    return re.sub(r"(?im)^\s*Decision\s*:.*$", f"Decision: {sports_decision}", cleaned).strip()
+
+
 def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
     """Conservatively clean the final Live Analyst answer for Telegram delivery."""
     ui_language = "ru" if ui_language == "ru" else "en"
@@ -472,8 +642,11 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     text = _normalize_live_money_levels(str(answer or "").strip())
     decision = _extract_decision(text, evidence_pack)
     is_crypto = (evidence_pack.get("mode") or "").lower() == "crypto"
+    is_sports = (evidence_pack.get("mode") or "").lower() == "sports"
     if is_crypto:
         decision = _first_evidence_decision(evidence_pack, decision)
+    if is_sports and decision not in _SPORTS_DECISION_LABELS:
+        decision = "DATA NEEDED"
     text = _normalize_decision_lines(text, decision)
     text = _clean_live_spacing(text)
     if is_crypto:
@@ -482,7 +655,13 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = _normalize_live_money_levels(text)
         text = _normalize_raw_crypto_level_numbers(text, evidence_pack)
         text = _clean_live_spacing(text)
-    text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET)\b\s*\.?,?\s*$", "", text).strip()
+    if is_sports:
+        text = _sports_structured_answer(text, evidence_pack, ui_language, decision)
+        decision = _extract_decision(text, evidence_pack)
+        if decision not in _SPORTS_DECISION_LABELS:
+            decision = "DATA NEEDED"
+        text = _sanitize_sports_text(text)
+    text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
     text = re.sub(r"\*{2,}", "", text).strip()
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     return _trim_live_answer(text, 1600)
@@ -689,8 +868,10 @@ Keep crypto answers complete and under 1200–1600 characters.
 Режим: sports betting consultant. Если нет live статистики/линий букмекеров, НЕ говори просто «агент не подключён».
 Дай ограниченный, но полезный разбор только по тексту пользователя и памяти. Ясно отметь, что live external data сейчас не подтянута.
 Обязательно укажи, какие данные нужны для более сильного вывода: лига/составы, минута/счёт, xG/удары/темп, движение линии, маржа и альтернативные коэффициенты.
-Не обещай прибыль; используй possible edge, watch, no trade, risk is high.
-Формат: Short conclusion / What I see / Risk / What would confirm/deny the idea / Decision: NO TRADE, WATCH, EDGE CANDIDATE или DATA NEEDED.
+Не обещай прибыль; используй possible edge, WATCH, NO BET/NO EDGE, risk is high.
+Запрещены reckless-фразы: «ставь железно», «100% зайдет», «гарантия», «all-in», «точняк», «бери срочно», «без риска».
+Формат RU: 🏟 Коротко: / Данные: / Разбор: / Value: / Риск: / Итог: / Decision: NO BET, NO EDGE, WATCH, DATA NEEDED или EDGE CANDIDATE.
+Format EN: 🏟 Short: / Data: / Breakdown: / Value: / Risk: / Final: / Decision: NO BET, NO EDGE, WATCH, DATA NEEDED or EDGE CANDIDATE.
 """.strip()
     if mode == "unknown":
         return """
@@ -940,7 +1121,8 @@ Keep it complete and under 1200–1400 characters.
 def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
     labels = evidence_pack.get("recommended_decision_labels") or [] if evidence_pack else []
     decision = labels[0] if labels else "DATA NEEDED"
-    if decision not in {"WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE"}:
+    allowed = set(_SPORTS_DECISION_LABELS) if (evidence_pack or {}).get("mode") == "sports" else {"WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE"}
+    if decision not in allowed:
         decision = "DATA NEEDED"
     missing = ", ".join(str(x) for x in (evidence_pack.get("missing_data") or [])[:4]) if evidence_pack else "fresh data"
     confidence = evidence_pack.get("confidence_label") if evidence_pack else "low"
