@@ -75,3 +75,64 @@ def test_final_decision_one_line_sports_labels_only():
     decisions = re.findall(r"(?m)^Decision: ([A-Z ]+)$", answer)
     assert len(decisions) == 1
     assert decisions[0] in {"NO BET", "NO EDGE", "WATCH", "DATA NEEDED", "EDGE CANDIDATE"}
+
+
+def test_production_path_without_odds_uses_professional_betting_format():
+    pack = {
+        "mode": "sports",
+        "intent": "betting_angle",
+        "derived_facts": {
+            "understanding": {
+                "intent": "betting_angle",
+                "teams": ["Реал", "Барса"],
+                "sport": "football",
+                "market": "moneyline",
+                "odds": "",
+            },
+            "sports_context": {"sources": [], "teams": ["Реал", "Барса"]},
+        },
+        "missing_data": ["odds"],
+    }
+    answer = format_live_final_answer("На кого ставить Реал — Барса?\nDecision: DATA NEEDED", pack, "ru")
+    low = answer.lower()
+    assert "🏟 Коротко:" in answer
+    assert "Данные:" in answer
+    assert "Value:" in answer
+    assert "Риск:" in answer
+    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+    assert "Без коэффициента нельзя понять value" in answer
+    assert "ставь железно" not in low
+    assert "100%" not in low
+    assert "гарантия" not in low
+
+
+def test_total_line_is_not_parsed_as_odds_in_production_path():
+    u = understand_live_request("Реал — Барса, тотал 2.5 больше?", {"mode": "sports"}, {}, "ru")
+    pack = _pack(u, sources=False)
+    answer = format_live_final_answer("Реал — Барса, тотал 2.5 больше?\nDecision: DATA NEEDED", pack, "ru")
+    assert "- Рынок: total" in answer
+    assert "- Коэффициент: не указан" in answer
+    assert "- Implied probability: —" in answer
+    assert "40.0%" not in answer
+    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+
+
+def test_handicap_line_is_not_parsed_as_odds_in_production_path():
+    u = understand_live_request("Lakers vs Celtics фора -3.5 есть ставка?", {"mode": "sports"}, {}, "ru")
+    pack = _pack(u, sources=False)
+    answer = format_live_final_answer("Lakers vs Celtics фора -3.5 есть ставка?\nDecision: DATA NEEDED", pack, "ru")
+    assert "- Рынок: handicap" in answer
+    assert "- Коэффициент: не указан" in answer
+    assert "- Implied probability: —" in answer
+    assert "28.6%" not in answer
+    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+
+
+def test_explicit_odds_still_parsed_in_production_path():
+    u = understand_live_request("Реал — Барса, Реал кэф 1.95, есть ставка?", {"mode": "sports"}, {}, "ru")
+    pack = _pack(u, estimated=0.58, sources=True)
+    answer = format_live_final_answer("Реал — Барса, Реал кэф 1.95, есть ставка?\nDecision: DATA NEEDED", pack, "ru")
+    assert "- Коэффициент: 1.95" in answer
+    assert "- Implied probability: 51.3%" in answer
+    assert "- Edge: +6.7 pp" in answer
+    assert "Decision: EDGE CANDIDATE" in answer

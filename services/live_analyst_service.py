@@ -497,6 +497,28 @@ def _sports_estimated_probability(evidence_pack: Dict[str, Any]) -> Optional[flo
     return None
 
 
+def _sports_user_odds(understanding: Dict[str, Any], facts: Dict[str, Any]) -> Optional[float]:
+    """Return only explicitly parsed user odds; do not infer odds from market lines."""
+    return _parse_decimal_odds((understanding or {}).get("odds") or (facts or {}).get("user_odds"))
+
+
+def _is_sports_betting_intent(text: str, pack: Dict[str, Any], facts: Dict[str, Any]) -> bool:
+    understanding = (facts or {}).get("understanding") or (pack or {}).get("understanding") or {}
+    intent = str(understanding.get("intent") or (pack or {}).get("intent") or "").lower()
+    if intent in {"betting_angle", "odds_value"}:
+        return True
+    if understanding.get("market"):
+        return True
+    low = (text or "").lower()
+    phrases = (
+        "на кого ставить", "кого брать", "что взять", "есть ставка", "лучший кэф",
+        "прогноз на матч", "кто выиграет", "что по кэфу", "value", "odds",
+        "кэф", "коэффициент", "who to bet on", "best bet", "moneyline",
+        "spread", "over/under", "props", "edge",
+    )
+    return any(phrase in low for phrase in phrases)
+
+
 def _sanitize_sports_text(text: str) -> str:
     banned = (
         r"ставь\s+железно", r"железно\s+ставь", r"\b100\s*%\b", r"гаранти[яи]", r"\ball-?in\b",
@@ -520,7 +542,7 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
     sport = understanding.get("sport") or sc.get("sport") or "sport"
     league = understanding.get("league") or sc.get("league") or "—"
     market = understanding.get("market") or "moneyline"
-    odds = _parse_decimal_odds(understanding.get("odds") or facts.get("user_odds") or user_text)
+    odds = _sports_user_odds(understanding, facts)
     implied = _sports_implied_probability(odds)
     estimated = _sports_estimated_probability(pack)
     sources = sc.get("sources") or []
@@ -628,7 +650,12 @@ def _sports_structured_answer(text: str, evidence_pack: Dict[str, Any], ui_langu
     pack = dict(evidence_pack or {})
     facts = pack.setdefault("derived_facts", {})
     facts.setdefault("understanding", pack.get("understanding") or {})
-    if _sports_estimated_probability(pack) is not None or _parse_decimal_odds(str(text) + " " + str(facts.get("odds"))) or decision not in _SPORTS_DECISION_LABELS:
+    if (
+        _is_sports_betting_intent(text, pack, facts)
+        or _sports_estimated_probability(pack) is not None
+        or _sports_user_odds(facts.get("understanding") or {}, facts)
+        or decision not in _SPORTS_DECISION_LABELS
+    ):
         return build_sports_betting_analysis(text, facts.get("sports_context") or {}, pack, ui_language)
     cleaned = _sanitize_sports_text(text)
     sports_decision = decision if decision in _SPORTS_DECISION_LABELS else "DATA NEEDED"
