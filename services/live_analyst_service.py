@@ -164,6 +164,13 @@ def _strip_live_section_heading(text: str) -> str:
     result = str(text or "").strip()
     if not result:
         return ""
+
+    def clean_markdown_markers(value: str) -> str:
+        value = re.sub(r"\*{2,}", "", value or "")
+        value = re.sub(r"__+", "", value)
+        return value.strip()
+
+    result = clean_markdown_markers(result)
     labels = (
         "Коротко",
         "Short",
@@ -177,13 +184,13 @@ def _strip_live_section_heading(text: str) -> str:
     )
     label_pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
     heading_pattern = re.compile(
-        rf"(?is)^\s*(?:[-–—•]*\s*)?(?:\*{{1,2}}|__)?\s*(?:🧠\s*)?(?:{label_pattern})\s*(?:\*{{1,2}}|__)?\s*[:：-]\s*"
+        rf"(?is)^\s*(?:[-–—•]*\s*)?(?:🧠\s*)?(?:{label_pattern})\s*[:：-]\s*"
     )
     previous = None
     while result and result != previous:
         previous = result
         result = heading_pattern.sub("", result, count=1).strip()
-    result = re.sub(r"\*{2,}", "", result).strip()
+        result = clean_markdown_markers(result)
     return result
 
 

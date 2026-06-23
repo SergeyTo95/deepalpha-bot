@@ -764,3 +764,33 @@ def test_format_live_final_answer_keeps_single_decision_label():
     assert "\nDecision:\nWATCH" not in result
     assert "Scenario:" not in result
     assert "Risk:" not in result
+
+
+def test_format_live_final_answer_strips_emoji_bold_ru_short_heading():
+    result = svc.format_live_final_answer(
+        "🧠 **Коротко:** BTCUSDT на 15m таймфрейме находится вблизи ключевой поддержки $62,500.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    short_body = _section_body(result, "🧠 Коротко")
+    assert result.startswith("🧠 Коротко:\nBTCUSDT на 15m таймфрейме")
+    assert result.count("🧠 Коротко:") == 1
+    assert "🧠 Коротко:" not in result.replace("🧠 Коротко:", "", 1)
+    assert "**" not in result
+    assert not short_body.startswith("🧠")
+    assert not short_body.startswith("Коротко:")
+
+
+def test_format_live_final_answer_strips_nested_emoji_bold_english_heading():
+    result = svc.format_live_final_answer(
+        "🧠 **Short take:** BTCUSDT waits for confirmation.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="en",
+    )
+    short_body = _section_body(result, "🧠 Short take")
+    assert result.startswith("🧠 Short take:\nBTCUSDT waits for confirmation.")
+    assert result.count("🧠 Short take:") == 1
+    assert "Short take:" not in result.replace("🧠 Short take:", "", 1)
+    assert "**" not in result
+    assert not short_body.startswith("🧠")
+    assert not short_body.startswith("Short take:")
