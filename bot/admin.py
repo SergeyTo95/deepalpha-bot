@@ -3197,21 +3197,15 @@ def register_admin(dp: Dispatcher):
         )
         try:
             from app import post_to_channel
-            result = await post_to_channel(force=False)
+            result = await post_to_channel(force=True)
             ok = result.get("ok") if isinstance(result, dict) else bool(result)
             reason = result.get("reason") if isinstance(result, dict) else "sent" if result else "error"
             if ok:
                 text = "✅ Опубликовано!"
             elif reason == "disabled":
-                text = "⏸ Постинг в канал выключен в админке. Включи его или добавь отдельную forced-кнопку."
-            elif reason == "no_channel":
-                text = "❌ CHANNEL_ID не настроен."
-            elif reason == "no_events":
-                text = "⚠️ Нет событий Polymarket для публикации."
-            elif reason == "no_candidates":
-                text = "⚠️ Нет подходящих кандидатов для публикации."
+                text = "📢 Channel posting is disabled. Enable it first."
             else:
-                text = "❌ Не удалось опубликовать в канал."
+                text = f"❌ Не опубликовано: {reason}"
             await callback.message.edit_text(
                 text,
                 reply_markup=InlineKeyboardMarkup().add(
