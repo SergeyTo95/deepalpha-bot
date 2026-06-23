@@ -1,3 +1,4 @@
+import re
 import sys
 import types
 
@@ -681,3 +682,85 @@ def test_process_live_text_saves_fully_localized_ru_crypto_answer(monkeypatch):
     assert "evidence-уровней" not in result["message"]
     assert saved[1][0][4] == result["message"]
     assert len(charges) == 1
+
+
+def _section_body(text: str, heading: str) -> str:
+    pattern = rf"(?s){re.escape(heading)}:\n(.*?)(?=\n\n(?:🧠 Коротко|Данные|Сценарий|Риск|Decision|Data|Scenario|Risk):|\Z)"
+    match = re.search(pattern, text)
+    return match.group(1).strip() if match else ""
+
+
+def _crypto_evidence_with_levels(extra_facts=None):
+    facts = {
+        "support_levels": [62500],
+        "resistance_levels": [63500],
+        "better_zone": 62500,
+        "confirmation": "ждать реакции от поддержки",
+        "invalidation": "Сценарий слабеет ниже ближайшей поддержки.",
+    }
+    facts.update(extra_facts or {})
+    return {
+        "mode": "crypto",
+        "recommended_decision_labels": ["WATCH"],
+        "derived_facts": facts,
+        "answer_policy": {"can_give_levels": True},
+    }
+
+
+def test_format_live_final_answer_removes_duplicate_short_heading():
+    result = svc.format_live_final_answer(
+        "🧠 Коротко: BTCUSDT на 15m находится у поддержки $62,500.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    assert result.startswith("🧠 Коротко:\nBTCUSDT на 15m находится у поддержки $62,500.")
+    assert result.count("🧠 Коротко:") == 1
+    assert _section_body(result, "🧠 Коротко") == "BTCUSDT на 15m находится у поддержки $62,500."
+    assert "Коротко:" not in result.replace("🧠 Коротко:", "")
+
+
+def test_format_live_final_answer_removes_markdown_section_markers():
+    result = svc.format_live_final_answer(
+        "**Коротко:** BTCUSDT ждет подтверждения.\n**Риск:** вход без подтверждения рискован.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    assert "**" not in result
+    assert "**Коротко:**" not in result
+
+
+def test_format_live_final_answer_rebuilds_risk_that_duplicates_invalidation():
+    result = svc.format_live_final_answer(
+        "Коротко: BTCUSDT ждет подтверждения.\nРиск: Сценарий слабеет ниже ближайшей поддержки.\nDecision: WATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    risk = _section_body(result, "Риск")
+    invalidation = _section_body(result, "Данные").split("- Инвалидация: ", 1)[1].split("\n", 1)[0]
+    assert risk != invalidation
+    assert "$62,500" in risk
+    assert "$63,500" in risk
+    assert "Вход без подтверждения" in risk
+
+
+def test_format_live_final_answer_keeps_clean_ru_answer_body():
+    result = svc.format_live_final_answer(
+        "Коротко: BTCUSDT ждет подтверждения у поддержки.\nСценарий: ждать реакции цены.\nРиск: вход без подтверждения повышает риск ложного движения.\nDecision: WATCH",
+        {"mode": "crypto", "recommended_decision_labels": ["WATCH"], "derived_facts": {}, "answer_policy": {"can_give_levels": False}},
+        ui_language="ru",
+    )
+    assert _section_body(result, "🧠 Коротко") == "BTCUSDT ждет подтверждения у поддержки."
+    assert _section_body(result, "Сценарий") == "ждать реакции цены."
+    assert _section_body(result, "Риск") == "вход без подтверждения повышает риск ложного движения."
+
+
+def test_format_live_final_answer_keeps_single_decision_label():
+    result = svc.format_live_final_answer(
+        "Коротко: Decision: WATCH\nСценарий: Scenario: ждать подтверждения.\nРиск: Risk: вход без подтверждения рискован.\nDecision:\nWATCH",
+        _crypto_evidence_with_levels(),
+        ui_language="ru",
+    )
+    assert result.count("Decision: WATCH") == 1
+    assert "\nDecision:\nWATCH" not in result
+    assert "Scenario:" not in result
+    assert "Risk:" not in result
