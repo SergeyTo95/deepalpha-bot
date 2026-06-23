@@ -57,11 +57,30 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # CHANNEL POSTER
 # ═══════════════════════════════════════════
 
-async def post_to_channel():
+def is_channel_posting_enabled() -> bool:
+    """Return whether Telegram channel posting is enabled.
+
+    CHANNEL_POSTING_DISABLED is an emergency environment kill switch that
+    overrides the admin DB setting.
+    """
+    hard_disabled = str(os.getenv("CHANNEL_POSTING_DISABLED", "")).strip().lower()
+    if hard_disabled in ("1", "true", "yes", "on", "disabled"):
+        return False
+
+    value = str(get_setting("channel_posting_enabled", "on")).strip().lower()
+    return value in ("on", "true", "1", "yes", "enabled")
+
+
+async def post_to_channel(force: bool = False):
     """Постит рандомный рынок Polymarket в канал."""
     if not CHANNEL_ID:
         print("📢 CHANNEL_ID not set, skip")
-        return
+        return {"ok": False, "reason": "no_channel"}
+
+    if not is_channel_posting_enabled():
+        print(f"📢 Channel posting disabled in admin settings, skip force={force}")
+        print(f"channel_posting_blocked disabled force={force}")
+        return {"ok": False, "reason": "disabled"}
 
     try:
         shown_str = get_setting("channel_shown_markets", "")
@@ -78,7 +97,7 @@ async def post_to_channel():
         events = list_events(limit=50)
         if not events:
             print("📢 No events from Polymarket")
-            return
+            return {"ok": False, "reason": "no_events"}
 
         from agents.news_agent import NewsAgent
         agent = NewsAgent()
@@ -177,7 +196,7 @@ async def post_to_channel():
 
         if not candidates:
             print("📢 No candidates found")
-            return
+            return {"ok": False, "reason": "no_candidates"}
 
         market = random.choice(candidates[:10])
         question = market["question"]
@@ -220,27 +239,27 @@ async def post_to_channel():
             set_setting("channel_shown_markets", ",".join(filter(None, shown)))
 
         set_setting("last_channel_post", datetime.now(timezone.utc).isoformat())
+        return {"ok": True}
 
     except Exception as e:
         print(f"📢 CHANNEL POST ERROR: {e}")
         import traceback
         traceback.print_exc()
+        return {"ok": False, "reason": "error", "error": str(e)}
 
 
 async def channel_worker():
     """Постит в канал каждые N часов."""
     await asyncio.sleep(300)
 
-    channel_enabled = get_setting("channel_posting_enabled", "on")
-    if channel_enabled == "on" and CHANNEL_ID:
+    if CHANNEL_ID:
         await post_to_channel()
 
     while True:
         try:
             interval_hours = int(get_setting("channel_post_interval_hours", "3"))
             await asyncio.sleep(interval_hours * 3600)
-            channel_enabled = get_setting("channel_posting_enabled", "on")
-            if channel_enabled == "on" and CHANNEL_ID:
+            if CHANNEL_ID:
                 await post_to_channel()
         except Exception as e:
             print(f"CHANNEL WORKER ERROR: {e}")

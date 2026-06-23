@@ -2375,7 +2375,23 @@ def register_admin(dp: Dispatcher):
         )
         try:
             from app import post_to_channel
-            await post_to_channel()
+            result = await post_to_channel(force=True)
+            if result and result.get("reason") == "disabled":
+                await callback.message.edit_text(
+                    "📢 Channel posting is disabled. Enable it first.",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("⬅️", callback_data="admin_system")
+                    )
+                )
+                return
+            if result and not result.get("ok", False):
+                await callback.message.edit_text(
+                    f"❌ Не опубликовано: {result.get('reason', 'unknown')}",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("⬅️", callback_data="admin_system")
+                    )
+                )
+                return
             await callback.message.edit_text(
                 "✅ Опубликовано!",
                 reply_markup=InlineKeyboardMarkup().add(
