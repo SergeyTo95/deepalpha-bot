@@ -586,3 +586,98 @@ def test_process_live_text_saves_contradiction_free_crypto_answer(monkeypatch):
     assert "$64,100" not in result["message"]
     assert saved[1][0][4] == result["message"]
     assert len(charges) == 1
+
+
+def test_crypto_default_short_ru_uses_key_levels_not_evidence():
+    result = svc._crypto_default_short("ru", True)
+    assert "ключевых уровней" in result
+    assert "evidence" not in result
+
+
+def test_format_live_final_answer_localizes_ru_confirmation_and_invalidation():
+    result = svc.format_live_final_answer(
+        "Коротко: WATCH\nDecision: WATCH",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {
+                "support_levels": [65000],
+                "resistance_levels": [65500],
+                "confirmation": "Wait for reaction/reclaim from support or breakout retest on the selected timeframe.",
+                "invalidation": "Scenario weakens below the nearest derived support.",
+            },
+            "answer_policy": {"can_give_levels": True},
+        },
+        ui_language="ru",
+    )
+    assert "Ждать реакции/возврата от поддержки" in result
+    assert "Сценарий слабеет ниже ближайшей поддержки" in result
+    assert "Wait for" not in result
+    assert "Scenario weakens" not in result
+
+
+def test_format_live_final_answer_formats_raw_evidence_levels_inside_risk():
+    result = svc.format_live_final_answer(
+        "Коротко: WATCH\nРиск: вход без подтверждения отскока от поддержки 65000 или сопротивления 65500\nDecision: WATCH",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {"support_levels": [65000], "resistance_levels": [65500]},
+            "answer_policy": {"can_give_levels": True},
+        },
+        ui_language="ru",
+    )
+    assert "$65,000" in result
+    assert "$65,500" in result
+    assert "поддержки 65000" not in result
+    assert "сопротивления 65500" not in result
+
+
+def test_format_live_final_answer_does_not_replace_timeframe_as_level():
+    result = svc.format_live_final_answer(
+        "Коротко: BTCUSDT 15m остается WATCH\nDecision: WATCH",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {"support_levels": [65000], "resistance_levels": [65500]},
+            "answer_policy": {"can_give_levels": True},
+        },
+        ui_language="ru",
+    )
+    assert "BTCUSDT 15m" in result
+    assert "$15" not in result
+
+
+def test_process_live_text_saves_fully_localized_ru_crypto_answer(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "fresh_context_needed", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "get_crypto_market_context", lambda *args, **kwargs: {
+        "ok": True,
+        "pair": "BTCUSDT",
+        "timeframe": "15m",
+        "price": 65062,
+        "price_source": "mock",
+        "support_levels": [65000],
+        "resistance_levels": [65500],
+        "entry_context": {
+            "better_zone": 65000,
+            "confirmation": "Wait for reaction/reclaim from support or breakout retest on the selected timeframe.",
+            "invalidation": "Scenario weakens below the nearest derived support.",
+        },
+        "sources": ["mock"],
+    })
+    monkeypatch.setattr(svc, "validate_live_answer_against_evidence", lambda answer, evidence_pack: {"ok": True, "severity": "none", "issues": []})
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Коротко: WATCH: вход не подтверждён сейчас; лучше ждать реакции от evidence-уровней.\nДанные: BTCUSDT 15m, уровни есть в контексте.\nСценарий: ждать реакции от поддержки и не входить по рынку без подтверждения; это сохраняет риск контролируемым и не превращает идею в догон цены.\nРиск: вход без подтверждения отскока от поддержки 65000 или пробоя/ретеста сопротивления 65500.\nDecision: WATCH")
+
+    result = svc.process_live_text(24, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert "Ждать реакции/возврата от поддержки" in result["message"]
+    assert "Сценарий слабеет ниже ближайшей поддержки" in result["message"]
+    assert "$65,000" in result["message"]
+    assert "$65,500" in result["message"]
+    assert "Wait for" not in result["message"]
+    assert "Scenario weakens" not in result["message"]
+    assert "evidence-уровней" not in result["message"]
+    assert saved[1][0][4] == result["message"]
+    assert len(charges) == 1
