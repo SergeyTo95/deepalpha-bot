@@ -998,3 +998,71 @@ def test_process_live_text_reconstructs_followup_context_from_recent_messages(mo
     assert evidence_pack["previous_live_context"]["key_levels"]["resistance"] == [60000, 63239]
     assert evidence_pack["followup_type"] == "long_position"
     assert evidence_pack["followup_level"] == "64500"
+
+
+def test_live_followup_suggestions_crypto_successful_answer():
+    answer = svc.append_live_followup_suggestions(
+        "🧠 Коротко:\nBTCUSDT лучше наблюдать.\n\nDecision: WATCH",
+        {"mode": "crypto", "intent": "entry_now"},
+        ui_language="ru",
+    )
+
+    assert "Decision: WATCH" in answer
+    assert "Можно продолжить:" in answer
+    assert "сценарий" in answer
+    assert "уровень" in answer
+    assert "риск" in answer.lower()
+    forbidden = ("покупай", "продавай", "ставь", "гарантирую")
+    assert not any(word in answer.lower() for word in forbidden)
+
+
+def test_live_followup_suggestions_crypto_long_position():
+    answer = svc.append_live_followup_suggestions(
+        "🧠 Коротко:\nЛонг пока только сценарий.\n\nDecision: WATCH",
+        {"mode": "crypto", "intent": "entry_now", "followup_type": "long_position"},
+        ui_language="ru",
+    )
+    lower = answer.lower()
+
+    assert "лонг" in lower
+    assert "подтверждение" in lower
+    assert "отмена" in lower
+    assert "риск" in lower
+    assert "долгосрочный" not in lower
+
+
+def test_live_followup_suggestions_sports_betting_answer():
+    answer = svc.append_live_followup_suggestions(
+        "🏟 Коротко:\nПо линии пока WATCH.\n\nDecision: WATCH",
+        {"mode": "sports", "intent": "betting_analysis"},
+        ui_language="ru",
+    )
+    lower = answer.lower()
+
+    assert "value" in lower
+    assert "коэффициент" in lower
+    assert "implied probability" in lower
+    assert "edge" in lower
+    assert "ставь" not in lower
+    assert "бери" not in lower
+
+
+def test_live_followup_suggestions_not_added_to_clarification_response():
+    answer = svc.append_live_followup_suggestions(
+        "Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию?",
+        {"mode": "unknown"},
+        ui_language="ru",
+    )
+
+    assert "Можно продолжить:" not in answer
+
+
+def test_live_followup_suggestions_not_added_to_live_unavailable_message():
+    answer = svc.append_live_followup_suggestions(
+        svc.LIVE_UNAVAILABLE_MESSAGE,
+        {"mode": "crypto"},
+        ui_language="ru",
+    )
+
+    assert answer == svc.LIVE_UNAVAILABLE_MESSAGE
+    assert "Можно продолжить:" not in answer
