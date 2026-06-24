@@ -23,6 +23,7 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
+from services.live_context_memory import resolve_live_followup, save_live_context
 from services.live_evidence_engine import (
     apply_validation_safety,
     build_live_evidence_pack,
@@ -984,6 +985,8 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
         f"Allowed claims: levels={policy.get('can_give_levels')} entry_zone={policy.get('can_give_entry_zone')} odds={policy.get('can_comment_on_odds')}",
         f"Forbidden claims: {policy.get('must_not_invent') or []}",
         f"Recommended decision labels: {evidence_pack.get('recommended_decision_labels') or []}",
+        f"Is follow-up: {bool(evidence_pack.get('is_followup'))}",
+        f"Previous live context: {evidence_pack.get('previous_live_context') or {}}",
         "Planned research queries:",
         "\n".join(planned_lines) if planned_lines else "- none",
         "Evidence items:",
@@ -1209,6 +1212,42 @@ def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = 
     return f"🧠 Short take:\n{decision}: data is not strong enough for a confident entry; wait for confirmation.\n\nData:\nEvidence quality: {confidence}. Missing: {missing or 'current confirmations'}.\n\nScenario:\nBase case is WATCH until confirmed levels/odds/context are available.\n\nRisk:\nWithout the missing data, the signal can be false.\n\nDecision: {decision}"
 
 
+
+def _store_successful_live_context(user_id: int, original_text: str, normalized_query: str, understanding: Dict[str, Any], router_result: Dict[str, Any], evidence_pack: Dict[str, Any], answer: str) -> None:
+    """Persist compact context for resolving future Live follow-up questions."""
+    if not user_id or not answer or not evidence_pack:
+        return
+    mode = evidence_pack.get("mode") or (understanding or {}).get("mode") or (router_result or {}).get("mode") or "general"
+    facts = evidence_pack.get("derived_facts") or {}
+    entities = (router_result or {}).get("entities") or {}
+    key_levels = {
+        "current_price": facts.get("current_price"),
+        "support": facts.get("support_levels") or facts.get("support"),
+        "resistance": facts.get("resistance_levels") or facts.get("resistance"),
+        "better_zone": facts.get("better_zone"),
+        "confirmation": facts.get("confirmation"),
+        "invalidation": facts.get("invalidation"),
+    }
+    key_levels = {k: v for k, v in key_levels.items() if v not in (None, "", [], {})}
+    teams = (understanding or {}).get("teams") or entities.get("teams") or facts.get("participants") or ""
+    if isinstance(teams, (list, tuple)):
+        teams_event = " — ".join(str(x) for x in teams if str(x).strip())
+    else:
+        teams_event = str(teams or "")
+    save_live_context(
+        int(user_id),
+        mode=mode,
+        original_user_text=original_text,
+        normalized_query=normalized_query,
+        asset_pair=(understanding or {}).get("pair") or entities.get("pair") or (facts.get("symbol") or facts.get("pair") or ""),
+        timeframe=(understanding or {}).get("timeframe") or entities.get("timeframe") or evidence_pack.get("timeframe") or "",
+        teams_event=teams_event,
+        market=(understanding or {}).get("market") or entities.get("market") or "",
+        odds=(understanding or {}).get("odds") or entities.get("odds") or facts.get("user_odds"),
+        key_levels=key_levels,
+        last_final_answer=answer,
+    )
+
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     if not is_live_enabled():
         return {"ok": False, "message": LIVE_DISABLED_MESSAGE, "charged": False}
@@ -1233,6 +1272,16 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     recent = get_recent_context(int(session["id"]), memory_limit)
     router_result = router_result or {}
     ui_language = "ru" if ui_language == "ru" else "en"
+    original_text = text
+    followup_resolution = resolve_live_followup(user_id, text)
+    if followup_resolution.get("need_context"):
+        return {"ok": False, "message": followup_resolution.get("message"), "charged": False, "needs_clarification": True, "is_followup": True}
+    if followup_resolution.get("is_followup") and followup_resolution.get("resolved_query"):
+        text = followup_resolution.get("resolved_query") or text
+        previous_mode = followup_resolution.get("mode")
+        if previous_mode and (not router_result.get("mode") or router_result.get("mode") == "unknown"):
+            router_result = {**router_result, "mode": previous_mode}
+        router_result = {**router_result, "is_followup": True}
     if router_result.get("mode") == "unknown":
         message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, a crypto asset/pair, or a sports event/line. Send a link, screenshot, ticker, timeframe, or odds.")
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
@@ -1267,6 +1316,9 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
     evidence_pack = build_live_evidence_pack(text, understanding, router_result, crypto_market_context=crypto_market_context, sports_context=sports_context, research_context=research_context, ui_language=ui_language)
+    if followup_resolution.get("is_followup"):
+        evidence_pack["is_followup"] = True
+        evidence_pack["previous_live_context"] = followup_resolution.get("previous_context") or {}
     logger.info("live_evidence_pack_built mode=%s intent=%s score=%s confidence=%s missing=%s", evidence_pack.get("mode"), evidence_pack.get("intent"), evidence_pack.get("data_quality_score"), evidence_pack.get("confidence_label"), evidence_pack.get("missing_data"))
     ep_policy = evidence_pack.get("answer_policy") or {}
     logger.info("live_evidence_policy can_give_levels=%s can_give_entry_zone=%s can_comment_on_odds=%s", ep_policy.get("can_give_levels"), ep_policy.get("can_give_entry_zone"), ep_policy.get("can_comment_on_odds"))
@@ -1330,6 +1382,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         logger.warning("live_text_charge_failed_after_analysis user_id=%s cost=%s", user_id, cost)
         return {"ok": False, "message": INSUFFICIENT_LIVE_TOKENS_MESSAGE, "charged": False}
 
+    _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, answer)
+
     session = update_context_from_user_text(session, text)
     mode = router_result.get("mode")
     entities = router_result.get("entities") or {}
@@ -1348,7 +1402,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             session = update_current_market_context(session, market_title=title)
         except Exception:
             pass
-    save_message(int(session["id"]), user_id, "user", "text", text, tokens_charged=cost)
+    save_message(int(session["id"]), user_id, "user", "text", original_text, tokens_charged=cost)
     save_message(int(session["id"]), user_id, "assistant", "text", answer, tokens_charged=0)
     return {"ok": True, "message": answer, "charged": True, "cost": cost, "session": session}
 
