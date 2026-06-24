@@ -57,32 +57,61 @@ def calculate_tokens_for_amount(ton_amount: float) -> int:
 # CHANNEL POSTER
 # ═══════════════════════════════════════════
 
-def is_channel_posting_enabled() -> bool:
+def channel_posting_disabled_reason() -> str | None:
     disabled_values = {"off", "false", "0", "no", "disabled"}
     enabled_values = {"on", "true", "1", "yes", "enabled"}
 
     env_value = str(os.getenv("CHANNEL_POSTING_DISABLED", "")).strip().lower()
-    if env_value in {"true", "1", "on", "yes", "disabled"}:
-        return False
+    if env_value in {"true", "1", "on", "yes", "disabled", "off"}:
+        return "env_disabled"
+
+    if not CHANNEL_ID:
+        return "no_channel_id"
 
     value = str(get_setting("channel_posting_enabled", "on")).strip().lower()
     if value in disabled_values:
-        return False
+        return "db_disabled"
     if value in enabled_values:
-        return True
-    return False
+        return None
+    return "db_unknown_disabled"
+
+
+def is_channel_posting_enabled() -> bool:
+    return channel_posting_disabled_reason() is None
+
+
+async def safe_send_channel_message(text: str, **kwargs):
+    reason = channel_posting_disabled_reason()
+    if reason:
+        print(f"📢 CHANNEL SEND BLOCKED reason={reason}")
+        print(f"channel_posting_blocked reason={reason}")
+        return {"ok": False, "reason": reason}
+    await telegram_bot.bot.send_message(CHANNEL_ID, text, **kwargs)
+    return {"ok": True, "reason": "sent"}
+
+
+def log_channel_diagnostics_once():
+    db_value = get_setting("channel_posting_enabled", "on")
+    enabled = channel_posting_disabled_reason() is None
+    print(
+        "📢 CHANNEL DIAGNOSTICS "
+        f"channel_id_set={'yes' if CHANNEL_ID else 'no'} "
+        f"env_disabled={os.getenv('CHANNEL_POSTING_DISABLED', '')} "
+        f"db={db_value} "
+        f"enabled={str(enabled).lower()} "
+        f"commit={os.getenv('RAILWAY_GIT_COMMIT_SHA', '')} "
+        f"service={os.getenv('RAILWAY_SERVICE_NAME', '')} "
+        f"environment={os.getenv('RAILWAY_ENVIRONMENT_NAME', '')}"
+    )
 
 
 async def post_to_channel(force: bool = False):
     """Постит рандомный рынок Polymarket в канал."""
-    if not CHANNEL_ID:
-        print("📢 CHANNEL_ID not set, skip")
-        return {"ok": False, "reason": "no_channel"}
-
-    if not is_channel_posting_enabled():
-        print(f"📢 Channel posting disabled in admin settings, skip force={force}")
-        print(f"channel_posting_blocked disabled force={force}")
-        return {"ok": False, "reason": "disabled"}
+    disabled_reason = channel_posting_disabled_reason()
+    if disabled_reason:
+        print(f"📢 Channel posting disabled, skip force={force} reason={disabled_reason}")
+        print(f"channel_posting_blocked reason={disabled_reason} force={force}")
+        return {"ok": False, "reason": disabled_reason}
 
     try:
         shown_str = get_setting("channel_shown_markets", "")
@@ -227,11 +256,9 @@ async def post_to_channel(force: bool = False):
         if url:
             text += f"🔗 Рынок → {url}"
 
-        await telegram_bot.bot.send_message(
-            CHANNEL_ID,
-            text,
-            disable_web_page_preview=True,
-        )
+        sent = await safe_send_channel_message(text, disable_web_page_preview=True)
+        if not sent.get("ok"):
+            return sent
         print(f"📢 Posted [{category}]: {question[:50]}")
 
         if market["id"]:
@@ -254,19 +281,21 @@ async def channel_worker():
     """Постит в канал каждые N часов."""
     await asyncio.sleep(300)
 
-    if is_channel_posting_enabled() and CHANNEL_ID:
-        await post_to_channel()
+    disabled_reason = channel_posting_disabled_reason()
+    if disabled_reason:
+        print(f"📢 Channel worker blocked reason={disabled_reason}")
     else:
-        print("📢 Channel posting disabled in admin settings")
+        await post_to_channel()
 
     while True:
         try:
             interval_hours = int(get_setting("channel_post_interval_hours", "3"))
             await asyncio.sleep(interval_hours * 3600)
-            if is_channel_posting_enabled() and CHANNEL_ID:
-                await post_to_channel()
+            disabled_reason = channel_posting_disabled_reason()
+            if disabled_reason:
+                print(f"📢 Channel worker blocked reason={disabled_reason}")
             else:
-                print("📢 Channel posting disabled in admin settings")
+                await post_to_channel()
         except Exception as e:
             print(f"CHANNEL WORKER ERROR: {e}")
             await asyncio.sleep(60)
@@ -1078,6 +1107,7 @@ async def run_polling():
 
 async def main():
     telegram_bot.initialize_database_once()
+    log_channel_diagnostics_once()
 
     try:
         await telegram_bot.bot.delete_webhook(drop_pending_updates=True)
