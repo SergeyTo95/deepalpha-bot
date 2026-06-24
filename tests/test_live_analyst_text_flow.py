@@ -1066,3 +1066,44 @@ def test_live_followup_suggestions_not_added_to_live_unavailable_message():
 
     assert answer == svc.LIVE_UNAVAILABLE_MESSAGE
     assert "Можно продолжить:" not in answer
+
+
+def test_process_live_text_stores_suggested_actions_and_resolves_short_confirmation(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    evidence_packs = []
+    prompts = []
+
+    def fake_understand(text, *args, **kwargs):
+        assert "BTCUSDT" in text
+        return {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}}
+
+    def fake_build(text, understanding, router_result, **kwargs):
+        pack = {
+            "mode": "crypto",
+            "intent": "entry_now",
+            "derived_facts": {"current_price": 64000, "support_levels": [63800], "resistance_levels": [64500], "confirmation": "reclaim", "invalidation": "below support"},
+            "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+            "recommended_decision_labels": ["WATCH"],
+        }
+        evidence_packs.append(pack)
+        return pack
+
+    monkeypatch.setattr(svc, "understand_live_request", fake_understand)
+    monkeypatch.setattr(svc, "build_live_evidence_pack", fake_build)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Коротко: WATCH\nDecision: WATCH")
+
+    first = svc.process_live_text(301, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+    ctx = context_memory.get_live_context(301)
+    assert first["ok"] is True
+    assert ctx and ctx["suggested_actions"]
+
+    second = svc.process_live_text(301, "давай", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert second["ok"] is True
+    assert second.get("needs_clarification") is not True
+    assert evidence_packs[-1]["selected_action_id"] == ctx["suggested_actions"][0]["id"]
+    assert "Selected action:" in prompts[-1]
+    assert len(charges) == 2

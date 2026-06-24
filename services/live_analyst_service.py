@@ -201,6 +201,68 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     return "\n".join(f"- {line}" for line in lines[:3])
 
 
+
+def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -> List[Dict[str, str]]:
+    """Return structured actions matching the visible Live follow-up suggestions."""
+    lang = "ru" if ui_language == "ru" else "en"
+    pack = evidence_pack or {}
+    mode = str(pack.get("mode") or "general").lower()
+    intent = str(pack.get("intent") or "").lower()
+    followup_type = str(pack.get("followup_type") or "").lower()
+
+    if mode == "crypto" and followup_type == "long_position":
+        labels = [
+            "Разобрать лонг: подтверждение, отмена и риск" if lang == "ru" else "Break down long: confirmation, invalidation and risk",
+            "Сравнить сценарий на 5m/1h" if lang == "ru" else "Compare the setup on 5m/1h",
+        ]
+        ids = ["invalidation_confirmation", "timeframe_compare"]
+        templates = [
+            "Analyze this long scenario step by step without direct trading commands.",
+            "Compare the same scenario across timeframes and explain noise risk.",
+        ]
+    elif mode == "crypto":
+        labels = [
+            "Найти вход, отмену сценария и подтверждение" if lang == "ru" else "Map entry area, scenario invalidation and confirmation",
+            "Сравнить 5m/15m/1h и собрать план" if lang == "ru" else "Compare 5m/15m/1h and build a plan",
+        ]
+        ids = ["invalidation_confirmation", "timeframe_compare"]
+        templates = [
+            "Analyze where to wait for entry, where the scenario breaks, and what confirms it.",
+            "Compare 5m/15m/1h and build an entry-risk-invalidation plan.",
+        ]
+    elif mode == "sports":
+        labels = [
+            "Посчитать value под коэффициент" if lang == "ru" else "Calculate value for the odds",
+            "Сравнить рынки: победа, фора, тотал" if lang == "ru" else "Compare markets: moneyline, spread, total",
+        ]
+        ids = ["calculate_value", "compare_markets"]
+        templates = [
+            "Calculate implied probability, estimated probability, edge, and minimum playable odds.",
+            "Compare moneyline, handicap/spread, and total markets from a value and risk perspective.",
+        ]
+    elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
+        labels = [
+            "Разобрать драйверы вероятности" if lang == "ru" else "Analyze probability drivers",
+            "Сравнить market odds с AI probability" if lang == "ru" else "Compare market odds with AI probability",
+        ]
+        ids = ["probability_drivers", "odds_probability_compare"]
+        templates = [
+            "Analyze news and market drivers that may move probability.",
+            "Compare market odds with AI probability and explain any mismatch.",
+        ]
+    else:
+        labels = [
+            "Уточнить таймфрейм, рынок или сценарий" if lang == "ru" else "Specify timeframe, market, or scenario",
+            "Собрать 3 сценария" if lang == "ru" else "Build three scenarios",
+        ]
+        ids = ["clarify_scenario", "scenario_plan"]
+        templates = [
+            "Continue the analysis for the specified timeframe, market, or scenario.",
+            "Build base, bullish, and bearish scenarios with risks.",
+        ]
+    return [{"id": action_id, "label": label, "resolved_query_template": template} for action_id, label, template in zip(ids, labels, templates)][:3]
+
+
 def append_live_followup_suggestions(answer: str, evidence_pack: dict, ui_language: str = "ru") -> str:
     """Append Live follow-up suggestions only to successful final answers."""
     if not answer:
@@ -1407,7 +1469,7 @@ def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = 
 
 
 
-def _store_successful_live_context(user_id: int, original_text: str, normalized_query: str, understanding: Dict[str, Any], router_result: Dict[str, Any], evidence_pack: Dict[str, Any], answer: str) -> None:
+def _store_successful_live_context(user_id: int, original_text: str, normalized_query: str, understanding: Dict[str, Any], router_result: Dict[str, Any], evidence_pack: Dict[str, Any], answer: str, ui_language: str = "ru") -> None:
     """Persist compact context for resolving future Live follow-up questions."""
     if not user_id or not answer or not evidence_pack:
         return
@@ -1440,6 +1502,7 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         odds=(understanding or {}).get("odds") or entities.get("odds") or facts.get("user_odds"),
         key_levels=key_levels,
         last_final_answer=answer,
+        suggested_actions=build_live_suggested_actions(evidence_pack, ui_language=ui_language),
     )
 
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
@@ -1532,9 +1595,11 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if followup_resolution.get("is_followup"):
         evidence_pack["is_followup"] = True
         evidence_pack["previous_live_context"] = followup_resolution.get("previous_context") or {}
-        for key in ("followup_type", "followup_level", "followup_timeframe"):
+        for key in ("followup_type", "followup_level", "followup_timeframe", "selected_action_id"):
             if followup_resolution.get(key):
                 evidence_pack[key] = followup_resolution.get(key)
+        if followup_resolution.get("selected_action"):
+            evidence_pack["selected_action"] = followup_resolution.get("selected_action")
     logger.info("live_evidence_pack_built mode=%s intent=%s score=%s confidence=%s missing=%s", evidence_pack.get("mode"), evidence_pack.get("intent"), evidence_pack.get("data_quality_score"), evidence_pack.get("confidence_label"), evidence_pack.get("missing_data"))
     ep_policy = evidence_pack.get("answer_policy") or {}
     logger.info("live_evidence_policy can_give_levels=%s can_give_entry_zone=%s can_comment_on_odds=%s", ep_policy.get("can_give_levels"), ep_policy.get("can_give_entry_zone"), ep_policy.get("can_comment_on_odds"))
@@ -1561,7 +1626,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         if not fallback:
             return None
         logger.warning("live_deterministic_fallback_used user_id=%s mode=%s reason=%s", user_id, mode, reason)
-        _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, fallback)
+        _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, fallback, ui_language=ui_language)
         try:
             save_message(int(session["id"]), user_id, "assistant", "text", fallback, tokens_charged=0)
         except Exception as exc:
@@ -1627,7 +1692,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         logger.warning("live_text_charge_failed_after_analysis user_id=%s cost=%s", user_id, cost)
         return {"ok": False, "message": INSUFFICIENT_LIVE_TOKENS_MESSAGE, "charged": False}
 
-    _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, answer)
+    _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, answer, ui_language=ui_language)
 
     session = update_context_from_user_text(session, text)
     mode = router_result.get("mode")

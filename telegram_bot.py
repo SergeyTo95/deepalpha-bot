@@ -116,7 +116,7 @@ from services.live_analyst_memory_service import (
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
 )
-from services.live_context_memory import clear_live_context
+from services.live_context_memory import clear_live_context, get_live_context, is_live_continuation
 from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
 logging.basicConfig(level=logging.INFO)
@@ -9842,6 +9842,17 @@ async def fallback_handler(message: types.Message):
 
     _register_user(message)
     state = dp.current_state(user=message.from_user.id, chat=message.chat.id)
+    if message.from_user and is_private_chat(message) and is_live_continuation(message.text or ""):
+        live_ctx = get_live_context(message.from_user.id)
+        if live_ctx and live_ctx.get("suggested_actions"):
+            lang = get_user_lang(message.from_user.id)
+            text = (
+                "Похоже, это продолжение Live-разбора. Нажми 🧠 Live Analyst, и я продолжу по последнему сценарию."
+                if lang == "ru"
+                else "This looks like a continuation of a Live analysis. Tap 🧠 Live Analyst and I’ll continue from the latest scenario."
+            )
+            await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
+            return
     if await state.get_state() == AnalysisStates.waiting_for_top_analysis_link.state:
         lang = get_user_lang(message.from_user.id)
         text = (
