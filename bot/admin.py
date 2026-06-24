@@ -753,6 +753,14 @@ def system_text() -> str:
     last_sent = get_setting("last_notification_sent", "")
     last_sent = last_sent[:19] if last_sent else "никогда"
     channel_enabled = get_setting("channel_posting_enabled", "on")
+    channel_env_disabled = os.getenv("CHANNEL_POSTING_DISABLED", "")
+    channel_db_normalized = str(channel_enabled).strip().lower()
+    channel_env_normalized = str(channel_env_disabled).strip().lower()
+    channel_effective = (
+        bool(CHANNEL_ID)
+        and channel_env_normalized not in {"true", "1", "on", "yes", "disabled", "off"}
+        and channel_db_normalized in {"on", "true", "1", "yes", "enabled"}
+    )
     channel_interval = get_setting("channel_post_interval_hours", "3")
     last_post = get_setting("last_channel_post", "")
     last_post_str = last_post[:16].replace("T", " ") if last_post else "никогда"
@@ -766,7 +774,9 @@ def system_text() -> str:
         f"📅 Интервал: {'Ежедневно' if interval == 'daily' else 'Еженедельно'}\n"
         f"📤 Последняя рассылка: {last_sent}\n\n"
         f"📢 Канал: {channel_id_str}\n"
-        f"Постинг: {'🟢 ON' if channel_enabled == 'on' else '🔴 OFF'}\n"
+        f"DB setting channel_posting_enabled: {channel_enabled}\n"
+        f"ENV kill switch CHANNEL_POSTING_DISABLED: {channel_env_disabled or 'not set'}\n"
+        f"Effective status: {'🟢 enabled' if channel_effective else '🔴 disabled'}\n"
         f"Интервал: каждые {channel_interval} ч\n"
         f"Последний пост: {last_post_str}"
     )

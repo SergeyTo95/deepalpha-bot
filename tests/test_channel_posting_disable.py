@@ -43,7 +43,7 @@ async def test_post_to_channel_disabled_does_not_fetch_or_send(monkeypatch, forc
 
     result = await app.post_to_channel(force=force)
 
-    assert result == {"ok": False, "reason": "disabled"}
+    assert result == {"ok": False, "reason": "db_disabled"}
     assert calls == {"list_events": 0, "send_message": 0}
 
 
