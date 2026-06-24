@@ -7,6 +7,7 @@ sys.modules.setdefault("psycopg2", types.SimpleNamespace(connect=lambda *a, **k:
 sys.modules.setdefault("psycopg2.extras", types.SimpleNamespace(RealDictCursor=object))
 
 from services import live_analyst_memory_service as memory_svc
+from services import live_context_memory as context_memory
 from services import live_analyst_service as svc
 
 
@@ -42,6 +43,36 @@ def test_crypto_text_useful_answer_charges_once_and_saves_memory(monkeypatch):
     assert saved[1][0][2] == "assistant"
     assert "crypto consultant" in prompts[0]
     assert "BTCUSDT" in prompts[0]
+
+
+def test_process_live_text_injects_crypto_followup_fields_into_evidence_pack(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    context_memory.save_live_context(101, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", last_final_answer="Decision: WATCH")
+    evidence_pack = {
+        "mode": "crypto",
+        "intent": "entry_now",
+        "derived_facts": {"current_price": 64000, "support_levels": [63800], "resistance_levels": [64500]},
+        "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+        "recommended_decision_labels": ["WATCH"],
+    }
+    prompts = []
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Коротко: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(101, "а если лонг от 64500?", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert saved
+    assert evidence_pack["followup_type"] == "long_position"
+    assert evidence_pack["followup_level"] == "64500"
+    assert evidence_pack["followup_timeframe"] == "15m"
+    assert "Follow-up type: long_position" in prompts[0]
+    assert "Follow-up level: 64500" in prompts[0]
 
 
 def test_sports_text_useful_answer_path(monkeypatch):

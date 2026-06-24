@@ -14,7 +14,7 @@ _FOLLOWUP_PATTERNS = (
     r"\bшорт\s+от\b", r"\bесли\s+пробь[её]т\b", r"\bесли\s+ниже\b", r"\bесли\s+выше\b",
     r"\bа\s+к[эе]ф\b", r"\bа\s+без\s+к[эе]фа\b", r"\bwhat\s+if\b", r"\bthen\b",
     r"\bwhere\s+is\s+stop\b", r"\binvalidated\s+where\b", r"\bon\s+\d+\s*[mh]\b",
-    r"\bgive\s+\d*\s*scenarios?\b", r"\blong\s+from\b", r"\bshort\s+from\b", r"\bif\s+it\s+breaks\b",
+    r"\bgive\s+\d*\s*scenarios?\b", r"\blong\s+(?:from|at)\b", r"\bshort\s+(?:from|at)\b", r"\bif\s+it\s+breaks\b",
     r"\bif\s+below\b", r"\bif\s+above\b",
 )
 
@@ -88,6 +88,24 @@ def _extract_odds(text: str) -> str:
     return m.group(1).replace(",", ".") if m else ""
 
 
+def _extract_level(text: str) -> str:
+    m = re.search(r"(\d{4,7}(?:[.,]\d+)?)", text or "")
+    return m.group(1).replace(",", ".") if m else ""
+
+
+def _detect_crypto_followup_type(text: str) -> str:
+    low = (text or "").lower()
+    if "лонг" in low or re.search(r"(?i)\blong\s*(?:from|at)?\b", text or ""):
+        return "long_position"
+    if "шорт" in low or re.search(r"(?i)\bshort\s*(?:from|at)?\b", text or ""):
+        return "short_position"
+    if "проб" in low or "break" in low:
+        return "breakout"
+    if _extract_timeframe(text):
+        return "timeframe_change"
+    return "generic"
+
+
 def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     detected = is_live_followup(text)
     if not detected:
@@ -103,13 +121,13 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
         if not pair:
             return {"is_followup": True, "need_context": True, "message": "Не вижу актив в предыдущем Live-контексте. Напиши актив/пару и таймфрейм."}
         low = (text or "").lower()
-        level_match = re.search(r"(\d{4,7}(?:[.,]\d+)?)", text or "")
-        level = level_match.group(1).replace(",", ".") if level_match else ""
-        if "лонг" in low or "long" in low:
-            scenario = f"analyze long scenario from {level}" if level else "analyze long scenario"
-        elif "шорт" in low or "short" in low:
-            scenario = f"analyze short scenario from {level}" if level else "analyze short scenario"
-        elif "проб" in low or "break" in low:
+        level = _extract_level(text)
+        followup_type = _detect_crypto_followup_type(text)
+        if followup_type == "long_position":
+            scenario = f"analyze LONG POSITION scenario from {level}; this means a trading long entry, not a long-term forecast" if level else "analyze LONG POSITION scenario; this means a trading long entry, not a long-term forecast"
+        elif followup_type == "short_position":
+            scenario = f"analyze SHORT POSITION scenario from {level}; this means a trading short entry, not a short-term forecast" if level else "analyze SHORT POSITION scenario; this means a trading short entry"
+        elif followup_type == "breakout":
             scenario = f"analyze breakout scenario at {level}" if level else "analyze breakout scenario"
         else:
             scenario = "analyze scenario"
@@ -125,4 +143,7 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
         resolved = f"{event}, market {market or 'unspecified'}{odds_part}. Follow-up: {text}. {tail}"
     else:
         resolved = f"Previous Live context mode {mode}. Follow-up: {text}. Use previous context and answer completely."
-    return {"is_followup": True, "previous_context": ctx, "resolved_query": resolved, "mode": mode}
+    result = {"is_followup": True, "previous_context": ctx, "resolved_query": resolved, "mode": mode}
+    if mode == "crypto":
+        result.update({"followup_type": followup_type, "followup_level": level, "followup_timeframe": tf})
+    return result

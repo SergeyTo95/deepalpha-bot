@@ -22,9 +22,14 @@ def test_crypto_followup_with_previous_btc_context():
     result = memory.resolve_live_followup(1, "а если лонг от 64500?")
 
     assert result["is_followup"] is True
+    assert result["followup_type"] == "long_position"
+    assert result["followup_level"] == "64500"
+    assert result["followup_timeframe"] == "15m"
     assert "BTCUSDT" in result["resolved_query"]
     assert "15m" in result["resolved_query"]
-    assert "лонг от 64500" in result["resolved_query"] or "long scenario from 64500" in result["resolved_query"]
+    assert "LONG POSITION" in result["resolved_query"]
+    assert "not a long-term forecast" in result["resolved_query"]
+    assert "long scenario from 64500" not in result["resolved_query"]
 
 
 def test_crypto_timeframe_followup_mentions_new_timeframe_and_previous_context():

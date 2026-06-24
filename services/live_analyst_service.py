@@ -424,6 +424,15 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
         data.append(("Зона лучше" if ui_language == "ru" else "Better zone", _format_money_value(facts.get("better_zone"))))
     confirmation = _strip_live_section_heading(_localize_crypto_context_phrase(str(facts.get("confirmation") or "").strip(), ui_language))
     invalidation = _strip_live_section_heading(_localize_crypto_context_phrase(str(facts.get("invalidation") or "").strip(), ui_language))
+    followup_type = evidence_pack.get("followup_type") or ""
+    followup_level = evidence_pack.get("followup_level") or ""
+    followup_timeframe = evidence_pack.get("followup_timeframe") or ""
+    if followup_type == "long_position" and followup_level:
+        data.append(("Условие follow-up" if ui_language == "ru" else "Follow-up condition", f"лонг от {_format_money_value(followup_level)}" if ui_language == "ru" else f"long from {_format_money_value(followup_level)}"))
+    elif followup_type:
+        data.append(("Тип follow-up" if ui_language == "ru" else "Follow-up type", str(followup_type)))
+    if followup_timeframe:
+        data.append(("Таймфрейм follow-up" if ui_language == "ru" else "Follow-up timeframe", str(followup_timeframe)))
     if confirmation:
         data.append(("Подтверждение" if ui_language == "ru" else "Confirmation", confirmation))
     if invalidation:
@@ -431,7 +440,14 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
 
     scenario = _strip_leading_decision_label(_strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Сценарий", "Scenario"))), facts, has_levels, has_entry_context), ui_language)))
     risk = _strip_leading_decision_label(_strip_live_section_heading(_localize_crypto_context_phrase(_clean_crypto_fragment(_strip_live_section_heading(_extract_section(answer, ("Риск", "Risk"))), facts, has_levels, has_entry_context), ui_language)))
-    if has_levels and (facts.get("better_zone") is not None or facts.get("confirmation")):
+    current_price = facts.get("current_price")
+    try:
+        current_below_followup = followup_type == "long_position" and followup_level and current_price is not None and float(current_price) < float(followup_level)
+    except (TypeError, ValueError):
+        current_below_followup = False
+    if current_below_followup:
+        scenario = ("Это не текущий вход; это сценарий только если цена дойдёт до/закрепится выше этого уровня и даст подтверждение/ретест." if ui_language == "ru" else "This is not a current entry; it is a scenario only if price reaches/holds above that level and gives confirmation/retest.")
+    elif has_levels and (facts.get("better_zone") is not None or facts.get("confirmation")):
         if ui_language == "ru":
             scenario = "Вход не подтверждён сейчас. Базовый сценарий — ждать реакции от %s или пробоя/ретеста сопротивления %s." % (_format_money_value(facts.get("better_zone") or (facts.get("support_levels") or [None])[0]), _format_resistance_range(facts.get("resistance_levels")))
         else:
@@ -986,6 +1002,9 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
         f"Forbidden claims: {policy.get('must_not_invent') or []}",
         f"Recommended decision labels: {evidence_pack.get('recommended_decision_labels') or []}",
         f"Is follow-up: {bool(evidence_pack.get('is_followup'))}",
+        f"Follow-up type: {evidence_pack.get('followup_type') or ''}",
+        f"Follow-up level: {evidence_pack.get('followup_level') or ''}",
+        f"Follow-up timeframe: {evidence_pack.get('followup_timeframe') or ''}",
         f"Previous live context: {evidence_pack.get('previous_live_context') or {}}",
         "Planned research queries:",
         "\n".join(planned_lines) if planned_lines else "- none",
@@ -1068,6 +1087,7 @@ Evidence rules:
 - Use only facts from Live Evidence Pack for levels/time/odds.
 - If can_give_entry_zone=false, do not mention specific entry levels.
 - If can_give_levels=true, mention support/resistance/better_zone/invalidation when relevant.
+- For crypto follow-up type long_position with a follow-up level, include in Data: "Условие follow-up: лонг от $<level>" / "Follow-up condition: long from $<level>". If current price is below that level, clearly say this is not a current entry and only applies if price reaches/holds above that level with confirmation/retest. Never interpret Russian "лонг" as a long-term forecast.
 - If confidence is low, prefer DATA NEEDED/WATCH.
 - Do not invent. Do not give direct financial/gambling commands.
 - Validator forbidden claims must be treated as hard constraints.
@@ -1319,6 +1339,9 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if followup_resolution.get("is_followup"):
         evidence_pack["is_followup"] = True
         evidence_pack["previous_live_context"] = followup_resolution.get("previous_context") or {}
+        for key in ("followup_type", "followup_level", "followup_timeframe"):
+            if followup_resolution.get(key):
+                evidence_pack[key] = followup_resolution.get(key)
     logger.info("live_evidence_pack_built mode=%s intent=%s score=%s confidence=%s missing=%s", evidence_pack.get("mode"), evidence_pack.get("intent"), evidence_pack.get("data_quality_score"), evidence_pack.get("confidence_label"), evidence_pack.get("missing_data"))
     ep_policy = evidence_pack.get("answer_policy") or {}
     logger.info("live_evidence_policy can_give_levels=%s can_give_entry_zone=%s can_comment_on_odds=%s", ep_policy.get("can_give_levels"), ep_policy.get("can_give_entry_zone"), ep_policy.get("can_comment_on_odds"))
