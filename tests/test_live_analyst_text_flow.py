@@ -111,7 +111,7 @@ def test_empty_model_failure_does_not_charge_or_save_assistant(monkeypatch):
 
     assert result["ok"] is False
     assert result["charged"] is False
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert charges == []
     assert saved == []
 
@@ -875,3 +875,88 @@ def test_crypto_existing_clean_short_remains_clean():
         ui_language="ru",
     )
     assert _section_body(result, "🧠 Коротко") == "BTCUSDT находится рядом с поддержкой $62,000."
+
+
+def _crypto_deterministic_evidence(**overrides):
+    pack = {
+        "mode": "crypto",
+        "intent": "entry_now",
+        "derived_facts": {
+            "symbol": "BTCUSDT",
+            "current_price": 60370,
+            "support_levels": [60219.51, 60000],
+            "resistance_levels": [60500, 63239.06],
+            "better_zone": 60219.51,
+            "confirmation": "Wait for reaction/reclaim from support or breakout retest on the selected timeframe.",
+            "invalidation": "Scenario weakens below the nearest derived support.",
+        },
+        "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+        "recommended_decision_labels": ["WATCH"],
+    }
+    pack.update(overrides)
+    return pack
+
+
+def test_process_live_text_uses_deterministic_crypto_fallback_when_llm_empty(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    calls = []
+    evidence_pack = _crypto_deterministic_evidence()
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: calls.append(args) or "")
+
+    result = svc.process_live_text(201, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert result["charged"] is False
+    assert result["cost"] == 0
+    assert "Ответ собран без LLM" in result["message"]
+    assert "Цена" in result["message"]
+    assert "Поддержка" in result["message"]
+    assert "Сопротивление" in result["message"]
+    assert "Decision: WATCH" in result["message"]
+    assert charges == []
+    assert len(calls) == 1
+    assert saved and saved[-1][0][2] == "assistant"
+
+
+def test_process_live_text_deterministic_followup_long_position(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    context_memory.save_live_context(202, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", last_final_answer="Decision: WATCH")
+    evidence_pack = _crypto_deterministic_evidence()
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "")
+
+    result = svc.process_live_text(202, "а если лонг от 64500?", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert result["charged"] is False
+    assert "Условие follow-up: лонг от $64,500" in result["message"]
+    assert "Это не текущий вход" in result["message"]
+    assert "долгосрочный" not in result["message"].lower()
+    assert "Decision: WATCH" in result["message"]
+    assert charges == []
+    assert saved and saved[-1][0][2] == "assistant"
+
+
+def test_process_live_text_keeps_unavailable_when_deterministic_facts_missing(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    calls = []
+    evidence_pack = _crypto_deterministic_evidence(derived_facts={"current_price": 60370})
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: calls.append(args) or "")
+
+    result = svc.process_live_text(203, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+
+    assert result == {"ok": False, "message": svc.LIVE_UNAVAILABLE_MESSAGE, "charged": False}
+    assert charges == []
+    assert len(calls) == 1

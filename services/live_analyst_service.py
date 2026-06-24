@@ -977,6 +977,16 @@ Format EN: 🏟 Short: / Data: / Breakdown: / Value: / Risk: / Final: / Decision
 """.strip()
 
 
+def _compact_previous_live_context(previous: Any) -> Dict[str, Any]:
+    if not isinstance(previous, dict):
+        return {}
+    allowed = ("mode", "asset_pair", "timeframe", "teams_event", "market", "odds", "key_levels", "last_final_answer")
+    compact = {key: previous.get(key) for key in allowed if previous.get(key) not in (None, "", [], {})}
+    if compact.get("last_final_answer"):
+        compact["last_final_answer"] = str(compact["last_final_answer"])[:500]
+    return compact
+
+
 def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
     if not evidence_pack:
         return "Live Evidence Pack: not built."
@@ -1005,7 +1015,7 @@ def _format_live_evidence_pack(evidence_pack: Optional[Dict[str, Any]]) -> str:
         f"Follow-up type: {evidence_pack.get('followup_type') or ''}",
         f"Follow-up level: {evidence_pack.get('followup_level') or ''}",
         f"Follow-up timeframe: {evidence_pack.get('followup_timeframe') or ''}",
-        f"Previous live context: {evidence_pack.get('previous_live_context') or {}}",
+        f"Previous live context: {_compact_previous_live_context(evidence_pack.get('previous_live_context'))}",
         "Planned research queries:",
         "\n".join(planned_lines) if planned_lines else "- none",
         "Evidence items:",
@@ -1219,6 +1229,68 @@ Keep it complete and under 1200–1400 characters.
 """.strip()
 
 
+
+def _has_deterministic_crypto_facts(evidence_pack: Dict[str, Any]) -> bool:
+    if not evidence_pack or (evidence_pack.get("mode") or "").lower() != "crypto":
+        return False
+    facts = evidence_pack.get("derived_facts") or {}
+    required = ("current_price", "support_levels", "resistance_levels", "better_zone", "confirmation", "invalidation")
+    return all(facts.get(key) not in (None, "", [], {}) for key in required)
+
+
+def build_deterministic_live_answer(evidence_pack: dict, ui_language: str = "ru") -> str:
+    """Build a no-LLM Live Analyst answer from structured evidence when possible."""
+    if not _has_deterministic_crypto_facts(evidence_pack):
+        return ""
+    facts = evidence_pack.get("derived_facts") or {}
+    symbol = facts.get("symbol") or facts.get("pair") or evidence_pack.get("pair") or "BTCUSDT"
+    current_price = facts.get("current_price")
+    support = _fact_list(facts.get("support_levels"))
+    resistance = _fact_list(facts.get("resistance_levels"))
+    better_zone = _format_money_value(facts.get("better_zone"))
+    confirmation = _localize_crypto_context_phrase(str(facts.get("confirmation") or "").strip(), ui_language)
+    invalidation = _localize_crypto_context_phrase(str(facts.get("invalidation") or "").strip(), ui_language)
+    followup_type = evidence_pack.get("followup_type") or ""
+    followup_level = evidence_pack.get("followup_level")
+
+    data = [
+        ("Цена" if ui_language == "ru" else "Price", _format_money_value(current_price)),
+        ("Поддержка" if ui_language == "ru" else "Support", support),
+        ("Сопротивление" if ui_language == "ru" else "Resistance", resistance),
+        ("Зона лучше" if ui_language == "ru" else "Better zone", better_zone),
+    ]
+    if followup_type == "long_position" and followup_level not in (None, ""):
+        data.append(("Условие follow-up" if ui_language == "ru" else "Follow-up condition", f"лонг от {_format_money_value(followup_level)}" if ui_language == "ru" else f"long from {_format_money_value(followup_level)}"))
+    data.extend([
+        ("Подтверждение" if ui_language == "ru" else "Confirmation", confirmation),
+        ("Инвалидация" if ui_language == "ru" else "Invalidation", invalidation),
+    ])
+
+    current_below_followup = False
+    try:
+        current_below_followup = followup_type == "long_position" and followup_level not in (None, "") and float(current_price) < float(followup_level)
+    except (TypeError, ValueError):
+        current_below_followup = False
+
+    if ui_language == "ru":
+        short = f"Данные по {symbol} есть, но AI-провайдер временно перегружен. По текущим уровням вход не подтверждён: нужен откат/реакция от поддержки или пробой с ретестом сопротивления."
+        if current_below_followup:
+            scenario = f"Это не текущий вход; это сценарий только если цена дойдёт до/закрепится выше {_format_money_value(followup_level)} и даст подтверждение/ретест."
+        else:
+            scenario = "Вход не подтверждён сейчас. Базовый сценарий — ждать реакции от поддержки или пробоя/ретеста сопротивления."
+        risk = "Ответ собран без LLM из рыночных уровней, потому что AI-провайдер был перегружен. Используй как предварительный сценарий, не как сигнал."
+        data_block = "\n".join(f"- {k}: {v}" for k, v in data if v not in (None, ""))
+        return f"🧠 Коротко:\n{short}\n\nДанные:\n{data_block}\n\nСценарий:\n{scenario}\n\nРиск:\n{risk}\n\nDecision: WATCH"
+
+    short = f"Data for {symbol} is available, but the AI provider is temporarily overloaded. Current levels do not confirm an entry: wait for a support reaction or a resistance breakout/retest."
+    if current_below_followup:
+        scenario = f"This is not a current entry; it is a scenario only if price reaches/holds above {_format_money_value(followup_level)} and gives confirmation/retest."
+    else:
+        scenario = "Entry is not confirmed now. Base case is to wait for reaction from support or a resistance breakout/retest."
+    risk = "This answer was assembled without an LLM from market levels because the AI provider was overloaded. Use it as a preliminary scenario, not as a signal."
+    data_block = "\n".join(f"- {k}: {v}" for k, v in data if v not in (None, ""))
+    return f"🧠 Short take:\n{short}\n\nData:\n{data_block}\n\nScenario:\n{scenario}\n\nRisk:\n{risk}\n\nDecision: WATCH"
+
 def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
     labels = evidence_pack.get("recommended_decision_labels") or [] if evidence_pack else []
     decision = labels[0] if labels else "DATA NEEDED"
@@ -1362,24 +1434,51 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     logger.info("live_answer_generated chars=%s incomplete=%s", len(answer), incomplete)
     if not had_non_empty_first_answer:
         logger.warning("live_answer_empty_after_generation_no_charge user_id=%s mode=%s", user_id, mode)
+    def return_deterministic_fallback(reason: str) -> Optional[Dict[str, Any]]:
+        fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)
+        if not fallback:
+            return None
+        logger.warning("live_deterministic_fallback_used user_id=%s mode=%s reason=%s", user_id, mode, reason)
+        _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, fallback)
+        try:
+            save_message(int(session["id"]), user_id, "assistant", "text", fallback, tokens_charged=0)
+        except Exception as exc:
+            logger.warning("live_deterministic_fallback_save_failed user_id=%s error=%s", user_id, exc)
+        return {"ok": True, "message": fallback, "charged": False, "cost": 0, "session": session}
+
     if incomplete:
         logger.warning("live_answer_incomplete_detected user_id=%s mode=%s chars=%s tail=%s", user_id, mode, len(answer), _safe(answer[-80:], 80))
-        repair_prompt = _build_live_repair_prompt(text, evidence_pack, ai_control_context, validation=None, ui_language=ui_language)
-        logger.info("live_answer_repair_retry_started user_id=%s mode=%s prompt_chars=%s", user_id, mode, len(repair_prompt))
-        try:
-            repaired = (generate_live_analyst_text(repair_prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
-        except Exception:
-            repaired = ""
+        if not had_non_empty_first_answer:
+            deterministic = return_deterministic_fallback("llm_unavailable")
+            if deterministic:
+                return deterministic
+        repaired = ""
+        if had_non_empty_first_answer:
+            repair_prompt = _build_live_repair_prompt(text, evidence_pack, ai_control_context, validation=None, ui_language=ui_language)
+            logger.info("live_answer_repair_retry_started user_id=%s mode=%s prompt_chars=%s", user_id, mode, len(repair_prompt))
+            try:
+                repaired = (generate_live_analyst_text(repair_prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
+            except Exception:
+                repaired = ""
+        else:
+            logger.info("live_answer_repair_retry_skipped user_id=%s mode=%s reason=empty_first_answer", user_id, mode)
         if not _is_incomplete_live_answer(repaired, mode, ui_language):
             answer = repaired
             logger.info("live_answer_repair_retry_success chars=%s", len(answer))
-        elif had_non_empty_first_answer and _has_meaningful_partial_live_answer(first_answer):
-            answer = _build_live_safe_fallback(evidence_pack, ui_language=ui_language)
-            logger.warning("live_answer_repair_retry_failed_fallback_used user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
         else:
-            logger.warning("live_answer_repair_retry_failed_no_charge user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
-            return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
+            if had_non_empty_first_answer and _has_meaningful_partial_live_answer(first_answer):
+                answer = _build_live_safe_fallback(evidence_pack, ui_language=ui_language)
+                logger.warning("live_answer_repair_retry_failed_fallback_used user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
+            else:
+                deterministic = return_deterministic_fallback("llm_unavailable" if not had_non_empty_first_answer else "repair_failed")
+                if deterministic:
+                    return deterministic
+                logger.warning("live_answer_repair_retry_failed_no_charge user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
+                return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
     if not answer:
+        deterministic = return_deterministic_fallback("llm_unavailable")
+        if deterministic:
+            return deterministic
         return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
 
     validation = validate_live_answer_against_evidence(answer, evidence_pack)
