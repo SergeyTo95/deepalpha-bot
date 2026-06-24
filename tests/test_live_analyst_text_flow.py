@@ -998,3 +998,152 @@ def test_process_live_text_reconstructs_followup_context_from_recent_messages(mo
     assert evidence_pack["previous_live_context"]["key_levels"]["resistance"] == [60000, 63239]
     assert evidence_pack["followup_type"] == "long_position"
     assert evidence_pack["followup_level"] == "64500"
+
+
+def test_live_followup_suggestions_crypto_successful_answer():
+    answer = svc.append_live_followup_suggestions(
+        "🧠 Коротко:\nBTCUSDT лучше наблюдать.\n\nDecision: WATCH",
+        {"mode": "crypto", "intent": "entry_now"},
+        ui_language="ru",
+    )
+
+    assert "Decision: WATCH" in answer
+    assert "Можно продолжить:" in answer
+    assert "сценарий" in answer
+    assert "уровень" in answer
+    assert "риск" in answer.lower()
+    forbidden = ("покупай", "продавай", "ставь", "гарантирую")
+    assert not any(word in answer.lower() for word in forbidden)
+
+
+def test_live_followup_suggestions_crypto_long_position():
+    answer = svc.append_live_followup_suggestions(
+        "🧠 Коротко:\nЛонг пока только сценарий.\n\nDecision: WATCH",
+        {"mode": "crypto", "intent": "entry_now", "followup_type": "long_position"},
+        ui_language="ru",
+    )
+    lower = answer.lower()
+
+    assert "лонг" in lower
+    assert "подтверждение" in lower
+    assert "отмена" in lower
+    assert "риск" in lower
+    assert "долгосрочный" not in lower
+
+
+def test_live_followup_suggestions_sports_betting_answer():
+    answer = svc.append_live_followup_suggestions(
+        "🏟 Коротко:\nПо линии пока WATCH.\n\nDecision: WATCH",
+        {"mode": "sports", "intent": "betting_analysis"},
+        ui_language="ru",
+    )
+    lower = answer.lower()
+
+    assert "value" in lower
+    assert "коэффициент" in lower
+    assert "implied probability" in lower
+    assert "edge" in lower
+    assert "ставь" not in lower
+    assert "бери" not in lower
+
+
+def test_live_followup_suggestions_not_added_to_clarification_response():
+    answer = svc.append_live_followup_suggestions(
+        "Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию?",
+        {"mode": "unknown"},
+        ui_language="ru",
+    )
+
+    assert "Можно продолжить:" not in answer
+
+
+def test_live_followup_suggestions_not_added_to_live_unavailable_message():
+    answer = svc.append_live_followup_suggestions(
+        svc.LIVE_UNAVAILABLE_MESSAGE,
+        {"mode": "crypto"},
+        ui_language="ru",
+    )
+
+    assert answer == svc.LIVE_UNAVAILABLE_MESSAGE
+    assert "Можно продолжить:" not in answer
+
+
+def test_process_live_text_stores_suggested_actions_and_resolves_short_confirmation(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    evidence_packs = []
+    prompts = []
+
+    def fake_understand(text, *args, **kwargs):
+        assert "BTCUSDT" in text
+        return {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}}
+
+    def fake_build(text, understanding, router_result, **kwargs):
+        pack = {
+            "mode": "crypto",
+            "intent": "entry_now",
+            "derived_facts": {"current_price": 64000, "support_levels": [63800], "resistance_levels": [64500], "confirmation": "reclaim", "invalidation": "below support"},
+            "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+            "recommended_decision_labels": ["WATCH"],
+        }
+        evidence_packs.append(pack)
+        return pack
+
+    monkeypatch.setattr(svc, "understand_live_request", fake_understand)
+    monkeypatch.setattr(svc, "build_live_evidence_pack", fake_build)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Коротко: WATCH\nDecision: WATCH")
+
+    first = svc.process_live_text(301, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
+    ctx = context_memory.get_live_context(301)
+    assert first["ok"] is True
+    assert ctx and ctx["suggested_actions"]
+
+    second = svc.process_live_text(301, "давай", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert second["ok"] is True
+    assert second.get("needs_clarification") is not True
+    assert evidence_packs[-1]["selected_action_id"] == ctx["suggested_actions"][0]["id"]
+    assert "Selected action:" in prompts[-1]
+    assert len(charges) == 2
+
+
+def test_process_live_text_reconstructs_suggested_actions_for_short_confirmation(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    recent = [
+        {"role": "user", "content": "BTCUSDT 15m есть вход?"},
+        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\nDecision: WATCH\n\nМожно продолжить:\n\n- Найти точку отмены и подтверждение входа."},
+    ]
+    evidence_packs = []
+    prompts = []
+    monkeypatch.setattr(svc, "get_recent_context", lambda session_id, limit: recent)
+    monkeypatch.setattr(svc, "understand_live_request", lambda text, *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+
+    def fake_build(text, understanding, router_result, **kwargs):
+        pack = {
+            "mode": "crypto",
+            "intent": "entry_now",
+            "derived_facts": {"current_price": 59670, "support_levels": [59500], "resistance_levels": [60000], "confirmation": "reclaim", "invalidation": "below support"},
+            "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+            "recommended_decision_labels": ["WATCH"],
+        }
+        evidence_packs.append(pack)
+        return pack
+
+    monkeypatch.setattr(svc, "build_live_evidence_pack", fake_build)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Коротко: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(401, "давай", router_result={"mode": "unknown"}, ui_language="ru")
+    ctx = context_memory.get_live_context(401)
+
+    assert result["ok"] is True
+    assert result.get("needs_clarification") is not True
+    assert ctx and ctx["suggested_actions"]
+    assert evidence_packs[-1].get("selected_action_id")
+    assert "BTCUSDT" in prompts[-1]
+    assert len(charges) == 1
+    assert saved

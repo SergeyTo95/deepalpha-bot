@@ -136,3 +136,120 @@ def test_extract_money_values_handles_thousands_and_decimals():
     assert memory._extract_money_values("$60,219.51") == [60219.51]
     assert memory._extract_money_values("$59,670") == [59670]
     assert memory._extract_money_values("$60,500.0") == [60500.0]
+
+
+def _crypto_actions():
+    return [
+        {"id": "invalidation_confirmation", "label": "Find invalidation and confirmation", "resolved_query_template": "Identify confirmation, invalidation, and risk."},
+        {"id": "timeframe_compare", "label": "Compare 5m/15m/1h", "resolved_query_template": "Compare timeframes."},
+        {"id": "scenario_plan", "label": "Build a step by step plan", "resolved_query_template": "Build a plan."},
+    ]
+
+
+def _sports_actions():
+    return [
+        {"id": "calculate_value", "label": "calculate value", "resolved_query_template": "Calculate implied probability, edge, and minimum playable odds."},
+        {"id": "compare_markets", "label": "compare markets", "resolved_query_template": "Compare moneyline, handicap, and total."},
+    ]
+
+
+def test_ru_generic_continuation_selects_first_action():
+    memory.save_live_context(21, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    result = memory.resolve_live_followup(21, "давай")
+
+    assert result["is_followup"] is True
+    assert result["selected_action_id"] == "invalidation_confirmation"
+    assert "BTCUSDT" in result["resolved_query"]
+
+
+def test_ru_ordinal_continuation_selects_second_action():
+    memory.save_live_context(22, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    result = memory.resolve_live_followup(22, "второй")
+
+    assert result["selected_action_id"] == "timeframe_compare"
+
+
+def test_ru_calculate_value_selects_sports_value_action():
+    memory.save_live_context(23, mode="sports", original_user_text="Lakers — Celtics handicap", normalized_query="Lakers — Celtics handicap", teams_event="Lakers — Celtics", market="handicap", suggested_actions=_sports_actions())
+    result = memory.resolve_live_followup(23, "посчитай")
+
+    assert result["selected_action_id"] == "calculate_value"
+    assert "implied probability" in result["resolved_query"]
+    assert "edge" in result["resolved_query"]
+    assert "odds" in result["resolved_query"]
+
+
+def test_ru_stop_selects_invalidation_confirmation_action():
+    memory.save_live_context(24, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    result = memory.resolve_live_followup(24, "где стоп?")
+
+    assert result["selected_action_id"] == "invalidation_confirmation"
+
+
+def test_ru_timeframe_selects_timeframe_compare_action():
+    memory.save_live_context(25, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    result = memory.resolve_live_followup(25, "на 5m")
+
+    assert result["selected_action_id"] == "timeframe_compare"
+
+
+def test_en_generic_and_ordinal_continuations_select_actions():
+    memory.save_live_context(26, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+
+    assert memory.resolve_live_followup(26, "yes")["selected_action_id"] == "invalidation_confirmation"
+    assert memory.resolve_live_followup(26, "second")["selected_action_id"] == "timeframe_compare"
+
+
+def test_en_value_and_stop_select_expected_actions():
+    memory.save_live_context(27, mode="sports", original_user_text="Lakers — Celtics handicap", normalized_query="Lakers — Celtics handicap", teams_event="Lakers — Celtics", market="handicap", suggested_actions=_sports_actions())
+    assert memory.resolve_live_followup(27, "calculate edge")["selected_action_id"] == "calculate_value"
+
+    memory.save_live_context(28, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    assert memory.resolve_live_followup(28, "where is stop")["selected_action_id"] == "invalidation_confirmation"
+
+
+def test_generic_confirmation_without_suggested_actions_needs_context():
+    memory.save_live_context(29, mode="crypto", original_user_text="ETHUSDT 1h", normalized_query="ETHUSDT 1h", asset_pair="ETHUSDT", timeframe="1h")
+    result = memory.resolve_live_followup(29, "давай")
+
+    assert result["need_context"] is True
+    assert "что именно продолжить" in result["message"]
+    assert "BTC" not in result.get("resolved_query", "")
+    assert "ETH" not in result.get("resolved_query", "")
+
+
+def test_continuation_resolved_queries_do_not_use_forbidden_terms():
+    forbidden = ("покупай", "продавай", "ставь", "бери", "гарантирую", "железно", "buy now", "sell now", "bet now", "guaranteed", "lock")
+    memory.save_live_context(30, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", suggested_actions=_crypto_actions())
+    memory.save_live_context(31, mode="sports", original_user_text="Lakers — Celtics handicap", normalized_query="Lakers — Celtics handicap", teams_event="Lakers — Celtics", market="handicap", suggested_actions=_sports_actions())
+
+    texts = [
+        memory.resolve_live_followup(30, "давай")["resolved_query"],
+        memory.resolve_live_followup(30, "where is stop")["resolved_query"],
+        memory.resolve_live_followup(31, "calculate edge")["resolved_query"],
+    ]
+    assert all(term not in text.lower() for text in texts for term in forbidden)
+
+
+def test_standalone_sports_short_request_is_not_live_continuation():
+    assert memory.looks_like_new_standalone_live_request("Lakers Celtics тотал") is True
+    assert memory.is_live_continuation("Lakers Celtics тотал") is False
+    assert memory.is_live_followup("Lakers Celtics тотал") is False
+    assert memory.is_live_followup("Brazil фора") is False
+    assert memory.is_live_followup("UFC total") is False
+
+
+def test_standalone_crypto_short_request_is_not_live_continuation():
+    assert memory.looks_like_new_standalone_live_request("BTCUSDT 15m есть вход?") is True
+    assert memory.is_live_continuation("BTCUSDT 15m есть вход?") is False
+    assert memory.is_live_followup("BTCUSDT 15m есть вход?") is False
+    assert memory.is_live_followup("ETHUSDT short 1h") is False
+
+
+def test_pure_confirmation_without_context_still_requests_live_context():
+    result = memory.resolve_live_followup(41, "давай")
+
+    assert memory.is_live_continuation("давай") is True
+    assert result["is_followup"] is True
+    assert result["need_context"] is True
+    assert "предыдущий Live-контекст" in result["message"]

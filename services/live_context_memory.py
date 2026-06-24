@@ -8,6 +8,88 @@ from typing import Any, Dict, List, Optional
 LIVE_CONTEXT_TTL_MINUTES = 60
 _contexts: Dict[int, Dict[str, Any]] = {}
 
+
+_CONFIRMATION_PHRASES = {
+    "да", "давай", "го", "погнали", "ок", "окей", "хорошо", "норм", "продолжай", "продолжим",
+    "можно", "ага", "угу", "сделай", "давай сделай", "разберем", "разбери", "покажи", "объясни",
+    "давай разберем", "давай продолжим", "yes", "yeah", "yep", "sure", "ok", "okay", "go", "go on",
+    "continue", "proceed", "do it", "let's do it", "do that", "sounds good", "show me", "explain",
+    "break it down", "analyze it", "continue with that",
+}
+
+_CONTINUATION_KEYWORDS = (
+    "посчитай", "рассчитай", "считаем", "value", "валуй", "вэлью", "edge", "кэф", "коэффициент",
+    "playable odds", "минимальный", "первый", "второй", "треть", "вариант", "последний", "любой",
+    "твой выбор", "где стоп", "стоплосс", "стоп-лосс", "отмена", "инвалидация", "подтверждение",
+    "где вход", "точка входа", "план", "риск", "риск/прибыль", "риск прибыль", "rr", "r/r",
+    "риск ревард", "по шагам", "таймфрейм", "сравни", "5m", "15m", "1h", "4h", "лонг", "шорт",
+    "ставку", "рынки", "фора", "тотал", "победа", "moneyline", "handicap", "total", "есть ставка", "есть value",
+    "calculate", "compute", "implied probability", "minimum odds", "odds needed", "fair odds", "fair price",
+    "first", "second", "third", "option", "last", "any", "your choice", "where is stop", "stop loss",
+    "invalidation", "confirmation", "entry", "trade plan", "risk reward", "step by step", "compare timeframes",
+    "long", "short", "compare markets", "spread", "over under", "calculate bet", "is there value", "any edge",
+    "what odds do i need",
+)
+
+
+
+_STANDALONE_SPORTS_TOKENS = {
+    "lakers", "celtics", "ufc", "nba", "nfl", "nhl", "mlb", "brazil", "argentina", "france", "spain",
+    "germany", "italy", "england", "real", "barca", "barcelona", "arsenal", "chelsea", "psg", "milan",
+}
+_STANDALONE_MARKET_TOKENS = {
+    "total", "тотал", "победа", "фора", "handicap", "spread", "moneyline", "over", "under", "short", "long", "шорт", "лонг",
+}
+_ACTION_ONLY_WORDS = {
+    "calculate", "edge", "value", "odds", "where", "is", "stop", "first", "second", "third", "option",
+    "yes", "ok", "okay", "continue", "посчитай", "где", "стоп", "первый", "второй", "третий", "давай",
+}
+
+
+def looks_like_new_standalone_live_request(text: str) -> bool:
+    """Detect short standalone Live requests so they are not mistaken for continuation clicks."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    low = _normalize_short_text(raw)
+    if _extract_pair_from_text(raw):
+        return True
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", raw)
+    latin_words = re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", raw)
+    if len([word for word in latin_words if word.lower() not in _ACTION_ONLY_WORDS]) >= 2:
+        return True
+    if re.search(r"(?i)\b(?:vs|v)\b|\s[-—]\s", raw):
+        return True
+    has_market = any(token in low for token in _STANDALONE_MARKET_TOKENS)
+    has_team_like = any(token.lower() in _STANDALONE_SPORTS_TOKENS for token in tokens)
+    if has_market and has_team_like:
+        return True
+    if has_market and len(tokens) >= 3 and any(re.search(r"[A-Za-zА-Яа-яЁё]", token) for token in tokens):
+        non_action = [token for token in tokens if token.lower() not in _ACTION_ONLY_WORDS and token.lower() not in _STANDALONE_MARKET_TOKENS]
+        return len(non_action) >= 1
+    return False
+
+def _normalize_short_text(text: str) -> str:
+    return re.sub(r"[!?.,…]+$", "", (text or "").strip().lower()).strip()
+
+
+def is_live_continuation(text: str) -> bool:
+    raw = text or ""
+    value = _normalize_short_text(raw)
+    if not value:
+        return False
+    if _extract_pair_from_text(raw):
+        return False
+    if looks_like_new_standalone_live_request(raw):
+        return False
+    if len(value.split()) > 5 and value not in _CONFIRMATION_PHRASES:
+        return False
+    if value in _CONFIRMATION_PHRASES:
+        return True
+    if re.fullmatch(r"[123]", value):
+        return True
+    return any(keyword in value for keyword in _CONTINUATION_KEYWORDS)
+
 _FOLLOWUP_PATTERNS = (
     r"\bа\s+если\b", r"\bтогда\b", r"\bа\s+где\b", r"\bгде\s+стоп\b", r"\bгде\s+отмена\b",
     r"\bчто\s+если\b", r"\bа\s+на\s+\d+\s*[mмhчdд]\b", r"\bдай\s+\d*\s*сценари", r"\bлонг\s+от\b",
@@ -33,7 +115,7 @@ def clear_live_context(user_id: int) -> None:
 
 def is_live_followup(text: str) -> bool:
     value = (text or "").strip().lower()
-    return bool(value and any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in _FOLLOWUP_PATTERNS))
+    return bool(value and (is_live_continuation(value) or any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in _FOLLOWUP_PATTERNS)))
 
 
 def _is_expired(ctx: Dict[str, Any]) -> bool:
@@ -60,7 +142,7 @@ def get_live_context(user_id: int) -> Optional[Dict[str, Any]]:
     return dict(ctx)
 
 
-def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "") -> Dict[str, Any]:
+def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     previous = _contexts.get(int(user_id)) or {}
     now = _now()
     ctx = {
@@ -75,6 +157,7 @@ def save_live_context(user_id: int, *, mode: str, original_user_text: str, norma
         "odds": odds,
         "key_levels": key_levels or {},
         "last_final_answer": (last_final_answer or "")[:1600],
+        "suggested_actions": list(suggested_actions or previous.get("suggested_actions") or [])[:3],
         "created_at": previous.get("created_at") or now,
         "updated_at": now,
     }
@@ -220,6 +303,76 @@ def reconstruct_live_context_from_recent_messages(recent_messages: list[dict], u
                 return {"user_id": int(user_id), "mode": "sports", "teams_event": event, "market": _extract_labeled_value(answer, ("Рынок", "Market")), "odds": _extract_labeled_value(answer, ("Коэффициент", "Odds")), "original_user_text": original, "normalized_query": original, "last_final_answer": answer[:1000]}
     return None
 
+def _action_text(action: Dict[str, Any]) -> str:
+    return f"{action.get('id') or ''} {action.get('label') or ''} {action.get('resolved_query_template') or ''}".lower()
+
+
+def _pick_action(text: str, mode: str, actions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not actions:
+        return None
+    low = _normalize_short_text(text)
+    ordinal_map = (
+        (0, ("перв", "1", "option 1", "first")),
+        (1, ("втор", "2", "option 2", "second")),
+        (2, ("трет", "3", "option 3", "third")),
+    )
+    for idx, needles in ordinal_map:
+        if idx < len(actions) and any(low == n or n in low for n in needles):
+            return actions[idx]
+
+    checks = [
+        (("value", "edge", "кэф", "коэффициент", "implied", "playable", "minimum odds", "минимальный"), ("value", "calculate", "odds", "edge", "implied")),
+        (("5m", "15m", "1h", "4h", "timeframe", "таймфрейм"), ("timeframe", "compare", "5m", "1h")),
+        (("stop", "стоп", "отмена", "invalidation", "confirmation", "подтверждение"), ("invalidation", "confirmation", "stop", "отмена")),
+        (("plan", "план", "по шагам", "step by step"), ("plan", "scenario", "steps", "шаг")),
+    ]
+    if mode == "sports" and any(k in low for k in ("compare", "сравни", "рынки", "moneyline", "фора", "тотал", "handicap", "total")):
+        for action in actions:
+            if action.get("id") == "compare_markets":
+                return action
+    for text_needles, action_needles in checks:
+        if any(k in low for k in text_needles):
+            for action in actions:
+                haystack = _action_text(action)
+                if any(k in haystack for k in action_needles):
+                    return action
+            return actions[0]
+    return actions[0]
+
+
+def _compact_levels(ctx: Dict[str, Any]) -> str:
+    levels = ctx.get("key_levels") or {}
+    parts = []
+    for key in ("support", "resistance", "better_zone", "confirmation", "invalidation"):
+        value = levels.get(key)
+        if value not in (None, "", [], {}):
+            parts.append(f"{key}: {value}")
+    return "; ".join(parts)[:320]
+
+
+def _build_resolved_query(ctx: Dict[str, Any], text: str, action: Optional[Dict[str, Any]]) -> str:
+    mode = ctx.get("mode") or "general"
+    label = (action or {}).get("label") or (action or {}).get("id") or "continue analysis"
+    template = (action or {}).get("resolved_query_template") or "Continue from previous Live context."
+    tf = _extract_timeframe(text) or ctx.get("timeframe") or ""
+    odds = _extract_odds(text) or ctx.get("odds") or ""
+    if mode == "crypto":
+        pair = ctx.get("asset_pair") or ""
+        levels = _compact_levels(ctx)
+        level_part = f" Previous key levels: {levels}." if levels else ""
+        return f"{pair}, timeframe {tf or 'unspecified'}. Continue from previous Live context.{level_part} Original follow-up: {text}. Selected action: {label}. {template} Identify confirmation level, invalidation level, risk and Decision."
+    if mode == "sports":
+        event = ctx.get("teams_event") or ""
+        market = ctx.get("market") or ""
+        odds_part = f", odds {odds}" if odds else ""
+        tail = "If odds are provided, calculate implied probability, edge and minimum playable odds; if odds are missing, ask for odds."
+        return f"{event}, market {market or 'unspecified'}{odds_part}. Continue from previous Live context. Selected action: {label}. {template} {tail}"
+    if mode in ("polymarket", "prediction_market"):
+        market_title = ctx.get("market") or ctx.get("teams_event") or ctx.get("normalized_query") or "previous market"
+        return f"Polymarket market: {market_title}. Continue from previous Live context. Selected action: {label}. {template} Compare market odds vs AI probability or explain probability drivers; do not give direct betting commands."
+    return f"Previous Live context mode {mode}. Continue from previous context. Selected action: {label}. {template}"
+
+
 def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     detected = is_live_followup(text)
     if not detected:
@@ -228,36 +381,36 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     if not ctx:
         return {"is_followup": True, "need_context": True, "message": "Не вижу предыдущий Live-контекст. Напиши актив/матч и таймфрейм/рынок."}
     mode = ctx.get("mode") or "general"
+    actions = list(ctx.get("suggested_actions") or [])[:3]
+    normalized_text = _normalize_short_text(text)
+    if not actions and (normalized_text in _CONFIRMATION_PHRASES or re.fullmatch(r"[123]", normalized_text)):
+        return {"is_followup": True, "need_context": True, "message": "Похоже, это продолжение Live-разбора. Уточни, что именно продолжить: сценарий, риск, уровни, value или таймфрейм."}
+    selected_action = _pick_action(text, mode, actions)
     tf = _extract_timeframe(text) or ctx.get("timeframe") or ""
     odds = _extract_odds(text) or ctx.get("odds") or ""
     if mode == "crypto":
         pair = ctx.get("asset_pair") or ""
         if not pair:
             return {"is_followup": True, "need_context": True, "message": "Не вижу актив в предыдущем Live-контексте. Напиши актив/пару и таймфрейм."}
-        low = (text or "").lower()
         level = _extract_level(text)
         followup_type = _detect_crypto_followup_type(text)
-        if followup_type == "long_position":
-            scenario = f"analyze LONG POSITION scenario from {level}; this means a trading long entry, not a long-term forecast" if level else "analyze LONG POSITION scenario; this means a trading long entry, not a long-term forecast"
-        elif followup_type == "short_position":
-            scenario = f"analyze SHORT POSITION scenario from {level}; this means a trading short entry, not a short-term forecast" if level else "analyze SHORT POSITION scenario; this means a trading short entry"
-        elif followup_type == "breakout":
-            scenario = f"analyze breakout scenario at {level}" if level else "analyze breakout scenario"
-        else:
-            scenario = "analyze scenario"
-        resolved = f"{pair}, timeframe {tf or 'unspecified'}. Follow-up: {scenario}. Original follow-up: {text}. Use previous context. Explain confirmation, invalidation, risk, and decision."
     elif mode == "sports":
-        event = ctx.get("teams_event") or ""
-        if not event:
+        if not (ctx.get("teams_event") or ""):
             return {"is_followup": True, "need_context": True, "message": "Не вижу матч в предыдущем Live-контексте. Напиши событие/команды и рынок."}
-        market = ctx.get("market") or ""
-        odds_part = f", odds {odds}" if odds else ""
-        no_bet = "без ставки" in (text or "").lower() or "without bet" in (text or "").lower()
-        tail = "Give non-betting sports forecast using previous context. Do not calculate edge unless odds are provided." if no_bet else "Recalculate implied probability/value using previous sports context."
-        resolved = f"{event}, market {market or 'unspecified'}{odds_part}. Follow-up: {text}. {tail}"
+        level = ""
+        followup_type = "generic"
     else:
-        resolved = f"Previous Live context mode {mode}. Follow-up: {text}. Use previous context and answer completely."
-    result = {"is_followup": True, "previous_context": ctx, "resolved_query": resolved, "mode": mode}
+        level = ""
+        followup_type = "generic"
+    if mode == "crypto" and not selected_action:
+        if followup_type == "long_position":
+            selected_action = {"id": "long_position", "label": "LONG POSITION", "resolved_query_template": "Analyze LONG POSITION scenario; this means a trading long entry, not a long-term forecast."}
+        elif followup_type == "short_position":
+            selected_action = {"id": "short_position", "label": "SHORT POSITION", "resolved_query_template": "Analyze SHORT POSITION scenario; this means a trading short entry."}
+    resolved = _build_resolved_query(ctx, text, selected_action)
+    result = {"is_followup": True, "previous_context": ctx, "resolved_query": resolved, "mode": mode, "selected_action": selected_action, "selected_action_id": (selected_action or {}).get("id")}
     if mode == "crypto":
         result.update({"followup_type": followup_type, "followup_level": level, "followup_timeframe": tf})
+    if mode == "sports":
+        result.update({"followup_odds": odds})
     return result
