@@ -116,6 +116,7 @@ from services.live_analyst_memory_service import (
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
 )
+from services.live_context_memory import clear_live_context
 from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
 logging.basicConfig(level=logging.INFO)
@@ -8323,6 +8324,7 @@ async def _reset_live_mode(message: types.Message) -> None:
     _register_user(message)
     uid = message.from_user.id
     reset_live_session(uid)
+    clear_live_context(uid)
     await message.answer(
         "Live context очищен. Можно начать новый диалог.",
         reply_markup=private_reply_markup(message, get_live_analyst_keyboard(uid)),

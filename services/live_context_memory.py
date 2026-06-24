@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 LIVE_CONTEXT_TTL_MINUTES = 60
 _contexts: Dict[int, Dict[str, Any]] = {}
@@ -25,6 +25,10 @@ def _now() -> datetime:
 
 def clear_live_context_memory() -> None:
     _contexts.clear()
+
+
+def clear_live_context(user_id: int) -> None:
+    _contexts.pop(int(user_id), None)
 
 
 def is_live_followup(text: str) -> bool:
@@ -105,6 +109,116 @@ def _detect_crypto_followup_type(text: str) -> str:
         return "timeframe_change"
     return "generic"
 
+
+
+def _extract_money_values(line: str) -> List[float]:
+    values: List[float] = []
+    for raw in re.findall(r"\$?\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b|\$?\b\d{4,7}(?:\.\d+)?\b", line or ""):
+        cleaned = raw.replace("$", "").replace(" ", "")
+        if "," in cleaned:
+            cleaned = cleaned.replace(",", "")
+        try:
+            value = float(cleaned)
+        except ValueError:
+            continue
+        values.append(int(value) if value.is_integer() else value)
+    return values
+
+
+def _extract_pair_from_text(text: str) -> str:
+    m = re.search(r"(?i)\b([A-Z]{2,10}(?:USDT|USDC|USD|BTC|ETH))\b", text or "")
+    return m.group(1).upper() if m else ""
+
+
+def _extract_timeframe_from_text(text: str) -> str:
+    return _extract_timeframe(text)
+
+
+def _extract_labeled_value(answer: str, labels: tuple[str, ...]) -> str:
+    for line in (answer or "").splitlines():
+        clean = line.strip(" -•\t")
+        if any(clean.lower().startswith(label.lower()) for label in labels):
+            return clean.split(":", 1)[1].strip() if ":" in clean else clean
+    return ""
+
+
+def _extract_crypto_context_from_answer(answer: str) -> Dict[str, Any]:
+    text = answer or ""
+    key_levels: Dict[str, Any] = {}
+    for line in text.splitlines():
+        clean = line.strip(" -•\t")
+        low = clean.lower()
+        if low.startswith("цена:") or low.startswith("price:"):
+            vals = _extract_money_values(clean)
+            if vals:
+                key_levels["current_price"] = vals[0]
+        elif low.startswith("поддержка:") or low.startswith("support:"):
+            vals = _extract_money_values(clean)
+            if vals:
+                key_levels["support"] = vals
+        elif low.startswith("сопротивление:") or low.startswith("resistance:"):
+            vals = _extract_money_values(clean)
+            if vals:
+                key_levels["resistance"] = vals
+        elif low.startswith("зона лучше:") or low.startswith("better zone:"):
+            vals = _extract_money_values(clean)
+            if vals:
+                key_levels["better_zone"] = vals[0]
+        elif low.startswith("подтверждение:") or low.startswith("confirmation:"):
+            key_levels["confirmation"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
+        elif low.startswith("инвалидация:") or low.startswith("invalidation:"):
+            key_levels["invalidation"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
+    pair = _extract_pair_from_text(text)
+    has_live_answer = any(marker.lower() in text.lower() for marker in ("Цена:", "Поддержка:", "Сопротивление:", "Зона лучше:", "Decision:"))
+    if not has_live_answer:
+        return {}
+    return {"mode": "crypto", "asset_pair": pair, "key_levels": key_levels, "last_final_answer": text[:1000]}
+
+
+def _message_role(message: Dict[str, Any]) -> str:
+    return str(message.get("role") or message.get("sender") or message.get("author") or "").lower()
+
+
+def _message_content(message: Dict[str, Any]) -> str:
+    return str(message.get("content") or message.get("text") or message.get("message") or "")
+
+
+def reconstruct_live_context_from_recent_messages(recent_messages: list[dict], user_id: int) -> dict | None:
+    messages = list(recent_messages or [])[-60:]
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if _message_role(msg) != "assistant":
+            continue
+        answer = _message_content(msg)
+        crypto = _extract_crypto_context_from_answer(answer)
+        if crypto:
+            original = ""
+            for prev in range(idx - 1, -1, -1):
+                if _message_role(messages[prev]) == "user":
+                    original = _message_content(messages[prev])
+                    break
+            pair = crypto.get("asset_pair") or _extract_pair_from_text(original)
+            if not pair:
+                return None
+            crypto.update({
+                "user_id": int(user_id),
+                "asset_pair": pair,
+                "timeframe": _extract_timeframe_from_text(original) or _extract_timeframe_from_text(answer),
+                "original_user_text": original,
+                "normalized_query": original,
+            })
+            return crypto
+        lower = answer.lower()
+        if any(marker in lower for marker in ("событие:", "спорт/лига:", "рынок:", "коэффициент:")):
+            original = ""
+            for prev in range(idx - 1, -1, -1):
+                if _message_role(messages[prev]) == "user":
+                    original = _message_content(messages[prev])
+                    break
+            event = _extract_labeled_value(answer, ("Событие", "Event"))
+            if event:
+                return {"user_id": int(user_id), "mode": "sports", "teams_event": event, "market": _extract_labeled_value(answer, ("Рынок", "Market")), "odds": _extract_labeled_value(answer, ("Коэффициент", "Odds")), "original_user_text": original, "normalized_query": original, "last_final_answer": answer[:1000]}
+    return None
 
 def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     detected = is_live_followup(text)
