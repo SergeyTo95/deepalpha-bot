@@ -23,7 +23,12 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
-from services.live_context_memory import resolve_live_followup, save_live_context
+from services.live_context_memory import (
+    is_live_followup,
+    reconstruct_live_context_from_recent_messages,
+    resolve_live_followup,
+    save_live_context,
+)
 from services.live_evidence_engine import (
     apply_validation_safety,
     build_live_evidence_pack,
@@ -1361,11 +1366,30 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         if title:
             prompt_session["current_market_title"] = title
     memory_limit = get_memory_message_limit()
+    if is_live_followup(text):
+        memory_limit = max(memory_limit, 60)
     recent = get_recent_context(int(session["id"]), memory_limit)
     router_result = router_result or {}
     ui_language = "ru" if ui_language == "ru" else "en"
     original_text = text
     followup_resolution = resolve_live_followup(user_id, text)
+    if followup_resolution.get("need_context"):
+        reconstructed = reconstruct_live_context_from_recent_messages(recent, user_id)
+        if reconstructed:
+            save_live_context(
+                user_id,
+                mode=reconstructed.get("mode") or "general",
+                original_user_text=reconstructed.get("original_user_text") or "",
+                normalized_query=reconstructed.get("normalized_query") or reconstructed.get("original_user_text") or "",
+                asset_pair=reconstructed.get("asset_pair") or "",
+                timeframe=reconstructed.get("timeframe") or "",
+                teams_event=reconstructed.get("teams_event") or "",
+                market=reconstructed.get("market") or "",
+                odds=reconstructed.get("odds"),
+                key_levels=reconstructed.get("key_levels") or {},
+                last_final_answer=reconstructed.get("last_final_answer") or "",
+            )
+            followup_resolution = resolve_live_followup(user_id, text)
     if followup_resolution.get("need_context"):
         return {"ok": False, "message": followup_resolution.get("message"), "charged": False, "needs_clarification": True, "is_followup": True}
     if followup_resolution.get("is_followup") and followup_resolution.get("resolved_query"):

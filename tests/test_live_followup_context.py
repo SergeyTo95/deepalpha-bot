@@ -72,3 +72,67 @@ def test_context_ttl_expires_and_requests_refresh():
     assert result["is_followup"] is True
     assert result["need_context"] is True
     assert "предыдущий Live-контекст" in result["message"]
+
+
+def test_reconstruct_crypto_context_from_recent_messages_and_resolve_followup():
+    recent = [
+        {"role": "user", "content": "BTCUSDT 15m есть вход?"},
+        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\n  Decision: WATCH"},
+    ]
+
+    reconstructed = memory.reconstruct_live_context_from_recent_messages(recent, 11)
+
+    assert reconstructed is not None
+    assert reconstructed["mode"] == "crypto"
+    assert reconstructed["asset_pair"] == "BTCUSDT"
+    assert reconstructed["timeframe"] == "15m"
+    assert reconstructed["key_levels"]["current_price"] == 59670
+    assert reconstructed["key_levels"]["support"] == [59500, 59339]
+    assert reconstructed["key_levels"]["resistance"] == [60000, 63239]
+
+    memory.save_live_context(11, **{k: v for k, v in reconstructed.items() if k != "user_id"})
+    result = memory.resolve_live_followup(11, "а если лонг от 64500?")
+
+    assert result.get("need_context") is not True
+    assert "LONG POSITION" in result["resolved_query"]
+    assert "64500" in result["resolved_query"]
+    assert result["followup_type"] == "long_position"
+    assert result["followup_level"] == "64500"
+
+
+def test_reconstruct_crypto_answer_without_pair_does_not_hallucinate_btc():
+    recent = [
+        {"role": "user", "content": "15m есть вход?"},
+        {"role": "assistant", "content": "- Цена: $59,670\n- Поддержка: $59,500 / $59,339\nDecision: WATCH"},
+    ]
+
+    reconstructed = memory.reconstruct_live_context_from_recent_messages(recent, 12)
+
+    assert reconstructed is None
+    result = memory.resolve_live_followup(12, "а где стоп?")
+    assert result["need_context"] is True
+    assert "BTC" not in result.get("resolved_query", "")
+
+
+def test_exit_live_does_not_clear_context_memory():
+    memory.save_live_context(13, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", last_final_answer="Decision: WATCH")
+
+    result = memory.resolve_live_followup(13, "а где стоп?")
+
+    assert result.get("need_context") is not True
+    assert "BTCUSDT" in result["resolved_query"]
+
+
+def test_reset_live_clears_context_memory():
+    memory.save_live_context(14, mode="crypto", original_user_text="BTCUSDT 15m", normalized_query="BTCUSDT 15m", asset_pair="BTCUSDT", timeframe="15m", last_final_answer="Decision: WATCH")
+    memory.clear_live_context(14)
+
+    result = memory.resolve_live_followup(14, "а где стоп?")
+
+    assert result["need_context"] is True
+
+
+def test_extract_money_values_handles_thousands_and_decimals():
+    assert memory._extract_money_values("$60,219.51") == [60219.51]
+    assert memory._extract_money_values("$59,670") == [59670]
+    assert memory._extract_money_values("$60,500.0") == [60500.0]

@@ -960,3 +960,41 @@ def test_process_live_text_keeps_unavailable_when_deterministic_facts_missing(mo
     assert result == {"ok": False, "message": svc.LIVE_UNAVAILABLE_MESSAGE, "charged": False}
     assert charges == []
     assert len(calls) == 1
+
+
+def test_process_live_text_reconstructs_followup_context_from_recent_messages(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    recent = [
+        {"role": "user", "content": "BTCUSDT 15m есть вход?"},
+        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\nDecision: WATCH"},
+    ]
+    limits = []
+    monkeypatch.setattr(svc, "get_recent_context", lambda session_id, limit: limits.append(limit) or recent)
+    evidence_pack = {
+        "mode": "crypto",
+        "intent": "entry_now",
+        "derived_facts": {},
+        "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+        "recommended_decision_labels": ["WATCH"],
+    }
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "Коротко: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(303, "а если лонг от 64500?", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert result.get("needs_clarification") is not True
+    assert limits == [60]
+    assert len(charges) == 1
+    ctx = context_memory.get_live_context(303)
+    assert ctx["mode"] == "crypto"
+    assert ctx["asset_pair"] == "BTCUSDT"
+    assert ctx["timeframe"] == "15m"
+    assert evidence_pack["previous_live_context"]["key_levels"]["support"] == [59500, 59339]
+    assert evidence_pack["previous_live_context"]["key_levels"]["resistance"] == [60000, 63239]
+    assert evidence_pack["followup_type"] == "long_position"
+    assert evidence_pack["followup_level"] == "64500"
