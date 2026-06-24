@@ -229,3 +229,27 @@ def test_continuation_resolved_queries_do_not_use_forbidden_terms():
         memory.resolve_live_followup(31, "calculate edge")["resolved_query"],
     ]
     assert all(term not in text.lower() for text in texts for term in forbidden)
+
+
+def test_standalone_sports_short_request_is_not_live_continuation():
+    assert memory.looks_like_new_standalone_live_request("Lakers Celtics тотал") is True
+    assert memory.is_live_continuation("Lakers Celtics тотал") is False
+    assert memory.is_live_followup("Lakers Celtics тотал") is False
+    assert memory.is_live_followup("Brazil фора") is False
+    assert memory.is_live_followup("UFC total") is False
+
+
+def test_standalone_crypto_short_request_is_not_live_continuation():
+    assert memory.looks_like_new_standalone_live_request("BTCUSDT 15m есть вход?") is True
+    assert memory.is_live_continuation("BTCUSDT 15m есть вход?") is False
+    assert memory.is_live_followup("BTCUSDT 15m есть вход?") is False
+    assert memory.is_live_followup("ETHUSDT short 1h") is False
+
+
+def test_pure_confirmation_without_context_still_requests_live_context():
+    result = memory.resolve_live_followup(41, "давай")
+
+    assert memory.is_live_continuation("давай") is True
+    assert result["is_followup"] is True
+    assert result["need_context"] is True
+    assert "предыдущий Live-контекст" in result["message"]

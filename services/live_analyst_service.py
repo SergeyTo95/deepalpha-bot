@@ -1536,9 +1536,11 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if followup_resolution.get("need_context"):
         reconstructed = reconstruct_live_context_from_recent_messages(recent, user_id)
         if reconstructed:
+            reconstructed_mode = reconstructed.get("mode") or "general"
+            suggested_actions = reconstructed.get("suggested_actions") or build_live_suggested_actions({"mode": reconstructed_mode}, ui_language=ui_language)
             save_live_context(
                 user_id,
-                mode=reconstructed.get("mode") or "general",
+                mode=reconstructed_mode,
                 original_user_text=reconstructed.get("original_user_text") or "",
                 normalized_query=reconstructed.get("normalized_query") or reconstructed.get("original_user_text") or "",
                 asset_pair=reconstructed.get("asset_pair") or "",
@@ -1548,6 +1550,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
                 odds=reconstructed.get("odds"),
                 key_levels=reconstructed.get("key_levels") or {},
                 last_final_answer=reconstructed.get("last_final_answer") or "",
+                suggested_actions=suggested_actions,
             )
             followup_resolution = resolve_live_followup(user_id, text)
     if followup_resolution.get("need_context"):

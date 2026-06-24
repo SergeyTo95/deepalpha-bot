@@ -32,15 +32,55 @@ _CONTINUATION_KEYWORDS = (
 )
 
 
+
+_STANDALONE_SPORTS_TOKENS = {
+    "lakers", "celtics", "ufc", "nba", "nfl", "nhl", "mlb", "brazil", "argentina", "france", "spain",
+    "germany", "italy", "england", "real", "barca", "barcelona", "arsenal", "chelsea", "psg", "milan",
+}
+_STANDALONE_MARKET_TOKENS = {
+    "total", "тотал", "победа", "фора", "handicap", "spread", "moneyline", "over", "under", "short", "long", "шорт", "лонг",
+}
+_ACTION_ONLY_WORDS = {
+    "calculate", "edge", "value", "odds", "where", "is", "stop", "first", "second", "third", "option",
+    "yes", "ok", "okay", "continue", "посчитай", "где", "стоп", "первый", "второй", "третий", "давай",
+}
+
+
+def looks_like_new_standalone_live_request(text: str) -> bool:
+    """Detect short standalone Live requests so they are not mistaken for continuation clicks."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    low = _normalize_short_text(raw)
+    if _extract_pair_from_text(raw):
+        return True
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", raw)
+    latin_words = re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", raw)
+    if len([word for word in latin_words if word.lower() not in _ACTION_ONLY_WORDS]) >= 2:
+        return True
+    if re.search(r"(?i)\b(?:vs|v)\b|\s[-—]\s", raw):
+        return True
+    has_market = any(token in low for token in _STANDALONE_MARKET_TOKENS)
+    has_team_like = any(token.lower() in _STANDALONE_SPORTS_TOKENS for token in tokens)
+    if has_market and has_team_like:
+        return True
+    if has_market and len(tokens) >= 3 and any(re.search(r"[A-Za-zА-Яа-яЁё]", token) for token in tokens):
+        non_action = [token for token in tokens if token.lower() not in _ACTION_ONLY_WORDS and token.lower() not in _STANDALONE_MARKET_TOKENS]
+        return len(non_action) >= 1
+    return False
+
 def _normalize_short_text(text: str) -> str:
     return re.sub(r"[!?.,…]+$", "", (text or "").strip().lower()).strip()
 
 
 def is_live_continuation(text: str) -> bool:
-    value = _normalize_short_text(text)
+    raw = text or ""
+    value = _normalize_short_text(raw)
     if not value:
         return False
-    if _extract_pair_from_text(value):
+    if _extract_pair_from_text(raw):
+        return False
+    if looks_like_new_standalone_live_request(raw):
         return False
     if len(value.split()) > 5 and value not in _CONFIRMATION_PHRASES:
         return False

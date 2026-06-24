@@ -1107,3 +1107,43 @@ def test_process_live_text_stores_suggested_actions_and_resolves_short_confirmat
     assert evidence_packs[-1]["selected_action_id"] == ctx["suggested_actions"][0]["id"]
     assert "Selected action:" in prompts[-1]
     assert len(charges) == 2
+
+
+def test_process_live_text_reconstructs_suggested_actions_for_short_confirmation(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    recent = [
+        {"role": "user", "content": "BTCUSDT 15m есть вход?"},
+        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\nDecision: WATCH\n\nМожно продолжить:\n\n- Найти точку отмены и подтверждение входа."},
+    ]
+    evidence_packs = []
+    prompts = []
+    monkeypatch.setattr(svc, "get_recent_context", lambda session_id, limit: recent)
+    monkeypatch.setattr(svc, "understand_live_request", lambda text, *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+
+    def fake_build(text, understanding, router_result, **kwargs):
+        pack = {
+            "mode": "crypto",
+            "intent": "entry_now",
+            "derived_facts": {"current_price": 59670, "support_levels": [59500], "resistance_levels": [60000], "confirmation": "reclaim", "invalidation": "below support"},
+            "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False, "must_not_invent": []},
+            "recommended_decision_labels": ["WATCH"],
+        }
+        evidence_packs.append(pack)
+        return pack
+
+    monkeypatch.setattr(svc, "build_live_evidence_pack", fake_build)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: prompts.append(prompt) or "Коротко: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(401, "давай", router_result={"mode": "unknown"}, ui_language="ru")
+    ctx = context_memory.get_live_context(401)
+
+    assert result["ok"] is True
+    assert result.get("needs_clarification") is not True
+    assert ctx and ctx["suggested_actions"]
+    assert evidence_packs[-1].get("selected_action_id")
+    assert "BTCUSDT" in prompts[-1]
+    assert len(charges) == 1
+    assert saved
