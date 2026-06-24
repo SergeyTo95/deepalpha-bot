@@ -609,7 +609,7 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
     elif odds and not estimated:
         decision = "DATA NEEDED"
     elif not odds:
-        decision = "DATA NEEDED" if not sources else "WATCH"
+        decision = "DATA NEEDED"
 
     implied_txt = "%.1f%%" % (implied * 100) if implied else "—"
     estimated_txt = "%.1f%%" % (estimated * 100) if estimated else "—"
@@ -629,7 +629,7 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
         key = "map pool, patch/meta, roster changes, recent form, BO format"
 
     if ui_language == "ru":
-        short = ("Лучший кандидат есть только при value: %s, минимум кэф %s." % (event, fair_txt)) if decision == "EDGE CANDIDATE" else (("Кэф %.2f даёт implied probability %s, но без свежей оценки вероятности edge не доказан." % (odds, implied_txt)) if odds and not estimated else "По спортивной логике можно сделать lean, но без достаточных коэффициентов/свежих данных это не ставка.")
+        short = ("Лучший кандидат есть только при value: %s, минимум кэф %s." % (event, fair_txt)) if decision == "EDGE CANDIDATE" else (("Кэф %.2f даёт implied probability %s, но без свежей оценки вероятности edge не доказан." % (odds, implied_txt)) if odds and not estimated else "По спортивной логике можно сделать lean, но без коэффициента это не ставка: нужен кэф, чтобы посчитать implied probability и edge.")
         if decision == "EDGE CANDIDATE":
             value = "Коэффициент выше fair odds даёт value."
         elif decision == "NO EDGE":
@@ -637,7 +637,7 @@ def build_sports_betting_analysis(user_text: str, sports_context: Dict[str, Any]
         elif odds and not estimated:
             value = "Коэффициент есть, implied probability посчитана, но без моей оценки вероятности и свежих данных edge не доказан."
         else:
-            value = "Без коэффициента нельзя понять value; пришли кэф — посчитаю implied probability и edge."
+            value = "Без коэффициента нельзя посчитать implied probability и edge."
         return _sanitize_sports_text(f"""🏟 Коротко:
 {short}
 
@@ -663,7 +663,7 @@ Value:
 Составы/травмы, мотивация, travel/rest, позднее движение линии и дисперсия рынка могут убрать edge. Если свежие новости не подтверждены, выбор лучше держать как WATCH/DATA NEEDED.
 
 Итог:
-{decision}: {'кандидат на value только при кэфе не ниже ' + fair_txt if decision == 'EDGE CANDIDATE' else 'данных/edge недостаточно для профессиональной ставки.'}
+{decision}: {'кандидат на value только при кэфе не ниже ' + fair_txt if decision == 'EDGE CANDIDATE' else ('без коэффициента нельзя посчитать implied probability и edge.' if not odds else 'данных/edge недостаточно для профессиональной ставки.')}
 
 Decision: {decision}""")
     short = "There is an edge candidate only if market odds stay above fair odds." if decision == "EDGE CANDIDATE" else (("Odds %.2f imply %s, but edge is not proven without a fresh estimated probability." % (odds, implied_txt)) if odds and not estimated else "Lean is not the same as a bet; odds/fresh data are needed to prove value.")

@@ -26,13 +26,14 @@ def _pack(understanding, estimated=None, sources=True):
     }
 
 
-def test_ru_direct_betting_without_odds_data_needed_or_watch():
+def test_ru_direct_betting_without_odds_data_needed():
     u = understand_live_request("На кого ставить Реал — Барса?", {"mode": "unknown"}, {}, "ru")
     answer = build_sports_betting_analysis("На кого ставить Реал — Барса?", {}, _pack(u, sources=False), "ru")
     assert u["mode"] == "sports"
     assert "ставь железно" not in answer.lower()
-    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
-    assert "Без коэффициента нельзя понять value" in answer or "кэф" in answer.lower()
+    assert "Decision: DATA NEEDED" in answer
+    assert "Decision: WATCH" not in answer
+    assert "Без коэффициента нельзя посчитать" in answer or "без коэффициента" in answer.lower()
 
 
 def test_ru_question_with_odds_edge_candidate():
@@ -99,8 +100,8 @@ def test_production_path_without_odds_uses_professional_betting_format():
     assert "Данные:" in answer
     assert "Value:" in answer
     assert "Риск:" in answer
-    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
-    assert "Без коэффициента нельзя понять value" in answer
+    assert "Decision: DATA NEEDED" in answer
+    assert "Без коэффициента нельзя посчитать" in answer
     assert "ставь железно" not in low
     assert "100%" not in low
     assert "гарантия" not in low
@@ -119,13 +120,20 @@ def test_total_line_is_not_parsed_as_odds_in_production_path():
 
 def test_handicap_line_is_not_parsed_as_odds_in_production_path():
     u = understand_live_request("Lakers vs Celtics фора -3.5 есть ставка?", {"mode": "sports"}, {}, "ru")
-    pack = _pack(u, sources=False)
+    pack = _pack(u, sources=True)
     answer = format_live_final_answer("Lakers vs Celtics фора -3.5 есть ставка?\nDecision: DATA NEEDED", pack, "ru")
+    assert u["mode"] == "sports"
+    assert u["intent"] == "betting_angle"
+    assert u["teams"] == ["Lakers", "Celtics"]
+    assert "Спорт/лига: basketball / NBA" in answer
     assert "- Рынок: handicap" in answer
     assert "- Коэффициент: не указан" in answer
     assert "- Implied probability: —" in answer
+    assert "- Edge: —" in answer
     assert "28.6%" not in answer
-    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+    assert "Без коэффициента нельзя посчитать" in answer or "без коэффициента" in answer.lower()
+    assert answer.rstrip().endswith("Decision: DATA NEEDED")
+    assert "Decision: WATCH" not in answer
 
 
 def test_explicit_odds_still_parsed_in_production_path():
@@ -180,8 +188,8 @@ def test_lakers_celtics_missing_odds_keeps_no_odds_value_copy():
     answer = format_live_final_answer("На кого ставить Lakers — Celtics?\nDecision: DATA NEEDED", _pack(u, sources=False), "ru")
     assert "Спорт/лига: basketball / NBA" in answer
     assert "Коэффициент: не указан" in answer
-    assert "Без коэффициента нельзя понять value" in answer
-    assert re.search(r"Decision: (DATA NEEDED|WATCH)", answer)
+    assert "Без коэффициента нельзя посчитать" in answer
+    assert "Decision: DATA NEEDED" in answer
 
 
 def test_lakers_celtics_edge_candidate_with_estimated_probability():
