@@ -81,3 +81,34 @@ def test_esports_continuation_calculate_value():
     assert "implied probability" in result["resolved_query"].lower()
     assert "edge" in result["resolved_query"].lower()
     assert "minimum playable odds" in result["resolved_query"].lower()
+
+
+def test_lakers_celtics_total_stays_sports():
+    u = understand_live_request("Lakers Celtics тотал 218.5 кэф 1.9", {"mode": "unknown"}, {}, "ru")
+    assert u["mode"] == "sports"
+    assert u["sport"] == "basketball"
+    assert u["market"] == "total"
+    assert u["odds"] in ("1.9", "1.90")
+
+
+def test_nba_lakers_celtics_over_stays_sports():
+    u = understand_live_request("NBA Lakers vs Celtics over 218.5 odds 1.90", {"mode": "unknown"}, {}, "en")
+    assert u["mode"] == "sports"
+    assert u["sport"] == "basketball"
+
+
+def test_ufc_total_rounds_stays_sports():
+    u = understand_live_request("UFC total rounds 2.5 odds 1.85", {"mode": "unknown"}, {}, "en")
+    assert u["mode"] == "sports"
+    assert u["sport"] == "mma"
+
+
+def test_esports_still_wins_before_sports():
+    u = understand_live_request("NAVI Vitality тб 2.5 карт кэф 1.85", {"mode": "unknown"}, {}, "ru")
+    assert u["mode"] == "esports"
+    assert u["game"] == "cs2"
+
+
+def test_generic_event_betting_fallback_still_works():
+    u = understand_live_request("ивент X over 3.5 odds 1.9", {"mode": "unknown"}, {}, "ru")
+    assert u["mode"] == "event_betting"
