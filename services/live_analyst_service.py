@@ -157,23 +157,35 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     plan = pack.get("market_intelligence_plan") or {}
     if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
         factors = " ".join(str(x).lower() for x in (plan.get("needed_factors") or []))
+        domain = str(plan.get("market_domain") or mode or "unknown").lower()
         if lang == "ru":
             middle = "Разобрать ключевые факторы, которые двигают вероятность?"
-            if any(x in factors for x in ("poll", "calendar", "news", "candidate")):
-                middle = "Разобрать polls/новости/календарь, которые двигают вероятность?"
-            elif any(x in factors for x in ("support", "timeframe", "invalidation")):
-                middle = "Разобрать уровни, таймфрейм и отмену сценария?"
-            elif any(x in factors for x in ("injuries", "lineups", "form")):
+            if domain == "esports":
+                if any(x in factors for x in ("map", "draft", "pick-ban")):
+                    middle = "Разобрать ключевые факторы: форма, карта/драфт/pick-ban и движение линии?"
+                else:
+                    middle = "Разобрать ключевые факторы и движение линии?"
+            elif domain == "sports":
                 middle = "Разобрать форму, составы/травмы и движение линии?"
-            elif any(x in factors for x in ("map", "draft", "pick-ban")):
-                middle = "Разобрать форму, map/draft и движение линии?"
+            elif domain == "crypto":
+                middle = "Разобрать уровни, таймфрейм и отмену сценария?"
+            elif domain == "politics":
+                middle = "Разобрать опросы, новости и календарь?"
+            elif domain in ("event", "unknown"):
+                middle = "Разобрать правила, участников и таймлайн?"
             lines = ["Посчитать value под твой коэффициент?", middle, "Найти минимальный playable odds / fair price?"]
         else:
             middle = "Break down the key factors that move probability?"
-            if any(x in factors for x in ("poll", "calendar", "news", "candidate")):
-                middle = "Break down polls/news/calendar that move probability?"
-            elif any(x in factors for x in ("support", "timeframe", "invalidation")):
+            if domain == "esports":
+                middle = "Break down key factors, map/draft/pick-ban, and line movement?" if any(x in factors for x in ("map", "draft", "pick-ban")) else "Break down key factors and line movement?"
+            elif domain == "sports":
+                middle = "Break down form, lineups/injuries, and line movement?"
+            elif domain == "crypto":
                 middle = "Break down levels, timeframe, and invalidation?"
+            elif domain == "politics":
+                middle = "Break down polls/news/calendar that move probability?"
+            elif domain in ("event", "unknown"):
+                middle = "Break down rules, participants, and timeline?"
             lines = ["Calculate value for your odds?", middle, "Find the minimum playable odds / fair price?"]
         return "\n".join(f"- {line}" for line in lines[:3])
 
@@ -1066,6 +1078,72 @@ Decision: {decision}""")
 
 
 
+def _localize_market_factor(value: Any, ui_language: str = "ru") -> str:
+    text = str(value or "").strip()
+    if ui_language != "ru":
+        return text
+    mapping = {
+        "recent form": "свежая форма",
+        "participant/team strength": "сила участников / команд",
+        "map/draft/pick-ban context": "карта / драфт / pick-ban контекст",
+        "roster/stand-in changes": "составы / замены / stand-in",
+        "patch/meta changes": "патч / meta",
+        "tournament format": "формат турнира",
+        "line movement": "движение линии",
+        "odds history": "история коэффициентов",
+        "current price": "текущая цена",
+        "support/resistance": "поддержка / сопротивление",
+        "volatility": "волатильность",
+        "liquidity": "ликвидность",
+        "timeframe structure": "структура таймфрейма",
+        "market news": "новости рынка",
+        "invalidation level": "уровень отмены сценария",
+        "confirmation trigger": "триггер подтверждения",
+        "market rules": "правила рынка",
+        "resolution criteria": "критерии резолва",
+        "end date": "дата окончания",
+        "outcomes": "исходы",
+        "current market odds": "текущие рыночные цены",
+        "current odds": "текущие коэффициенты",
+        "relevant news": "релевантные новости",
+        "probability drivers": "факторы вероятности",
+        "polling": "опросы",
+        "approval/ratings": "рейтинги / approval",
+        "calendar/deadlines": "календарь / дедлайны",
+        "candidate/party context": "контекст кандидата / партии",
+        "news catalysts": "новостные катализаторы",
+        "legal/institutional constraints": "юридические / институциональные ограничения",
+        "latest economic data": "последние экономические данные",
+        "consensus expectations": "консенсус-прогнозы",
+        "policy context": "политический / регуляторный контекст",
+        "market pricing": "рыночное ценообразование",
+        "revisions/risk factors": "пересмотры / риск-факторы",
+        "event rules": "правила события",
+        "participants": "участники",
+        "timeline": "таймлайн",
+        "data source reliability": "надёжность источников",
+        "independent probability": "независимая оценка вероятности",
+        "edge estimate without evidence": "edge без подтверждённых данных",
+    }
+    return mapping.get(text.lower(), text)
+
+
+def _localize_freshness(value: Any, ui_language: str = "ru") -> str:
+    text = str(value or "unknown").strip()
+    if ui_language != "ru":
+        return text
+    return {
+        "partial": "частичная",
+        "missing": "отсутствует",
+        "low": "низкая",
+        "medium": "средняя",
+        "high": "высокая",
+        "fresh": "свежая",
+        "live": "live",
+        "unknown": "неизвестна",
+    }.get(text.lower(), text)
+
+
 def _format_universal_market_advisor_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
     pack = evidence_pack or {}
     facts = pack.get("derived_facts") or {}
@@ -1084,37 +1162,39 @@ def _format_universal_market_advisor_answer(answer: str, evidence_pack: Dict[str
     odds_txt = str(odds) if odds else ("не указан" if ui_language == "ru" else "not provided")
     needed = plan.get("needed_factors") or pack.get("missing_data") or []
     missing = pack.get("missing_data") or plan.get("missing_data") or needed
-    fresh = facts.get("data_freshness") or pack.get("confidence_label") or "unknown"
+    fresh = _localize_freshness(facts.get("data_freshness") or pack.get("confidence_label") or "unknown", ui_language)
     event = plan.get("event") or facts.get("event") or "—"
     market_type = plan.get("market_type") or facts.get("market_type") or "—"
     side_line = " / ".join(str(x) for x in (plan.get("side"), plan.get("line")) if str(x or "").strip()) or "—"
     game = facts.get("game") or ""
     game_map = {"cs2": "CS2", "dota2": "Dota 2", "lol": "LoL", "valorant": "Valorant", "unknown": "—", "": "—"}
     game_txt = game_map.get(str(game).lower(), str(game))
-    ru_factor = {"recent form":"форма последних матчей", "participant/team strength":"сила участников/команд", "map/draft/pick-ban context":"карта/драфт/pick-ban", "roster/stand-in changes":"изменения состава/stand-in", "patch/meta changes":"патч/meta", "tournament format":"формат турнира", "line movement":"движение линии", "odds history":"история коэффициентов", "current price":"текущая цена", "support/resistance":"поддержка/сопротивление", "confirmation trigger":"триггер подтверждения", "invalidation level":"уровень отмены", "market rules":"правила рынка", "current odds":"текущие коэффициенты", "timeline":"таймлайн", "participants":"участники"}
     if (plan.get("answer_focus") == "value_calculation" or pack.get("selected_action_id") == "calculate_value") and odds and implied not in (None, ""):
-        now = "Коэффициент %.2f требует вероятности выше %s до учёта маржи/буфера. Независимой оценки в evidence pack нет, поэтому edge честно не считается." % (float(odds), implied_txt)
+        now = ("Коэффициент %.2f требует вероятности выше %s до учёта маржи/буфера. Независимой оценки вероятности пока нет, поэтому edge честно не считается." % (float(odds), implied_txt)) if ui_language == "ru" else ("Odds %.2f require probability above %s before margin/buffer. Independent probability estimate is not available yet, so edge cannot be calculated honestly." % (float(odds), implied_txt))
     else:
         now = _strip_live_section_heading(_strip_decision_lines(answer)) or ("Можно описать структуру риска, но не доказывать edge без свежих факторов." if ui_language == "ru" else "I can outline the risk structure, but not prove edge without fresh factors.")
     if ui_language == "ru":
-        checks = "\n".join("- " + ru_factor.get(str(x), str(x)) for x in needed[:8]) or "- коэффициент / правила / свежие данные"
-        miss = ", ".join(str(x) for x in missing[:8]) or "свежая независимая вероятность"
+        checks = "\n".join("- " + _localize_market_factor(x, ui_language) for x in needed[:8]) or "- коэффициент / правила / свежие данные"
+        miss = ", ".join(_localize_market_factor(x, ui_language) for x in missing[:8]) or "свежая независимая вероятность"
+        context_lines = [f"- Домен: {plan.get('market_domain') or pack.get('mode') or 'unknown'}"]
+        if game_txt != "—":
+            context_lines.append(f"- Игра: {game_txt}")
+        context_lines.extend([
+            f"- Событие / рынок: {event}",
+            f"- Тип рынка: {market_type}",
+            f"- Сторона / линия: {side_line}",
+            f"- Коэффициент / цена: {odds_txt}",
+            f"- Implied probability: {implied_txt}",
+            "- Моя оценка: —",
+            "- Edge: —",
+            f"- Свежесть данных: {fresh}",
+        ])
+        context = "\n".join(context_lines)
         return _sanitize_sports_text(f"""🧠 Коротко:
 Это разбор вероятности против цены, не команда к действию. Сейчас данных недостаточно для честного EDGE CANDIDATE, поэтому базовый вывод — DATA NEEDED / WATCH.
 
 Контекст:
-- Домен: {plan.get('market_domain') or pack.get('mode') or 'unknown'}
-- Игра: {game_txt}
-- Событие: {event}
-- Событие / рынок: {event}
-- Тип рынка: {market_type}
-- Сторона / линия: {side_line}
-- Коэффициент: {odds_txt}
-- Коэффициент / цена: {odds_txt}
-- Implied probability: {implied_txt}
-- Моя оценка: —
-- Edge: —
-- Свежесть данных: {fresh}
+{context}
 
 Что нужно проверить:
 {checks}
@@ -1129,21 +1209,27 @@ def _format_universal_market_advisor_answer(answer: str, evidence_pack: Dict[str
 {decision}
 
 Decision: {decision}""")
-    checks = "\n".join("- " + str(x) for x in needed[:8]) or "- odds / rules / fresh data"
-    miss = ", ".join(str(x) for x in missing[:8]) or "fresh independent probability"
+    checks = "\n".join("- " + _localize_market_factor(x, ui_language) for x in needed[:8]) or "- odds / rules / fresh data"
+    miss = ", ".join(_localize_market_factor(x, ui_language) for x in missing[:8]) or "fresh independent probability"
+    context_lines = [f"- Domain: {plan.get('market_domain') or pack.get('mode') or 'unknown'}"]
+    if game_txt != "—":
+        context_lines.append(f"- Game: {game_txt}")
+    context_lines.extend([
+        f"- Event / market: {event}",
+        f"- Market type: {market_type}",
+        f"- Side / line: {side_line}",
+        f"- Odds / price: {odds_txt}",
+        f"- Implied probability: {implied_txt}",
+        "- My estimate: —",
+        "- Edge: —",
+        f"- Data freshness: {fresh}",
+    ])
+    context = "\n".join(context_lines)
     return _sanitize_sports_text(f"""🧠 Short:
 This is probability versus price, not a command. There is not enough data for an honest EDGE CANDIDATE, so the base conclusion is DATA NEEDED / WATCH.
 
 Context:
-- Domain: {plan.get('market_domain') or pack.get('mode') or 'unknown'}
-- Event / market: {event}
-- Market type: {market_type}
-- Side / line: {side_line}
-- Odds / price: {odds_txt}
-- Implied probability: {implied_txt}
-- My estimate: —
-- Edge: —
-- Data freshness: {fresh}
+{context}
 
 What to check:
 {checks}
