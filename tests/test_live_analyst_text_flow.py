@@ -1300,3 +1300,39 @@ def test_process_live_text_crypto_compare_flow_is_contextual(monkeypatch):
     assert "Сравнить этот сценарий на 5m / 15m / 1h?" not in result["message"]
     assert len(charges) == 1
     assert saved[1][0][4] == result["message"]
+
+
+def test_process_live_text_timeframe_compare_empty_llm_uses_contextual_deterministic_fallback(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    context_memory.save_live_context(
+        910,
+        mode="crypto",
+        original_user_text="BTCUSDT 15m",
+        normalized_query="BTCUSDT 15m",
+        asset_pair="BTCUSDT",
+        timeframe="15m",
+        last_final_answer="Decision: WATCH",
+        suggested_actions=svc.build_live_suggested_actions({"mode": "crypto"}, ui_language="ru"),
+    )
+    evidence_pack = _timeframe_compare_evidence()
+
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "")
+
+    result = svc.process_live_text(910, "сравни", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert result["charged"] is False
+    assert result["cost"] == 0
+    assert "Сравнение таймфреймов" in result["message"]
+    assert "- 5m:" in result["message"]
+    assert "- 15m:" in result["message"]
+    assert "- 1h:" in result["message"]
+    assert "Сравнить этот сценарий на 5m / 15m / 1h?" not in result["message"]
+    assert "Собрать итоговый план" in result["message"]
+    assert charges == []
+    assert saved and saved[0][0][4] == result["message"]

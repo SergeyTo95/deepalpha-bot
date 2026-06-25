@@ -1764,7 +1764,10 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if not had_non_empty_first_answer:
         logger.warning("live_answer_empty_after_generation_no_charge user_id=%s mode=%s", user_id, mode)
     def return_deterministic_fallback(reason: str) -> Optional[Dict[str, Any]]:
-        fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)
+        if mode == "crypto" and _is_crypto_timeframe_compare(evidence_pack):
+            fallback = _format_crypto_timeframe_compare_answer("", evidence_pack, ui_language)
+        else:
+            fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)
         fallback = append_live_followup_suggestions(fallback, evidence_pack, ui_language)
         if not fallback:
             return None
