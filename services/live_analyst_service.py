@@ -149,54 +149,64 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     if lang == "ru":
         if mode == "crypto" and followup_type == "long_position":
             lines = [
-                "Могу дальше разобрать этот лонг по шагам: где подтверждение, где отмена и какой риск.",
-                "Также можно проверить тот же сценарий на 5m/1h, чтобы не входить против шума.",
+                "Разобрать этот лонг по шагам: подтверждение, отмена и риск?",
+                "Проверить этот сценарий на 5m / 15m / 1h?",
+                "Найти, при каком условии этот лонг становится слабым?",
             ]
         elif mode == "crypto":
             lines = [
-                "Могу дальше разобрать: где лучше ждать вход, где сценарий ломается и какой уровень будет подтверждением.",
-                "Ещё можно сравнить этот сценарий на 5m/15m/1h или собрать план вход → риск → отмена.",
+                "Разобрать, где лучше ждать вход и где сценарий ломается?",
+                "Сравнить этот сценарий на 5m / 15m / 1h?",
+                "Собрать короткий план: вход → риск → отмена?",
             ]
         elif mode == "sports":
             lines = [
-                "Могу дальше посчитать value под твой коэффициент или сравнить рынки: победа, фора, тотал.",
-                "Если пришлёшь кэф/линию, разберу implied probability, edge и минимальный playable odds.",
+                "Посчитать value под твой коэффициент?",
+                "Сравнить рынки: победа, фора, тотал?",
+                "Найти минимальный playable odds для этого сценария?",
             ]
         elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
             lines = [
-                "Могу дальше разобрать рынок глубже: какие новости двигают вероятность и где может быть edge.",
-                "Также можно сравнить market odds с AI probability и понять, есть ли перекос.",
+                "Сравнить market odds с AI probability?",
+                "Разобрать, какие новости могут сдвинуть вероятность?",
+                "Понять, где может быть edge и где рынок уже всё учёл?",
             ]
         else:
             lines = [
-                "Могу продолжить разбор: уточни таймфрейм, рынок или сценарий, который хочешь проверить.",
-                "Можно также попросить план из 3 сценариев: базовый, bullish и bearish.",
+                "Разобрать тему глубже по шагам?",
+                "Собрать 3 сценария: базовый, bullish и bearish?",
+                "Проверить риски и что может изменить вывод?",
             ]
     else:
         if mode == "crypto" and followup_type == "long_position":
             lines = [
-                "I can break down this long scenario step by step: confirmation, invalidation, and risk.",
-                "We can also check the same setup on 5m/1h so it is not fighting short-term noise.",
+                "Break down this long scenario step by step: confirmation, invalidation, and risk?",
+                "Check this setup on 5m / 15m / 1h?",
+                "Find what would weaken this long scenario?",
             ]
         elif mode == "crypto":
             lines = [
-                "I can next map where to wait for entry, where the scenario breaks, and which level confirms it.",
-                "We can also compare this setup on 5m/15m/1h or build an entry → risk → invalidation plan.",
+                "Break down where to wait for entry and where the scenario breaks?",
+                "Compare this setup on 5m / 15m / 1h?",
+                "Build a short plan: entry → risk → invalidation?",
             ]
         elif mode == "sports":
             lines = [
-                "I can calculate value for your odds or compare markets: moneyline, spread, total.",
-                "Send the odds/line and I’ll break down implied probability, edge, and minimum playable odds.",
+                "Calculate value for your odds?",
+                "Compare markets: moneyline, spread, total?",
+                "Find the minimum playable odds for this setup?",
             ]
         elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
             lines = [
-                "I can analyze the market deeper: which news drivers move probability and where edge may exist.",
-                "We can also compare market odds with AI probability to spot any mismatch.",
+                "Compare market odds with AI probability?",
+                "Break down which news could move probability?",
+                "Check where edge may exist and what the market already priced in?",
             ]
         else:
             lines = [
-                "I can continue if you specify the timeframe, market, or scenario you want to test.",
-                "You can also ask for a 3-scenario plan: base, bullish, and bearish.",
+                "Break this down step by step?",
+                "Build 3 scenarios: base, bullish, and bearish?",
+                "Check the risks and what could change the conclusion?",
             ]
     return "\n".join(f"- {line}" for line in lines[:3])
 
@@ -212,53 +222,63 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
 
     if mode == "crypto" and followup_type == "long_position":
         labels = [
-            "Разобрать лонг: подтверждение, отмена и риск" if lang == "ru" else "Break down long: confirmation, invalidation and risk",
-            "Сравнить сценарий на 5m/1h" if lang == "ru" else "Compare the setup on 5m/1h",
+            "Разобрать этот лонг по шагам: подтверждение, отмена и риск?" if lang == "ru" else "Break down this long scenario step by step: confirmation, invalidation, and risk?",
+            "Проверить этот сценарий на 5m / 15m / 1h?" if lang == "ru" else "Check this setup on 5m / 15m / 1h?",
+            "Найти, при каком условии этот лонг становится слабым?" if lang == "ru" else "Find what would weaken this long scenario?",
         ]
-        ids = ["invalidation_confirmation", "timeframe_compare"]
+        ids = ["invalidation_confirmation", "timeframe_compare", "weakening_condition"]
         templates = [
-            "Analyze this long scenario step by step without direct trading commands.",
-            "Compare the same scenario across timeframes and explain noise risk.",
+            "Analyze this long scenario step by step without direct trading commands; cover confirmation, invalidation, and risk.",
+            "Compare the same scenario across 5m, 15m, and 1h timeframes and explain noise risk.",
+            "Identify the conditions that would weaken or invalidate this long scenario.",
         ]
     elif mode == "crypto":
         labels = [
-            "Найти вход, отмену сценария и подтверждение" if lang == "ru" else "Map entry area, scenario invalidation and confirmation",
-            "Сравнить 5m/15m/1h и собрать план" if lang == "ru" else "Compare 5m/15m/1h and build a plan",
+            "Разобрать, где лучше ждать вход и где сценарий ломается?" if lang == "ru" else "Break down where to wait for entry and where the scenario breaks?",
+            "Сравнить этот сценарий на 5m / 15m / 1h?" if lang == "ru" else "Compare this setup on 5m / 15m / 1h?",
+            "Собрать короткий план: вход → риск → отмена?" if lang == "ru" else "Build a short plan: entry → risk → invalidation?",
         ]
-        ids = ["invalidation_confirmation", "timeframe_compare"]
+        ids = ["invalidation_confirmation", "timeframe_compare", "entry_risk_invalidation_plan"]
         templates = [
             "Analyze where to wait for entry, where the scenario breaks, and what confirms it.",
-            "Compare 5m/15m/1h and build an entry-risk-invalidation plan.",
+            "Compare this setup on 5m, 15m, and 1h timeframes.",
+            "Build a concise entry-risk-invalidation plan without direct trading commands.",
         ]
     elif mode == "sports":
         labels = [
-            "Посчитать value под коэффициент" if lang == "ru" else "Calculate value for the odds",
-            "Сравнить рынки: победа, фора, тотал" if lang == "ru" else "Compare markets: moneyline, spread, total",
+            "Посчитать value под твой коэффициент?" if lang == "ru" else "Calculate value for your odds?",
+            "Сравнить рынки: победа, фора, тотал?" if lang == "ru" else "Compare markets: moneyline, spread, total?",
+            "Найти минимальный playable odds для этого сценария?" if lang == "ru" else "Find the minimum playable odds for this setup?",
         ]
-        ids = ["calculate_value", "compare_markets"]
+        ids = ["calculate_value", "compare_markets", "minimum_playable_odds"]
         templates = [
             "Calculate implied probability, estimated probability, edge, and minimum playable odds.",
             "Compare moneyline, handicap/spread, and total markets from a value and risk perspective.",
+            "Find the minimum playable odds for this setup and explain the assumptions.",
         ]
     elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
         labels = [
-            "Разобрать драйверы вероятности" if lang == "ru" else "Analyze probability drivers",
-            "Сравнить market odds с AI probability" if lang == "ru" else "Compare market odds with AI probability",
+            "Сравнить market odds с AI probability?" if lang == "ru" else "Compare market odds with AI probability?",
+            "Разобрать, какие новости могут сдвинуть вероятность?" if lang == "ru" else "Break down which news could move probability?",
+            "Понять, где может быть edge и где рынок уже всё учёл?" if lang == "ru" else "Check where edge may exist and what the market already priced in?",
         ]
-        ids = ["probability_drivers", "odds_probability_compare"]
+        ids = ["odds_probability_compare", "probability_drivers", "edge_priced_in"]
         templates = [
-            "Analyze news and market drivers that may move probability.",
             "Compare market odds with AI probability and explain any mismatch.",
+            "Analyze news and market drivers that may move probability.",
+            "Identify where edge may exist and what the market may have already priced in.",
         ]
     else:
         labels = [
-            "Уточнить таймфрейм, рынок или сценарий" if lang == "ru" else "Specify timeframe, market, or scenario",
-            "Собрать 3 сценария" if lang == "ru" else "Build three scenarios",
+            "Разобрать тему глубже по шагам?" if lang == "ru" else "Break this down step by step?",
+            "Собрать 3 сценария: базовый, bullish и bearish?" if lang == "ru" else "Build 3 scenarios: base, bullish, and bearish?",
+            "Проверить риски и что может изменить вывод?" if lang == "ru" else "Check the risks and what could change the conclusion?",
         ]
-        ids = ["clarify_scenario", "scenario_plan"]
+        ids = ["step_by_step", "scenario_plan", "risk_check"]
         templates = [
-            "Continue the analysis for the specified timeframe, market, or scenario.",
+            "Break the topic down step by step.",
             "Build base, bullish, and bearish scenarios with risks.",
+            "Check the risks and what could change the conclusion.",
         ]
     return [{"id": action_id, "label": label, "resolved_query_template": template} for action_id, label, template in zip(ids, labels, templates)][:3]
 
@@ -282,8 +302,14 @@ def append_live_followup_suggestions(answer: str, evidence_pack: dict, ui_langua
     )
     if any(phrase and phrase in lower for phrase in blocked):
         return answer
-    title = "Можно продолжить:" if ui_language == "ru" else "You can continue with:"
-    if title.lower() in lower:
+    title = "Хочешь продолжить разбор?" if ui_language == "ru" else "Want to continue the analysis?"
+    existing_titles = (
+        "можно продолжить:",
+        "хочешь продолжить разбор?",
+        "you can continue with:",
+        "want to continue the analysis?",
+    )
+    if any(existing in lower for existing in existing_titles):
         return answer
     suggestions = build_live_followup_suggestions(evidence_pack or {}, ui_language=ui_language)
     if not suggestions.strip():
