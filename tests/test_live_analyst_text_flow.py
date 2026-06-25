@@ -1336,3 +1336,72 @@ def test_process_live_text_timeframe_compare_empty_llm_uses_contextual_determini
     assert "Собрать итоговый план" in result["message"]
     assert charges == []
     assert saved and saved[0][0][4] == result["message"]
+
+
+def test_unknown_router_does_not_block_esports_live_understanding(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "Short conclusion: DATA NEEDED\nWhat I see: NAVI vs Vitality over 2.5 maps at 1.85\nRisk: need fresh map pool/form\nDecision: DATA NEEDED")
+
+    result = svc.process_live_text(
+        1501,
+        "NAVI Vitality тб 2.5 карт кэф 1.85",
+        router_result={"mode": "unknown"},
+        ui_language="ru",
+    )
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert "Домен: esports" in result["message"]
+    assert "Игра: CS2" in result["message"]
+    assert "NAVI — Vitality" in result["message"]
+    assert "Коэффициент: 1.85" in result["message"]
+    assert "Уточни, пожалуйста" not in result["message"]
+
+
+def test_unknown_router_does_not_block_sports_live_understanding(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "get_sports_context", lambda *args, **kwargs: {"ok": True, "sources": []})
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "Short conclusion: DATA NEEDED\nWhat I see: Lakers vs Celtics total 218.5 at 1.9\nRisk: need fresh injury/news context\nDecision: DATA NEEDED")
+
+    result = svc.process_live_text(
+        1502,
+        "Lakers Celtics тотал 218.5 кэф 1.9",
+        router_result={"mode": "unknown"},
+        ui_language="ru",
+    )
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert "Уточни, пожалуйста" not in result["message"]
+
+
+def test_unknown_router_truly_unknown_clarifies_with_esports_event_wording(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "should not be called")
+
+    result = svc.process_live_text(1503, "что думаешь?", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is False
+    assert result["charged"] is False
+    assert result["needs_clarification"] is True
+    assert "sports/esports матч или линию/коэффициент" in result["message"]
+    assert charges == []
+    assert saved == []
+
+
+def test_followup_without_previous_context_still_clarifies(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    monkeypatch.setattr(svc, "get_recent_context", lambda session_id, limit: [])
+
+    result = svc.process_live_text(1504, "давай", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is False
+    assert result["charged"] is False
+    assert result["needs_clarification"] is True
+    assert result["is_followup"] is True
+    assert charges == []
+    assert saved == []

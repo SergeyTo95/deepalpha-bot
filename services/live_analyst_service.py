@@ -1821,16 +1821,30 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         if previous_mode and (not router_result.get("mode") or router_result.get("mode") == "unknown"):
             router_result = {**router_result, "mode": previous_mode}
         router_result = {**router_result, "is_followup": True}
-    if router_result.get("mode") == "unknown":
-        message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару или sports-матч/линию? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, a crypto asset/pair, or a sports event/line. Send a link, screenshot, ticker, timeframe, or odds.")
-        return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
     understanding = understand_live_request(text, router_result, prompt_session, ui_language=ui_language)
-    logger.info("live_understanding_result mode=%s intent=%s asset=%s pair=%s timeframe=%s missing=%s", understanding.get("mode"), understanding.get("intent"), understanding.get("asset"), understanding.get("pair"), understanding.get("timeframe"), understanding.get("missing"))
+    logger.info(
+        "live_understanding_result mode=%s intent=%s domain=%s game=%s teams=%s market=%s odds=%s missing=%s",
+        understanding.get("mode"),
+        understanding.get("intent"),
+        understanding.get("domain"),
+        understanding.get("game"),
+        understanding.get("teams"),
+        understanding.get("market"),
+        understanding.get("odds"),
+        understanding.get("missing"),
+    )
+    needs = understanding.get("needs") or {}
+    if (
+        router_result.get("mode") == "unknown"
+        and understanding.get("mode") == "unknown"
+        and (needs.get("clarification") or "mode" in (understanding.get("missing") or []))
+    ):
+        message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару, sports/esports матч или линию/коэффициент? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, crypto asset/pair, sports/esports match, or event line/odds. Send a link, screenshot, ticker, timeframe, or odds.")
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
     if understanding.get("mode") == "sports":
         logger.info("live_sports_understanding_result sport=%s intent=%s teams=%s market=%s missing=%s", understanding.get("sport"), understanding.get("intent"), understanding.get("teams"), understanding.get("market"), understanding.get("missing"))
     crypto_market_context = None
     sports_context = None
-    needs = understanding.get("needs") or {}
     if understanding.get("mode") == "sports":
         try:
             sports_context = get_sports_context(understanding, ui_language=ui_language)
