@@ -77,10 +77,13 @@ def _horizon(timeframe: str, text: str) -> str:
 
 _TEAM_ALIASES = {
     "франция": "France", "ирак": "Iraq", "англия": "England", "гана": "Ghana",
-    "аргентина": "Argentina", "австрия": "Austria", "реал": "Real", "барса": "Barcelona",
-    "барселона": "Barcelona", "real": "Real", "barca": "Barcelona", "barcelona": "Barcelona",
+    "аргентина": "Argentina", "австрия": "Austria", "бразилия": "Brazil", "испания": "Spain",
+    "германия": "Germany", "реал": "Real", "барса": "Barcelona", "барселона": "Barcelona",
     "france": "France", "iraq": "Iraq", "england": "England", "ghana": "Ghana",
-    "argentina": "Argentina", "austria": "Austria",
+    "argentina": "Argentina", "austria": "Austria", "brazil": "Brazil", "spain": "Spain",
+    "germany": "Germany", "real": "Real", "barca": "Barcelona", "barcelona": "Barcelona",
+    "lakers": "Lakers", "celtics": "Celtics", "arsenal": "Arsenal", "chelsea": "Chelsea",
+    "psg": "PSG", "milan": "Milan",
 }
 
 _SPORT_WORDS = ("матч", "турнир", "состав", "игрок", "тотал", "фора", "коэффициент", "кэф", "став", "футбол", "баскет", "теннис", "mma", "ufc", "бокс", "хоккей", "волейбол", "киберспорт", "экспресс", "ординар", "победа", "ничья", "обе забьют", "индивидуальный тотал", "финал", "фаворит", "гол", "голы", "команда", "лига", "football", "soccer", "basketball", "tennis", "hockey", "nhl", "mma", "ufc", "boxing", "baseball", "mlb", "nfl", "esports", "volleyball", "odds", "lineup", "injury", "match", "final", "favorite", "value", "edge", "moneyline", "spread", "props", "pick", "best bet", "over", "under", "over/under", "handicap")
@@ -154,10 +157,16 @@ def _sports_market(text: str) -> Dict[str, str]:
     elif "фора" in low or "handicap" in low or "spread" in low: market="handicap"
     elif "prop" in low or "индивидуальный" in low: market="props"
     elif "побед" in low or "moneyline" in low or "winner" in low or "на кого" in low or "кто выиграет" in low or "pick" in low: market="moneyline"
-    m=re.search(r"(?:тотал|total|over|under|фора|handicap)\s*([0-9]+(?:[.,][0-9]+)?)", text, re.I)
+    m=re.search(r"(?:тотал|total|over|under|фора|handicap)\s*([+-]?\d+(?:[.,]\d+)?)", text, re.I)
     if m: line=m.group(1).replace(',', '.')
-    o=re.search(r"(?:odds|коэффициент|кэф)\s*([0-9]+(?:[.,][0-9]+)?)|\b([1-9][0-9]?[.,][0-9]{2})\b", text, re.I)
-    if o: odds=(o.group(1) or o.group(2)).replace(',', '.')
+    labeled=re.search(r"(?:odds|коэффициент|кэф)\s*([0-9]+(?:[.,][0-9]+)?)", text, re.I)
+    if labeled:
+        odds=labeled.group(1).replace(',', '.')
+    else:
+        nums=[x.replace(',', '.') for x in re.findall(r"\b([1-9][0-9]?[.,][0-9]{1,2})\b", text, re.I)]
+        line_abs = line.lstrip("+-")
+        odds_candidates=[x for x in nums if x != line and x != line_abs]
+        if odds_candidates: odds=odds_candidates[-1]
     return {"market":market,"line":line,"odds":odds}
 
 
@@ -187,12 +196,139 @@ def _sports_understanding(text: str, router_result: Dict[str, Any]) -> Dict[str,
     return {"mode":"sports","intent":intent,"asset":"","pair":"","timeframe":"","horizon":"","sport":_sport(text, router_result),"league":league,"tournament":tournament,"teams":teams,"players":[],"market":sm["market"],"line":sm["line"],"odds":sm["odds"],"date_hint":_date_hint(text),"needs":needs,"missing":missing,"user_question_normalized":re.sub(r"\s+"," ",text)[:500],"confidence":0.82 if intent!="unknown" else 0.55,"reason":"Rule-based sports understanding from user wording and router entities."}
 
 
+
+_ESPORTS_TEAM_ALIASES = {
+    "navi": "NAVI", "нави": "NAVI", "natus vincere": "NAVI", "vitality": "Vitality", "виталити": "Vitality",
+    "g2": "G2", "faze": "FaZe", "team spirit": "Spirit", "spirit": "Spirit", "astralis": "Astralis",
+    "mouz": "MOUZ", "liquid": "Liquid", "team liquid": "Liquid", "cloud9": "Cloud9", "c9": "Cloud9",
+    "t1": "T1", "gen.g": "Gen.G", "geng": "Gen.G", "fnatic": "Fnatic", "heretics": "Heretics", "sentinels": "Sentinels",
+}
+_ESPORTS_GAME_PATTERNS = (
+    ("cs2", ("cs2", "cs:go", "counter-strike", "counter strike", "navi", "виталити", "vitality", "faze", "g2", "astralis", "mouz")),
+    ("dota2", ("dota 2", "dota2", "dota")),
+    ("lol", ("league of legends", "lol", "gen.g", "geng", "t1")),
+    ("valorant", ("valorant", "sentinels", "heretics")),
+    ("gaming", ("fifa", "ea fc", "starcraft", "overwatch", "pubg", "fortnite")),
+)
+_ESPORTS_WORDS = ("esports", "киберспорт", "cs2", "cs:go", "counter-strike", "dota", "league of legends", "lol", "valorant", "fifa", "ea fc", "starcraft", "overwatch", "pubg", "fortnite", "map total", "over maps", "under maps", "map handicap", "map veto", "veto", "draft", "patch", "roster", "stand-in", "тотал карт", "тб карт", "тм карт", "больше карт", "меньше карт", "фора по картам", "карта 1", "карта 2", "bo3", "bo5")
+_EVENT_BETTING_WORDS = ("odds", "коэффициент", "кэф", "market", "line", "тотал", "фора", "handicap", "spread", "over", "under", "winner", "победа", "исход")
+
+
+def _esports_game(text: str) -> str:
+    low = text.lower()
+    for game, pats in _ESPORTS_GAME_PATTERNS:
+        if any(p in low for p in pats):
+            return game
+    return "unknown"
+
+
+def _extract_esports_teams(text: str, router_result: Dict[str, Any]) -> List[str]:
+    low = text.lower()
+    hits: List[tuple[int, str]] = []
+    for alias, canon in sorted(_ESPORTS_TEAM_ALIASES.items(), key=lambda kv: -len(kv[0])):
+        m = re.search(r"(?<!\w)%s(?!\w)" % re.escape(alias), low, re.I)
+        if m and canon not in [c for _pos, c in hits]:
+            hits.append((m.start(), canon))
+    found = [canon for _pos, canon in sorted(hits, key=lambda x: x[0])]
+    return found[:2] if found else _extract_teams(text, router_result)
+
+
+def _event_market(text: str, esports: bool = False) -> Dict[str, str]:
+    low = text.lower(); mt = "unknown"; side = ""; line = ""; odds = ""; fmt = ""
+    if re.search(r"\bbo\s*3\b", low): fmt = "BO3"
+    if re.search(r"\bbo\s*5\b", low): fmt = "BO5"
+    if any(x in low for x in ("тб", "больше", "over")): side = "over"
+    elif any(x in low for x in ("тм", "меньше", "under")): side = "under"
+    if any(x in low for x in ("тотал карт", "map total", "over maps", "under maps", "тб карт", "тм карт", "больше карт", "меньше карт")):
+        mt = "map_total"
+    elif any(x in low for x in ("фора по картам", "map handicap")):
+        mt = "map_handicap"
+    elif any(x in low for x in ("тотал", "total", "over", "under", "тб", "тм")):
+        mt = "map_total" if esports else "total"
+    elif any(x in low for x in ("фора", "handicap", "spread")):
+        mt = "map_handicap" if esports else "handicap"
+    elif any(x in low for x in ("winner", "moneyline", "победа", "исход", "кто выиграет", "кто сильнее")):
+        mt = "winner"
+    m = re.search(r"(?:тб|тм|over|under|больше|меньше|тотал(?: карт)?|total(?: maps)?|фора(?: по картам)?|handicap|spread)\s*([+-]?\d+(?:[.,]\d+)?)", text, re.I)
+    if m: line = m.group(1).replace(',', '.')
+    labeled = re.search(r"(?:odds|коэффициент|кэф)\s*([0-9]+(?:[.,][0-9]+)?)", text, re.I)
+    if labeled:
+        odds = labeled.group(1).replace(',', '.')
+    else:
+        nums = [x.replace(',', '.') for x in re.findall(r"\b([1-9][0-9]?[.,][0-9]{1,2})\b", text, re.I)]
+        odds_candidates = [x for x in nums if x != line]
+        if odds_candidates:
+            odds = odds_candidates[-1]
+    return {"market_type": mt, "line": line, "side": side, "odds": odds, "format": fmt}
+
+
+def _esports_understanding(text: str, router_result: Dict[str, Any]) -> Dict[str, Any]:
+    teams = _extract_esports_teams(text, router_result); em = _event_market(text, esports=True); game = _esports_game(text)
+    needs = {"web_research": True, "odds": not bool(em["odds"]), "fresh_data": True, "clarification": len(teams) < 2}
+    missing = []
+    if len(teams) < 2: missing.append("teams")
+    if not em["odds"]: missing.append("odds")
+    return {"mode":"esports","domain":"esports","intent":"odds_value" if em["odds"] else "betting_angle","game":game,"teams":teams,"market_type":em["market_type"],"market":em["market_type"],"line":em["line"],"side":em["side"],"odds":em["odds"],"format":em["format"],"needs":needs,"missing":missing,"user_question_normalized":re.sub(r"\s+"," ",text)[:500],"confidence":0.86,"reason":"Rule-based esports betting understanding."}
+
+
+def _event_betting_understanding(text: str, router_result: Dict[str, Any]) -> Dict[str, Any]:
+    em = _event_market(text, esports=False)
+    teams = _extract_teams(text, router_result)
+    needs = {"web_research": True, "odds": not bool(em["odds"]), "fresh_data": True, "clarification": False}
+    missing = [] if em["odds"] else ["odds"]
+    return {"mode":"event_betting","domain":"event","intent":"odds_value" if em["odds"] else "betting_angle","game":"unknown","teams":teams,"event":re.sub(r"\s+"," ",text)[:180],"market_type":em["market_type"],"market":em["market_type"],"line":em["line"],"side":em["side"],"odds":em["odds"],"format":em["format"],"needs":needs,"missing":missing,"user_question_normalized":re.sub(r"\s+"," ",text)[:500],"confidence":0.68,"reason":"Rule-based universal event betting understanding."}
+
+
+def _looks_esports(text: str) -> bool:
+    low = text.lower()
+    return any(x in low for x in _ESPORTS_WORDS) or any(re.search(r"(?<!\w)%s(?!\w)" % re.escape(a), low, re.I) for a in _ESPORTS_TEAM_ALIASES)
+
+
+
+def _looks_sports(text: str, router_result: Dict[str, Any]) -> bool:
+    if _looks_esports(text):
+        return False
+    mode = str((router_result or {}).get("mode") or "").lower()
+    if mode == "sports":
+        return True
+    entities = (router_result or {}).get("entities") or {}
+    if entities.get("sport") or entities.get("league"):
+        return True
+    low = text.lower()
+    sports_signals = (
+        "nba", "nfl", "nhl", "mlb", "ufc", "mma", "football", "soccer", "basketball", "tennis",
+        "hockey", "boxing", "baseball", "волейбол", "футбол", "баскет", "теннис", "хоккей", "бокс",
+        "american football", "atp", "wta",
+    )
+    if any(signal in low for signal in sports_signals):
+        return True
+    known_sports_names = (
+        "lakers", "celtics", "brazil", "argentina", "france", "spain", "england", "germany",
+        "real", "barcelona", "barca", "arsenal", "chelsea", "psg", "milan",
+        "бразилия", "аргентина", "франция", "испания", "англия", "германия", "реал", "барса", "барселона",
+    )
+    if any(re.search(r"(?<!\w)%s(?!\w)" % re.escape(name), low, re.I) for name in known_sports_names):
+        return True
+    teams = _extract_teams(text, router_result)
+    return len(teams) >= 1
+
+def _looks_event_betting(text: str) -> bool:
+    low = text.lower()
+    has_market = any(x in low for x in _EVENT_BETTING_WORDS)
+    has_num = bool(re.search(r"\b\d+(?:[.,]\d+)?\b", text))
+    has_event = bool(re.search(r"\S+\s*(?:—|–|-|\bvs\b|\bv\b)\s*\S+", text, re.I) or "ивент" in low or "event" in low or "турнир" in low)
+    return has_market and (has_event or has_num)
+
 def understand_live_request(text: str, router_result: Dict[str, Any], session: Dict[str, Any], ui_language: str = "ru") -> Dict[str, Any]:
     router_result = router_result or {}
     text = _text(text)
     mode = router_result.get("mode") or "unknown"
-    if mode == "sports" or (mode == "unknown" and (any(x in text.lower() for x in _SPORT_WORDS) or re.search(r"\S+\s*(?:—|–|-|\bvs\b|\bv\b)\s*\S+", text, re.I))):
+    if mode in ("esports",) or _looks_esports(text):
+        return _esports_understanding(text, router_result)
+    if _looks_sports(text, router_result):
         return _sports_understanding(text, router_result)
+    if mode == "event_betting" or (mode == "unknown" and _looks_event_betting(text)):
+        return _event_betting_understanding(text, router_result)
     ap = _asset_and_pair(text, router_result)
     if mode == "unknown" and (ap.get("asset") or ap.get("pair")):
         mode = "crypto"

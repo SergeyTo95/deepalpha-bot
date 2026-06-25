@@ -338,6 +338,10 @@ def _pick_action(text: str, mode: str, actions: List[Dict[str, Any]]) -> Optiona
         (("stop", "стоп", "отмена", "invalidation", "confirmation", "подтверждение"), ("invalidation", "confirmation", "stop", "отмена")),
         (("plan", "план", "по шагам", "step by step"), ("plan", "scenario", "steps", "шаг")),
     ]
+    if mode in ("esports", "event_betting") and any(k in low for k in ("map veto", "veto", "драфт", "draft", "форма", "form", "patch", "roster")):
+        for action in actions:
+            if action.get("id") == "form_map_draft_risk":
+                return action
     if mode == "sports" and any(k in low for k in ("compare", "сравни", "рынки", "moneyline", "фора", "тотал", "handicap", "total")):
         for action in actions:
             if action.get("id") == "compare_markets":
@@ -382,7 +386,7 @@ def _build_resolved_query(ctx: Dict[str, Any], text: str, action: Optional[Dict[
                 "Return a concise comparison, not a repeated single-timeframe answer."
             )
         return f"{pair}, timeframe {tf or 'unspecified'}. Continue from previous Live context.{level_part} Original follow-up: {text}. Selected action: {label}. {template} Identify confirmation level, invalidation level, risk and Decision."
-    if mode == "sports":
+    if mode in ("sports", "esports", "event_betting"):
         event = ctx.get("teams_event") or ""
         market = ctx.get("market") or ""
         odds_part = f", odds {odds}" if odds else ""
@@ -415,7 +419,7 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
             return {"is_followup": True, "need_context": True, "message": "Не вижу актив в предыдущем Live-контексте. Напиши актив/пару и таймфрейм."}
         level = _extract_level(text)
         followup_type = _detect_crypto_followup_type(text)
-    elif mode == "sports":
+    elif mode in ("sports", "esports", "event_betting"):
         if not (ctx.get("teams_event") or ""):
             return {"is_followup": True, "need_context": True, "message": "Не вижу матч в предыдущем Live-контексте. Напиши событие/команды и рынок."}
         level = ""
@@ -432,6 +436,6 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     result = {"is_followup": True, "previous_context": ctx, "resolved_query": resolved, "mode": mode, "selected_action": selected_action, "selected_action_id": (selected_action or {}).get("id")}
     if mode == "crypto":
         result.update({"followup_type": followup_type, "followup_level": level, "followup_timeframe": tf})
-    if mode == "sports":
+    if mode in ("sports", "esports", "event_betting"):
         result.update({"followup_odds": odds})
     return result
