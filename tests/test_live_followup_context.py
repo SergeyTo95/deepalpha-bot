@@ -253,3 +253,40 @@ def test_pure_confirmation_without_context_still_requests_live_context():
     assert result["is_followup"] is True
     assert result["need_context"] is True
     assert "предыдущий Live-контекст" in result["message"]
+
+
+def test_crypto_compare_ru_selects_timeframe_compare_and_strengthens_query():
+    memory.save_live_context(
+        51,
+        mode="crypto",
+        original_user_text="BTCUSDT 15m",
+        normalized_query="BTCUSDT 15m",
+        asset_pair="BTCUSDT",
+        timeframe="15m",
+        suggested_actions=_crypto_actions(),
+    )
+
+    result = memory.resolve_live_followup(51, "сравни")
+
+    assert result["selected_action_id"] == "timeframe_compare"
+    assert "BTCUSDT" in result["resolved_query"]
+    assert "5m" in result["resolved_query"]
+    assert "15m" in result["resolved_query"]
+    assert "1h" in result["resolved_query"]
+    assert "not a repeated single-timeframe answer" in result["resolved_query"]
+
+
+def test_crypto_compare_en_selects_timeframe_compare():
+    memory.save_live_context(
+        52,
+        mode="crypto",
+        original_user_text="BTCUSDT 15m",
+        normalized_query="BTCUSDT 15m",
+        asset_pair="BTCUSDT",
+        timeframe="15m",
+        suggested_actions=_crypto_actions(),
+    )
+
+    result = memory.resolve_live_followup(52, "compare")
+
+    assert result["selected_action_id"] == "timeframe_compare"

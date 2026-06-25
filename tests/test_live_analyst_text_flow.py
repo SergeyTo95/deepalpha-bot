@@ -1179,3 +1179,34 @@ def test_process_live_text_reconstructs_suggested_actions_for_short_confirmation
     assert "BTCUSDT" in prompts[-1]
     assert len(charges) == 1
     assert saved
+
+
+def test_format_live_final_answer_removes_technical_followup_metadata():
+    result = svc.format_live_final_answer(
+        "Коротко: жду.\n\nДанные:\n\n- Тип follow-up: generic\n- Таймфрейм follow-up: 15m\n\nDecision: WATCH",
+        {"mode": "crypto", "recommended_decision_labels": ["WATCH"], "derived_facts": {}, "answer_policy": {"can_give_levels": False}},
+        ui_language="ru",
+    )
+
+    assert "Тип follow-up" not in result
+    assert "Таймфрейм follow-up" not in result
+
+
+def test_format_live_final_answer_keeps_long_condition_without_technical_metadata():
+    result = svc.format_live_final_answer(
+        "Коротко: это сценарий.\nDecision: WATCH",
+        {
+            "mode": "crypto",
+            "recommended_decision_labels": ["WATCH"],
+            "derived_facts": {"current_price": 64000},
+            "answer_policy": {"can_give_levels": True},
+            "followup_type": "long_position",
+            "followup_level": 64500,
+            "followup_timeframe": "15m",
+        },
+        ui_language="ru",
+    )
+
+    assert "Условие follow-up: лонг от $64,500" in result
+    assert "Тип follow-up" not in result
+    assert "Таймфрейм follow-up" not in result
