@@ -1008,10 +1008,11 @@ def test_live_followup_suggestions_crypto_successful_answer():
     )
 
     assert "Decision: WATCH" in answer
-    assert "Можно продолжить:" in answer
-    assert "сценарий" in answer
-    assert "уровень" in answer
-    assert "риск" in answer.lower()
+    assert "Хочешь продолжить разбор?" in answer
+    suggestion_lines = [line for line in answer.splitlines() if line.startswith("- ")]
+    assert suggestion_lines
+    assert all(line.endswith("?") for line in suggestion_lines)
+    assert "где лучше ждать вход" in answer
     forbidden = ("покупай", "продавай", "ставь", "гарантирую")
     assert not any(word in answer.lower() for word in forbidden)
 
@@ -1039,13 +1040,42 @@ def test_live_followup_suggestions_sports_betting_answer():
     )
     lower = answer.lower()
 
-    assert "value" in lower
-    assert "коэффициент" in lower
-    assert "implied probability" in lower
-    assert "edge" in lower
+    assert "Посчитать value под твой коэффициент?" in answer
+    assert "Сравнить рынки" in answer
     assert "ставь" not in lower
     assert "бери" not in lower
 
+
+
+def test_live_followup_suggestions_crypto_english_questions():
+    answer = svc.append_live_followup_suggestions(
+        "🧠 Short take:\nBTCUSDT is a watch setup.\n\nDecision: WATCH",
+        {"mode": "crypto", "intent": "entry_now"},
+        ui_language="en",
+    )
+
+    assert "Want to continue the analysis?" in answer
+    suggestion_lines = [line for line in answer.splitlines() if line.startswith("- ")]
+    assert suggestion_lines
+    assert all(line.endswith("?") for line in suggestion_lines)
+
+
+def test_live_followup_suggestions_does_not_duplicate_old_or_new_titles():
+    old_answer = svc.append_live_followup_suggestions(
+        "Decision: WATCH\n\nМожно продолжить:\n\n- Старый вариант.",
+        {"mode": "crypto"},
+        ui_language="ru",
+    )
+    new_answer = svc.append_live_followup_suggestions(
+        "Decision: WATCH\n\nХочешь продолжить разбор?\n\n- Старый вариант?",
+        {"mode": "crypto"},
+        ui_language="ru",
+    )
+
+    assert old_answer.count("Можно продолжить:") == 1
+    assert "Хочешь продолжить разбор?" not in old_answer
+    assert new_answer.count("Хочешь продолжить разбор?") == 1
+    assert "Можно продолжить:" not in new_answer
 
 def test_live_followup_suggestions_not_added_to_clarification_response():
     answer = svc.append_live_followup_suggestions(
@@ -1054,6 +1084,7 @@ def test_live_followup_suggestions_not_added_to_clarification_response():
         ui_language="ru",
     )
 
+    assert "Хочешь продолжить разбор?" not in answer
     assert "Можно продолжить:" not in answer
 
 
@@ -1065,6 +1096,7 @@ def test_live_followup_suggestions_not_added_to_live_unavailable_message():
     )
 
     assert answer == svc.LIVE_UNAVAILABLE_MESSAGE
+    assert "Хочешь продолжить разбор?" not in answer
     assert "Можно продолжить:" not in answer
 
 
@@ -1114,7 +1146,7 @@ def test_process_live_text_reconstructs_suggested_actions_for_short_confirmation
     context_memory.clear_live_context_memory()
     recent = [
         {"role": "user", "content": "BTCUSDT 15m есть вход?"},
-        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\nDecision: WATCH\n\nМожно продолжить:\n\n- Найти точку отмены и подтверждение входа."},
+        {"role": "assistant", "content": "Данные:\n\n- Цена: $59,670\n- Поддержка: $59,500 / $59,339\n- Сопротивление: $60,000 / $63,239\n- Зона лучше: $59,500\nDecision: WATCH\n\nХочешь продолжить разбор?\n\n- Разобрать, где лучше ждать вход и где сценарий ломается?"},
     ]
     evidence_packs = []
     prompts = []
