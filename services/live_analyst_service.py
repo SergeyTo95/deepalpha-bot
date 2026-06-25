@@ -1944,6 +1944,67 @@ def _build_live_safe_fallback(evidence_pack: Dict[str, Any], ui_language: str = 
 
 
 
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return ""
+
+
+def _market_context_fields_from_pack(understanding: Dict[str, Any], router_result: Dict[str, Any], evidence_pack: Dict[str, Any]) -> Dict[str, Any]:
+    plan = (evidence_pack or {}).get("market_intelligence_plan") or {}
+    facts = (evidence_pack or {}).get("derived_facts") or {}
+    entities = (router_result or {}).get("entities") or {}
+    understanding = understanding or {}
+    participants = _first_present(plan.get("participants"), facts.get("participants"), understanding.get("participants"), understanding.get("teams"), entities.get("participants"), entities.get("teams"))
+    return {
+        "market_domain": _first_present(plan.get("market_domain"), facts.get("market_domain"), facts.get("domain"), understanding.get("market_domain"), understanding.get("domain")),
+        "market_type": _first_present(plan.get("market_type"), facts.get("market_type"), understanding.get("market_type"), understanding.get("market"), entities.get("market_type"), entities.get("market")),
+        "event": _first_present(plan.get("event"), facts.get("event"), understanding.get("event"), entities.get("event")),
+        "participants": participants,
+        "side": _first_present(plan.get("side"), facts.get("side"), understanding.get("side"), entities.get("side")),
+        "line": _first_present(plan.get("line"), facts.get("line"), understanding.get("line"), entities.get("line")),
+        "odds": _first_present(plan.get("odds"), facts.get("user_odds"), facts.get("odds"), understanding.get("odds"), entities.get("odds")),
+        "implied_probability": _first_present(plan.get("implied_probability"), facts.get("implied_probability"), understanding.get("implied_probability"), entities.get("implied_probability")),
+        "timeframe": _first_present(plan.get("timeframe"), facts.get("timeframe"), understanding.get("timeframe"), entities.get("timeframe"), (evidence_pack or {}).get("timeframe")),
+        "asset": _first_present(plan.get("asset"), facts.get("asset"), facts.get("symbol"), facts.get("pair"), understanding.get("asset"), understanding.get("pair"), entities.get("asset"), entities.get("pair")),
+        "price": _first_present(plan.get("price"), facts.get("price"), facts.get("current_price"), understanding.get("price"), entities.get("price")),
+    }
+
+
+def _merge_previous_market_context_into_understanding(understanding: Dict[str, Any], previous_context: Dict[str, Any]) -> Dict[str, Any]:
+    if not previous_context:
+        return understanding or {}
+    merged = dict(understanding or {})
+    mapping = {
+        "market_domain": ("market_domain", "domain"),
+        "market_type": ("market_type",),
+        "event": ("event",),
+        "participants": ("participants", "teams"),
+        "side": ("side",),
+        "line": ("line",),
+        "odds": ("odds",),
+        "timeframe": ("timeframe",),
+        "asset": ("asset", "pair"),
+        "price": ("price",),
+    }
+    for ctx_key, targets in mapping.items():
+        value = previous_context.get(ctx_key)
+        if value in (None, "", [], {}):
+            if ctx_key == "event":
+                value = previous_context.get("teams_event")
+            elif ctx_key == "market_type":
+                value = previous_context.get("market")
+            elif ctx_key == "asset":
+                value = previous_context.get("asset_pair")
+        if value in (None, "", [], {}):
+            continue
+        for target in targets:
+            if merged.get(target) in (None, "", [], {}):
+                merged[target] = value
+    return merged
+
 def _store_successful_live_context(user_id: int, original_text: str, normalized_query: str, understanding: Dict[str, Any], router_result: Dict[str, Any], evidence_pack: Dict[str, Any], answer: str, ui_language: str = "ru") -> None:
     """Persist compact context for resolving future Live follow-up questions."""
     if not user_id or not answer or not evidence_pack:
@@ -1965,17 +2026,20 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         teams_event = " — ".join(str(x) for x in teams if str(x).strip())
     else:
         teams_event = str(teams or "")
+    market_fields = _market_context_fields_from_pack(understanding, router_result, evidence_pack)
+    extra_market_fields = {k: v for k, v in market_fields.items() if k not in ("odds", "timeframe")}
     save_live_context(
         int(user_id),
         mode=mode,
         original_user_text=original_text,
         normalized_query=normalized_query,
-        asset_pair=(understanding or {}).get("pair") or entities.get("pair") or (facts.get("symbol") or facts.get("pair") or ""),
-        timeframe=(understanding or {}).get("timeframe") or entities.get("timeframe") or evidence_pack.get("timeframe") or "",
+        asset_pair=(understanding or {}).get("pair") or entities.get("pair") or (facts.get("symbol") or facts.get("pair") or market_fields.get("asset") or ""),
+        timeframe=market_fields.get("timeframe") or (understanding or {}).get("timeframe") or entities.get("timeframe") or evidence_pack.get("timeframe") or "",
         teams_event=teams_event,
         market=(understanding or {}).get("market") or entities.get("market") or "",
-        odds=(understanding or {}).get("odds") or entities.get("odds") or facts.get("user_odds"),
+        odds=market_fields.get("odds") or (understanding or {}).get("odds") or entities.get("odds") or facts.get("user_odds"),
         key_levels=key_levels,
+        **extra_market_fields,
         last_final_answer=answer,
         suggested_actions=build_live_suggested_actions(evidence_pack, ui_language=ui_language),
     )
@@ -2056,6 +2120,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     ):
         message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару, sports/esports матч или линию/коэффициент? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, crypto asset/pair, sports/esports match, or event line/odds. Send a link, screenshot, ticker, timeframe, or odds.")
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
+    if followup_resolution.get("is_followup"):
+        understanding = _merge_previous_market_context_into_understanding(understanding, followup_resolution.get("previous_context") or {})
     if understanding.get("mode") == "sports":
         logger.info("live_sports_understanding_result sport=%s intent=%s teams=%s market=%s missing=%s", understanding.get("sport"), understanding.get("intent"), understanding.get("teams"), understanding.get("market"), understanding.get("missing"))
     crypto_market_context = None
