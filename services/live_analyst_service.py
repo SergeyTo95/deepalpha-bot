@@ -154,6 +154,28 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     mode = str(pack.get("mode") or "general").lower()
     intent = str(pack.get("intent") or "").lower()
     followup_type = str(pack.get("followup_type") or "").lower()
+    plan = pack.get("market_intelligence_plan") or {}
+    if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
+        factors = " ".join(str(x).lower() for x in (plan.get("needed_factors") or []))
+        if lang == "ru":
+            middle = "Разобрать ключевые факторы, которые двигают вероятность?"
+            if any(x in factors for x in ("poll", "calendar", "news", "candidate")):
+                middle = "Разобрать polls/новости/календарь, которые двигают вероятность?"
+            elif any(x in factors for x in ("support", "timeframe", "invalidation")):
+                middle = "Разобрать уровни, таймфрейм и отмену сценария?"
+            elif any(x in factors for x in ("injuries", "lineups", "form")):
+                middle = "Разобрать форму, составы/травмы и движение линии?"
+            elif any(x in factors for x in ("map", "draft", "pick-ban")):
+                middle = "Разобрать форму, map/draft и движение линии?"
+            lines = ["Посчитать value под твой коэффициент?", middle, "Найти минимальный playable odds / fair price?"]
+        else:
+            middle = "Break down the key factors that move probability?"
+            if any(x in factors for x in ("poll", "calendar", "news", "candidate")):
+                middle = "Break down polls/news/calendar that move probability?"
+            elif any(x in factors for x in ("support", "timeframe", "invalidation")):
+                middle = "Break down levels, timeframe, and invalidation?"
+            lines = ["Calculate value for your odds?", middle, "Find the minimum playable odds / fair price?"]
+        return "\n".join(f"- {line}" for line in lines[:3])
 
     if lang == "ru":
         if mode == "crypto" and _is_crypto_timeframe_compare(pack):
@@ -252,6 +274,20 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
     mode = str(pack.get("mode") or "general").lower()
     intent = str(pack.get("intent") or "").lower()
     followup_type = str(pack.get("followup_type") or "").lower()
+    plan = pack.get("market_intelligence_plan") or {}
+    if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
+        labels = [
+            "Посчитать value под твой коэффициент?" if lang == "ru" else "Calculate value for your odds?",
+            "Разобрать ключевые факторы, которые двигают вероятность?" if lang == "ru" else "Break down the key factors that move probability?",
+            "Найти минимальный playable odds / fair price?" if lang == "ru" else "Find the minimum playable odds / fair price?",
+        ]
+        ids = ["calculate_value", "research_key_factors", "minimum_playable_odds"]
+        templates = [
+            "Calculate implied probability; if independent probability is missing, return DATA NEEDED.",
+            "Explain how the planned factor categories change the probability estimate without inventing data.",
+            "Explain fair odds formula and required independent probability; do not invent minimum odds.",
+        ]
+        return [{"id": action_id, "label": label, "resolved_query_template": template} for action_id, label, template in zip(ids, labels, templates)]
 
     if mode == "crypto" and _is_crypto_timeframe_compare(pack):
         labels = [
@@ -1030,6 +1066,99 @@ Decision: {decision}""")
 
 
 
+def _format_universal_market_advisor_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
+    pack = evidence_pack or {}
+    facts = pack.get("derived_facts") or {}
+    plan = pack.get("market_intelligence_plan") or {}
+    decision = _first_evidence_decision(pack, _extract_decision(answer, pack))
+    odds = plan.get("odds") or facts.get("odds") or facts.get("user_odds") or ""
+    implied = plan.get("implied_probability") or facts.get("implied_probability")
+    if implied in (None, "") and odds:
+        try:
+            implied = round(100.0 / float(str(odds).replace(',', '.')), 1)
+        except Exception:
+            implied = None
+    if odds and implied not in (None, ""):
+        decision = "DATA NEEDED"
+    implied_txt = ("%.1f%%" % float(implied)) if implied not in (None, "") else "—"
+    odds_txt = str(odds) if odds else ("не указан" if ui_language == "ru" else "not provided")
+    needed = plan.get("needed_factors") or pack.get("missing_data") or []
+    missing = pack.get("missing_data") or plan.get("missing_data") or needed
+    fresh = facts.get("data_freshness") or pack.get("confidence_label") or "unknown"
+    event = plan.get("event") or facts.get("event") or "—"
+    market_type = plan.get("market_type") or facts.get("market_type") or "—"
+    side_line = " / ".join(str(x) for x in (plan.get("side"), plan.get("line")) if str(x or "").strip()) or "—"
+    game = facts.get("game") or ""
+    game_map = {"cs2": "CS2", "dota2": "Dota 2", "lol": "LoL", "valorant": "Valorant", "unknown": "—", "": "—"}
+    game_txt = game_map.get(str(game).lower(), str(game))
+    ru_factor = {"recent form":"форма последних матчей", "participant/team strength":"сила участников/команд", "map/draft/pick-ban context":"карта/драфт/pick-ban", "roster/stand-in changes":"изменения состава/stand-in", "patch/meta changes":"патч/meta", "tournament format":"формат турнира", "line movement":"движение линии", "odds history":"история коэффициентов", "current price":"текущая цена", "support/resistance":"поддержка/сопротивление", "confirmation trigger":"триггер подтверждения", "invalidation level":"уровень отмены", "market rules":"правила рынка", "current odds":"текущие коэффициенты", "timeline":"таймлайн", "participants":"участники"}
+    if (plan.get("answer_focus") == "value_calculation" or pack.get("selected_action_id") == "calculate_value") and odds and implied not in (None, ""):
+        now = "Коэффициент %.2f требует вероятности выше %s до учёта маржи/буфера. Независимой оценки в evidence pack нет, поэтому edge честно не считается." % (float(odds), implied_txt)
+    else:
+        now = _strip_live_section_heading(_strip_decision_lines(answer)) or ("Можно описать структуру риска, но не доказывать edge без свежих факторов." if ui_language == "ru" else "I can outline the risk structure, but not prove edge without fresh factors.")
+    if ui_language == "ru":
+        checks = "\n".join("- " + ru_factor.get(str(x), str(x)) for x in needed[:8]) or "- коэффициент / правила / свежие данные"
+        miss = ", ".join(str(x) for x in missing[:8]) or "свежая независимая вероятность"
+        return _sanitize_sports_text(f"""🧠 Коротко:
+Это разбор вероятности против цены, не команда к действию. Сейчас данных недостаточно для честного EDGE CANDIDATE, поэтому базовый вывод — DATA NEEDED / WATCH.
+
+Контекст:
+- Домен: {plan.get('market_domain') or pack.get('mode') or 'unknown'}
+- Игра: {game_txt}
+- Событие: {event}
+- Событие / рынок: {event}
+- Тип рынка: {market_type}
+- Сторона / линия: {side_line}
+- Коэффициент: {odds_txt}
+- Коэффициент / цена: {odds_txt}
+- Implied probability: {implied_txt}
+- Моя оценка: —
+- Edge: —
+- Свежесть данных: {fresh}
+
+Что нужно проверить:
+{checks}
+
+Что я могу сказать сейчас:
+{now}
+
+Риск:
+Без данных по пунктам выше нельзя придумывать вероятность, результаты, составы, новости, правила рынка или движение цены/линии. Не хватает: {miss}.
+
+Итог:
+{decision}
+
+Decision: {decision}""")
+    checks = "\n".join("- " + str(x) for x in needed[:8]) or "- odds / rules / fresh data"
+    miss = ", ".join(str(x) for x in missing[:8]) or "fresh independent probability"
+    return _sanitize_sports_text(f"""🧠 Short:
+This is probability versus price, not a command. There is not enough data for an honest EDGE CANDIDATE, so the base conclusion is DATA NEEDED / WATCH.
+
+Context:
+- Domain: {plan.get('market_domain') or pack.get('mode') or 'unknown'}
+- Event / market: {event}
+- Market type: {market_type}
+- Side / line: {side_line}
+- Odds / price: {odds_txt}
+- Implied probability: {implied_txt}
+- My estimate: —
+- Edge: —
+- Data freshness: {fresh}
+
+What to check:
+{checks}
+
+What I can say now:
+{now}
+
+Risk:
+Without the missing factors above, I will not invent probability, results, lineups, news, market rules, or price/line movement. Missing: {miss}.
+
+Final:
+{decision}
+
+Decision: {decision}""")
+
 def _event_betting_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
     pack = evidence_pack or {}
     facts = pack.get("derived_facts") or {}
@@ -1171,7 +1300,7 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = _normalize_raw_crypto_level_numbers(text, evidence_pack)
         text = _clean_live_spacing(text)
     if is_event_betting:
-        text = _event_betting_structured_answer(text, evidence_pack, ui_language, decision)
+        text = _format_universal_market_advisor_answer(text, evidence_pack, ui_language)
         decision = _extract_decision(text, evidence_pack)
     if is_sports:
         text = _sports_structured_answer(text, evidence_pack, ui_language, decision)
