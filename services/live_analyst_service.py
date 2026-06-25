@@ -619,10 +619,8 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
     followup_timeframe = evidence_pack.get("followup_timeframe") or ""
     if followup_type == "long_position" and followup_level:
         data.append(("Условие follow-up" if ui_language == "ru" else "Follow-up condition", f"лонг от {_format_money_value(followup_level)}" if ui_language == "ru" else f"long from {_format_money_value(followup_level)}"))
-    elif followup_type:
-        data.append(("Тип follow-up" if ui_language == "ru" else "Follow-up type", str(followup_type)))
-    if followup_timeframe:
-        data.append(("Таймфрейм follow-up" if ui_language == "ru" else "Follow-up timeframe", str(followup_timeframe)))
+    elif followup_type == "short_position" and followup_level:
+        data.append(("Условие follow-up" if ui_language == "ru" else "Follow-up condition", f"шорт от {_format_money_value(followup_level)}" if ui_language == "ru" else f"short from {_format_money_value(followup_level)}"))
     if confirmation:
         data.append(("Подтверждение" if ui_language == "ru" else "Confirmation", confirmation))
     if invalidation:
@@ -920,6 +918,13 @@ def _sports_structured_answer(text: str, evidence_pack: Dict[str, Any], ui_langu
     return re.sub(r"(?im)^\s*Decision\s*:.*$", f"Decision: {sports_decision}", cleaned).strip()
 
 
+
+def _remove_technical_followup_metadata(text: str) -> str:
+    """Hide internal follow-up routing metadata from the user-facing answer."""
+    text = re.sub(r"(?im)^\s*[-•]?\s*(?:Тип follow-up|Follow-up type)\s*:\s*(?:generic|timeframe_change|long_position|short_position)\s*$", "", text or "")
+    text = re.sub(r"(?im)^\s*[-•]?\s*(?:Таймфрейм follow-up|Follow-up timeframe)\s*:\s*[^\n]*$", "", text)
+    return _clean_live_spacing(text)
+
 def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
     """Conservatively clean the final Live Analyst answer for Telegram delivery."""
     ui_language = "ru" if ui_language == "ru" else "en"
@@ -948,6 +953,7 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = _sanitize_sports_text(text)
     text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
     text = re.sub(r"\*{2,}", "", text).strip()
+    text = _remove_technical_followup_metadata(text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     return _trim_live_answer(text, 1600)
 

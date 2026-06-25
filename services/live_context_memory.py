@@ -22,11 +22,13 @@ _CONTINUATION_KEYWORDS = (
     "playable odds", "минимальный", "первый", "второй", "треть", "вариант", "последний", "любой",
     "твой выбор", "где стоп", "стоплосс", "стоп-лосс", "отмена", "инвалидация", "подтверждение",
     "где вход", "точка входа", "план", "риск", "риск/прибыль", "риск прибыль", "rr", "r/r",
-    "риск ревард", "по шагам", "таймфрейм", "сравни", "5m", "15m", "1h", "4h", "лонг", "шорт",
+    "риск ревард", "по шагам", "таймфрейм", "таймфреймы", "по таймфреймам", "сравни",
+    "сравнить", "сравнение", "5m", "15m", "1h", "4h", "лонг", "шорт",
     "ставку", "рынки", "фора", "тотал", "победа", "moneyline", "handicap", "total", "есть ставка", "есть value",
     "calculate", "compute", "implied probability", "minimum odds", "odds needed", "fair odds", "fair price",
     "first", "second", "third", "option", "last", "any", "your choice", "where is stop", "stop loss",
-    "invalidation", "confirmation", "entry", "trade plan", "risk reward", "step by step", "compare timeframes",
+    "invalidation", "confirmation", "entry", "trade plan", "risk reward", "step by step", "compare",
+    "compare this", "compare setup", "compare timeframes", "timeframes",
     "long", "short", "compare markets", "spread", "over under", "calculate bet", "is there value", "any edge",
     "what odds do i need",
 )
@@ -320,9 +322,19 @@ def _pick_action(text: str, mode: str, actions: List[Dict[str, Any]]) -> Optiona
         if idx < len(actions) and any(low == n or n in low for n in needles):
             return actions[idx]
 
+    crypto_compare_needles = (
+        "сравни", "сравнить", "сравнение", "compare", "compare this", "compare setup",
+        "compare timeframes", "timeframes", "таймфреймы", "по таймфреймам",
+    )
+    if mode == "crypto" and any(k in low for k in crypto_compare_needles):
+        for action in actions:
+            haystack = _action_text(action)
+            if any(k in haystack for k in ("timeframe", "compare", "5m", "15m", "1h")):
+                return action
+
     checks = [
         (("value", "edge", "кэф", "коэффициент", "implied", "playable", "minimum odds", "минимальный"), ("value", "calculate", "odds", "edge", "implied")),
-        (("5m", "15m", "1h", "4h", "timeframe", "таймфрейм"), ("timeframe", "compare", "5m", "1h")),
+        (("5m", "15m", "1h", "4h", "timeframe", "таймфрейм", "таймфреймы", "по таймфреймам"), ("timeframe", "compare", "5m", "15m", "1h")),
         (("stop", "стоп", "отмена", "invalidation", "confirmation", "подтверждение"), ("invalidation", "confirmation", "stop", "отмена")),
         (("plan", "план", "по шагам", "step by step"), ("plan", "scenario", "steps", "шаг")),
     ]
@@ -360,6 +372,15 @@ def _build_resolved_query(ctx: Dict[str, Any], text: str, action: Optional[Dict[
         pair = ctx.get("asset_pair") or ""
         levels = _compact_levels(ctx)
         level_part = f" Previous key levels: {levels}." if levels else ""
+        selected_id = (action or {}).get("id") or ""
+        if selected_id == "timeframe_compare":
+            return (
+                f"Compare the current {pair} setup across 5m, 15m, and 1h using previous Live context. "
+                f"Previous timeframe: {ctx.get('timeframe') or tf or 'unspecified'}. "
+                f"Selected action: {selected_id} ({label}). Original follow-up: {text}.{level_part} "
+                "Explain whether the entry/invalidation scenario changes on each timeframe. "
+                "Return a concise comparison, not a repeated single-timeframe answer."
+            )
         return f"{pair}, timeframe {tf or 'unspecified'}. Continue from previous Live context.{level_part} Original follow-up: {text}. Selected action: {label}. {template} Identify confirmation level, invalidation level, risk and Decision."
     if mode == "sports":
         event = ctx.get("teams_event") or ""
