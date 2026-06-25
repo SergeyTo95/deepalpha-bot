@@ -88,3 +88,25 @@ def test_universal_ru_localization_avoids_raw_internal_labels():
     assert answer.count("Коэффициент / цена:") == 1
     assert "- Событие:" not in answer
     assert "- Коэффициент:" not in answer
+
+
+def test_universal_planner_uses_context_enriched_followup_understanding():
+    plan = build_market_intelligence_plan(
+        "посчитай",
+        {
+            "mode": "esports",
+            "event": "NAVI — Vitality",
+            "market_domain": "esports",
+            "market_type": "total",
+            "side": "over",
+            "line": "2.5",
+            "odds": "1.85",
+            "teams": ["NAVI", "Vitality"],
+        },
+        {},
+    )
+    assert plan["side"] == "over"
+    assert plan["line"] == "2.5"
+    assert plan["odds"] == "1.85"
+    assert plan["implied_probability"] == 54.1
+    assert plan["market_type"] == "total"

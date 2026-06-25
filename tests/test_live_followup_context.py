@@ -1,3 +1,15 @@
+import sys
+import types
+
+sys.modules.setdefault("requests", types.SimpleNamespace())
+psycopg2 = types.ModuleType("psycopg2")
+class Error(Exception): pass
+psycopg2.Error = Error
+psycopg2.connect = lambda *a, **k: (_ for _ in ()).throw(Error("stub"))
+psycopg2.errors = types.SimpleNamespace()
+sys.modules.setdefault("psycopg2", psycopg2)
+sys.modules.setdefault("psycopg2.extras", types.SimpleNamespace(RealDictCursor=object))
+
 from datetime import datetime, timedelta, timezone
 
 from services import live_context_memory as memory
@@ -290,3 +302,55 @@ def test_crypto_compare_en_selects_timeframe_compare():
     result = memory.resolve_live_followup(52, "compare")
 
     assert result["selected_action_id"] == "timeframe_compare"
+
+
+def test_esports_calculate_followup_preserves_market_side_line_and_odds():
+    from services.live_analyst_service import (
+        _merge_previous_market_context_into_understanding,
+        _store_successful_live_context,
+        format_live_final_answer,
+    )
+    from services.live_evidence_engine import build_live_evidence_pack
+
+    memory.clear_live_context_memory()
+    original_understanding = {"mode": "esports", "teams": ["NAVI", "Vitality"]}
+    original_pack = build_live_evidence_pack(
+        "NAVI Vitality тб 2.5 карт кэф 1.85",
+        original_understanding,
+        {"mode": "esports"},
+        ui_language="ru",
+    )
+    _store_successful_live_context(
+        777,
+        "NAVI Vitality тб 2.5 карт кэф 1.85",
+        "NAVI Vitality тб 2.5 карт кэф 1.85",
+        original_understanding,
+        {"mode": "esports"},
+        original_pack,
+        "Decision: DATA NEEDED",
+        ui_language="ru",
+    )
+
+    result = memory.resolve_live_followup(777, "посчитай")
+    assert result["is_followup"] is True
+    understanding = _merge_previous_market_context_into_understanding(
+        {"mode": "esports", "intent": "odds_value"},
+        result["previous_context"],
+    )
+    followup_pack = build_live_evidence_pack(
+        "посчитай",
+        understanding,
+        {"mode": "esports", "is_followup": True},
+        ui_language="ru",
+    )
+    followup_pack["selected_action_id"] = "calculate_value"
+    answer = format_live_final_answer("", followup_pack, ui_language="ru")
+
+    assert "Сторона / линия: over / 2.5" in answer
+    assert "Коэффициент / цена: 1.85" in answer
+    assert "Implied probability: 54.1%" in answer
+    assert "Независимой оценки вероятности пока нет" in answer
+    assert "Decision: DATA NEEDED" in answer
+    assert "Сторона / линия: —" not in answer
+    assert "partial" not in answer
+    assert "evidence pack" not in answer

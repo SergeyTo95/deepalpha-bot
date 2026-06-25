@@ -40,12 +40,13 @@ def _odds(text: str, understanding: Dict[str, Any], router_result: Dict[str, Any
 
 
 def _domain(text: str, understanding: Dict[str, Any], router_result: Dict[str, Any]) -> str:
-    low = text.lower(); mode = str(understanding.get("mode") or router_result.get("mode") or "").lower(); dom = str(understanding.get("domain") or "").lower()
+    low = text.lower(); mode = str(understanding.get("mode") or router_result.get("mode") or "").lower(); dom = str(understanding.get("market_domain") or understanding.get("domain") or "").lower()
     if "polymarket" in low or mode in ("polymarket", "prediction_market"): return "polymarket"
     if mode == "crypto" or re.search(r"\b(?:btc|eth|sol|[a-z]{2,10}usdt)\b", low): return "crypto"
     if mode == "esports" or any(x in low for x in ("navi","vitality","cs2","dota","lol","valorant","кибер","карт")): return "esports"
     if any(x in low for x in ("trump","biden","election","выбор","president","senate","congress")): return "politics"
     if any(x in low for x in ("cpi","inflation","fed","gdp","unemployment","ставка фрс","инфляц")): return "economy"
+    if dom in DOMAINS and dom != "unknown": return dom
     if mode == "sports" or dom == "sports": return "sports"
     if mode == "event_betting" or any(x in low for x in ("odds", "кэф", "over", "under", "ивент", "event")): return "event"
     return "unknown"

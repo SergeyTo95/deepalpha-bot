@@ -144,7 +144,7 @@ def get_live_context(user_id: int) -> Optional[Dict[str, Any]]:
     return dict(ctx)
 
 
-def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None, market_domain: str = "", market_type: str = "", event: str = "", participants: Any = None, side: Any = None, line: Any = None, implied_probability: Any = None, asset: str = "", price: Any = None) -> Dict[str, Any]:
     previous = _contexts.get(int(user_id)) or {}
     now = _now()
     ctx = {
@@ -156,7 +156,16 @@ def save_live_context(user_id: int, *, mode: str, original_user_text: str, norma
         "timeframe": timeframe or "",
         "teams_event": teams_event or "",
         "market": market or "",
-        "odds": odds,
+        "market_domain": market_domain or "",
+        "market_type": market_type or "",
+        "event": event or teams_event or "",
+        "participants": participants if participants not in (None, "", [], {}) else [],
+        "side": side if side not in (None, "") else "",
+        "line": line if line not in (None, "") else "",
+        "odds": odds if odds not in (None, "") else None,
+        "implied_probability": implied_probability if implied_probability not in (None, "") else None,
+        "asset": asset or asset_pair or "",
+        "price": price if price not in (None, "") else None,
         "key_levels": key_levels or {},
         "last_final_answer": (last_final_answer or "")[:1600],
         "suggested_actions": list(suggested_actions or previous.get("suggested_actions") or [])[:3],
