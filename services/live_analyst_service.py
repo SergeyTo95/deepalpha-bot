@@ -138,6 +138,15 @@ def _clean_live_spacing(answer: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _is_crypto_timeframe_compare(evidence_pack: Dict[str, Any]) -> bool:
+    selected = (evidence_pack or {}).get("selected_action_id")
+    selected_action = (evidence_pack or {}).get("selected_action") or {}
+    return selected == "timeframe_compare" or (
+        isinstance(selected_action, dict)
+        and selected_action.get("id") == "timeframe_compare"
+    )
+
+
 def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru") -> str:
     """Build compact, ethical follow-up prompts for successful Live Analyst answers."""
     lang = "ru" if ui_language == "ru" else "en"
@@ -147,7 +156,13 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     followup_type = str(pack.get("followup_type") or "").lower()
 
     if lang == "ru":
-        if mode == "crypto" and followup_type == "long_position":
+        if mode == "crypto" and _is_crypto_timeframe_compare(pack):
+            lines = [
+                "Собрать итоговый план: вход → подтверждение → риск → отмена?",
+                "Разобрать, какой таймфрейм сейчас главный для решения?",
+                "Проверить сценарий лонга или шорта от конкретного уровня?",
+            ]
+        elif mode == "crypto" and followup_type == "long_position":
             lines = [
                 "Разобрать этот лонг по шагам: подтверждение, отмена и риск?",
                 "Проверить этот сценарий на 5m / 15m / 1h?",
@@ -178,7 +193,13 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Проверить риски и что может изменить вывод?",
             ]
     else:
-        if mode == "crypto" and followup_type == "long_position":
+        if mode == "crypto" and _is_crypto_timeframe_compare(pack):
+            lines = [
+                "Build a final plan: entry → confirmation → risk → invalidation?",
+                "Identify which timeframe should drive the decision now?",
+                "Check a long or short scenario from a specific level?",
+            ]
+        elif mode == "crypto" and followup_type == "long_position":
             lines = [
                 "Break down this long scenario step by step: confirmation, invalidation, and risk?",
                 "Check this setup on 5m / 15m / 1h?",
@@ -220,7 +241,19 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
     intent = str(pack.get("intent") or "").lower()
     followup_type = str(pack.get("followup_type") or "").lower()
 
-    if mode == "crypto" and followup_type == "long_position":
+    if mode == "crypto" and _is_crypto_timeframe_compare(pack):
+        labels = [
+            "Собрать итоговый план: вход → подтверждение → риск → отмена?" if lang == "ru" else "Build a final plan: entry → confirmation → risk → invalidation?",
+            "Разобрать, какой таймфрейм сейчас главный для решения?" if lang == "ru" else "Identify which timeframe should drive the decision now?",
+            "Проверить сценарий лонга или шорта от конкретного уровня?" if lang == "ru" else "Check a long or short scenario from a specific level?",
+        ]
+        ids = ["entry_risk_invalidation_plan", "dominant_timeframe_decision", "level_based_long_short_scenario"]
+        templates = [
+            "Build a final entry-confirmation-risk-invalidation plan using the previous multi-timeframe comparison.",
+            "Identify which timeframe should drive the decision now and explain why.",
+            "Analyze a long or short scenario from a specific user-provided level; ask for the level if missing.",
+        ]
+    elif mode == "crypto" and followup_type == "long_position":
         labels = [
             "Разобрать этот лонг по шагам: подтверждение, отмена и риск?" if lang == "ru" else "Break down this long scenario step by step: confirmation, invalidation, and risk?",
             "Проверить этот сценарий на 5m / 15m / 1h?" if lang == "ru" else "Check this setup on 5m / 15m / 1h?",
@@ -658,6 +691,76 @@ def _crypto_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_lan
 
 
 
+
+def _format_crypto_timeframe_compare_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
+    """Build a deterministic crypto 5m/15m/1h comparison from available evidence."""
+    facts = (evidence_pack or {}).get("derived_facts") or {}
+    symbol = facts.get("symbol") or facts.get("pair") or (evidence_pack or {}).get("symbol") or (evidence_pack or {}).get("pair") or "BTCUSDT"
+    price = _format_money_value(facts.get("current_price")) if facts.get("current_price") is not None else "—"
+    support = _fact_list(facts.get("support_levels")) or "—"
+    resistance = _format_resistance_range(facts.get("resistance_levels")) or "—"
+    better_zone = _format_money_value(facts.get("better_zone")) if facts.get("better_zone") is not None else "—"
+    decision = _first_evidence_decision(evidence_pack, _extract_decision(answer, evidence_pack))
+    if decision not in {"NO TRADE", "EDGE CANDIDATE", "DATA NEEDED"}:
+        decision = "WATCH"
+
+    if ui_language == "ru":
+        return f"""🧠 Коротко:
+{symbol} пока остаётся {decision}: 5m может дать ранний, но шумный сигнал; 15m остаётся основным рабочим таймфреймом; 1h нужен как фильтр направления. Вход лучше ждать только после подтверждения уровня.
+
+Сравнение таймфреймов:
+
+- 5m:
+  Быстрый сигнал, но больше шума. Использовать только для подтверждения реакции/ретеста, не как самостоятельный вход.
+
+- 15m:
+  Основной рабочий таймфрейм текущего сценария. Следить за реакцией от поддержки и пробоем/ретестом сопротивления.
+
+- 1h:
+  Фильтр направления. Если 1h не подтверждает движение, сигнал на 5m/15m слабее.
+
+Отдельных подтверждённых уровней по 5m/1h нет в данных, поэтому сравнение — по роли таймфреймов, а не по новым уровням.
+
+Ключевые уровни:
+
+- Цена: {price}
+- Поддержка: {support}
+- Сопротивление: {resistance}
+- Зона лучше: {better_zone}
+
+Итог:
+Для входа лучше дождаться совпадения: 15m держит уровень, 5m даёт подтверждение, 1h не противоречит сценарию.
+
+Decision: {decision}"""
+
+    return f"""🧠 Short take:
+{symbol} remains {decision}: 5m can give an early but noisy signal; 15m remains the main working timeframe; 1h should act as the direction filter. Entry is better only after level confirmation.
+
+Timeframe comparison:
+
+- 5m:
+  Fast signal, but more noise. Use it only to confirm reaction/retest, not as a standalone entry.
+
+- 15m:
+  Main working timeframe for the current scenario. Watch the reaction from support and breakout/retest of resistance.
+
+- 1h:
+  Direction filter. If 1h does not confirm the move, the 5m/15m signal is weaker.
+
+Separate confirmed 5m/1h levels are not available in the evidence, so this comparison is by timeframe role, not by new levels.
+
+Key levels:
+
+- Price: {price}
+- Support: {support}
+- Resistance: {resistance}
+- Better zone: {better_zone}
+
+Conclusion:
+For entry, wait for alignment: 15m holds the level, 5m gives confirmation, and 1h does not contradict the scenario.
+
+Decision: {decision}"""
+
 def _ensure_crypto_evidence_lines(answer: str, evidence_pack: Dict[str, Any], ui_language: str) -> str:
     return answer
 
@@ -939,7 +1042,12 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         decision = "DATA NEEDED"
     text = _normalize_decision_lines(text, decision)
     text = _clean_live_spacing(text)
-    if is_crypto:
+    if is_crypto and _is_crypto_timeframe_compare(evidence_pack):
+        text = _format_crypto_timeframe_compare_answer(text, evidence_pack, ui_language)
+        text = _normalize_live_money_levels(text)
+        text = _normalize_raw_crypto_level_numbers(text, evidence_pack)
+        text = _clean_live_spacing(text)
+    elif is_crypto:
         text = _crypto_structured_answer(text, evidence_pack, ui_language, decision)
         text = _ensure_crypto_evidence_lines(text, evidence_pack, ui_language)
         text = _normalize_live_money_levels(text)
