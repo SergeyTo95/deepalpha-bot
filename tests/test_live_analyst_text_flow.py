@@ -1356,7 +1356,7 @@ def test_unknown_router_does_not_block_esports_live_understanding(monkeypatch):
     assert "Домен: esports" in result["message"]
     assert "Игра: CS2" in result["message"]
     assert "NAVI — Vitality" in result["message"]
-    assert "Коэффициент: 1.85" in result["message"]
+    assert "Коэффициент / цена: 1.85" in result["message"]
     assert "Уточни, пожалуйста" not in result["message"]
 
 

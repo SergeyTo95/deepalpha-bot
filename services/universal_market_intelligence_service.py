@@ -75,14 +75,20 @@ def _participants(text: str, understanding: Dict[str, Any]) -> List[str]:
 def _line_side_timeframe(text: str, understanding: Dict[str, Any]) -> tuple[str, str, str]:
     low = text.lower(); line = _num(understanding.get("line")); side = str(understanding.get("side") or "").lower(); tf = str(understanding.get("timeframe") or "")
     if not line:
-        m = re.search(r"(?:тб|тм|over|under|line)\s*([0-9]+(?:[\.,][0-9]+)?)", low)
+        m = re.search(
+            r"(?:\b(?:тб|тм|больше|меньше|over|under)\b|(?:total|тотал)\s+(?:over|under|больше|меньше)?|(?:лонг|long)\s+(?:от|from)?|(?:шорт|short)\s+(?:от|from)?)\s*([0-9]+(?:[\.,][0-9]+)?)",
+            low,
+            re.I,
+        )
         if m: line = m.group(1).replace(",", ".")
     if not side:
         for k, v in RU_TO_EN_SIDE.items():
-            if k in low: side = v; break
+            if re.search(rf"\b{re.escape(k)}\b", low): side = v; break
         if not side:
-            if "over" in low: side = "over"
-            elif "under" in low: side = "under"
+            if re.search(r"\bover\b", low): side = "over"
+            elif re.search(r"\bunder\b", low): side = "under"
+            elif re.search(r"\blong\b", low): side = "long"
+            elif re.search(r"\bshort\b", low): side = "short"
     if not tf:
         m = re.search(r"\b(\d+\s*(?:m|min|h|d|м|ч))\b", low)
         if m: tf = m.group(1).replace(" ", "")

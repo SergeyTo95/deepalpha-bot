@@ -46,8 +46,8 @@ def test_esports_formatted_answer_with_odds_ru():
     answer = format_live_final_answer("Decision: DATA NEEDED", pack, "ru")
     assert "Домен: esports" in answer
     assert "Игра: CS2" in answer
-    assert "Событие: NAVI — Vitality" in answer
-    assert "Коэффициент: 1.85" in answer
+    assert "Событие / рынок: NAVI — Vitality" in answer
+    assert "Коэффициент / цена: 1.85" in answer
     assert "Implied probability" in answer
     assert "54" in answer
     assert "DATA NEEDED" in answer
@@ -70,6 +70,19 @@ def test_followup_suggestions_esports_ru():
     assert "Посчитать value под твой коэффициент?" in text
     assert "Разобрать форму, карту/драфт и риск?" in text
     assert "Найти минимальный playable odds" in text
+
+
+def test_followup_suggestions_esports_plan_avoids_injuries_ru():
+    pack = {
+        "mode": "esports",
+        "market_intelligence_plan": {
+            "market_domain": "esports",
+            "needed_factors": ["recent form", "map/draft/pick-ban context", "line movement"],
+        },
+    }
+    text = build_live_followup_suggestions(pack, "ru")
+    assert "карта/драфт" in text or "ключевые факторы" in text
+    assert "травмы" not in text
 
 
 def test_esports_continuation_calculate_value():

@@ -30,6 +30,8 @@ def test_universal_planner_esports_total():
     assert plan["research_queries"]
     assert any("recent form" in x for x in plan["must_not_invent"])
     assert any("roster" in x for x in plan["must_not_invent"])
+    assert plan["side"] == "over"
+    assert plan["line"] == "2.5"
 
 
 def test_universal_planner_crypto():
@@ -64,6 +66,8 @@ def test_universal_calculate_value_no_independent_probability():
     answer = format_live_final_answer("", {"mode": "esports", "selected_action_id": "calculate_value", "market_intelligence_plan": plan, "derived_facts": {}, "missing_data": plan["missing_data"], "answer_policy": {"must_not_invent": plan["must_not_invent"]}, "recommended_decision_labels": ["DATA NEEDED", "WATCH"]}, ui_language="ru")
     assert "54.1%" in answer
     assert "edge честно не считается" in answer
+    assert "Независимой оценки вероятности пока нет" in answer
+    assert "evidence pack" not in answer
     assert "Decision: DATA NEEDED" in answer
     forbidden = ("ставь", "бери", "грузи", "железно", "100%", "buy now", "bet now", "lock", "guaranteed")
     assert not any(word in answer.lower() for word in forbidden)
@@ -71,6 +75,16 @@ def test_universal_calculate_value_no_independent_probability():
 
 def test_universal_ru_localization_avoids_raw_internal_labels():
     plan = build_market_intelligence_plan("NAVI Vitality тб 2.5 карт кэф 1.85", {"mode": "esports", "teams": ["NAVI", "Vitality"]}, {})
-    answer = format_live_final_answer("", {"mode": "esports", "market_intelligence_plan": plan, "derived_facts": {}, "missing_data": plan["missing_data"], "answer_policy": {}, "recommended_decision_labels": ["DATA NEEDED"]}, ui_language="ru")
-    assert "partial" not in answer
-    assert "rosters/stand-ins" not in answer
+    answer = format_live_final_answer("", {"mode": "esports", "selected_action_id": "calculate_value", "market_intelligence_plan": plan, "derived_facts": {"data_freshness": "partial"}, "missing_data": plan["missing_data"], "answer_policy": {}, "recommended_decision_labels": ["DATA NEEDED"]}, ui_language="ru")
+    for forbidden in ("partial", "recent form", "participant/team strength", "roster/stand-in changes", "evidence pack", "derived_facts", "market_intelligence_plan"):
+        assert forbidden not in answer
+    assert "Свежесть данных: частичная" in answer
+    assert "свежая форма" in answer
+    assert "сила участников / команд" in answer
+    assert "движение линии" in answer
+    assert "Независимой оценки вероятности пока нет" in answer
+    assert "Сторона / линия: over / 2.5" in answer
+    assert answer.count("Событие / рынок:") == 1
+    assert answer.count("Коэффициент / цена:") == 1
+    assert "- Событие:" not in answer
+    assert "- Коэффициент:" not in answer
