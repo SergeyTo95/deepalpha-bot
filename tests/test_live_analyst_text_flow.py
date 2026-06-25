@@ -1210,3 +1210,129 @@ def test_format_live_final_answer_keeps_long_condition_without_technical_metadat
     assert "Условие follow-up: лонг от $64,500" in result
     assert "Тип follow-up" not in result
     assert "Таймфрейм follow-up" not in result
+
+
+def _timeframe_compare_evidence():
+    return {
+        "mode": "crypto",
+        "selected_action_id": "timeframe_compare",
+        "derived_facts": {
+            "symbol": "BTCUSDT",
+            "timeframe": "15m",
+            "current_price": 61768,
+            "support_levels": [61522, 61500],
+            "resistance_levels": [61962, 62000],
+            "better_zone": 61522,
+            "confirmation": "...",
+            "invalidation": "...",
+        },
+        "recommended_decision_labels": ["WATCH"],
+        "answer_policy": {"can_give_levels": True, "can_give_entry_zone": True, "can_comment_on_odds": False},
+    }
+
+
+def test_crypto_timeframe_compare_final_formatting_ru():
+    result = svc.format_live_final_answer("Коротко: WATCH\nDecision: WATCH", _timeframe_compare_evidence(), ui_language="ru")
+
+    assert "Сравнение таймфреймов" in result
+    assert "- 5m:" in result
+    assert "- 15m:" in result
+    assert "- 1h:" in result
+    assert "Ключевые уровни" in result
+    assert "Decision: WATCH" in result
+    assert "Тип follow-up" not in result
+    assert "Таймфрейм follow-up" not in result
+
+
+def test_crypto_timeframe_compare_suggestions_ru():
+    answer = svc.append_live_followup_suggestions("🧠 Коротко:\nWATCH\n\nDecision: WATCH", _timeframe_compare_evidence(), ui_language="ru")
+
+    assert "Хочешь продолжить разбор?" in answer
+    assert "Собрать итоговый план" in answer
+    assert "какой таймфрейм сейчас главный" in answer
+    assert "лонга или шорта" in answer
+    assert "Сравнить этот сценарий на 5m / 15m / 1h?" not in answer
+
+
+def test_crypto_normal_first_answer_suggestions_unchanged():
+    answer = svc.append_live_followup_suggestions("🧠 Коротко:\nWATCH\n\nDecision: WATCH", {"mode": "crypto"}, ui_language="ru")
+
+    assert "Сравнить этот сценарий на 5m / 15m / 1h?" in answer
+
+
+def test_crypto_timeframe_compare_en_format_and_suggestions():
+    formatted = svc.format_live_final_answer("Short take: WATCH\nDecision: WATCH", _timeframe_compare_evidence(), ui_language="en")
+    answer = svc.append_live_followup_suggestions(formatted, _timeframe_compare_evidence(), ui_language="en")
+
+    assert "Timeframe comparison" in answer
+    assert "Build a final plan" in answer
+    assert "Compare this setup on 5m / 15m / 1h?" not in answer
+
+
+def test_process_live_text_crypto_compare_flow_is_contextual(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    context_memory.save_live_context(
+        909,
+        mode="crypto",
+        original_user_text="BTCUSDT 15m",
+        normalized_query="BTCUSDT 15m",
+        asset_pair="BTCUSDT",
+        timeframe="15m",
+        last_final_answer="Decision: WATCH",
+        suggested_actions=svc.build_live_suggested_actions({"mode": "crypto"}, ui_language="ru"),
+    )
+    evidence_pack = _timeframe_compare_evidence()
+    evidence_packs = []
+
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_packs.append(dict(evidence_pack)) or evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "validate_live_answer_against_evidence", lambda answer, evidence_pack: {"ok": True, "severity": "none", "issues": []})
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Коротко: WATCH\nDecision: WATCH")
+
+    result = svc.process_live_text(909, "сравни", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert evidence_pack["selected_action_id"] == "timeframe_compare"
+    assert "Сравнение таймфреймов" in result["message"]
+    assert "Сравнить этот сценарий на 5m / 15m / 1h?" not in result["message"]
+    assert len(charges) == 1
+    assert saved[1][0][4] == result["message"]
+
+
+def test_process_live_text_timeframe_compare_empty_llm_uses_contextual_deterministic_fallback(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    context_memory.clear_live_context_memory()
+    context_memory.save_live_context(
+        910,
+        mode="crypto",
+        original_user_text="BTCUSDT 15m",
+        normalized_query="BTCUSDT 15m",
+        asset_pair="BTCUSDT",
+        timeframe="15m",
+        last_final_answer="Decision: WATCH",
+        suggested_actions=svc.build_live_suggested_actions({"mode": "crypto"}, ui_language="ru"),
+    )
+    evidence_pack = _timeframe_compare_evidence()
+
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "crypto", "intent": "entry_now", "pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m", "needs": {}})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "")
+
+    result = svc.process_live_text(910, "сравни", router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert result["charged"] is False
+    assert result["cost"] == 0
+    assert "Сравнение таймфреймов" in result["message"]
+    assert "- 5m:" in result["message"]
+    assert "- 15m:" in result["message"]
+    assert "- 1h:" in result["message"]
+    assert "Сравнить этот сценарий на 5m / 15m / 1h?" not in result["message"]
+    assert "Собрать итоговый план" in result["message"]
+    assert charges == []
+    assert saved and saved[0][0][4] == result["message"]
