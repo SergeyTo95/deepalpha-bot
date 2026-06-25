@@ -16,7 +16,7 @@ def _clamp(x: float) -> float:
 
 def _mode(understanding: Dict[str, Any], router_result: Dict[str, Any]) -> str:
     m = str((understanding or {}).get("mode") or (router_result or {}).get("mode") or "unknown")
-    return m if m in ("crypto", "sports", "polymarket", "general") else "unknown"
+    return m if m in ("crypto", "sports", "esports", "event_betting", "polymarket", "general") else "unknown"
 
 
 def _freshness(ctx: Dict[str, Any]) -> str:
@@ -99,14 +99,27 @@ def plan_live_research_queries(user_text: str, understanding: Dict[str, Any]) ->
         ]
         if asset in ("BTC", "BITCOIN"):
             queries.insert(1, {"purpose": "news", "query": "Bitcoin ETF flows crypto market today", "priority": 4})
-    elif mode == "sports":
+    elif mode in ("sports", "esports", "event_betting"):
         teams = [str(x) for x in _as_list(understanding.get("teams")) if str(x).strip()]
-        subject = " vs ".join(teams[:2]) if len(teams) >= 2 else (text or "sports event")
-        queries = [
-            {"purpose": "odds", "query": "%s odds preview injuries lineup" % subject, "priority": 5},
-            {"purpose": "schedule", "query": "%s kickoff date time" % subject, "priority": 4},
-            {"purpose": "lineup", "query": "%s lineup injuries latest news" % subject, "priority": 3},
-        ]
+        subject = " vs ".join(teams[:2]) if len(teams) >= 2 else (text or ("esports event" if mode == "esports" else "sports event"))
+        if mode == "esports":
+            game = str(understanding.get("game") or "esports")
+            queries = [
+                {"purpose": "odds", "query": "%s %s odds map veto roster patch" % (subject, game), "priority": 5},
+                {"purpose": "form", "query": "%s %s recent form maps" % (subject, game), "priority": 4},
+                {"purpose": "roster", "query": "%s %s roster stand-in latest" % (subject, game), "priority": 3},
+            ]
+        elif mode == "event_betting":
+            queries = [
+                {"purpose": "odds", "query": "%s odds line market" % subject, "priority": 5},
+                {"purpose": "context", "query": "%s event probability forecast" % subject, "priority": 4},
+            ]
+        else:
+            queries = [
+                {"purpose": "odds", "query": "%s odds preview injuries lineup" % subject, "priority": 5},
+                {"purpose": "schedule", "query": "%s kickoff date time" % subject, "priority": 4},
+                {"purpose": "lineup", "query": "%s lineup injuries latest news" % subject, "priority": 3},
+            ]
     elif mode == "polymarket":
         subject = text or str(understanding.get("market") or "polymarket event")
         queries = [
@@ -151,6 +164,39 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
             policy["can_comment_on_odds"] = False
             if "odds" not in missing: missing.append("odds")
         if intent in ("betting_angle", "odds_value", "lineup_check", "match_preview") and not (_has(sc.get("lineups")) or _has(sc.get("injuries"))) and "lineups/injuries" not in missing: missing.append("lineups/injuries")
+
+    if mode in ("esports", "event_betting"):
+        teams = [str(x) for x in _as_list(understanding.get("teams")) if str(x).strip()]
+        event = " — ".join(teams[:2]) if len(teams) >= 2 else str(understanding.get("event") or user_text or "")
+        odds = str(understanding.get("odds") or "")
+        implied = None
+        try:
+            implied = round(100.0 / float(odds), 1) if odds and float(odds) > 1 else None
+        except Exception:
+            implied = None
+        market_type = str(understanding.get("market_type") or understanding.get("market") or "unknown")
+        side = str(understanding.get("side") or "")
+        line = str(understanding.get("line") or "")
+        market_bits = []
+        if market_type in ("map_total", "total"):
+            market_bits.append("total maps" if mode == "esports" else "total")
+            if side: market_bits.append(side)
+            if line: market_bits.append(line)
+        elif market_type in ("map_handicap", "handicap"):
+            market_bits.append("map handicap" if mode == "esports" else "handicap")
+            if line: market_bits.append(line)
+        elif market_type == "winner":
+            market_bits.append("winner")
+        else:
+            market_bits.append(str(understanding.get("market") or "unknown"))
+        missing_defaults = ["recent form", "map veto" if mode == "esports" else "event rules", "line movement", "rosters/stand-ins" if mode == "esports" else "participants", "tournament format" if mode == "esports" else "market rules"]
+        data_freshness = "partial" if research_context.get("ok") and _has(research_context.get("sources")) else "missing"
+        facts.update({"domain": understanding.get("domain") or ("esports" if mode == "esports" else "event"), "game": understanding.get("game") or ("unknown" if mode == "esports" else ""), "event": event, "teams": teams, "market": " ".join(x for x in market_bits if x).strip(), "market_type": market_type, "line": line, "side": side, "odds": odds, "implied_probability": implied, "data_freshness": data_freshness, "missing_data": missing_defaults})
+        for item in missing_defaults:
+            if item not in missing: missing.append(item)
+        if not odds and "odds" not in missing: missing.append("odds")
+        policy["can_comment_on_odds"] = bool(odds)
+        score += 0.15 if odds else 0.05
     if mode == "polymarket":
         entities = router_result.get("entities") or {}
         prob = entities.get("probability") or entities.get("polymarket_probability") or (research_context or {}).get("polymarket_probability")
@@ -170,8 +216,11 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
     if missing: score = _clamp(score - min(0.2, 0.04 * len(missing)))
     confidence = "high" if score >= 0.65 and len(missing) <= 1 else ("medium" if score >= 0.35 else "low")
     policy["must_not_invent"] = ["price levels not present in evidence", "exact event times not present in evidence", "odds not present in evidence", "direct buy/sell/bet commands"]
+    if mode in ("esports", "event_betting"):
+        policy["must_not_invent"].extend(["recent form", "rosters", "map veto", "patch", "injuries/lineups", "scores/results"])
     labels = ["WATCH", "DATA NEEDED"] if confidence == "low" else ["WATCH", "NO TRADE", "EDGE CANDIDATE"]
     if mode == "sports" and intent in ("betting_angle", "odds_value") and not policy["can_comment_on_odds"]: labels = ["NO BET", "WATCH", "DATA NEEDED"]
+    if mode in ("esports", "event_betting"): labels = ["DATA NEEDED", "NO EDGE", "WATCH", "EDGE CANDIDATE", "NO BET"]
     return {"ok": True, "mode": mode, "intent": intent, "planned_queries": planned_queries, "evidence_items": items, "derived_facts": facts, "missing_data": missing, "conflicts": conflicts, "data_quality_score": score, "confidence_label": confidence, "answer_policy": policy, "recommended_decision_labels": labels, "reason": "Evidence pack built from live understanding plus available market/sports/research context."}
 
 
@@ -216,7 +265,7 @@ def validate_live_answer_against_evidence(answer: str, evidence_pack: Dict[str, 
         issues.append(issue); major_issues.append(issue)
     elif command_severity == "minor":
         issues.append("answer_contains_cautionary_imperative")
-    if pack.get("mode") in ("crypto", "sports") and not re.search(r"\bDecision\s*:", text, flags=re.I):
+    if pack.get("mode") in ("crypto", "sports", "esports", "event_betting") and not re.search(r"\bDecision\s*:", text, flags=re.I):
         issues.append("answer_lacks_decision_label")
     if pack.get("confidence_label") == "low" and any(x in low for x in ("точно", "уверенно", "definitely", "certainly", "без риска")):
         issues.append("answer_too_certain_for_low_confidence")

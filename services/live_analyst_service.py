@@ -174,6 +174,12 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Сравнить этот сценарий на 5m / 15m / 1h?",
                 "Собрать короткий план: вход → риск → отмена?",
             ]
+        elif mode in ("esports", "event_betting"):
+            lines = [
+                "Посчитать value под твой коэффициент?",
+                "Разобрать форму, карту/драфт и риск?",
+                "Найти минимальный playable odds для этого сценария?",
+            ]
         elif mode == "sports":
             lines = [
                 "Посчитать value под твой коэффициент?",
@@ -210,6 +216,12 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Break down where to wait for entry and where the scenario breaks?",
                 "Compare this setup on 5m / 15m / 1h?",
                 "Build a short plan: entry → risk → invalidation?",
+            ]
+        elif mode in ("esports", "event_betting"):
+            lines = [
+                "Calculate value for your odds?",
+                "Break down form, map/draft, and risk?",
+                "Find the minimum playable odds for this setup?",
             ]
         elif mode == "sports":
             lines = [
@@ -276,6 +288,18 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
             "Analyze where to wait for entry, where the scenario breaks, and what confirms it.",
             "Compare this setup on 5m, 15m, and 1h timeframes.",
             "Build a concise entry-risk-invalidation plan without direct trading commands.",
+        ]
+    elif mode in ("esports", "event_betting"):
+        labels = [
+            "Посчитать value под твой коэффициент?" if lang == "ru" else "Calculate value for your odds?",
+            "Разобрать форму, карту/драфт и риск?" if lang == "ru" else "Break down form, map/draft, and risk?",
+            "Найти минимальный playable odds для этого сценария?" if lang == "ru" else "Find the minimum playable odds for this setup?",
+        ]
+        ids = ["calculate_value", "form_map_draft_risk", "minimum_playable_odds"]
+        templates = [
+            "Calculate implied probability, estimated probability if possible, edge, and minimum playable odds. If data is missing, say what is needed.",
+            "Analyze recent form, map veto/draft/patch/roster risk. Do not invent missing data.",
+            "Find the minimum playable odds for this setup and explain assumptions.",
         ]
     elif mode == "sports":
         labels = [
@@ -1005,6 +1029,97 @@ Final:
 Decision: {decision}""")
 
 
+
+def _event_betting_structured_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
+    pack = evidence_pack or {}
+    facts = pack.get("derived_facts") or {}
+    mode = str(pack.get("mode") or facts.get("domain") or "event_betting")
+    domain = facts.get("domain") or ("esports" if mode == "esports" else "event")
+    game_map = {"cs2": "CS2", "dota2": "Dota 2", "lol": "LoL", "valorant": "Valorant", "gaming": "Gaming", "unknown": "—", "": "—"}
+    game = game_map.get(str(facts.get("game") or "").lower(), str(facts.get("game") or "—"))
+    event = facts.get("event") or " — ".join(str(x) for x in (facts.get("teams") or [])[:2]) or "—"
+    market = facts.get("market") or "—"
+    odds = facts.get("odds") or ""
+    implied = facts.get("implied_probability")
+    if implied in (None, "") and odds:
+        try: implied = round(100.0 / float(str(odds).replace(',', '.')), 1)
+        except Exception: implied = None
+    implied_txt = ("%.1f%%" % float(implied)) if implied not in (None, "") else "—"
+    odds_txt = str(odds) if odds else ("не указан" if ui_language == "ru" else "not provided")
+    fresh = facts.get("data_freshness") or "missing"
+    decision = decision if decision in _SPORTS_DECISION_LABELS else "DATA NEEDED"
+    if not odds or implied in (None, ""):
+        decision = "DATA NEEDED"
+    missing = facts.get("missing_data") or pack.get("missing_data") or []
+    needed = ", ".join(str(x) for x in missing[:6]) or ("odds and fresh event data" if ui_language != "ru" else "коэффициент и свежие данные события")
+    if ui_language == "ru":
+        value_note = "Коэффициент нужен, чтобы посчитать value/edge." if not odds else "Implied probability посчитана; точный edge не называю без независимой оценки вероятности."
+        return _sanitize_sports_text(f"""🧠 Коротко:
+Это разбор вероятности против цены, не команда к действию. {value_note}
+
+Контекст:
+- Домен: {domain}
+- Игра: {game}
+- Событие: {event}
+- Рынок: {market}
+- Коэффициент: {odds_txt}
+- Implied probability: {implied_txt}
+- Моя оценка: —
+- Edge: —
+- Свежесть данных: {fresh}
+
+Разбор:
+Без свежих данных я не буду придумывать форму, составы, veto/draft, patch, результаты или движение линии. Для EDGE CANDIDATE нужна связка: коэффициент + независимая оценка вероятности + подтверждающие факторы.
+
+Что важно проверить:
+- форма последних матчей
+- map veto / draft / patch
+- составы / stand-in
+- формат BO3/BO5
+- мотивация турнира
+- движение линии
+
+Риск:
+Недостаток данных, изменение состава, veto/draft, патч/meta и движение коэффициента могут полностью убрать предполагаемый перевес. Сейчас не хватает: {needed}.
+
+Итог:
+{decision}
+
+Decision: {decision}""")
+    value_note = "Odds are needed to calculate value/edge." if not odds else "Implied probability is calculated; exact edge is not stated without an independent probability estimate."
+    return _sanitize_sports_text(f"""🧠 Short take:
+This is probability versus price, not a command. {value_note}
+
+Context:
+- Domain: {domain}
+- Game: {game}
+- Event: {event}
+- Market: {market}
+- Odds: {odds_txt}
+- Implied probability: {implied_txt}
+- My estimate: —
+- Edge: —
+- Data freshness: {fresh}
+
+Analysis:
+Without fresh data I will not invent form, rosters, veto/draft, patch, scores, results, or line movement. EDGE CANDIDATE requires odds + an independent probability estimate + supporting factors.
+
+What to check:
+- recent form
+- map veto / draft / patch
+- rosters / stand-ins
+- BO3/BO5 format
+- tournament motivation
+- line movement
+
+Risk:
+Missing data, roster changes, veto/draft, patch/meta and odds movement can remove the edge. Missing now: {needed}.
+
+Conclusion:
+{decision}
+
+Decision: {decision}""")
+
 def _sports_structured_answer(text: str, evidence_pack: Dict[str, Any], ui_language: str, decision: str) -> str:
     pack = dict(evidence_pack or {})
     facts = pack.setdefault("derived_facts", {})
@@ -1035,10 +1150,12 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     text = _normalize_live_money_levels(str(answer or "").strip())
     decision = _extract_decision(text, evidence_pack)
     is_crypto = (evidence_pack.get("mode") or "").lower() == "crypto"
-    is_sports = (evidence_pack.get("mode") or "").lower() == "sports"
+    mode_lower = (evidence_pack.get("mode") or "").lower()
+    is_sports = mode_lower == "sports"
+    is_event_betting = mode_lower in ("esports", "event_betting")
     if is_crypto:
         decision = _first_evidence_decision(evidence_pack, decision)
-    if is_sports and decision not in _SPORTS_DECISION_LABELS:
+    if (is_sports or is_event_betting) and decision not in _SPORTS_DECISION_LABELS:
         decision = "DATA NEEDED"
     text = _normalize_decision_lines(text, decision)
     text = _clean_live_spacing(text)
@@ -1053,6 +1170,9 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = _normalize_live_money_levels(text)
         text = _normalize_raw_crypto_level_numbers(text, evidence_pack)
         text = _clean_live_spacing(text)
+    if is_event_betting:
+        text = _event_betting_structured_answer(text, evidence_pack, ui_language, decision)
+        decision = _extract_decision(text, evidence_pack)
     if is_sports:
         text = _sports_structured_answer(text, evidence_pack, ui_language, decision)
         decision = _extract_decision(text, evidence_pack)
