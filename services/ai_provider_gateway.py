@@ -1,7 +1,11 @@
 import os
 from typing import Any, Dict, List
 
-from services.llm_service import GEMINI_MODEL
+from services.llm_service import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_FALLBACK_MODELS,
+    LIVE_ANALYST_GEMINI_MODEL,
+)
 
 
 def _env_enabled(name: str, default: bool) -> bool:
@@ -12,8 +16,16 @@ def _env_enabled(name: str, default: bool) -> bool:
 
 
 def get_provider_status() -> Dict[str, Any]:
+    gemini_enabled = _env_enabled("GEMINI_ENABLED", True)
     return {
-        "gemini": {"enabled": _env_enabled("GEMINI_ENABLED", True), "role": "primary", "model": GEMINI_MODEL},
+        "gemini": {
+            "enabled": gemini_enabled,
+            "role": "primary",
+            "model": DEFAULT_GEMINI_MODEL,
+            "default_model": DEFAULT_GEMINI_MODEL,
+            "live_analyst_model": LIVE_ANALYST_GEMINI_MODEL,
+            "fallback_models": list(GEMINI_FALLBACK_MODELS),
+        },
         "openai": {"enabled": _env_enabled("OPENAI_ENABLED", False), "role": "future"},
         "anthropic": {"enabled": _env_enabled("ANTHROPIC_ENABLED", False), "role": "future"},
     }
@@ -28,7 +40,7 @@ def choose_provider_for_task(task_type: str, mode: str, quality_need: str = "nor
     gemini = status.get("gemini") or {}
     return {
         "provider": "gemini",
-        "model": gemini.get("model") or GEMINI_MODEL,
+        "model": gemini.get("default_model") or DEFAULT_GEMINI_MODEL,
         "enabled": bool(gemini.get("enabled")),
         "reason": "Gemini is the only enabled provider",
         "task_type": task_type,
