@@ -13,6 +13,30 @@ DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 LIVE_ANALYST_GEMINI_MODEL = os.getenv("LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
 
 
+def _parse_live_analyst_primary_max_attempts(raw: Optional[str] = None) -> int:
+    if raw is None:
+        raw = os.getenv("LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", "1")
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _parse_live_analyst_primary_retry_delays(raw: Optional[str] = None) -> list[float]:
+    if raw is None:
+        raw = os.getenv("LIVE_ANALYST_PRIMARY_RETRY_DELAYS", "")
+    delays: list[float] = []
+    for value in str(raw or "").split(","):
+        value = value.strip()
+        if not value:
+            continue
+        try:
+            delays.append(max(0.0, float(value)))
+        except ValueError:
+            continue
+    return delays
+
+
 def _parse_fallback_models(raw: Optional[str] = None) -> list[str]:
     if raw is None:
         raw = os.getenv("GEMINI_FALLBACK_MODELS", "")
@@ -21,6 +45,8 @@ def _parse_fallback_models(raw: Optional[str] = None) -> list[str]:
 
 
 GEMINI_FALLBACK_MODELS = _parse_fallback_models()
+LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS = _parse_live_analyst_primary_max_attempts()
+LIVE_ANALYST_PRIMARY_RETRY_DELAYS = _parse_live_analyst_primary_retry_delays()
 
 # Backwards-compatible aliases for existing imports/tests.
 GEMINI_MODEL = DEFAULT_GEMINI_MODEL
@@ -136,20 +162,35 @@ def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent
     selected_fallback_models = fallback_models if fallback_models is not None else GEMINI_FALLBACK_MODELS
     models = [selected_primary_model] + [m for m in selected_fallback_models if m != selected_primary_model]
 
-    for model in models:
+    for index, model in enumerate(models):
+        is_live_primary = feature == "live_analyst" and index == 0 and model == selected_primary_model
+        if is_live_primary:
+            print(f"LLM_PRIMARY_SELECTED feature={feature} model={model}")
+            max_attempts = LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS
+            retry_delays = LIVE_ANALYST_PRIMARY_RETRY_DELAYS
+        else:
+            if feature == "live_analyst":
+                print(f"LLM_FALLBACK_SELECTED feature={feature} model={model}")
+            max_attempts = len(RETRY_DELAYS)
+            retry_delays = RETRY_DELAYS
+
         print(f"LLM: trying model={model} feature={feature}")
 
-        for attempt, delay in enumerate(RETRY_DELAYS, start=1):
+        for attempt in range(1, max_attempts + 1):
             text, status = _call_model_once(prompt, model, max_tokens)
 
-            if status == 200:
+            if status == 200 and (text or not is_live_primary):
                 if attempt > 1:
                     print(f"LLM: success on attempt {attempt} with model={model}")
+                print(f"LLM_SUCCESS feature={feature} model={model}")
                 try:
                     record_gemini_call(feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background)
                 except Exception as exc:
                     print(f"gemini_usage_record_failed feature={feature} error={exc}")
                 return text
+
+            if status == 200:
+                print(f"LLM EMPTY: model={model} feature={feature}")
 
             if status == 404:
                 # Модель не существует — не retry, сразу следующая
@@ -160,16 +201,17 @@ def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent
                 # API ключ не задан — нет смысла продолжать
                 return ""
 
-            # 503, 429, 0 — ждём и повторяем
-            if attempt < len(RETRY_DELAYS):
+            if attempt < max_attempts:
+                delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)] if retry_delays else 0
                 print(
-                    f"LLM: model={model} attempt={attempt}/{len(RETRY_DELAYS)} "
+                    f"LLM: model={model} attempt={attempt}/{max_attempts} "
                     f"status={status} retrying in {delay}s"
                 )
-                time.sleep(delay)
+                if delay > 0:
+                    time.sleep(delay)
             else:
                 print(
-                    f"LLM: model={model} all {len(RETRY_DELAYS)} attempts exhausted"
+                    f"LLM: model={model} all {max_attempts} attempts exhausted"
                 )
 
     print("LLM FAILED: all models exhausted, returning empty")
