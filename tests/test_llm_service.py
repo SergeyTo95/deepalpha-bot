@@ -109,3 +109,89 @@ def test_404_on_live_analyst_primary_falls_back_to_flash(monkeypatch):
 
     assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
     assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
+
+
+def test_live_analyst_primary_timeout_falls_back_after_one_attempt_by_default(monkeypatch):
+    models = []
+
+    def fake_call_model_once(prompt, model, max_tokens):
+        models.append(model)
+        if model == "gemini-3.5-flash":
+            return "", 0
+        return "fallback ok", 200
+
+    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [])
+    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
+    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
+    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+
+    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
+    assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
+
+
+def test_live_analyst_primary_503_falls_back_after_one_attempt_by_default(monkeypatch):
+    models = []
+
+    def fake_call_model_once(prompt, model, max_tokens):
+        models.append(model)
+        if model == "gemini-3.5-flash":
+            return "", 503
+        return "fallback ok", 200
+
+    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [])
+    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
+    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
+    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+
+    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
+    assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
+
+
+def test_non_live_generate_text_still_uses_normal_retry_behavior(monkeypatch):
+    models = []
+
+    def fake_call_model_once(prompt, model, max_tokens):
+        models.append(model)
+        if len(models) < 3:
+            return "", 503
+        return "ok", 200
+
+    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+    monkeypatch.setattr(llm, "DEFAULT_GEMINI_MODEL", "gemini-default")
+    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-fallback"])
+    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
+    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
+    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+
+    assert llm.generate_text("prompt", budget_checked=True) == "ok"
+    assert models == ["gemini-default", "gemini-default", "gemini-default"]
+
+
+def test_live_analyst_primary_max_attempts_two_retries_primary_before_fallback(monkeypatch):
+    models = []
+
+    def fake_call_model_once(prompt, model, max_tokens):
+        models.append(model)
+        if model == "gemini-3.5-flash":
+            return "", 503
+        return "fallback ok", 200
+
+    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [0])
+    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
+    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
+    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+
+    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
+    assert models == ["gemini-3.5-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
