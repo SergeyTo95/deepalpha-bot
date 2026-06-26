@@ -7,9 +7,24 @@ from services.gemini_budget_guard import can_call_gemini, record_gemini_call
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
 
-# Основная модель из env, fallback — lite версия
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-FALLBACK_MODELS = ["gemini-2.5-flash-lite"]
+# Default model for general/background tasks. Live Analyst can use a stronger
+# model without changing the cost profile for other features.
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+LIVE_ANALYST_GEMINI_MODEL = os.getenv("LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
+
+
+def _parse_fallback_models(raw: Optional[str] = None) -> list[str]:
+    if raw is None:
+        raw = os.getenv("GEMINI_FALLBACK_MODELS", "")
+    models = [model.strip() for model in raw.split(",") if model.strip()]
+    return models or ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+
+GEMINI_FALLBACK_MODELS = _parse_fallback_models()
+
+# Backwards-compatible aliases for existing imports/tests.
+GEMINI_MODEL = DEFAULT_GEMINI_MODEL
+FALLBACK_MODELS = GEMINI_FALLBACK_MODELS
 
 # Задержки между retry попытками (секунды)
 RETRY_DELAYS = [5, 15, 30]
@@ -95,7 +110,7 @@ def _call_model_once(prompt: str, model: str, max_tokens: int) -> tuple:
         return "", 0
 
 
-def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
+def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False, primary_model: Optional[str] = None, fallback_models: Optional[list[str]] = None) -> str:
     """
     Вызывает Gemini с retry и fallback.
 
@@ -117,10 +132,12 @@ def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent
         print("LLM ERROR: GEMINI_API_KEY not set")
         return ""
 
-    models = [GEMINI_MODEL] + [m for m in FALLBACK_MODELS if m != GEMINI_MODEL]
+    selected_primary_model = primary_model or DEFAULT_GEMINI_MODEL
+    selected_fallback_models = fallback_models if fallback_models is not None else GEMINI_FALLBACK_MODELS
+    models = [selected_primary_model] + [m for m in selected_fallback_models if m != selected_primary_model]
 
     for model in models:
-        print(f"LLM: trying model={model}")
+        print(f"LLM: trying model={model} feature={feature}")
 
         for attempt, delay in enumerate(RETRY_DELAYS, start=1):
             text, status = _call_model_once(prompt, model, max_tokens)
@@ -160,17 +177,17 @@ def _call_gemini(prompt: str, max_tokens: int = 1024, feature: str = "news_agent
 
 
 def generate_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
-    return _call_gemini(prompt, max_tokens=512, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
+    return _call_gemini(prompt, max_tokens=512, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override, primary_model=DEFAULT_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS)
 
 
 def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
-    return _call_gemini(prompt, max_tokens=1024, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
+    return _call_gemini(prompt, max_tokens=1024, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override, primary_model=DEFAULT_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS)
 
 
 def generate_live_analyst_text(prompt: str, feature: str = "live_analyst", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
     max_tokens = int(os.getenv("LIVE_ANALYST_MAX_OUTPUT_TOKENS", "2200"))
-    return _call_gemini(prompt, max_tokens=max_tokens, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
+    return _call_gemini(prompt, max_tokens=max_tokens, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override, primary_model=LIVE_ANALYST_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS)
 
 
 def generate_news_text(prompt: str, feature: str = "news_agent", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False) -> str:
-    return _call_gemini(prompt, max_tokens=768, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override)
+    return _call_gemini(prompt, max_tokens=768, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override, primary_model=DEFAULT_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS)
