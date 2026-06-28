@@ -155,6 +155,19 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
     intent = str(pack.get("intent") or "").lower()
     followup_type = str(pack.get("followup_type") or "").lower()
     plan = pack.get("market_intelligence_plan") or {}
+    frame = pack.get("universal_live_frame") or {}
+    answer_style = str(frame.get("answer_style") or "").lower()
+    user_intent = str(frame.get("user_intent") or intent or "").lower()
+    if answer_style in ("probability_vs_price", "debug_report", "decision_tree", "pros_cons", "research_brief") or user_intent in ("calculate_value", "debug_problem", "make_decision", "compare_options", "research_topic", "check_claim"):
+        if answer_style == "debug_report" or user_intent == "debug_problem":
+            lines = ["Найти вероятную причину по логам?", "Составить план фикса?", "Проверить, что смотреть в следующем деплое?"] if lang == "ru" else ["Find the likely cause from logs?", "Build a fix plan?", "Check what to watch in the next deploy?"]
+        elif answer_style in ("decision_tree", "pros_cons") or user_intent in ("make_decision", "compare_options"):
+            lines = ["Разобрать риски?", "Сравнить варианты?", "Собрать пошаговый план?"] if lang == "ru" else ["Break down risks?", "Compare options?", "Build a step-by-step plan?"]
+        elif answer_style == "research_brief" or user_intent in ("research_topic", "check_claim"):
+            lines = ["Проверить свежие источники?", "Разобрать аргументы за/против?", "Составить краткий вывод?"] if lang == "ru" else ["Check fresh sources?", "Break down arguments for/against?", "Draft a concise conclusion?"]
+        else:
+            lines = ["Посчитать value под твой коэффициент?", "Разобрать факторы, которые двигают вероятность?", "Показать fair odds / минимальный playable odds?"] if lang == "ru" else ["Calculate value for your odds?", "Break down factors that move probability?", "Show fair odds / minimum playable odds?"]
+        return "\n".join(f"- {line}" for line in lines[:3])
     if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
         factors = " ".join(str(x).lower() for x in (plan.get("needed_factors") or []))
         domain = str(plan.get("market_domain") or mode or "unknown").lower()
@@ -287,6 +300,27 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
     intent = str(pack.get("intent") or "").lower()
     followup_type = str(pack.get("followup_type") or "").lower()
     plan = pack.get("market_intelligence_plan") or {}
+    frame = pack.get("universal_live_frame") or {}
+    answer_style = str(frame.get("answer_style") or "").lower()
+    user_intent = str(frame.get("user_intent") or intent or "").lower()
+    if answer_style in ("probability_vs_price", "debug_report", "decision_tree", "pros_cons", "research_brief") or user_intent in ("calculate_value", "debug_problem", "make_decision", "compare_options", "research_topic", "check_claim"):
+        if answer_style == "debug_report" or user_intent == "debug_problem":
+            labels = ["Найти вероятную причину по логам?" if lang == "ru" else "Find the likely cause from logs?", "Составить план фикса?" if lang == "ru" else "Build a fix plan?", "Проверить, что смотреть в следующем деплое?" if lang == "ru" else "Check what to watch in the next deploy?"]
+            ids = ["debug_likely_cause", "debug_fix_plan", "debug_next_deploy_check"]
+            templates = ["Find likely cause from available logs without inventing logs.", "Build a step-by-step fix plan.", "List what to verify in the next deployment."]
+        elif answer_style in ("decision_tree", "pros_cons") or user_intent in ("make_decision", "compare_options"):
+            labels = ["Разобрать риски?" if lang == "ru" else "Break down risks?", "Сравнить варианты?" if lang == "ru" else "Compare options?", "Собрать пошаговый план?" if lang == "ru" else "Build a step-by-step plan?"]
+            ids = ["risk_breakdown", "compare_options", "step_by_step_plan"]
+            templates = ["Break down key risks and missing data.", "Compare available options with pros and cons.", "Build a practical step-by-step plan."]
+        elif answer_style == "research_brief" or user_intent in ("research_topic", "check_claim"):
+            labels = ["Проверить свежие источники?" if lang == "ru" else "Check fresh sources?", "Разобрать аргументы за/против?" if lang == "ru" else "Break down arguments for/against?", "Составить краткий вывод?" if lang == "ru" else "Draft a concise conclusion?"]
+            ids = ["fresh_sources", "for_against", "concise_conclusion"]
+            templates = ["Check fresh reliable sources and separate verified from unverified.", "List arguments for and against.", "Draft a concise evidence-based conclusion."]
+        else:
+            labels = ["Посчитать value под твой коэффициент?" if lang == "ru" else "Calculate value for your odds?", "Разобрать факторы, которые двигают вероятность?" if lang == "ru" else "Break down factors that move probability?", "Показать fair odds / минимальный playable odds?" if lang == "ru" else "Show fair odds / minimum playable odds?"]
+            ids = ["calculate_value", "probability_drivers", "fair_playable_odds"]
+            templates = ["Calculate implied probability and value if enough evidence exists.", "Explain factors that move the probability without inventing data.", "Show fair odds formula and minimum playable odds if independent probability exists."]
+        return [{"id": action_id, "label": label, "resolved_query_template": template} for action_id, label, template in zip(ids, labels, templates)]
     if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
         labels = [
             "Посчитать value под твой коэффициент?" if lang == "ru" else "Calculate value for your odds?",
@@ -1977,6 +2011,7 @@ def _merge_previous_market_context_into_understanding(understanding: Dict[str, A
     if not previous_context:
         return understanding or {}
     merged = dict(understanding or {})
+    frame_followup = ((previous_context.get("universal_live_frame") or {}).get("followup_state") or {}) if isinstance(previous_context.get("universal_live_frame"), dict) else {}
     mapping = {
         "market_domain": ("market_domain", "domain"),
         "market_type": ("market_type",),
@@ -1990,7 +2025,7 @@ def _merge_previous_market_context_into_understanding(understanding: Dict[str, A
         "price": ("price",),
     }
     for ctx_key, targets in mapping.items():
-        value = previous_context.get(ctx_key)
+        value = frame_followup.get(ctx_key) or previous_context.get(ctx_key)
         if value in (None, "", [], {}):
             if ctx_key == "event":
                 value = previous_context.get("teams_event")
@@ -2028,6 +2063,7 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         teams_event = str(teams or "")
     market_fields = _market_context_fields_from_pack(understanding, router_result, evidence_pack)
     extra_market_fields = {k: v for k, v in market_fields.items() if k not in ("odds", "timeframe")}
+    frame = (evidence_pack or {}).get("universal_live_frame") or {}
     save_live_context(
         int(user_id),
         mode=mode,
@@ -2042,6 +2078,16 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         **extra_market_fields,
         last_final_answer=answer,
         suggested_actions=build_live_suggested_actions(evidence_pack, ui_language=ui_language),
+        universal_live_frame=frame,
+        followup_state=frame.get("followup_state") or {},
+        user_intent=frame.get("user_intent") or "",
+        subject=frame.get("subject") or "",
+        question_type=frame.get("question_type") or "",
+        safety_domain=frame.get("safety_domain") or "",
+        answer_style=frame.get("answer_style") or "",
+        evidence_needs=frame.get("evidence_needs") or [],
+        missing_data=frame.get("missing_data") or (evidence_pack or {}).get("missing_data") or [],
+        allowed_decision_labels=frame.get("allowed_decision_labels") or [],
     )
 
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
