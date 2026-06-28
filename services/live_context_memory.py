@@ -144,7 +144,7 @@ def get_live_context(user_id: int) -> Optional[Dict[str, Any]]:
     return dict(ctx)
 
 
-def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None, market_domain: str = "", market_type: str = "", event: str = "", participants: Any = None, side: Any = None, line: Any = None, implied_probability: Any = None, asset: str = "", price: Any = None) -> Dict[str, Any]:
+def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None, market_domain: str = "", market_type: str = "", event: str = "", participants: Any = None, side: Any = None, line: Any = None, implied_probability: Any = None, asset: str = "", price: Any = None, universal_live_frame: Optional[Dict[str, Any]] = None, followup_state: Optional[Dict[str, Any]] = None, user_intent: str = "", subject: str = "", question_type: str = "", safety_domain: str = "", answer_style: str = "", evidence_needs: Optional[List[str]] = None, missing_data: Optional[List[str]] = None, allowed_decision_labels: Optional[List[str]] = None) -> Dict[str, Any]:
     previous = _contexts.get(int(user_id)) or {}
     now = _now()
     ctx = {
@@ -166,6 +166,17 @@ def save_live_context(user_id: int, *, mode: str, original_user_text: str, norma
         "implied_probability": implied_probability if implied_probability not in (None, "") else None,
         "asset": asset or asset_pair or "",
         "price": price if price not in (None, "") else None,
+        "universal_live_frame": universal_live_frame or previous.get("universal_live_frame") or {},
+        "followup_state": followup_state or (universal_live_frame or {}).get("followup_state") or previous.get("followup_state") or {},
+        "domain": (universal_live_frame or {}).get("domain") or market_domain or previous.get("domain") or "",
+        "user_intent": user_intent or (universal_live_frame or {}).get("user_intent") or previous.get("user_intent") or "",
+        "subject": subject or (universal_live_frame or {}).get("subject") or previous.get("subject") or "",
+        "question_type": question_type or (universal_live_frame or {}).get("question_type") or previous.get("question_type") or "",
+        "safety_domain": safety_domain or (universal_live_frame or {}).get("safety_domain") or previous.get("safety_domain") or "",
+        "answer_style": answer_style or (universal_live_frame or {}).get("answer_style") or previous.get("answer_style") or "",
+        "evidence_needs": list(evidence_needs or (universal_live_frame or {}).get("evidence_needs") or previous.get("evidence_needs") or []),
+        "missing_data": list(missing_data or (universal_live_frame or {}).get("missing_data") or previous.get("missing_data") or []),
+        "allowed_decision_labels": list(allowed_decision_labels or (universal_live_frame or {}).get("allowed_decision_labels") or previous.get("allowed_decision_labels") or []),
         "key_levels": key_levels or {},
         "last_final_answer": (last_final_answer or "")[:1600],
         "suggested_actions": list(suggested_actions or previous.get("suggested_actions") or [])[:3],

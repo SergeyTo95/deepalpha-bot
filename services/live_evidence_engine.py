@@ -2,6 +2,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.universal_market_intelligence_service import build_market_intelligence_plan
+from services.universal_live_frame_service import build_universal_live_frame
 
 
 def _as_list(value: Any) -> List[Any]:
@@ -137,6 +138,8 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
     mode = _mode(understanding, router_result); intent = str(understanding.get("intent") or "unknown")
     planned_queries = plan_live_research_queries(user_text, understanding)
     market_plan = build_market_intelligence_plan(user_text, understanding, router_result, ui_language=ui_language)
+    frame_seed_pack = {"market_intelligence_plan": market_plan, "missing_data": []}
+    universal_live_frame = build_universal_live_frame(user_text, router_result, understanding, evidence_pack=frame_seed_pack, ui_language=ui_language)
     for q in market_plan.get("research_queries") or []:
         if q and not any(item.get("query") == q for item in planned_queries):
             planned_queries.append({"purpose": "market_intelligence", "query": q, "priority": 3})
@@ -230,12 +233,16 @@ def build_live_evidence_pack(user_text: str, understanding: Dict[str, Any], rout
     for item in market_plan.get("must_not_invent") or []:
         if item not in policy["must_not_invent"]:
             policy["must_not_invent"].append(item)
+    for item in universal_live_frame.get("must_not_invent") or []:
+        if item not in policy["must_not_invent"]:
+            policy["must_not_invent"].append(item)
     if mode in ("esports", "event_betting"):
         policy["must_not_invent"].extend(["recent form", "rosters", "map veto", "patch", "injuries/lineups", "scores/results"])
     labels = ["WATCH", "DATA NEEDED"] if confidence == "low" else ["WATCH", "NO TRADE", "EDGE CANDIDATE"]
     if mode == "sports" and intent in ("betting_angle", "odds_value") and not policy["can_comment_on_odds"]: labels = ["NO BET", "WATCH", "DATA NEEDED"]
     if mode in ("esports", "event_betting"): labels = ["DATA NEEDED", "NO EDGE", "WATCH", "EDGE CANDIDATE", "NO BET"]
-    return {"ok": True, "mode": mode, "intent": intent, "market_intelligence_plan": market_plan, "planned_queries": planned_queries, "evidence_items": items, "derived_facts": facts, "missing_data": missing, "conflicts": conflicts, "data_quality_score": score, "confidence_label": confidence, "answer_policy": policy, "recommended_decision_labels": labels, "reason": "Evidence pack built from live understanding plus available market/sports/research context."}
+    universal_live_frame["missing_data"] = list(missing)
+    return {"ok": True, "mode": mode, "intent": intent, "market_intelligence_plan": market_plan, "universal_live_frame": universal_live_frame, "planned_queries": planned_queries, "evidence_items": items, "derived_facts": facts, "missing_data": missing, "conflicts": conflicts, "data_quality_score": score, "confidence_label": confidence, "answer_policy": policy, "recommended_decision_labels": labels, "reason": "Evidence pack built from live understanding plus available market/sports/research context."}
 
 
 def _direct_command_issue(text: str) -> str:
