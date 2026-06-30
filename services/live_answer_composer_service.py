@@ -42,7 +42,7 @@ def _fallback(domain: str, ui_language: str) -> str:
             "Fix: keep one polling instance or move to webhook/leader lock. Final: LIKELY CAUSE / FIX NEEDED."
         )
     if domain == "business":
-        return ("Как бизнес-решение это нельзя оценить без цели, аудитории, канала, бюджета, текущей конверсии, CAC, payback и таймлайна. "
+        return ("Как бизнес-решение это нельзя оценить без цель/goal, аудитория/audience, канала, бюджета, текущей конверсии, CAC, payback и таймлайна. "
                 "Практичный следующий шаг: запустить маленький тест с чётким stop-loss, заранее определить целевой CAC/конверсию и сравнить с payback. "
                 "Итог: DATA NEEDED.") if ru else (
                 "As a business decision, this needs goal, audience, channel, budget, current conversion, CAC, payback, and timeline. Run a small test with a clear stop-loss and compare CAC/conversion to payback. Final: DATA NEEDED.")
@@ -53,6 +53,29 @@ def _fallback(domain: str, ui_language: str) -> str:
         return ("Это можно разобрать только как общую правовую информацию, не как финальное юридическое заключение. Нужны юрисдикция, текст договора/пункта, даты, стороны и цель. "
                 "Для решения с последствиями лучше показать документы юристу. Итог: INFORMATIONAL / DATA NEEDED.")
     return ("Данных недостаточно для уверенного вывода. Скажи, что именно нужно решить, какие факты уже известны и какие ограничения важны. Итог: DATA NEEDED.") if ru else "There is not enough evidence for a confident answer. Share the decision, known facts, and constraints. Final: DATA NEEDED."
+
+
+_STRICT_NON_MARKET_COMPOSER_MODES = {
+    "technical_debug",
+    "business",
+    "health_info",
+    "legal_info",
+    "research",
+}
+_STRICT_NON_MARKET_ROLE_MARKERS = (
+    "incident responder",
+    "business advisor",
+    "health information",
+    "legal information",
+    "research analyst",
+)
+
+
+def is_strict_non_market_composer(composer: dict) -> bool:
+    composer = composer or {}
+    mode = _s(composer.get("composer_mode")).lower()
+    role = _s(composer.get("system_role")).lower()
+    return mode in _STRICT_NON_MARKET_COMPOSER_MODES or any(marker in role for marker in _STRICT_NON_MARKET_ROLE_MARKERS)
 
 
 def compose_live_answer(
