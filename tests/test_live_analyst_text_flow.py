@@ -15,6 +15,7 @@ def _patch_common(monkeypatch, balance=True):
     session = {"id": 123, "current_market_url": "", "current_market_title": ""}
     saved = []
     charges = []
+    monkeypatch.setattr(svc, "can_user_access_live", lambda user_id: {"allowed": True, "mode": "everyone"})
     monkeypatch.setattr(svc, "is_live_enabled", lambda: True)
     monkeypatch.setattr(svc, "get_live_request_cost", lambda message_type: 1)
     monkeypatch.setattr(svc, "can_user_afford_live_request", lambda user_id, cost: balance)

@@ -15,6 +15,7 @@ from services.live_analyst_admin_service import (
     get_memory_message_limit,
     is_live_enabled,
 )
+from services.live_access_control_service import can_user_access_live, format_live_access_denied_message
 from services.live_analyst_billing_service import (
     INSUFFICIENT_LIVE_TOKENS_MESSAGE,
     can_user_afford_live_request,
@@ -2174,6 +2175,13 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
     )
 
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
+    ui_language = "ru" if ui_language == "ru" else "en"
+    access = can_user_access_live(user_id)
+    if not access.get("allowed"):
+        logger.info("live_access_denied user_id=%s mode=%s", user_id, access.get("mode"))
+        return {"ok": False, "message": format_live_access_denied_message(ui_language), "charged": False, "access_denied": True}
+    logger.info("live_access_allowed user_id=%s mode=%s", user_id, access.get("mode"))
+
     if not is_live_enabled():
         return {"ok": False, "message": LIVE_DISABLED_MESSAGE, "charged": False}
 
@@ -2198,7 +2206,6 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         memory_limit = max(memory_limit, 60)
     recent = get_recent_context(int(session["id"]), memory_limit)
     router_result = router_result or {}
-    ui_language = "ru" if ui_language == "ru" else "en"
     original_text = text
     followup_resolution = resolve_live_followup(user_id, text)
     if followup_resolution.get("need_context"):

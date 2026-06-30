@@ -116,6 +116,7 @@ def test_live_analyst_integration_scores_and_logs_without_extra_charge(monkeypat
     charges = []
     events = []
     qualities = []
+    monkeypatch.setattr(live_svc, "can_user_access_live", lambda user_id: {"allowed": True, "mode": "everyone"})
     monkeypatch.setattr(live_svc, "is_live_enabled", lambda: True)
     monkeypatch.setattr(live_svc, "get_live_request_cost", lambda message_type: 1)
     monkeypatch.setattr(live_svc, "can_user_afford_live_request", lambda user_id, cost: True)
