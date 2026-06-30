@@ -7,7 +7,7 @@ _NON_MARKET_ADAPTIVE_DOMAINS = {
     "technical_debug", "business", "tech", "news", "gaming", "personal_decision",
     "health_info", "legal_info", "generic_research",
 }
-_MARKET_DOMAINS = {"crypto", "sports", "esports", "polymarket"}
+_MARKET_DOMAINS = {"crypto", "sports", "esports", "event_betting", "polymarket"}
 
 
 def _s(value: Any) -> str:
@@ -78,6 +78,18 @@ def is_strict_non_market_composer(composer: dict) -> bool:
     return mode in _STRICT_NON_MARKET_COMPOSER_MODES or any(marker in role for marker in _STRICT_NON_MARKET_ROLE_MARKERS)
 
 
+def is_market_composer(composer: dict) -> bool:
+    composer = composer or {}
+    mode = _s(composer.get("composer_mode")).lower()
+    role = _s(composer.get("system_role")).lower()
+    return (
+        mode in {"betting", "financial", "event_probability"}
+        or "betting market analyst" in role
+        or "market analyst" in role
+        or "event probability analyst" in role
+    )
+
+
 def compose_live_answer(
     user_text: str,
     evidence_pack: dict,
@@ -88,6 +100,9 @@ def compose_live_answer(
     evidence_pack = evidence_pack or {}
     frame = _frame(evidence_pack)
     domain = _s(frame.get("domain") or evidence_pack.get("mode") or (understanding or {}).get("mode") or (router_result or {}).get("mode") or "generic_research").lower()
+    market_hint = _s(evidence_pack.get("mode") or (understanding or {}).get("mode") or (router_result or {}).get("mode")).lower()
+    if market_hint in _MARKET_DOMAINS:
+        domain = market_hint
     low_user = (user_text or "").lower()
     if any(term in low_user for term in ("traceback", "getupdates", "aiogram", "railway", "polling", "webhook", "bot_token", "redeploy")):
         domain = "technical_debug"
@@ -101,7 +116,7 @@ def compose_live_answer(
 
     if domain == "technical_debug" or style == "debug_report" or intent in ("debug_problem", "incident_response"):
         mode, role = "technical_debug", "senior production incident responder"
-    elif domain == "business" or safety_domain == "business_advice" or style in ("decision_tree", "pros_cons"):
+    elif domain == "business" or safety_domain == "business_advice" or (style in ("decision_tree", "pros_cons") and domain not in _MARKET_DOMAINS):
         mode, role = "business", "senior product/growth/business advisor"
     elif domain in ("crypto", "stocks") or safety_domain == "financial_advice":
         mode, role = "financial", "market analyst"

@@ -1444,10 +1444,10 @@ def test_no_duplicate_decision_ending_for_market_answer():
     assert not ("Итог: DATA NEEDED" in answer and "Decision: DATA NEEDED" in answer)
 
 
-def _patch_non_market_flow(monkeypatch, text, mode):
+def _patch_non_market_flow(monkeypatch, text, mode, evidence_mode="unknown"):
     monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "unknown", "intent": "incident_response" if mode == "technical_debug" else "business_decision", "needs": {}})
     evidence_pack = {
-        "mode": "unknown",
+        "mode": evidence_mode,
         "intent": "incident_response" if mode == "technical_debug" else "business_decision",
         "missing_data": [],
         "derived_facts": {},
@@ -1510,3 +1510,24 @@ def test_business_market_like_answer_gets_replaced(monkeypatch):
         assert expected in low
     for forbidden in ("teams", "event_time", "уверенного входа", "implied probability", "moneyline"):
         assert forbidden not in low
+
+
+def test_technical_debug_strict_composer_overrides_legacy_sports_mode(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    text = "Railway aiogram traceback: Terminated by other getUpdates request; make sure that only one bot instance is running."
+    _patch_non_market_flow(monkeypatch, text, "technical_debug", evidence_mode="sports")
+    market_answer = "🧠 Коротко:\nWATCH: данных недостаточно для уверенного входа; лучше дождаться подтверждения.\n\nДанные:\nКачество evidence: medium. Не хватает: teams, event_time.\n\nDecision: WATCH"
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: market_answer)
+
+    result = svc.process_live_text(24204, text, router_result={"mode": "sports"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    out = result["message"]
+    assert "getUpdates" in out
+    assert "polling" in out
+    assert "BOT_TOKEN" in out or "bot token" in out
+    assert "Railway" in out
+    assert "LIKELY CAUSE" in out or "FIX NEEDED" in out
+    forbidden = ["WATCH: данных недостаточно для уверенного входа", "teams, event_time", "Decision: WATCH", "Implied probability", "Edge", "moneyline", "american_football", "спорт", "sports"]
+    assert not any(x in out for x in forbidden)

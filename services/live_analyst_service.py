@@ -29,7 +29,7 @@ from services.live_context_memory import (
     resolve_live_followup,
     save_live_context,
 )
-from services.live_answer_composer_service import compose_live_answer, is_non_market_adaptive_domain, is_strict_non_market_composer
+from services.live_answer_composer_service import compose_live_answer, is_market_composer, is_non_market_adaptive_domain, is_strict_non_market_composer
 from services.live_evidence_engine import (
     apply_validation_safety,
     build_live_evidence_pack,
@@ -2356,7 +2356,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
                     return deterministic
                 logger.warning("live_answer_repair_retry_failed_no_charge user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
                 return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
-    strict_non_market = is_strict_non_market_composer(answer_composer) and (mode or "").lower() not in {"crypto", "sports", "esports", "event_betting", "polymarket"}
+    strict_non_market = is_strict_non_market_composer(answer_composer) and not is_market_composer(answer_composer)
     if strict_non_market:
         composer_mode = answer_composer.get("composer_mode") or "unknown"
         logger.info("live_answer_composer_strict_mode composer_mode=%s", composer_mode)
