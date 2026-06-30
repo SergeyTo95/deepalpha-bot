@@ -244,7 +244,7 @@
             </div>
 
             <div class="custom-amount-section">
-                <div class="custom-amount-title">Или введи свою сумму в TON:</div>
+                <div class="custom-amount-title">Или введи свою сумму в Gram:</div>
                 <input type="number" class="custom-input" id="custom-amount"
                        placeholder="Например: 2.5"
                        step="0.1" min="0.1"
@@ -256,13 +256,13 @@
             </div>
 
             <button class="pay-btn" id="pay-btn" onclick="handlePay('tokens')">
-                💎 Оплатить через TON Connect
+                💎 Оплатить Gram
             </button>
 
             <div class="divider">или вручную</div>
 
             <div class="manual-pay">
-                <div class="manual-title">Отправь TON напрямую</div>
+                <div class="manual-title">Отправь Gram напрямую</div>
                 <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
@@ -277,7 +277,7 @@
         <div class="tab-content" id="tab-subscription">
             <div class="sub-card">
                 <div class="sub-title">🔔 DeepAlpha Premium</div>
-                <div class="sub-price" id="sub-price-display">1 TON / 30 дней</div>
+                <div class="sub-price" id="sub-price-display">1 Gram / 30 дней</div>
                 <div class="sub-feature">🔔 Ежедневные сигналы</div>
                 <div class="sub-feature">⚡ Сигнал часа бесплатно</div>
                 <div class="sub-feature">📊 До 15 анализов в день</div>
@@ -299,7 +299,7 @@
             <div class="divider">или вручную</div>
 
             <div class="manual-pay">
-                <div class="manual-title">Отправь TON напрямую</div>
+                <div class="manual-title">Отправь Gram напрямую</div>
                 <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
@@ -315,13 +315,13 @@
             <div class="author-card">
                 <div class="author-icon">📢</div>
                 <div class="author-title">Стать автором DeepAlpha</div>
-                <div class="author-price-big" id="author-price-display">5 TON</div>
+                <div class="author-price-big" id="author-price-display">5 Gram</div>
                 <div class="author-desc">Одноразовая оплата — пожизненный статус</div>
 
                 <div class="author-features">
                     <div class="author-feature">📝 Публикуй свои прогнозы как автор</div>
                     <div class="author-feature">👥 Получай подписчиков</div>
-                    <div class="author-feature">💝 Принимай донаты в TON от юзеров</div>
+                    <div class="author-feature">💝 Принимай донаты в Gram от юзеров</div>
                     <div class="author-feature">👤 Публичный профиль автора</div>
                     <div class="author-feature">📊 Статистика донатов и подписок</div>
                     <div class="author-feature">💳 Вывод донатов на свой кошелёк</div>
@@ -345,7 +345,7 @@
             <div class="divider">или вручную</div>
 
             <div class="manual-pay">
-                <div class="manual-title">Отправь TON напрямую</div>
+                <div class="manual-title">Отправь Gram напрямую</div>
                 <div class="address-box" data-ton-project-wallet>UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
@@ -362,7 +362,7 @@
                 <div style="font-size:36px;">💝</div>
                 <div style="font-size:22px;font-weight:800;margin-top:4px;">Поддержать автора</div>
                 <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-top:4px;">
-                    Отправь донат в TON выбранному автору
+                    Отправь донат в Gram выбранному автору
                 </div>
             </div>
 
@@ -448,7 +448,7 @@
 
             <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:16px;margin-bottom:16px;">
                 <div style="font-size:13px;color:rgba(255,255,255,0.7);line-height:1.6;">
-                    💡 Доп. слоты оплачиваются <b>токенами</b>, не TON.<br>
+                    💡 Доп. слоты оплачиваются <b>токенами</b>, не Gram.<br>
                     Нажми кнопку ниже — перейди на вкладку Токены чтобы купить токены, затем купи слоты.
                 </div>
             </div>
@@ -596,7 +596,7 @@
                 let rootId = 'ton-connect-button';
                 if (specialMode === 'author_status') rootId = 'ton-connect-button-author';
                 else if (specialMode === 'donate') rootId = 'ton-connect-button-donate';
-                // watchlist_slots — без TON Connect, только токены
+                // watchlist_slots — без Gram Connect, только токены
 
                 if (specialMode === 'watchlist_slots') return;  // не инициализируем
 
@@ -640,14 +640,14 @@
                     <div class="package-header">
                         <div class="package-top">
                             <div class="package-name">${pkg.name}</div>
-                            <div class="package-price">${pkg.price_ton} TON</div>
+                            <div class="package-price">${pkg.price_ton} Gram</div>
                         </div>
                         <div class="package-badge-slot">${popularBadge}</div>
                     </div>
                     <div class="package-bottom">
                         <div>
                             <div class="package-tokens">💎 ${pkg.tokens} токенов ${discountText}</div>
-                            <div class="package-per-token">${perToken} TON за токен</div>
+                            <div class="package-per-token">${perToken} Gram за токен</div>
                         </div>
                     </div>
                 </div>`;
@@ -689,11 +689,11 @@
             const pkg = packages.find(p => p.id === selectedPackageId);
             if (pkg) {
                 document.getElementById('pay-btn').textContent =
-                    `💎 Купить «${pkg.name}» — ${pkg.price_ton} TON (${pkg.tokens} токенов)`;
+                    `💎 Купить «${pkg.name}» — ${pkg.price_ton} Gram (${pkg.tokens} токенов)`;
             } else {
                 const tokens = Math.floor(selectedAmount / tokenPrice);
                 document.getElementById('pay-btn').textContent =
-                    `💎 Оплатить ${selectedAmount} TON (≈${tokens} токенов)`;
+                    `💎 Оплатить ${selectedAmount} Gram (≈${tokens} токенов)`;
             }
         }
 
@@ -816,8 +816,8 @@
                         if (data.subscription_price) subPrice = parseFloat(data.subscription_price);
                         if (data.subscription_days) subDays = parseInt(data.subscription_days);
 
-                        document.getElementById('sub-price-display').textContent = `${subPrice} TON / ${subDays} дней`;
-                        document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} TON`;
+                        document.getElementById('sub-price-display').textContent = `${subPrice} Gram / ${subDays} дней`;
+                        document.getElementById('sub-pay-btn').textContent = `🔔 Подписаться — ${subPrice} Gram`;
 
                         // Настройки авторов/донатов/слотов
                         if (data.author_status_price_ton) authorStatusPrice = parseFloat(data.author_status_price_ton);
@@ -838,7 +838,7 @@
                             if (data.subscription_until) {
                                 document.getElementById('sub-until').textContent = `До ${data.subscription_until.slice(0,10)}`;
                             }
-                            document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} TON`;
+                            document.getElementById('sub-pay-btn').textContent = `🔄 Продлить — ${subPrice} Gram`;
                         } else {
                             document.getElementById('sub-badge').style.display = 'none';
                             document.getElementById('sub-status-card').style.display = 'none';
@@ -872,8 +872,8 @@
         // ═══════════════════════════════════════════
 
         function updateAuthorStatusUI() {
-            document.getElementById('author-price-display').textContent = `${authorStatusPrice} TON`;
-            document.getElementById('author-pay-btn').textContent = `📢 Стать автором — ${authorStatusPrice} TON`;
+            document.getElementById('author-price-display').textContent = `${authorStatusPrice} Gram`;
+            document.getElementById('author-pay-btn').textContent = `📢 Стать автором — ${authorStatusPrice} Gram`;
 
             if (userData && userData.is_author) {
                 document.getElementById('already-author-card').style.display = 'block';
@@ -1078,7 +1078,7 @@
                         <div class="author-avatar">${initial}</div>
                         <div class="author-info">
                             <div class="author-name">@${a.display_name}</div>
-                            <div class="author-stats">👥 ${a.total_subscribers} · 📝 ${a.total_posts} · 💰 ${a.total_earned_ton.toFixed(2)} TON</div>
+                            <div class="author-stats">👥 ${a.total_subscribers} · 📝 ${a.total_posts} · 💰 ${a.total_earned_ton.toFixed(2)} Gram</div>
                         </div>
                     </div>`;
                 }).join('');
@@ -1148,13 +1148,13 @@
                 return;
             }
             if (!donationAmount || donationAmount < minDonation) {
-                btn.textContent = `❌ Минимум ${minDonation} TON`;
+                btn.textContent = `❌ Минимум ${minDonation} Gram`;
                 btn.disabled = true;
                 return;
             }
 
             const authorGets = (donationAmount * (100 - platformFeePercent) / 100).toFixed(4);
-            btn.textContent = `💝 Донат ${donationAmount} TON (автор получит ${authorGets})`;
+            btn.textContent = `💝 Донат ${donationAmount} Gram (автор получит ${authorGets})`;
             btn.disabled = false;
         }
 
@@ -1172,7 +1172,7 @@
                 return;
             }
             if (!donationAmount || donationAmount < minDonation) {
-                showStatus(`❌ Минимум ${minDonation} TON`, 'error');
+                showStatus(`❌ Минимум ${minDonation} Gram`, 'error');
                 return;
             }
             if (userId === selectedAuthorId) {
@@ -1209,7 +1209,7 @@
                     throw new Error(createData.error || 'Не удалось создать донат');
                 }
 
-                // Отправляем транзакцию TON
+                // Отправляем транзакцию Gram
                 const amountNano = Math.floor(donationAmount * 1e9).toString();
 
                 await tonConnectUI.sendTransaction({
@@ -1227,7 +1227,7 @@
                     ? `@${selectedAuthorData.display_name}`
                     : 'автору';
                 showStatus(
-                    `✅ Донат ${donationAmount} TON отправлен ${authorName}!\n` +
+                    `✅ Донат ${donationAmount} Gram отправлен ${authorName}!\n` +
                     `Автор получит подтверждение через 1-2 минуты.`,
                     'success'
                 );
@@ -1318,7 +1318,7 @@
                 return;
             }
             if (!tonConnectUI) {
-                showStatus('❌ TON Connect не инициализирован', 'error');
+                showStatus('❌ Gram Connect не инициализирован', 'error');
                 return;
             }
             if (!tonConnectUI.wallet) {

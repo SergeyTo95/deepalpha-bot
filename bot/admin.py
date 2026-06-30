@@ -359,7 +359,7 @@ def pricing_kb():
         InlineKeyboardButton("🔍 Analysis price (tokens)", callback_data="pricing_set_analysis"),
         InlineKeyboardButton("💡 Signal price (tokens)", callback_data="pricing_set_opportunity"),
         InlineKeyboardButton(f"👥 Referral %: {ref_percent}%", callback_data="pricing_set_referral"),
-        InlineKeyboardButton(f"🔔 Подписка: {sub_price} TON", callback_data="pricing_set_sub_price"),
+        InlineKeyboardButton(f"🔔 Подписка: {sub_price} Gram", callback_data="pricing_set_sub_price"),
         InlineKeyboardButton(f"📅 Дней подписки: {sub_days}", callback_data="pricing_set_sub_days"),
         InlineKeyboardButton(f"📊 Анализов в день: {sub_analyses}", callback_data="pricing_set_sub_analyses"),
         InlineKeyboardButton(f"💡 Сигналов в день: {sub_opp}", callback_data="pricing_set_sub_opp"),
@@ -410,11 +410,11 @@ def pricing_text():
     return (
         f"💰 Pricing & Tokens\n\n"
         f"Режим: {'🟢 Платный' if paid_mode == 'on' else '🔴 Бесплатный'}\n"
-        f"Цена токена: {token_price} TON\n"
+        f"Цена токена: {token_price} Gram\n"
         f"Анализ: {analysis_price} токенов\n"
         f"Сигнал: {opportunity_price} токенов\n"
         f"Реферальный %: {ref_percent}%\n\n"
-        f"🔔 Подписка: {sub_price} TON / {sub_days} дней\n"
+        f"🔔 Подписка: {sub_price} Gram / {sub_days} дней\n"
         f"📊 Анализов в день: {sub_analyses}\n"
         f"💡 Сигналов в день: {sub_opp}\n\n"
         f"🎁 Пробный период: {'ON' if free_trial == 'on' else 'OFF'}\n"
@@ -441,7 +441,7 @@ def packages_kb():
         status = "✅" if p["is_active"] else "❌"
         discount = f" (-{p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
         kb.add(InlineKeyboardButton(
-            f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}",
+            f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} Gram{discount}",
             callback_data=f"pkg_edit_{p['id']}"
         ))
     kb.add(InlineKeyboardButton("➕ Добавить пакет", callback_data="pkg_add"))
@@ -454,7 +454,7 @@ def package_edit_kb(package_id: int, is_active: bool):
     kb.add(
         InlineKeyboardButton("✏️ Название", callback_data=f"pkg_name_{package_id}"),
         InlineKeyboardButton("🔢 Кол-во токенов", callback_data=f"pkg_tokens_{package_id}"),
-        InlineKeyboardButton("💎 Цена TON", callback_data=f"pkg_price_{package_id}"),
+        InlineKeyboardButton("💎 Цена Gram", callback_data=f"pkg_price_{package_id}"),
         InlineKeyboardButton("🏷 Скидка %", callback_data=f"pkg_discount_{package_id}"),
         InlineKeyboardButton(
             "❌ Деактивировать" if is_active else "✅ Активировать",
@@ -505,7 +505,7 @@ def format_user_info(user: dict) -> str:
     auth_line = "📢 Автор" if is_auth else ""
     if is_auth:
         auth_balance = user.get("author_balance_ton", 0) or 0
-        auth_line += f" (баланс: {auth_balance:.4f} TON)"
+        auth_line += f" (баланс: {auth_balance:.4f} Gram)"
 
     return (
         f"👤 Пользователь\n\n"
@@ -520,7 +520,7 @@ def format_user_info(user: dict) -> str:
         f"Анализов: {user['total_analyses']}\n"
         f"Сигналов: {user['total_opportunities']}\n"
         f"Рефералов: {get_referral_count(user['user_id'])}\n"
-        f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} TON\n"
+        f"Реф. заработок: {user.get('referral_earnings_ton', 0):.4f} Gram\n"
         f"🎁 Пробных анализов: {trial['analyses_used']}/{trial['analyses_limit']}\n"
         f"🎁 Пробных сигналов: {trial['opportunities_used']}/{trial['opportunities_limit']}\n"
         f"Регистрация: {user['created_at'][:10] if user['created_at'] else 'н/д'}"
@@ -617,8 +617,8 @@ def format_analytics(data: dict) -> str:
         f"📈 Всего запросов: {total_requests}\n"
         f"Анализы: {analysis_pct}% | Сигналы: {opp_pct}%\n\n"
         f"💰 Финансы\n"
-        f"Всего TON: {data['total_ton']:.4f}\n"
-        f"Реф. выплаты: {data['total_referral_ton']:.4f} TON\n\n"
+        f"Всего Gram: {data['total_ton']:.4f}\n"
+        f"Реф. выплаты: {data['total_referral_ton']:.4f} Gram\n\n"
         f"👥 Рефералы\n"
         f"Всего приглашено: {data['total_referred']}\n\n"
         f"🏆 Топ рынков:\n{top}"
@@ -1074,10 +1074,10 @@ def authors_admin_kb() -> InlineKeyboardMarkup:
             callback_data="auth_admin_toggle_donations"
         ),
         InlineKeyboardButton("─── 💰 Цены ───", callback_data="auth_admin_noop"),
-        InlineKeyboardButton(f"💎 Цена статуса: {status_price} TON", callback_data="auth_admin_status_price"),
+        InlineKeyboardButton(f"💎 Цена статуса: {status_price} Gram", callback_data="auth_admin_status_price"),
         InlineKeyboardButton(f"🏦 Комиссия платформы: {platform_fee}%", callback_data="auth_admin_platform_fee"),
-        InlineKeyboardButton(f"💵 Мин. донат: {min_donation} TON", callback_data="auth_admin_min_donation"),
-        InlineKeyboardButton(f"💳 Мин. вывод: {min_withdrawal} TON", callback_data="auth_admin_min_withdrawal"),
+        InlineKeyboardButton(f"💵 Мин. донат: {min_donation} Gram", callback_data="auth_admin_min_donation"),
+        InlineKeyboardButton(f"💳 Мин. вывод: {min_withdrawal} Gram", callback_data="auth_admin_min_withdrawal"),
         InlineKeyboardButton(f"📝 Постов в день: {max_posts}", callback_data="auth_admin_max_posts"),
         InlineKeyboardButton("─── 📋 Управление ───", callback_data="auth_admin_noop"),
         InlineKeyboardButton("📢 Список авторов", callback_data="auth_admin_list"),
@@ -1114,9 +1114,9 @@ def authors_admin_text() -> str:
         f"📝 Опубликовано постов: {posts_count}\n"
         f"🔔 Подписок: {subs_count}\n"
         f"💝 Донатов всего: {stats['total_donations']}\n"
-        f"💰 Собрано: {stats['total_ton']:.4f} TON\n"
-        f"🏦 Комиссия платформы: {stats['platform_revenue_ton']:.4f} TON\n"
-        f"👑 Выплачено авторам: {stats['authors_received_ton']:.4f} TON\n"
+        f"💰 Собрано: {stats['total_ton']:.4f} Gram\n"
+        f"🏦 Комиссия платформы: {stats['platform_revenue_ton']:.4f} Gram\n"
+        f"👑 Выплачено авторам: {stats['authors_received_ton']:.4f} Gram\n"
         f"💳 Заявок на вывод (pending): {pending_withdrawals}\n\n"
         f"Настройки ↓"
     )
@@ -1136,8 +1136,8 @@ def authors_list_text() -> str:
         earned = balance + (a.get("author_withdrawn_ton", 0) or 0)
         text += (
             f"{i}. @{name} (id: {a['user_id']})\n"
-            f"   👥 {subs} | 📝 {posts} | 💰 {earned:.2f} TON\n"
-            f"   Баланс: {balance:.4f} TON\n\n"
+            f"   👥 {subs} | 📝 {posts} | 💰 {earned:.2f} Gram\n"
+            f"   Баланс: {balance:.4f} Gram\n\n"
         )
     return text
 
@@ -1149,9 +1149,9 @@ def donation_stats_text() -> str:
     text = (
         f"📊 Статистика донатов\n\n"
         f"Всего донатов: {stats['total_donations']}\n"
-        f"Сумма: {stats['total_ton']:.4f} TON\n"
-        f"💼 Доход платформы: {stats['platform_revenue_ton']:.4f} TON\n"
-        f"👑 Получено авторами: {stats['authors_received_ton']:.4f} TON\n"
+        f"Сумма: {stats['total_ton']:.4f} Gram\n"
+        f"💼 Доход платформы: {stats['platform_revenue_ton']:.4f} Gram\n"
+        f"👑 Получено авторами: {stats['authors_received_ton']:.4f} Gram\n"
         f"👥 Уникальных донатеров: {stats['unique_donors']}\n"
         f"📢 Авторов получили донаты: {stats['unique_authors']}\n\n"
     )
@@ -1160,7 +1160,7 @@ def donation_stats_text() -> str:
         text += "🏆 Топ авторов:\n"
         for i, a in enumerate(top, 1):
             name = a.get("username") or a.get("first_name") or str(a["user_id"])
-            text += f"{i}. @{name}: {a['total_earned']:.2f} TON ({a['total_subscribers']} подп.)\n"
+            text += f"{i}. @{name}: {a['total_earned']:.2f} Gram ({a['total_subscribers']} подп.)\n"
 
     return text
 
@@ -1176,8 +1176,8 @@ def withdrawals_list_text() -> str:
         created = w.get("created_at", "")[:16].replace("T", " ") if w.get("created_at") else ""
         text += (
             f"#{w['id']} — @{name} (id: {w['author_id']})\n"
-            f"💎 Сумма: {w['amount_ton']:.4f} TON\n"
-            f"💰 Текущий баланс: {w['current_balance']:.4f} TON\n"
+            f"💎 Сумма: {w['amount_ton']:.4f} Gram\n"
+            f"💰 Текущий баланс: {w['current_balance']:.4f} Gram\n"
             f"💳 Кошелёк: `{w['ton_wallet']}`\n"
             f"📅 {created}\n"
             f"➡️ /wd_approve_{w['id']} или /wd_reject_{w['id']}\n\n"
@@ -1203,13 +1203,13 @@ def referral_rewards_admin_text(lang: str = "en") -> str:
             f"Статус: {'Включено' if s['enabled'] else 'Выключено'}\n"
             f"Процент награды: {s['reward_percent']}%\n"
             f"Задержка разблокировки: {s['unlock_hours']}ч\n"
-            f"Минимальный вывод: {_nano_to_ton(s['min_withdrawal_nano']):.2f} TON\n"
-            f"Дневной лимит: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} TON\n\n"
+            f"Минимальный вывод: {_nano_to_ton(s['min_withdrawal_nano']):.2f} Gram\n"
+            f"Дневной лимит: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} Gram\n\n"
             "Статистика:\n"
-            f"Ожидает: {_nano_to_ton(st['pending_nano']):.4f} TON\n"
-            f"Доступно: {_nano_to_ton(st['available_nano']):.4f} TON\n"
-            f"В обработке: {_nano_to_ton(st['in_review_nano']):.4f} TON\n"
-            f"Выведено: {_nano_to_ton(st['withdrawn_nano']):.4f} TON\n\n"
+            f"Ожидает: {_nano_to_ton(st['pending_nano']):.4f} Gram\n"
+            f"Доступно: {_nano_to_ton(st['available_nano']):.4f} Gram\n"
+            f"В обработке: {_nano_to_ton(st['in_review_nano']):.4f} Gram\n"
+            f"Выведено: {_nano_to_ton(st['withdrawn_nano']):.4f} Gram\n\n"
             "Заявки на вывод:\n"
             f"Ожидают: {st['pending_withdrawal_requests_count']}"
         )
@@ -1218,13 +1218,13 @@ def referral_rewards_admin_text(lang: str = "en") -> str:
         f"Status: {'Enabled' if s['enabled'] else 'Disabled'}\n"
         f"Reward percent: {s['reward_percent']}%\n"
         f"Unlock delay: {s['unlock_hours']}h\n"
-        f"Minimum withdrawal: {_nano_to_ton(s['min_withdrawal_nano']):.2f} TON\n"
-        f"Daily withdrawal cap: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} TON\n\n"
+        f"Minimum withdrawal: {_nano_to_ton(s['min_withdrawal_nano']):.2f} Gram\n"
+        f"Daily withdrawal cap: {_nano_to_ton(s['daily_withdrawal_cap_nano']):.2f} Gram\n\n"
         "Stats:\n"
-        f"Pending rewards: {_nano_to_ton(st['pending_nano']):.4f} TON\n"
-        f"Available rewards: {_nano_to_ton(st['available_nano']):.4f} TON\n"
-        f"In review: {_nano_to_ton(st['in_review_nano']):.4f} TON\n"
-        f"Withdrawn: {_nano_to_ton(st['withdrawn_nano']):.4f} TON\n\n"
+        f"Pending rewards: {_nano_to_ton(st['pending_nano']):.4f} Gram\n"
+        f"Available rewards: {_nano_to_ton(st['available_nano']):.4f} Gram\n"
+        f"In review: {_nano_to_ton(st['in_review_nano']):.4f} Gram\n"
+        f"Withdrawn: {_nano_to_ton(st['withdrawn_nano']):.4f} Gram\n\n"
         "Withdrawal requests:\n"
         f"Pending requests: {st['pending_withdrawal_requests_count']}"
     )
@@ -1458,7 +1458,7 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "pricing_set_token")
     async def set_token_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_token_price.set()
-        await callback.message.answer("Введи цену токена в TON:")
+        await callback.message.answer("Введи цену токена в Gram:")
 
     @dp.message_handler(state=PricingStates.waiting_token_price)
     async def save_token_price(message: types.Message, state: FSMContext):
@@ -1466,7 +1466,7 @@ def register_admin(dp: Dispatcher):
             float(message.text.strip())
             set_setting("token_price_ton", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена: {message.text.strip()} TON")
+            await message.answer(f"✅ Цена: {message.text.strip()} Gram")
         except ValueError:
             await message.answer("❌ Число")
 
@@ -1523,7 +1523,7 @@ def register_admin(dp: Dispatcher):
     async def set_sub_price(callback: types.CallbackQuery, state: FSMContext):
         await PricingStates.waiting_subscription_price.set()
         current = get_setting("subscription_price_ton", "1")
-        await callback.message.answer(f"Текущая: {current} TON\n\nВведи:")
+        await callback.message.answer(f"Текущая: {current} Gram\n\nВведи:")
 
     @dp.message_handler(state=PricingStates.waiting_subscription_price)
     async def save_sub_price(message: types.Message, state: FSMContext):
@@ -1531,7 +1531,7 @@ def register_admin(dp: Dispatcher):
             float(message.text.strip())
             set_setting("subscription_price_ton", message.text.strip())
             await state.finish()
-            await message.answer(f"✅ Цена: {message.text.strip()} TON")
+            await message.answer(f"✅ Цена: {message.text.strip()} Gram")
         except ValueError:
             await message.answer("❌ Число")
 
@@ -1722,7 +1722,7 @@ def register_admin(dp: Dispatcher):
             for p in packages:
                 status = "✅" if p["is_active"] else "❌"
                 discount = f" (скидка {p['discount_percent']}%)" if p["discount_percent"] > 0 else ""
-                text += f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} TON{discount}\n"
+                text += f"{status} {p['name']}: {p['tokens']} токенов = {p['price_ton']} Gram{discount}\n"
         else:
             text += "Пакетов нет"
         await callback.message.edit_text(text, reply_markup=packages_kb())
@@ -1747,7 +1747,7 @@ def register_admin(dp: Dispatcher):
                 return
             await state.update_data(tokens=tokens)
             await PackageStates.waiting_price.set()
-            await message.answer("Цена в TON:")
+            await message.answer("Цена в Gram:")
         except ValueError:
             await message.answer("❌ Целое число")
 
@@ -1795,7 +1795,7 @@ def register_admin(dp: Dispatcher):
             f"📦 Редактирование пакета\n\n"
             f"Название: {package['name']}\n"
             f"Токены: {package['tokens']}\n"
-            f"Цена: {package['price_ton']} TON{discount_text}\n"
+            f"Цена: {package['price_ton']} Gram{discount_text}\n"
             f"Статус: {'✅ Активен' if package['is_active'] else '❌ Неактивен'}"
         )
         await callback.message.edit_text(text, reply_markup=package_edit_kb(pkg_id, package["is_active"]))
@@ -1815,7 +1815,7 @@ def register_admin(dp: Dispatcher):
             f"📦 Редактирование\n\n"
             f"Название: {package['name']}\n"
             f"Токены: {package['tokens']}\n"
-            f"Цена: {package['price_ton']} TON{discount_text}\n"
+            f"Цена: {package['price_ton']} Gram{discount_text}\n"
             f"Статус: {'✅' if new_active else '❌'}"
         )
         await callback.message.edit_text(text, reply_markup=package_edit_kb(pkg_id, new_active))
@@ -1829,7 +1829,7 @@ def register_admin(dp: Dispatcher):
         text = "📦 Пакеты\n\n"
         for p in packages:
             status = "✅" if p["is_active"] else "❌"
-            text += f"{status} {p['name']}: {p['tokens']} = {p['price_ton']} TON\n"
+            text += f"{status} {p['name']}: {p['tokens']} = {p['price_ton']} Gram\n"
         await callback.message.edit_text(text, reply_markup=packages_kb())
 
     @dp.callback_query_handler(lambda c: c.data.startswith("pkg_name_"))
@@ -1877,7 +1877,7 @@ def register_admin(dp: Dispatcher):
         pkg_id = int(callback.data.replace("pkg_price_", ""))
         await state.update_data(pkg_id=pkg_id)
         await PackageStates.editing_price.set()
-        await callback.message.answer("Новая цена TON:")
+        await callback.message.answer("Новая цена Gram:")
 
     @dp.message_handler(state=PackageStates.editing_price)
     async def pkg_save_price(message: types.Message, state: FSMContext):
@@ -1893,7 +1893,7 @@ def register_admin(dp: Dispatcher):
                 update_token_package(pkg_id, package["name"], package["tokens"],
                                      price, package["discount_percent"], package["is_active"])
             await state.finish()
-            await message.answer(f"✅ {price} TON")
+            await message.answer(f"✅ {price} Gram")
         except ValueError:
             await message.answer("❌")
 
@@ -2048,7 +2048,7 @@ def register_admin(dp: Dispatcher):
             name = r.get("username") or r.get("first_name") or str(r["user_id"])
             warn = " ⚠️ legacy mismatch" if r.get("legacy_mismatch") else ""
             balance = r.get("token_balance", 0) or 0
-            lines.append(f"{i}. @{name} — {r['total_referrals']} ({r.get('source_used')}) | {balance} tokens | {r.get('referral_earnings_ton', 0):.4f} TON{warn}")
+            lines.append(f"{i}. @{name} — {r['total_referrals']} ({r.get('source_used')}) | {balance} tokens | {r.get('referral_earnings_ton', 0):.4f} Gram{warn}")
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_users"))
         await callback.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -2166,7 +2166,7 @@ def register_admin(dp: Dispatcher):
                     "Теперь ты можешь:\n"
                     "• Публиковать свои прогнозы\n"
                     "• Получать подписчиков\n"
-                    "• Получать донаты в TON\n\n"
+                    "• Получать донаты в Gram\n\n"
                     "Настрой профиль: /profile\n"
                     "Установи bio: /edit_bio\n"
                     "Кошелёк для выплат: /set_wallet"
@@ -2336,7 +2336,7 @@ def register_admin(dp: Dispatcher):
         data = get_analytics_data()
         text = (
             f"💰 Revenue\n\n"
-            f"Всего TON: {data['total_ton']:.4f}\n"
+            f"Всего Gram: {data['total_ton']:.4f}\n"
             f"Реф. выплаты: {data['total_referral_ton']:.4f}\n"
             f"Чистый доход: {(data['total_ton'] - data['total_referral_ton']):.4f}"
         )
@@ -2701,7 +2701,7 @@ def register_admin(dp: Dispatcher):
     async def referral_set_min_withdrawal(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_min_withdrawal_ton.set()
         lang = _get_lang(callback.from_user.id)
-        await callback.message.answer("Отправьте минимум вывода в TON, например: 1" if lang == "ru" else "Send minimum withdrawal in TON, example: 1")
+        await callback.message.answer("Отправьте минимум вывода в Gram, например: 1" if lang == "ru" else "Send minimum withdrawal in Gram, example: 1")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_min_withdrawal_ton)
     async def referral_save_min_withdrawal(message: types.Message, state: FSMContext):
@@ -2721,7 +2721,7 @@ def register_admin(dp: Dispatcher):
     async def referral_set_daily_cap(callback: types.CallbackQuery, state: FSMContext):
         await ReferralRewardsAdminStates.waiting_daily_cap_ton.set()
         lang = _get_lang(callback.from_user.id)
-        await callback.message.answer("Отправьте дневной лимит вывода в TON, например: 50" if lang == "ru" else "Send daily withdrawal cap in TON, example: 50")
+        await callback.message.answer("Отправьте дневной лимит вывода в Gram, например: 50" if lang == "ru" else "Send daily withdrawal cap in Gram, example: 50")
 
     @dp.message_handler(state=ReferralRewardsAdminStates.waiting_daily_cap_ton)
     async def referral_save_daily_cap(message: types.Message, state: FSMContext):
@@ -2748,7 +2748,7 @@ def register_admin(dp: Dispatcher):
         for r in rows:
             created = str(r.get("created_at") or "")[:16].replace("T", " ")
             amount_ton = _nano_to_ton(int(r.get("amount_nano") or 0))
-            lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} TON | {created}")
+            lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} Gram | {created}")
             kb.add(
                 InlineKeyboardButton(
                     (f"✅ Отметить выплаченным #{r['id']}" if lang == "ru" else f"✅ Mark Paid #{r['id']}"),
@@ -2819,7 +2819,7 @@ def register_admin(dp: Dispatcher):
         await AuthorAdminStates.waiting_author_status_price.set()
         current = get_setting("author_status_price_ton", "5")
         await callback.message.answer(
-            f"Текущая цена статуса автора: {current} TON\n\nВведи новую цену:"
+            f"Текущая цена статуса автора: {current} Gram\n\nВведи новую цену:"
         )
 
     @dp.message_handler(state=AuthorAdminStates.waiting_author_status_price)
@@ -2831,7 +2831,7 @@ def register_admin(dp: Dispatcher):
                 return
             set_setting("author_status_price_ton", str(val))
             await state.finish()
-            await message.answer(f"✅ Цена статуса автора: {val} TON")
+            await message.answer(f"✅ Цена статуса автора: {val} Gram")
         except ValueError:
             await message.answer("❌ Число")
 
@@ -2863,7 +2863,7 @@ def register_admin(dp: Dispatcher):
         await AuthorAdminStates.waiting_min_donation.set()
         current = get_setting("min_donation_ton", "0.1")
         await callback.message.answer(
-            f"Текущий минимум: {current} TON\n\nВведи новый:"
+            f"Текущий минимум: {current} Gram\n\nВведи новый:"
         )
 
     @dp.message_handler(state=AuthorAdminStates.waiting_min_donation)
@@ -2875,7 +2875,7 @@ def register_admin(dp: Dispatcher):
                 return
             set_setting("min_donation_ton", str(val))
             await state.finish()
-            await message.answer(f"✅ Мин. донат: {val} TON")
+            await message.answer(f"✅ Мин. донат: {val} Gram")
         except ValueError:
             await message.answer("❌ Число")
 
@@ -2884,7 +2884,7 @@ def register_admin(dp: Dispatcher):
         await AuthorAdminStates.waiting_min_withdrawal.set()
         current = get_setting("min_withdrawal_ton", "1")
         await callback.message.answer(
-            f"Текущий минимум вывода: {current} TON\n\nВведи новый:"
+            f"Текущий минимум вывода: {current} Gram\n\nВведи новый:"
         )
 
     @dp.message_handler(state=AuthorAdminStates.waiting_min_withdrawal)
@@ -2896,7 +2896,7 @@ def register_admin(dp: Dispatcher):
                 return
             set_setting("min_withdrawal_ton", str(val))
             await state.finish()
-            await message.answer(f"✅ Мин. вывод: {val} TON")
+            await message.answer(f"✅ Мин. вывод: {val} Gram")
         except ValueError:
             await message.answer("❌ Число")
 
@@ -2962,7 +2962,7 @@ def register_admin(dp: Dispatcher):
                     "Теперь ты можешь:\n"
                     "• Публиковать свои прогнозы\n"
                     "• Получать подписчиков\n"
-                    "• Получать донаты в TON\n\n"
+                    "• Получать донаты в Gram\n\n"
                     "Настрой профиль: /profile\n"
                     "Установи bio: /edit_bio\n"
                     "Кошелёк для выплат: /set_wallet"
@@ -3031,7 +3031,7 @@ def register_admin(dp: Dispatcher):
             await AuthorAdminStates.waiting_withdrawal_tx.set()
             await message.answer(
                 f"💰 Заявка #{wid}\n\n"
-                f"Введи TX hash транзакции после отправки TON на кошелёк автора.\n\n"
+                f"Введи TX hash транзакции после отправки Gram на кошелёк автора.\n\n"
                 f"Или /cancel для отмены."
             )
         except ValueError:
@@ -3070,7 +3070,7 @@ def register_admin(dp: Dispatcher):
             await message.answer(
                 f"✅ Заявка #{wid} одобрена!\n\n"
                 f"Автор: {author_id}\n"
-                f"Сумма: {amount:.4f} TON\n"
+                f"Сумма: {amount:.4f} Gram\n"
                 f"TX: {tx_hash[:30]}..."
             )
 
@@ -3082,7 +3082,7 @@ def register_admin(dp: Dispatcher):
                 await b.send_message(
                     author_id,
                     f"💰 Твоя заявка на вывод одобрена!\n\n"
-                    f"💎 Сумма: {amount:.4f} TON\n"
+                    f"💎 Сумма: {amount:.4f} Gram\n"
                     f"💳 Кошелёк: {wallet[:20]}...\n"
                     f"🔗 TX: {tx_hash[:30]}...\n\n"
                     f"Средства отправлены! Проверь кошелёк."
@@ -3143,7 +3143,7 @@ def register_admin(dp: Dispatcher):
                 await b.send_message(
                     author_id,
                     f"❌ Твоя заявка на вывод отклонена\n\n"
-                    f"💎 Сумма: {amount:.4f} TON\n\n"
+                    f"💎 Сумма: {amount:.4f} Gram\n\n"
                     f"Причина:\n{admin_note}\n\n"
                     f"Средства остаются на твоём балансе."
                 )

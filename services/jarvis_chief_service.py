@@ -246,7 +246,7 @@ def _purchase_line(snapshot: Dict[str, Any]) -> str:
     purchases = _metric(snapshot, "token_purchases_days")
     revenue = _metric(snapshot, "revenue_ton_days")
     if purchases is not None and revenue is not None:
-        return f"{purchases} / {_value(revenue, ' TON')}"
+        return f"{purchases} / {_value(revenue, ' Gram')}"
     if purchases is not None:
         return str(purchases)
     if _metric(snapshot, "purchase_intents_days") is not None:
@@ -312,8 +312,8 @@ def build_metrics_report(actor_id: int, days: int = 7) -> str:
         f"Analyses per user | {_ratio_value(m.get('analyses_per_user_days'))}",
         f"Analyses per active user | {_ratio_value(m.get('analyses_per_active_user_days'))}",
         f"Purchase conversion | {_percent(m.get('purchase_conversion_days'))}",
-        f"Revenue per user | {_value(m.get('revenue_per_user_days'), ' TON')}",
-        f"Revenue per active user | {_value(m.get('revenue_per_active_user_days'), ' TON')}",
+        f"Revenue per user | {_value(m.get('revenue_per_user_days'), ' Gram')}",
+        f"Revenue per active user | {_value(m.get('revenue_per_active_user_days'), ' Gram')}",
         f"Referral ratio | {_ratio_value(m.get('referral_ratio'))}",
         f"Growth quality | {_growth_quality_text(m.get('growth_quality'))}",
         f"Анализы всего | {_value(m.get('total_analyses'))}",
@@ -321,8 +321,8 @@ def build_metrics_report(actor_id: int, days: int = 7) -> str:
         f"Анализы за период | {_value(m.get('analyses_days'))}",
         f"Подтверждённые token purchases всего | {_value(m.get('total_token_purchases'))}",
         f"Подтверждённые token purchases за период | {_value(m.get('token_purchases_days'))}",
-        f"Выручка всего | {_value(m.get('revenue_ton_total'), ' TON')}",
-        f"Выручка за период | {_value(m.get('revenue_ton_days'), ' TON')}",
+        f"Выручка всего | {_value(m.get('revenue_ton_total'), ' Gram')}",
+        f"Выручка за период | {_value(m.get('revenue_ton_days'), ' Gram')}",
         f"Payment intents всего | {_value(m.get('purchase_intents_total'))}",
         f"Payment intents за период | {_value(m.get('purchase_intents_days'))}",
         f"Рефералы всего | {_value(m.get('referral_count'))}",
@@ -368,8 +368,8 @@ def build_report(actor_id: int, days: int = 7) -> str:
         f"Анализов на активного: {_ratio_value(m.get('analyses_per_active_user_days'))}.\n\n"
         "4. Revenue\n"
         f"Покупки/выручка: {_purchase_line(snapshot)}. Purchase conversion: {_percent(m.get('purchase_conversion_days'))}. "
-        f"Revenue per user: {_value(m.get('revenue_per_user_days'), ' TON')}. "
-        f"Revenue per active user: {_value(m.get('revenue_per_active_user_days'), ' TON')}.\n\n"
+        f"Revenue per user: {_value(m.get('revenue_per_user_days'), ' Gram')}. "
+        f"Revenue per active user: {_value(m.get('revenue_per_active_user_days'), ' Gram')}.\n\n"
         "5. Referral signal\n"
         f"Рефералы: {_value(m.get('referrals_days'))}. Referral ratio: {_ratio_value(m.get('referral_ratio'))}.\n\n"
         "6. Bottleneck\n"
