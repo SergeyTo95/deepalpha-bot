@@ -13,6 +13,7 @@ def reload_points(monkeypatch):
     monkeypatch.setattr(svc, "get_connection", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
     svc._MEMORY_LEDGER.clear()
     svc._MEMORY_ID = 1
+    svc._MEMORY_REFERRAL_ACTIVATIONS.clear()
     return svc
 
 
@@ -83,6 +84,8 @@ def test_wording_safety(monkeypatch):
     assert "Coin: Soon" in texts[1]
     assert "Монета: Soon" in texts[2]
     assert "Coin: Soon" in texts[3]
+    assert "Топ-анализ" in texts[0]
+    assert "Top Analysis" in texts[1]
     for text in texts:
         assert "DeepAlpha Points" in text
         assert "Soon" in text
@@ -98,3 +101,64 @@ def test_successful_analysis_reason_awards(monkeypatch):
     assert svc.get_airdrop_points_balance(1)["points"] == 20
     history = svc.get_airdrop_points_history(1)
     assert {row["reason"] for row in history} == {"analysis_completed", "live_analysis_completed"}
+
+
+def test_award_analysis_points_top_source(monkeypatch):
+    svc = reload_points(monkeypatch)
+    result = svc.award_analysis_points(1, source="top_analysis")
+    assert result["awarded"] is True
+    assert svc.get_airdrop_points_balance(1)["points"] == 10
+    assert svc.get_airdrop_points_history(1)[0]["metadata"]["source"] == "top_analysis"
+
+
+def test_daily_cap_shared_by_top_and_normal(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setenv("AIRDROP_DAILY_CAP", "20")
+    assert svc.award_analysis_points(1, "top_analysis")["amount"] == 10
+    assert svc.award_analysis_points(1, "telegram_quick_analysis")["amount"] == 10
+    assert svc.award_analysis_points(1, "webapp_analysis")["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 20
+
+
+def test_referral_no_referrer(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setattr(svc, "get_user", lambda user_id: {"user_id": user_id, "referred_by": None})
+    result = svc.award_referral_activation_points(2, {"source": "top_analysis"})
+    assert result["awarded"] is False
+    assert result["reason"] == "no_referrer"
+
+
+def test_referral_activation(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setattr(svc, "get_user", lambda user_id: {"user_id": user_id, "referred_by": 1})
+    result = svc.award_referral_activation_points(2, {"source": "telegram_quick_analysis"})
+    assert result["awarded"] is True
+    assert svc.get_airdrop_points_balance(1)["points"] == 50
+    assert svc.get_airdrop_points_balance(2)["points"] == 20
+    reasons = {row["reason"] for uid in (1, 2) for row in svc.get_airdrop_points_history(uid)}
+    assert reasons == {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
+
+
+def test_referral_idempotency(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setattr(svc, "get_user", lambda user_id: {"user_id": user_id, "referred_by": 1})
+    assert svc.award_referral_activation_points(2, {"source": "telegram_quick_analysis"})["awarded"] is True
+    assert svc.award_referral_activation_points(2, {"source": "top_analysis"})["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 50
+    assert svc.get_airdrop_points_balance(2)["points"] == 20
+
+
+def test_self_referral(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setattr(svc, "get_user", lambda user_id: {"user_id": user_id, "referred_by": user_id})
+    assert svc.award_referral_activation_points(2)["reason"] == "self_referral"
+    assert svc.get_airdrop_points_balance(2)["points"] == 0
+
+
+def test_disabled_referral_points(monkeypatch):
+    svc = reload_points(monkeypatch)
+    monkeypatch.setenv("AIRDROP_REFERRAL_POINTS_ENABLED", "false")
+    monkeypatch.setattr(svc, "get_user", lambda user_id: {"user_id": user_id, "referred_by": 1})
+    result = svc.award_referral_activation_points(2)
+    assert result["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 0

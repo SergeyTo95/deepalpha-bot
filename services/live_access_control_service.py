@@ -125,15 +125,23 @@ def list_live_whitelist_users() -> list[int]:
 
 def format_live_access_denied_message(ui_language: str = "ru") -> str:
     if ui_language == "en":
-        return ("Live Analyst is currently in private beta.\n"
-                "Access will open soon.\n\n"
-                "For now, you can use regular DeepAlpha analysis and collect points.\n\n"
-                "🎁 Airdrop\n"
-                "DeepAlpha Points are awarded for every successful analysis.\n"
-                "Coin: Soon.")
-    return ("Live Analyst сейчас в закрытой beta.\n"
-            "Доступ скоро откроется.\n\n"
-            "А пока ты можешь пользоваться обычным анализом DeepAlpha и собирать баллы.\n\n"
+        return (
+            "Live Analyst is currently in private beta.\n"
+            "Access will open soon.\n\n"
+            "For now, you can use regular DeepAlpha analysis and collect points.\n\n"
             "🎁 Airdrop\n"
-            "DeepAlpha Points начисляются за каждый успешный анализ.\n"
-            "Монета: Soon.")
+            "DeepAlpha Points are awarded for every successful analysis.\n"
+            "Top Analysis also earns points.\n"
+            "Invite friends and earn points after their first successful analysis.\n\n"
+            "Coin: Soon."
+        )
+    return (
+        "Live Analyst сейчас в закрытой beta.\n"
+        "Доступ скоро откроется.\n\n"
+        "А пока ты можешь пользоваться обычным анализом DeepAlpha и собирать баллы.\n\n"
+        "🎁 Airdrop\n"
+        "DeepAlpha Points начисляются за каждый успешный анализ.\n"
+        "Топ-анализ тоже приносит баллы.\n"
+        "Приглашай друзей и получай points после их первого успешного анализа.\n\n"
+        "Монета: Soon."
+    )

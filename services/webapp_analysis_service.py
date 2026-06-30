@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 from agents.chief_agent import ChiefAgent
 from services.webapp_report_formatter import build_webapp_analysis_report, save_analysis_to_web_history
-from services.airdrop_points_service import award_airdrop_points
+from services.airdrop_points_service import award_analysis_points, award_referral_activation_points
 
 from db.database import (
     add_tokens,
@@ -88,7 +88,9 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
     except Exception:
         pass
     try:
-        award_airdrop_points(user_id, reason="analysis_completed", metadata={"source": "webapp_analysis", "market_url": market_url})
+        # Only award after successful user-facing analysis completion.
+        award_result = award_analysis_points(user_id, source="webapp_analysis", metadata={"market_url": market_url})
+        award_referral_activation_points(user_id, metadata={"source": "webapp_analysis"})
     except Exception:
         pass
 
