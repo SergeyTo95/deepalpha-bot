@@ -11,7 +11,7 @@ try:
 except Exception:  # pragma: no cover - tests can stub psycopg2
     psycopg2 = None
 
-from db.database import get_connection, get_user
+from db.database import get_connection, get_setting, get_user
 
 logger = logging.getLogger(__name__)
 
@@ -51,28 +51,94 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+
+def _setting_value(key: str) -> Optional[str]:
+    try:
+        value = get_setting(key, "")
+    except Exception as exc:
+        logger.warning("airdrop_points_setting_read_failed key=%s error=%s", key, type(exc).__name__)
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text != "" else None
+
+
+def _setting_bool(key: str) -> Optional[bool]:
+    raw = _setting_value(key)
+    if raw is None:
+        return None
+    lowered = raw.lower()
+    if lowered in {"1", "true", "on", "yes", "enabled"}:
+        return True
+    if lowered in {"0", "false", "off", "no", "disabled"}:
+        return False
+    logger.warning("airdrop_points_invalid_setting_bool key=%s value=%s", key, raw)
+    return None
+
+
+def _setting_int(key: str, min_value: int, max_value: int) -> Optional[int]:
+    raw = _setting_value(key)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        logger.warning("airdrop_points_invalid_setting_int key=%s value=%s", key, raw)
+        return None
+    if value < min_value or value > max_value:
+        logger.warning("airdrop_points_setting_int_out_of_range key=%s value=%s min=%s max=%s", key, value, min_value, max_value)
+        return None
+    return value
+
+
+def _env_int_bounded(name: str, default: int, min_value: int, max_value: int) -> int:
+    value = _env_int(name, default)
+    if value < min_value or value > max_value:
+        logger.warning("airdrop_points_env_int_out_of_range name=%s value=%s min=%s max=%s", name, value, min_value, max_value)
+        return default
+    return value
+
 def points_enabled() -> bool:
+    setting = _setting_bool("airdrop_points_enabled")
+    if setting is not None:
+        return setting
     return _env_bool("AIRDROP_POINTS_ENABLED", True)
 
 
 def points_per_analysis() -> int:
-    return _env_int("AIRDROP_POINTS_PER_ANALYSIS", AIRDROP_POINTS_PER_ANALYSIS)
+    setting = _setting_int("airdrop_points_per_analysis", 0, 10000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded("AIRDROP_POINTS_PER_ANALYSIS", AIRDROP_POINTS_PER_ANALYSIS, 0, 10000)
 
 
 def daily_cap() -> int:
-    return _env_int("AIRDROP_DAILY_CAP", AIRDROP_DAILY_CAP)
+    setting = _setting_int("airdrop_daily_cap", 0, 100000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded("AIRDROP_DAILY_CAP", AIRDROP_DAILY_CAP, 0, 100000)
 
 
 def referral_points_enabled() -> bool:
+    setting = _setting_bool("airdrop_referral_points_enabled")
+    if setting is not None:
+        return setting
     return _env_bool("AIRDROP_REFERRAL_POINTS_ENABLED", True)
 
 
 def referrer_points() -> int:
-    return _env_int("AIRDROP_REFERRER_POINTS", AIRDROP_REFERRER_POINTS)
+    setting = _setting_int("airdrop_referrer_points", 0, 100000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded("AIRDROP_REFERRER_POINTS", AIRDROP_REFERRER_POINTS, 0, 100000)
 
 
 def referred_user_points() -> int:
-    return _env_int("AIRDROP_REFERRED_USER_POINTS", AIRDROP_REFERRED_USER_POINTS)
+    setting = _setting_int("airdrop_referred_user_points", 0, 100000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded("AIRDROP_REFERRED_USER_POINTS", AIRDROP_REFERRED_USER_POINTS, 0, 100000)
 
 
 def _ensure_table(cursor) -> None:
@@ -256,6 +322,8 @@ def award_referral_activation_points(referred_user_id: int, metadata: dict | Non
     uid = int(referred_user_id)
     meta_in = metadata if isinstance(metadata, dict) else {}
     source = str(meta_in.get("source") or "unknown")
+    if not points_enabled():
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "points_disabled"}
     if not referral_points_enabled():
         return {"ok": True, "awarded": False, "amount": 0, "reason": "disabled"}
     referrer_id = _get_referrer_user_id(uid)

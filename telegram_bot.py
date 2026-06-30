@@ -25,7 +25,7 @@ from texts.analysis_guide import get_analysis_guide
 from agents.top_analysis.top_analysis_agent import TopAnalysisAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
-    ensure_user, is_user_banned, get_user, get_setting,
+    ensure_user, is_user_banned, get_user, get_setting, set_setting,
     add_tokens, increment_user_stat, get_referrals, get_referral_count,
     is_subscribed, get_subscription_until, set_subscription,
     check_daily_limit, increment_daily, get_daily_usage,
@@ -112,7 +112,7 @@ from services.live_access_control_service import (
 )
 from services.airdrop_points_service import (
     award_airdrop_points, award_analysis_points, award_referral_activation_points, format_airdrop_status, get_airdrop_points_balance,
-    get_airdrop_points_history, get_referral_activation_count, referrer_points,
+    get_airdrop_points_history, get_referral_activation_count, points_enabled, points_per_analysis, daily_cap, referral_points_enabled, referrer_points, referred_user_points,
 )
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
@@ -8496,7 +8496,7 @@ async def airdrop_handler(message: types.Message, state: FSMContext):
     await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8504,6 +8504,56 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
+    if cmd == "airdrop_settings":
+        await message.answer(
+            "Airdrop Settings:\n\n"
+            f"- Points enabled: {str(points_enabled()).lower()}\n"
+            f"- Points per analysis: {points_per_analysis()}\n"
+            f"- Daily cap: {daily_cap()}\n"
+            f"- Referral points enabled: {str(referral_points_enabled()).lower()}\n"
+            f"- Referrer bonus: {referrer_points()}\n"
+            f"- Referred user bonus: {referred_user_points()}\n"
+            "- Coin: Soon"
+        )
+        return
+    if cmd == "airdrop_enable":
+        set_setting("airdrop_points_enabled", "true")
+        await message.answer("Airdrop Points включены.")
+        return
+    if cmd == "airdrop_disable":
+        set_setting("airdrop_points_enabled", "false")
+        await message.answer("Airdrop Points отключены. Начисления и referral activation не будут происходить.")
+        return
+    if cmd == "airdrop_referrals_enable":
+        set_setting("airdrop_referral_points_enabled", "true")
+        await message.answer("Referral Airdrop Points включены.")
+        return
+    if cmd == "airdrop_referrals_disable":
+        set_setting("airdrop_referral_points_enabled", "false")
+        await message.answer("Referral Airdrop Points отключены.")
+        return
+    airdrop_int_commands = {
+        "airdrop_set_analysis_points": ("airdrop_points_per_analysis", 0, 10000, "Points за анализ обновлены: {amount}"),
+        "airdrop_set_daily_cap": ("airdrop_daily_cap", 0, 100000, "Daily cap обновлён: {amount}"),
+        "airdrop_set_referrer_points": ("airdrop_referrer_points", 0, 100000, "Referral bonus для пригласившего обновлён: {amount}"),
+        "airdrop_set_referred_points": ("airdrop_referred_user_points", 0, 100000, "Referral bonus для друга обновлён: {amount}"),
+    }
+    if cmd in airdrop_int_commands:
+        key, min_value, max_value, response_template = airdrop_int_commands[cmd]
+        if len(parts) != 2:
+            await message.answer(f"Формат: /{cmd} <amount>")
+            return
+        try:
+            amount = int(parts[1])
+        except Exception:
+            await message.answer("Amount должен быть числом.")
+            return
+        if amount < min_value or amount > max_value:
+            await message.answer(f"Amount должен быть от {min_value} до {max_value}.")
+            return
+        set_setting(key, str(amount))
+        await message.answer(response_template.format(amount=amount))
+        return
     if cmd == "airdrop_points":
         if len(parts) != 2 or not parts[1].isdigit():
             await message.answer("Формат: /airdrop_points <telegram_user_id>")
@@ -8517,6 +8567,10 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
             f"Airdrop Points for {target_id}:\n"
             f"Balance: {balance.get('points', 0)}\n"
             f"Today: {balance.get('today_earned', 0)}\n"
+            f"Points per analysis: {points_per_analysis()}\n"
+            f"Daily cap: {daily_cap()}\n"
+            f"Referrer bonus: {referrer_points()}\n"
+            f"Referred user bonus: {referred_user_points()}\n"
             f"Referral activations: {activations}\n\n"
             "Last entries:\n" + ("\n".join(rows) if rows else "—")
         )
