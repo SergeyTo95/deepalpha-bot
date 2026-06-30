@@ -105,6 +105,11 @@ from services.live_analyst_billing_service import (
 )
 from services.live_analyst_image_service import analyze_image_bytes
 from services.live_analyst_access import can_use_live_analyst
+from services.live_access_control_service import (
+    add_live_whitelist_user, can_user_access_live, format_live_access_denied_message,
+    get_live_access_settings, list_live_whitelist_users, remove_live_whitelist_user,
+    update_live_access_settings,
+)
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
@@ -374,6 +379,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🔍 Анализ"))
         kb.add(KeyboardButton("💎 TON кошелёк"))
         kb.add(KeyboardButton("🎁 Чеки"))
+        kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Касса"))
         kb.add(KeyboardButton("👤 Профиль"))
         kb.add(KeyboardButton("⚙️ Ещё"))
@@ -381,6 +387,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🔍 Analysis"))
         kb.add(KeyboardButton("💎 TON Wallet"))
         kb.add(KeyboardButton("🎁 Checks"))
+        kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Cashier"))
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("⚙️ More"))
@@ -406,6 +413,29 @@ def get_onboarding_after_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
         kb.add(InlineKeyboardButton("🔍 How it works", callback_data="onboarding_how_it_works"))
     return kb
 
+
+
+def format_airdrop_teaser(ui_language: str = "ru") -> str:
+    if ui_language == "en":
+        return ("🎁 Airdrop\n\n"
+                "Earn DeepAlpha Points for activity in DeepAlpha.\n"
+                "Points may be considered in the future DeepAlpha ecosystem.\n\n"
+                "Future rewards: Soon.")
+    return ("🎁 Airdrop\n\n"
+            "Зарабатывай DeepAlpha Points за активность в DeepAlpha.\n"
+            "Баллы могут учитываться в будущей экосистеме проекта.\n\n"
+            "Будущие награды: Soon.")
+
+
+def _format_live_access_status() -> str:
+    settings = get_live_access_settings()
+    return ("Live Access:\n\n"
+            f"- Mode: {settings.get('mode')}\n"
+            f"- Enabled: {str(settings.get('enabled')).lower()}\n"
+            f"- Owners: {len(settings.get('owner_user_ids') or [])}\n"
+            f"- Whitelist: {len(settings.get('whitelist_user_ids') or [])}\n\n"
+            "Commands: /live_owner_only /live_whitelist /live_everyone /live_disable\n"
+            "/live_add_user <telegram_user_id> /live_remove_user <telegram_user_id> /live_whitelist_list")
 
 def get_onboarding_demo_text(lang: str) -> str:
     if lang == "ru":
@@ -539,13 +569,13 @@ def get_profile_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("👤 Профиль"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("✍️ Мои прогнозы"))
         kb.add(KeyboardButton("💰 Баланс автора"), KeyboardButton("👥 Рефералы"))
-        kb.add(KeyboardButton("💸 Заработать"))
+        kb.add(KeyboardButton("💸 Заработать"), KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("✍️ My forecasts"))
         kb.add(KeyboardButton("💰 Author balance"), KeyboardButton("👥 Referrals"))
-        kb.add(KeyboardButton("💸 Earn"))
+        kb.add(KeyboardButton("💸 Earn"), KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("⬅️ Back"))
     return kb
 
@@ -8281,6 +8311,12 @@ async def _activate_live_mode(message: types.Message, analysis: Optional[dict] =
     if _check_banned(message):
         await message.answer(t(uid, "banned"))
         return
+    access = can_user_access_live(uid)
+    if not access.get("allowed"):
+        logger.info("live_access_denied user_id=%s mode=%s", uid, access.get("mode"))
+        await message.answer(format_live_access_denied_message(get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+        return
+    logger.info("live_access_allowed user_id=%s mode=%s", uid, access.get("mode"))
     if not is_live_enabled():
         await message.answer(LIVE_DISABLED_MESSAGE, reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
         return
@@ -8398,6 +8434,13 @@ async def live_discuss_callback(callback: types.CallbackQuery, state: FSMContext
         await callback.answer("Недоступно.", show_alert=True)
         return
     analysis = last_analysis_cache.get(uid) or {}
+    access = can_user_access_live(uid)
+    if not access.get("allowed"):
+        logger.info("live_access_denied user_id=%s mode=%s", uid, access.get("mode"))
+        await callback.message.answer(format_live_access_denied_message(get_user_lang(uid)))
+        await callback.answer("Live Analyst в закрытой beta", show_alert=True)
+        return
+    logger.info("live_access_allowed user_id=%s mode=%s", uid, access.get("mode"))
     if not is_live_enabled():
         await callback.answer(LIVE_DISABLED_MESSAGE, show_alert=True)
         return
@@ -8425,6 +8468,52 @@ def _is_private_live_message(message: types.Message) -> bool:
 def _is_private_live_callback(callback: types.CallbackQuery) -> bool:
     return bool(callback and callback.message and callback.message.chat and callback.message.chat.type == "private")
 
+
+
+@dp.message_handler(commands=["airdrop"], state="*")
+@dp.message_handler(lambda m: (m.text or "") == "🎁 Airdrop", state="*")
+async def airdrop_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer(format_airdrop_teaser(get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+
+
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list"], state="*")
+async def live_access_admin_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    cmd = (message.get_command() or "").lstrip("/")
+    parts = (message.text or "").split()
+    if cmd == "live_access":
+        await message.answer(_format_live_access_status())
+    elif cmd == "live_owner_only":
+        update_live_access_settings({"enabled": True, "mode": "owner_only"})
+        await message.answer("Live Analyst закрыт. Доступ только у owner.")
+    elif cmd == "live_whitelist":
+        update_live_access_settings({"enabled": True, "mode": "whitelist"})
+        await message.answer("Live Analyst доступен только owner + whitelist.")
+    elif cmd == "live_everyone":
+        update_live_access_settings({"enabled": True, "mode": "everyone"})
+        await message.answer("Live Analyst открыт для всех пользователей.")
+    elif cmd == "live_disable":
+        update_live_access_settings({"enabled": False, "mode": "disabled"})
+        await message.answer("Live Analyst отключён для пользователей. Owner может тестировать.")
+    elif cmd in {"live_add_user", "live_remove_user"}:
+        if len(parts) != 2 or not parts[1].isdigit():
+            await message.answer(f"Формат: /{cmd} <telegram_user_id>")
+            return
+        if cmd == "live_add_user":
+            add_live_whitelist_user(int(parts[1]))
+            await message.answer("Пользователь добавлен в Live whitelist.")
+        else:
+            remove_live_whitelist_user(int(parts[1]))
+            await message.answer("Пользователь удалён из Live whitelist.")
+    else:
+        ids = list_live_whitelist_users()
+        await message.answer("Live whitelist:\n" + (", ".join(str(x) for x in ids) if ids else "—"))
 
 @dp.message_handler(commands=["live_admin", "live_stats"], state="*")
 async def live_admin_handler(message: types.Message, state: FSMContext):
@@ -8568,6 +8657,12 @@ async def live_image_handler(message: types.Message, state: FSMContext):
     if not is_live_enabled():
         await message.answer(LIVE_DISABLED_MESSAGE)
         return
+    policy_access = can_user_access_live(uid)
+    if not policy_access.get("allowed"):
+        logger.info("live_access_denied user_id=%s mode=%s", uid, policy_access.get("mode"))
+        await message.answer(format_live_access_denied_message(get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+        return
+    logger.info("live_access_allowed user_id=%s mode=%s", uid, policy_access.get("mode"))
     if not is_image_analysis_enabled():
         await message.answer("Я пока не умею анализировать изображения в этом режиме. Отправь текст или ссылку.")
         return

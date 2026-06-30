@@ -168,6 +168,7 @@ def test_process_live_text_passes_enriched_research_seed_and_charges_once(monkey
     saved = []
     charges = []
     research_calls = []
+    monkeypatch.setattr(svc, "can_user_access_live", lambda user_id: {"allowed": True, "mode": "everyone"})
     monkeypatch.setattr(svc, "is_live_enabled", lambda: True)
     monkeypatch.setattr(svc, "get_live_request_cost", lambda message_type: 1)
     monkeypatch.setattr(svc, "can_user_afford_live_request", lambda user_id, cost: True)
