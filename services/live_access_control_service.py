@@ -127,13 +127,13 @@ def format_live_access_denied_message(ui_language: str = "ru") -> str:
     if ui_language == "en":
         return ("Live Analyst is currently in private beta.\n"
                 "Access will open soon.\n\n"
-                "For now, you can follow DeepAlpha and prepare for the Airdrop.\n\n"
+                "For now, you can use regular DeepAlpha analysis and collect points.\n\n"
                 "🎁 Airdrop\n"
-                "Earn DeepAlpha Points for activity.\n"
-                "Future rewards: Soon.")
+                "DeepAlpha Points are awarded for every successful analysis.\n"
+                "Coin: Soon.")
     return ("Live Analyst сейчас в закрытой beta.\n"
             "Доступ скоро откроется.\n\n"
-            "А пока ты можешь следить за DeepAlpha и готовиться к Airdrop.\n\n"
+            "А пока ты можешь пользоваться обычным анализом DeepAlpha и собирать баллы.\n\n"
             "🎁 Airdrop\n"
-            "Зарабатывай DeepAlpha Points за активность.\n"
-            "Будущие награды: Soon.")
+            "DeepAlpha Points начисляются за каждый успешный анализ.\n"
+            "Монета: Soon.")

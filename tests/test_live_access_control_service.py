@@ -60,11 +60,11 @@ def test_denied_message_safe_words(monkeypatch):
     svc = reload_service(monkeypatch, owners="1")
     ru = svc.format_live_access_denied_message("ru")
     en = svc.format_live_access_denied_message("en")
-    for text, phrases in [(ru, ["закрытой beta", "Airdrop", "DeepAlpha Points", "Soon"]), (en, ["private beta", "Airdrop", "DeepAlpha Points", "Soon"] )]:
+    for text, phrases in [(ru, ["закрытой beta", "Airdrop", "DeepAlpha Points", "Монета: Soon"]), (en, ["private beta", "Airdrop", "DeepAlpha Points", "Coin: Soon"] )]:
         for phrase in phrases:
             assert phrase in text
         low = text.lower()
-        for forbidden in ["token ticker", "listing", "price", "guaranteed", "profit"]:
+        for forbidden in ["ticker", "listing", "price", "guaranteed", "profit", "future rewards", "may be considered"]:
             assert forbidden not in low
 
 

@@ -110,6 +110,10 @@ from services.live_access_control_service import (
     get_live_access_settings, list_live_whitelist_users, remove_live_whitelist_user,
     update_live_access_settings,
 )
+from services.airdrop_points_service import (
+    award_airdrop_points, format_airdrop_status, get_airdrop_points_balance,
+    get_airdrop_points_history,
+)
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
@@ -415,16 +419,8 @@ def get_onboarding_after_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 
-def format_airdrop_teaser(ui_language: str = "ru") -> str:
-    if ui_language == "en":
-        return ("🎁 Airdrop\n\n"
-                "Earn DeepAlpha Points for activity in DeepAlpha.\n"
-                "Points may be considered in the future DeepAlpha ecosystem.\n\n"
-                "Future rewards: Soon.")
-    return ("🎁 Airdrop\n\n"
-            "Зарабатывай DeepAlpha Points за активность в DeepAlpha.\n"
-            "Баллы могут учитываться в будущей экосистеме проекта.\n\n"
-            "Будущие награды: Soon.")
+def format_airdrop_teaser(user_id: int, ui_language: str = "ru") -> str:
+    return format_airdrop_status(user_id, ui_language)
 
 
 def _format_live_access_status() -> str:
@@ -4718,6 +4714,8 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"Анализов: {user['total_analyses']}\n"
             f"Сигналов: {user['total_opportunities']}\n"
             f"Рефералов: {get_referral_count(uid)}\n"
+            f"🎁 Airdrop Points: {get_airdrop_points_balance(uid).get('points', 0)}\n"
+            f"Монета: Soon\n"
             f"\n🔗 Реферальная ссылка:\n"
             f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
@@ -4749,6 +4747,8 @@ def _format_profile(user_id: int, target_user_id: int = None) -> str:
             f"Analyses: {user['total_analyses']}\n"
             f"Signals: {user['total_opportunities']}\n"
             f"Referrals: {get_referral_count(uid)}\n"
+            f"🎁 Airdrop Points: {get_airdrop_points_balance(uid).get('points', 0)}\n"
+            f"Coin: Soon\n"
             f"\n🔗 Referral link:\n"
             f"https://t.me/{BOT_USERNAME or 'DeepAlphaAI_bot'}?start=ref_{uid}\n"
         )
@@ -8476,10 +8476,10 @@ async def airdrop_handler(message: types.Message, state: FSMContext):
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
-    await message.answer(format_airdrop_teaser(get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+    await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8487,7 +8487,35 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
-    if cmd == "live_access":
+    if cmd == "airdrop_points":
+        if len(parts) != 2 or not parts[1].isdigit():
+            await message.answer("Формат: /airdrop_points <telegram_user_id>")
+            return
+        target_id = int(parts[1])
+        balance = get_airdrop_points_balance(target_id)
+        history = get_airdrop_points_history(target_id, limit=10)
+        rows = [f"- {h.get('created_at')}: {h.get('amount')} ({h.get('reason')})" for h in history]
+        await message.answer(
+            f"Airdrop Points for {target_id}:\n"
+            f"Balance: {balance.get('points', 0)}\n"
+            f"Today: {balance.get('today_earned', 0)}\n\n"
+            "Last entries:\n" + ("\n".join(rows) if rows else "—")
+        )
+    elif cmd == "airdrop_add_points":
+        if len(parts) < 4 or not parts[1].isdigit():
+            await message.answer("Формат: /airdrop_add_points <telegram_user_id> <amount> <reason>")
+            return
+        target_id = int(parts[1])
+        try:
+            amount = int(parts[2])
+        except Exception:
+            await message.answer("Amount должен быть числом.")
+            return
+        reason_text = " ".join(parts[3:]).strip()
+        result = award_airdrop_points(target_id, reason="admin_adjustment", amount=amount, metadata={"admin_user_id": message.from_user.id, "reason": reason_text})
+        logger.info("airdrop_points_admin_adjustment admin_user_id=%s user_id=%s amount=%s reason=%s", message.from_user.id, target_id, amount, reason_text)
+        await message.answer(f"Airdrop Points обновлены. Balance: {result.get('points', 0)}")
+    elif cmd == "live_access":
         await message.answer(_format_live_access_status())
     elif cmd == "live_owner_only":
         update_live_access_settings({"enabled": True, "mode": "owner_only"})
@@ -8836,6 +8864,11 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     final_text = result.get("message") or LIVE_UNAVAILABLE_MESSAGE
     final_markup = private_reply_markup(message, get_live_analyst_keyboard(uid))
     await _send_live_final_chunks(message, thinking_message, final_text, final_markup=final_markup)
+    if result.get("ok") and result.get("charged"):
+        try:
+            award_airdrop_points(uid, reason="live_analysis_completed", metadata={"source": "telegram_live_text"})
+        except Exception as exc:
+            logger.warning("airdrop_points_live_award_failed user_id=%s error=%s", uid, exc)
     logger.info(
         "live_text_handled_stop_propagation user_id=%s ok=%s charged=%s",
         uid,
@@ -9330,6 +9363,10 @@ async def _run_normal_polymarket_analysis(message: types.Message, url_override: 
             reply_markup=share_kb,
             parse_mode="HTML",
         )
+        try:
+            award_airdrop_points(uid, reason="analysis_completed", metadata={"source": "telegram_quick_analysis", "url": url})
+        except Exception as exc:
+            logger.warning("airdrop_points_analysis_award_failed user_id=%s error=%s", uid, exc)
         try:
             save_analysis_to_web_history(
                 user_id=uid,
