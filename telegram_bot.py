@@ -25,7 +25,7 @@ from texts.analysis_guide import get_analysis_guide
 from agents.top_analysis.top_analysis_agent import TopAnalysisAgent
 from db.database import (
     init_db, get_recent_analyses, get_top_opportunities,
-    ensure_user, is_user_banned, get_user, get_setting,
+    ensure_user, is_user_banned, get_user, get_setting, set_setting,
     add_tokens, increment_user_stat, get_referrals, get_referral_count,
     is_subscribed, get_subscription_until, set_subscription,
     check_daily_limit, increment_daily, get_daily_usage,
@@ -111,8 +111,8 @@ from services.live_access_control_service import (
     update_live_access_settings,
 )
 from services.airdrop_points_service import (
-    award_airdrop_points, format_airdrop_status, get_airdrop_points_balance,
-    get_airdrop_points_history,
+    award_airdrop_points, award_analysis_points, award_referral_activation_points, format_airdrop_status, get_airdrop_points_balance,
+    get_airdrop_points_history, get_referral_activation_count, points_enabled, points_per_analysis, daily_cap, referral_points_enabled, referrer_points, referred_user_points,
 )
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
@@ -1997,6 +1997,7 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
     user = get_user(uid)
     user_balance = (user or {}).get("token_balance", 0)
     if user_balance < price:
+        logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", "insufficient_tokens")
         await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
         return
 
@@ -2040,14 +2041,23 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
                 result.get("failed_component"),
                 result.get("failed_component_error"),
             )
+            logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", "analysis_failed")
             await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
             return
         logger.info("top_analysis_charge_attempt user_id=%s price=%s", uid, price)
         new_balance = add_tokens(uid, -price)
         if new_balance == 0 and user_balance > 0:
+            logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", "payment_failure")
             await respond_fn(_get_top_analysis_balance_message(lang, price), reply_markup=get_pay_keyboard(lang))
             return
         await respond_fn(_format_top_analysis_output(lang, input_data.get("question", ""), result))
+        try:
+            # Only award after successful user-facing analysis completion.
+            award_result = award_analysis_points(uid, source="top_analysis", metadata={"market": input_data.get("question", "")})
+            award_referral_activation_points(uid, metadata={"source": "top_analysis"})
+            logger.info("airdrop_points_top_analysis_awarded user_id=%s source=%s amount=%s", uid, "top_analysis", award_result.get("amount", 0))
+        except Exception as exc:
+            logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", type(exc).__name__)
         logger.info("top_analysis_success user_id=%s", uid)
     except Exception as exc:
         logger.warning(
@@ -2055,6 +2065,7 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
             uid,
             type(exc).__name__,
         )
+        logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", type(exc).__name__)
         await respond_fn(_get_top_analysis_maintenance_message(lang, timeout_variant=True))
 
 
@@ -7940,6 +7951,8 @@ async def balance_handler(message: types.Message):
     sub_analyses_limit = get_setting("sub_daily_analyses", "15")
     sub_opp_limit = get_setting("sub_daily_opportunities", "3")
     trial = get_free_trial_status(uid)
+    airdrop_balance = get_airdrop_points_balance(uid)
+    airdrop_points = int(airdrop_balance.get("points") or 0)
 
     if lang == "ru":
         sub_text = f"✅ До {sub_until[:10]}" if subscribed and sub_until else "❌ Нет"
@@ -7960,6 +7973,8 @@ async def balance_handler(message: types.Message):
             f"Токены: {user['token_balance']}\n"
             f"Анализов: {user['total_analyses']}\n"
             f"Сигналов: {user['total_opportunities']}\n"
+            f"Airdrop Points: {airdrop_points}\n"
+            f"Реферальные points: +{referrer_points()} за активного друга\n"
             f"VIP: {'👑 Да' if user['is_vip'] else 'Нет'}\n"
             f"Подписка: {sub_text}"
             f"{daily_text}"
@@ -7987,6 +8002,8 @@ async def balance_handler(message: types.Message):
             f"Tokens: {user['token_balance']}\n"
             f"Analyses: {user['total_analyses']}\n"
             f"Signals: {user['total_opportunities']}\n"
+            f"Airdrop Points: {airdrop_points}\n"
+            f"Referral points: +{referrer_points()} per active friend\n"
             f"VIP: {'👑' if user['is_vip'] else 'No'}\n"
             f"Sub: {sub_text}"
             f"{daily_text}"
@@ -8479,7 +8496,7 @@ async def airdrop_handler(message: types.Message, state: FSMContext):
     await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8487,6 +8504,56 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
+    if cmd == "airdrop_settings":
+        await message.answer(
+            "Airdrop Settings:\n\n"
+            f"- Points enabled: {str(points_enabled()).lower()}\n"
+            f"- Points per analysis: {points_per_analysis()}\n"
+            f"- Daily cap: {daily_cap()}\n"
+            f"- Referral points enabled: {str(referral_points_enabled()).lower()}\n"
+            f"- Referrer bonus: {referrer_points()}\n"
+            f"- Referred user bonus: {referred_user_points()}\n"
+            "- Coin: Soon"
+        )
+        return
+    if cmd == "airdrop_enable":
+        set_setting("airdrop_points_enabled", "true")
+        await message.answer("Airdrop Points включены.")
+        return
+    if cmd == "airdrop_disable":
+        set_setting("airdrop_points_enabled", "false")
+        await message.answer("Airdrop Points отключены. Начисления и referral activation не будут происходить.")
+        return
+    if cmd == "airdrop_referrals_enable":
+        set_setting("airdrop_referral_points_enabled", "true")
+        await message.answer("Referral Airdrop Points включены.")
+        return
+    if cmd == "airdrop_referrals_disable":
+        set_setting("airdrop_referral_points_enabled", "false")
+        await message.answer("Referral Airdrop Points отключены.")
+        return
+    airdrop_int_commands = {
+        "airdrop_set_analysis_points": ("airdrop_points_per_analysis", 0, 10000, "Points за анализ обновлены: {amount}"),
+        "airdrop_set_daily_cap": ("airdrop_daily_cap", 0, 100000, "Daily cap обновлён: {amount}"),
+        "airdrop_set_referrer_points": ("airdrop_referrer_points", 0, 100000, "Referral bonus для пригласившего обновлён: {amount}"),
+        "airdrop_set_referred_points": ("airdrop_referred_user_points", 0, 100000, "Referral bonus для друга обновлён: {amount}"),
+    }
+    if cmd in airdrop_int_commands:
+        key, min_value, max_value, response_template = airdrop_int_commands[cmd]
+        if len(parts) != 2:
+            await message.answer(f"Формат: /{cmd} <amount>")
+            return
+        try:
+            amount = int(parts[1])
+        except Exception:
+            await message.answer("Amount должен быть числом.")
+            return
+        if amount < min_value or amount > max_value:
+            await message.answer(f"Amount должен быть от {min_value} до {max_value}.")
+            return
+        set_setting(key, str(amount))
+        await message.answer(response_template.format(amount=amount))
+        return
     if cmd == "airdrop_points":
         if len(parts) != 2 or not parts[1].isdigit():
             await message.answer("Формат: /airdrop_points <telegram_user_id>")
@@ -8495,10 +8562,16 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
         balance = get_airdrop_points_balance(target_id)
         history = get_airdrop_points_history(target_id, limit=10)
         rows = [f"- {h.get('created_at')}: {h.get('amount')} ({h.get('reason')})" for h in history]
+        activations = get_referral_activation_count(target_id)
         await message.answer(
             f"Airdrop Points for {target_id}:\n"
             f"Balance: {balance.get('points', 0)}\n"
-            f"Today: {balance.get('today_earned', 0)}\n\n"
+            f"Today: {balance.get('today_earned', 0)}\n"
+            f"Points per analysis: {points_per_analysis()}\n"
+            f"Daily cap: {daily_cap()}\n"
+            f"Referrer bonus: {referrer_points()}\n"
+            f"Referred user bonus: {referred_user_points()}\n"
+            f"Referral activations: {activations}\n\n"
             "Last entries:\n" + ("\n".join(rows) if rows else "—")
         )
     elif cmd == "airdrop_add_points":
@@ -8866,7 +8939,9 @@ async def live_text_handler(message: types.Message, state: FSMContext):
     await _send_live_final_chunks(message, thinking_message, final_text, final_markup=final_markup)
     if result.get("ok") and result.get("charged"):
         try:
-            award_airdrop_points(uid, reason="live_analysis_completed", metadata={"source": "telegram_live_text"})
+            # Only award after successful user-facing analysis completion.
+            award_analysis_points(uid, source="telegram_live_text")
+            award_referral_activation_points(uid, metadata={"source": "telegram_live_text"})
         except Exception as exc:
             logger.warning("airdrop_points_live_award_failed user_id=%s error=%s", uid, exc)
     logger.info(
@@ -9364,7 +9439,9 @@ async def _run_normal_polymarket_analysis(message: types.Message, url_override: 
             parse_mode="HTML",
         )
         try:
-            award_airdrop_points(uid, reason="analysis_completed", metadata={"source": "telegram_quick_analysis", "url": url})
+            # Only award after successful user-facing analysis completion.
+            award_analysis_points(uid, source="telegram_quick_analysis", metadata={"url": url})
+            award_referral_activation_points(uid, metadata={"source": "telegram_quick_analysis"})
         except Exception as exc:
             logger.warning("airdrop_points_analysis_award_failed user_id=%s error=%s", uid, exc)
         try:
