@@ -1,4 +1,4 @@
-from services.live_answer_composer_service import compose_live_answer
+from services.live_answer_composer_service import compose_live_answer, is_market_composer, is_strict_non_market_composer
 from services.universal_live_frame_service import build_universal_live_frame
 
 
@@ -50,3 +50,16 @@ def test_health_request_uses_informational_composer():
     assert "врач" in fallback or "doctor" in fallback
     assert "moneyline" not in fallback
     assert "betting" not in fallback
+
+
+def test_strict_non_market_composer_helper_matches_modes_and_roles():
+    assert is_strict_non_market_composer({"composer_mode": "technical_debug"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "business"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "health_info"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "legal_info"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "research"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "other", "system_role": "senior production incident responder"}) is True
+    assert is_strict_non_market_composer({"composer_mode": "betting", "system_role": "betting market analyst"}) is False
+    assert is_market_composer({"composer_mode": "betting", "system_role": "betting market analyst"}) is True
+    assert is_market_composer({"composer_mode": "financial", "system_role": "market analyst"}) is True
+    assert is_market_composer({"composer_mode": "technical_debug", "system_role": "senior production incident responder"}) is False

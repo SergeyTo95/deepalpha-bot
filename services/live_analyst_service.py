@@ -29,7 +29,7 @@ from services.live_context_memory import (
     resolve_live_followup,
     save_live_context,
 )
-from services.live_answer_composer_service import compose_live_answer, is_non_market_adaptive_domain
+from services.live_answer_composer_service import compose_live_answer, is_market_composer, is_non_market_adaptive_domain, is_strict_non_market_composer
 from services.live_evidence_engine import (
     apply_validation_safety,
     build_live_evidence_pack,
@@ -1393,6 +1393,77 @@ def _remove_technical_followup_metadata(text: str) -> str:
     text = re.sub(r"(?im)^\s*[-•]?\s*(?:Таймфрейм follow-up|Follow-up timeframe)\s*:\s*[^\n]*$", "", text)
     return _clean_live_spacing(text)
 
+_MARKET_LEAKAGE_MARKERS = (
+    "watch: данных недостаточно для уверенного входа",
+    "уверенного входа",
+    "уровней/коэффициентов",
+    "teams, event_time",
+    "implied probability",
+    "edge",
+    "minimum playable odds",
+    "moneyline",
+    "american_football",
+    "форма/составы",
+    "травмы",
+    "travel/rest",
+    "кэф",
+    "ставка",
+    "no bet",
+    "no trade",
+)
+
+
+def _adaptive_market_leak_reason(answer: str) -> str:
+    low = (answer or "").lower()
+    for marker in _MARKET_LEAKAGE_MARKERS:
+        if marker in low:
+            return f"market_marker:{marker}"
+    return ""
+
+
+def _non_market_required_terms_missing(answer: str, composer: Dict[str, Any]) -> str:
+    low = (answer or "").lower()
+    mode = (composer or {}).get("composer_mode") or ""
+    if mode == "technical_debug":
+        groups = (
+            ("getupdates",),
+            ("polling",),
+            ("bot_token", "bot token"),
+            ("railway",),
+            ("webhook",),
+            ("deployment", "redeploy"),
+            ("old container", "second instance", "старый контейнер", "второй инстанс"),
+        )
+        return "" if sum(any(term in low for term in group) for group in groups) >= 2 else "generic_technical_debug"
+    if mode == "business":
+        groups = (
+            ("цель", "goal"),
+            ("аудитория", "audience"),
+            ("бюджет", "budget"),
+            ("cac",),
+            ("payback",),
+            ("метрики", "metrics"),
+            ("тест", "experiment"),
+        )
+        return "" if sum(any(term in low for term in group) for group in groups) >= 2 else "generic_business"
+    if mode == "health_info" and re.search(r"\b(диагноз|diagnosis)\s*[:—-]|у вас\s+|you have\s+", low):
+        return "unsafe_health_diagnosis"
+    if mode == "legal_info" and any(term in low for term in ("точно законно", "точно незаконно", "final legal determination")):
+        return "unsafe_legal_determination"
+    return ""
+
+
+def format_adaptive_non_market_final_answer(answer: str, composer: dict, evidence_pack: dict, ui_language: str = "ru") -> str:
+    """Clean adaptive non-market answers without applying market formatters or decisions."""
+    text = _normalize_live_money_levels(str(answer or "").strip())
+    text = _normalize_decision_lines(text, "")
+    text = _clean_live_spacing(text)
+    text = re.sub(r"(?im)^\s*Decision\s*:\s*[^\n]+\s*$", "", text).strip()
+    text = re.sub(r"(?im)^\s*(?:Итог|Final)\s*:\s*(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?\s*$", "", text).strip()
+    text = re.sub(r"\*{2,}", "", text).strip()
+    text = _remove_technical_followup_metadata(text)
+    return _trim_live_answer(_clean_live_spacing(text), 1600)
+
 def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
     """Conservatively clean the final Live Analyst answer for Telegram delivery."""
     ui_language = "ru" if ui_language == "ru" else "en"
@@ -2285,6 +2356,22 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
                     return deterministic
                 logger.warning("live_answer_repair_retry_failed_no_charge user_id=%s mode=%s first_chars=%s retry_chars=%s", user_id, mode, len(first_answer), len(repaired))
                 return {"ok": False, "message": LIVE_UNAVAILABLE_MESSAGE, "charged": False}
+    strict_non_market = is_strict_non_market_composer(answer_composer) and not is_market_composer(answer_composer)
+    if strict_non_market:
+        composer_mode = answer_composer.get("composer_mode") or "unknown"
+        logger.info("live_answer_composer_strict_mode composer_mode=%s", composer_mode)
+        replacement_reason = ""
+        if not (answer or "").strip():
+            replacement_reason = "empty_answer"
+        else:
+            replacement_reason = _adaptive_market_leak_reason(answer) or _non_market_required_terms_missing(answer, answer_composer)
+        if replacement_reason:
+            logger.warning("live_answer_composer_replaced_market_leak composer_mode=%s reason=%s", composer_mode, replacement_reason)
+            answer = (answer_composer.get("fallback_answer") or _build_live_safe_fallback(evidence_pack, ui_language=ui_language)).strip()
+            logger.info("live_answer_composer_final_used composer_mode=%s source=fallback", composer_mode)
+        else:
+            logger.info("live_answer_composer_final_used composer_mode=%s source=llm", composer_mode)
+
     if not answer:
         deterministic = return_deterministic_fallback("llm_unavailable")
         if deterministic:
@@ -2297,7 +2384,10 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         answer = apply_validation_safety(answer, evidence_pack, validation, ui_language=ui_language)
         logger.info("live_answer_validation_safety_applied severity=major issues=%s", validation.get("issues"))
 
-    answer = format_live_final_answer(answer, evidence_pack, ui_language)
+    if strict_non_market:
+        answer = format_adaptive_non_market_final_answer(answer, answer_composer, evidence_pack, ui_language)
+    else:
+        answer = format_live_final_answer(answer, evidence_pack, ui_language)
     answer = append_live_followup_suggestions(answer, evidence_pack, ui_language)
 
     ai_quality = score_ai_response_quality(answer, evidence_pack, validation)

@@ -1442,3 +1442,92 @@ def test_technical_debug_final_answer_must_not_use_sports_formatter(monkeypatch)
 def test_no_duplicate_decision_ending_for_market_answer():
     answer = svc.format_live_final_answer("Итог: DATA NEEDED\nDecision: DATA NEEDED", {"mode": "esports", "derived_facts": {}, "missing_data": ["recent form"], "recommended_decision_labels": ["DATA NEEDED"]}, "ru")
     assert not ("Итог: DATA NEEDED" in answer and "Decision: DATA NEEDED" in answer)
+
+
+def _patch_non_market_flow(monkeypatch, text, mode, evidence_mode="unknown"):
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "unknown", "intent": "incident_response" if mode == "technical_debug" else "business_decision", "needs": {}})
+    evidence_pack = {
+        "mode": evidence_mode,
+        "intent": "incident_response" if mode == "technical_debug" else "business_decision",
+        "missing_data": [],
+        "derived_facts": {},
+        "universal_live_frame": {"domain": mode if mode != "technical_debug" else "technical_debug", "user_intent": "incident_response" if mode == "technical_debug" else "business_decision"},
+    }
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    return evidence_pack
+
+
+def test_technical_debug_market_like_answer_gets_replaced(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    text = "Railway aiogram traceback: Terminated by other getUpdates request; make sure that only one bot instance is running."
+    _patch_non_market_flow(monkeypatch, text, "technical_debug")
+    market_answer = "🧠 Коротко:\nWATCH: данных недостаточно для уверенного входа; лучше дождаться подтверждения.\n\nДанные:\nКачество evidence: medium. Не хватает: teams, event_time.\n\nDecision: WATCH"
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: market_answer)
+
+    result = svc.process_live_text(24201, text, router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    out = result["message"]
+    assert "getUpdates" in out
+    assert "polling" in out
+    assert "BOT_TOKEN" in out or "bot token" in out
+    assert "Railway" in out
+    assert "LIKELY CAUSE" in out or "FIX NEEDED" in out
+    forbidden = ["WATCH: данных недостаточно для уверенного входа", "teams, event_time", "уровней/коэффициентов", "Decision: WATCH", "Implied probability", "Edge", "moneyline", "american_football"]
+    assert not any(x in out for x in forbidden)
+
+
+def test_technical_debug_valid_llm_answer_is_preserved(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    text = "Railway aiogram traceback: Terminated by other getUpdates request; make sure that only one bot instance is running."
+    _patch_non_market_flow(monkeypatch, text, "technical_debug")
+    llm_answer = "Похоже на conflict getUpdates: две polling-инстанции с одним BOT_TOKEN одновременно читают updates в Railway после redeploy. Проверь активные deployments, webhook/polling и старый контейнер. Итог: LIKELY CAUSE / FIX NEEDED."
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: llm_answer)
+
+    result = svc.process_live_text(24202, text, router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    assert llm_answer in result["message"]
+
+
+def test_business_market_like_answer_gets_replaced(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    text = "Стоит ли запускать рекламу для DeepAlpha сейчас?"
+    _patch_non_market_flow(monkeypatch, text, "business")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "WATCH: данных недостаточно для уверенного входа; Не хватает: teams, event_time. Implied probability и moneyline неизвестны. Decision: WATCH")
+
+    result = svc.process_live_text(24203, text, router_result={"mode": "unknown"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    out = result["message"]
+    low = out.lower()
+    for expected in ("цель", "audience", "бюдж", "cac", "payback", "тест"):
+        assert expected in low
+    for forbidden in ("teams", "event_time", "уверенного входа", "implied probability", "moneyline"):
+        assert forbidden not in low
+
+
+def test_technical_debug_strict_composer_overrides_legacy_sports_mode(monkeypatch):
+    _saved, charges = _patch_common(monkeypatch)
+    text = "Railway aiogram traceback: Terminated by other getUpdates request; make sure that only one bot instance is running."
+    _patch_non_market_flow(monkeypatch, text, "technical_debug", evidence_mode="sports")
+    market_answer = "🧠 Коротко:\nWATCH: данных недостаточно для уверенного входа; лучше дождаться подтверждения.\n\nДанные:\nКачество evidence: medium. Не хватает: teams, event_time.\n\nDecision: WATCH"
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: market_answer)
+
+    result = svc.process_live_text(24204, text, router_result={"mode": "sports"}, ui_language="ru")
+
+    assert result["ok"] is True
+    assert len(charges) == 1
+    out = result["message"]
+    assert "getUpdates" in out
+    assert "polling" in out
+    assert "BOT_TOKEN" in out or "bot token" in out
+    assert "Railway" in out
+    assert "LIKELY CAUSE" in out or "FIX NEEDED" in out
+    forbidden = ["WATCH: данных недостаточно для уверенного входа", "teams, event_time", "Decision: WATCH", "Implied probability", "Edge", "moneyline", "american_football", "спорт", "sports"]
+    assert not any(x in out for x in forbidden)

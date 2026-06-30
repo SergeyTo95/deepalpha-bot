@@ -7,7 +7,7 @@ _NON_MARKET_ADAPTIVE_DOMAINS = {
     "technical_debug", "business", "tech", "news", "gaming", "personal_decision",
     "health_info", "legal_info", "generic_research",
 }
-_MARKET_DOMAINS = {"crypto", "sports", "esports", "polymarket"}
+_MARKET_DOMAINS = {"crypto", "sports", "esports", "event_betting", "polymarket"}
 
 
 def _s(value: Any) -> str:
@@ -42,7 +42,7 @@ def _fallback(domain: str, ui_language: str) -> str:
             "Fix: keep one polling instance or move to webhook/leader lock. Final: LIKELY CAUSE / FIX NEEDED."
         )
     if domain == "business":
-        return ("Как бизнес-решение это нельзя оценить без цели, аудитории, канала, бюджета, текущей конверсии, CAC, payback и таймлайна. "
+        return ("Как бизнес-решение это нельзя оценить без цель/goal, аудитория/audience, канала, бюджета, текущей конверсии, CAC, payback и таймлайна. "
                 "Практичный следующий шаг: запустить маленький тест с чётким stop-loss, заранее определить целевой CAC/конверсию и сравнить с payback. "
                 "Итог: DATA NEEDED.") if ru else (
                 "As a business decision, this needs goal, audience, channel, budget, current conversion, CAC, payback, and timeline. Run a small test with a clear stop-loss and compare CAC/conversion to payback. Final: DATA NEEDED.")
@@ -55,6 +55,41 @@ def _fallback(domain: str, ui_language: str) -> str:
     return ("Данных недостаточно для уверенного вывода. Скажи, что именно нужно решить, какие факты уже известны и какие ограничения важны. Итог: DATA NEEDED.") if ru else "There is not enough evidence for a confident answer. Share the decision, known facts, and constraints. Final: DATA NEEDED."
 
 
+_STRICT_NON_MARKET_COMPOSER_MODES = {
+    "technical_debug",
+    "business",
+    "health_info",
+    "legal_info",
+    "research",
+}
+_STRICT_NON_MARKET_ROLE_MARKERS = (
+    "incident responder",
+    "business advisor",
+    "health information",
+    "legal information",
+    "research analyst",
+)
+
+
+def is_strict_non_market_composer(composer: dict) -> bool:
+    composer = composer or {}
+    mode = _s(composer.get("composer_mode")).lower()
+    role = _s(composer.get("system_role")).lower()
+    return mode in _STRICT_NON_MARKET_COMPOSER_MODES or any(marker in role for marker in _STRICT_NON_MARKET_ROLE_MARKERS)
+
+
+def is_market_composer(composer: dict) -> bool:
+    composer = composer or {}
+    mode = _s(composer.get("composer_mode")).lower()
+    role = _s(composer.get("system_role")).lower()
+    return (
+        mode in {"betting", "financial", "event_probability"}
+        or "betting market analyst" in role
+        or "market analyst" in role
+        or "event probability analyst" in role
+    )
+
+
 def compose_live_answer(
     user_text: str,
     evidence_pack: dict,
@@ -65,6 +100,9 @@ def compose_live_answer(
     evidence_pack = evidence_pack or {}
     frame = _frame(evidence_pack)
     domain = _s(frame.get("domain") or evidence_pack.get("mode") or (understanding or {}).get("mode") or (router_result or {}).get("mode") or "generic_research").lower()
+    market_hint = _s(evidence_pack.get("mode") or (understanding or {}).get("mode") or (router_result or {}).get("mode")).lower()
+    if market_hint in _MARKET_DOMAINS:
+        domain = market_hint
     low_user = (user_text or "").lower()
     if any(term in low_user for term in ("traceback", "getupdates", "aiogram", "railway", "polling", "webhook", "bot_token", "redeploy")):
         domain = "technical_debug"
@@ -78,7 +116,7 @@ def compose_live_answer(
 
     if domain == "technical_debug" or style == "debug_report" or intent in ("debug_problem", "incident_response"):
         mode, role = "technical_debug", "senior production incident responder"
-    elif domain == "business" or safety_domain == "business_advice" or style in ("decision_tree", "pros_cons"):
+    elif domain == "business" or safety_domain == "business_advice" or (style in ("decision_tree", "pros_cons") and domain not in _MARKET_DOMAINS):
         mode, role = "business", "senior product/growth/business advisor"
     elif domain in ("crypto", "stocks") or safety_domain == "financial_advice":
         mode, role = "financial", "market analyst"
