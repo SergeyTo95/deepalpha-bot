@@ -29,6 +29,7 @@ from services.live_context_memory import (
     resolve_live_followup,
     save_live_context,
 )
+from services.live_answer_composer_service import compose_live_answer, is_non_market_adaptive_domain
 from services.live_evidence_engine import (
     apply_validation_safety,
     build_live_evidence_pack,
@@ -1400,8 +1401,9 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     decision = _extract_decision(text, evidence_pack)
     is_crypto = (evidence_pack.get("mode") or "").lower() == "crypto"
     mode_lower = (evidence_pack.get("mode") or "").lower()
-    is_sports = mode_lower == "sports"
-    is_event_betting = mode_lower in ("esports", "event_betting")
+    non_market_adaptive = is_non_market_adaptive_domain(evidence_pack)
+    is_sports = mode_lower == "sports" and not non_market_adaptive
+    is_event_betting = mode_lower in ("esports", "event_betting") and not non_market_adaptive
     if is_crypto:
         decision = _first_evidence_decision(evidence_pack, decision)
     if (is_sports or is_event_betting) and decision not in _SPORTS_DECISION_LABELS:
@@ -1429,6 +1431,7 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
             decision = "DATA NEEDED"
         text = _sanitize_sports_text(text)
     text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
+    text = re.sub(r"(?im)^\s*(?:Итог|Final)\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
     text = re.sub(r"\*{2,}", "", text).strip()
     text = _remove_technical_followup_metadata(text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
@@ -1712,7 +1715,13 @@ def _format_ai_control_context(ai_control_context: Optional[Dict[str, Any]]) -> 
     ])
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None) -> str:
+def _format_live_answer_composer(composer: Optional[Dict[str, Any]]) -> str:
+    if not composer or not composer.get("should_use_adaptive_answer"):
+        return "Adaptive answer composer: not used."
+    return str(composer.get("answer_prompt") or "").strip()
+
+
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None, answer_composer: Optional[Dict[str, Any]] = None) -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -1755,6 +1764,9 @@ Research context:
 {_format_live_evidence_pack(evidence_pack)}
 
 {_format_ai_control_context(ai_control_context)}
+
+{_format_live_answer_composer(answer_composer)}
+
 AI Control Center rules:
 - Optimize only for long-term trust-adjusted token revenue: useful, honest, evidence-grounded paid usage.
 - Do not upsell when evidence quality is low. Do not pressure the user. Do not imply hidden charges or scarcity.
@@ -2210,7 +2222,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     ai_control_context = build_ai_control_context(user_id, text, evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown", evidence_pack.get("intent") or understanding.get("intent") or "unknown", evidence_pack=evidence_pack, router_result=router_result, session=session)
     provider_choice = choose_ai_provider("live_analyst", ai_control_context.get("mode") or "unknown")
     logger.info("ai_control_provider_chosen user_id=%s mode=%s provider=%s model=%s reason=%s", user_id, ai_control_context.get("mode"), provider_choice.get("provider"), provider_choice.get("model"), provider_choice.get("reason"))
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context)
+    answer_composer = compose_live_answer(text, evidence_pack, router_result=router_result, understanding=understanding, ui_language=ui_language)
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer)
     logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
 
     mode = evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown"
@@ -2225,7 +2238,10 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if not had_non_empty_first_answer:
         logger.warning("live_answer_empty_after_generation_no_charge user_id=%s mode=%s", user_id, mode)
     def return_deterministic_fallback(reason: str) -> Optional[Dict[str, Any]]:
-        if mode == "crypto" and _is_crypto_timeframe_compare(evidence_pack):
+        if answer_composer.get("should_use_adaptive_answer") and is_non_market_adaptive_domain(evidence_pack):
+            fallback = answer_composer.get("fallback_answer") or _build_live_safe_fallback(evidence_pack, ui_language=ui_language)
+            logger.warning("live_answer_composer_fallback_used domain=%s reason=%s", ((evidence_pack.get("universal_live_frame") or {}).get("domain")), reason)
+        elif mode == "crypto" and _is_crypto_timeframe_compare(evidence_pack):
             fallback = _format_crypto_timeframe_compare_answer("", evidence_pack, ui_language)
         else:
             fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)

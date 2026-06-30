@@ -1405,3 +1405,40 @@ def test_followup_without_previous_context_still_clarifies(monkeypatch):
     assert result["is_followup"] is True
     assert charges == []
     assert saved == []
+
+
+def test_technical_debug_final_answer_must_not_use_sports_formatter(monkeypatch):
+    saved, charges = _patch_common(monkeypatch)
+    text = "Railway aiogram traceback: Terminated by other getUpdates request; make sure that only one bot instance is running. Бот на aiogram polling, Railway production, после redeploy иногда появляется conflict getUpdates."
+    frame = {
+        "domain": "technical_debug",
+        "user_intent": "debug_problem",
+        "answer_style": "debug_report",
+        "safety_domain": "technical_debug",
+        "subject": text,
+        "missing_data": ["logs", "deployments", "BOT_TOKEN"],
+    }
+    evidence_pack = {"mode": "sports", "intent": "betting_angle", "universal_live_frame": frame, "derived_facts": {}, "missing_data": frame["missing_data"], "answer_policy": {}, "recommended_decision_labels": ["DATA NEEDED"]}
+    monkeypatch.setattr(svc, "understand_live_request", lambda *args, **kwargs: {"mode": "sports", "intent": "betting_angle"})
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *args, **kwargs: evidence_pack)
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kwargs: "Вероятная причина: conflict getUpdates — две polling-инстанции с одним BOT_TOKEN в Railway после redeploy. Проверь deployments/replicas и логи старого процесса. Итог: LIKELY CAUSE / FIX NEEDED")
+
+    result = svc.process_live_text(808, text, router_result={"mode": "sports"}, ui_language="ru")
+
+    assert result["ok"] is True
+    output = result["message"]
+    assert "getUpdates" in output
+    assert "polling" in output
+    assert "BOT_TOKEN" in output or "bot token" in output.lower()
+    assert "Railway" in output
+    assert any(x in output for x in ["Вероятная причина", "LIKELY CAUSE", "FIX NEEDED"])
+    forbidden = ["🏟", "sports", "спортив", "american_football", "moneyline", "форма/составы", "травмы", "travel/rest", "Implied probability", "Edge", "Minimum playable odds"]
+    for item in forbidden:
+        assert item not in output
+
+
+def test_no_duplicate_decision_ending_for_market_answer():
+    answer = svc.format_live_final_answer("Итог: DATA NEEDED\nDecision: DATA NEEDED", {"mode": "esports", "derived_facts": {}, "missing_data": ["recent form"], "recommended_decision_labels": ["DATA NEEDED"]}, "ru")
+    assert not ("Итог: DATA NEEDED" in answer and "Decision: DATA NEEDED" in answer)
