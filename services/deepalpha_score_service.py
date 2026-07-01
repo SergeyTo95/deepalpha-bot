@@ -153,6 +153,62 @@ def _edge_text(score: Dict[str, Any], lang: str) -> str:
     return f"{edge:+.2f} pp"
 
 
+_SAFE_SCORE_LABELS = {"EDGE CANDIDATE", "WATCH", "DATA NEEDED", "NO EDGE", "NO BET", "NO TRADE"}
+_RISK_LABELS = {
+    "en": {"low": "Low", "medium": "Medium", "high": "High", "unknown": "Unknown"},
+    "ru": {"low": "Низкий", "medium": "Средний", "high": "Высокий", "unknown": "Неизвестно"},
+}
+_DATA_QUALITY_LABELS = {
+    "en": {"strong": "Strong", "mixed": "Mixed", "weak": "Weak", "missing": "Missing"},
+    "ru": {"strong": "Сильное", "mixed": "Среднее", "weak": "Слабое", "missing": "Недостаточно"},
+}
+
+
+def _safe_score_label(value: Any) -> str:
+    label = str(value or "DATA NEEDED").strip().upper()
+    return label if label in _SAFE_SCORE_LABELS else "DATA NEEDED"
+
+
+def _compact_edge_text(score: Dict[str, Any], lang: str = "en") -> str:
+    unavailable = "недоступно" if lang == "ru" else "unavailable"
+    edge = score.get("edge_delta")
+    if edge is None:
+        return unavailable
+    try:
+        return f"{float(edge):+.2f} pp"
+    except (TypeError, ValueError):
+        return unavailable
+
+
+def format_compact_deepalpha_score(score: dict, lang: str = "ru") -> str:
+    """Return a compact, user-visible DeepAlpha Score block."""
+    lang = "ru" if lang == "ru" else "en"
+    s = score or {}
+    risk_key = str(s.get("risk_level") or "unknown").strip().lower()
+    quality_key = str(s.get("data_quality") or "missing").strip().lower()
+    risk = _RISK_LABELS[lang].get(risk_key, _RISK_LABELS[lang]["unknown"])
+    quality = _DATA_QUALITY_LABELS[lang].get(quality_key, _DATA_QUALITY_LABELS[lang]["missing"])
+    confidence = _clamp_int(s.get("confidence"), default=0)
+    lines = [f"📊 DeepAlpha Score: {_clamp_int(s.get('overall_score'), default=0)}/100"]
+    if lang == "ru":
+        lines.extend([
+            f"Решение: {_safe_score_label(s.get('label'))}",
+            f"Уверенность: {confidence}%",
+            f"Риск: {risk}",
+            f"Качество данных: {quality}",
+            f"Преимущество: {_compact_edge_text(s, lang)}",
+        ])
+    else:
+        lines.extend([
+            f"Decision: {_safe_score_label(s.get('label'))}",
+            f"Confidence: {confidence}%",
+            f"Risk: {risk}",
+            f"Data quality: {quality}",
+            f"Edge: {_compact_edge_text(s, lang)}",
+        ])
+    return "\n".join(lines)
+
+
 def format_deepalpha_score(score: dict, lang: str = "ru") -> str:
     lang = "ru" if lang == "ru" else "en"
     s = score or {}

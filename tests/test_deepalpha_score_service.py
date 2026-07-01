@@ -1,4 +1,4 @@
-from services.deepalpha_score_service import build_deepalpha_score, format_deepalpha_score
+from services.deepalpha_score_service import build_deepalpha_score, format_deepalpha_score, format_compact_deepalpha_score
 
 
 def test_score_always_clamps_0_100():
@@ -61,3 +61,31 @@ def test_ru_format_contains_required_fields():
     assert "Risk" in text
     assert "Data quality" in text
     assert "Итог" in text
+
+
+def test_compact_formatter_includes_deepalpha_score_and_unavailable_edge():
+    score = build_deepalpha_score(data_quality="mixed", confidence=50, risk_level="medium")
+    text = format_compact_deepalpha_score(score, lang="en")
+    assert "📊 DeepAlpha Score:" in text
+    assert "Decision:" in text
+    assert "Edge: unavailable" in text
+
+
+def test_compact_formatter_formats_positive_and_negative_edge_delta():
+    positive = build_deepalpha_score(market_probability=50, ai_probability=57.5, data_quality="mixed", confidence=50, risk_level="medium")
+    negative = build_deepalpha_score(market_probability=50, ai_probability=45.8, data_quality="mixed", confidence=50, risk_level="medium")
+    assert "Edge: +7.50 pp" in format_compact_deepalpha_score(positive, lang="en")
+    assert "Edge: -4.20 pp" in format_compact_deepalpha_score(negative, lang="en")
+
+
+def test_ru_compact_formatter_uses_polished_labels():
+    score = build_deepalpha_score(data_quality="mixed", confidence=50, risk_level="medium")
+    text = format_compact_deepalpha_score(score, lang="ru")
+    assert "Решение:" in text
+    assert "Decision:" not in text
+    assert "Уверенность: 50%" in text
+    assert "Риск:" in text
+    assert "Качество данных:" in text
+    assert "Преимущество: недоступно" in text
+    assert "Edge:" not in text
+    assert "unavailable" not in text

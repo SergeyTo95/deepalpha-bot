@@ -25,7 +25,7 @@ from services.live_analyst_billing_service import (
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
 from services.user_analyst_profile_service import build_user_analyst_profile_prompt_block, get_user_analyst_profile
-from services.deepalpha_score_service import build_deepalpha_score, build_score_prompt_block
+from services.deepalpha_score_service import build_deepalpha_score, build_score_prompt_block, format_compact_deepalpha_score
 from services.live_context_memory import (
     is_live_followup,
     reconstruct_live_context_from_recent_messages,
@@ -1467,7 +1467,7 @@ def format_adaptive_non_market_final_answer(answer: str, composer: dict, evidenc
     text = _remove_technical_followup_metadata(text)
     return _trim_live_answer(_clean_live_spacing(text), 1600)
 
-def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
+def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru", user_text: str = "", understanding: Optional[Dict[str, Any]] = None, router_result: Optional[Dict[str, Any]] = None) -> str:
     """Conservatively clean the final Live Analyst answer for Telegram delivery."""
     ui_language = "ru" if ui_language == "ru" else "en"
     evidence_pack = evidence_pack or {}
@@ -1509,8 +1509,82 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     text = re.sub(r"\*{2,}", "", text).strip()
     text = _remove_technical_followup_metadata(text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
+    text = prepend_deepalpha_score_if_needed(text, evidence_pack, ui_language, understanding, router_result, user_text)
     return _trim_live_answer(text, 1600)
 
+
+_DEEPALPHA_SURFACE_DOMAINS = {
+    "crypto", "sports", "esports", "politics", "polymarket", "prediction_market",
+    "prediction_markets", "betting", "macro", "event", "market", "odds", "event_betting",
+}
+_DEEPALPHA_SURFACE_TEXT_MARKERS = (
+    "odds", "коэффициент", "ставка", "став", "кэф", "матч", "btc", "eth",
+    "trump", "polymarket", "probability", "вероятност", "edge", "эдж",
+)
+
+
+def _flatten_live_values(*values: Any) -> str:
+    parts: List[str] = []
+    def add(value: Any) -> None:
+        if value in (None, "", [], {}):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                add(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item)
+        else:
+            parts.append(str(value))
+    for value in values:
+        add(value)
+    return " ".join(parts).lower()
+
+
+def should_surface_deepalpha_score(
+    evidence_pack: Optional[Dict[str, Any]] = None,
+    understanding: Optional[Dict[str, Any]] = None,
+    router_result: Optional[Dict[str, Any]] = None,
+    user_text: str = "",
+) -> bool:
+    """Return True when a Live answer is market/event-like enough to show the score."""
+    pack = evidence_pack or {}
+    if not isinstance(pack.get("deepalpha_score"), dict) or not pack.get("deepalpha_score"):
+        return False
+    understanding = understanding or pack.get("understanding") or {}
+    router_result = router_result or pack.get("router_result") or {}
+    frame = pack.get("universal_live_frame") or {}
+    frame_domain = str(frame.get("domain") or frame.get("safety_domain") or "").strip().lower()
+    if frame_domain and not any(domain in frame_domain for domain in _DEEPALPHA_SURFACE_DOMAINS):
+        return False
+    hay = _flatten_live_values(
+        pack.get("mode"), pack.get("intent"), pack.get("domain"),
+        understanding.get("mode"), understanding.get("domain"), understanding.get("intent"),
+        router_result.get("mode"), (router_result.get("entities") or {}).get("domain"),
+        frame.get("domain"), frame.get("mode"), frame.get("answer_style"), frame.get("user_intent"),
+    )
+    if any(domain in hay for domain in _DEEPALPHA_SURFACE_DOMAINS):
+        return True
+    text_hay = str(user_text or pack.get("original_user_text") or pack.get("normalized_query") or "").lower()
+    return any(marker in text_hay for marker in _DEEPALPHA_SURFACE_TEXT_MARKERS)
+
+
+def prepend_deepalpha_score_if_needed(
+    answer: str,
+    evidence_pack: Optional[Dict[str, Any]] = None,
+    ui_language: str = "ru",
+    understanding: Optional[Dict[str, Any]] = None,
+    router_result: Optional[Dict[str, Any]] = None,
+    user_text: str = "",
+) -> str:
+    """Prepend the compact score block once for relevant Live market/event answers."""
+    text = str(answer or "").strip()
+    if not text or "deepalpha score" in text.lower():
+        return text
+    if not should_surface_deepalpha_score(evidence_pack, understanding, router_result, user_text):
+        return text
+    block = format_compact_deepalpha_score((evidence_pack or {}).get("deepalpha_score") or {}, lang=ui_language)
+    return _clean_live_spacing(f"{block}\n\n{text}")
 
 def _safe(text: Any, limit: int = 1200) -> str:
     return str(text or "").strip()[:limit]
@@ -2393,6 +2467,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             fallback = _format_crypto_timeframe_compare_answer("", evidence_pack, ui_language)
         else:
             fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)
+        fallback = prepend_deepalpha_score_if_needed(fallback, evidence_pack, ui_language, understanding, router_result, text)
         fallback = append_live_followup_suggestions(fallback, evidence_pack, ui_language)
         if not fallback:
             return None
@@ -2464,7 +2539,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     if strict_non_market:
         answer = format_adaptive_non_market_final_answer(answer, answer_composer, evidence_pack, ui_language)
     else:
-        answer = format_live_final_answer(answer, evidence_pack, ui_language)
+        answer = format_live_final_answer(answer, evidence_pack, ui_language, user_text=text, understanding=understanding, router_result=router_result)
     answer = append_live_followup_suggestions(answer, evidence_pack, ui_language)
 
     ai_quality = score_ai_response_quality(answer, evidence_pack, validation)
