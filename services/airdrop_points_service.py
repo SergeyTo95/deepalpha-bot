@@ -22,6 +22,10 @@ AIRDROP_REFERRED_USER_POINTS = 20
 _ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
 _REFERRAL_REASONS = {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
 _POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment"}
+
+
+def _is_supported_reason(reason: str) -> bool:
+    return reason in _POSITIVE_REASONS or str(reason or "").startswith("daily_quest:")
 _TABLE_READY = False
 _MEMORY_LEDGER: Dict[int, List[dict]] = defaultdict(list)
 _MEMORY_ID = 1
@@ -239,7 +243,7 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
     if not points_enabled():
         balance = get_airdrop_points_balance(uid)
         return {"ok": True, "awarded": False, "amount": 0, "reason": "disabled", **balance}
-    if reason not in _POSITIVE_REASONS:
+    if not _is_supported_reason(reason):
         balance = get_airdrop_points_balance(uid)
         return {"ok": False, "awarded": False, "amount": 0, "reason": "unsupported_reason", **balance}
     requested = points_per_analysis() if amount is None else max(0, int(amount))
@@ -269,6 +273,19 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
                 conn.commit()
                 balance = get_airdrop_points_balance(uid)
                 return {"ok": True, "awarded": False, "amount": 0, "reason": "cap_reached", **balance}
+            if reason.startswith("daily_quest:"):
+                cur.execute(
+                    """
+                    SELECT id FROM airdrop_points_ledger
+                    WHERE user_id=%s AND reason=%s AND created_at::date=%s::date
+                    LIMIT 1
+                    """,
+                    (uid, reason, today),
+                )
+                if cur.fetchone():
+                    conn.commit()
+                    balance = get_airdrop_points_balance(uid)
+                    return {"ok": True, "awarded": False, "amount": 0, "reason": "already_awarded", **balance}
             cur.execute(
                 """
                 INSERT INTO airdrop_points_ledger (user_id, reason, amount, metadata, created_at)
@@ -293,6 +310,11 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
         if requested <= 0:
             balance = _fallback_balance(uid)
             return {"ok": True, "awarded": False, "amount": 0, "reason": "cap_reached", **balance}
+        if reason.startswith("daily_quest:"):
+            today = _now().date().isoformat()
+            if any(str(row.get("created_at") or "")[:10] == today and row.get("reason") == reason for row in _MEMORY_LEDGER[int(uid)]):
+                balance = _fallback_balance(uid)
+                return {"ok": True, "awarded": False, "amount": 0, "reason": "already_awarded", **balance}
         row = _memory_insert(uid, reason, requested, metadata)
         balance = _fallback_balance(uid)
         return {"ok": True, "awarded": True, "entry_id": row["id"], "amount": requested, "reason": reason, **balance}
