@@ -83,7 +83,7 @@ const I18N = {
     loadMore: "Load more"
     ,
     tonWallet: "Gram Wallet",
-    tonTokensDisabled: "TON tokens are not enabled yet.",
+    tonTokensDisabled: "Tokens are not enabled yet.",
     refresh: "Refresh",
     copyAddress: "Copy address",
     sendTon: "Send Gram",
@@ -154,7 +154,7 @@ const I18N = {
     loadMore: "Загрузить ещё"
     ,
     tonWallet: "Gram кошелёк",
-    tonTokensDisabled: "TON-токены пока не подключены.",
+    tonTokensDisabled: "Токены пока не подключены.",
     refresh: "Обновить",
     copyAddress: "Скопировать адрес",
     sendTon: "Отправить Gram",
@@ -482,14 +482,14 @@ function renderAuthed(summary, lang) {
     }
     if (String(code || "") === "send_failed") {
       const detailMapRu = {
-        toncenter_rejected: "Сеть Gram отклонила транзакцию. Попробуйте уменьшить сумму или обновить баланс.",
+        toncenter_rejected: "Сеть TON отклонила транзакцию. Попробуйте уменьшить сумму или обновить баланс.",
         insufficient_network_fee: "Недостаточно Gram с учётом реальной комиссии сети. Уменьшите сумму.",
         seqno_or_account_state: "Не удалось подтвердить состояние кошелька. Обновите баланс и попробуйте ещё раз.",
         toncenter_unavailable: "TON Center временно недоступен. Попробуйте позже.",
         unknown: "Ошибка отправки в сеть."
       };
       const detailMapEn = {
-        toncenter_rejected: "The Gram network rejected the transaction. Try a smaller amount or refresh balance.",
+        toncenter_rejected: "The TON network rejected the transaction. Try a smaller amount or refresh balance.",
         insufficient_network_fee: "Not enough Gram after real network fee. Reduce the amount.",
         seqno_or_account_state: "Wallet state could not be confirmed. Refresh balance and try again.",
         toncenter_unavailable: "TON Center is temporarily unavailable. Please try later.",

@@ -75,8 +75,20 @@ def test_user_facing_forbidden_ton_phrases_absent_except_compatibility():
     forbidden = [
         "TON balance", "TON баланс", "Send TON", "Receive TON", "Pay with TON",
         "Buy with TON", "TON transaction", "TON транзакция",
+        "TON tokens are not enabled yet", "TON-токены пока не подключены",
+        "Gram Connect", "Gram Center", "Gram protocol", "Gram network", "Сеть Gram",
+        "TON already sent", "TON was already sent", "TON уже был отправлен",
     ]
     for phrase in forbidden:
         assert phrase not in combined
     for phrase in compatibility:
         assert phrase in combined
+
+
+def test_protocol_phrases_remain_ton_where_visible():
+    combined = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in [ROOT / "webapp" / "app.js", ROOT / "webapp" / "index.html"]
+    )
+    for expected in ["TON Connect", "TON Center", "TON network", "Tonviewer"]:
+        assert expected in combined

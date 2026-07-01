@@ -6019,10 +6019,10 @@ async def ref_pay_wallet_cb(c: types.CallbackQuery):
         err = str(res.get("error") or "")
         msg_map = {
             "payout_already_processing": ("Выплата уже в обработке. Не нажимайте повторно.", "Payout is already processing. Do not click again."),
-            "payout_requires_reconciliation": ("TON уже был отправлен. Нужна ручная сверка.", "TON was already sent. Manual reconciliation is required."),
+            "payout_requires_reconciliation": ("Платёж уже был отправлен. Нужна ручная сверка.", "Payment was already sent. Manual reconciliation is required."),
             "request_already_paid": ("Эта заявка уже оплачена.", "This request is already paid."),
-            "insufficient_balance": ("Недостаточно Gram на payout wallet.", "Payout wallet has insufficient balance."),
-            "payout_sent_reconcile_required": ("TON уже отправлен, требуется ручная сверка.", "TON already sent, reconciliation is required."),
+            "insufficient_balance": ("Недостаточно Gram на payout wallet.", "Payout wallet has insufficient Gram balance."),
+            "payout_sent_reconcile_required": ("Платёж уже отправлен, требуется ручная сверка.", "Payment already sent, reconciliation is required."),
         }
         ru_en = msg_map.get(err, ("❌ Ошибка выплаты. Попробуйте позже.", "❌ Payout failed. Please try later."))
         await c.message.answer(ru_en[0] if lang == "ru" else ru_en[1])
@@ -10847,7 +10847,7 @@ def _ton_send_error(uid: int, code: str) -> str:
 
 
 def _ton_network_label(raw_network: Optional[str] = None) -> str:
-    # Display runtime Gram network from Railway/env, not stale wallet DB row.
+    # Display runtime TON network from Railway/env, not stale wallet DB row.
     # Existing wallets may have been created while TON_NETWORK=testnet.
     network = (os.getenv("TON_NETWORK", "testnet") or "testnet").strip().lower()
     return "MAINNET" if network == "mainnet" else "TESTNET"

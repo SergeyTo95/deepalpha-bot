@@ -596,7 +596,7 @@
                 let rootId = 'ton-connect-button';
                 if (specialMode === 'author_status') rootId = 'ton-connect-button-author';
                 else if (specialMode === 'donate') rootId = 'ton-connect-button-donate';
-                // watchlist_slots — без Gram Connect, только токены
+                // watchlist_slots — без TON Connect, только токены
 
                 if (specialMode === 'watchlist_slots') return;  // не инициализируем
 
@@ -1318,7 +1318,7 @@
                 return;
             }
             if (!tonConnectUI) {
-                showStatus('❌ Gram Connect не инициализирован', 'error');
+                showStatus('❌ TON Connect не инициализирован', 'error');
                 return;
             }
             if (!tonConnectUI.wallet) {
