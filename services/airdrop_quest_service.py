@@ -17,6 +17,7 @@ QUEST_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "crypto_analysis_daily": {"title": {"ru": "Сделай крипто-анализ", "en": "Make a crypto analysis"}, "target": 1, "reward_points": 15},
     "sports_analysis_daily": {"title": {"ru": "Сделай спорт/киберспорт анализ", "en": "Make a sports/esports analysis"}, "target": 1, "reward_points": 15},
     "profile_setup_once_or_daily_check": {"title": {"ru": "Настрой Analyst Profile", "en": "Set up Analyst Profile"}, "target": 1, "reward_points": 20},
+    "checkin_daily": {"title": {"ru": "Сделай Daily Check-in", "en": "Make Daily Check-in"}, "target": 1, "reward_points": 0},
 }
 
 _TABLE_READY = False
@@ -233,6 +234,13 @@ def record_profile_daily_quest(user_id: int, source: str = "analyst_profile", me
     return _increment_quest(user_id, "profile_setup_once_or_daily_check", metadata=meta)
 
 
+def record_checkin_daily_quest(user_id: int, metadata: dict | None = None) -> dict:
+    meta = {"source": "daily_checkin"}
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    return _increment_quest(user_id, "checkin_daily", metadata=meta)
+
+
 def format_daily_quests(user_id: int, lang: str = "ru") -> str:
     data = get_daily_quests(user_id, lang)
     ru = lang != "en"
@@ -246,7 +254,10 @@ def format_daily_quests(user_id: int, lang: str = "ru") -> str:
         lines.append(f"{icon} {q['title']} — {int(q.get('progress') or 0)}/{int(q.get('target') or 1)} — +{int(q.get('reward_points') or 0)} Points")
     if not data.get("points_enabled"):
         lines += ["", "⚠️ Airdrop Points are currently disabled." if not ru else "⚠️ DeepAlpha Points сейчас отключены."]
-    lines += ["", f"Points today: {int(data.get('points_today') or 0)}", f"Total Points: {int(data.get('total_points') or 0)}"]
+    if ru:
+        lines += ["", f"Баллы сегодня: {int(data.get('points_today') or 0)}", f"Всего баллов: {data.get('total_points') or 0}"]
+    else:
+        lines += ["", f"Points today: {int(data.get('points_today') or 0)}", f"Total Points: {data.get('total_points') or 0}"]
     return "\n".join(lines)
 
 

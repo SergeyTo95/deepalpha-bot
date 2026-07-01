@@ -119,6 +119,10 @@ from services.airdrop_quest_service import (
     format_daily_quests, get_airdrop_quests_status, record_analysis_for_daily_quests,
     record_profile_daily_quest,
 )
+from services.airdrop_checkin_service import (
+    claim_daily_checkin, format_daily_checkin_status, get_airdrop_checkin_status,
+)
+from services.airdrop_points_service import format_points_amount
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
@@ -435,6 +439,7 @@ def get_onboarding_after_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def get_airdrop_keyboard(user_id: int) -> InlineKeyboardMarkup:
     lang = get_user_lang(user_id)
     kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Daily Check-in", callback_data="airdrop_daily_checkin"))
     kb.add(InlineKeyboardButton("🎯 Daily Quests", callback_data="airdrop_daily_quests"))
     kb.add(InlineKeyboardButton("🚀 Сделать анализ" if lang == "ru" else "🚀 Make analysis", callback_data="onboarding_send_link"))
     return kb
@@ -443,9 +448,20 @@ def get_airdrop_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def get_daily_quests_keyboard(user_id: int) -> InlineKeyboardMarkup:
     lang = get_user_lang(user_id)
     kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("✅ Daily Check-in", callback_data="airdrop_daily_checkin"))
     kb.add(InlineKeyboardButton("🚀 Сделать анализ" if lang == "ru" else "🚀 Make analysis", callback_data="onboarding_send_link"))
     kb.add(InlineKeyboardButton("🧠 Analyst Profile", callback_data="quests_open_analyst_profile"))
     kb.add(InlineKeyboardButton("🎁 Airdrop", callback_data="quests_open_airdrop"), InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="quests_open_airdrop"))
+    return kb
+
+
+def get_daily_checkin_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Получить +0.25 Points" if lang == "ru" else "✅ Claim +0.25 Points", callback_data="daily_checkin_claim"))
+    kb.add(InlineKeyboardButton("🎯 Daily Quests", callback_data="airdrop_daily_quests"))
+    kb.add(InlineKeyboardButton("🎁 Airdrop", callback_data="quests_open_airdrop"))
+    kb.add(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="quests_open_airdrop"))
     return kb
 
 
@@ -8760,6 +8776,45 @@ def _is_private_live_callback(callback: types.CallbackQuery) -> bool:
 
 
 
+@dp.message_handler(commands=["checkin"], state="*")
+async def checkin_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer(format_daily_checkin_status(uid, get_user_lang(uid)), reply_markup=get_daily_checkin_keyboard(uid))
+
+
+@dp.callback_query_handler(lambda c: c.data in {"airdrop_daily_checkin", "daily_checkin_claim"}, state="*")
+async def daily_checkin_callback(callback: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    if callback.data == "daily_checkin_claim":
+        result = claim_daily_checkin(uid)
+        if result.get("claimed"):
+            total = format_points_amount((result.get("status") or {}).get("balance", {}).get("points") or 0)
+            streak = int(result.get("streak_count") or 0)
+            base = format_points_amount(result.get("base_reward") or 0)
+            bonus = format_points_amount(result.get("bonus_reward") or 0)
+            if lang == "en":
+                bonus_line = f"\nStreak bonus: +{bonus} DeepAlpha Points" if bonus != "0" else ""
+                text = f"✅ Check-in claimed\n\n+{base} DeepAlpha Points awarded.{bonus_line}\n\nYour streak: {streak} days\nTotal Points: {total}\n\nCome back tomorrow to continue your streak."
+            else:
+                bonus_line = f"\nStreak bonus: +{bonus} DeepAlpha Points" if bonus != "0" else ""
+                text = f"✅ Check-in получен\n\n+{base} DeepAlpha Points начислено.{bonus_line}\n\nТвой streak: {streak} день{'я' if streak in (2,3,4) else 'ей' if streak != 1 else ''}\nВсего Points: {total}\n\nВозвращайся завтра, чтобы продолжить streak."
+        elif result.get("reason") == "already_claimed":
+            st = result.get("status") or {}
+            streak = int(st.get("streak_count") or 0)
+            text = (f"✅ Today’s check-in is already claimed\n\nYour streak: {streak} days\nNext check-in will be available tomorrow." if lang == "en" else f"✅ Сегодня check-in уже получен\n\nТвой streak: {streak} дней\nСледующий check-in будет доступен завтра.")
+        elif result.get("reason") == "points_disabled":
+            text = result.get("message", {}).get(lang) or result.get("message", {}).get("ru")
+        else:
+            text = format_daily_checkin_status(uid, lang)
+        await callback.message.edit_text(text, reply_markup=get_daily_checkin_keyboard(uid)); await callback.answer(); return
+    await callback.message.edit_text(format_daily_checkin_status(uid, lang), reply_markup=get_daily_checkin_keyboard(uid))
+    await callback.answer()
+
+
 @dp.message_handler(commands=["quests"], state="*")
 @dp.message_handler(lambda m: (m.text or "") == "🎯 Daily Quests", state="*")
 async def quests_handler(message: types.Message, state: FSMContext):
@@ -8794,7 +8849,7 @@ async def airdrop_handler(message: types.Message, state: FSMContext):
     await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid))
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status", "airdrop_checkin_status"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8802,6 +8857,20 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
+    if cmd == "airdrop_checkin_status":
+        status = get_airdrop_checkin_status()
+        top = status.get("top_streaks") or []
+        top_lines = [f"- {row.get('user_id')}: {row.get('streak_count')}" for row in top]
+        await message.answer(
+            "Airdrop Check-in Status:\n\n"
+            f"- Date: {status.get('checkin_date')}\n"
+            f"- Points enabled: {str(status.get('points_enabled')).lower()}\n"
+            f"- Total check-ins today: {status.get('total_checkins_today')}\n"
+            f"- Total check-in points awarded today: {format_points_amount(status.get('total_points_awarded_today') or 0)}\n"
+            f"- Active streak users count: {status.get('active_streak_users_count')}\n\n"
+            "Top streaks:\n" + ("\n".join(top_lines) if top_lines else "—")
+        )
+        return
     if cmd == "airdrop_quests_status":
         status = get_airdrop_quests_status()
         top = status.get("top_quest_codes") or []
