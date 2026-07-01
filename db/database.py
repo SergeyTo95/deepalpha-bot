@@ -1402,6 +1402,24 @@ def get_web_analysis_job(job_id: str, user_id: int) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
+def get_broadcast_users() -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT user_id, is_banned, created_at, language
+            FROM users
+            WHERE user_id IS NOT NULL
+            ORDER BY created_at DESC
+        """)
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"get_broadcast_users error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def get_all_user_ids() -> List[int]:
     conn = get_connection()
     cursor = conn.cursor()

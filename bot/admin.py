@@ -3244,22 +3244,14 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "system_broadcast")
     async def broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-        await SystemStates.waiting_broadcast.set()
-        await callback.message.answer("Сообщение для рассылки:")
-
-    @dp.message_handler(state=SystemStates.waiting_broadcast)
-    async def broadcast_send(message: types.Message, state: FSMContext):
         await state.finish()
-        users = get_all_users(limit=10000)
-        sent = 0
-        failed = 0
-        for user in users:
-            try:
-                await message.bot.send_message(user["user_id"], f"📢 {message.text}")
-                sent += 1
-            except Exception:
-                failed += 1
-        await message.answer(f"✅ Отправлено: {sent}\nОшибок: {failed}")
+        await callback.message.answer(
+            "📢 Безопасная рассылка теперь запускается командами:\n"
+            "/broadcast_preview — предпросмотр\n"
+            "/broadcast_send — предпросмотр и подтверждение\n"
+            "/broadcast_status — статус\n"
+            "/broadcast_cancel — отмена"
+        )
 
     @dp.callback_query_handler(lambda c: c.data == "system_db_stats")
     async def db_stats(callback: types.CallbackQuery):

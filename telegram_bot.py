@@ -46,7 +46,7 @@ from db.database import (
     is_subscribed_to_author, get_user_subscriptions,
     get_author_subscribers, toggle_subscription_notifications,
     get_subscription_feed, get_author_donations_list,
-    get_all_user_ids,
+    get_all_user_ids, get_broadcast_users,
     create_analysis_check, get_analysis_check_by_code,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent, fail_ton_purchase_intent, link_ton_wallet_tx_to_intent,
     get_referral_reward_withdrawal_requests, mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
@@ -125,6 +125,9 @@ from services.live_analyst_memory_service import (
 )
 from services.live_analyst_service import (
     LIVE_DISABLED_MESSAGE, LIVE_UNAVAILABLE_MESSAGE, build_image_context, process_live_text,
+)
+from services.broadcast_service import (
+    DEFAULT_BROADCAST_TEXT, broadcast_state, filter_broadcast_recipients, send_broadcast,
 )
 from services.live_context_memory import clear_live_context, get_live_context, is_live_continuation
 from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
@@ -636,6 +639,60 @@ def get_category_keyboard(user_id: int) -> InlineKeyboardMarkup:
     kb.add(*buttons)
     return kb
 
+
+
+
+def get_broadcast_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    if WEBAPP_URL:
+        kb.add(InlineKeyboardButton("🚀 Открыть DeepAlpha", web_app=types.WebAppInfo(url=WEBAPP_URL)))
+    else:
+        kb.add(InlineKeyboardButton("🚀 Открыть DeepAlpha", url=f"https://t.me/{BOT_USERNAME}"))
+    kb.add(InlineKeyboardButton("🎁 Airdrop Points", callback_data="broadcast_airdrop_points"))
+    kb.add(InlineKeyboardButton("💬 Live скоро", callback_data="broadcast_live_soon"))
+    return kb
+
+
+
+async def _run_broadcast_with_admin_notice(admin_chat_id: int, recipients: List[int]) -> None:
+    await send_broadcast(bot, recipients, DEFAULT_BROADCAST_TEXT, reply_markup=get_broadcast_keyboard())
+    try:
+        await bot.send_message(
+            admin_chat_id,
+            f"Broadcast {broadcast_state.status}: sent {broadcast_state.sent}, failed {broadcast_state.failed}, blocked {broadcast_state.blocked}.",
+        )
+    except Exception as e:
+        logger.warning("broadcast admin finish notify failed: %s", e)
+
+
+def get_broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ Send broadcast", callback_data="broadcast_confirm_send"),
+        InlineKeyboardButton("❌ Cancel", callback_data="broadcast_confirm_cancel"),
+    )
+    return kb
+
+
+def format_broadcast_status() -> str:
+    data = broadcast_state.as_dict()
+    return (
+        "📢 Broadcast status\n\n"
+        f"status: {data['status']}\n"
+        f"total users: {data['total']}\n"
+        f"sent: {data['sent']}\n"
+        f"failed: {data['failed']}\n"
+        f"blocked: {data['blocked']}\n"
+        f"skipped: {data['skipped']}\n"
+        f"current rate: {data['current_rate']}/s\n"
+        f"started_at: {data['started_at'] or '-'}\n"
+        f"finished_at: {data['finished_at'] or '-'}\n"
+        f"last_error: {data['last_error'] or '-'}"
+    )
+
+
+def _broadcast_recipients() -> List[int]:
+    return filter_broadcast_recipients(get_broadcast_users())
 
 def get_language_keyboard() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -8396,6 +8453,81 @@ async def _show_live_status(message: types.Message) -> None:
 
 async def _send_live_admin_panel(message: types.Message) -> None:
     await message.answer(format_live_admin_text(), reply_markup=get_live_admin_keyboard())
+
+
+
+@dp.message_handler(commands=["broadcast_preview"], state="*")
+async def broadcast_preview_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    await message.answer(DEFAULT_BROADCAST_TEXT, reply_markup=get_broadcast_keyboard(), disable_web_page_preview=True)
+
+
+@dp.message_handler(commands=["broadcast_send"], state="*")
+async def broadcast_send_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    if broadcast_state.status == "running":
+        await message.answer("Broadcast is already running. Use /broadcast_status to monitor or /broadcast_cancel to stop it.")
+        return
+    await message.answer("Preview below. Send this broadcast to all users?")
+    await message.answer(DEFAULT_BROADCAST_TEXT, reply_markup=get_broadcast_keyboard(), disable_web_page_preview=True)
+    await message.answer("Confirm sending to all users:", reply_markup=get_broadcast_confirm_keyboard())
+
+
+@dp.message_handler(commands=["broadcast_status"], state="*")
+async def broadcast_status_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    await message.answer(format_broadcast_status())
+
+
+@dp.message_handler(commands=["broadcast_cancel"], state="*")
+async def broadcast_cancel_handler(message: types.Message, state: FSMContext):
+    if not message.from_user or not _require_live_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await state.finish()
+    if broadcast_state.status != "running":
+        await message.answer("No active broadcast is running.")
+        return
+    broadcast_state.cancel_requested = True
+    await message.answer("Broadcast cancellation requested. Use /broadcast_status to monitor.")
+
+
+@dp.callback_query_handler(lambda c: c.data in {"broadcast_confirm_send", "broadcast_confirm_cancel", "broadcast_airdrop_points", "broadcast_live_soon"}, state="*")
+async def broadcast_callback_handler(callback: types.CallbackQuery, state: FSMContext):
+    data = callback.data or ""
+    if data == "broadcast_airdrop_points":
+        uid = callback.from_user.id if callback.from_user else 0
+        await callback.message.answer(format_airdrop_teaser(uid, get_user_lang(uid)))
+        await callback.answer("Airdrop Points")
+        return
+    if data == "broadcast_live_soon":
+        await callback.answer("Live режим скоро откроется. Это будет AI-чат с личным аналитиком внутри Telegram.", show_alert=True)
+        return
+    if not callback.from_user or not _require_live_admin(callback.from_user.id):
+        await callback.answer("Только для администратора.", show_alert=True)
+        return
+    await state.finish()
+    if data == "broadcast_confirm_cancel":
+        broadcast_state.status = "cancelled" if broadcast_state.status != "running" else broadcast_state.status
+        await callback.message.answer("Broadcast cancelled.")
+        await callback.answer("Cancelled")
+        return
+    if broadcast_state.status == "running":
+        await callback.answer("Broadcast is already running.", show_alert=True)
+        return
+    recipients = _broadcast_recipients()
+    asyncio.create_task(_run_broadcast_with_admin_notice(callback.message.chat.id, recipients))
+    await callback.message.answer(f"Broadcast started for {len(recipients)} users. Use /broadcast_status to monitor.")
+    await callback.answer("Started")
 
 
 @dp.message_handler(commands=["live"], state="*")
