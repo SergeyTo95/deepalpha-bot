@@ -132,7 +132,8 @@ from services.broadcast_service import (
 from services.live_context_memory import clear_live_context, get_live_context, is_live_continuation
 from services.user_analyst_profile_service import (
     ALLOWED_DOMAINS, DEFAULT_PREFERRED_DOMAINS, format_user_analyst_profile,
-    get_user_analyst_profile, reset_user_analyst_profile, update_user_analyst_profile,
+    get_user_analyst_profile, parse_analyst_profile_set_callback,
+    reset_user_analyst_profile, update_user_analyst_profile,
 )
 from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
@@ -6353,8 +6354,9 @@ async def analyst_profile_callback(callback: types.CallbackQuery, state: FSMCont
         update_user_analyst_profile(uid, preferred_domains=DEFAULT_PREFERRED_DOMAINS)
         await callback.message.edit_text("🌍 Выбери рынки/домены" if lang == "ru" else "🌍 Choose markets/domains", reply_markup=get_analyst_profile_domains_keyboard(uid)); await callback.answer(); return
     elif data.startswith("analyst_profile_set:"):
-        _, _, field, value = data.split(":", 3)
-        if field in {"risk_style", "answer_depth", "primary_goal"}:
+        parsed = parse_analyst_profile_set_callback(data)
+        if parsed:
+            field, value = parsed
             update_user_analyst_profile(uid, **{field: value})
     elif data.startswith("analyst_profile_domain:"):
         domain = data.split(":", 1)[1]

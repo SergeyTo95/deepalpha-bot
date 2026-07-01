@@ -59,3 +59,24 @@ def test_aggressive_risk_does_not_disable_safety_wording_rules():
 def test_profile_prompt_block_contains_never_promise_profit():
     block = svc.build_user_analyst_profile_prompt_block(10)
     assert "Never promise profit" in block
+
+
+def test_reset_user_analyst_profile_does_not_raise_and_restores_defaults():
+    svc.update_user_analyst_profile(
+        11,
+        risk_style="aggressive",
+        answer_depth="deep",
+        primary_goal="check_my_idea",
+        preferred_domains=["macro", "general_events"],
+    )
+    p = svc.reset_user_analyst_profile(11)
+    assert p["risk_style"] == "balanced"
+    assert p["answer_depth"] == "normal"
+    assert p["primary_goal"] == "find_opportunities"
+    assert p["preferred_domains"] == svc.DEFAULT_PREFERRED_DOMAINS
+
+
+def test_parse_analyst_profile_set_callback_accepts_expected_callbacks():
+    assert svc.parse_analyst_profile_set_callback("analyst_profile_set:risk_style:balanced") == ("risk_style", "balanced")
+    assert svc.parse_analyst_profile_set_callback("analyst_profile_set:answer_depth:deep") == ("answer_depth", "deep")
+    assert svc.parse_analyst_profile_set_callback("analyst_profile_set:primary_goal:check_my_idea") == ("primary_goal", "check_my_idea")

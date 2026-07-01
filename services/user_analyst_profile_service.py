@@ -150,7 +150,20 @@ def update_user_analyst_profile(user_id: int, **fields) -> Dict[str, Any]:
 
 
 def reset_user_analyst_profile(user_id: int) -> Dict[str, Any]:
-    return update_user_analyst_profile(int(user_id), **_default_profile(int(user_id)))
+    user_id = int(user_id)
+    defaults = _default_profile(user_id)
+    defaults.pop("user_id", None)
+    return update_user_analyst_profile(user_id, **defaults)
+
+
+def parse_analyst_profile_set_callback(data: str) -> tuple[str, str] | None:
+    parts = str(data or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != "analyst_profile_set":
+        return None
+    _, field, value = parts
+    if field not in {"risk_style", "answer_depth", "primary_goal"}:
+        return None
+    return field, value
 
 
 _RU = {
