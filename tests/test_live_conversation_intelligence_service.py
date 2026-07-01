@@ -62,3 +62,39 @@ def test_utility_intents_detected():
     assert resolve_live_conversation_intent("Переведи на турецкий: хочу заказать креветки")["domain"] == "translation"
     assert resolve_live_conversation_intent("Что значит implied probability?")["domain"] == "explanation"
     assert resolve_live_conversation_intent("Привет")["domain"] == "casual"
+
+
+def test_reconstructed_pending_storage_preserves_best_full_question():
+    from services import live_context_memory as memory
+
+    memory.clear_live_context_memory()
+    completed = resolve_live_conversation_intent("2028", pending_clarification=politics_pending(), ui_language="ru")["completed_text"]
+    memory.save_pending_clarification(5001, {
+        "domain": "politics",
+        "subject": "Trump",
+        "intent": "probability_check",
+        "missing_data": ["market", "side"],
+        "original_user_text": completed,
+        "latest_user_text": "2028",
+        "raw_user_text": "2028",
+    })
+    pending = memory.get_pending_clarification(5001)
+    assert pending["original_user_text"] == "Трамп победит на выборах 2028?"
+    assert pending["latest_user_text"] == "2028"
+
+
+def test_yes_after_reconstructed_pending_uses_full_question_not_short_year():
+    pending = {
+        "domain": "politics",
+        "subject": "Trump",
+        "intent": "probability_check",
+        "missing_data": ["market", "side"],
+        "original_user_text": "Трамп победит на выборах 2028?",
+        "latest_user_text": "2028",
+    }
+    r = resolve_live_conversation_intent("Yes", pending_clarification=pending, ui_language="ru")
+    assert r["domain"] == "politics"
+    assert r["filled"]["side"] == "Yes"
+    assert r["completed_text"] == "Трамп победит на выборах 2028? Yes"
+    assert not r["completed_text"].startswith("2028 Yes")
+    assert r["answer_strategy"] != "generic_clarification"

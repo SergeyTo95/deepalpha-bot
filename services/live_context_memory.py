@@ -478,6 +478,7 @@ def save_pending_clarification(user_id: int, pending: Dict[str, Any]) -> Dict[st
         "mode": pending.get("domain") or previous.get("mode") or "general",
         "domain": pending.get("domain") or previous.get("domain") or "",
         "original_user_text": pending.get("original_user_text") or previous.get("original_user_text") or "",
+        "latest_user_text": pending.get("latest_user_text") or pending.get("raw_user_text") or previous.get("latest_user_text") or "",
         "normalized_query": pending.get("original_user_text") or previous.get("normalized_query") or "",
         "subject": pending.get("subject") or previous.get("subject") or "",
         "user_intent": pending.get("intent") or previous.get("user_intent") or "",
