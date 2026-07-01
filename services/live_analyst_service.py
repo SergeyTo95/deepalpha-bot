@@ -24,7 +24,8 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
-from services.user_analyst_profile_service import build_user_analyst_profile_prompt_block
+from services.user_analyst_profile_service import build_user_analyst_profile_prompt_block, get_user_analyst_profile
+from services.deepalpha_score_service import build_deepalpha_score, build_score_prompt_block
 from services.live_context_memory import (
     is_live_followup,
     reconstruct_live_context_from_recent_messages,
@@ -1794,7 +1795,7 @@ def _format_live_answer_composer(composer: Optional[Dict[str, Any]]) -> str:
     return str(composer.get("answer_prompt") or "").strip()
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None, answer_composer: Optional[Dict[str, Any]] = None, analyst_profile_block: str = "") -> str:
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None, answer_composer: Optional[Dict[str, Any]] = None, analyst_profile_block: str = "", deepalpha_score_block: str = "") -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -1840,12 +1841,15 @@ Research context:
 
 {_format_live_answer_composer(answer_composer)}
 
+{deepalpha_score_block or "DeepAlpha Score: not available."}
+
 {analyst_profile_block or "User Analyst Profile: not loaded."}
 
 AI Control Center rules:
 - Optimize only for long-term trust-adjusted token revenue: useful, honest, evidence-grounded paid usage.
 - Do not upsell when evidence quality is low. Do not pressure the user. Do not imply hidden charges or scarcity.
 - If quality/evidence is weak, be cautious and prefer DATA NEEDED/WATCH/NO TRADE.
+- Treat DeepAlpha Score as an advisory structure only; never turn it into a profit promise or direct buy/bet command.
 
 Final answer must be Telegram-ready:
 - short, structured, no raw JSON;
@@ -2177,6 +2181,64 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         allowed_decision_labels=frame.get("allowed_decision_labels") or [],
     )
 
+
+def _score_data_quality_from_pack(evidence_pack: Dict[str, Any]) -> str:
+    score = evidence_pack.get("data_quality_score") if evidence_pack else None
+    try:
+        numeric = float(score)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if numeric >= 0.75:
+        return "strong"
+    if numeric >= 0.45:
+        return "mixed"
+    if numeric > 0:
+        return "weak"
+    return "missing"
+
+
+def _score_confidence_from_pack(evidence_pack: Dict[str, Any]) -> int:
+    label = str((evidence_pack or {}).get("confidence_label") or "").lower()
+    if label == "high":
+        return 80
+    if label == "medium":
+        return 60
+    if label == "low":
+        return 35
+    return 50
+
+
+def _score_risk_from_pack(evidence_pack: Dict[str, Any]) -> str:
+    facts = (evidence_pack or {}).get("derived_facts") or {}
+    policy = (evidence_pack or {}).get("answer_policy") or {}
+    if facts.get("risk_level") in ("low", "medium", "high", "unknown"):
+        return facts.get("risk_level")
+    if (evidence_pack or {}).get("conflicts") or not policy.get("can_comment_on_odds", True):
+        return "high"
+    if (evidence_pack or {}).get("missing_data"):
+        return "medium"
+    return "unknown"
+
+
+def _build_live_deepalpha_score(user_text: str, evidence_pack: Dict[str, Any], analyst_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    pack = evidence_pack or {}
+    facts = pack.get("derived_facts") or {}
+    mode = pack.get("mode") or facts.get("domain") or "general"
+    market_probability = facts.get("implied_probability") or facts.get("polymarket_probability")
+    ai_probability = facts.get("estimated_probability") or facts.get("model_probability") or facts.get("win_probability")
+    return build_deepalpha_score(
+        domain=mode,
+        user_text=user_text,
+        market_probability=market_probability,
+        ai_probability=ai_probability,
+        confidence=_score_confidence_from_pack(pack),
+        risk_level=_score_risk_from_pack(pack),
+        data_quality=_score_data_quality_from_pack(pack),
+        evidence_items=pack.get("evidence_items") or [],
+        missing_data=pack.get("missing_data") or [],
+        metadata={"analyst_profile": analyst_profile or {}},
+    )
+
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     ui_language = "ru" if ui_language == "ru" else "en"
     access = can_user_access_live(user_id)
@@ -2304,8 +2366,12 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     provider_choice = choose_ai_provider("live_analyst", ai_control_context.get("mode") or "unknown")
     logger.info("ai_control_provider_chosen user_id=%s mode=%s provider=%s model=%s reason=%s", user_id, ai_control_context.get("mode"), provider_choice.get("provider"), provider_choice.get("model"), provider_choice.get("reason"))
     answer_composer = compose_live_answer(text, evidence_pack, router_result=router_result, understanding=understanding, ui_language=ui_language)
+    analyst_profile = get_user_analyst_profile(user_id)
     analyst_profile_block = build_user_analyst_profile_prompt_block(user_id)
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block)
+    deepalpha_score = _build_live_deepalpha_score(text, evidence_pack, analyst_profile=analyst_profile)
+    evidence_pack["deepalpha_score"] = deepalpha_score
+    deepalpha_score_block = build_score_prompt_block(deepalpha_score)
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block, deepalpha_score_block=deepalpha_score_block)
     logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
 
     mode = evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown"
