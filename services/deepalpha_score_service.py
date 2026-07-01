@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-_MARKET_DOMAINS = {"sports", "betting", "esports", "event_betting", "prediction_markets", "prediction_market", "polymarket"}
+_MARKET_DOMAINS = {"sports", "betting", "esports", "event_betting"}
+_POLITICS_DOMAINS = {"politics", "polymarket", "prediction_markets", "prediction_market"}
 _TRADING_WORDS = ("trade", "trading", "entry", "long", "short", "scalp", "futures", "leverage", "лонг", "шорт", "вход", "плеч", "фьючер")
 _FORBIDDEN_FORMAT_WORDS = ("ставь", "покупай", "buy now", "guaranteed", "guaranteed win", "гарантия", "точно зайд")
 
@@ -57,6 +58,10 @@ def _is_sports_like(domain: str) -> bool:
     return domain in _MARKET_DOMAINS or "sport" in domain or "bet" in domain
 
 
+def _is_politics_like(domain: str) -> bool:
+    return domain in _POLITICS_DOMAINS or "politic" in domain or "polymarket" in domain or "prediction" in domain
+
+
 def _is_trading_like(domain: str, text: str) -> bool:
     hay = f"{domain} {text}".lower()
     return "crypto" in hay and any(w in hay for w in _TRADING_WORDS)
@@ -69,6 +74,8 @@ def _label(score: int, domain: str, user_text: str) -> str:
         return "WATCH"
     if score >= 40:
         return "DATA NEEDED"
+    if _is_politics_like(domain):
+        return "DATA NEEDED" if score < 35 else "NO EDGE"
     if _is_sports_like(domain):
         return "NO BET"
     if _is_trading_like(domain, user_text):
@@ -139,7 +146,10 @@ def build_deepalpha_score(*, domain: str | None = None, user_text: str | None = 
     what_can_break.extend(["Fresh news against the thesis.", "Sharp market/line movement.", "Insufficient fresh data."])
 
     overall = _clamp_int(score)
-    label = _apply_profile(_label(overall, domain_s, user_text_s), overall, metadata)
+    label = _label(overall, domain_s, user_text_s)
+    if _is_politics_like(domain_s) and missing_data and any(str(x).lower() in {"market", "date", "election_year", "side", "probability"} for x in missing_data):
+        label = "DATA NEEDED"
+    label = _apply_profile(label, overall, metadata)
     if str(metadata.get("risk_style") or metadata.get("analyst_profile", {}).get("risk_style") or "").lower() == "aggressive":
         warnings.append("Aggressive profile does not remove risk or safety constraints.")
 
