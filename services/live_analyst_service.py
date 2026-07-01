@@ -24,6 +24,7 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
+from services.live_market_resolver_service import domain_aware_clarification, merge_market_resolution_into_pack, resolve_live_market_context
 from services.user_analyst_profile_service import build_user_analyst_profile_prompt_block, get_user_analyst_profile
 from services.deepalpha_score_service import build_deepalpha_score, build_score_prompt_block, format_compact_deepalpha_score
 from services.live_context_memory import (
@@ -56,6 +57,64 @@ LIVE_DISABLED_MESSAGE = "Live Analyst сейчас отключён админи
 LIVE_DAILY_LIMIT_MESSAGE = "Дневной лимит сообщений Live Analyst исчерпан. Попробуйте завтра."
 logger = logging.getLogger(__name__)
 
+
+def domain_aware_clarification(domain: str, ui_language: str = "ru") -> str:
+    domain = str(domain or "unknown").lower()
+    if ui_language == "ru":
+        messages = {
+            "politics": "Понял: политика. Какое событие разбираем? Например: ‘Трамп победит на выборах?’ или пришли Polymarket-ссылку.",
+            "sports": "Понял: спорт. Напиши матч/команды и, если есть, коэффициент или рынок.",
+            "crypto": "Понял: крипта. Напиши актив/пару и таймфрейм.",
+            "polymarket": "Пришли ссылку на рынок или название события.",
+        }
+        return messages.get(domain, "Что разбираем: крипту, спорт, киберспорт, политику или Polymarket-событие? Напиши событие обычным текстом — я сам попробую найти рынок и данные. Можно указать sports/esports матч или линию/коэффициент.")
+    messages = {
+        "politics": "Got it: politics. Which event should we analyze? For example: ‘Trump win election?’ or send a Polymarket link.",
+        "sports": "Got it: sports. Send the match/teams and, if available, odds or market.",
+        "crypto": "Got it: crypto. Send the asset/pair and timeframe.",
+        "polymarket": "Send the market link or event name.",
+    }
+    return messages.get(domain, "Please clarify what we should analyze: crypto, sports, esports, politics, or a Polymarket event. Write the event in plain text — I will try to find market data myself.")
+
+
+def _targeted_resolver_clarification(resolver_result: Dict[str, Any], ui_language: str = "ru") -> str:
+    domain = str((resolver_result or {}).get("domain") or "unknown").lower()
+    subject = (resolver_result or {}).get("subject") or ""
+    if ui_language == "ru":
+        if domain in {"politics", "polymarket"}:
+            return "Понял: это политическое событие / prediction market. Я не нашёл достаточно надёжный рынок/коэффициент в текущих данных. Пришли Polymarket-ссылку или уточни выборы/дату — я посчитаю probability и edge."
+        if domain == "sports":
+            label = f" / {subject}" if subject else ""
+            return f"Понял: спорт{label}. Я могу сделать предварительный lean, но для value нужен рынок и коэффициент. Пришли кэф или скажи рынок: победа, тотал, фора."
+        return domain_aware_clarification(domain, ui_language)
+    if domain in {"politics", "polymarket"}:
+        return "Got it: political event / prediction market. I did not find a reliable market/odds in current data. Send a Polymarket link or specify the election/date so I can calculate probability and edge."
+    if domain == "sports":
+        return "Got it: sports. I can give a preliminary lean, but value needs a market and odds. Send odds or the market: winner, total, spread."
+    return domain_aware_clarification(domain, ui_language)
+
+
+def merge_market_resolution_into_pack(evidence_pack: Dict[str, Any], resolver_result: Dict[str, Any]) -> None:
+    if not evidence_pack or not resolver_result:
+        return
+    evidence_pack["market_resolution"] = resolver_result
+    domain = resolver_result.get("domain")
+    if domain and (evidence_pack.get("mode") in (None, "", "unknown", "general")):
+        evidence_pack["mode"] = "polymarket" if domain == "politics" else domain
+    facts = evidence_pack.setdefault("derived_facts", {})
+    for src, dst in (("market_probability", "polymarket_probability"), ("implied_probability", "implied_probability"), ("odds", "odds"), ("market_url", "market_url"), ("market_title", "market_title"), ("domain", "domain")):
+        val = resolver_result.get(src)
+        if val not in (None, "", []):
+            facts[dst] = val
+    missing = evidence_pack.setdefault("missing_data", [])
+    for item in resolver_result.get("missing_data") or []:
+        if item not in missing:
+            missing.append(item)
+    if resolver_result.get("source"):
+        items = evidence_pack.setdefault("evidence_items", [])
+        items.append({"type": "market_resolution", "title": resolver_result.get("market_title") or resolver_result.get("subject") or "Resolved market context", "summary": "Autonomous resolver context.", "source": resolver_result.get("source"), "url": resolver_result.get("market_url") or "", "freshness": resolver_result.get("freshness") or "unknown", "relevance": 0.8, "reliability": 0.65})
+    if resolver_result.get("search_attempted") and not (resolver_result.get("market_probability") or resolver_result.get("implied_probability") or resolver_result.get("odds")):
+        evidence_pack["recommended_decision_labels"] = ["DATA NEEDED", "WATCH"]
 
 _DECISION_LABELS = ("WATCH", "DATA NEEDED", "NO TRADE", "EDGE CANDIDATE", "NO BET", "NO EDGE")
 _SPORTS_DECISION_LABELS = ("NO BET", "NO EDGE", "WATCH", "DATA NEEDED", "EDGE CANDIDATE")
@@ -2478,13 +2537,20 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         understanding.get("missing"),
     )
     needs = understanding.get("needs") or {}
+    resolver_result = resolve_live_market_context(text, ui_language=ui_language, router_result=router_result, understanding=understanding, recent_messages=recent)
+    if resolver_result.get("domain") and resolver_result.get("domain") != "unknown" and (understanding.get("mode") in (None, "", "unknown")):
+        mapped_mode = "polymarket" if resolver_result.get("domain") == "politics" else resolver_result.get("domain")
+        understanding = {**understanding, "mode": mapped_mode, "domain": resolver_result.get("domain"), "intent": understanding.get("intent") or resolver_result.get("intent")}
+        needs = understanding.get("needs") or {}
+    if resolver_result.get("intent") == "domain_entry":
+        return {"ok": False, "message": domain_aware_clarification(resolver_result.get("domain"), ui_language), "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     if (
         router_result.get("mode") == "unknown"
         and understanding.get("mode") == "unknown"
         and (needs.get("clarification") or "mode" in (understanding.get("missing") or []))
     ):
-        message = ("Уточни, пожалуйста, что разбираем: Polymarket-рынок, crypto-актив/пару, sports/esports матч или линию/коэффициент? Пришли ссылку, скрин, тикер, таймфрейм или коэффициент." if ui_language == "ru" else "Please clarify what we are analyzing: a Polymarket market, crypto asset/pair, sports/esports match, or event line/odds. Send a link, screenshot, ticker, timeframe, or odds.")
-        return {"ok": False, "message": message, "charged": False, "needs_clarification": True}
+        message = domain_aware_clarification(resolver_result.get("domain") or "unknown", ui_language)
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     if followup_resolution.get("is_followup"):
         understanding = _merge_previous_market_context_into_understanding(understanding, followup_resolution.get("previous_context") or {})
     if understanding.get("mode") == "sports":
@@ -2515,6 +2581,14 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
     evidence_pack = build_live_evidence_pack(text, understanding, router_result, crypto_market_context=crypto_market_context, sports_context=sports_context, research_context=research_context, ui_language=ui_language)
+    merge_market_resolution_into_pack(evidence_pack, resolver_result)
+    resolver_domain = resolver_result.get("domain")
+    resolver_has_market_number = bool(resolver_result.get("market_probability") or resolver_result.get("implied_probability") or resolver_result.get("odds") or understanding.get("odds") or (router_result.get("entities") or {}).get("odds"))
+    should_target_clarify = resolver_result.get("search_attempted") and not resolver_result.get("resolved") and resolver_domain in {"politics", "polymarket"}
+    should_target_clarify = should_target_clarify or (resolver_result.get("search_attempted") and not resolver_has_market_number and resolver_domain == "sports" and (router_result.get("mode") in (None, "", "unknown") and understanding.get("mode") in (None, "", "unknown", "sports")))
+    if should_target_clarify:
+        # Keep the answer compact and targeted instead of falling back to a generic mode clarification.
+        evidence_pack["targeted_clarification"] = _targeted_resolver_clarification(resolver_result, ui_language)
     if followup_resolution.get("is_followup"):
         evidence_pack["is_followup"] = True
         evidence_pack["previous_live_context"] = followup_resolution.get("previous_context") or {}
@@ -2535,6 +2609,9 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     deepalpha_score = _build_live_deepalpha_score(text, evidence_pack, analyst_profile=analyst_profile)
     evidence_pack["deepalpha_score"] = deepalpha_score
     evidence_pack["analyst_profile"] = analyst_profile
+    if evidence_pack.get("targeted_clarification"):
+        message = format_compact_deepalpha_score(deepalpha_score, lang=ui_language) + "\n\n" + evidence_pack.get("targeted_clarification")
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     deepalpha_score_block = build_score_prompt_block(deepalpha_score)
     prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block, deepalpha_score_block=deepalpha_score_block)
     logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
