@@ -4,6 +4,7 @@ import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 try:
@@ -21,7 +22,7 @@ AIRDROP_REFERRER_POINTS = 50
 AIRDROP_REFERRED_USER_POINTS = 20
 _ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
 _REFERRAL_REASONS = {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
-_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment"}
+_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus"}
 
 
 def _is_supported_reason(reason: str) -> bool:
@@ -96,6 +97,22 @@ def _setting_int(key: str, min_value: int, max_value: int) -> Optional[int]:
     return value
 
 
+def _to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
+    try:
+        dec = Decimal(str(value if value is not None else default))
+    except (InvalidOperation, ValueError, TypeError):
+        return default
+    if dec < 0:
+        return Decimal("0")
+    return dec.quantize(Decimal("0.0001"))
+
+
+def format_points_amount(value: Any) -> str:
+    dec = _to_decimal(value)
+    text = format(dec.normalize(), "f")
+    return "0" if text == "-0" else text
+
+
 def _env_int_bounded(name: str, default: int, min_value: int, max_value: int) -> int:
     value = _env_int(name, default)
     if value < min_value or value > max_value:
@@ -152,12 +169,32 @@ def _ensure_table(cursor) -> None:
             id SERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
             reason TEXT NOT NULL,
-            amount INTEGER NOT NULL,
+            amount NUMERIC(18, 4) NOT NULL,
             metadata TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         )
         """
     )
+    try:
+        cursor.execute("SAVEPOINT airdrop_points_amount_decimal_migration")
+        cursor.execute(
+            """
+            SELECT data_type, numeric_precision, numeric_scale
+            FROM information_schema.columns
+            WHERE table_name='airdrop_points_ledger' AND column_name='amount'
+            """
+        )
+        row = cursor.fetchone()
+        if row and str(row[0]).lower() not in {"numeric", "decimal"}:
+            cursor.execute("ALTER TABLE airdrop_points_ledger ALTER COLUMN amount TYPE NUMERIC(18, 4) USING amount::numeric")
+        cursor.execute("RELEASE SAVEPOINT airdrop_points_amount_decimal_migration")
+    except Exception as exc:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT airdrop_points_amount_decimal_migration")
+            cursor.execute("RELEASE SAVEPOINT airdrop_points_amount_decimal_migration")
+        except Exception:
+            pass
+        logger.warning("airdrop_points_amount_decimal_migration_failed error=%s", type(exc).__name__)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_airdrop_points_user_created ON airdrop_points_ledger(user_id, created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_airdrop_points_user_day ON airdrop_points_ledger(user_id, created_at, reason)")
     cursor.execute(
@@ -184,18 +221,18 @@ def _connect_ready():
     return conn, cur
 
 
-def _memory_today_sum(user_id: int) -> int:
+def _memory_today_sum(user_id: int) -> Decimal:
     today = _now().date().isoformat()
     return sum(
-        int(row.get("amount") or 0)
+        _to_decimal(row.get("amount") or 0)
         for row in _MEMORY_LEDGER[int(user_id)]
-        if str(row.get("created_at") or "")[:10] == today and row.get("reason") in _ANALYSIS_REASONS and int(row.get("amount") or 0) > 0
+        if str(row.get("created_at") or "")[:10] == today and row.get("reason") in _ANALYSIS_REASONS and _to_decimal(row.get("amount") or 0) > 0
     )
 
 
-def _memory_insert(user_id: int, reason: str, amount: int, metadata: dict | None) -> dict:
+def _memory_insert(user_id: int, reason: str, amount: Decimal, metadata: dict | None) -> dict:
     global _MEMORY_ID
-    row = {"id": _MEMORY_ID, "user_id": int(user_id), "reason": reason, "amount": int(amount), "metadata": metadata or {}, "created_at": _now_iso()}
+    row = {"id": _MEMORY_ID, "user_id": int(user_id), "reason": reason, "amount": _to_decimal(amount), "metadata": metadata or {}, "created_at": _now_iso()}
     _MEMORY_ID += 1
     _MEMORY_LEDGER[int(user_id)].append(row)
     return row
@@ -207,7 +244,7 @@ def _memory_referral_activation_count(referrer_user_id: int) -> int:
 
 def _fallback_balance(user_id: int) -> dict:
     entries = _MEMORY_LEDGER[int(user_id)]
-    balance = sum(int(row.get("amount") or 0) for row in entries)
+    balance = sum(_to_decimal(row.get("amount") or 0) for row in entries)
     return {"user_id": int(user_id), "points": balance, "today_earned": _memory_today_sum(user_id)}
 
 
@@ -218,7 +255,7 @@ def get_airdrop_points_balance(user_id: int) -> dict:
         try:
             today = _now().date().isoformat()
             cur.execute("SELECT COALESCE(SUM(amount),0) FROM airdrop_points_ledger WHERE user_id=%s", (uid,))
-            points = int((cur.fetchone() or [0])[0] or 0)
+            points = _to_decimal((cur.fetchone() or [0])[0] or 0)
             cur.execute(
                 """
                 SELECT COALESCE(SUM(amount),0)
@@ -228,7 +265,7 @@ def get_airdrop_points_balance(user_id: int) -> dict:
                 """,
                 (uid, today),
             )
-            today_earned = int((cur.fetchone() or [0])[0] or 0)
+            today_earned = _to_decimal((cur.fetchone() or [0])[0] or 0)
             return {"user_id": uid, "points": points, "today_earned": today_earned}
         finally:
             conn.close()
@@ -237,7 +274,7 @@ def get_airdrop_points_balance(user_id: int) -> dict:
         return _fallback_balance(uid)
 
 
-def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None, metadata: Optional[dict] = None) -> dict:
+def award_airdrop_points(user_id: int, reason: str, amount: Optional[Any] = None, metadata: Optional[dict] = None) -> dict:
     uid = int(user_id)
     reason = str(reason or "").strip()
     if not points_enabled():
@@ -246,7 +283,7 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
     if not _is_supported_reason(reason):
         balance = get_airdrop_points_balance(uid)
         return {"ok": False, "awarded": False, "amount": 0, "reason": "unsupported_reason", **balance}
-    requested = points_per_analysis() if amount is None else max(0, int(amount))
+    requested = _to_decimal(points_per_analysis() if amount is None else amount)
     if requested <= 0:
         balance = get_airdrop_points_balance(uid)
         return {"ok": True, "awarded": False, "amount": 0, "reason": reason, **balance}
@@ -256,7 +293,7 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
         conn, cur = _connect_ready()
         try:
             today = _now().date().isoformat()
-            today_earned = 0
+            today_earned = Decimal("0")
             if cap > 0:
                 cur.execute(
                     """
@@ -267,8 +304,8 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[int] = None
                     """,
                     (uid, today),
                 )
-                today_earned = int((cur.fetchone() or [0])[0] or 0)
-                requested = min(requested, max(0, cap - today_earned))
+                today_earned = _to_decimal((cur.fetchone() or [0])[0] or 0)
+                requested = min(requested, max(Decimal("0"), _to_decimal(cap) - today_earned))
             if requested <= 0:
                 conn.commit()
                 balance = get_airdrop_points_balance(uid)
@@ -385,7 +422,7 @@ def award_referral_activation_points(referred_user_id: int, metadata: dict | Non
 
     referrer_result = award_airdrop_points(referrer_id, reason="referral_first_analysis_referrer", amount=referrer_points(), metadata=meta)
     referred_result = award_airdrop_points(uid, reason="referral_first_analysis_referred", amount=referred_user_points(), metadata=meta)
-    return {"ok": True, "awarded": bool(referrer_result.get("awarded") or referred_result.get("awarded")), "amount": int(referrer_result.get("amount") or 0) + int(referred_result.get("amount") or 0), "reason": "referral_activated", "referrer_user_id": referrer_id, "referrer": referrer_result, "referred": referred_result}
+    return {"ok": True, "awarded": bool(referrer_result.get("awarded") or referred_result.get("awarded")), "amount": _to_decimal(referrer_result.get("amount") or 0) + _to_decimal(referred_result.get("amount") or 0), "reason": "referral_activated", "referrer_user_id": referrer_id, "referrer": referrer_result, "referred": referred_result}
 
 
 def get_referral_activation_count(user_id: int) -> int:
@@ -429,7 +466,7 @@ def get_airdrop_points_history(user_id: int, limit: int = 20) -> list[dict]:
             )
             rows = cur.fetchall() or []
             return [
-                {"id": int(r[0]), "user_id": int(r[1]), "reason": r[2], "amount": int(r[3] or 0), "metadata": _decode_metadata(r[4]), "created_at": str(r[5])}
+                {"id": int(r[0]), "user_id": int(r[1]), "reason": r[2], "amount": _to_decimal(r[3] or 0), "metadata": _decode_metadata(r[4]), "created_at": str(r[5])}
                 for r in rows
             ]
         finally:
@@ -441,7 +478,7 @@ def get_airdrop_points_history(user_id: int, limit: int = 20) -> list[dict]:
 
 def format_airdrop_status(user_id: int, ui_language: str = "ru") -> str:
     balance = get_airdrop_points_balance(user_id)
-    points = int(balance.get("points") or 0)
+    points = format_points_amount(balance.get("points") or 0)
     if ui_language == "en":
         return (
             "🎁 Airdrop\n\n"

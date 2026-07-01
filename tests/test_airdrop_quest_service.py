@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 import sys
 import types
 
@@ -107,3 +108,15 @@ def test_quest_text_does_not_contain_forbidden_promises(monkeypatch):
     text = svc.format_daily_quests(10, "ru").lower() + "\n" + svc.format_daily_quests(10, "en").lower()
     forbidden = ["guaranteed profit", "guaranteed airdrop", "guaranteed token allocation", "exact listing date", "exact coin price", "гарантированная прибыль", "гарантированный airdrop", "точная дата листинга", "точная цена"]
     assert not any(word in text for word in forbidden)
+
+
+def test_daily_quests_total_points_displays_fractional_balance(monkeypatch):
+    force_memory(monkeypatch)
+    monkeypatch.setattr(svc, "get_airdrop_points_balance", lambda user_id: {"user_id": user_id, "points": Decimal("0.25"), "today_earned": 0})
+    ru = svc.format_daily_quests(11, "ru")
+    en = svc.format_daily_quests(11, "en")
+    assert "Всего баллов: 0.25" in ru.splitlines()
+    assert "Всего баллов: 0.2500" not in ru.splitlines()
+    assert "Всего баллов: 0" not in ru.splitlines()
+    assert "Total Points: 0.25" in en.splitlines()
+    assert "Total Points: 0.2500" not in en.splitlines()
