@@ -1510,6 +1510,7 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     text = _remove_technical_followup_metadata(text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     text = prepend_deepalpha_score_if_needed(text, evidence_pack, ui_language, understanding, router_result, user_text)
+    text = compact_live_answer_if_needed(text, evidence_pack, ui_language, user_text=user_text)
     return _trim_live_answer(text, 1600)
 
 
@@ -1585,6 +1586,95 @@ def prepend_deepalpha_score_if_needed(
         return text
     block = format_compact_deepalpha_score((evidence_pack or {}).get("deepalpha_score") or {}, lang=ui_language)
     return _clean_live_spacing(f"{block}\n\n{text}")
+
+
+_LIVE_DECISION_LABELS_RE = r"(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)"
+
+
+def remove_duplicate_decision_labels(answer: str) -> str:
+    """Keep a single decision line when the DeepAlpha Score block already carries it."""
+    text = str(answer or "").strip()
+    if "deepalpha score" not in text.lower():
+        return text
+    score_decision = re.search(rf"(?im)^\s*(?:Решение|Decision)\s*:\s*{_LIVE_DECISION_LABELS_RE}\s*$", text)
+    if not score_decision:
+        return text
+    first_start, first_end = score_decision.span()
+
+    def repl(match: re.Match) -> str:
+        if match.start() == first_start and match.end() == first_end:
+            return match.group(0)
+        return ""
+
+    text = re.sub(rf"(?im)^\s*(?:Решение|Decision)\s*:\s*{_LIVE_DECISION_LABELS_RE}\s*$", repl, text)
+    return _clean_live_spacing(text)
+
+
+def normalize_ru_live_terms(answer: str) -> str:
+    """Polish common RU Live wording without changing decision labels."""
+    text = str(answer or "")
+    replacements = (
+        (r"\bValue\s*:", "Преимущество:"),
+        (r"\bValue\b", "Преимущество"),
+        (r"\bMinimum playable odds\b", "Минимальный рабочий кэф"),
+        (r"\btravel/rest\b", "перелёты/отдых"),
+        (r"\bfair price\b", "честная цена"),
+        (r"(?m)^([\s\-•]*)Edge\s*:", r"\1Преимущество:"),
+    )
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text, flags=re.I)
+    return text
+
+
+def _answer_depth_from_pack(evidence_pack: Dict[str, Any]) -> str:
+    profile = (evidence_pack or {}).get("analyst_profile") or {}
+    depth = str(profile.get("answer_depth") or (evidence_pack or {}).get("answer_depth") or "normal").lower()
+    return depth if depth in {"short", "normal", "deep"} else "normal"
+
+
+def _explicitly_requests_deep(user_text: str) -> bool:
+    low = (user_text or "").lower()
+    return any(x in low for x in ("подробно", "глубоко", "полный разбор", "разбери все факторы"))
+
+
+def _is_ru_sports_no_odds_pack(evidence_pack: Dict[str, Any]) -> bool:
+    pack = evidence_pack or {}
+    if str(pack.get("mode") or "").lower() != "sports":
+        return False
+    facts = pack.get("derived_facts") or {}
+    understanding = facts.get("understanding") or pack.get("understanding") or {}
+    return _sports_user_odds(understanding, facts) is None
+
+
+def _build_ru_no_odds_compact_answer(answer: str, evidence_pack: Dict[str, Any]) -> str:
+    score = (evidence_pack or {}).get("deepalpha_score") or {}
+    block = format_compact_deepalpha_score(score, lang="ru")
+    missing = (evidence_pack or {}).get("missing_data") or []
+    needed = ["коэффициент", "рынок: победа / тотал / фора", "дата и турнир", "составы/травмы"]
+    if missing and any(str(item).lower() in {"market", "line", "рынок", "линия"} for item in missing):
+        needed[1] = "рынок/линия"
+    return _clean_live_spacing(
+        f"{block}\n\n"
+        "🏟 Коротко:\n"
+        "Без коэффициента нельзя посчитать implied probability и edge.\n\n"
+        "Нужны данные:\n"
+        + "\n".join(f"• {item}" for item in needed)
+        + "\n\nИтог:\n"
+        "DATA NEEDED — можно сделать предварительный lean, но преимущество без кэфа не считается.\n\n"
+        "Скинь коэффициент — посчитаю преимущество."
+    )
+
+
+def compact_live_answer_if_needed(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru", user_text: str = "") -> str:
+    """Apply compact Telegram defaults for Live answers while preserving deep mode."""
+    text = str(answer or "").strip()
+    if ui_language == "ru":
+        text = normalize_ru_live_terms(text)
+    depth = _answer_depth_from_pack(evidence_pack)
+    has_score = isinstance((evidence_pack or {}).get("deepalpha_score"), dict) and bool((evidence_pack or {}).get("deepalpha_score"))
+    if ui_language == "ru" and has_score and depth != "deep" and not _explicitly_requests_deep(user_text) and _is_ru_sports_no_odds_pack(evidence_pack):
+        text = _build_ru_no_odds_compact_answer(text, evidence_pack)
+    return remove_duplicate_decision_labels(_clean_live_spacing(text))
 
 def _safe(text: Any, limit: int = 1200) -> str:
     return str(text or "").strip()[:limit]
@@ -2444,6 +2534,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     analyst_profile_block = build_user_analyst_profile_prompt_block(user_id)
     deepalpha_score = _build_live_deepalpha_score(text, evidence_pack, analyst_profile=analyst_profile)
     evidence_pack["deepalpha_score"] = deepalpha_score
+    evidence_pack["analyst_profile"] = analyst_profile
     deepalpha_score_block = build_score_prompt_block(deepalpha_score)
     prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block, deepalpha_score_block=deepalpha_score_block)
     logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
