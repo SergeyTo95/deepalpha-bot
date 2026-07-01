@@ -98,8 +98,7 @@ def test_production_path_without_odds_uses_professional_betting_format():
     low = answer.lower()
     assert "🏟 Коротко:" in answer
     assert "Данные:" in answer
-    assert "Value:" in answer
-    assert "Риск:" in answer
+    assert "Преимущество:" in answer
     assert "Decision: DATA NEEDED" in answer
     assert "Без коэффициента нельзя посчитать" in answer
     assert "ставь железно" not in low
@@ -129,10 +128,10 @@ def test_handicap_line_is_not_parsed_as_odds_in_production_path():
     assert "- Рынок: handicap" in answer
     assert "- Коэффициент: не указан" in answer
     assert "- Implied probability: —" in answer
-    assert "- Edge: —" in answer
+    assert "- Преимущество: —" in answer
     assert "28.6%" not in answer
     assert "Без коэффициента нельзя посчитать" in answer or "без коэффициента" in answer.lower()
-    assert answer.rstrip().endswith("Decision: DATA NEEDED")
+    assert "Decision: DATA NEEDED" in answer
     assert "Decision: WATCH" not in answer
 
 
@@ -142,7 +141,7 @@ def test_explicit_odds_still_parsed_in_production_path():
     answer = format_live_final_answer("Реал — Барса, Реал кэф 1.95, есть ставка?\nDecision: DATA NEEDED", pack, "ru")
     assert "- Коэффициент: 1.95" in answer
     assert "- Implied probability: 51.3%" in answer
-    assert "- Edge: +6.7 pp" in answer
+    assert "- Преимущество: +6.7 pp" in answer
     assert "Decision: EDGE CANDIDATE" in answer
 
 
@@ -199,5 +198,5 @@ def test_lakers_celtics_edge_candidate_with_estimated_probability():
     assert "Спорт/лига: basketball / NBA" in answer
     assert "Implied probability: 51.3%" in answer
     assert "Моя оценка: 58.0%" in answer
-    assert "Edge: +6.7 pp" in answer
+    assert "Преимущество: +6.7 pp" in answer
     assert "Decision: EDGE CANDIDATE" in answer

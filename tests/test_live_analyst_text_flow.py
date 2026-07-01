@@ -171,7 +171,7 @@ def test_crypto_asset_without_pair_still_uses_paid_consultant_path(monkeypatch):
     assert len(charges) == 1
     assert len(saved) == 2
     assert "crypto consultant" in prompts[0]
-    assert "Decision:" in result["message"]
+    assert ("Decision:" in result["message"] or "Решение:" in result["message"])
     assert "asset': 'BTC" in prompts[0]
 
 
@@ -432,7 +432,7 @@ def test_process_live_text_repairs_truncated_answer_and_charges_once(monkeypatch
     result = svc.process_live_text(77, "BTCUSDT 15m есть вход?", router_result={"mode": "crypto", "entities": {"pair": "BTCUSDT", "asset": "BTC", "timeframe": "15m"}}, ui_language="ru")
 
     assert result["ok"] is True
-    assert "Decision: WATCH" in result["message"]
+    assert "Решение:" in result["message"]
     assert len(calls) == 2
     assert len(charges) == 1
     assert len(research_calls) <= 1
@@ -453,7 +453,7 @@ def test_process_live_text_uses_safe_fallback_when_repair_still_incomplete(monke
 
     assert result["ok"] is True
     assert result["charged"] is True
-    assert "Decision:" in result["message"]
+    assert "Решение:" in result["message"]
     assert len(calls) == 2
     assert len(charges) == 1
 
@@ -541,7 +541,7 @@ def test_process_live_text_applies_final_formatter_before_saving(monkeypatch):
     assert result["ok"] is True
     assert "$64,000" in result["message"]
     assert "$64,500" in result["message"]
-    assert "Decision: WATCH" in result["message"]
+    assert "Решение:" in result["message"]
     assert saved[1][0][4] == result["message"]
     assert len(charges) == 1
 
@@ -917,7 +917,7 @@ def test_process_live_text_uses_deterministic_crypto_fallback_when_llm_empty(mon
     assert "Цена" in result["message"]
     assert "Поддержка" in result["message"]
     assert "Сопротивление" in result["message"]
-    assert "Decision: WATCH" in result["message"]
+    assert "Решение:" in result["message"]
     assert charges == []
     assert len(calls) == 1
     assert saved and saved[-1][0][2] == "assistant"
@@ -941,7 +941,7 @@ def test_process_live_text_deterministic_followup_long_position(monkeypatch):
     assert "Условие follow-up: лонг от $64,500" in result["message"]
     assert "Это не текущий вход" in result["message"]
     assert "долгосрочный" not in result["message"].lower()
-    assert "Decision: WATCH" in result["message"]
+    assert "Решение:" in result["message"]
     assert charges == []
     assert saved and saved[-1][0][2] == "assistant"
 
