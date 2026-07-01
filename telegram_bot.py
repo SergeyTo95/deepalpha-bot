@@ -115,6 +115,10 @@ from services.airdrop_points_service import (
     award_airdrop_points, award_analysis_points, award_referral_activation_points, format_airdrop_status, get_airdrop_points_balance,
     get_airdrop_points_history, get_referral_activation_count, points_enabled, points_per_analysis, daily_cap, referral_points_enabled, referrer_points, referred_user_points,
 )
+from services.airdrop_quest_service import (
+    format_daily_quests, get_airdrop_quests_status, record_analysis_for_daily_quests,
+    record_profile_daily_quest,
+)
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
@@ -428,8 +432,27 @@ def get_onboarding_after_demo_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 
+def get_airdrop_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🎯 Daily Quests", callback_data="airdrop_daily_quests"))
+    kb.add(InlineKeyboardButton("🚀 Сделать анализ" if lang == "ru" else "🚀 Make analysis", callback_data="onboarding_send_link"))
+    return kb
+
+
+def get_daily_quests_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("🚀 Сделать анализ" if lang == "ru" else "🚀 Make analysis", callback_data="onboarding_send_link"))
+    kb.add(InlineKeyboardButton("🧠 Analyst Profile", callback_data="quests_open_analyst_profile"))
+    kb.add(InlineKeyboardButton("🎁 Airdrop", callback_data="quests_open_airdrop"), InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="quests_open_airdrop"))
+    return kb
+
+
 def format_airdrop_teaser(user_id: int, ui_language: str = "ru") -> str:
-    return format_airdrop_status(user_id, ui_language)
+    base = format_airdrop_status(user_id, ui_language)
+    hint = "\n\n🎯 Daily Quests: /quests"
+    return f"{base}{hint}"
 
 
 def _format_live_access_status() -> str:
@@ -6320,6 +6343,10 @@ async def analyst_profile_command(message: types.Message, state: FSMContext):
     _register_user(message)
     uid = message.from_user.id
     lang = get_user_lang(uid)
+    try:
+        record_profile_daily_quest(uid, source="analyst_profile_open")
+    except Exception as exc:
+        logger.warning("airdrop_profile_quest_failed user_id=%s error=%s", uid, exc)
     await message.answer(format_user_analyst_profile(uid, lang), reply_markup=get_analyst_profile_keyboard(uid))
 
 
@@ -6336,6 +6363,10 @@ async def analyst_profile_callback(callback: types.CallbackQuery, state: FSMCont
     uid = callback.from_user.id
     lang = get_user_lang(uid)
     data = callback.data or ""
+    try:
+        record_profile_daily_quest(uid, source="analyst_profile_callback", metadata={"callback": data})
+    except Exception as exc:
+        logger.warning("airdrop_profile_quest_callback_failed user_id=%s error=%s", uid, exc)
     if data == "analyst_profile_risk":
         title = "⚖️ Выбери стиль риска" if lang == "ru" else "⚖️ Choose risk style"
         await callback.message.edit_text(title, reply_markup=get_analyst_profile_choice_keyboard("risk", uid)); await callback.answer(); return
@@ -8729,16 +8760,41 @@ def _is_private_live_callback(callback: types.CallbackQuery) -> bool:
 
 
 
+@dp.message_handler(commands=["quests"], state="*")
+@dp.message_handler(lambda m: (m.text or "") == "🎯 Daily Quests", state="*")
+async def quests_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    await message.answer(format_daily_quests(uid, get_user_lang(uid)), reply_markup=get_daily_quests_keyboard(uid))
+
+
+@dp.callback_query_handler(lambda c: c.data in {"airdrop_daily_quests", "quests_open_airdrop", "quests_open_analyst_profile"}, state="*")
+async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    uid = callback.from_user.id
+    if callback.data == "quests_open_airdrop":
+        await callback.message.edit_text(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid)); await callback.answer(); return
+    if callback.data == "quests_open_analyst_profile":
+        try:
+            record_profile_daily_quest(uid, source="analyst_profile_open")
+        except Exception as exc:
+            logger.warning("airdrop_profile_quest_failed user_id=%s error=%s", uid, exc)
+        await callback.message.edit_text(format_user_analyst_profile(uid, get_user_lang(uid)), reply_markup=get_analyst_profile_keyboard(uid)); await callback.answer(); return
+    await callback.message.edit_text(format_daily_quests(uid, get_user_lang(uid)), reply_markup=get_daily_quests_keyboard(uid))
+    await callback.answer()
+
+
 @dp.message_handler(commands=["airdrop"], state="*")
 @dp.message_handler(lambda m: (m.text or "") == "🎁 Airdrop", state="*")
 async def airdrop_handler(message: types.Message, state: FSMContext):
     await state.finish()
     _register_user(message)
     uid = message.from_user.id
-    await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=private_reply_markup(message, get_main_keyboard(uid)))
+    await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid))
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8746,6 +8802,19 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
+    if cmd == "airdrop_quests_status":
+        status = get_airdrop_quests_status()
+        top = status.get("top_quest_codes") or []
+        top_lines = [f"- {row.get('quest_code')}: {row.get('count')}" for row in top]
+        await message.answer(
+            "Airdrop Quests Status:\n\n"
+            f"- Date: {status.get('quest_date')}\n"
+            f"- Points enabled: {str(status.get('points_enabled')).lower()}\n"
+            f"- Total completions today: {status.get('total_completions')}\n"
+            f"- Total quest points awarded today: {status.get('total_points_awarded')}\n\n"
+            "Top quest codes today:\n" + ("\n".join(top_lines) if top_lines else "—")
+        )
+        return
     if cmd == "airdrop_settings":
         await message.answer(
             "Airdrop Settings:\n\n"
@@ -9183,6 +9252,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
         try:
             # Only award after successful user-facing analysis completion.
             award_analysis_points(uid, source="telegram_live_text")
+            record_analysis_for_daily_quests(uid, source="telegram_live_text", domain=(router_result or {}).get("mode"), metadata=router_result if isinstance(router_result, dict) else None)
             award_referral_activation_points(uid, metadata={"source": "telegram_live_text"})
         except Exception as exc:
             logger.warning("airdrop_points_live_award_failed user_id=%s error=%s", uid, exc)
@@ -9683,6 +9753,7 @@ async def _run_normal_polymarket_analysis(message: types.Message, url_override: 
         try:
             # Only award after successful user-facing analysis completion.
             award_analysis_points(uid, source="telegram_quick_analysis", metadata={"url": url})
+            record_analysis_for_daily_quests(uid, source="telegram_quick_analysis", domain=(result or {}).get("category_type") or (result or {}).get("analysis_mode"), metadata={"url": url, **(result if isinstance(result, dict) else {})})
             award_referral_activation_points(uid, metadata={"source": "telegram_quick_analysis"})
         except Exception as exc:
             logger.warning("airdrop_points_analysis_award_failed user_id=%s error=%s", uid, exc)
