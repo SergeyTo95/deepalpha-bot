@@ -89,3 +89,14 @@ def test_ru_compact_formatter_uses_polished_labels():
     assert "Преимущество: недоступно" in text
     assert "Edge:" not in text
     assert "unavailable" not in text
+
+
+def test_politics_low_score_never_uses_sports_no_bet():
+    score = build_deepalpha_score(domain="politics", data_quality="missing", confidence=20, risk_level="high")
+    assert score["label"] in {"DATA NEEDED", "NO EDGE"}
+    assert score["label"] != "NO BET"
+
+
+def test_politics_missing_market_date_label_is_data_needed():
+    score = build_deepalpha_score(domain="polymarket", data_quality="missing", confidence=35, risk_level="high", missing_data=["market", "election_year", "side"])
+    assert score["label"] == "DATA NEEDED"

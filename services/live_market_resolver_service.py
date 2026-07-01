@@ -93,6 +93,36 @@ def _subject(text: str, domain: str) -> Optional[str]:
     return cleaned or None
 
 
+def _extract_election_year(text: str) -> Optional[int]:
+    match = re.search(r"\b(20\d{2}|19\d{2})\b", text or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _has_yes_no_side(text: str) -> bool:
+    low = (text or "").lower()
+    return bool(re.search(r"\b(yes|no)\b|\bда\b|\bнет\b", low))
+
+
+def _is_ambiguous_election_reference(text: str, domain: str) -> bool:
+    if domain != "politics":
+        return False
+    low = (text or "").lower()
+    electionish = bool(re.search(r"election|elections|выбор|president|президент", low))
+    broad_win = bool(re.search(r"\bwin\b|побед", low)) and bool(re.search(r"trump|трамп|кто|who", low))
+    if not (electionish or broad_win):
+        return False
+    if _extract_election_year(text):
+        return False
+    if re.search(r"polymarket\.com|slug=|condition_id=|/event/|/market/", low):
+        return False
+    return True
+
+
 def _targeted_queries(text: str, domain: str, subject: Optional[str]) -> List[str]:
     s = subject or text.strip()
     if domain == "politics":
@@ -143,6 +173,10 @@ def resolve_live_market_context(user_text: str, *, ui_language: str = "ru", rout
     intent = _detect_intent(text, domain)
     subject = _subject(text, domain)
     out.update({"domain": domain, "intent": intent, "subject": subject})
+    election_year = _extract_election_year(text) if domain == "politics" else None
+    if election_year:
+        out["election_year"] = election_year
+    ambiguous_election = _is_ambiguous_election_reference(text, domain)
     odds_match = re.search(r"(?i)(?:odds|кэф|коэффициент)\s*[:=]?\s*(\d+(?:[.,]\d+)?)", text)
     if odds_match:
         try:
@@ -157,6 +191,14 @@ def resolve_live_market_context(user_text: str, *, ui_language: str = "ru", rout
     if intent == "domain_entry":
         out["resolved"] = False
         _add_missing(out, "event")
+        return out
+    if ambiguous_election:
+        out["resolved"] = False
+        out["search_attempted"] = True
+        out["intent"] = "probability_check" if intent in {"unknown", "market_lookup"} else intent
+        _add_missing(out, "election_year", "market", "side", "probability")
+        if "ambiguous_election_reference" not in out["notes"]:
+            out["notes"].append("ambiguous_election_reference")
         return out
     out["queries"] = _targeted_queries(text, domain, subject)[:3]
     if domain in {"politics", "polymarket", "sports", "esports", "macro", "event"}:
@@ -182,6 +224,8 @@ def resolve_live_market_context(user_text: str, *, ui_language: str = "ru", rout
         out["implied_probability"] = implied_probability_from_decimal_odds(out["odds"])
     if domain in {"politics", "polymarket"} and out.get("market_probability") is None:
         _add_missing(out, "market", "probability")
+    if domain == "politics" and _extract_election_year(text) and not _has_yes_no_side(text):
+        _add_missing(out, "side")
     if domain == "sports" and out.get("odds") is None:
         _add_missing(out, "odds", "market")
     return out

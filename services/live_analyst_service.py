@@ -80,15 +80,31 @@ def domain_aware_clarification(domain: str, ui_language: str = "ru") -> str:
 def _targeted_resolver_clarification(resolver_result: Dict[str, Any], ui_language: str = "ru") -> str:
     domain = str((resolver_result or {}).get("domain") or "unknown").lower()
     subject = (resolver_result or {}).get("subject") or ""
+    notes = set((resolver_result or {}).get("notes") or [])
     if ui_language == "ru":
         if domain in {"politics", "polymarket"}:
-            return "Понял: это политическое событие / prediction market. Я не нашёл достаточно надёжный рынок/коэффициент в текущих данных. Пришли Polymarket-ссылку или уточни выборы/дату — я посчитаю probability и edge."
+            if "ambiguous_election_reference" in notes:
+                return (
+                    "🗳 Коротко:\n"
+                    "Понял: это политика / prediction market, но вопрос неоднозначный.\n\n"
+                    "Нужно уточнить:\n"
+                    "• какие выборы / год\n"
+                    "• какой рынок\n"
+                    "• сторона: Yes или No\n"
+                    "• ссылка на Polymarket, если есть\n\n"
+                    "Итог:\n"
+                    "DATA NEEDED — без конкретного рынка и даты нельзя корректно считать вероятность и edge.\n\n"
+                    "Если ты имел в виду 2024, событие уже завершено. Если речь о будущем рынке — уточни год/ссылку."
+                )
+            return "Понял: это политика / prediction market. Пришли конкретный рынок, год/дату, сторону Yes/No или Polymarket-ссылку — я посчитаю probability и edge."
         if domain == "sports":
             label = f" / {subject}" if subject else ""
             return f"Понял: спорт{label}. Я могу сделать предварительный lean, но для value нужен рынок и коэффициент. Пришли кэф или скажи рынок: победа, тотал, фора."
         return domain_aware_clarification(domain, ui_language)
     if domain in {"politics", "polymarket"}:
-        return "Got it: political event / prediction market. I did not find a reliable market/odds in current data. Send a Polymarket link or specify the election/date so I can calculate probability and edge."
+        if "ambiguous_election_reference" in notes:
+            return "Short: this is politics / prediction market, but the election reference is ambiguous. Please specify election/year, market, Yes/No side, and a Polymarket link if available. Final: DATA NEEDED."
+        return "Got it: politics / prediction market. Send the specific market, year/date, Yes/No side, or a Polymarket link so I can calculate probability and edge."
     if domain == "sports":
         return "Got it: sports. I can give a preliminary lean, but value needs a market and odds. Send odds or the market: winner, total, spread."
     return domain_aware_clarification(domain, ui_language)
@@ -229,7 +245,11 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
         elif answer_style == "research_brief" or user_intent in ("research_topic", "check_claim"):
             lines = ["Проверить свежие источники?", "Разобрать аргументы за/против?", "Составить краткий вывод?"] if lang == "ru" else ["Check fresh sources?", "Break down arguments for/against?", "Draft a concise conclusion?"]
         else:
-            lines = ["Посчитать value под твой коэффициент?", "Разобрать факторы, которые двигают вероятность?", "Показать fair odds / минимальный playable odds?"] if lang == "ru" else ["Calculate value for your odds?", "Break down factors that move probability?", "Show fair odds / minimum playable odds?"]
+            is_politics = mode in ("polymarket", "prediction_market", "politics") or str((pack.get("market_resolution") or {}).get("domain") or "").lower() == "politics"
+            if is_politics:
+                lines = ["Найти активный Polymarket-рынок?", "Посчитать probability и edge по Yes/No?", "Проверить ликвидность, правила resolution и риски?"] if lang == "ru" else ["Find an active Polymarket market?", "Calculate probability and edge for Yes/No?", "Check liquidity, resolution rules, and risks?"]
+            else:
+                lines = ["Посчитать value под твой коэффициент?", "Разобрать факторы, которые двигают вероятность?", "Показать fair odds / минимальный playable odds?"] if lang == "ru" else ["Calculate value for your odds?", "Break down factors that move probability?", "Show fair odds / minimum playable odds?"]
         return "\n".join(f"- {line}" for line in lines[:3])
     if plan and (mode in ("crypto", "sports", "esports", "event_betting", "polymarket", "prediction_market", "general") or plan.get("market_domain") not in (None, "", "unknown")):
         factors = " ".join(str(x).lower() for x in (plan.get("needed_factors") or []))
@@ -246,7 +266,8 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Разобрать уровни, таймфрейм и отмену сценария?"
             elif domain == "politics":
-                middle = "Разобрать опросы, новости и календарь?"
+                lines = ["Найти активный Polymarket-рынок?", "Посчитать probability и edge по Yes/No?", "Проверить ликвидность, правила resolution и риски?"]
+                return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Разобрать правила, участников и таймлайн?"
             lines = ["Посчитать value под твой коэффициент?", middle, "Найти минимальный playable odds / fair price?"]
@@ -259,7 +280,8 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Break down levels, timeframe, and invalidation?"
             elif domain == "politics":
-                middle = "Break down polls/news/calendar that move probability?"
+                lines = ["Find an active Polymarket market?", "Calculate probability and edge for Yes/No?", "Check liquidity, resolution rules, and risks?"]
+                return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Break down rules, participants, and timeline?"
             lines = ["Calculate value for your odds?", middle, "Find the minimum playable odds / fair price?"]
@@ -296,11 +318,11 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Сравнить рынки: победа, фора, тотал?",
                 "Найти минимальный playable odds для этого сценария?",
             ]
-        elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
+        elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
             lines = [
-                "Сравнить market odds с AI probability?",
-                "Разобрать, какие новости могут сдвинуть вероятность?",
-                "Понять, где может быть edge и где рынок уже всё учёл?",
+                "Найти активный Polymarket-рынок?",
+                "Посчитать probability и edge по Yes/No?",
+                "Проверить ликвидность, правила resolution и риски?",
             ]
         else:
             lines = [
@@ -339,11 +361,11 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Compare markets: moneyline, spread, total?",
                 "Find the minimum playable odds for this setup?",
             ]
-        elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
+        elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
             lines = [
-                "Compare market odds with AI probability?",
-                "Break down which news could move probability?",
-                "Check where edge may exist and what the market already priced in?",
+                "Find an active Polymarket market?",
+                "Calculate probability and edge for Yes/No?",
+                "Check liquidity, resolution rules, and risks?",
             ]
         else:
             lines = [
@@ -458,17 +480,17 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
             "Compare moneyline, handicap/spread, and total markets from a value and risk perspective.",
             "Find the minimum playable odds for this setup and explain the assumptions.",
         ]
-    elif mode in ("polymarket", "prediction_market") or "polymarket" in intent:
+    elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
         labels = [
-            "Сравнить market odds с AI probability?" if lang == "ru" else "Compare market odds with AI probability?",
-            "Разобрать, какие новости могут сдвинуть вероятность?" if lang == "ru" else "Break down which news could move probability?",
-            "Понять, где может быть edge и где рынок уже всё учёл?" if lang == "ru" else "Check where edge may exist and what the market already priced in?",
+            "Найти активный Polymarket-рынок?" if lang == "ru" else "Find an active Polymarket market?",
+            "Посчитать probability и edge по Yes/No?" if lang == "ru" else "Calculate probability and edge for Yes/No?",
+            "Проверить ликвидность, правила resolution и риски?" if lang == "ru" else "Check liquidity, resolution rules, and risks?",
         ]
-        ids = ["odds_probability_compare", "probability_drivers", "edge_priced_in"]
+        ids = ["find_active_polymarket_market", "yes_no_probability_edge", "liquidity_resolution_risks"]
         templates = [
-            "Compare market odds with AI probability and explain any mismatch.",
-            "Analyze news and market drivers that may move probability.",
-            "Identify where edge may exist and what the market may have already priced in.",
+            "Find the active Polymarket market for this political event; ask for a link if ambiguous.",
+            "Calculate probability and edge for the Yes/No side using confirmed market data.",
+            "Check liquidity, resolution rules, and key risks for the prediction market.",
         ]
     else:
         labels = [
@@ -2406,6 +2428,9 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
 
 
 def _score_data_quality_from_pack(evidence_pack: Dict[str, Any]) -> str:
+    resolver = (evidence_pack or {}).get("market_resolution") or {}
+    if "ambiguous_election_reference" in set(resolver.get("notes") or []):
+        return "missing"
     score = evidence_pack.get("data_quality_score") if evidence_pack else None
     try:
         numeric = float(score)
@@ -2421,6 +2446,9 @@ def _score_data_quality_from_pack(evidence_pack: Dict[str, Any]) -> str:
 
 
 def _score_confidence_from_pack(evidence_pack: Dict[str, Any]) -> int:
+    resolver = (evidence_pack or {}).get("market_resolution") or {}
+    if "ambiguous_election_reference" in set(resolver.get("notes") or []):
+        return 35
     label = str((evidence_pack or {}).get("confidence_label") or "").lower()
     if label == "high":
         return 80
@@ -2432,6 +2460,9 @@ def _score_confidence_from_pack(evidence_pack: Dict[str, Any]) -> int:
 
 
 def _score_risk_from_pack(evidence_pack: Dict[str, Any]) -> str:
+    resolver = (evidence_pack or {}).get("market_resolution") or {}
+    if "ambiguous_election_reference" in set(resolver.get("notes") or []):
+        return "high"
     facts = (evidence_pack or {}).get("derived_facts") or {}
     policy = (evidence_pack or {}).get("answer_policy") or {}
     if facts.get("risk_level") in ("low", "medium", "high", "unknown"):

@@ -84,3 +84,40 @@ def test_no_forbidden_wording_in_compact_template():
     low = answer.lower()
     for phrase in ("guaranteed profit", "guaranteed win", "ставь", "покупай", "100% зайдёт"):
         assert phrase not in low
+
+from services.live_analyst_service import _targeted_resolver_clarification, append_live_followup_suggestions
+
+
+def _politics_pack():
+    return {
+        "mode": "polymarket",
+        "intent": "probability_check",
+        "deepalpha_score": _score("DATA NEEDED"),
+        "market_resolution": {"domain": "politics", "notes": ["ambiguous_election_reference"]},
+        "missing_data": ["election_year", "market", "side"],
+    }
+
+
+def test_compact_politics_ambiguity_answer_contains_targeted_fields():
+    pack = _politics_pack()
+    answer = format_live_final_answer(_targeted_resolver_clarification(pack["market_resolution"], "ru"), pack, "ru", user_text="Трамп победит на выборах?")
+    assert "DeepAlpha Score" in answer
+    assert "Решение: DATA NEEDED" in answer
+    assert "политика / prediction market" in answer
+    assert "какие выборы / год" in answer
+    assert "Yes или No" in answer
+
+
+def test_politics_followups_avoid_sports_betting_terms():
+    answer = append_live_followup_suggestions("📊 DeepAlpha Score: 43/100\nРешение: DATA NEEDED\n\nКоротко.\nDecision: DATA NEEDED", _politics_pack(), "ru")
+    low = answer.lower()
+    assert "найти активный polymarket-рынок" in low
+    for phrase in ("playable odds", "fair price", "ставка"):
+        assert phrase not in low
+
+
+def test_no_forbidden_wording_in_politics_ambiguity_template():
+    answer = format_live_final_answer(_targeted_resolver_clarification(_politics_pack()["market_resolution"], "ru"), _politics_pack(), "ru")
+    low = answer.lower()
+    for phrase in ("guaranteed profit", "guaranteed win", "ставь", "покупай", "100%"):
+        assert phrase not in low

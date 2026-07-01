@@ -84,3 +84,31 @@ def test_no_forbidden_wording_in_resolver_messages():
     forbidden = ["guaranteed profit", "guaranteed win", "ставь", "покупай", "100%"]
     hay = "\n".join(texts).lower()
     assert not any(word in hay for word in forbidden)
+
+
+def test_ambiguous_trump_election_missing_year_market_side(monkeypatch):
+    monkeypatch.setattr("services.live_market_resolver_service.find_related_markets", lambda *a, **k: [])
+    monkeypatch.setattr("services.live_market_resolver_service.search_web", lambda *a, **k: [])
+    result = resolve_live_market_context("Трамп победит на выборах?")
+    assert result["domain"] == "politics"
+    assert result["resolved"] is False
+    assert {"election_year", "market", "side"}.issubset(set(result["missing_data"]))
+    assert "ambiguous_election_reference" in result["notes"]
+
+
+def test_trump_election_not_resolved_just_from_text(monkeypatch):
+    monkeypatch.setattr("services.live_market_resolver_service.find_related_markets", lambda *a, **k: [])
+    monkeypatch.setattr("services.live_market_resolver_service.search_web", lambda *a, **k: [{"title": "2024 result", "url": "https://example.com", "source": "test"}])
+    result = resolve_live_market_context("Trump win election?")
+    assert result["resolved"] is False
+    assert result["market_title"] is None
+    assert "ambiguous_election_reference" in result["notes"]
+
+
+def test_trump_2028_election_is_not_ambiguous(monkeypatch):
+    monkeypatch.setattr("services.live_market_resolver_service.find_related_markets", lambda *a, **k: [])
+    monkeypatch.setattr("services.live_market_resolver_service.search_web", lambda *a, **k: [])
+    result = resolve_live_market_context("Trump win election 2028?")
+    assert result["domain"] == "politics"
+    assert result.get("election_year") == 2028
+    assert "ambiguous_election_reference" not in result["notes"]
