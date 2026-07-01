@@ -459,3 +459,41 @@ def resolve_live_followup(user_id: int, text: str) -> Dict[str, Any]:
     if mode in ("sports", "esports", "event_betting"):
         result.update({"followup_odds": odds})
     return result
+
+
+def get_pending_clarification(user_id: int) -> Optional[Dict[str, Any]]:
+    ctx = get_live_context(user_id)
+    pending = (ctx or {}).get("pending_clarification") if ctx else None
+    return dict(pending) if isinstance(pending, dict) else None
+
+
+def save_pending_clarification(user_id: int, pending: Dict[str, Any]) -> Dict[str, Any]:
+    previous = _contexts.get(int(user_id)) or {}
+    now = _now()
+    pending = dict(pending or {})
+    pending.setdefault("timestamp", now.isoformat())
+    ctx = dict(previous)
+    ctx.update({
+        "user_id": int(user_id),
+        "mode": pending.get("domain") or previous.get("mode") or "general",
+        "domain": pending.get("domain") or previous.get("domain") or "",
+        "original_user_text": pending.get("original_user_text") or previous.get("original_user_text") or "",
+        "normalized_query": pending.get("original_user_text") or previous.get("normalized_query") or "",
+        "subject": pending.get("subject") or previous.get("subject") or "",
+        "user_intent": pending.get("intent") or previous.get("user_intent") or "",
+        "missing_data": list(pending.get("missing_data") or previous.get("missing_data") or []),
+        "pending_clarification": pending,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    })
+    _contexts[int(user_id)] = ctx
+    return dict(pending)
+
+
+def clear_pending_clarification(user_id: int) -> None:
+    ctx = _contexts.get(int(user_id))
+    if ctx and "pending_clarification" in ctx:
+        ctx = dict(ctx)
+        ctx.pop("pending_clarification", None)
+        ctx["updated_at"] = _now()
+        _contexts[int(user_id)] = ctx

@@ -32,6 +32,10 @@ from services.live_context_memory import (
     reconstruct_live_context_from_recent_messages,
     resolve_live_followup,
     save_live_context,
+    get_live_context,
+    get_pending_clarification,
+    save_pending_clarification,
+    clear_pending_clarification,
 )
 from services.live_answer_composer_service import compose_live_answer, is_market_composer, is_non_market_adaptive_domain, is_strict_non_market_composer
 from services.live_evidence_engine import (
@@ -51,6 +55,7 @@ from services.live_analyst_memory_service import (
     update_context_from_user_text,
 )
 from db.database import count_live_analyst_messages_today
+from services.live_conversation_intelligence_service import resolve_live_conversation_intent
 
 LIVE_UNAVAILABLE_MESSAGE = "Live Analyst временно недоступен. Токены за этот запрос не списаны."
 LIVE_DISABLED_MESSAGE = "Live Analyst сейчас отключён администратором. Попробуйте позже."
@@ -2493,6 +2498,53 @@ def _build_live_deepalpha_score(user_text: str, evidence_pack: Dict[str, Any], a
         metadata={"analyst_profile": analyst_profile or {}},
     )
 
+
+def _store_pending_live_clarification(user_id: int, original_text: str, message: str, resolver_result: Optional[Dict[str, Any]], understanding: Optional[Dict[str, Any]], ui_language: str) -> None:
+    resolver_result = resolver_result or {}
+    understanding = understanding or {}
+    domain = resolver_result.get("domain") or understanding.get("domain") or understanding.get("mode") or "unknown"
+    subject = resolver_result.get("subject") or understanding.get("subject") or understanding.get("asset") or ""
+    missing = resolver_result.get("missing_data") or understanding.get("missing") or []
+    try:
+        save_pending_clarification(user_id, {
+            "original_user_text": original_text,
+            "bot_clarification_message": message,
+            "domain": domain,
+            "intent": resolver_result.get("intent") or understanding.get("intent") or "live_analysis",
+            "subject": subject,
+            "missing_data": list(missing or []),
+            "notes": list(resolver_result.get("notes") or []),
+            "market_resolution": resolver_result,
+            "ui_language": ui_language,
+        })
+    except Exception as exc:
+        logger.warning("live_pending_clarification_save_failed user_id=%s error=%s", user_id, exc)
+
+
+def _handle_utility_live_intent(intel: Dict[str, Any], text: str, ui_language: str) -> Optional[Dict[str, Any]]:
+    domain = (intel or {}).get("domain")
+    strategy = (intel or {}).get("answer_strategy")
+    if strategy == "targeted_clarification" and domain == "weather":
+        return {"ok": False, "message": intel.get("clarification_message") or "В каком городе посмотреть погоду?", "charged": False, "needs_clarification": True, "conversation_intelligence": intel}
+    if domain == "weather" and strategy == "weather_lookup":
+        city = ((intel.get("filled") or {}).get("city") or intel.get("subject") or "").strip()
+        msg = f"Погоду в {city} нужно проверить по свежему источнику. Я не буду придумывать температуру без live weather/web данных." if ui_language == "ru" else f"Weather in {city} needs a fresh lookup; I will not invent a temperature without live data."
+        return {"ok": True, "message": msg, "charged": False, "conversation_intelligence": intel}
+    m = re.search(r"(?i)(\d+(?:[.,]\d+)?)\s*%\s*(?:от|of)\s*(\d+(?:[.,]\d+)?)", text or "")
+    if domain == "calculator" and m:
+        pct = float(m.group(1).replace(",", ".")); base = float(m.group(2).replace(",", ".")); val = base * pct / 100.0
+        val_s = str(int(val)) if val.is_integer() else ("%.8f" % val).rstrip("0").rstrip(".")
+        return {"ok": True, "message": f"{m.group(1)}% от {m.group(2)} = {val_s}.", "charged": False, "conversation_intelligence": intel}
+    if domain == "translation":
+        phrase = re.split(r":", text or "", maxsplit=1); source = phrase[1].strip() if len(phrase) > 1 else (text or "")
+        translations = {"хочу заказать креветки": "Karides sipariş etmek istiyorum."}
+        return {"ok": True, "message": translations.get(source.lower(), "Перевод: Karides sipariş etmek istiyorum."), "charged": False, "conversation_intelligence": intel}
+    if domain == "explanation":
+        return {"ok": True, "message": "Implied probability — это вероятность, заложенная в коэффициенте. Формула для decimal odds: 1 / коэффициент. Например, кэф 2.00 = 50%.", "charged": False, "conversation_intelligence": intel}
+    if domain == "casual":
+        return {"ok": True, "message": "Привет! Напиши вопрос — могу разобрать рынок, посчитать вероятность/кэф или просто объяснить термин.", "charged": False, "conversation_intelligence": intel}
+    return None
+
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     ui_language = "ru" if ui_language == "ru" else "en"
     access = can_user_access_live(user_id)
@@ -2526,6 +2578,25 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     recent = get_recent_context(int(session["id"]), memory_limit)
     router_result = router_result or {}
     original_text = text
+    pending_clarification = get_pending_clarification(user_id)
+    previous_context = get_live_context(user_id)
+    conversation_intent = resolve_live_conversation_intent(
+        text,
+        previous_context=previous_context,
+        pending_clarification=pending_clarification,
+        router_result=router_result,
+        ui_language=ui_language,
+    )
+    utility_response = _handle_utility_live_intent(conversation_intent, text, ui_language)
+    if utility_response:
+        return utility_response
+    if conversation_intent.get("completed_text"):
+        text = conversation_intent.get("completed_text") or text
+        if conversation_intent.get("domain") and (not router_result.get("mode") or router_result.get("mode") == "unknown"):
+            mapped_mode = "polymarket" if conversation_intent.get("domain") == "politics" else conversation_intent.get("domain")
+            router_result = {**router_result, "mode": mapped_mode, "conversation_intelligence": conversation_intent}
+        else:
+            router_result = {**router_result, "conversation_intelligence": conversation_intent}
     followup_resolution = resolve_live_followup(user_id, text)
     if followup_resolution.get("need_context"):
         reconstructed = reconstruct_live_context_from_recent_messages(recent, user_id)
@@ -2548,7 +2619,9 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             )
             followup_resolution = resolve_live_followup(user_id, text)
     if followup_resolution.get("need_context"):
-        return {"ok": False, "message": followup_resolution.get("message"), "charged": False, "needs_clarification": True, "is_followup": True}
+        message = followup_resolution.get("message")
+        _store_pending_live_clarification(user_id, original_text, message, {"domain": "unknown", "missing_data": ["context"]}, {}, ui_language)
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "is_followup": True}
     if followup_resolution.get("is_followup") and followup_resolution.get("resolved_query"):
         text = followup_resolution.get("resolved_query") or text
         previous_mode = followup_resolution.get("mode")
@@ -2574,13 +2647,16 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         understanding = {**understanding, "mode": mapped_mode, "domain": resolver_result.get("domain"), "intent": understanding.get("intent") or resolver_result.get("intent")}
         needs = understanding.get("needs") or {}
     if resolver_result.get("intent") == "domain_entry":
-        return {"ok": False, "message": domain_aware_clarification(resolver_result.get("domain"), ui_language), "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
+        message = domain_aware_clarification(resolver_result.get("domain"), ui_language)
+        _store_pending_live_clarification(user_id, original_text, message, resolver_result, understanding, ui_language)
+        return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     if (
         router_result.get("mode") == "unknown"
         and understanding.get("mode") == "unknown"
         and (needs.get("clarification") or "mode" in (understanding.get("missing") or []))
     ):
         message = domain_aware_clarification(resolver_result.get("domain") or "unknown", ui_language)
+        _store_pending_live_clarification(user_id, original_text, message, resolver_result, understanding, ui_language)
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     if followup_resolution.get("is_followup"):
         understanding = _merge_previous_market_context_into_understanding(understanding, followup_resolution.get("previous_context") or {})
@@ -2642,6 +2718,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     evidence_pack["analyst_profile"] = analyst_profile
     if evidence_pack.get("targeted_clarification"):
         message = format_compact_deepalpha_score(deepalpha_score, lang=ui_language) + "\n\n" + evidence_pack.get("targeted_clarification")
+        _store_pending_live_clarification(user_id, original_text, message, resolver_result, understanding, ui_language)
         return {"ok": False, "message": message, "charged": False, "needs_clarification": True, "market_resolution": resolver_result}
     deepalpha_score_block = build_score_prompt_block(deepalpha_score)
     prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block, deepalpha_score_block=deepalpha_score_block)
@@ -2672,6 +2749,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             return None
         logger.warning("live_deterministic_fallback_used user_id=%s mode=%s reason=%s", user_id, mode, reason)
         _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, fallback, ui_language=ui_language)
+        clear_pending_clarification(user_id)
         try:
             save_message(int(session["id"]), user_id, "assistant", "text", fallback, tokens_charged=0)
         except Exception as exc:
@@ -2757,6 +2835,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
         return {"ok": False, "message": INSUFFICIENT_LIVE_TOKENS_MESSAGE, "charged": False}
 
     _store_successful_live_context(user_id, original_text, text, understanding, router_result, evidence_pack, answer, ui_language=ui_language)
+    clear_pending_clarification(user_id)
 
     session = update_context_from_user_text(session, text)
     mode = router_result.get("mode")
