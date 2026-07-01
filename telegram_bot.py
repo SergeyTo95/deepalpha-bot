@@ -57,6 +57,7 @@ from services.badge_service import (
     format_next_badge_hint, get_all_badges_info, BADGES,
 )
 from services.resolved_market_recap_service import render_resolved_market_recap
+from services.native_coin_display import native_wallet_label
 
 from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
@@ -381,7 +382,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if lang == "ru":
         kb.add(KeyboardButton("🔍 Анализ"))
-        kb.add(KeyboardButton("💎 TON кошелёк"))
+        kb.add(KeyboardButton(f"💎 {native_wallet_label('ru')}"))
         kb.add(KeyboardButton("🎁 Чеки"))
         kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Касса"))
@@ -389,7 +390,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("⚙️ Ещё"))
     else:
         kb.add(KeyboardButton("🔍 Analysis"))
-        kb.add(KeyboardButton("💎 TON Wallet"))
+        kb.add(KeyboardButton(f"💎 {native_wallet_label('en')}"))
         kb.add(KeyboardButton("🎁 Checks"))
         kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Cashier"))
@@ -1346,7 +1347,7 @@ def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
     if user_is_author:
         edit_bio_label = "✏️ Изменить bio" if lang == "ru" else "✏️ Edit bio"
-        wallet_label = "💳 TON кошелёк" if lang == "ru" else "💳 TON wallet"
+        wallet_label = "💳 Gram кошелёк" if lang == "ru" else "💳 Gram wallet"
         kb.add(InlineKeyboardButton(edit_bio_label, callback_data="author_edit_bio"))
         kb.add(InlineKeyboardButton(wallet_label, callback_data="author_set_wallet"))
 
@@ -4927,9 +4928,9 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
     donations_line = ""
     if total_donations > 0:
         if lang == "ru":
-            donations_line = f"\n💝 Донатов: {total_donations:.2f} TON от {total_donors} поддержавших"
+            donations_line = f"\n💝 Донатов: {total_donations:.2f} Gram от {total_donors} поддержавших"
         else:
-            donations_line = f"\n💝 Donations: {total_donations:.2f} TON from {total_donors} supporters"
+            donations_line = f"\n💝 Donations: {total_donations:.2f} Gram from {total_donors} supporters"
 
     if lang == "ru":
         text = (
@@ -4994,7 +4995,7 @@ def _format_author_profile(viewer_id: int, author_id: int) -> str:
             f"📝 Опубликовано прогнозов: {posts}\n"
         )
         if earned > 0:
-            text += f"💝 Заработано донатов: {earned:.2f} TON\n"
+            text += f"💝 Заработано донатов: {earned:.2f} Gram\n"
         if since:
             text += f"📅 Автор с {since}\n"
 
@@ -5012,7 +5013,7 @@ def _format_author_profile(viewer_id: int, author_id: int) -> str:
             f"📝 Posts published: {posts}\n"
         )
         if earned > 0:
-            text += f"💝 Total donations: {earned:.2f} TON\n"
+            text += f"💝 Total donations: {earned:.2f} Gram\n"
         if since:
             text += f"📅 Author since {since}\n"
 
@@ -5065,7 +5066,7 @@ def _format_authors_list(uid: int) -> str:
             )
 
         if earned > 0:
-            text += f" | 💝 {earned:.1f} TON"
+            text += f" | 💝 {earned:.1f} Gram"
 
         text += f"\n   /author_{a['user_id']}\n\n"
 
@@ -5181,12 +5182,12 @@ def _format_my_posts(uid: int) -> str:
         if lang == "ru":
             text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
             if donations > 0:
-                text += f"   💝 {donations:.2f} TON ({donors})\n"
+                text += f"   💝 {donations:.2f} Gram ({donors})\n"
             text += f"   📅 {created} /post_{p['id']}\n\n"
         else:
             text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
             if donations > 0:
-                text += f"   💝 {donations:.2f} TON ({donors})\n"
+                text += f"   💝 {donations:.2f} Gram ({donors})\n"
             text += f"   📅 {created} /post_{p['id']}\n\n"
 
     return text
@@ -5211,16 +5212,16 @@ def _format_author_balance(uid: int) -> str:
         text = (
             f"💰 Баланс автора\n"
             f"{'─' * 30}\n\n"
-            f"💎 Доступно к выводу: {balance:.4f} TON\n"
-            f"💸 Уже выведено: {withdrawn:.4f} TON\n"
-            f"📊 Всего заработано: {total_earned:.4f} TON\n\n"
+            f"💎 Доступно к выводу: {balance:.4f} Gram\n"
+            f"💸 Уже выведено: {withdrawn:.4f} Gram\n"
+            f"📊 Всего заработано: {total_earned:.4f} Gram\n\n"
         )
         if wallet:
             text += f"💳 Кошелёк: {wallet[:20]}...\n\n"
         else:
             text += "💳 Кошелёк не установлен\n\n"
 
-        text += f"Минимум для вывода: {min_withdrawal} TON\n\n"
+        text += f"Минимум для вывода: {min_withdrawal} Gram\n\n"
 
         if donations:
             text += f"🎁 Последние донаты:\n{'─' * 30}\n"
@@ -5229,23 +5230,23 @@ def _format_author_balance(uid: int) -> str:
                 amount = d.get("ton_amount", 0) or 0
                 received = d.get("author_received_ton", 0) or 0
                 comment = d.get("comment", "") or ""
-                text += f"• @{donor}: {amount:.2f} TON (получил {received:.2f})\n"
+                text += f"• @{donor}: {amount:.2f} Gram (получил {received:.2f})\n"
                 if comment:
                     text += f"  💬 {comment[:50]}\n"
     else:
         text = (
             f"💰 Author Balance\n"
             f"{'─' * 30}\n\n"
-            f"💎 Available: {balance:.4f} TON\n"
-            f"💸 Withdrawn: {withdrawn:.4f} TON\n"
-            f"📊 Total earned: {total_earned:.4f} TON\n\n"
+            f"💎 Available: {balance:.4f} Gram\n"
+            f"💸 Withdrawn: {withdrawn:.4f} Gram\n"
+            f"📊 Total earned: {total_earned:.4f} Gram\n\n"
         )
         if wallet:
             text += f"💳 Wallet: {wallet[:20]}...\n\n"
         else:
             text += "💳 No wallet set\n\n"
 
-        text += f"Min withdrawal: {min_withdrawal} TON\n\n"
+        text += f"Min withdrawal: {min_withdrawal} Gram\n\n"
 
         if donations:
             text += f"🎁 Latest donations:\n{'─' * 30}\n"
@@ -5254,7 +5255,7 @@ def _format_author_balance(uid: int) -> str:
                 amount = d.get("ton_amount", 0) or 0
                 received = d.get("author_received_ton", 0) or 0
                 comment = d.get("comment", "") or ""
-                text += f"• @{donor}: {amount:.2f} TON (got {received:.2f})\n"
+                text += f"• @{donor}: {amount:.2f} Gram (got {received:.2f})\n"
                 if comment:
                     text += f"  💬 {comment[:50]}\n"
 
@@ -5967,7 +5968,7 @@ async def ref_payout_wallet_cb(c: types.CallbackQuery):
             bal = nano_to_ton_display(get_ton_balance(str(w.get("wallet_address") or "")))
         except Exception:
             pass
-        text = f"💼 Referral payout wallet\n\nStatus: active\nAddress:\n{w.get('wallet_address')}\n\nBalance: {bal} TON"
+        text = f"💼 Referral payout wallet\n\nStatus: active\nAddress:\n{w.get('wallet_address')}\n\nBalance: {bal} Gram"
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("➕ Create payout wallet", callback_data="ref_payout_create"))
     kb.add(InlineKeyboardButton("🔐 Reveal seed phrase", callback_data="ref_payout_seed"))
@@ -6018,10 +6019,10 @@ async def ref_pay_wallet_cb(c: types.CallbackQuery):
         err = str(res.get("error") or "")
         msg_map = {
             "payout_already_processing": ("Выплата уже в обработке. Не нажимайте повторно.", "Payout is already processing. Do not click again."),
-            "payout_requires_reconciliation": ("TON уже был отправлен. Нужна ручная сверка.", "TON was already sent. Manual reconciliation is required."),
+            "payout_requires_reconciliation": ("Платёж уже был отправлен. Нужна ручная сверка.", "Payment was already sent. Manual reconciliation is required."),
             "request_already_paid": ("Эта заявка уже оплачена.", "This request is already paid."),
-            "insufficient_balance": ("Недостаточно TON на payout wallet.", "Payout wallet has insufficient balance."),
-            "payout_sent_reconcile_required": ("TON уже отправлен, требуется ручная сверка.", "TON already sent, reconciliation is required."),
+            "insufficient_balance": ("Недостаточно Gram на payout wallet.", "Payout wallet has insufficient Gram balance."),
+            "payout_sent_reconcile_required": ("Платёж уже отправлен, требуется ручная сверка.", "Payment already sent, reconciliation is required."),
         }
         ru_en = msg_map.get(err, ("❌ Ошибка выплаты. Попробуйте позже.", "❌ Payout failed. Please try later."))
         await c.message.answer(ru_en[0] if lang == "ru" else ru_en[1])
@@ -6394,11 +6395,11 @@ async def become_author_command(message: types.Message):
     if lang == "ru":
         text = (
             f"📢 Стать автором DeepAlpha\n\n"
-            f"Цена: {price} TON (одноразовая оплата)\n\n"
+            f"Цена: {price} Gram (одноразовая оплата)\n\n"
             f"Что ты получаешь:\n"
             f"• 📝 Возможность публиковать свои прогнозы\n"
             f"• 📰 Подписчики будут получать уведомления\n"
-            f"• 💝 Получай донаты в TON от благодарных юзеров\n"
+            f"• 💝 Получай донаты в Gram от благодарных юзеров\n"
             f"• 👤 Публичный профиль автора\n"
             f"• 📊 Статистика по донатам и подписчикам\n\n"
             f"💳 Оплата через WebApp ниже"
@@ -6406,11 +6407,11 @@ async def become_author_command(message: types.Message):
     else:
         text = (
             f"📢 Become a DeepAlpha Author\n\n"
-            f"Price: {price} TON (one-time)\n\n"
+            f"Price: {price} Gram (one-time)\n\n"
             f"You get:\n"
             f"• 📝 Publish your predictions\n"
             f"• 📰 Subscribers get notifications\n"
-            f"• 💝 Receive TON donations\n"
+            f"• 💝 Receive Gram donations\n"
             f"• 👤 Public author profile\n"
             f"• 📊 Stats on donations & subscribers\n\n"
             f"💳 Pay via WebApp below"
@@ -6488,15 +6489,15 @@ async def set_wallet_command(message: types.Message, state: FSMContext):
 
     if lang == "ru":
         text = (
-            f"💳 TON кошелёк для вывода донатов\n\n"
+            f"💳 Gram кошелёк для вывода донатов\n\n"
             f"Текущий: {current_wallet[:30] + '...' if current_wallet else 'не установлен'}\n\n"
-            f"Введи адрес TON кошелька (начинается с EQ или UQ)."
+            f"Введи адрес Gram кошелька (начинается с EQ или UQ)."
         )
     else:
         text = (
-            f"💳 TON wallet for withdrawals\n\n"
+            f"💳 Gram wallet for withdrawals\n\n"
             f"Current: {current_wallet[:30] + '...' if current_wallet else 'not set'}\n\n"
-            f"Enter TON wallet address (starts with EQ or UQ)."
+            f"Enter Gram wallet address (starts with EQ or UQ)."
         )
 
     await message.answer(text)
@@ -6509,7 +6510,7 @@ async def save_wallet(message: types.Message, state: FSMContext):
     wallet = message.text.strip()
 
     if not (wallet.startswith("EQ") or wallet.startswith("UQ")) or len(wallet) < 40:
-        msg = "❌ Некорректный адрес TON" if lang == "ru" else "❌ Invalid TON address"
+        msg = "❌ Некорректный адрес Gram" if lang == "ru" else "❌ Invalid Gram address"
         await message.answer(msg)
         return
 
@@ -6547,9 +6548,9 @@ async def withdraw_command(message: types.Message):
 
     if balance < min_withdrawal:
         if lang == "ru":
-            msg = f"❌ Минимум для вывода: {min_withdrawal} TON\nТвой баланс: {balance:.4f} TON"
+            msg = f"❌ Минимум для вывода: {min_withdrawal} Gram\nТвой баланс: {balance:.4f} Gram"
         else:
-            msg = f"❌ Min withdrawal: {min_withdrawal} TON\nYour balance: {balance:.4f} TON"
+            msg = f"❌ Min withdrawal: {min_withdrawal} Gram\nYour balance: {balance:.4f} Gram"
         await message.answer(msg)
         return
 
@@ -6560,7 +6561,7 @@ async def withdraw_command(message: types.Message):
         if lang == "ru":
             text = (
                 f"✅ Заявка на вывод создана!\n\n"
-                f"💎 Сумма: {balance:.4f} TON\n"
+                f"💎 Сумма: {balance:.4f} Gram\n"
                 f"💳 Кошелёк: {wallet[:20]}...\n\n"
                 f"Админ обработает заявку в течение 24 часов.\n"
                 f"После подтверждения деньги придут на твой кошелёк."
@@ -6568,7 +6569,7 @@ async def withdraw_command(message: types.Message):
         else:
             text = (
                 f"✅ Withdrawal request created!\n\n"
-                f"💎 Amount: {balance:.4f} TON\n"
+                f"💎 Amount: {balance:.4f} Gram\n"
                 f"💳 Wallet: {wallet[:20]}...\n\n"
                 f"Admin will process within 24 hours."
             )
@@ -6583,7 +6584,7 @@ async def withdraw_command(message: types.Message):
                     admin_id,
                     f"💰 Новая заявка на вывод #{request_id}\n\n"
                     f"Автор: @{author_name} ({uid})\n"
-                    f"Сумма: {balance:.4f} TON\n"
+                    f"Сумма: {balance:.4f} Gram\n"
                     f"Кошелёк: {wallet}\n\n"
                     f"Обработать в /admin → 📢 Авторы"
                 )
@@ -6782,12 +6783,12 @@ async def author_set_wallet_callback(callback: types.CallbackQuery, state: FSMCo
     if lang == "ru":
         text = (
             f"💳 Текущий: {current_wallet[:30] + '...' if current_wallet else 'не установлен'}\n\n"
-            f"Введи адрес TON кошелька (EQ... или UQ...):"
+            f"Введи адрес Gram кошелька (EQ... или UQ...):"
         )
     else:
         text = (
             f"💳 Current: {current_wallet[:30] + '...' if current_wallet else 'not set'}\n\n"
-            f"Enter TON wallet (EQ... or UQ...):"
+            f"Enter Gram wallet (EQ... or UQ...):"
         )
 
     await callback.message.answer(text)
@@ -6858,7 +6859,7 @@ async def author_balance_button_handler(message: types.Message):
     text = _format_author_balance(uid)
 
     kb = InlineKeyboardMarkup(row_width=1)
-    wallet_label = "💳 TON кошелёк" if lang == "ru" else "💳 TON wallet"
+    wallet_label = "💳 Gram кошелёк" if lang == "ru" else "💳 Gram wallet"
     withdraw_label = "💸 Запросить вывод" if lang == "ru" else "💸 Request withdrawal"
     kb.add(InlineKeyboardButton(wallet_label, callback_data="author_set_wallet"))
     kb.add(InlineKeyboardButton(withdraw_label, callback_data="author_withdraw"))
@@ -6888,9 +6889,9 @@ async def author_withdraw_callback(callback: types.CallbackQuery):
 
     if balance < min_withdrawal:
         if lang == "ru":
-            msg = f"❌ Минимум: {min_withdrawal} TON. Баланс: {balance:.4f}"
+            msg = f"❌ Минимум: {min_withdrawal} Gram. Баланс: {balance:.4f}"
         else:
-            msg = f"❌ Min: {min_withdrawal} TON. Balance: {balance:.4f}"
+            msg = f"❌ Min: {min_withdrawal} Gram. Balance: {balance:.4f}"
         await callback.answer(msg, show_alert=True)
         return
 
@@ -6901,14 +6902,14 @@ async def author_withdraw_callback(callback: types.CallbackQuery):
         if lang == "ru":
             text = (
                 f"✅ Заявка на вывод создана!\n\n"
-                f"💎 Сумма: {balance:.4f} TON\n"
+                f"💎 Сумма: {balance:.4f} Gram\n"
                 f"💳 Кошелёк: {wallet[:20]}...\n\n"
                 f"Админ обработает в течение 24 часов."
             )
         else:
             text = (
                 f"✅ Withdrawal request created!\n\n"
-                f"💎 Amount: {balance:.4f} TON\n"
+                f"💎 Amount: {balance:.4f} Gram\n"
                 f"💳 Wallet: {wallet[:20]}...\n\n"
                 f"Admin will process within 24 hours."
             )
@@ -6921,7 +6922,7 @@ async def author_withdraw_callback(callback: types.CallbackQuery):
                     admin_id,
                     f"💰 Новая заявка на вывод #{request_id}\n\n"
                     f"Автор: {uid}\n"
-                    f"Сумма: {balance:.4f} TON\n"
+                    f"Сумма: {balance:.4f} Gram\n"
                     f"Кошелёк: {wallet}"
                 )
             except Exception:
@@ -7257,7 +7258,7 @@ async def author_posts_callback(callback: types.CallbackQuery):
             donations = p.get("total_donations_ton", 0) or 0
             text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
             if donations > 0:
-                text += f"   💝 {donations:.2f} TON\n"
+                text += f"   💝 {donations:.2f} Gram\n"
             text += f"   /post_{p['id']}\n\n"
 
     kb = InlineKeyboardMarkup()
@@ -7567,7 +7568,7 @@ async def analyze_prompt_handler(message: types.Message):
 _MAIN_MENU_BUTTONS = {
     "🔍 Анализ", "🔍 Analysis", "🔍 Analyze",
     "⚡️ Быстрый анализ", "⚡️ Quick Analysis",
-    "💎 TON кошелёк", "💎 TON Wallet",
+    "💎 Gram кошелёк", "💎 Gram Wallet", "💎 TON кошелёк", "💎 TON Wallet",
     "🎁 Чеки", "🎁 Checks",
     "💡 Сигнал часа", "💡 Signal of the hour",
     LIVE_ANALYST_BUTTON, LIVE_STATUS_BUTTON, LIVE_RESET_BUTTON, LIVE_EXIT_BUTTON,
@@ -8049,7 +8050,7 @@ async def subscription_handler(message: types.Message):
                 f"• 📊 {sub_analyses} анализов/день\n"
                 f"• 💡 {sub_opp} сигнала/день\n"
                 f"• ⭐ Watchlist free ({wl_vip_limit})\n\n"
-                f"Продлить — {sub_price} TON / {sub_days} дней"
+                f"Продлить — {sub_price} Gram / {sub_days} дней"
             )
         else:
             text = (
@@ -8059,12 +8060,12 @@ async def subscription_handler(message: types.Message):
                 f"• 📊 {sub_analyses} analyses/day\n"
                 f"• 💡 {sub_opp} signals/day\n"
                 f"• ⭐ Watchlist free ({wl_vip_limit})\n\n"
-                f"Renew — {sub_price} TON / {sub_days} days"
+                f"Renew — {sub_price} Gram / {sub_days} days"
             )
     else:
         if lang == "ru":
             text = (
-                f"🔔 Подписка {sub_price} TON / {sub_days} дней\n\n"
+                f"🔔 Подписка {sub_price} Gram / {sub_days} дней\n\n"
                 f"• Ежедневные сигналы\n"
                 f"• ⚡ Сигнал часа free\n"
                 f"• 📊 {sub_analyses} анализов/день\n"
@@ -8073,7 +8074,7 @@ async def subscription_handler(message: types.Message):
             )
         else:
             text = (
-                f"🔔 Sub {sub_price} TON / {sub_days} days\n\n"
+                f"🔔 Sub {sub_price} Gram / {sub_days} days\n\n"
                 f"• Daily signals\n"
                 f"• ⚡ Signal of hour free\n"
                 f"• 📊 {sub_analyses} analyses/day\n"
@@ -8103,7 +8104,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
             f"👥 Рефералы\n\n"
             f"Ссылка:\n`{ref_link}`\n\n"
             f"Приглашено: {get_referral_count(uid)}\n"
-            f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
+            f"Заработано: {user['referral_earnings_ton'] if user else 0:.4f} Gram\n\n"
             f"Ты получаешь {ref_percent}% с покупок рефералов\n\n"
         )
         if referrals:
@@ -8116,7 +8117,7 @@ async def referrals_handler(message: types.Message, state: FSMContext):
             f"👥 Referrals\n\n"
             f"Link:\n`{ref_link}`\n\n"
             f"Invited: {get_referral_count(uid)}\n"
-            f"Earned: {user['referral_earnings_ton'] if user else 0:.4f} TON\n\n"
+            f"Earned: {user['referral_earnings_ton'] if user else 0:.4f} Gram\n\n"
             f"You get {ref_percent}% from each referral purchase\n\n"
         )
         if referrals:
@@ -8139,12 +8140,12 @@ async def send_referral_earnings_screen(target, user_id: int):
     user = get_user(user_id) or {}
     referral_count = get_referral_count(user_id)
     text = (
-        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {referral_count}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
+        f"💸 Заработать\n\nВсего заработано: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} Gram\nОжидает: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} Gram\nВ обработке: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} Gram\nДоступно к выводу: {nano_to_ton_display(int(summary.get('available_nano') or 0))} Gram\n\nМинимум для вывода: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} Gram\nРеферальная ставка: {settings.get('reward_percent', 10)}%\n\n👥 Рефералов: {referral_count}\n\n🔗 Ваша реферальная ссылка:\n{ref_link}"
         if lang == "ru" else
-        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} TON\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} TON\nIn review: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} TON\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} TON\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} TON\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {referral_count}\n\n🔗 Your referral link:\n{ref_link}"
+        f"💸 Earn\n\nTotal earned: {nano_to_ton_display(int(summary.get('total_earned_nano') or 0))} Gram\nPending: {nano_to_ton_display(int(summary.get('pending_nano') or 0))} Gram\nIn review: {nano_to_ton_display(int(summary.get('in_review_nano') or 0))} Gram\nAvailable to withdraw: {nano_to_ton_display(int(summary.get('available_nano') or 0))} Gram\n\nMinimum withdrawal: {nano_to_ton_display(int(settings.get('min_withdrawal_nano') or 0))} Gram\nReferral rate: {settings.get('reward_percent', 10)}%\n\n👥 Referrals: {referral_count}\n\n🔗 Your referral link:\n{ref_link}"
     )
     kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(InlineKeyboardButton("📤 Вывести на TON кошелёк" if lang == "ru" else "📤 Withdraw to TON wallet", callback_data="earn_withdraw"))
+    kb.add(InlineKeyboardButton("📤 Вывести на Gram кошелёк" if lang == "ru" else "📤 Withdraw to Gram wallet", callback_data="earn_withdraw"))
     kb.add(InlineKeyboardButton("🏆 Топ рефереров" if lang == "ru" else "🏆 Top referrers", callback_data="earn_top_ref"), InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="earn_refresh"))
     await target.answer(text, reply_markup=kb)
 
@@ -8170,16 +8171,16 @@ async def earn_actions_cb(c: types.CallbackQuery):
         res = withdraw_referral_rewards(uid)
         if not res.get("ok"):
             if res.get("error") == "below_minimum":
-                msg = (f"Минимальная сумма для вывода: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nСейчас доступно: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON." if lang == "ru" else f"Minimum withdrawal: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} TON.\nCurrently available: {nano_to_ton_display(int(res.get('available_nano') or 0))} TON.")
+                msg = (f"Минимальная сумма для вывода: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} Gram.\nСейчас доступно: {nano_to_ton_display(int(res.get('available_nano') or 0))} Gram." if lang == "ru" else f"Minimum withdrawal: {nano_to_ton_display(int(res.get('minimum_nano') or 0))} Gram.\nCurrently available: {nano_to_ton_display(int(res.get('available_nano') or 0))} Gram.")
             elif res.get("error") == "pending_request_exists":
                 msg = ("⏳ У вас уже есть заявка на вывод в обработке." if lang == "ru" else "⏳ You already have a withdrawal request in progress.")
             else:
                 msg = ("❌ Не удалось создать заявку на вывод. Попробуйте позже." if lang == "ru" else "❌ Failed to create withdrawal request. Please try again later.")
         else:
             msg = (
-                f"✅ Заявка на вывод создана.\nАдмин обработает вывод вручную.\nСумма: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nRequest ID: {int(res.get('request_id') or 0)}"
+                f"✅ Заявка на вывод создана.\nАдмин обработает вывод вручную.\nСумма: {nano_to_ton_display(int(res.get('amount_nano') or 0))} Gram\nRequest ID: {int(res.get('request_id') or 0)}"
                 if lang == "ru" else
-                f"✅ Withdrawal request created.\nAdmin will process it manually.\nAmount: {nano_to_ton_display(int(res.get('amount_nano') or 0))} TON\nRequest ID: {int(res.get('request_id') or 0)}"
+                f"✅ Withdrawal request created.\nAdmin will process it manually.\nAmount: {nano_to_ton_display(int(res.get('amount_nano') or 0))} Gram\nRequest ID: {int(res.get('request_id') or 0)}"
             )
         await c.message.answer(msg)
     elif c.data == "earn_top_ref":
@@ -10039,7 +10040,7 @@ async def top_analysis_state_non_polymarket_handler(message: types.Message):
     await message.answer(text, reply_markup=private_reply_markup(message, get_main_keyboard(message.from_user.id)))
 
 
-@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m) and (m.text or "").strip() not in ["💎 TON кошелёк", "💎 TON Wallet"] and not (m.from_user and m.from_user.id in TON_SEND_PENDING))
+@dp.message_handler(lambda m: not (m.text or "").startswith("/") and (m.text or "").strip() not in ["🎁 Чеки", "🎁 Checks", "🎁 Мои чеки", "🎁 My Checks"] and not _is_waiting_check_channel(m) and not _is_waiting_check_count(m) and (m.text or "").strip() not in ["💎 Gram кошелёк", "💎 Gram Wallet", "💎 TON кошелёк", "💎 TON Wallet"] and not (m.from_user and m.from_user.id in TON_SEND_PENDING))
 async def fallback_handler(message: types.Message):
     if message.from_user and is_private_chat(message) and is_live_session_active(message.from_user.id):
         return
@@ -10663,7 +10664,7 @@ async def buy_tokens_ton_wallet_start(c: types.CallbackQuery, state: FSMContext)
     uid = c.from_user.id
     lang = get_user_lang(uid)
     if not is_ton_wallet_token_purchase_enabled():
-        await c.answer("Покупка токенов через TON временно отключена." if lang == "ru" else "TON wallet token purchase is disabled.", show_alert=True)
+        await c.answer("Покупка токенов через Gram временно отключена." if lang == "ru" else "Gram wallet token purchase is disabled.", show_alert=True)
         return
     w = get_or_create_user_ton_wallet(uid)
     if not w.get("ok"):
@@ -10694,7 +10695,7 @@ async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext
     price_per_token = get_ton_token_price_per_internal_token_nano()
     if price_per_token <= 0:
         await state.finish()
-        await message.answer("Некорректная TON цена токена." if lang == "ru" else "Invalid TON token price.")
+        await message.answer("Некорректная Gram цена токена." if lang == "ru" else "Invalid Gram token price.")
         return
     bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
     bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
@@ -10710,33 +10711,33 @@ async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext
     required_nano = purchase_amount_nano + reserve_nano
     if balance_nano < required_nano:
         await message.answer(
-            (f"Недостаточно TON.\nБаланс: {balance_data.get('balance_display')} TON\nНужно: {nano_to_ton_display(required_nano)} TON")
+            (f"Недостаточно Gram.\nБаланс: {balance_data.get('balance_display')} Gram\nНужно: {nano_to_ton_display(required_nano)} Gram")
             if lang == "ru"
-            else (f"Insufficient TON.\nBalance: {balance_data.get('balance_display')} TON\nNeeded: {nano_to_ton_display(required_nano)} TON")
+            else (f"Insufficient Gram.\nBalance: {balance_data.get('balance_display')} Gram\nNeeded: {nano_to_ton_display(required_nano)} Gram")
         )
         return
     project_wallet = _ton_project_wallet()
     short_wallet = _short_ton_value(project_wallet)
     ton_amount_display = nano_to_ton_display(purchase_amount_nano)
     text = (
-        "💎 Покупка токенов с TON кошелька\n\n"
+        "💎 Покупка токенов с Gram кошелька\n\n"
         f"Токены: {amount_tokens}\n"
         f"Бонус: {bonus_tokens}\n"
         f"Итого будет зачислено: {total_tokens}\n\n"
-        f"К оплате: {ton_amount_display} TON\n"
-        f"Ваш TON баланс: {balance_data.get('balance_display')} TON\n"
-        f"Резерв на комиссию: {nano_to_ton_display(reserve_nano)} TON\n\n"
+        f"К оплате: {ton_amount_display} Gram\n"
+        f"Ваш Gram баланс: {balance_data.get('balance_display')} Gram\n"
+        f"Резерв на комиссию: {nano_to_ton_display(reserve_nano)} Gram\n\n"
         f"Кошелёк проекта:\n{short_wallet}\n\n"
         "Подтвердить покупку?"
         if lang == "ru"
         else
-        "💎 Buy tokens with TON wallet\n\n"
+        "💎 Buy tokens with Gram wallet\n\n"
         f"Tokens: {amount_tokens}\n"
         f"Bonus: {bonus_tokens}\n"
         f"Total to credit: {total_tokens}\n\n"
-        f"To pay: {ton_amount_display} TON\n"
-        f"Your TON balance: {balance_data.get('balance_display')} TON\n"
-        f"Fee reserve: {nano_to_ton_display(reserve_nano)} TON\n\n"
+        f"To pay: {ton_amount_display} Gram\n"
+        f"Your Gram balance: {balance_data.get('balance_display')} Gram\n"
+        f"Fee reserve: {nano_to_ton_display(reserve_nano)} Gram\n\n"
         f"Project wallet:\n{short_wallet}\n\n"
         "Confirm purchase?"
     )
@@ -10787,9 +10788,9 @@ async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMCon
         submit_ton_purchase_intent(int(intent.get("id")), "")
         await state.finish()
         await c.message.answer(
-            "✅ TON отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции."
+            "✅ Gram отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции."
             if lang == "ru" else
-            "✅ TON sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification."
+            "✅ Gram sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification."
         )
         await c.answer()
         return
@@ -10810,7 +10811,7 @@ async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMCon
                 rid = int(reward.get("user_id"))
                 amount = nano_to_ton_display(int(reward.get("reward_nano") or 0))
                 rlang = get_user_lang(rid)
-                msg = (f"🔥 Вы получили referral reward: +{amount} TON\nНаграда станет доступна после проверки." if rlang == "ru" else f"🔥 You earned a referral reward: +{amount} TON\nIt will become available after the pending period.")
+                msg = (f"🔥 Вы получили referral reward: +{amount} Gram\nНаграда станет доступна после проверки." if rlang == "ru" else f"🔥 You earned a referral reward: +{amount} Gram\nIt will become available after the pending period.")
                 await bot.send_message(rid, msg)
         except Exception as e:
             print(f"referral reward hook error: {e}")
@@ -10824,24 +10825,24 @@ async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMCon
     ton_amount = nano_to_ton_display(purchase_amount_nano)
     final_hash = str(verification.get("tx_hash") or tx_hash)
     if verify_ok:
-        text = (f"✅ Покупка выполнена.\nЗачислено: {total_tokens} токенов\nОплачено: {ton_amount} TON\nTx: {final_hash}"
+        text = (f"✅ Покупка выполнена.\nЗачислено: {total_tokens} токенов\nОплачено: {ton_amount} Gram\nTx: {final_hash}"
                 if lang == "ru" else
-                f"✅ Purchase completed.\nCredited: {total_tokens} tokens\nPaid: {ton_amount} TON\nTx: {final_hash}")
+                f"✅ Purchase completed.\nCredited: {total_tokens} tokens\nPaid: {ton_amount} Gram\nTx: {final_hash}")
     else:
-        text = (f"✅ TON отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции.\nTx: {final_hash}"
+        text = (f"✅ Gram отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции.\nTx: {final_hash}"
                 if lang == "ru" else
-                f"✅ TON sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification.\nTx: {final_hash}")
+                f"✅ Gram sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification.\nTx: {final_hash}")
     await c.message.answer(text)
     await c.answer()
 
 
 def _ton_unavailable(uid: int) -> str:
-    return "TON wallet is temporarily unavailable" if get_user_lang(uid) == "en" else "TON кошелёк временно недоступен"
+    return "Gram wallet is temporarily unavailable" if get_user_lang(uid) == "en" else "Gram кошелёк временно недоступен"
 
 
 def _ton_send_error(uid: int, code: str) -> str:
-    en = {"invalid_address":"Invalid TON address.","invalid_amount":"Invalid amount.","wallet_not_found":"TON wallet not found.","balance_unavailable":"Unable to fetch on-chain balance.","insufficient_balance":"Insufficient TON balance.","seqno_unavailable":"Unable to get wallet seqno.","send_failed":"Network send failed.","signing_failed":"Signing failed.","setup_required":"TON wallet backend is not fully configured.","disabled":"TON wallet is temporarily unavailable"}
-    ru = {"invalid_address":"Неверный TON адрес.","invalid_amount":"Неверная сумма.","wallet_not_found":"TON кошелёк не найден.","balance_unavailable":"Не удалось получить баланс из сети.","insufficient_balance":"Недостаточно TON на кошельке.","seqno_unavailable":"Не удалось получить seqno кошелька.","send_failed":"Ошибка отправки в сеть.","signing_failed":"Ошибка подписи транзакции.","setup_required":"TON кошелёк не настроен на сервере.","disabled":"TON кошелёк временно недоступен"}
+    en = {"invalid_address":"Invalid Gram address.","invalid_amount":"Invalid amount.","wallet_not_found":"Gram wallet not found.","balance_unavailable":"Unable to fetch on-chain balance.","insufficient_balance":"Insufficient Gram balance.","seqno_unavailable":"Unable to get wallet seqno.","send_failed":"Network send failed.","signing_failed":"Signing failed.","setup_required":"Gram wallet backend is not fully configured.","disabled":"Gram wallet is temporarily unavailable"}
+    ru = {"invalid_address":"Неверный Gram адрес.","invalid_amount":"Неверная сумма.","wallet_not_found":"Gram кошелёк не найден.","balance_unavailable":"Не удалось получить баланс из сети.","insufficient_balance":"Недостаточно Gram на кошельке.","seqno_unavailable":"Не удалось получить seqno кошелька.","send_failed":"Ошибка отправки в сеть.","signing_failed":"Ошибка подписи транзакции.","setup_required":"Gram кошелёк не настроен на сервере.","disabled":"Gram кошелёк временно недоступен"}
     return (en if get_user_lang(uid)=="en" else ru).get(code, ("Operation failed" if get_user_lang(uid)=="en" else "Операция не выполнена"))
 
 
@@ -10866,19 +10867,19 @@ async def _send_ton_wallet_screen(message: types.Message):
     balance_html = html.escape(str(b.get("balance_display", "0")))
     network_html = html.escape(str(network_label))
     if lang == "ru":
-        text = f"💎 Ваш TON кошелёк\n\nСеть: {network_html}\n\nАдрес для пополнения:\n<code>{address_html}</code>\n\nБаланс: {balance_html} TON\n\nОтправляйте только TON в сети {network_html}."
+        text = f"💎 Ваш Gram кошелёк\n\nСеть: {network_html}\n\nАдрес для пополнения:\n<code>{address_html}</code>\n\nБаланс: {balance_html} Gram\n\nОтправляйте только Gram в сети {network_html}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
-        kb.add(InlineKeyboardButton("📥 Получить TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить TON", callback_data="ton_send"))
-        kb.add(InlineKeyboardButton("📜 TON Транзакции", callback_data="ton_transactions"))
+        kb.add(InlineKeyboardButton("📥 Получить Gram", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить Gram", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("📜 Gram Транзакции", callback_data="ton_transactions"))
         kb.add(InlineKeyboardButton("💎 Купить токены", callback_data="buy_tokens_ton_wallet"))
         kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
     else:
-        text = f"💎 Your TON Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} TON\n\nSend only TON on {network_html}."
+        text = f"💎 Your Gram Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} Gram\n\nSend only Gram on {network_html}."
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
-        kb.add(InlineKeyboardButton("📥 Receive TON", callback_data="ton_receive"), InlineKeyboardButton("📤 Send TON", callback_data="ton_send"))
-        kb.add(InlineKeyboardButton("📜 TON Transactions", callback_data="ton_transactions"))
+        kb.add(InlineKeyboardButton("📥 Receive Gram", callback_data="ton_receive"), InlineKeyboardButton("📤 Send Gram", callback_data="ton_send"))
+        kb.add(InlineKeyboardButton("📜 Gram Transactions", callback_data="ton_transactions"))
         kb.add(InlineKeyboardButton("💎 Buy tokens", callback_data="buy_tokens_ton_wallet"))
         kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -10937,7 +10938,7 @@ def _ton_transactions_keyboard(lang: str, offset: int = 0, has_more: bool = Fals
         nav.append(InlineKeyboardButton("➡️ Ещё" if lang == "ru" else "➡️ More", callback_data=f"ton_transactions:{next_offset}"))
     if nav:
         kb.row(*nav)
-    kb.add(InlineKeyboardButton("⬅️ Назад к TON кошельку" if lang == "ru" else "⬅️ Back to TON wallet", callback_data="ton_wallet_back"))
+    kb.add(InlineKeyboardButton("⬅️ Назад к Gram кошельку" if lang == "ru" else "⬅️ Back to Gram wallet", callback_data="ton_wallet_back"))
     return kb
 
 
@@ -10956,11 +10957,11 @@ async def ton_transactions_cb(c: types.CallbackQuery):
     has_more = len(items) > limit
     items = items[:limit]
     if not items:
-        msg = "📜 TON транзакций пока нет." if lang == "ru" else "📜 No TON transactions yet."
+        msg = "📜 Gram транзакций пока нет." if lang == "ru" else "📜 No Gram transactions yet."
         await c.message.answer(msg, reply_markup=_ton_transactions_keyboard(lang, offset=offset, has_more=False, limit=limit))
         await c.answer()
         return
-    lines = ["📜 TON Транзакции" if lang == "ru" else "📜 TON Transactions", ""]
+    lines = ["📜 Gram Транзакции" if lang == "ru" else "📜 Gram Transactions", ""]
     for idx, tx in enumerate(items, start=1):
         direction = _ton_tx_direction_label(lang, str(tx.get("direction") or ""))
         amount = str(tx.get("amount_display") or "0")
@@ -10971,7 +10972,7 @@ async def ton_transactions_cb(c: types.CallbackQuery):
         created = format_ton_tx_date(tx.get("created_at"), lang=lang)
         if lang == "ru":
             lines.append(f"{idx}. {_safe_html(direction)}")
-            lines.append(f"Сумма: {_safe_html(amount)} TON")
+            lines.append(f"Сумма: {_safe_html(amount)} Gram")
             lines.append(f"Статус: {_safe_html(status)}")
             lines.append(f"Адрес: {_safe_html(address or '-')}")
             lines.append(f"Tx: {_safe_html(tx_hash or '-')}")
@@ -10981,7 +10982,7 @@ async def ton_transactions_cb(c: types.CallbackQuery):
             lines.append("")
         else:
             lines.append(f"{idx}. {_safe_html(direction)}")
-            lines.append(f"Amount: {_safe_html(amount)} TON")
+            lines.append(f"Amount: {_safe_html(amount)} Gram")
             lines.append(f"Status: {_safe_html(status)}")
             lines.append(f"Address: {_safe_html(address or '-')}")
             lines.append(f"Tx: {_safe_html(tx_hash or '-')}")
@@ -11014,9 +11015,9 @@ async def cmd_ton_send(message: types.Message):
         await message.answer(_ton_unavailable(uid))
         return
     TON_SEND_PENDING[uid] = {"step": "address"}
-    await message.answer("Введите TON адрес получателя:" if get_user_lang(uid)=="ru" else "Enter destination TON address:")
+    await message.answer("Введите Gram адрес получателя:" if get_user_lang(uid)=="ru" else "Enter destination Gram address:")
 
-@dp.message_handler(lambda m: m.text in ["💎 TON кошелёк", "💎 TON Wallet"])
+@dp.message_handler(lambda m: m.text in ["💎 Gram кошелёк", "💎 Gram Wallet", "💎 TON кошелёк", "💎 TON Wallet"])
 async def ton_wallet_button(message: types.Message):
     await _send_ton_wallet_screen(message)
 
@@ -11029,7 +11030,7 @@ async def ton_refresh_cb(c: types.CallbackQuery):
     b = get_user_ton_balance(uid, refresh=True)
     if not b.get("ok"):
         await c.answer(_ton_unavailable(uid), show_alert=True); return
-    await c.answer(("Баланс обновлён: " if get_user_lang(uid)=="ru" else "Balance refreshed: ") + b['balance_display'] + " TON", show_alert=True)
+    await c.answer(("Баланс обновлён: " if get_user_lang(uid)=="ru" else "Balance refreshed: ") + b['balance_display'] + " Gram", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "ton_receive")
 async def ton_receive_cb(c: types.CallbackQuery):
@@ -11043,9 +11044,9 @@ async def ton_receive_cb(c: types.CallbackQuery):
     network_label = _ton_network_label(b.get("network"))
     address = w.get("wallet_address", "")
     msg = (
-        f"📥 Адрес для пополнения TON:\n\n<code>{address}</code>\n\nОтправляйте только TON в сети {network_label}."
+        f"📥 Адрес для пополнения Gram:\n\n<code>{address}</code>\n\nОтправляйте только Gram в сети {network_label}."
         if lang == "ru"
-        else f"📥 TON deposit address:\n\n<code>{address}</code>\n\nSend only TON on {network_label}."
+        else f"📥 Gram deposit address:\n\n<code>{address}</code>\n\nSend only Gram on {network_label}."
     )
     await c.message.answer(msg, parse_mode="HTML")
     await c.answer()
@@ -11057,7 +11058,7 @@ async def ton_send_cb(c: types.CallbackQuery):
         await c.answer(_ton_unavailable(c.from_user.id), show_alert=True)
         return
     TON_SEND_PENDING[c.from_user.id] = {"step": "address"}
-    await c.message.answer("Введите TON адрес получателя:" if get_user_lang(c.from_user.id)=="ru" else "Enter destination TON address:")
+    await c.message.answer("Введите Gram адрес получателя:" if get_user_lang(c.from_user.id)=="ru" else "Enter destination Gram address:")
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "ton_seed_export")
@@ -11082,8 +11083,8 @@ async def ton_seed_confirm(c: types.CallbackQuery):
     if not r.get("ok"):
         txt = "Seed phrase has already been shown. DeepAlpha cannot show it again." if lang=="en" else "Seed phrase уже была показана. DeepAlpha больше не может показать её повторно."
         await c.message.answer(txt); await c.answer(); return
-    txt = (f"🔐 Seed phrase for your TON wallet:\n\n{r['seed_phrase']}"
-           if lang=="en" else f"🔐 Seed phrase вашего TON-кошелька:\n\n{r['seed_phrase']}")
+    txt = (f"🔐 Seed phrase for your Gram wallet:\n\n{r['seed_phrase']}"
+           if lang=="en" else f"🔐 Seed phrase вашего Gram-кошелька:\n\n{r['seed_phrase']}")
     await c.message.answer(txt)
     await c.answer()
 
@@ -11103,13 +11104,13 @@ async def ton_send_flow(message: types.Message):
     if st["step"] == "address":
         addr = (message.text or '').strip()
         if not validate_ton_address(addr):
-            await message.answer("Неверный TON адрес. Попробуйте ещё раз:" if lang=="ru" else "Invalid TON address. Try again:")
+            await message.answer("Неверный Gram адрес. Попробуйте ещё раз:" if lang=="ru" else "Invalid Gram address. Try again:")
             return
         st["address"] = normalize_ton_address(addr)
         st["step"] = "amount"
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("💰 Отправить всё" if lang=="ru" else "💰 Send MAX", callback_data="ton_send_max"))
-        await message.answer("Введите сумму TON:" if lang=="ru" else "Enter TON amount:", reply_markup=kb)
+        await message.answer("Введите сумму Gram:" if lang=="ru" else "Enter Gram amount:", reply_markup=kb)
         return
     if st["step"] == "amount":
         try:
@@ -11127,9 +11128,9 @@ async def ton_send_flow(message: types.Message):
                 amount_disp = nano_to_ton_display(nano)
                 reserve_disp = nano_to_ton_display(reserve_nano)
                 insufficient_msg = (
-                    f"Недостаточно TON.\nБаланс: {balance_disp} TON\nСумма: {amount_disp} TON\nРезерв комиссии: ~{reserve_disp} TON"
+                    f"Недостаточно Gram.\nБаланс: {balance_disp} Gram\nСумма: {amount_disp} Gram\nРезерв комиссии: ~{reserve_disp} Gram"
                     if lang == "ru"
-                    else f"Insufficient TON.\nBalance: {balance_disp} TON\nAmount: {amount_disp} TON\nFee reserve: ~{reserve_disp} TON"
+                    else f"Insufficient Gram.\nBalance: {balance_disp} Gram\nAmount: {amount_disp} Gram\nFee reserve: ~{reserve_disp} Gram"
                 )
                 await message.answer(insufficient_msg)
                 return
@@ -11145,9 +11146,9 @@ async def ton_send_flow(message: types.Message):
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("✅ Отправить" if lang=="ru" else "✅ Send", callback_data="ton_send_confirm"), InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_send_cancel"))
         text = (
-            f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} TON\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} TON\n\nПримерно потребуется всего:\n~{total_disp} TON"
+            f"📤 Подтвердите отправку Gram\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} Gram\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} Gram\n\nПримерно потребуется всего:\n~{total_disp} Gram"
             if lang=="ru" else
-            f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} TON\n\nEstimated network fee/reserve:\n~{reserve_disp} TON\n\nApprox total needed:\n~{total_disp} TON"
+            f"📤 Confirm Gram transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} Gram\n\nEstimated network fee/reserve:\n~{reserve_disp} Gram\n\nApprox total needed:\n~{total_disp} Gram"
         )
         await message.answer(text, reply_markup=kb)
 
@@ -11168,7 +11169,7 @@ async def ton_send_max_cb(c: types.CallbackQuery):
     reserve_nano = get_ton_send_fee_reserve_nano()
     max_send_nano = balance_nano - reserve_nano
     if max_send_nano <= 0:
-        await c.answer("Недостаточно TON." if lang == "ru" else "Insufficient TON.", show_alert=True)
+        await c.answer("Недостаточно Gram." if lang == "ru" else "Insufficient Gram.", show_alert=True)
         return
     st["amount_nano"] = max_send_nano
     st["step"] = "confirm"
@@ -11178,9 +11179,9 @@ async def ton_send_max_cb(c: types.CallbackQuery):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("✅ Отправить" if lang=="ru" else "✅ Send", callback_data="ton_send_confirm"), InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_send_cancel"))
     text = (
-        f"📤 Подтвердите отправку TON\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} TON\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} TON\n\nПримерно потребуется всего:\n~{total_disp} TON"
+        f"📤 Подтвердите отправку Gram\n\nКуда:\n{st['address']}\n\nСумма к отправке:\n{amount_disp} Gram\n\nПримерная комиссия/резерв сети:\n~{reserve_disp} Gram\n\nПримерно потребуется всего:\n~{total_disp} Gram"
         if lang=="ru" else
-        f"📤 Confirm TON transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} TON\n\nEstimated network fee/reserve:\n~{reserve_disp} TON\n\nApprox total needed:\n~{total_disp} TON"
+        f"📤 Confirm Gram transfer\n\nTo:\n{st['address']}\n\nAmount to send:\n{amount_disp} Gram\n\nEstimated network fee/reserve:\n~{reserve_disp} Gram\n\nApprox total needed:\n~{total_disp} Gram"
     )
     await c.message.answer(text, reply_markup=kb)
     await c.answer()
@@ -11190,7 +11191,7 @@ async def ton_send_max_cb(c: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == "ton_send_cancel")
 async def ton_send_cancel_cb(c: types.CallbackQuery):
     TON_SEND_PENDING.pop(c.from_user.id, None)
-    await c.message.answer("Отправка TON отменена." if get_user_lang(c.from_user.id) == "ru" else "TON send cancelled.")
+    await c.message.answer("Отправка Gram отменена." if get_user_lang(c.from_user.id) == "ru" else "TON send cancelled.")
     await c.answer()
 
 
@@ -11210,7 +11211,7 @@ async def ton_send_confirm_cb(c: types.CallbackQuery):
         user_id=uid,
         destination_address=st["address"],
         amount_nano=int(st["amount_nano"]),
-        comment="DeepAlpha TON transfer",
+        comment="DeepAlpha Gram transfer",
     )
 
     TON_SEND_PENDING.pop(uid, None)
@@ -11221,8 +11222,8 @@ async def ton_send_confirm_cb(c: types.CallbackQuery):
 
     tx_hash = result.get("tx_hash")
     success_text = (
-        f"✅ TON отправлен.\n\nTx:\n{tx_hash}" if tx_hash else "✅ TON отправлен.\n\nСтатус: submitted"
+        f"✅ Gram отправлен.\n\nTx:\n{tx_hash}" if tx_hash else "✅ Gram отправлен.\n\nСтатус: submitted"
     ) if lang == "ru" else (
-        f"✅ TON sent.\n\nTx:\n{tx_hash}" if tx_hash else "✅ TON sent.\n\nStatus: submitted"
+        f"✅ Gram sent.\n\nTx:\n{tx_hash}" if tx_hash else "✅ Gram sent.\n\nStatus: submitted"
     )
     await c.message.answer(success_text)

@@ -82,17 +82,17 @@ const I18N = {
     ,
     loadMore: "Load more"
     ,
-    tonWallet: "TON Wallet",
-    tonTokensDisabled: "TON tokens are not enabled yet.",
+    tonWallet: "Gram Wallet",
+    tonTokensDisabled: "Tokens are not enabled yet.",
     refresh: "Refresh",
     copyAddress: "Copy address",
-    sendTon: "Send TON",
+    sendTon: "Send Gram",
     sendMax: "Send MAX",
-    tonHistory: "📜 TON Transactions",
-    tonHistoryEmpty: "No TON transactions yet.",
+    tonHistory: "📜 Gram Transactions",
+    tonHistoryEmpty: "No Gram transactions yet.",
     refreshHistory: "Refresh transactions",
     openInTonviewer: "Open in Tonviewer",
-    buyWithTon: "Buy tokens with TON wallet"
+    buyWithTon: "Buy tokens with Gram wallet"
   },
   ru: {
     title: "Личный кабинет",
@@ -153,17 +153,17 @@ const I18N = {
     historyItemUnavailable: "Для этой записи пока нет полного отчёта.",
     loadMore: "Загрузить ещё"
     ,
-    tonWallet: "TON кошелёк",
-    tonTokensDisabled: "TON-токены пока не подключены.",
+    tonWallet: "Gram кошелёк",
+    tonTokensDisabled: "Токены пока не подключены.",
     refresh: "Обновить",
     copyAddress: "Скопировать адрес",
-    sendTon: "Отправить TON",
+    sendTon: "Отправить Gram",
     sendMax: "Отправить всё",
-    tonHistory: "📜 TON Транзакции",
-    tonHistoryEmpty: "TON транзакций пока нет.",
+    tonHistory: "📜 Gram Транзакции",
+    tonHistoryEmpty: "Gram транзакций пока нет.",
     refreshHistory: "Обновить транзакции",
     openInTonviewer: "Открыть в Tonviewer",
-    buyWithTon: "Купить токены с TON кошелька"
+    buyWithTon: "Купить токены с Gram кошелька"
   }
 };
 
@@ -477,20 +477,20 @@ function renderAuthed(summary, lang) {
   const mapTonError = (code, details, errorDetail = "unknown") => {
     if (String(code || "") === "insufficient_balance") {
       return lang === "ru"
-        ? `Недостаточно TON с учётом комиссии.\nБаланс: ${details.balanceDisplay} TON\nРезерв комиссии: ~${details.feeReserveDisplay} TON\nМаксимум к отправке: ${details.maxSendDisplay} TON\n\nНажмите “Отправить всё”, чтобы отправить максимум.`
-        : `Insufficient TON including fee reserve.\nBalance: ${details.balanceDisplay} TON\nFee reserve: ~${details.feeReserveDisplay} TON\nMaximum send amount: ${details.maxSendDisplay} TON\n\nTap “Send MAX” to use the maximum.`;
+        ? `Недостаточно Gram с учётом комиссии.\nБаланс: ${details.balanceDisplay} Gram\nРезерв комиссии: ~${details.feeReserveDisplay} Gram\nМаксимум к отправке: ${details.maxSendDisplay} Gram\n\nНажмите “Отправить всё”, чтобы отправить максимум.`
+        : `Insufficient Gram including fee reserve.\nBalance: ${details.balanceDisplay} Gram\nFee reserve: ~${details.feeReserveDisplay} Gram\nMaximum send amount: ${details.maxSendDisplay} Gram\n\nTap “Send MAX” to use the maximum.`;
     }
     if (String(code || "") === "send_failed") {
       const detailMapRu = {
         toncenter_rejected: "Сеть TON отклонила транзакцию. Попробуйте уменьшить сумму или обновить баланс.",
-        insufficient_network_fee: "Недостаточно TON с учётом реальной комиссии сети. Уменьшите сумму.",
+        insufficient_network_fee: "Недостаточно Gram с учётом реальной комиссии сети. Уменьшите сумму.",
         seqno_or_account_state: "Не удалось подтвердить состояние кошелька. Обновите баланс и попробуйте ещё раз.",
         toncenter_unavailable: "TON Center временно недоступен. Попробуйте позже.",
         unknown: "Ошибка отправки в сеть."
       };
       const detailMapEn = {
         toncenter_rejected: "The TON network rejected the transaction. Try a smaller amount or refresh balance.",
-        insufficient_network_fee: "Not enough TON after real network fee. Reduce the amount.",
+        insufficient_network_fee: "Not enough Gram after real network fee. Reduce the amount.",
         seqno_or_account_state: "Wallet state could not be confirmed. Refresh balance and try again.",
         toncenter_unavailable: "TON Center is temporarily unavailable. Please try later.",
         unknown: "Network send failed."
@@ -498,24 +498,24 @@ function renderAuthed(summary, lang) {
       return (lang === "ru" ? detailMapRu : detailMapEn)[String(errorDetail || "unknown")] || (lang === "ru" ? detailMapRu.unknown : detailMapEn.unknown);
     }
     const en = {
-      invalid_address: "Invalid TON address.",
+      invalid_address: "Invalid Gram address.",
       invalid_amount: "Invalid amount.",
-      disabled: "TON wallet is temporarily unavailable.",
-      setup_required: "TON wallet backend is not fully configured.",
+      disabled: "Gram wallet is temporarily unavailable.",
+      setup_required: "Gram wallet backend is not fully configured.",
       send_failed: "Network send failed.",
       signing_failed: "Signing failed.",
       balance_unavailable: "Unable to fetch on-chain balance."
     };
     const ru = {
-      invalid_address: "Неверный TON адрес.",
+      invalid_address: "Неверный Gram адрес.",
       invalid_amount: "Неверная сумма.",
-      disabled: "TON кошелёк временно недоступен.",
-      setup_required: "TON кошелёк не настроен на сервере.",
+      disabled: "Gram кошелёк временно недоступен.",
+      setup_required: "Gram кошелёк не настроен на сервере.",
       send_failed: "Ошибка отправки в сеть.",
       signing_failed: "Ошибка подписи транзакции.",
       balance_unavailable: "Не удалось получить баланс из сети."
     };
-    return (lang === "ru" ? ru : en)[String(code || "")] || (lang === "ru" ? "Ошибка отправки TON." : "TON send failed.");
+    return (lang === "ru" ? ru : en)[String(code || "")] || (lang === "ru" ? "Ошибка отправки Gram." : "Gram send failed.");
   };
 
   const loadTonWallet = async (doRefresh) => {
@@ -523,14 +523,14 @@ function renderAuthed(summary, lang) {
     tonRefreshRunning = true;
     const res = doRefresh ? await callTonRefresh() : await callTonWallet();
     if (!res.ok || !res.data?.ok) {
-      tonStatusLine.textContent = "TON wallet unavailable";
+      tonStatusLine.textContent = "Gram wallet unavailable";
       tonRefreshRunning = false;
       return;
     }
     tonWalletData = res.data;
     tonNetworkLine.textContent = `Network: ${String(res.data.network || "").toUpperCase()}`;
     tonAddressLine.textContent = `Address: ${res.data.wallet_address || "-"}`;
-    tonBalanceLine.textContent = `${res.data.balance_display || "0"} TON`;
+    tonBalanceLine.textContent = `${res.data.balance_display || "0"} Gram`;
     tonStatusLine.textContent = "";
     const balanceNano = BigInt(String(res.data.balance_nano || "0"));
     const feeReserveNano = BigInt(String(res.data.fee_reserve_nano || "0"));
@@ -545,7 +545,7 @@ function renderAuthed(summary, lang) {
       maxSendDisplay: tonDisplayFromNanoClient(maxSendNano)
     };
     const jettons = Array.isArray(res.data.enabled_jettons) ? res.data.enabled_jettons : [];
-    document.getElementById("tonJettonsLine").textContent = jettons.length ? `Tokens on TON: ${jettons.length}` : t.tonTokensDisabled;
+    document.getElementById("tonJettonsLine").textContent = jettons.length ? `Tokens on Gram: ${jettons.length}` : t.tonTokensDisabled;
     tonRefreshRunning = false;
   };
   const loadTonHistory = async () => {
@@ -558,7 +558,7 @@ function renderAuthed(summary, lang) {
       const explorerLine = explorerUrl
         ? `<div class='small'><a href="${escapeHtml(explorerUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.openInTonviewer)}</a></div>`
         : "";
-      return `<div class='history-item'><div><b>${escapeHtml(x.direction || "-")}</b> · ${escapeHtml(x.amount_display || "0")} TON · ${escapeHtml(x.status || "")}</div><div class='small'>${escapeHtml(x.address || "")}</div><div class='small'>${escapeHtml(x.tx_hash || "")}</div>${explorerLine}<div class='small'>${escapeHtml(x.created_at || "")}</div></div>`;
+      return `<div class='history-item'><div><b>${escapeHtml(x.direction || "-")}</b> · ${escapeHtml(x.amount_display || "0")} Gram · ${escapeHtml(x.status || "")}</div><div class='small'>${escapeHtml(x.address || "")}</div><div class='small'>${escapeHtml(x.tx_hash || "")}</div>${explorerLine}<div class='small'>${escapeHtml(x.created_at || "")}</div></div>`;
     }).join("");
   };
 
@@ -634,14 +634,14 @@ function renderAuthed(summary, lang) {
   document.getElementById("tonMaxBtn").onclick = async () => {
     if (tonWalletState.maxSendNano <= 0n) {
       tonStatusLine.textContent = lang === "ru"
-        ? `Недостаточно TON для отправки с учётом резерва комиссии.\nБаланс: ${tonWalletState.balanceDisplay} TON\nРезерв: ~${tonWalletState.feeReserveDisplay} TON`
-        : `Not enough TON to send after fee reserve.\nBalance: ${tonWalletState.balanceDisplay} TON\nReserve: ~${tonWalletState.feeReserveDisplay} TON`;
+        ? `Недостаточно Gram для отправки с учётом резерва комиссии.\nБаланс: ${tonWalletState.balanceDisplay} Gram\nРезерв: ~${tonWalletState.feeReserveDisplay} Gram`
+        : `Not enough Gram to send after fee reserve.\nBalance: ${tonWalletState.balanceDisplay} Gram\nReserve: ~${tonWalletState.feeReserveDisplay} Gram`;
       return;
     }
     document.getElementById("tonAmountInput").value = tonWalletState.maxSendDisplay;
     tonStatusLine.textContent = lang === "ru"
-      ? `Будет отправлено всё доступное за вычетом резерва комиссии: ${tonWalletState.maxSendDisplay} TON`
-      : `Will send all available after fee reserve: ${tonWalletState.maxSendDisplay} TON`;
+      ? `Будет отправлено всё доступное за вычетом резерва комиссии: ${tonWalletState.maxSendDisplay} Gram`
+      : `Will send all available after fee reserve: ${tonWalletState.maxSendDisplay} Gram`;
   };
   document.getElementById("tonSendBtn").onclick = async () => {
     const destination = String(document.getElementById("tonDestInput").value || "").trim();
@@ -657,7 +657,7 @@ function renderAuthed(summary, lang) {
     }
     const sent = await callTonSend(destination, amount, "");
     if (sent.data?.ok) {
-      tonStatusLine.textContent = lang === "ru" ? "✅ TON отправлен.\nБаланс обновляется..." : "✅ TON sent.\nRefreshing balance...";
+      tonStatusLine.textContent = lang === "ru" ? "✅ Gram отправлен.\nБаланс обновляется..." : "✅ Gram sent.\nRefreshing balance...";
       await loadTonWallet(true);
       await loadTonHistory();
       return;

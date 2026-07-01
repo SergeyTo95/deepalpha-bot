@@ -348,7 +348,7 @@ async def handle_create_donation(request):
         min_donation = float(get_setting("min_donation_ton", "0.1"))
         if ton_amount < min_donation:
             return _json_response({
-                "error": f"Minimum donation: {min_donation} TON"
+                "error": f"Minimum donation: {min_donation} Gram"
             }, status=400)
 
         if not is_author(author_id):
@@ -380,7 +380,7 @@ async def handle_create_donation(request):
 
         print(
             f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
-            f"author={author_id}, amount={ton_amount} TON, post={post_id}"
+            f"author={author_id}, amount={ton_amount} Gram, post={post_id}"
         )
 
         return _json_response({

@@ -671,7 +671,7 @@ async def watchlist_worker():
 
 
 # ═══════════════════════════════════════════
-# TON PAYMENTS — обрабатывает 5 типов:
+# Gram PAYMENTS — обрабатывает 5 типов:
 #   - tokens              → начисление токенов
 #   - subscription        → активация подписки
 #   - author_status       → выдача статуса автора
@@ -754,8 +754,8 @@ async def check_ton_payments():
                             await telegram_bot.bot.send_message(
                                 referrer_id,
                                 f"🎉 Ваш реферал пополнил баланс!\n\n"
-                                f"💎 Его покупка: {ton_amount:.2f} TON\n"
-                                f"🎁 Ваш бонус: {referral_bonus_ton:.4f} TON "
+                                f"💎 Его покупка: {ton_amount:.2f} Gram\n"
+                                f"🎁 Ваш бонус: {referral_bonus_ton:.4f} Gram "
                                 f"({referral_tokens} токенов)"
                             )
                         except Exception as e:
@@ -778,7 +778,7 @@ async def check_ton_payments():
                         await telegram_bot.bot.send_message(
                             user_id,
                             f"✅ Подписка активирована!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} TON\n"
+                            f"💎 Оплачено: {ton_amount:.2f} Gram\n"
                             f"📅 Действует до: {until[:10]}\n\n"
                             f"Теперь у тебя:\n"
                             f"• 🔔 Ежедневные сигналы\n"
@@ -802,14 +802,14 @@ async def check_ton_payments():
                         await telegram_bot.bot.send_message(
                             user_id,
                             f"🎉 Поздравляем! Ты теперь Автор DeepAlpha!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} TON\n\n"
+                            f"💎 Оплачено: {ton_amount:.2f} Gram\n\n"
                             f"Теперь ты можешь:\n"
                             f"• 📝 Публиковать свои прогнозы\n"
                             f"• 👥 Получать подписчиков\n"
-                            f"• 💝 Получать донаты в TON от юзеров\n\n"
+                            f"• 💝 Получать донаты в Gram от юзеров\n\n"
                             f"Настрой профиль: /profile\n"
                             f"Установи bio: /edit_bio\n"
-                            f"Добавь TON кошелёк для выплат: /set_wallet"
+                            f"Добавь Gram кошелёк для выплат: /set_wallet"
                         )
                     except Exception as e:
                         print(f"AUTHOR STATUS NOTIFY ERROR: {e}")
@@ -828,7 +828,7 @@ async def check_ton_payments():
                         await telegram_bot.bot.send_message(
                             user_id,
                             f"✅ Доп. слоты Watchlist добавлены!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} TON\n"
+                            f"💎 Оплачено: {ton_amount:.2f} Gram\n"
                             f"➕ Добавлено: {slots_count} слотов\n"
                             f"📊 Всего доп. слотов: {new_total}\n\n"
                             f"Теперь ты можешь добавить больше рынков!\n"
@@ -883,7 +883,7 @@ async def check_ton_payments():
                         donor_text = (
                             f"💝 Донат отправлен!\n\n"
                             f"👤 Автору: @{author_name}\n"
-                            f"💎 Сумма: {ton_amount:.4f} TON\n"
+                            f"💎 Сумма: {ton_amount:.4f} Gram\n"
                         )
                         if post_id:
                             donor_text += f"📝 Пост: /post_{post_id}\n"
@@ -903,9 +903,9 @@ async def check_ton_payments():
                         author_text = (
                             f"💝 Ты получил донат!\n\n"
                             f"👤 От: @{donor_name}\n"
-                            f"💎 Сумма доната: {ton_amount:.4f} TON\n"
-                            f"🏦 Комиссия платформы: {platform_fee:.4f} TON\n"
-                            f"💰 Тебе зачислено: {author_received:.4f} TON\n"
+                            f"💎 Сумма доната: {ton_amount:.4f} Gram\n"
+                            f"🏦 Комиссия платформы: {platform_fee:.4f} Gram\n"
+                            f"💰 Тебе зачислено: {author_received:.4f} Gram\n"
                         )
                         if post_id:
                             author_text += f"📝 За пост: /post_{post_id}\n"
@@ -941,7 +941,7 @@ async def check_ton_payments():
                         await telegram_bot.bot.send_message(
                             user_id,
                             f"✅ Оплата получена!\n\n"
-                            f"💎 TON: {ton_amount:.4f}\n"
+                            f"💎 Gram: {ton_amount:.4f}\n"
                             f"📦 Пакет: {package_name}\n"
                             f"🪙 Начислено токенов: {tokens}"
                             f"{discount_text}\n"
