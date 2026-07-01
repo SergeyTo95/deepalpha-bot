@@ -81,6 +81,11 @@ def test_compact_formatter_formats_positive_and_negative_edge_delta():
 def test_ru_compact_formatter_uses_polished_labels():
     score = build_deepalpha_score(data_quality="mixed", confidence=50, risk_level="medium")
     text = format_compact_deepalpha_score(score, lang="ru")
+    assert "Решение:" in text
+    assert "Decision:" not in text
     assert "Уверенность: 50%" in text
     assert "Риск:" in text
     assert "Качество данных:" in text
+    assert "Преимущество: недоступно" in text
+    assert "Edge:" not in text
+    assert "unavailable" not in text

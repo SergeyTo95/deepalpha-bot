@@ -169,14 +169,15 @@ def _safe_score_label(value: Any) -> str:
     return label if label in _SAFE_SCORE_LABELS else "DATA NEEDED"
 
 
-def _compact_edge_text(score: Dict[str, Any]) -> str:
+def _compact_edge_text(score: Dict[str, Any], lang: str = "en") -> str:
+    unavailable = "недоступно" if lang == "ru" else "unavailable"
     edge = score.get("edge_delta")
     if edge is None:
-        return "unavailable"
+        return unavailable
     try:
         return f"{float(edge):+.2f} pp"
     except (TypeError, ValueError):
-        return "unavailable"
+        return unavailable
 
 
 def format_compact_deepalpha_score(score: dict, lang: str = "ru") -> str:
@@ -188,23 +189,23 @@ def format_compact_deepalpha_score(score: dict, lang: str = "ru") -> str:
     risk = _RISK_LABELS[lang].get(risk_key, _RISK_LABELS[lang]["unknown"])
     quality = _DATA_QUALITY_LABELS[lang].get(quality_key, _DATA_QUALITY_LABELS[lang]["missing"])
     confidence = _clamp_int(s.get("confidence"), default=0)
-    lines = [
-        f"📊 DeepAlpha Score: {_clamp_int(s.get('overall_score'), default=0)}/100",
-        f"Decision: {_safe_score_label(s.get('label'))}",
-    ]
+    lines = [f"📊 DeepAlpha Score: {_clamp_int(s.get('overall_score'), default=0)}/100"]
     if lang == "ru":
         lines.extend([
+            f"Решение: {_safe_score_label(s.get('label'))}",
             f"Уверенность: {confidence}%",
             f"Риск: {risk}",
             f"Качество данных: {quality}",
+            f"Преимущество: {_compact_edge_text(s, lang)}",
         ])
     else:
         lines.extend([
+            f"Decision: {_safe_score_label(s.get('label'))}",
             f"Confidence: {confidence}%",
             f"Risk: {risk}",
             f"Data quality: {quality}",
+            f"Edge: {_compact_edge_text(s, lang)}",
         ])
-    lines.append(f"Edge: {_compact_edge_text(s)}")
     return "\n".join(lines)
 
 

@@ -1,3 +1,10 @@
+import sys
+import types
+
+sys.modules.setdefault("requests", types.SimpleNamespace(post=lambda *args, **kwargs: None))
+sys.modules.setdefault("psycopg2", types.SimpleNamespace(connect=lambda *a, **k: None, extras=types.SimpleNamespace(RealDictCursor=object), errors=types.SimpleNamespace()))
+sys.modules.setdefault("psycopg2.extras", types.SimpleNamespace(RealDictCursor=object))
+
 from services.live_analyst_service import prepend_deepalpha_score_if_needed, should_surface_deepalpha_score
 
 
