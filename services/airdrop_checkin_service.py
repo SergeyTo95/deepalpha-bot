@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from db.database import get_connection
 from services.airdrop_points_service import (
+    _MEMORY_LEDGER,
     award_airdrop_points,
     format_points_amount,
     get_airdrop_points_balance,
@@ -221,16 +222,47 @@ def get_airdrop_checkin_status() -> dict:
     try:
         conn, cur = _connect_ready()
         try:
-            cur.execute("SELECT COUNT(*), COALESCE(SUM(reward_points),0) FROM airdrop_daily_checkins WHERE checkin_date=%s::date", (today,))
-            total = cur.fetchone() or [0, 0]
+            cur.execute("SELECT COUNT(*) FROM airdrop_daily_checkins WHERE checkin_date=%s::date", (today,))
+            total_checkins = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(amount),0)
+                FROM airdrop_points_ledger
+                WHERE created_at::date=%s::date
+                  AND reason IN ('daily_checkin', 'daily_checkin_streak_bonus')
+                """,
+                (today,),
+            )
+            total_awarded = _to_decimal((cur.fetchone() or [0])[0] or 0)
             cur.execute("SELECT COUNT(DISTINCT user_id) FROM airdrop_daily_checkins WHERE checkin_date >= %s::date", ((_today() - timedelta(days=1)).isoformat(),))
             active = int((cur.fetchone() or [0])[0] or 0)
-            cur.execute("SELECT user_id, streak_count FROM airdrop_daily_checkins ORDER BY streak_count DESC, checkin_date DESC LIMIT 10")
+            cur.execute(
+                """
+                SELECT user_id, MAX(streak_count) AS streak_count
+                FROM airdrop_daily_checkins
+                GROUP BY user_id
+                ORDER BY MAX(streak_count) DESC, user_id
+                LIMIT 10
+                """
+            )
             top = [{"user_id": int(r[0]), "streak_count": int(r[1] or 0)} for r in (cur.fetchall() or [])]
-            return {"checkin_date": today, "total_checkins_today": int(total[0] or 0), "total_points_awarded_today": _to_decimal(total[1]), "active_streak_users_count": active, "top_streaks": top, "points_enabled": points_enabled()}
+            return {"checkin_date": today, "total_checkins_today": total_checkins, "total_points_awarded_today": total_awarded, "active_streak_users_count": active, "top_streaks": top, "points_enabled": points_enabled()}
         finally:
             conn.close()
     except Exception:
         rows = [r for by_user in _MEMORY.values() for r in by_user.values() if r.get("checkin_date") == today]
-        top = sorted([r for by_user in _MEMORY.values() for r in by_user.values()], key=lambda r: -int(r.get("streak_count") or 0))[:10]
-        return {"checkin_date": today, "total_checkins_today": len(rows), "total_points_awarded_today": sum(_to_decimal(r.get("reward_points")) for r in rows), "active_streak_users_count": len({r.get("user_id") for r in rows}), "top_streaks": [{"user_id": r.get("user_id"), "streak_count": r.get("streak_count")} for r in top], "points_enabled": points_enabled()}
+        ledger_total = sum(
+            _to_decimal(row.get("amount"))
+            for by_user in _MEMORY_LEDGER.values()
+            for row in by_user
+            if str(row.get("created_at") or "")[:10] == today
+            and row.get("reason") in {"daily_checkin", "daily_checkin_streak_bonus"}
+        )
+        if ledger_total <= 0:
+            ledger_total = sum(_to_decimal(r.get("reward_points")) + _to_decimal((r.get("metadata") or {}).get("bonus_reward")) for r in rows)
+        max_streak_by_user: Dict[int, int] = {}
+        for r in [r for by_user in _MEMORY.values() for r in by_user.values()]:
+            uid = int(r.get("user_id") or 0)
+            max_streak_by_user[uid] = max(max_streak_by_user.get(uid, 0), int(r.get("streak_count") or 0))
+        top = sorted(max_streak_by_user.items(), key=lambda item: (-item[1], item[0]))[:10]
+        return {"checkin_date": today, "total_checkins_today": len(rows), "total_points_awarded_today": ledger_total, "active_streak_users_count": len({r.get("user_id") for r in rows}), "top_streaks": [{"user_id": uid, "streak_count": streak} for uid, streak in top], "points_enabled": points_enabled()}

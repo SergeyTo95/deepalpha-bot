@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
-from services.airdrop_points_service import award_airdrop_points, get_airdrop_points_balance, points_enabled
+from services.airdrop_points_service import award_airdrop_points, format_points_amount, get_airdrop_points_balance, points_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def get_daily_quests(user_id: int, lang: str = "ru") -> dict:
                 rows.append(row)
             conn.commit()
             balance = get_airdrop_points_balance(uid)
-            return {"user_id": uid, "quest_date": quest_date, "quests": rows, "points_today": _quest_points_today(uid), "total_points": int(balance.get("points") or 0), "points_enabled": points_enabled()}
+            return {"user_id": uid, "quest_date": quest_date, "quests": rows, "points_today": _quest_points_today(uid), "total_points": balance.get("points") or 0, "points_enabled": points_enabled()}
         finally:
             conn.close()
     except Exception as exc:
@@ -129,7 +129,7 @@ def get_daily_quests(user_id: int, lang: str = "ru") -> dict:
         for code, d in QUEST_DEFINITIONS.items():
             row = dict(_memory_get_or_create(uid, code, quest_date)); row["title"] = d["title"].get(lang) or d["title"]["ru"]; rows.append(row)
         balance = get_airdrop_points_balance(uid)
-        return {"user_id": uid, "quest_date": quest_date, "quests": rows, "points_today": sum(int(r["reward_points"]) for r in rows if r.get("completed")), "total_points": int(balance.get("points") or 0), "points_enabled": points_enabled()}
+        return {"user_id": uid, "quest_date": quest_date, "quests": rows, "points_today": sum(int(r["reward_points"]) for r in rows if r.get("completed")), "total_points": balance.get("points") or 0, "points_enabled": points_enabled()}
 
 
 def get_user_daily_quest_progress(user_id: int) -> dict:
@@ -255,9 +255,9 @@ def format_daily_quests(user_id: int, lang: str = "ru") -> str:
     if not data.get("points_enabled"):
         lines += ["", "⚠️ Airdrop Points are currently disabled." if not ru else "⚠️ DeepAlpha Points сейчас отключены."]
     if ru:
-        lines += ["", f"Баллы сегодня: {int(data.get('points_today') or 0)}", f"Всего баллов: {data.get('total_points') or 0}"]
+        lines += ["", f"Баллы сегодня: {int(data.get('points_today') or 0)}", f"Всего баллов: {format_points_amount(data.get('total_points') or 0)}"]
     else:
-        lines += ["", f"Points today: {int(data.get('points_today') or 0)}", f"Total Points: {data.get('total_points') or 0}"]
+        lines += ["", f"Points today: {int(data.get('points_today') or 0)}", f"Total Points: {format_points_amount(data.get('total_points') or 0)}"]
     return "\n".join(lines)
 
 

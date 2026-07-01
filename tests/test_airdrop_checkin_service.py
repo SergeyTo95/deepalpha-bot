@@ -110,3 +110,28 @@ def test_checkin_text_does_not_contain_forbidden_promises(monkeypatch):
     low = text.lower()
     for forbidden in ["guaranteed profit", "guaranteed airdrop", "guaranteed token allocation", "listing date", "token price"]:
         assert forbidden not in low
+
+
+def test_admin_status_includes_three_day_streak_bonus_for_today(monkeypatch):
+    _, _, checkin = reload_services(monkeypatch, date(2026, 7, 1))
+    for offset in range(3):
+        set_today(monkeypatch, checkin, date(2026, 7, 1 + offset))
+        checkin.claim_daily_checkin(1)
+    status = checkin.get_airdrop_checkin_status()
+    assert status["total_checkins_today"] == 1
+    assert status["total_points_awarded_today"] == Decimal("0.5000")
+
+
+def test_admin_status_top_streaks_have_unique_user_ids(monkeypatch):
+    _, _, checkin = reload_services(monkeypatch, date(2026, 7, 1))
+    for offset in range(3):
+        set_today(monkeypatch, checkin, date(2026, 7, 1 + offset))
+        checkin.claim_daily_checkin(1)
+    for offset in range(2):
+        set_today(monkeypatch, checkin, date(2026, 7, 1 + offset))
+        checkin.claim_daily_checkin(2)
+    set_today(monkeypatch, checkin, date(2026, 7, 3))
+    status = checkin.get_airdrop_checkin_status()
+    user_ids = [row["user_id"] for row in status["top_streaks"]]
+    assert user_ids == list(dict.fromkeys(user_ids))
+    assert {row["user_id"]: row["streak_count"] for row in status["top_streaks"]}[1] == 3
