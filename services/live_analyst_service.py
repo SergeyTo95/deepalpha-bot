@@ -24,6 +24,7 @@ from services.live_analyst_billing_service import (
 )
 from services.live_research_service import fresh_context_needed, get_live_research_context, live_research_max_results
 from services.live_understanding_service import understand_live_request
+from services.user_analyst_profile_service import build_user_analyst_profile_prompt_block
 from services.live_context_memory import (
     is_live_followup,
     reconstruct_live_context_from_recent_messages,
@@ -1793,7 +1794,7 @@ def _format_live_answer_composer(composer: Optional[Dict[str, Any]]) -> str:
     return str(composer.get("answer_prompt") or "").strip()
 
 
-def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None, answer_composer: Optional[Dict[str, Any]] = None) -> str:
+def _build_live_prompt(session: Dict[str, Any], recent_messages: List[Dict[str, Any]], user_text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None, research_context: Optional[Dict[str, Any]] = None, understanding: Optional[Dict[str, Any]] = None, crypto_market_context: Optional[Dict[str, Any]] = None, sports_context: Optional[Dict[str, Any]] = None, evidence_pack: Optional[Dict[str, Any]] = None, ai_control_context: Optional[Dict[str, Any]] = None, answer_composer: Optional[Dict[str, Any]] = None, analyst_profile_block: str = "") -> str:
     ui_language = "ru" if ui_language == "ru" else "en"
     language_instruction = "Отвечай на русском." if ui_language == "ru" else "Reply in English."
     skill_context = _build_live_text_skill_context(user_text)
@@ -1838,6 +1839,8 @@ Research context:
 {_format_ai_control_context(ai_control_context)}
 
 {_format_live_answer_composer(answer_composer)}
+
+{analyst_profile_block or "User Analyst Profile: not loaded."}
 
 AI Control Center rules:
 - Optimize only for long-term trust-adjusted token revenue: useful, honest, evidence-grounded paid usage.
@@ -2301,7 +2304,8 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     provider_choice = choose_ai_provider("live_analyst", ai_control_context.get("mode") or "unknown")
     logger.info("ai_control_provider_chosen user_id=%s mode=%s provider=%s model=%s reason=%s", user_id, ai_control_context.get("mode"), provider_choice.get("provider"), provider_choice.get("model"), provider_choice.get("reason"))
     answer_composer = compose_live_answer(text, evidence_pack, router_result=router_result, understanding=understanding, ui_language=ui_language)
-    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer)
+    analyst_profile_block = build_user_analyst_profile_prompt_block(user_id)
+    prompt = _build_live_prompt(prompt_session, recent, text, router_result, ui_language=ui_language, research_context=research_context, understanding=understanding, crypto_market_context=crypto_market_context, sports_context=sports_context, evidence_pack=evidence_pack, ai_control_context=ai_control_context, answer_composer=answer_composer, analyst_profile_block=analyst_profile_block)
     logger.info("live_prompt_built chars=%s evidence_items=%s planned_queries=%s", len(prompt), len(evidence_pack.get("evidence_items") or []), len(planned_queries or []))
 
     mode = evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown"

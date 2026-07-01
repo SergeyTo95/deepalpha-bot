@@ -187,6 +187,18 @@ def _init_db_inner(conn, cursor):
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_analyst_profiles (
+        user_id BIGINT PRIMARY KEY,
+        risk_style TEXT NOT NULL DEFAULT 'balanced',
+        answer_depth TEXT NOT NULL DEFAULT 'normal',
+        primary_goal TEXT NOT NULL DEFAULT 'find_opportunities',
+        preferred_domains TEXT NOT NULL DEFAULT 'crypto,sports,esports,politics,polymarket',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
         username TEXT,
