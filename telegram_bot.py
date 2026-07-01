@@ -130,6 +130,10 @@ from services.broadcast_service import (
     DEFAULT_BROADCAST_TEXT, broadcast_state, filter_broadcast_recipients, send_broadcast,
 )
 from services.live_context_memory import clear_live_context, get_live_context, is_live_continuation
+from services.user_analyst_profile_service import (
+    ALLOWED_DOMAINS, DEFAULT_PREFERRED_DOMAINS, format_user_analyst_profile,
+    get_user_analyst_profile, reset_user_analyst_profile, update_user_analyst_profile,
+)
 from db.database import count_live_analyst_messages_today, get_live_analyst_active_session, record_live_analyst_usage
 
 logging.basicConfig(level=logging.INFO)
@@ -568,12 +572,14 @@ def get_profile_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if lang == "ru":
         kb.add(KeyboardButton("👤 Профиль"))
         kb.add(KeyboardButton("📜 История"), KeyboardButton("✍️ Мои прогнозы"))
+        kb.add(KeyboardButton("🧠 Analyst Profile"))
         kb.add(KeyboardButton("💰 Баланс автора"), KeyboardButton("👥 Рефералы"))
         kb.add(KeyboardButton("💸 Заработать"), KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("👤 Profile"))
         kb.add(KeyboardButton("📜 History"), KeyboardButton("✍️ My forecasts"))
+        kb.add(KeyboardButton("🧠 Analyst Profile"))
         kb.add(KeyboardButton("💰 Author balance"), KeyboardButton("👥 Referrals"))
         kb.add(KeyboardButton("💸 Earn"), KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("⬅️ Back"))
@@ -587,12 +593,14 @@ def get_more_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("⚙️ Ещё"))
         kb.add(KeyboardButton(LIVE_ANALYST_BUTTON))
         kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("📣 Авторы"))
+        kb.add(KeyboardButton("🧠 Analyst Profile"))
         kb.add(KeyboardButton("🌐 Язык"), KeyboardButton("❓ Помощь"))
         kb.add(KeyboardButton("⬅️ Назад"))
     else:
         kb.add(KeyboardButton("⚙️ More"))
         kb.add(KeyboardButton(LIVE_ANALYST_BUTTON))
         kb.add(KeyboardButton("📋 Watchlist"), KeyboardButton("📣 Authors"))
+        kb.add(KeyboardButton("🧠 Analyst Profile"))
         kb.add(KeyboardButton("🌐 Language"), KeyboardButton("❓ Help"))
         kb.add(KeyboardButton("⬅️ Back"))
     return kb
@@ -1382,6 +1390,50 @@ async def _send_or_edit_live_screenshot_only_analysis(callback, text, keyboard):
 
 def _is_private_callback(callback: types.CallbackQuery) -> bool:
     return bool(callback.message and callback.message.chat and callback.message.chat.type == "private")
+
+
+
+def get_analyst_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+    if lang == "ru":
+        kb.add(InlineKeyboardButton("🎯 Цель", callback_data="analyst_profile_goal"), InlineKeyboardButton("⚖️ Риск", callback_data="analyst_profile_risk"))
+        kb.add(InlineKeyboardButton("📚 Глубина ответа", callback_data="analyst_profile_depth"), InlineKeyboardButton("🌍 Рынки", callback_data="analyst_profile_domains"))
+        kb.add(InlineKeyboardButton("♻️ Сбросить", callback_data="analyst_profile_reset"), InlineKeyboardButton("⬅️ Назад", callback_data="back_to_profile"))
+    else:
+        kb.add(InlineKeyboardButton("🎯 Goal", callback_data="analyst_profile_goal"), InlineKeyboardButton("⚖️ Risk", callback_data="analyst_profile_risk"))
+        kb.add(InlineKeyboardButton("📚 Answer depth", callback_data="analyst_profile_depth"), InlineKeyboardButton("🌍 Markets", callback_data="analyst_profile_domains"))
+        kb.add(InlineKeyboardButton("♻️ Reset", callback_data="analyst_profile_reset"), InlineKeyboardButton("⬅️ Back", callback_data="back_to_profile"))
+    return kb
+
+
+def get_analyst_profile_choice_keyboard(kind: str, user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    if kind == "risk":
+        opts = [("conservative", "🛡 Осторожный" if lang == "ru" else "🛡 Conservative"), ("balanced", "⚖️ Баланс" if lang == "ru" else "⚖️ Balanced"), ("aggressive", "🔥 Агрессивный" if lang == "ru" else "🔥 Aggressive")]
+        for value, label in opts: kb.add(InlineKeyboardButton(label, callback_data=f"analyst_profile_set:risk_style:{value}"))
+    elif kind == "depth":
+        opts = [("short", "⚡ Кратко" if lang == "ru" else "⚡ Short"), ("normal", "🧠 Нормально" if lang == "ru" else "🧠 Normal"), ("deep", "🔬 Глубоко" if lang == "ru" else "🔬 Deep")]
+        for value, label in opts: kb.add(InlineKeyboardButton(label, callback_data=f"analyst_profile_set:answer_depth:{value}"))
+    elif kind == "goal":
+        opts = [("find_opportunities", "💎 Искать возможности" if lang == "ru" else "💎 Find opportunities"), ("check_my_idea", "✅ Проверять мои идеи" if lang == "ru" else "✅ Check my idea"), ("learn_analysis", "📚 Учиться анализировать" if lang == "ru" else "📚 Learn analysis"), ("monitor_markets", "👀 Следить за рынками" if lang == "ru" else "👀 Monitor markets")]
+        for value, label in opts: kb.add(InlineKeyboardButton(label, callback_data=f"analyst_profile_set:primary_goal:{value}"))
+    kb.add(InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back", callback_data="analyst_profile_back"))
+    return kb
+
+
+def get_analyst_profile_domains_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    selected = set(get_user_analyst_profile(user_id).get("preferred_domains") or DEFAULT_PREFERRED_DOMAINS)
+    labels = [("crypto", "₿ Crypto"), ("sports", "⚽ Sports"), ("esports", "🎮 Esports"), ("politics", "🗳 Politics"), ("polymarket", "📊 Polymarket"), ("macro", "🌍 Macro"), ("general_events", "🔮 General events")]
+    kb = InlineKeyboardMarkup(row_width=2)
+    for value, label in labels:
+        mark = "✅ " if value in selected else "☐ "
+        kb.insert(InlineKeyboardButton(mark + label, callback_data=f"analyst_profile_domain:{value}"))
+    kb.add(InlineKeyboardButton("✅ Готово" if lang == "ru" else "✅ Done", callback_data="analyst_profile_back"))
+    kb.add(InlineKeyboardButton("♻️ Сбросить рынки" if lang == "ru" else "♻️ Reset markets", callback_data="analyst_profile_domains_reset"))
+    return kb
 
 
 def get_profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -6257,6 +6309,61 @@ async def recap_send_confirm(callback: types.CallbackQuery, state: FSMContext):
         f"Отправлено: {sent}\n"
         f"Ошибок: {failed}"
     )
+    await callback.answer()
+
+
+
+@dp.message_handler(commands=["analyst_profile"], state="*")
+async def analyst_profile_command(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    await message.answer(format_user_analyst_profile(uid, lang), reply_markup=get_analyst_profile_keyboard(uid))
+
+
+@dp.message_handler(lambda m: m.text in ["🧠 Analyst Profile"], state="*")
+async def analyst_profile_button_handler(message: types.Message, state: FSMContext):
+    await analyst_profile_command(message, state)
+
+
+@dp.callback_query_handler(lambda c: c.data in {"analyst_profile_back", "analyst_profile_risk", "analyst_profile_depth", "analyst_profile_goal", "analyst_profile_domains", "analyst_profile_reset", "analyst_profile_domains_reset"} or (c.data or "").startswith("analyst_profile_set:") or (c.data or "").startswith("analyst_profile_domain:"), state="*")
+async def analyst_profile_callback(callback: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    if not callback.from_user:
+        return
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    data = callback.data or ""
+    if data == "analyst_profile_risk":
+        title = "⚖️ Выбери стиль риска" if lang == "ru" else "⚖️ Choose risk style"
+        await callback.message.edit_text(title, reply_markup=get_analyst_profile_choice_keyboard("risk", uid)); await callback.answer(); return
+    if data == "analyst_profile_depth":
+        title = "📚 Выбери глубину ответа" if lang == "ru" else "📚 Choose answer depth"
+        await callback.message.edit_text(title, reply_markup=get_analyst_profile_choice_keyboard("depth", uid)); await callback.answer(); return
+    if data == "analyst_profile_goal":
+        title = "🎯 Выбери главную цель" if lang == "ru" else "🎯 Choose primary goal"
+        await callback.message.edit_text(title, reply_markup=get_analyst_profile_choice_keyboard("goal", uid)); await callback.answer(); return
+    if data == "analyst_profile_domains":
+        title = "🌍 Выбери рынки/домены" if lang == "ru" else "🌍 Choose markets/domains"
+        await callback.message.edit_text(title, reply_markup=get_analyst_profile_domains_keyboard(uid)); await callback.answer(); return
+    if data == "analyst_profile_reset":
+        reset_user_analyst_profile(uid)
+    elif data == "analyst_profile_domains_reset":
+        update_user_analyst_profile(uid, preferred_domains=DEFAULT_PREFERRED_DOMAINS)
+        await callback.message.edit_text("🌍 Выбери рынки/домены" if lang == "ru" else "🌍 Choose markets/domains", reply_markup=get_analyst_profile_domains_keyboard(uid)); await callback.answer(); return
+    elif data.startswith("analyst_profile_set:"):
+        _, _, field, value = data.split(":", 3)
+        if field in {"risk_style", "answer_depth", "primary_goal"}:
+            update_user_analyst_profile(uid, **{field: value})
+    elif data.startswith("analyst_profile_domain:"):
+        domain = data.split(":", 1)[1]
+        if domain in ALLOWED_DOMAINS:
+            current = get_user_analyst_profile(uid).get("preferred_domains") or DEFAULT_PREFERRED_DOMAINS
+            domains = [d for d in current if d != domain] if domain in current else [*current, domain]
+            update_user_analyst_profile(uid, preferred_domains=domains or DEFAULT_PREFERRED_DOMAINS)
+        await callback.message.edit_text("🌍 Выбери рынки/домены" if lang == "ru" else "🌍 Choose markets/domains", reply_markup=get_analyst_profile_domains_keyboard(uid)); await callback.answer(); return
+    await callback.message.edit_text(format_user_analyst_profile(uid, lang), reply_markup=get_analyst_profile_keyboard(uid))
     await callback.answer()
 
 
