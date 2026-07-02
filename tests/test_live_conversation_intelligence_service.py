@@ -98,3 +98,23 @@ def test_yes_after_reconstructed_pending_uses_full_question_not_short_year():
     assert r["completed_text"] == "Трамп победит на выборах 2028? Yes"
     assert not r["completed_text"].startswith("2028 Yes")
     assert r["answer_strategy"] != "generic_clarification"
+
+
+def test_pending_macron_year_reconstructs_full_context():
+    pending = {"domain": "politics", "subject": "Макрон", "intent": "probability_check", "missing_data": ["election_year", "market", "side"], "original_user_text": "Макрон победит на выборах?"}
+    r = resolve_live_conversation_intent("2027", pending_clarification=pending, ui_language="ru")
+    assert r["domain"] == "politics"
+    assert r["subject"] == "Макрон"
+    assert r["filled"]["election_year"] == 2027
+    assert r["completed_text"] == "Макрон победит на выборах 2027?"
+
+
+def test_pending_macron_yes_keeps_candidate_year_and_fills_side():
+    pending = {"domain": "politics", "subject": "Макрон", "intent": "probability_check", "missing_data": ["market", "side"], "original_user_text": "Макрон победит на выборах 2027?", "election_context": {"is_election_question": True, "candidate": "Макрон", "country": "France", "election_year": 2027}}
+    r = resolve_live_conversation_intent("Yes", pending_clarification=pending, ui_language="ru")
+    assert r["domain"] == "politics"
+    assert r["subject"] == "Макрон"
+    assert r["filled"]["side"] == "Yes"
+    assert r["election_context"]["candidate"] == "Макрон"
+    assert r["election_context"]["election_year"] == 2027
+    assert r["completed_text"] == "Макрон победит на выборах 2027? Yes"

@@ -56,6 +56,7 @@ from services.live_analyst_memory_service import (
 )
 from db.database import count_live_analyst_messages_today
 from services.live_conversation_intelligence_service import resolve_live_conversation_intent
+from services.live_election_context_service import extract_election_candidate_context
 
 LIVE_UNAVAILABLE_MESSAGE = "Live Analyst временно недоступен. Токены за этот запрос не списаны."
 LIVE_DISABLED_MESSAGE = "Live Analyst сейчас отключён администратором. Попробуйте позже."
@@ -122,6 +123,8 @@ def merge_market_resolution_into_pack(evidence_pack: Dict[str, Any], resolver_re
     domain = resolver_result.get("domain")
     if domain and (evidence_pack.get("mode") in (None, "", "unknown", "general")):
         evidence_pack["mode"] = "polymarket" if domain == "politics" else domain
+    if isinstance(resolver_result.get("election_context"), dict):
+        evidence_pack.setdefault("election_context", resolver_result.get("election_context"))
     facts = evidence_pack.setdefault("derived_facts", {})
     for src, dst in (("market_probability", "polymarket_probability"), ("implied_probability", "implied_probability"), ("odds", "odds"), ("market_url", "market_url"), ("market_title", "market_title"), ("domain", "domain")):
         val = resolver_result.get(src)
@@ -264,52 +267,141 @@ def _is_politics_prediction_context(
     return any(value in hay for value in _POLITICS_DOMAIN_VALUES) or any(marker in hay for marker in _POLITICS_TEXT_MARKERS)
 
 
-def _is_trump_2028_legal_context(answer: str, evidence_pack: Optional[Dict[str, Any]] = None, user_text: str = "") -> bool:
-    hay = _flatten_live_values(answer, user_text, (evidence_pack or {}).get("original_user_text"), (evidence_pack or {}).get("normalized_query"), evidence_pack)
-    has_trump_2028 = ("trump" in hay or "трамп" in hay) and "2028" in hay and ("president" in hay or "президент" in hay or "выбор" in hay or "election" in hay)
-    legal_markers = ("22nd amendment", "22-я поправка", "constitutionally impossible", "конституционно невозможно", "cannot be elected again", "не может быть избран")
-    return has_trump_2028 and any(marker in hay for marker in legal_markers)
+_ELECTION_LEGAL_MARKERS = (
+    "term limit", "term limits", "constitution", "constitutional", "eligibility", "eligible", "ineligible",
+    "cannot run", "can't run", "cannot be elected", "cannot be elected again", "22nd amendment",
+    "не может быть избран", "не может баллотироваться", "конституционно невозможно", "ограничения по срокам",
+)
+_ELECTION_INELIGIBLE_MARKERS = (
+    "ineligible", "cannot run", "can't run", "cannot be elected", "cannot be elected again",
+    "не может быть избран", "не может баллотироваться", "конституционно невозможно",
+)
 
 
-def _politics_followup_lines(ui_language: str = "ru", trump_2028: bool = False) -> List[str]:
+def _compact_election_context(evidence_pack: Optional[Dict[str, Any]] = None, user_text: str = "") -> Dict[str, Any]:
+    """Return best-known election context without inventing missing eligibility facts."""
+    pack = evidence_pack or {}
+    candidates: List[Dict[str, Any]] = []
+    for source in (
+        pack.get("election_context"),
+        (pack.get("market_resolution") or {}).get("election_context"),
+        pack.get("conversation_intelligence"),
+        pack.get("live_conversation_intelligence"),
+        pack.get("understanding"),
+        pack.get("router_result"),
+    ):
+        if isinstance(source, dict):
+            candidates.append(source)
+    merged: Dict[str, Any] = {}
+    for ctx in candidates:
+        for src, dst in (
+            ("candidate", "candidate"), ("subject", "candidate"),
+            ("country", "country"), ("office", "office"),
+            ("election_year", "election_year"), ("year", "election_year"),
+            ("election_type", "election_type"), ("side", "side"),
+            ("eligibility_status", "eligibility_status"), ("eligibility_reason", "eligibility_reason"),
+        ):
+            value = ctx.get(src)
+            if value not in (None, "", []):
+                merged.setdefault(dst, value)
+        filled = ctx.get("filled") if isinstance(ctx.get("filled"), dict) else {}
+        for key in ("election_year", "side"):
+            if filled.get(key) not in (None, "", []):
+                merged.setdefault(key, filled.get(key))
+    seed_text = _flatten_live_values(user_text, pack.get("original_user_text"), pack.get("normalized_query"), pack.get("market_title"), (pack.get("market_resolution") or {}).get("market_title"))
+    extracted = extract_election_candidate_context(seed_text) if seed_text else {}
+    if extracted.get("is_election_question") or extracted.get("candidate") or extracted.get("election_year"):
+        for key in ("candidate", "country", "office", "election_year", "election_type", "side", "eligibility_status", "eligibility_reason"):
+            if extracted.get(key) not in (None, "", []):
+                merged.setdefault(key, extracted.get(key))
+    if merged:
+        merged["is_election_question"] = True
+    return merged
+
+
+def _is_candidate_election_legal_context(answer: str, evidence_pack: Optional[Dict[str, Any]] = None, user_text: str = "") -> bool:
+    ctx = _compact_election_context(evidence_pack, user_text)
+    if not (ctx.get("candidate") and (ctx.get("election_year") or ctx.get("office") or ctx.get("country"))):
+        return False
+    hay = _flatten_live_values(answer, user_text, evidence_pack or {})
+    return any(marker in hay for marker in _ELECTION_LEGAL_MARKERS)
+
+
+def _election_context_label(ctx: Dict[str, Any]) -> str:
+    parts = [str(ctx.get("office") or "выборы")]
+    if ctx.get("country"):
+        parts.append(str(ctx.get("country")))
+    if ctx.get("election_year"):
+        parts.append(str(ctx.get("election_year")))
+    return " / ".join(parts)
+
+
+def _election_followup_lines(election_context: Optional[Dict[str, Any]] = None, ui_language: str = "ru") -> List[str]:
+    ctx = election_context or {}
+    year = ctx.get("election_year")
     if ui_language == "ru":
-        if trump_2028:
-            return [
-                "Найти активный Polymarket-рынок на выборы 2028?",
-                "Проверить правила resolution и ликвидность?",
-                "Разобрать сценарии: преемник, номинация, обходной путь?",
-            ]
+        first = f"Найти активный Polymarket-рынок на выборы {year}?" if year else "Найти активный Polymarket-рынок?"
         return [
-            "Найти активный Polymarket-рынок?",
-            "Проверить ликвидность и правила resolution?",
-            "Разобрать Yes/No сторону и рыночную вероятность?",
+            first,
+            "Проверить eligibility, правила resolution и ликвидность?",
+            "Разобрать сценарии: кандидат, номинация, партия, преемник?",
         ]
-    if trump_2028:
-        return [
-            "Find the active Polymarket market for 2028?",
-            "Check resolution rules and liquidity?",
-            "Break down scenarios: successor, nomination, workaround?",
-        ]
+    first = f"Find the active Polymarket market for the {year} election?" if year else "Find the active Polymarket market?"
     return [
-        "Find the active Polymarket market?",
-        "Check liquidity and resolution rules?",
-        "Break down the Yes/No side and market probability?",
+        first,
+        "Check eligibility, resolution rules, and liquidity?",
+        "Break down scenarios: candidate, nomination, party, successor?",
     ]
 
 
-def _ensure_trump_2028_direct_legal_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, user_text: str = "") -> str:
+def _politics_followup_lines(ui_language: str = "ru", election_context: Optional[Dict[str, Any]] = None) -> List[str]:
+    return _election_followup_lines(election_context or {}, ui_language)
+
+
+def _ensure_candidate_election_direct_legal_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, user_text: str = "") -> str:
     text = str(answer or "")
-    if ui_language != "ru" or not _is_trump_2028_legal_context(text, evidence_pack, user_text):
+    if ui_language != "ru" or not _is_candidate_election_legal_context(text, evidence_pack, user_text):
         return text
-    if "напрямую победить" in text.lower() and "не может" in text.lower():
+    low = text.lower()
+    if low.startswith("коротко: напрямую") or low.startswith("коротко: если речь именно"):
         return text
-    direct = (
-        "Коротко: напрямую победить на президентских выборах 2028 он не может, "
-        "если речь именно о посте президента США.\n\n"
-        "Для Polymarket-анализа всё равно нужен конкретный рынок/ссылка, потому что рынок может быть "
-        "не про прямую победу, а про кандидата, номинацию, преемника или обходной сценарий."
-    )
+    ctx = _compact_election_context(evidence_pack, user_text)
+    candidate = str(ctx.get("candidate") or "кандидат").strip()
+    label = _election_context_label(ctx)
+    hay = _flatten_live_values(text, evidence_pack or {}, user_text)
+    clearly_ineligible = str(ctx.get("eligibility_status") or "").lower() == "ineligible" or any(marker in hay for marker in _ELECTION_INELIGIBLE_MARKERS)
+    if clearly_ineligible:
+        direct = f"Коротко: напрямую участвовать/победить в этом виде выборов {candidate}, похоже, не может из-за юридических ограничений."
+    else:
+        direct = f"Коротко: если речь именно о {label}, у {candidate} может быть юридическое ограничение на участие/победу. Для точного вывода нужно подтвердить eligibility и конкретный рынок."
     return _clean_live_spacing(f"{direct}\n\n{text}")
+
+
+def _sanitize_politics_final_text(text: str) -> str:
+    cleaned = str(text or "")
+    replacements = (
+        (r"(?i)\bminimum playable odds\b", "минимальный порог рынка"),
+        (r"(?i)\bplayable odds\b", "рыночный порог"),
+        (r"(?i)\bfair price\b", "справедливая вероятность"),
+        (r"(?i)\bfair odds\b", "справедливая вероятность"),
+        (r"(?i)\bNO BET\b", "DATA NEEDED"),
+        (r"(?i)\bbetting\b", "market"),
+        (r"(?i)\bbet\b", "market"),
+        (r"(?i)ставк[ауиеой]?", "рынок"),
+        (r"(?i)поставить", "выбрать сценарий"),
+    )
+    for pattern, repl in replacements:
+        cleaned = re.sub(pattern, repl, cleaned)
+    return _clean_live_spacing(cleaned)
+
+
+# Backward-compatible names for older tests/imports; implementation is generic.
+def _is_trump_2028_legal_context(answer: str, evidence_pack: Optional[Dict[str, Any]] = None, user_text: str = "") -> bool:
+    return _is_candidate_election_legal_context(answer, evidence_pack, user_text)
+
+
+def _ensure_trump_2028_direct_legal_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, user_text: str = "") -> str:
+    return _ensure_candidate_election_direct_legal_answer(answer, evidence_pack, ui_language, user_text)
 
 
 def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru") -> str:
@@ -333,7 +425,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
         else:
             is_politics = mode in ("polymarket", "prediction_market", "politics") or str((pack.get("market_resolution") or {}).get("domain") or "").lower() == "politics"
             if is_politics:
-                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+                lines = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
             else:
                 lines = ["Посчитать value под твой коэффициент?", "Разобрать факторы, которые двигают вероятность?", "Показать fair odds / минимальный playable odds?"] if lang == "ru" else ["Calculate value for your odds?", "Break down factors that move probability?", "Show fair odds / minimum playable odds?"]
         return "\n".join(f"- {line}" for line in lines[:3])
@@ -352,7 +444,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Разобрать уровни, таймфрейм и отмену сценария?"
             elif domain == "politics":
-                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+                lines = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
                 return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Разобрать правила, участников и таймлайн?"
@@ -366,7 +458,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Break down levels, timeframe, and invalidation?"
             elif domain == "politics":
-                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+                lines = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
                 return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Break down rules, participants, and timeline?"
@@ -405,7 +497,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Найти минимальный playable odds для этого сценария?",
             ]
         elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-            lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+            lines = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         else:
             lines = [
                 "Разобрать тему глубже по шагам?",
@@ -444,7 +536,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Find the minimum playable odds for this setup?",
             ]
         elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-            lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+            lines = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         else:
             lines = [
                 "Break this down step by step?",
@@ -559,7 +651,7 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
             "Find the minimum playable odds for this setup and explain the assumptions.",
         ]
     elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-        labels = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
+        labels = _politics_followup_lines(lang, _compact_election_context(pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         ids = ["find_active_polymarket_market", "yes_no_probability_edge", "liquidity_resolution_risks"]
         templates = [
             "Find the active Polymarket market for this political event; ask for a link if ambiguous.",
@@ -1680,10 +1772,14 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
         text = re.sub(r"(?i)\bDecision\s*:\s*NO BET\b", "Decision: DATA NEEDED", text)
         text = re.sub(r"(?i)\bNO BET\b", "DATA NEEDED", text)
     text = _remove_technical_followup_metadata(text)
-    text = _ensure_trump_2028_direct_legal_answer(text, evidence_pack, ui_language, user_text)
+    if is_politics_prediction:
+        text = _sanitize_politics_final_text(text)
+    text = _ensure_candidate_election_direct_legal_answer(text, evidence_pack, ui_language, user_text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     text = prepend_deepalpha_score_if_needed(text, evidence_pack, ui_language, understanding, router_result, user_text)
     text = compact_live_answer_if_needed(text, evidence_pack, ui_language, user_text=user_text)
+    if is_politics_prediction:
+        text = _sanitize_politics_final_text(text)
     return _trim_live_answer(text, 1600)
 
 
@@ -2604,6 +2700,7 @@ def _store_pending_live_clarification(user_id: int, original_text: str, message:
             "missing_data": list(missing or []),
             "notes": list(resolver_result.get("notes") or []),
             "market_resolution": resolver_result,
+            "election_context": resolver_result.get("election_context") or {},
             "ui_language": ui_language,
         })
     except Exception as exc:
@@ -2781,6 +2878,9 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             logger.warning("live_research_failed user_id=%s error=%s", user_id, exc)
             research_context = {"ok": False, "summary": "", "sources": [], "freshness": "fresh context unavailable", "error": str(exc)}
     evidence_pack = build_live_evidence_pack(text, understanding, router_result, crypto_market_context=crypto_market_context, sports_context=sports_context, research_context=research_context, ui_language=ui_language)
+    evidence_pack["conversation_intelligence"] = conversation_intent
+    if isinstance(conversation_intent.get("election_context"), dict):
+        evidence_pack.setdefault("election_context", conversation_intent.get("election_context"))
     merge_market_resolution_into_pack(evidence_pack, resolver_result)
     resolver_domain = resolver_result.get("domain")
     resolver_has_market_number = bool(resolver_result.get("market_probability") or resolver_result.get("implied_probability") or resolver_result.get("odds") or understanding.get("odds") or (router_result.get("entities") or {}).get("odds"))

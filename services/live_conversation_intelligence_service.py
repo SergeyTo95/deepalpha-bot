@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 import re
+from services.live_election_context_service import extract_election_candidate_context
 
 DOMAINS = {"crypto","sports","esports","politics","polymarket","macro","weather","calculator","translation","explanation","casual","general","unknown"}
 MARKET_DOMAINS = {"crypto", "sports", "esports", "politics", "polymarket", "macro"}
@@ -108,12 +109,14 @@ def _detect_general_intent(text: str) -> tuple[str, str, dict, list[str], Option
 
 
 def _detect_domain(text: str, router_result: Optional[Dict[str, Any]], understanding: Optional[Dict[str, Any]]) -> str:
+    if extract_election_candidate_context(text).get("is_election_question"):
+        return "politics"
     for src in (router_result, understanding):
         d = _ctx_domain(src)
         if d != "unknown":
             return d
     value = _low(text)
-    if "trump" in value or "трамп" in value or "выбор" in value or "election" in value:
+    if "выбор" in value or "election" in value or re.search(r"\b(?:president|senate|congress)\b|президент", value):
         return "politics"
     if "polymarket.com" in value:
         return "polymarket"
@@ -161,7 +164,12 @@ def resolve_live_conversation_intent(current_text: str, *, previous_context: dic
     ctx = pending_clarification or previous_context or {}
     ctx_domain = _ctx_domain(ctx)
     domain = ctx_domain if ctx_domain != "unknown" else _detect_domain(current_text, router_result, understanding)
-    subject = _ctx_subject(ctx) or _ctx_subject(understanding) or _ctx_subject(router_result)
+    election_ctx = extract_election_candidate_context(current_text, previous_context=previous_context, pending_clarification=pending_clarification, ui_language=ui_language)
+    if not election_ctx.get("is_election_question") and isinstance(ctx.get("election_context"), dict) and ctx.get("election_context"):
+        election_ctx = dict(ctx.get("election_context") or {})
+    if not election_ctx.get("is_election_question") and _original(ctx):
+        election_ctx = extract_election_candidate_context(_original(ctx), previous_context=previous_context, pending_clarification=pending_clarification, ui_language=ui_language)
+    subject = _ctx_subject(ctx) or _ctx_subject(understanding) or _ctx_subject(router_result) or election_ctx.get("candidate")
     missing = _missing(ctx)
     filled: Dict[str, Any] = {}
     is_followup = bool(ctx and current_text and (len(current_text.split()) <= 5 or _extract_url(current_text)))
@@ -171,7 +179,7 @@ def resolve_live_conversation_intent(current_text: str, *, previous_context: dic
         domain, subject, filled, missing = gen_domain, gen_subject, gen_filled, gen_missing
         intent = gen_intent
         strategy = {"weather": "weather_lookup" if not missing else "targeted_clarification", "calculator": "calculate", "translation": "translate", "explanation": "explain", "casual": "answer_now"}.get(domain, "answer_now")
-        return {"ok": True, "is_followup": False, "is_clarification_answer": False, "should_reconstruct_question": False, "completed_text": None, "domain": domain, "intent": intent, "subject": subject, "filled": filled, "remaining_missing": missing, "answer_strategy": strategy, "clarification_message": _targeted(domain, subject, missing, ui_language) if strategy == "targeted_clarification" else None, "confidence": 0.9, "notes": notes}
+        return {"ok": True, "is_followup": False, "is_clarification_answer": False, "should_reconstruct_question": False, "completed_text": None, "domain": domain, "intent": intent, "subject": subject, "filled": filled, "remaining_missing": missing, "answer_strategy": strategy, "clarification_message": _targeted(domain, subject, missing, ui_language) if strategy == "targeted_clarification" else None, "confidence": 0.9, "election_context": election_ctx if election_ctx.get("is_election_question") else {}, "notes": notes}
 
     url = _extract_url(current_text)
     if url and ("polymarket" in url.lower() or domain in {"politics", "polymarket"}):
@@ -220,4 +228,4 @@ def resolve_live_conversation_intent(current_text: str, *, previous_context: dic
     if ctx_domain != "unknown" and strategy == "generic_clarification":
         strategy = "targeted_clarification"
     intent = _s((ctx or {}).get("intent") or (understanding or {}).get("intent") or (router_result or {}).get("intent")) or ("probability_check" if domain in {"politics", "polymarket"} else "live_analysis")
-    return {"ok": True, "is_followup": is_followup, "is_clarification_answer": bool(pending_clarification and filled), "should_reconstruct_question": bool(completed), "completed_text": completed, "domain": domain, "intent": intent, "subject": subject, "filled": filled, "remaining_missing": remaining, "answer_strategy": strategy, "clarification_message": _targeted(domain, subject, remaining, ui_language) if strategy == "targeted_clarification" else ("Что разбираем: крипту, спорт, киберспорт, политику или Polymarket-событие?" if strategy == "generic_clarification" else None), "confidence": 0.86 if filled or domain != "unknown" else 0.35, "notes": notes}
+    return {"ok": True, "is_followup": is_followup, "is_clarification_answer": bool(pending_clarification and filled), "should_reconstruct_question": bool(completed), "completed_text": completed, "domain": domain, "intent": intent, "subject": subject, "filled": filled, "remaining_missing": remaining, "answer_strategy": strategy, "clarification_message": _targeted(domain, subject, remaining, ui_language) if strategy == "targeted_clarification" else ("Что разбираем: крипту, спорт, киберспорт, политику или Polymarket-событие?" if strategy == "generic_clarification" else None), "confidence": 0.86 if filled or domain != "unknown" else 0.35, "election_context": election_ctx if election_ctx.get("is_election_question") else {}, "notes": notes}
