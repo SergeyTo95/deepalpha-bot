@@ -190,3 +190,107 @@ def test_general_utility_answer_still_has_no_deepalpha_score():
     pack = {"mode": "general", "deepalpha_score": _score(), "universal_live_frame": {"domain": "utility"}}
     answer = format_live_final_answer("Коротко: можно составить список задач. Decision: DATA NEEDED", pack, "ru", user_text="как составить список задач")
     assert "DeepAlpha Score" not in answer
+
+
+def _macron_2027_pack():
+    pack = _politics_pack()
+    ctx = {
+        "is_election_question": True,
+        "candidate": "Макрон",
+        "country": "France",
+        "office": "president",
+        "election_year": 2027,
+        "eligibility_status": "unknown",
+    }
+    pack.update({
+        "mode": "polymarket",
+        "original_user_text": "Макрон победит на выборах 2027?",
+        "election_context": ctx,
+        "market_resolution": {"domain": "politics", "election_context": ctx, "missing_data": ["market", "side"]},
+        "missing_data": ["market", "side"],
+    })
+    return pack
+
+
+def test_macron_2027_final_followups_are_election_safe_and_generic():
+    answer = append_live_followup_suggestions("Коротко.\nDecision: DATA NEEDED", _macron_2027_pack(), "ru")
+    low = answer.lower()
+    assert "polymarket-рынок на выборы 2027" in low
+    assert "eligibility" in low
+    assert "кандидат, номинация, партия, преемник" in low
+    assert "trump" not in low and "трамп" not in low
+
+
+def test_macron_2027_final_answer_has_no_betting_terms():
+    answer = format_live_final_answer(
+        "Коротко: надо проверить market. Minimum playable odds / fair price неизвестны. Decision: NO BET",
+        _macron_2027_pack(),
+        "ru",
+        user_text="Макрон победит на выборах 2027?",
+    )
+    low = answer.lower()
+    for phrase in ("playable odds", "fair price", "ставка", "поставить", "no bet"):
+        assert phrase not in low
+    assert "data needed" in low
+
+
+def test_biden_2028_legal_evidence_gets_generic_direct_answer():
+    ctx = {
+        "is_election_question": True,
+        "candidate": "Biden",
+        "country": "United States",
+        "office": "president",
+        "election_year": 2028,
+        "eligibility_status": "unknown",
+    }
+    pack = _politics_pack()
+    pack.update({
+        "mode": "polymarket",
+        "original_user_text": "Will Biden win in 2028?",
+        "election_context": ctx,
+        "market_resolution": {"domain": "politics", "election_context": ctx},
+        "deepalpha_score": _score("DATA NEEDED"),
+    })
+    answer = format_live_final_answer(
+        "Eligibility evidence mentions term limit and constitution constraints. Decision: DATA NEEDED",
+        pack,
+        "ru",
+        user_text="Will Biden win in 2028?",
+    )
+    low = answer.lower()
+    assert low.startswith("📊 deepalpha score") or "коротко: если речь именно" in low
+    assert "у biden может быть юридическое ограничение" in low
+    assert "трамп" not in low and "trump" not in low
+
+
+def test_trump_2028_still_uses_generic_election_context():
+    pack = _trump_2028_pack()
+    pack["market_resolution"]["election_context"] = {
+        "is_election_question": True,
+        "candidate": "Trump",
+        "country": "United States",
+        "office": "president",
+        "election_year": 2028,
+        "eligibility_status": "ineligible",
+    }
+    answer = format_live_final_answer(
+        "22nd Amendment says Trump cannot be elected again. Decision: NO BET",
+        pack,
+        "ru",
+        user_text="Трамп победит на президентских выборах 2028?",
+    )
+    low = answer.lower()
+    assert "напрямую участвовать/победить" in low
+    assert "юридических ограничений" in low
+    assert "no bet" not in low
+
+
+def test_putin_election_followups_are_kept():
+    pack = _politics_pack()
+    ctx = {"is_election_question": True, "candidate": "Путин", "country": "Russia", "office": "president", "election_year": None}
+    pack.update({"original_user_text": "Путин победит на выборах?", "election_context": ctx, "market_resolution": {"domain": "politics", "election_context": ctx}})
+    answer = append_live_followup_suggestions("Коротко.\nDecision: DATA NEEDED", pack, "ru")
+    low = answer.lower()
+    assert "найти активный polymarket-рынок?" in low
+    assert "eligibility" in low
+    assert "resolution" in low
