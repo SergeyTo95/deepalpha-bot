@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 import re
+from services.live_election_context_service import extract_election_candidate_context
 
 DOMAINS = {"crypto","sports","esports","politics","polymarket","macro","weather","calculator","translation","explanation","casual","general","unknown"}
 MARKET_DOMAINS = {"crypto", "sports", "esports", "politics", "polymarket", "macro"}
@@ -108,12 +109,14 @@ def _detect_general_intent(text: str) -> tuple[str, str, dict, list[str], Option
 
 
 def _detect_domain(text: str, router_result: Optional[Dict[str, Any]], understanding: Optional[Dict[str, Any]]) -> str:
+    if extract_election_candidate_context(text).get("is_election_question"):
+        return "politics"
     for src in (router_result, understanding):
         d = _ctx_domain(src)
         if d != "unknown":
             return d
     value = _low(text)
-    if "trump" in value or "трамп" in value or "выбор" in value or "election" in value:
+    if "выбор" in value or "election" in value or re.search(r"\b(?:president|senate|congress)\b|президент", value):
         return "politics"
     if "polymarket.com" in value:
         return "polymarket"
@@ -161,7 +164,8 @@ def resolve_live_conversation_intent(current_text: str, *, previous_context: dic
     ctx = pending_clarification or previous_context or {}
     ctx_domain = _ctx_domain(ctx)
     domain = ctx_domain if ctx_domain != "unknown" else _detect_domain(current_text, router_result, understanding)
-    subject = _ctx_subject(ctx) or _ctx_subject(understanding) or _ctx_subject(router_result)
+    election_ctx = extract_election_candidate_context(current_text, previous_context=previous_context, pending_clarification=pending_clarification, ui_language=ui_language)
+    subject = _ctx_subject(ctx) or _ctx_subject(understanding) or _ctx_subject(router_result) or election_ctx.get("candidate")
     missing = _missing(ctx)
     filled: Dict[str, Any] = {}
     is_followup = bool(ctx and current_text and (len(current_text.split()) <= 5 or _extract_url(current_text)))

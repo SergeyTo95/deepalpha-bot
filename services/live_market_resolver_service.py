@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from services.live_election_context_service import extract_election_candidate_context
 from typing import Any, Dict, List, Optional
 
 
@@ -48,6 +49,9 @@ def implied_probability_from_decimal_odds(odds: Any) -> Optional[float]:
 
 
 def _detect_domain(text: str) -> str:
+    election_ctx = extract_election_candidate_context(text)
+    if election_ctx.get("is_election_question"):
+        return "politics"
     low = (text or "").lower()
     if re.search(r"\b(btc|eth|sol|xrp|bitcoin|ethereum|crypto|long|short|entry|futures)\b|лонг|шорт|крипт|биткоин|эфир", low):
         return "crypto"
@@ -89,11 +93,18 @@ def _subject(text: str, domain: str) -> Optional[str]:
     hits = [name for name, pat in known if re.search(pat, low)]
     if hits:
         return " / ".join(dict.fromkeys(hits))
+    if domain == "politics":
+        candidate = extract_election_candidate_context(text).get("candidate")
+        if candidate:
+            return str(candidate)
     cleaned = re.sub(r"[?!.]+", "", text).strip()
     return cleaned or None
 
 
 def _extract_election_year(text: str) -> Optional[int]:
+    ctx_year = extract_election_candidate_context(text).get("election_year")
+    if ctx_year:
+        return int(ctx_year)
     match = re.search(r"\b(20\d{2}|19\d{2})\b", text or "")
     if not match:
         return None
@@ -111,12 +122,11 @@ def _has_yes_no_side(text: str) -> bool:
 def _is_ambiguous_election_reference(text: str, domain: str) -> bool:
     if domain != "politics":
         return False
-    low = (text or "").lower()
-    electionish = bool(re.search(r"election|elections|выбор|president|президент", low))
-    broad_win = bool(re.search(r"\bwin\b|побед", low)) and bool(re.search(r"trump|трамп|кто|who", low))
-    if not (electionish or broad_win):
+    ctx = extract_election_candidate_context(text)
+    if not ctx.get("is_election_question"):
         return False
-    if _extract_election_year(text):
+    low = (text or "").lower()
+    if ctx.get("election_year") or ctx.get("market_url"):
         return False
     if re.search(r"polymarket\.com|slug=|condition_id=|/event/|/market/", low):
         return False
@@ -173,9 +183,15 @@ def resolve_live_market_context(user_text: str, *, ui_language: str = "ru", rout
     intent = _detect_intent(text, domain)
     subject = _subject(text, domain)
     out.update({"domain": domain, "intent": intent, "subject": subject})
-    election_year = _extract_election_year(text) if domain == "politics" else None
+    election_ctx = extract_election_candidate_context(text, ui_language=ui_language) if domain == "politics" else {}
+    election_year = election_ctx.get("election_year") if domain == "politics" else None
     if election_year:
         out["election_year"] = election_year
+    if election_ctx:
+        out["election_context"] = election_ctx
+        for key in ("candidate", "country", "office", "election_type", "eligibility_status", "eligibility_reason"):
+            if election_ctx.get(key) not in (None, "", []):
+                out[key] = election_ctx.get(key)
     ambiguous_election = _is_ambiguous_election_reference(text, domain)
     odds_match = re.search(r"(?i)(?:odds|кэф|коэффициент)\s*[:=]?\s*(\d+(?:[.,]\d+)?)", text)
     if odds_match:
@@ -196,7 +212,7 @@ def resolve_live_market_context(user_text: str, *, ui_language: str = "ru", rout
         out["resolved"] = False
         out["search_attempted"] = True
         out["intent"] = "probability_check" if intent in {"unknown", "market_lookup"} else intent
-        _add_missing(out, "election_year", "market", "side", "probability")
+        _add_missing(out, *(election_ctx.get("missing_data") or ["election_year"]), "market", "side", "probability")
         if "ambiguous_election_reference" not in out["notes"]:
             out["notes"].append("ambiguous_election_reference")
         return out
