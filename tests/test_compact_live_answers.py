@@ -121,3 +121,72 @@ def test_no_forbidden_wording_in_politics_ambiguity_template():
     low = answer.lower()
     for phrase in ("guaranteed profit", "guaranteed win", "ставь", "покупай", "100%"):
         assert phrase not in low
+
+
+def _trump_2028_pack(label="DATA NEEDED"):
+    pack = _politics_pack()
+    pack.update({
+        "mode": "polymarket",
+        "original_user_text": "Трамп победит на президентских выборах 2028?",
+        "normalized_query": "Trump wins 2028 US presidential election 22nd Amendment cannot be elected again",
+        "deepalpha_score": _score(label),
+        "market_resolution": {"domain": "politics", "notes": ["22nd Amendment", "cannot be elected again"]},
+    })
+    return pack
+
+
+def test_politics_final_followups_contain_polymarket_resolution_liquidity():
+    pack = _politics_pack()
+    answer = append_live_followup_suggestions(
+        "📊 DeepAlpha Score: 43/100\nРешение: DATA NEEDED\n\nКоротко.\nDecision: DATA NEEDED\n\nХочешь продолжить разбор?\n\n- Посчитать value под твой коэффициент?\n- Найти минимальный playable odds / fair price?",
+        pack,
+        "ru",
+    )
+    low = answer.lower()
+    assert "polymarket" in low
+    assert "resolution" in low
+    assert "ликвидность" in low or "liquidity" in low
+    for phrase in ("playable odds", "fair price", "ставка", "поставить", "no bet"):
+        assert phrase not in low
+
+
+def test_ru_final_answer_removes_duplicate_english_decision_when_ru_decision_exists():
+    answer = compact_live_answer_if_needed(
+        "📊 DeepAlpha Score: 43/100\nРешение: DATA NEEDED\n\nИтог: ждать\n\nDecision: DATA NEEDED",
+        _politics_pack(),
+        "ru",
+    )
+    assert "Решение: DATA NEEDED" in answer
+    assert "Decision: DATA NEEDED" not in answer
+
+
+def test_trump_2028_legal_impossibility_direct_answer_and_no_no_bet():
+    answer = format_live_final_answer(
+        "По 22nd Amendment Trump cannot be elected again. Decision: NO BET",
+        _trump_2028_pack(),
+        "ru",
+        user_text="2028",
+    )
+    low = answer.lower()
+    assert "напрямую" in low
+    assert "не может" in low
+    assert "deepalpha score" in low
+    assert "data needed" in low or "no edge" in low
+    assert "no bet" not in low
+
+
+def test_trump_2028_followups_are_specific_and_safe():
+    answer = append_live_followup_suggestions("Коротко.\nDecision: DATA NEEDED", _trump_2028_pack(), "ru")
+    low = answer.lower()
+    assert "polymarket-рынок на выборы 2028" in low
+    assert "resolution" in low
+    assert "ликвидность" in low
+    assert "преемник" in low
+    for phrase in ("playable odds", "fair price", "ставка", "поставить", "no bet"):
+        assert phrase not in low
+
+
+def test_general_utility_answer_still_has_no_deepalpha_score():
+    pack = {"mode": "general", "deepalpha_score": _score(), "universal_live_frame": {"domain": "utility"}}
+    answer = format_live_final_answer("Коротко: можно составить список задач. Decision: DATA NEEDED", pack, "ru", user_text="как составить список задач")
+    assert "DeepAlpha Score" not in answer

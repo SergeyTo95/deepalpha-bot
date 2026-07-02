@@ -231,6 +231,87 @@ def _is_crypto_timeframe_compare(evidence_pack: Dict[str, Any]) -> bool:
     )
 
 
+_POLITICS_DOMAIN_VALUES = {"politics", "polymarket", "prediction_market", "prediction_markets"}
+_POLITICS_TEXT_MARKERS = (
+    "трамп", "выбор", "выборы", "election", "politics", "political", "polymarket",
+    "prediction market", "president", "президент", "22nd amendment", "22-я поправка",
+)
+
+
+def _is_politics_prediction_context(
+    evidence_pack: Optional[Dict[str, Any]] = None,
+    ui_language: str = "ru",
+    user_text: str = "",
+    understanding: Optional[Dict[str, Any]] = None,
+    router_result: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Detect politics / Polymarket / prediction-market context for final-answer safety."""
+    pack = evidence_pack or {}
+    understanding = understanding or pack.get("understanding") or {}
+    router_result = router_result or pack.get("router_result") or {}
+    market_resolution = pack.get("market_resolution") or {}
+    conversation_intelligence = pack.get("conversation_intelligence") or pack.get("live_conversation_intelligence") or {}
+    frame = pack.get("universal_live_frame") or {}
+    hay = _flatten_live_values(
+        pack.get("mode"), pack.get("intent"), pack.get("domain"),
+        understanding.get("mode"), understanding.get("domain"), understanding.get("intent"),
+        router_result.get("mode"), (router_result.get("entities") or {}).get("domain"),
+        market_resolution.get("domain"), market_resolution.get("market_type"), market_resolution.get("event_type"),
+        conversation_intelligence.get("domain"), conversation_intelligence.get("intent"),
+        frame.get("domain"), frame.get("safety_domain"), frame.get("mode"), frame.get("user_intent"),
+        user_text, pack.get("original_user_text"), pack.get("normalized_query"),
+    )
+    return any(value in hay for value in _POLITICS_DOMAIN_VALUES) or any(marker in hay for marker in _POLITICS_TEXT_MARKERS)
+
+
+def _is_trump_2028_legal_context(answer: str, evidence_pack: Optional[Dict[str, Any]] = None, user_text: str = "") -> bool:
+    hay = _flatten_live_values(answer, user_text, (evidence_pack or {}).get("original_user_text"), (evidence_pack or {}).get("normalized_query"), evidence_pack)
+    has_trump_2028 = ("trump" in hay or "трамп" in hay) and "2028" in hay and ("president" in hay or "президент" in hay or "выбор" in hay or "election" in hay)
+    legal_markers = ("22nd amendment", "22-я поправка", "constitutionally impossible", "конституционно невозможно", "cannot be elected again", "не может быть избран")
+    return has_trump_2028 and any(marker in hay for marker in legal_markers)
+
+
+def _politics_followup_lines(ui_language: str = "ru", trump_2028: bool = False) -> List[str]:
+    if ui_language == "ru":
+        if trump_2028:
+            return [
+                "Найти активный Polymarket-рынок на выборы 2028?",
+                "Проверить правила resolution и ликвидность?",
+                "Разобрать сценарии: преемник, номинация, обходной путь?",
+            ]
+        return [
+            "Найти активный Polymarket-рынок?",
+            "Проверить ликвидность и правила resolution?",
+            "Разобрать Yes/No сторону и рыночную вероятность?",
+        ]
+    if trump_2028:
+        return [
+            "Find the active Polymarket market for 2028?",
+            "Check resolution rules and liquidity?",
+            "Break down scenarios: successor, nomination, workaround?",
+        ]
+    return [
+        "Find the active Polymarket market?",
+        "Check liquidity and resolution rules?",
+        "Break down the Yes/No side and market probability?",
+    ]
+
+
+def _ensure_trump_2028_direct_legal_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str, user_text: str = "") -> str:
+    text = str(answer or "")
+    if ui_language != "ru" or not _is_trump_2028_legal_context(text, evidence_pack, user_text):
+        return text
+    if "напрямую победить" in text.lower() and "не может" in text.lower():
+        return text
+    direct = (
+        "Коротко: напрямую победить на президентских выборах 2028 он не может, "
+        "если речь именно о посте президента США.\n\n"
+        "Для Polymarket-анализа всё равно нужен конкретный рынок/ссылка, потому что рынок может быть "
+        "не про прямую победу, а про кандидата, номинацию, преемника или обходной сценарий."
+    )
+    return _clean_live_spacing(f"{direct}\n\n{text}")
+
+
 def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru") -> str:
     """Build compact, ethical follow-up prompts for successful Live Analyst answers."""
     lang = "ru" if ui_language == "ru" else "en"
@@ -252,7 +333,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
         else:
             is_politics = mode in ("polymarket", "prediction_market", "politics") or str((pack.get("market_resolution") or {}).get("domain") or "").lower() == "politics"
             if is_politics:
-                lines = ["Найти активный Polymarket-рынок?", "Посчитать probability и edge по Yes/No?", "Проверить ликвидность, правила resolution и риски?"] if lang == "ru" else ["Find an active Polymarket market?", "Calculate probability and edge for Yes/No?", "Check liquidity, resolution rules, and risks?"]
+                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
             else:
                 lines = ["Посчитать value под твой коэффициент?", "Разобрать факторы, которые двигают вероятность?", "Показать fair odds / минимальный playable odds?"] if lang == "ru" else ["Calculate value for your odds?", "Break down factors that move probability?", "Show fair odds / minimum playable odds?"]
         return "\n".join(f"- {line}" for line in lines[:3])
@@ -271,7 +352,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Разобрать уровни, таймфрейм и отмену сценария?"
             elif domain == "politics":
-                lines = ["Найти активный Polymarket-рынок?", "Посчитать probability и edge по Yes/No?", "Проверить ликвидность, правила resolution и риски?"]
+                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
                 return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Разобрать правила, участников и таймлайн?"
@@ -285,7 +366,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
             elif domain == "crypto":
                 middle = "Break down levels, timeframe, and invalidation?"
             elif domain == "politics":
-                lines = ["Find an active Polymarket market?", "Calculate probability and edge for Yes/No?", "Check liquidity, resolution rules, and risks?"]
+                lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
                 return "\n".join(f"- {line}" for line in lines[:3])
             elif domain in ("event", "unknown"):
                 middle = "Break down rules, participants, and timeline?"
@@ -324,11 +405,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Найти минимальный playable odds для этого сценария?",
             ]
         elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-            lines = [
-                "Найти активный Polymarket-рынок?",
-                "Посчитать probability и edge по Yes/No?",
-                "Проверить ликвидность, правила resolution и риски?",
-            ]
+            lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         else:
             lines = [
                 "Разобрать тему глубже по шагам?",
@@ -367,11 +444,7 @@ def build_live_followup_suggestions(evidence_pack: dict, ui_language: str = "ru"
                 "Find the minimum playable odds for this setup?",
             ]
         elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-            lines = [
-                "Find an active Polymarket market?",
-                "Calculate probability and edge for Yes/No?",
-                "Check liquidity, resolution rules, and risks?",
-            ]
+            lines = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         else:
             lines = [
                 "Break this down step by step?",
@@ -486,11 +559,7 @@ def build_live_suggested_actions(evidence_pack: dict, ui_language: str = "ru") -
             "Find the minimum playable odds for this setup and explain the assumptions.",
         ]
     elif mode in ("polymarket", "prediction_market", "politics") or "polymarket" in intent or "politic" in intent:
-        labels = [
-            "Найти активный Polymarket-рынок?" if lang == "ru" else "Find an active Polymarket market?",
-            "Посчитать probability и edge по Yes/No?" if lang == "ru" else "Calculate probability and edge for Yes/No?",
-            "Проверить ликвидность, правила resolution и риски?" if lang == "ru" else "Check liquidity, resolution rules, and risks?",
-        ]
+        labels = _politics_followup_lines(lang, _is_trump_2028_legal_context("", pack, str(pack.get("original_user_text") or pack.get("normalized_query") or "")))
         ids = ["find_active_polymarket_market", "yes_no_probability_edge", "liquidity_resolution_risks"]
         templates = [
             "Find the active Polymarket market for this political event; ask for a link if ambiguous.",
@@ -538,7 +607,16 @@ def append_live_followup_suggestions(answer: str, evidence_pack: dict, ui_langua
         "you can continue with:",
         "want to continue the analysis?",
     )
-    if any(existing in lower for existing in existing_titles):
+    is_politics = _is_politics_prediction_context(evidence_pack or {}, ui_language)
+    if is_politics:
+        # Strip any previously composed generic betting/sports follow-up section and rebuild it safely.
+        text = re.sub(
+            r"(?is)\n{1,2}(?:Хочешь продолжить разбор\?|Можно продолжить:|Want to continue the analysis\?|You can continue with:).*\Z",
+            "",
+            text,
+        ).strip()
+        lower = text.lower()
+    elif any(existing in lower for existing in existing_titles):
         return answer
     suggestions = build_live_followup_suggestions(evidence_pack or {}, ui_language=ui_language)
     if not suggestions.strip():
@@ -1566,8 +1644,13 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     is_event_betting = mode_lower in ("esports", "event_betting") and not non_market_adaptive
     if is_crypto:
         decision = _first_evidence_decision(evidence_pack, decision)
+    is_politics_prediction = _is_politics_prediction_context(evidence_pack, ui_language, user_text, understanding, router_result)
+    if is_politics_prediction and decision == "NO BET":
+        decision = "DATA NEEDED"
     if (is_sports or is_event_betting) and decision not in _SPORTS_DECISION_LABELS:
         decision = "DATA NEEDED"
+    if is_politics_prediction:
+        text = re.sub(r"(?im)^\s*Decision\s*:\s*NO BET\b\s*$", "Decision: DATA NEEDED", text)
     text = _normalize_decision_lines(text, decision)
     text = _clean_live_spacing(text)
     if is_crypto and _is_crypto_timeframe_compare(evidence_pack):
@@ -1593,7 +1676,11 @@ def format_live_final_answer(answer: str, evidence_pack: Dict[str, Any], ui_lang
     text = re.sub(r"(?im)^\s*Decision\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
     text = re.sub(r"(?im)^\s*(?:Итог|Final)\s*:\s*(?:\n\s*)?(WATCH|DATA NEEDED|NO TRADE|EDGE CANDIDATE|NO BET|NO EDGE)\b\s*\.?,?\s*$", "", text).strip()
     text = re.sub(r"\*{2,}", "", text).strip()
+    if is_politics_prediction:
+        text = re.sub(r"(?i)\bDecision\s*:\s*NO BET\b", "Decision: DATA NEEDED", text)
+        text = re.sub(r"(?i)\bNO BET\b", "DATA NEEDED", text)
     text = _remove_technical_followup_metadata(text)
+    text = _ensure_trump_2028_direct_legal_answer(text, evidence_pack, ui_language, user_text)
     text = _clean_live_spacing(f"{text}\n\nDecision: {decision}")
     text = prepend_deepalpha_score_if_needed(text, evidence_pack, ui_language, understanding, router_result, user_text)
     text = compact_live_answer_if_needed(text, evidence_pack, ui_language, user_text=user_text)
