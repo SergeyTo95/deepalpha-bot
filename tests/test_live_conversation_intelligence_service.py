@@ -118,3 +118,98 @@ def test_pending_macron_yes_keeps_candidate_year_and_fills_side():
     assert r["election_context"]["candidate"] == "Макрон"
     assert r["election_context"]["election_year"] == 2027
     assert r["completed_text"] == "Макрон победит на выборах 2027? Yes"
+
+from services.live_conversation_intelligence_service import resolve_short_live_followup
+from services.live_conversation_intelligence_service import cleanup_final_politics_election_answer
+from services import live_context_memory as memory
+
+
+def macron_context():
+    return {
+        "domain": "politics",
+        "mode": "polymarket",
+        "original_user_text": "Макрон победит на выборах 2027?",
+        "normalized_query": "Макрон победит на выборах 2027?",
+        "candidate": "Макрон",
+        "country": "France",
+        "election_year": 2027,
+        "election_context": {"is_election_question": True, "candidate": "Макрон", "country": "France", "election_year": 2027},
+    }
+
+
+def test_short_followup_macron_year_reconstructs_context_first():
+    prev = {"domain": "politics", "original_user_text": "Макрон победит на выборах?", "candidate": "Макрон", "country": "France", "election_context": {"is_election_question": True, "candidate": "Макрон", "country": "France"}}
+    r = resolve_short_live_followup("2027", prev, None, ui_language="ru")
+    assert r["effective_text"] == "Макрон победит на выборах 2027?"
+    assert r["filled"]["election_year"] == 2027
+
+
+def test_successful_context_stores_effective_election_fields_not_short_reply():
+    memory.clear_live_context_memory()
+    ctx = memory.save_live_context(
+        7101,
+        mode="polymarket",
+        original_user_text="Макрон победит на выборах 2027?",
+        normalized_query="Макрон победит на выборах 2027?",
+        latest_user_text="2027",
+        raw_user_text="2027",
+        last_effective_user_text="Макрон победит на выборах 2027?",
+        market_domain="politics",
+        election_context={"is_election_question": True, "candidate": "Макрон", "country": "France", "election_year": 2027},
+        candidate="Макрон",
+        country="France",
+        election_year=2027,
+    )
+    assert ctx["original_user_text"] == "Макрон победит на выборах 2027?"
+    assert ctx["latest_user_text"] == "2027"
+    assert ctx["candidate"] == "Макрон"
+    assert ctx["country"] == "France"
+    assert ctx["election_year"] == 2027
+    assert ctx["domain"] == "politics"
+
+
+def test_short_followup_macron_yes_reconstructs_yes_not_crypto():
+    r = resolve_live_conversation_intent("Да", previous_context=macron_context(), ui_language="ru")
+    assert r["domain"] == "politics"
+    assert r["completed_text"] == "Макрон победит на выборах 2027? Yes"
+    assert r["filled"]["side"] == "Yes"
+
+
+def test_explicit_btc_2027_yes_overrides_previous_election_context():
+    r = resolve_live_conversation_intent("BTC 2027 yes", previous_context=macron_context(), ui_language="ru")
+    assert r["domain"] == "crypto"
+
+
+def test_country_and_office_short_followups_fill_election_context():
+    prev = {"domain": "politics", "original_user_text": "Кто победит на выборах?", "election_context": {"is_election_question": True}}
+    assert resolve_short_live_followup("Франция", prev, None)["filled"]["country"] == "France"
+    assert resolve_short_live_followup("президентские", prev, None)["filled"]["office"] == "president"
+
+
+def test_yes_after_election_fills_side_and_continue_when_side_exists():
+    no_side = macron_context(); no_side.pop("side", None)
+    assert resolve_short_live_followup("Yes", no_side, None)["filled"]["side"] == "Yes"
+    with_side = macron_context(); with_side["side"] = "Yes"; with_side["election_context"]["side"] = "Yes"
+    r = resolve_short_live_followup("Да", with_side, None)
+    assert r["should_continue_previous_analysis"] is True
+    assert r["filled"] == {}
+
+
+def test_yes_after_continue_prompt_keeps_election_context():
+    pending = macron_context() | {"bot_clarification_message": "Хочешь продолжить разбор?"}
+    r = resolve_live_conversation_intent("Да", pending_clarification=pending, ui_language="ru")
+    assert r["domain"] == "politics"
+    assert r["completed_text"] == "Макрон победит на выборах 2027?"
+    assert r["answer_strategy"] == "continue_previous_analysis"
+
+
+def test_final_politics_cleanup_removes_betting_terms_and_adds_safe_followups():
+    answer = "Решение: DATA NEEDED\nDecision: DATA NEEDED\nplayable odds 55%\nfair price 0.42\nvalue под твой коэффициент\nNO BET\nМожно поставить позже"
+    cleaned = cleanup_final_politics_election_answer(answer, {"mode": "polymarket", "election_context": {"election_year": 2027}}, "ru")
+    low = cleaned.lower()
+    for banned in ["playable odds", "fair price", "value под твой коэффициент", "no bet"]:
+        assert banned not in low
+    assert "Polymarket" in cleaned
+    assert "eligibility" in cleaned
+    assert "resolution" in cleaned
+    assert "ликвидность" in cleaned
