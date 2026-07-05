@@ -22,7 +22,7 @@ AIRDROP_REFERRER_POINTS = 50
 AIRDROP_REFERRED_USER_POINTS = 20
 _ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
 _REFERRAL_REASONS = {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
-_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus"}
+_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus", "referral_milestone_confirmed"}
 
 
 def _is_supported_reason(reason: str) -> bool:
