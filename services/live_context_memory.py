@@ -144,7 +144,7 @@ def get_live_context(user_id: int) -> Optional[Dict[str, Any]]:
     return dict(ctx)
 
 
-def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None, market_domain: str = "", market_type: str = "", event: str = "", participants: Any = None, side: Any = None, line: Any = None, implied_probability: Any = None, asset: str = "", price: Any = None, universal_live_frame: Optional[Dict[str, Any]] = None, followup_state: Optional[Dict[str, Any]] = None, user_intent: str = "", subject: str = "", question_type: str = "", safety_domain: str = "", answer_style: str = "", evidence_needs: Optional[List[str]] = None, missing_data: Optional[List[str]] = None, allowed_decision_labels: Optional[List[str]] = None) -> Dict[str, Any]:
+def save_live_context(user_id: int, *, mode: str, original_user_text: str, normalized_query: str = "", asset_pair: str = "", timeframe: str = "", teams_event: Any = None, market: str = "", odds: Any = None, key_levels: Optional[Dict[str, Any]] = None, last_final_answer: str = "", suggested_actions: Optional[List[Dict[str, Any]]] = None, market_domain: str = "", market_type: str = "", event: str = "", participants: Any = None, side: Any = None, line: Any = None, implied_probability: Any = None, asset: str = "", price: Any = None, universal_live_frame: Optional[Dict[str, Any]] = None, followup_state: Optional[Dict[str, Any]] = None, user_intent: str = "", subject: str = "", question_type: str = "", safety_domain: str = "", answer_style: str = "", evidence_needs: Optional[List[str]] = None, missing_data: Optional[List[str]] = None, allowed_decision_labels: Optional[List[str]] = None, latest_user_text: str = "", raw_user_text: str = "", last_effective_user_text: str = "", election_context: Optional[Dict[str, Any]] = None, candidate: str = "", country: str = "", office: str = "", election_year: Any = None, market_url: str = "") -> Dict[str, Any]:
     previous = _contexts.get(int(user_id)) or {}
     now = _now()
     ctx = {
@@ -152,6 +152,9 @@ def save_live_context(user_id: int, *, mode: str, original_user_text: str, norma
         "mode": mode or "general",
         "original_user_text": (original_user_text or "")[:1000],
         "normalized_query": (normalized_query or original_user_text or "")[:1000],
+        "latest_user_text": (latest_user_text or previous.get("latest_user_text") or original_user_text or "")[:1000],
+        "raw_user_text": (raw_user_text or latest_user_text or previous.get("raw_user_text") or original_user_text or "")[:1000],
+        "last_effective_user_text": (last_effective_user_text or normalized_query or original_user_text or "")[:1000],
         "asset_pair": asset_pair or "",
         "timeframe": timeframe or "",
         "teams_event": teams_event or "",
@@ -177,6 +180,12 @@ def save_live_context(user_id: int, *, mode: str, original_user_text: str, norma
         "evidence_needs": list(evidence_needs or (universal_live_frame or {}).get("evidence_needs") or previous.get("evidence_needs") or []),
         "missing_data": list(missing_data or (universal_live_frame or {}).get("missing_data") or previous.get("missing_data") or []),
         "allowed_decision_labels": list(allowed_decision_labels or (universal_live_frame or {}).get("allowed_decision_labels") or previous.get("allowed_decision_labels") or []),
+        "election_context": election_context or (universal_live_frame or {}).get("election_context") or previous.get("election_context") or {},
+        "candidate": candidate or (election_context or {}).get("candidate") or previous.get("candidate") or "",
+        "country": country or (election_context or {}).get("country") or previous.get("country") or "",
+        "office": office or (election_context or {}).get("office") or previous.get("office") or "",
+        "election_year": election_year if election_year not in (None, "") else ((election_context or {}).get("election_year") or previous.get("election_year") or ""),
+        "market_url": market_url or (election_context or {}).get("market_url") or previous.get("market_url") or "",
         "key_levels": key_levels or {},
         "last_final_answer": (last_final_answer or "")[:1600],
         "suggested_actions": list(suggested_actions or previous.get("suggested_actions") or [])[:3],

@@ -55,7 +55,7 @@ from services.live_analyst_memory_service import (
     update_context_from_user_text,
 )
 from db.database import count_live_analyst_messages_today
-from services.live_conversation_intelligence_service import resolve_live_conversation_intent
+from services.live_conversation_intelligence_service import resolve_live_conversation_intent, cleanup_final_politics_election_answer
 from services.live_election_context_service import extract_election_candidate_context
 
 LIVE_UNAVAILABLE_MESSAGE = "Live Analyst временно недоступен. Токены за этот запрос не списаны."
@@ -2586,13 +2586,16 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
     else:
         teams_event = str(teams or "")
     market_fields = _market_context_fields_from_pack(understanding, router_result, evidence_pack)
-    extra_market_fields = {k: v for k, v in market_fields.items() if k not in ("odds", "timeframe")}
+    extra_market_fields = {k: v for k, v in market_fields.items() if k not in ("odds", "timeframe", "side")}
     frame = (evidence_pack or {}).get("universal_live_frame") or {}
+    election_context = (evidence_pack or {}).get("election_context") or ((evidence_pack or {}).get("conversation_intelligence") or {}).get("election_context") or extract_election_candidate_context(normalized_query or original_text)
+    if election_context.get("is_election_question"):
+        frame = {**frame, "domain": "politics", "election_context": election_context}
     save_live_context(
         int(user_id),
         mode=mode,
-        original_user_text=original_text,
-        normalized_query=normalized_query,
+        original_user_text=normalized_query or original_text,
+        normalized_query=normalized_query or original_text,
         asset_pair=(understanding or {}).get("pair") or entities.get("pair") or (facts.get("symbol") or facts.get("pair") or market_fields.get("asset") or ""),
         timeframe=market_fields.get("timeframe") or (understanding or {}).get("timeframe") or entities.get("timeframe") or evidence_pack.get("timeframe") or "",
         teams_event=teams_event,
@@ -2612,6 +2615,16 @@ def _store_successful_live_context(user_id: int, original_text: str, normalized_
         evidence_needs=frame.get("evidence_needs") or [],
         missing_data=frame.get("missing_data") or (evidence_pack or {}).get("missing_data") or [],
         allowed_decision_labels=frame.get("allowed_decision_labels") or [],
+        latest_user_text=original_text,
+        raw_user_text=original_text,
+        last_effective_user_text=normalized_query or original_text,
+        election_context=election_context if election_context.get("is_election_question") else {},
+        candidate=(election_context or {}).get("candidate") or "",
+        country=(election_context or {}).get("country") or "",
+        office=(election_context or {}).get("office") or "",
+        election_year=(election_context or {}).get("election_year"),
+        side=(election_context or {}).get("side") or market_fields.get("side"),
+        market_url=(election_context or {}).get("market_url") or "",
     )
 
 
@@ -2730,6 +2743,7 @@ def _handle_utility_live_intent(intel: Dict[str, Any], text: str, ui_language: s
     if domain == "casual":
         return {"ok": True, "message": "Привет! Напиши вопрос — могу разобрать рынок, посчитать вероятность/кэф или просто объяснить термин.", "charged": False, "conversation_intelligence": intel}
     return None
+
 
 def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = None, ui_language: Optional[str] = None) -> Dict[str, Any]:
     ui_language = "ru" if ui_language == "ru" else "en"
@@ -2938,6 +2952,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             fallback = build_deterministic_live_answer(evidence_pack, ui_language=ui_language)
         fallback = prepend_deepalpha_score_if_needed(fallback, evidence_pack, ui_language, understanding, router_result, text)
         fallback = append_live_followup_suggestions(fallback, evidence_pack, ui_language)
+        fallback = cleanup_final_politics_election_answer(fallback, evidence_pack, ui_language)
         if not fallback:
             return None
         logger.warning("live_deterministic_fallback_used user_id=%s mode=%s reason=%s", user_id, mode, reason)
@@ -3011,6 +3026,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
     else:
         answer = format_live_final_answer(answer, evidence_pack, ui_language, user_text=text, understanding=understanding, router_result=router_result)
     answer = append_live_followup_suggestions(answer, evidence_pack, ui_language)
+    answer = cleanup_final_politics_election_answer(answer, evidence_pack, ui_language)
 
     ai_quality = score_ai_response_quality(answer, evidence_pack, validation)
     logger.info("ai_control_quality_scored user_id=%s mode=%s quality=%s penalties=%s bonuses=%s", user_id, ai_control_context.get("mode"), ai_quality.get("quality_score"), ai_quality.get("penalties"), ai_quality.get("bonuses"))

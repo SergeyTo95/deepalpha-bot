@@ -158,11 +158,182 @@ def _reconstruct(original: str, current: str, domain: str, filled: Dict[str, Any
     return None
 
 
+
+def _is_explicit_new_domain(text: str) -> bool:
+    value = _low(text)
+    if re.search(r"\b(?:btc|eth|sol|xrp|usdt|bitcoin|биткоин|крипт|лонг|шорт|futures?|entry)\b", value):
+        return True
+    if "погод" in value or re.search(r"\bweather\b", value):
+        return True
+    if any(k in value for k in ("real madrid", "реал", "матч", "тотал", "фора")) and len(value.split()) > 1:
+        return True
+    return False
+
+
+def _country_only(text: str) -> str:
+    ec = extract_election_candidate_context(f"выборы {text}")
+    return ec.get("country") or ""
+
+
+def _office_only(text: str) -> str:
+    ec = extract_election_candidate_context(f"{text} выборы")
+    return ec.get("office") or ""
+
+
+def _has_authoritative_election_context(ctx: Optional[Dict[str, Any]]) -> bool:
+    if not ctx:
+        return False
+    ec = ctx.get("election_context") if isinstance(ctx.get("election_context"), dict) else {}
+    return bool(
+        _ctx_domain(ctx) in {"politics", "polymarket"}
+        or ec
+        or ctx.get("candidate")
+        or ctx.get("country")
+        or ctx.get("office")
+        or ctx.get("election_year")
+        or ("выбор" in _low(_original(ctx)) or "election" in _low(_original(ctx)))
+    )
+
+
+def _merge_election_context(base: dict, filled: dict) -> dict:
+    merged = dict(base or {})
+    for key in ("candidate", "country", "office", "election_year", "side", "market_url"):
+        if filled.get(key) not in (None, "", [], {}):
+            merged[key] = filled[key]
+    if merged:
+        merged["is_election_question"] = True
+        if merged.get("office") == "president":
+            merged.setdefault("election_type", "presidential")
+    return merged
+
+
+def _reconstruct_election_followup(original: str, current: str, filled: dict, election_ctx: dict) -> str:
+    base = (original or "").strip() or (election_ctx.get("original_user_text") or "").strip()
+    if not base:
+        cand = election_ctx.get("candidate") or filled.get("candidate") or ""
+        country = election_ctx.get("country") or filled.get("country") or ""
+        year = election_ctx.get("election_year") or filled.get("election_year") or ""
+        base = f"{cand} победит на выборах".strip() if cand else "Кто победит на выборах"
+        if country:
+            base += f" во {country}" if country == "France" else f" {country}"
+        if year:
+            base += f" {year}"
+        base += "?"
+    base = re.sub(r"\s+", " ", base).strip()
+    if filled.get("candidate") and not re.search(re.escape(str(filled["candidate"])), base, re.I):
+        country_part = ""
+        country = election_ctx.get("country") or filled.get("country")
+        if country == "France":
+            country_part = " во Франции"
+        return f"{filled['candidate']} победит на выборах{country_part}?"
+    if filled.get("election_year") and not re.search(rf"\b{filled['election_year']}\b", base):
+        return base.rstrip().rstrip("?").rstrip() + f" {filled['election_year']}?"
+    if filled.get("country") and filled["country"] not in (election_ctx.get("country"),):
+        return base.rstrip().rstrip("?").rstrip() + f" {current.strip()}?"
+    if filled.get("office") and filled["office"] not in (election_ctx.get("office"),):
+        return base.rstrip().rstrip("?").rstrip() + f" {current.strip()}?"
+    if filled.get("side"):
+        return base.rstrip() + f" {filled['side']}"
+    if filled.get("market_url"):
+        return base.rstrip() + f" {filled['market_url']}"
+    return base
+
+
+def resolve_short_live_followup(current_text: str, previous_context: dict | None, pending_clarification: dict | None, ui_language: str = "ru") -> dict:
+    latest = _s(current_text)
+    ctx = pending_clarification or previous_context or {}
+    filled: Dict[str, Any] = {}
+    notes: list[str] = []
+    url = _extract_url(latest)
+    side = _extract_side(latest)
+    year = _extract_year(latest)
+    country = _country_only(latest)
+    office = _office_only(latest)
+    # Do not run candidate extraction for pure yes/no confirmation tokens:
+    # Russian "Да/Нет" can otherwise look like a capitalized candidate in
+    # synthetic strings such as "Да победит на выборах?".
+    candidate = "" if side else (extract_election_candidate_context(f"{latest} победит на выборах?").get("candidate") if latest else "")
+    bot_prompt = _low(ctx.get("bot_clarification_message") or ctx.get("last_final_answer") or "")
+    asked_to_continue = bool("хочешь продолжить" in bot_prompt or "continue" in bot_prompt)
+    is_continue = _low(latest) in {"продолжай", "давай", "разбери", "continue"} or (asked_to_continue and side == "Yes")
+    is_short = bool(url or side or year or country or office or candidate or is_continue or len(latest.split()) <= 2)
+    if not is_short:
+        return {"is_short_followup": False, "domain": None, "effective_text": None, "original_user_text": _original(ctx), "latest_user_text": latest, "filled": {}, "election_context": {}, "should_continue_previous_analysis": False, "should_ask_targeted_choice": False, "notes": []}
+    if _is_explicit_new_domain(latest) and not (url and "polymarket" in url.lower()):
+        return {"is_short_followup": True, "domain": _detect_domain(latest, None, None), "effective_text": None, "original_user_text": _original(ctx), "latest_user_text": latest, "filled": {}, "election_context": {}, "should_continue_previous_analysis": False, "should_ask_targeted_choice": False, "notes": ["explicit_new_domain_overrides_previous_context"]}
+    if not _has_authoritative_election_context(ctx):
+        return {"is_short_followup": is_short, "domain": None, "effective_text": None, "original_user_text": _original(ctx), "latest_user_text": latest, "filled": {}, "election_context": {}, "should_continue_previous_analysis": False, "should_ask_targeted_choice": False, "notes": ["no_authoritative_previous_election_context"]}
+    ec = dict(ctx.get("election_context") or {})
+    for key in ("candidate", "country", "office", "election_year", "side", "market_url"):
+        if ctx.get(key) not in (None, "", [], {}) and not ec.get(key):
+            ec[key] = ctx.get(key)
+    if year:
+        filled["election_year"] = year
+    if side:
+        if is_continue:
+            notes.append("yes_confirms_continue_previous_analysis")
+        elif not ec.get("side"):
+            filled["side"] = side
+        else:
+            is_continue = True
+            notes.append("side_already_present_yes_no_means_continue")
+    if country:
+        filled["country"] = country
+    if candidate and not ec.get("candidate"):
+        filled["candidate"] = candidate
+    if office:
+        filled["office"] = office
+    if url and "polymarket" in url.lower():
+        filled["market_url"] = url
+    if is_continue and not filled:
+        notes.append("continue_previous_analysis")
+    merged_ec = _merge_election_context(ec, filled)
+    effective = _reconstruct_election_followup(_original(ctx), latest, filled, merged_ec) if (filled or is_continue or side) else None
+    return {"is_short_followup": True, "domain": "politics", "effective_text": effective, "original_user_text": _original(ctx), "latest_user_text": latest, "filled": filled, "election_context": merged_ec, "should_continue_previous_analysis": bool(is_continue), "should_ask_targeted_choice": False, "notes": notes}
+
+
+def cleanup_final_politics_election_answer(answer: str, evidence_pack: Dict[str, Any], ui_language: str = "ru") -> str:
+    ctx = (evidence_pack or {}).get("election_context") or ((evidence_pack or {}).get("conversation_intelligence") or {}).get("election_context") or {}
+    domain = str(((evidence_pack or {}).get("conversation_intelligence") or {}).get("domain") or (evidence_pack or {}).get("mode") or "").lower()
+    if domain not in {"politics", "polymarket"} and not ctx:
+        return answer
+    lines = []
+    seen_decision = False
+    banned = re.compile(r"(?i)(playable odds|fair price|value\s+под\s+твой\s+коэффициент|\bNO BET\b|\bставк|поставить)")
+    for line in (answer or "").splitlines():
+        if banned.search(line):
+            continue
+        if re.search(r"(?i)^\s*Decision:\s*DATA NEEDED", line):
+            if seen_decision:
+                continue
+            seen_decision = True
+        if "Решение:" in line:
+            seen_decision = True
+        lines.append(line)
+    cleaned = "\n".join(lines).strip()
+    year = ctx.get("election_year") or "нужный год"
+    safe = [
+        f"Найти активный Polymarket-рынок на выборы {year}?",
+        "Проверить eligibility, правила resolution и ликвидность?",
+        "Разобрать сценарии: кандидат, номинация, партия, преемник?",
+    ]
+    cleaned = re.sub(r"(?is)(?:\n\s*)?(?:Хочешь|Могу|Дальше|Следующий шаг).{0,700}$", "", cleaned).strip()
+    if not all(term.lower() in cleaned.lower() for term in ("polymarket", "eligibility", "resolution")) or "ликвид" not in cleaned.lower():
+        cleaned = cleaned.rstrip() + "\n\n" + "\n".join(f"• {x}" for x in safe)
+    return cleaned
+
 def resolve_live_conversation_intent(current_text: str, *, previous_context: dict | None = None, pending_clarification: dict | None = None, router_result: dict | None = None, understanding: dict | None = None, ui_language: str = "ru") -> dict:
     current_text = _s(current_text)
     notes: list[str] = []
     ctx = pending_clarification or previous_context or {}
+    short_followup = resolve_short_live_followup(current_text, previous_context, pending_clarification, ui_language=ui_language)
+    if short_followup.get("effective_text") or short_followup.get("should_continue_previous_analysis"):
+        filled = short_followup.get("filled") or {}
+        election_ctx = short_followup.get("election_context") or {}
+        return {"ok": True, "is_followup": True, "is_short_followup": True, "is_clarification_answer": bool(pending_clarification and filled), "should_reconstruct_question": bool(short_followup.get("effective_text")), "completed_text": short_followup.get("effective_text"), "domain": short_followup.get("domain") or "politics", "intent": "probability_check", "subject": election_ctx.get("candidate") or _ctx_subject(ctx), "filled": filled, "remaining_missing": [], "answer_strategy": "continue_previous_analysis" if short_followup.get("should_continue_previous_analysis") else "market_lookup", "clarification_message": None, "confidence": 0.94, "election_context": election_ctx, "short_followup": short_followup, "notes": short_followup.get("notes") or []}
     ctx_domain = _ctx_domain(ctx)
+    if short_followup.get("notes") and "explicit_new_domain_overrides_previous_context" in short_followup.get("notes"):
+        ctx_domain = "unknown"
     domain = ctx_domain if ctx_domain != "unknown" else _detect_domain(current_text, router_result, understanding)
     election_ctx = extract_election_candidate_context(current_text, previous_context=previous_context, pending_clarification=pending_clarification, ui_language=ui_language)
     if not election_ctx.get("is_election_question") and isinstance(ctx.get("election_context"), dict) and ctx.get("election_context"):

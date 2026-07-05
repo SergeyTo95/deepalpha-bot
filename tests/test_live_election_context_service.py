@@ -55,3 +55,9 @@ def test_conversation_intelligence_detects_non_trump_election():
     assert result["domain"] == "politics"
     assert result["subject"] == "Macron"
     assert result["answer_strategy"] == "targeted_clarification"
+
+
+def test_election_extractor_side_tokens_are_not_candidates():
+    for token in ["Да", "да", "Нет", "нет", "Yes", "yes", "No", "no", "Y", "N"]:
+        ctx = extract_election_candidate_context(f"{token} победит на выборах?")
+        assert ctx["candidate"] is None

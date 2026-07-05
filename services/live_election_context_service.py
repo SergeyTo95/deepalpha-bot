@@ -36,7 +36,7 @@ _ELECTION_RE = re.compile(r"election|elections|vote|ballot|president|senate|cong
 _WIN_RE = re.compile(r"\bwin(?:s|ning)?\b|побед|выигра", re.I)
 _URL_RE = re.compile(r"https?://\S+", re.I)
 _CAP_NAME_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}|[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){0,2})\b")
-_STOP = {"will", "who", "what", "when", "where", "кто", "что", "будет", "выборы", "выборах", "следующих", "next", "yes", "no"}
+_STOP = {"will", "who", "what", "when", "where", "кто", "что", "будет", "выборы", "выборах", "следующих", "next", "yes", "no", "y", "n", "да", "нет"}
 
 
 def _norm(text: str) -> str:
@@ -113,6 +113,8 @@ def _capitalized_near_election(text: str) -> Optional[str]:
 
 
 def _candidate(text: str) -> Optional[str]:
+    if _norm(text).strip().strip("?.!,") in _STOP:
+        return None
     return _candidate_before_verb(text) or _hint_candidate(text) or _capitalized_near_election(text)
 
 
