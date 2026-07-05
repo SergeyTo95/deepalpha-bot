@@ -249,7 +249,10 @@ def resolve_short_live_followup(current_text: str, previous_context: dict | None
     year = _extract_year(latest)
     country = _country_only(latest)
     office = _office_only(latest)
-    candidate = extract_election_candidate_context(f"{latest} победит на выборах?").get("candidate") if latest else ""
+    # Do not run candidate extraction for pure yes/no confirmation tokens:
+    # Russian "Да/Нет" can otherwise look like a capitalized candidate in
+    # synthetic strings such as "Да победит на выборах?".
+    candidate = "" if side else (extract_election_candidate_context(f"{latest} победит на выборах?").get("candidate") if latest else "")
     bot_prompt = _low(ctx.get("bot_clarification_message") or ctx.get("last_final_answer") or "")
     asked_to_continue = bool("хочешь продолжить" in bot_prompt or "continue" in bot_prompt)
     is_continue = _low(latest) in {"продолжай", "давай", "разбери", "continue"} or (asked_to_continue and side == "Yes")

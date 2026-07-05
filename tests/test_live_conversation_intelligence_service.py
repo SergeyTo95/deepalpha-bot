@@ -213,3 +213,32 @@ def test_final_politics_cleanup_removes_betting_terms_and_adds_safe_followups():
     assert "eligibility" in cleaned
     assert "resolution" in cleaned
     assert "ликвидность" in cleaned
+
+
+def ambiguous_france_context_without_candidate():
+    return {
+        "domain": "politics",
+        "original_user_text": "Кто победит на выборах во Франции?",
+        "country": "France",
+        "election_context": {"is_election_question": True, "country": "France"},
+    }
+
+
+def test_russian_yes_after_candidate_missing_context_never_becomes_candidate():
+    r = resolve_live_conversation_intent("Да", previous_context=ambiguous_france_context_without_candidate(), ui_language="ru")
+    assert r["domain"] == "politics"
+    assert (r.get("filled") or {}).get("side") == "Yes" or r.get("answer_strategy") == "continue_previous_analysis"
+    assert (r.get("filled") or {}).get("candidate") != "Да"
+    assert (r.get("election_context") or {}).get("candidate") != "Да"
+
+
+def test_russian_no_after_candidate_missing_context_never_becomes_candidate():
+    r = resolve_short_live_followup("Нет", ambiguous_france_context_without_candidate(), None, ui_language="ru")
+    assert (r.get("filled") or {}).get("candidate") != "Нет"
+    assert (r.get("election_context") or {}).get("candidate") != "Нет"
+
+
+def test_english_yes_after_candidate_missing_context_never_becomes_candidate():
+    r = resolve_short_live_followup("Yes", ambiguous_france_context_without_candidate(), None, ui_language="ru")
+    assert (r.get("filled") or {}).get("candidate") != "Yes"
+    assert (r.get("election_context") or {}).get("candidate") != "Yes"
