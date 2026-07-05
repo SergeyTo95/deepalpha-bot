@@ -112,7 +112,7 @@ from services.live_access_control_service import (
     update_live_access_settings,
 )
 from services.airdrop_points_service import (
-    award_airdrop_points, award_analysis_points, format_airdrop_status, get_airdrop_points_balance,
+    award_airdrop_points, award_analysis_points, format_airdrop_status, format_points_amount, get_airdrop_points_balance,
     get_airdrop_points_history, get_referral_activation_count, points_enabled, points_per_analysis, daily_cap, referral_points_enabled, referrer_points, referred_user_points,
 )
 from services.airdrop_referral_service import (
@@ -126,7 +126,6 @@ from services.airdrop_quest_service import (
 from services.airdrop_checkin_service import (
     claim_daily_checkin, format_daily_checkin_status, get_airdrop_checkin_status,
 )
-from services.airdrop_points_service import format_points_amount
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
