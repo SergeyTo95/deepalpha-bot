@@ -66,3 +66,31 @@ def test_admin_stats_include_total_and_top_users():
     stats = svc.admin_get_share_card_stats()
     assert stats["total_share_cards_generated"] >= 2
     assert stats["top_share_card_users"]
+
+
+def test_get_share_card_stats_uses_db_when_available(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.queries = []
+        def execute(self, query, params=None):
+            self.queries.append((query, params))
+        def fetchall(self):
+            return [(123, "polymarket", "2099-01-01T00:00:00+00:00")]
+    class Conn:
+        def __init__(self):
+            self.cursor_obj = Cursor()
+        def cursor(self):
+            return self.cursor_obj
+        def close(self):
+            pass
+    conn = Conn()
+    monkeypatch.setattr(svc, "get_connection", lambda: conn)
+    monkeypatch.setattr(svc, "_TABLE_READY", True)
+    svc._MEMORY_CARDS["mem-only"] = {"user_id": 123, "domain": "memory", "created_at": "2099-01-01T00:00:00+00:00"}
+
+    stats = svc.get_share_card_stats(123)
+
+    assert stats["total_share_cards_generated"] == 1
+    assert stats["domains"] == {"polymarket": 1}
+    assert "WHERE user_id=%s" in conn.cursor_obj.queries[0][0]
+    assert conn.cursor_obj.queries[0][1] == (123,)

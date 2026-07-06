@@ -200,7 +200,24 @@ def _stats_from_rows(rows: list[dict], user_id: Optional[int] = None) -> dict:
 
 
 def get_share_card_stats(user_id: int) -> dict:
-    return _stats_from_rows(list(_MEMORY_CARDS.values()), int(user_id))
+    uid = int(user_id)
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute("SELECT user_id, domain, created_at FROM airdrop_share_cards WHERE user_id=%s", (uid,))
+            rows = [
+                {
+                    "user_id": r[0],
+                    "domain": r[1],
+                    "created_at": r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2]),
+                }
+                for r in cur.fetchall()
+            ]
+            return _stats_from_rows(rows, uid)
+        finally:
+            conn.close()
+    except Exception:
+        return _stats_from_rows(list(_MEMORY_CARDS.values()), uid)
 
 
 def admin_get_share_card_stats() -> dict:

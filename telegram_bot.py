@@ -610,6 +610,13 @@ def get_live_analyst_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     return kb
 
 
+def get_live_analyst_keyboard_with_share(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_user_lang(user_id)
+    kb = get_live_analyst_keyboard(user_id)
+    kb.add(KeyboardButton("📤 Поделиться инсайтом" if lang == "ru" else "📤 Share insight"))
+    return kb
+
+
 def get_help_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     lang = get_user_lang(user_id)
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -7837,6 +7844,7 @@ _MAIN_MENU_BUTTONS = {
     "🎁 Чеки", "🎁 Checks",
     "💡 Сигнал часа", "💡 Signal of the hour",
     LIVE_ANALYST_BUTTON, LIVE_STATUS_BUTTON, LIVE_RESET_BUTTON, LIVE_EXIT_BUTTON,
+    "📤 Поделиться инсайтом", "📤 Share insight",
     LIVE_ADMIN_BUTTON, LIVE_STATS_BUTTON,
     LIVE_ANALYST_LEGACY_RESET_BUTTON, LIVE_ANALYST_LEGACY_EXIT_BUTTON,
     "🪙 Крипто анализ", "🪙 Crypto Analysis",
@@ -8522,6 +8530,7 @@ LIVE_ANALYST_CONTROL_TEXTS = {
     LIVE_STATS_BUTTON,
     LIVE_ANALYST_LEGACY_RESET_BUTTON,
     LIVE_ANALYST_LEGACY_EXIT_BUTTON,
+    "📤 Поделиться инсайтом", "📤 Share insight",
 }
 
 
@@ -8876,6 +8885,21 @@ async def quests_handler(message: types.Message, state: FSMContext):
     await message.answer(format_daily_quests(uid, get_user_lang(uid)), reply_markup=get_daily_quests_keyboard(uid))
 
 
+
+
+async def _send_latest_share_card_message(target, uid: int) -> None:
+    lang = get_user_lang(uid)
+    payload = get_latest_share_card(uid)
+    if not payload:
+        await target.answer("Сначала сделай анализ, потом я соберу share-card." if lang == "ru" else "Run an analysis first, then I’ll build a share-card.")
+        return
+    share_text = format_share_card_text(payload, lang)
+    record_share_card_generated(uid, payload)
+    note = "Скопируй этот текст и отправь в Telegram/X/чат. Если люди зайдут по твоей ссылке и станут активными — реферальные награды начислятся автоматически." if lang == "ru" else "Copy this and share it in Telegram/X/chat. If people join through your link and become active, referral rewards will be applied automatically."
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🔗 Поделиться в Telegram" if lang == "ru" else "🔗 Share in Telegram", url=f"https://t.me/share/url?url={quote(payload.get('referral_link') or '')}&text={quote(share_text)}"))
+    await target.answer(f"{share_text}\n\n{note}", reply_markup=kb, disable_web_page_preview=True)
+
 @dp.callback_query_handler(lambda c: c.data in {"airdrop_daily_quests", "quests_open_airdrop", "quests_open_analyst_profile", "airdrop_invite_friends", "airdrop_share_earn", "airdrop_share_latest"}, state="*")
 async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.finish()
@@ -8887,17 +8911,7 @@ async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext
     if callback.data == "airdrop_share_earn":
         await callback.message.edit_text(format_share_earn_screen(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid), disable_web_page_preview=True); await callback.answer(); return
     if callback.data == "airdrop_share_latest":
-        lang = get_user_lang(uid)
-        payload = get_latest_share_card(uid)
-        if not payload:
-            await callback.message.answer("Сначала сделай анализ, потом я соберу share-card." if lang == "ru" else "Run an analysis first, then I’ll build a share-card.")
-            await callback.answer(); return
-        share_text = format_share_card_text(payload, lang)
-        record_share_card_generated(uid, payload)
-        note = "Скопируй этот текст и отправь в Telegram/X/чат. Если люди зайдут по твоей ссылке и станут активными — реферальные награды начислятся автоматически." if lang == "ru" else "Copy this and share it in Telegram/X/chat. If people join through your link and become active, referral rewards will be applied automatically."
-        kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(InlineKeyboardButton("🔗 Поделиться в Telegram" if lang == "ru" else "🔗 Share in Telegram", url=f"https://t.me/share/url?url={quote(payload.get('referral_link') or '')}&text={quote(share_text)}"))
-        await callback.message.answer(f"{share_text}\n\n{note}", reply_markup=kb, disable_web_page_preview=True)
+        await _send_latest_share_card_message(callback.message, uid)
         await callback.answer(); return
     if callback.data == "quests_open_analyst_profile":
         try:
@@ -8916,6 +8930,14 @@ async def airdrop_handler(message: types.Message, state: FSMContext):
     _register_user(message)
     uid = message.from_user.id
     await message.answer(format_airdrop_teaser(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid))
+
+
+
+@dp.message_handler(lambda m: (m.text or "") in {"📤 Поделиться инсайтом", "📤 Share insight"}, state="*")
+async def share_latest_message_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    _register_user(message)
+    await _send_latest_share_card_message(message, message.from_user.id)
 
 
 @dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status", "airdrop_checkin_status", "airdrop_referrals_status", "airdrop_share_status"], state="*")
@@ -9396,7 +9418,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
         thinking_message = None
     result = process_live_text(uid, text, router_result=router_result, ui_language=ui_language)
     final_text = result.get("message") or LIVE_UNAVAILABLE_MESSAGE
-    final_markup = private_reply_markup(message, get_airdrop_share_keyboard(uid) if result.get("ok") and result.get("charged") else get_live_analyst_keyboard(uid))
+    final_markup = private_reply_markup(message, get_live_analyst_keyboard_with_share(uid) if result.get("ok") and result.get("charged") else get_live_analyst_keyboard(uid))
     if result.get("ok") and result.get("charged"):
         _save_analysis_share_card(uid, "telegram_live_text", title=(router_result or {}).get("title") or text, domain=(router_result or {}).get("mode") or "live", decision="WATCH", short_summary=_extract_share_summary(final_text), key_risk="Resolution rules, liquidity, and missing data can materially change the interpretation.", metadata=router_result if isinstance(router_result, dict) else {"source": "telegram_live_text"}, ui_language=ui_language)
     await _send_live_final_chunks(message, thinking_message, final_text, final_markup=final_markup)
