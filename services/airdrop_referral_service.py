@@ -74,6 +74,32 @@ def _decode(value: Any) -> dict:
         return {}
 
 
+
+def _activity_fingerprint(metadata: dict) -> str:
+    meta = metadata if isinstance(metadata, dict) else {}
+    if meta.get("activity_fingerprint") is not None and str(meta.get("activity_fingerprint")).strip():
+        return hashlib.sha256(_json({"activity_fingerprint": str(meta.get("activity_fingerprint")).strip().lower()}).encode()).hexdigest()
+    for key in ("market", "market_url", "url"):
+        value = meta.get(key)
+        if value is not None and str(value).strip():
+            return hashlib.sha256(_json({"market": str(value).strip().lower()}).encode()).hexdigest()
+    for key in ("question", "query", "prompt"):
+        value = meta.get(key)
+        if value is not None and str(value).strip():
+            return hashlib.sha256(_json({"question": str(value).strip().lower()}).encode()).hexdigest()
+    if meta.get("analysis_id") is not None and str(meta.get("analysis_id")).strip():
+        return hashlib.sha256(_json({"analysis_id": str(meta.get("analysis_id")).strip().lower()}).encode()).hexdigest()
+    return hashlib.sha256(_json({"domain": meta.get("domain"), "mode": meta.get("mode"), "source": meta.get("source")}).encode()).hexdigest()
+
+
+def _safe_activity_metadata(metadata: dict) -> dict:
+    safe = dict(metadata or {})
+    for key in ("question", "query", "prompt"):
+        value = safe.get(key)
+        if isinstance(value, str) and len(value) > 160:
+            safe[key] = value[:157].rstrip() + "..."
+    return safe
+
 def _stable_code(user_id: int) -> str:
     secret = os.getenv("AIRDROP_REFERRAL_CODE_SECRET") or os.getenv("BOT_TOKEN") or "deepalpha-airdrop-referrals-v1"
     digest = hmac.new(secret.encode(), str(int(user_id)).encode(), hashlib.sha256).digest()
@@ -284,7 +310,8 @@ def record_referred_user_activity(user_id: int, activity_type: str, metadata: di
         return {"ok": True, "recorded": False, "reason": "no_referral"}
     if activity_type != "analysis_completed":
         return {"ok": True, "recorded": False, "reason": "unsupported_activity"}
-    fingerprint = hashlib.sha256(_json({"domain": meta.get("domain"), "mode": meta.get("mode"), "market": meta.get("market")}).encode()).hexdigest()
+    fingerprint = _activity_fingerprint(meta)
+    stored_meta = _safe_activity_metadata(meta)
     day = str(meta.get("activity_day") or _now().date().isoformat())
     try:
         conn, cur = _connect_ready()
@@ -294,7 +321,7 @@ def record_referred_user_activity(user_id: int, activity_type: str, metadata: di
                 VALUES (%s,%s,%s::date,%s,%s,NOW())
                 ON CONFLICT (referred_user_id, activity_type, activity_day, fingerprint) DO NOTHING
                 RETURNING id
-            """, (uid, activity_type, day, fingerprint, _json(meta)))
+            """, (uid, activity_type, day, fingerprint, _json(stored_meta)))
             inserted = bool(cur.fetchone())
             if not inserted:
                 conn.commit()

@@ -127,6 +127,40 @@ def test_pending_points_are_shown_separately_from_confirmed_points():
     assert summary["confirmed_points"] == Decimal("0")
 
 
+
+def test_distinct_live_fingerprints_same_day_count_toward_three_analyses():
+    svc.register_referral_visit(10, 20)
+    day = date.today().isoformat()
+    results = [
+        svc.record_referred_user_activity(20, "analysis_completed", {"mode": "live", "domain": "crypto", "activity_fingerprint": fp, "activity_day": day})
+        for fp in ("a", "b", "c")
+    ]
+    assert results[-1]["analysis_count"] == 3
+    rows = [r for r in svc.get_referral_summary(10)["milestones"] if r["milestone"] == svc.M3_THREE_ANALYSES]
+    assert len(rows) == 1
+
+
+def test_same_live_fingerprint_same_day_is_duplicate_and_count_stays_one():
+    svc.register_referral_visit(10, 20)
+    day = date.today().isoformat()
+    first = svc.record_referred_user_activity(20, "analysis_completed", {"mode": "live", "domain": "crypto", "activity_fingerprint": "same", "activity_day": day})
+    second = svc.record_referred_user_activity(20, "analysis_completed", {"mode": "live", "domain": "crypto", "activity_fingerprint": "same", "activity_day": day})
+    assert first["analysis_count"] == 1
+    assert second["reason"] == "duplicate_activity"
+    rows = [r for r in svc.get_referral_summary(10)["milestones"] if r["milestone"] == svc.M2_FIRST_ANALYSIS]
+    assert len(rows) == 1
+
+
+def test_market_based_dedupe_still_dedupes_quick_and_webapp_style_events():
+    svc.register_referral_visit(10, 20)
+    day = date.today().isoformat()
+    first = svc.record_referred_user_activity(20, "analysis_completed", {"mode": "quick_analysis", "market": "https://polymarket.com/event/a", "activity_day": day})
+    second = svc.record_referred_user_activity(20, "analysis_completed", {"mode": "webapp", "market_url": "https://polymarket.com/event/a", "activity_day": day})
+    third = svc.record_referred_user_activity(20, "analysis_completed", {"mode": "quick_analysis", "market": "https://polymarket.com/event/b", "activity_day": day})
+    assert first["analysis_count"] == 1
+    assert second["reason"] == "duplicate_activity"
+    assert third["analysis_count"] == 2
+
 def test_airdrop_invite_screen_renders_referral_link_and_stats():
     text = svc.format_invite_friends(10, "DeepAlphaAI_bot", "ru")
     assert "https://t.me/DeepAlphaAI_bot?start=ref_" in text

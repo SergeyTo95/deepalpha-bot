@@ -2,6 +2,7 @@ import re
 import asyncio
 import os
 import html
+import hashlib
 import logging
 import json
 import time
@@ -2208,7 +2209,7 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
         try:
             # Only award after successful user-facing analysis completion.
             award_result = award_analysis_points(uid, source="top_analysis", metadata={"market": input_data.get("question", "")})
-            record_referred_user_activity(uid, "analysis_completed", metadata={"source": "top_analysis", "mode": "top_analysis"})
+            record_referred_user_activity(uid, "analysis_completed", metadata={"source": "top_analysis", "mode": "top_analysis", "question": input_data.get("question", "")})
             logger.info("airdrop_points_top_analysis_awarded user_id=%s source=%s amount=%s", uid, "top_analysis", award_result.get("amount", 0))
         except Exception as exc:
             logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", type(exc).__name__)
@@ -9340,7 +9341,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
             # Only award after successful user-facing analysis completion.
             award_analysis_points(uid, source="telegram_live_text")
             record_analysis_for_daily_quests(uid, source="telegram_live_text", domain=(router_result or {}).get("mode"), metadata=router_result if isinstance(router_result, dict) else None)
-            record_referred_user_activity(uid, "analysis_completed", metadata={"source": "telegram_live_text", "mode": "live", "domain": (router_result or {}).get("mode")})
+            record_referred_user_activity(uid, "analysis_completed", metadata={"source": "telegram_live_text", "mode": "live", "domain": (router_result or {}).get("mode"), "activity_fingerprint": hashlib.sha256((text or "").strip().lower()[:1000].encode()).hexdigest()})
         except Exception as exc:
             logger.warning("airdrop_points_live_award_failed user_id=%s error=%s", uid, exc)
     logger.info(
