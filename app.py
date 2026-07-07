@@ -25,6 +25,7 @@ from db.database import (
     get_active_watchlist_items, get_watchlist_subscribers,
     update_watchlist_probability, mark_watchlist_notified,
     reset_watchlist_change_notification, close_watchlist_market,
+    charge_watchlist_event,
     cleanup_old_closed_watchlist,
     # ═══ NEW: Authors / Donations / Watchlist slots ═══
     set_author_status, add_watchlist_extra_slots,
@@ -36,6 +37,39 @@ register_admin(telegram_bot.dp)
 CATEGORIES = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
+
+
+def format_watchlist_charge_footer(charged_result: dict, lang: str = "ru") -> str:
+    if not charged_result:
+        return ""
+    reason = charged_result.get("reason")
+    if charged_result.get("charged"):
+        if lang == "ru":
+            return f"\n\n💳 Списано: {charged_result.get('cost', 0)} токенов\n💰 Баланс: {charged_result.get('balance', 0)} токена"
+        return f"\n\n💳 Charged: {charged_result.get('cost', 0)} tokens\n💰 Balance: {charged_result.get('balance', 0)} tokens"
+    if reason == "vip":
+        return "\n\n💎 VIP: токены не списаны" if lang == "ru" else "\n\n💎 VIP: no tokens charged"
+    return ""
+
+
+def get_watchlist_pause_keyboard(watchlist_id: int) -> "telegram_bot.InlineKeyboardMarkup":
+    kb = telegram_bot.InlineKeyboardMarkup(row_width=1)
+    kb.add(telegram_bot.InlineKeyboardButton("💎 Buy tokens / cashier", callback_data="buy_tokens"))
+    kb.add(telegram_bot.InlineKeyboardButton("▶️ Resume watcher", callback_data=f"watchlist_resume:{watchlist_id}"))
+    kb.add(telegram_bot.InlineKeyboardButton("🗑 Remove from watchlist", callback_data=f"wl_remove_{watchlist_id}"))
+    return kb
+
+
+async def send_watchlist_pause_message(user_id: int, watchlist_id: int, question: str) -> None:
+    text = (
+        "⏸ Watchlist Autopilot paused\n\n"
+        "Рынок:\n"
+        f"{question}\n\n"
+        "Причина:\n"
+        "Недостаточно токенов для AI Watchlist alerts.\n\n"
+        "Пополните баланс и нажмите Resume, чтобы DeepAlpha продолжил следить за рынком."
+    )
+    await telegram_bot.bot.send_message(user_id, text, reply_markup=get_watchlist_pause_keyboard(watchlist_id))
 
 
 def calculate_tokens_for_amount(ton_amount: float) -> int:
@@ -571,6 +605,14 @@ async def _check_subscriber_notifications(
 
     if abs_change >= threshold and not sub.get("notified_change"):
         direction = "📈" if change > 0 else "📉"
+        fingerprint = f"{watchlist_id}:{round(current_prob, 1)}:{round(initial_prob, 1)}:{round(threshold, 1)}"
+        charge = charge_watchlist_event(user_id, watchlist_id, item.get("market_slug", ""), "probability_change", fingerprint)
+        if charge.get("reason") == "insufficient_tokens":
+            try:
+                await send_watchlist_pause_message(user_id, watchlist_id, question)
+            except Exception as e:
+                print(f"⭐ Failed to notify {user_id} about watchlist pause: {e}")
+            return
         text = (
             f"{direction} Watchlist — изменение рынка!\n\n"
             f"📌 {question}\n\n"
@@ -578,6 +620,7 @@ async def _check_subscriber_notifications(
             f"Стало: {current_prob:.1f}%\n"
             f"Изменение: {'+' if change > 0 else ''}{change:.1f}%\n\n"
             f"🔗 {url}"
+            f"{format_watchlist_charge_footer(charge)}"
         )
         try:
             await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
@@ -593,12 +636,21 @@ async def _check_subscriber_notifications(
             hours_left = (end_dt - now).total_seconds() / 3600
 
             if 0 < hours_left <= closing_hours:
+                fingerprint = f"{item.get('market_slug', '')}:{end_date}:{closing_hours}"
+                charge = charge_watchlist_event(user_id, watchlist_id, item.get("market_slug", ""), "closing_soon", fingerprint)
+                if charge.get("reason") == "insufficient_tokens":
+                    try:
+                        await send_watchlist_pause_message(user_id, watchlist_id, question)
+                    except Exception as e:
+                        print(f"⭐ Failed to notify {user_id} about watchlist pause: {e}")
+                    return
                 text = (
                     f"⏰ Watchlist — рынок скоро закроется!\n\n"
                     f"📌 {question}\n\n"
                     f"Осталось: ~{int(hours_left)} часов\n"
                     f"Текущая вероятность: {current_prob:.1f}%\n\n"
                     f"🔗 {url}"
+                    f"{format_watchlist_charge_footer(charge)}"
                 )
                 await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
                 mark_watchlist_notified(watchlist_id, "closing_soon")
@@ -627,12 +679,23 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
                 continue
 
             try:
+                fingerprint = f"{slug}:{actual_outcome or 'unknown'}"
+                charge = charge_watchlist_event(
+                    sub["user_id"], sub["id"], slug, "resolved_recap", fingerprint
+                )
+                if charge.get("reason") == "insufficient_tokens":
+                    try:
+                        await send_watchlist_pause_message(sub["user_id"], sub["id"], question)
+                    except Exception as e:
+                        print(f"⭐ Failed to notify {sub.get('user_id')} about watchlist pause: {e}")
+                    continue
                 text = (
                     f"🎯 Watchlist — рынок закрылся!\n\n"
                     f"📌 {question}\n\n"
                     f"Результат: {actual_outcome or 'неизвестен'}\n\n"
                     f"🔗 {url}\n\n"
                     f"Рынок удалён из watchlist."
+                    f"{format_watchlist_charge_footer(charge)}"
                 )
                 await telegram_bot.bot.send_message(
                     sub["user_id"], text, disable_web_page_preview=True
