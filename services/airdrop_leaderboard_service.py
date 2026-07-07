@@ -26,8 +26,8 @@ ANALYSIS_SOURCES = {"telegram_live_text", "telegram_quick_analysis", "top_analys
 NON_ANALYSIS_REASONS = {"referral_milestone_confirmed", "checkin", "daily_checkin", "daily_checkin_streak_bonus", "admin_adjustment", "share_card_generated"}
 DISCLAIMER_RU = "Leaderboard показывает активность за неделю и не гарантирует токены. Финальные правила airdrop будут объявлены отдельно."
 DISCLAIMER_EN = "Leaderboard shows weekly activity and does not guarantee tokens. Final airdrop rules will be announced separately."
-WARMUP_NOTE_RU = "Warm-up строки помогают не оставлять ранний leaderboard пустым. Они не участвуют в airdrop rewards."
-WARMUP_NOTE_EN = "Warm-up rows keep the early leaderboard active. They are not eligible for airdrop rewards."
+WARMUP_NOTE_RU = "Некоторые стартовые позиции помогают запустить ранний leaderboard и не участвуют в rewards."
+WARMUP_NOTE_EN = "Some starter positions help initialize the early leaderboard and are not eligible for rewards."
 SEEDED_PROFILES = [
     {"seed_id": "seed_alpha_01", "public_name": "Alpha Scout", "score": 1840, "active_referrals_this_week": 1, "analyses_this_week": 18, "share_cards_this_week": 4},
     {"seed_id": "seed_macro_02", "public_name": "Macro Hunter", "score": 1360, "active_referrals_this_week": 0, "analyses_this_week": 14, "share_cards_this_week": 3},
@@ -189,6 +189,13 @@ def format_public_leaderboard_name(user_row_or_id: Any) -> str:
     if isinstance(user_row_or_id, dict):
         return _format_public_name(int(user_row_or_id.get("user_id") or 0), user_row_or_id)
     return _format_public_name(int(user_row_or_id))
+
+
+def format_leaderboard_points(value: Any) -> str:
+    """Format leaderboard display points without decimal precision."""
+    dec = _to_decimal(value)
+    whole = dec.to_integral_value(rounding=ROUND_FLOOR)
+    return format(whole, "f")
 
 
 def _empty_user(uid: int) -> dict:
@@ -355,7 +362,7 @@ def _points_to_next_rank(user: dict, top: list[dict]) -> Decimal:
 def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: str | None = None) -> str:
     data = get_weekly_leaderboard(user_id, week_key, 10); week = data["week"]; user = data["user"] or _empty_user(user_id)
     div = user["division"]; top = data["top"]
-    top_lines = [f"{r['rank']}. {r.get('public_name') or format_public_leaderboard_name(r['user_id'])}{' · Warm-up' if r.get('is_seeded') else ''} — {format_points_amount(r['score'])} pts" for r in top] or ["—"]
+    top_lines = [f"{r['rank']}. {r.get('public_name') or format_public_leaderboard_name(r['user_id'])} — {format_leaderboard_points(r['score'])} pts" for r in top] or ["—"]
     warmup_note = (WARMUP_NOTE_EN if ui_language == "en" else WARMUP_NOTE_RU) if data.get("seeded_rows_shown") else ""
     rank = f"#{user['rank']}" if user.get("rank") else "—"
     next_rank = format_points_amount(user.get("points_to_next_rank", _points_to_next_rank(user, data.get("top", []))))
@@ -363,7 +370,7 @@ def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: s
     if ui_language == "en":
         return (
             f"🏆 Weekly Leaderboard\n\nSeason:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
-            f"Your result:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n"
+            f"Your result:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'])}\n• Division: {div['name']}\n"
             f"• To next rank: {next_rank}\n• To next division: {next_div}\n\nTop Analysts this week:\n"
             + "\n".join(top_lines)
             + f"\n\nYour weekly stats:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"
@@ -374,7 +381,7 @@ def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: s
         )
     return (
         f"🏆 Weekly Leaderboard\n\nСезон:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
-        f"Твой результат:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n"
+        f"Твой результат:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'])}\n• Division: {div['name']}\n"
         f"• До следующего ранга: {next_rank}\n• До следующей division: {next_div}\n\nTop Analysts this week:\n"
         + "\n".join(top_lines)
         + f"\n\nТвои stats за неделю:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"

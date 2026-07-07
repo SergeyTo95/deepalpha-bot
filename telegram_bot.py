@@ -132,7 +132,7 @@ from services.airdrop_share_card_service import (
     get_latest_share_card, get_share_card_stats, record_share_card_generated, save_latest_share_card,
 )
 from services.airdrop_leaderboard_service import (
-    admin_get_weekly_leaderboard_stats, format_weekly_leaderboard,
+    admin_get_weekly_leaderboard_stats, format_leaderboard_points, format_weekly_leaderboard,
 )
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
@@ -8968,7 +8968,7 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     parts = (message.text or "").split()
     if cmd == "airdrop_leaderboard_status":
         st = admin_get_weekly_leaderboard_stats()
-        top = "\n".join([f"{r['rank']}. {'[seed] '+r.get('public_name', 'Seed') if r.get('is_seeded') else r['user_id']} — {format_points_amount(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
+        top = "\n".join([f"{r['rank']}. {'[seed] '+r.get('public_name', 'Seed') if r.get('is_seeded') else r['user_id']} — {format_leaderboard_points(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
         divs = "\n".join([f"• {name}: {count}" for name, count in (st.get("divisions") or {}).items()]) or "—"
         await message.answer(
             f"Airdrop Weekly Leaderboard\n\n"
