@@ -134,3 +134,49 @@ def test_airdrop_menu_contains_weekly_leaderboard_button():
     text = open("telegram_bot.py", encoding="utf-8").read()
     assert "🏆 Weekly Leaderboard" in text
     assert "airdrop_weekly_leaderboard" in text
+
+
+def test_ru_leaderboard_output_includes_no_guarantee_disclaimer(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    text = lb.format_weekly_leaderboard(1, "ru", "2026-W28")
+    assert "Leaderboard показывает активность за неделю и не гарантирует токены" in text
+
+
+def test_en_leaderboard_output_includes_no_guarantee_disclaimer(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "Leaderboard shows weekly activity and does not guarantee tokens" in text
+
+
+def test_analysis_sources_increment_analyses_this_week(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    sources = ["telegram_live_text", "telegram_quick_analysis", "top_analysis", "webapp_analysis"]
+    points._MEMORY_LEDGER[1] = [
+        {"user_id": 1, "reason": "analysis_completed", "amount": Decimal("10"), "metadata": {"source": source}, "created_at": "2026-07-07T10:00:00+00:00"}
+        for source in sources
+    ]
+    user = lb.get_weekly_leaderboard(1, "2026-W28")["user"]
+    assert user["analyses_this_week"] == 4
+
+
+def test_analysis_source_reasons_increment_analyses_this_week(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    reasons = ["telegram_live_text", "telegram_quick_analysis", "top_analysis", "webapp_analysis"]
+    points._MEMORY_LEDGER[1] = [
+        {"user_id": 1, "reason": reason, "amount": Decimal("10"), "created_at": "2026-07-07T10:00:00+00:00"}
+        for reason in reasons
+    ]
+    user = lb.get_weekly_leaderboard(1, "2026-W28")["user"]
+    assert user["analyses_this_week"] == 4
+
+
+def test_non_analysis_point_events_do_not_increment_analyses_this_week(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    reasons = ["referral_milestone_confirmed", "daily_checkin", "checkin", "admin_adjustment", "share_card_generated", "daily_quest:analysis"]
+    points._MEMORY_LEDGER[1] = [
+        {"user_id": 1, "reason": reason, "amount": Decimal("10"), "created_at": "2026-07-07T10:00:00+00:00"}
+        for reason in reasons
+    ]
+    user = lb.get_weekly_leaderboard(1, "2026-W28")["user"]
+    assert user["score"] == Decimal("60.0000")
+    assert user["analyses_this_week"] == 0

@@ -1,6 +1,7 @@
 """Weekly motivational leaderboard for Airdrop activity."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -19,6 +20,10 @@ DIVISIONS = [
     {"name": "Whale Analyst", "min_score": 50000},
 ]
 ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
+ANALYSIS_SOURCES = {"telegram_live_text", "telegram_quick_analysis", "top_analysis", "webapp_analysis"}
+NON_ANALYSIS_REASONS = {"referral_milestone_confirmed", "checkin", "daily_checkin", "daily_checkin_streak_bonus", "admin_adjustment", "share_card_generated"}
+DISCLAIMER_RU = "Leaderboard показывает активность за неделю и не гарантирует токены. Финальные правила airdrop будут объявлены отдельно."
+DISCLAIMER_EN = "Leaderboard shows weekly activity and does not guarantee tokens. Final airdrop rules will be announced separately."
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -44,6 +49,30 @@ def _parse_dt(value: Any) -> Optional[datetime]:
         return _to_utc(datetime.fromisoformat(text))
     except Exception:
         return None
+
+
+
+def _decode_metadata(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+def is_analysis_reason(reason: str, metadata: Any = None) -> bool:
+    """Return True for confirmed point ledger events created by successful analysis flows."""
+    clean = str(reason or "").strip()
+    if clean in NON_ANALYSIS_REASONS or clean.startswith("daily_quest:"):
+        return False
+    if clean in ANALYSIS_REASONS or clean in ANALYSIS_SOURCES:
+        return True
+    meta = _decode_metadata(metadata)
+    source = str(meta.get("source") or "").strip()
+    return source in ANALYSIS_SOURCES
 
 
 def get_current_week_key(now: datetime | None = None) -> str:
@@ -110,7 +139,7 @@ def _memory_rows(start: datetime, end: datetime) -> dict[int, dict]:
             if ts and start <= ts < end and amt > 0:
                 row = users.setdefault(int(uid), _empty_user(int(uid)))
                 row["score"] += amt; row["weekly_score"] = row["score"]
-                if e.get("reason") in ANALYSIS_REASONS:
+                if is_analysis_reason(e.get("reason"), e.get("metadata")):
                     row["analyses_this_week"] += 1
                 if row["first_activity_at"] is None or ts < row["first_activity_at"]:
                     row["first_activity_at"] = ts
@@ -130,15 +159,17 @@ def _db_rows(start: datetime, end: datetime) -> dict[int, dict]:
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT user_id, COALESCE(SUM(amount),0), MIN(created_at),
-                   SUM(CASE WHEN reason IN ('analysis_completed','live_analysis_completed') THEN 1 ELSE 0 END)
+            SELECT user_id, reason, amount, metadata, created_at
             FROM airdrop_points_ledger
             WHERE created_at >= %s AND created_at < %s AND amount > 0
-            GROUP BY user_id
         """, (start, end))
         for r in cur.fetchall() or []:
-            uid = int(r[0]); row = users.setdefault(uid, _empty_user(uid))
-            row.update({"score": _to_decimal(r[1]), "weekly_score": _to_decimal(r[1]), "first_activity_at": _parse_dt(r[2]), "analyses_this_week": int(r[3] or 0)})
+            uid = int(r[0]); ts = _parse_dt(r[4]); row = users.setdefault(uid, _empty_user(uid))
+            row["score"] += _to_decimal(r[2]); row["weekly_score"] = row["score"]
+            if is_analysis_reason(r[1], r[3]):
+                row["analyses_this_week"] += 1
+            if ts and (row["first_activity_at"] is None or ts < row["first_activity_at"]):
+                row["first_activity_at"] = ts
         cur.execute("""SELECT referrer_user_id, COUNT(*) FROM airdrop_referral_milestones WHERE milestone='M5_ACTIVE_REFERRAL' AND status='confirmed' AND confirmed_at >= %s AND confirmed_at < %s GROUP BY referrer_user_id""", (start, end))
         for r in cur.fetchall() or []:
             users.setdefault(int(r[0]), _empty_user(int(r[0])))["active_referrals_this_week"] = int(r[1] or 0)
@@ -197,8 +228,24 @@ def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: s
     next_rank = format_points_amount(user.get("points_to_next_rank", _points_to_next_rank(user, data.get("top", []))))
     next_div = format_points_amount(div.get("need_to_next", 0))
     if ui_language == "en":
-        return f"🏆 Weekly Leaderboard\n\nSeason:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\nYour result:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n• To next rank: {next_rank}\n• To next division: {next_div}\n\nTop Analysts this week:\n" + "\n".join(top_lines) + f"\n\nYour weekly stats:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n• Share-cards: {user['share_cards_this_week']}\n\nTip:\nRun analyses, share insight cards, and invite active users to climb the weekly leaderboard."
-    return f"🏆 Weekly Leaderboard\n\nСезон:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\nТвой результат:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n• До следующего ранга: {next_rank}\n• До следующей division: {next_div}\n\nTop Analysts this week:\n" + "\n".join(top_lines) + f"\n\nТвои stats за неделю:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n• Share-cards: {user['share_cards_this_week']}\n\nПодсказка:\nДелай анализы, делись share-card и приглашай активных пользователей — так растёт твой weekly rank."
+        return (
+            f"🏆 Weekly Leaderboard\n\nSeason:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
+            f"Your result:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n"
+            f"• To next rank: {next_rank}\n• To next division: {next_div}\n\nTop Analysts this week:\n"
+            + "\n".join(top_lines)
+            + f"\n\nYour weekly stats:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"
+            f"• Share-cards: {user['share_cards_this_week']}\n\nTip:\nRun analyses, share insight cards, and invite active users to climb the weekly leaderboard.\n\n"
+            + DISCLAIMER_EN
+        )
+    return (
+        f"🏆 Weekly Leaderboard\n\nСезон:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
+        f"Твой результат:\n• Rank: {rank}\n• Weekly Score: {format_points_amount(user['score'])}\n• Division: {div['name']}\n"
+        f"• До следующего ранга: {next_rank}\n• До следующей division: {next_div}\n\nTop Analysts this week:\n"
+        + "\n".join(top_lines)
+        + f"\n\nТвои stats за неделю:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"
+        f"• Share-cards: {user['share_cards_this_week']}\n\nПодсказка:\nДелай анализы, делись share-card и приглашай активных пользователей — так растёт твой weekly rank.\n\n"
+        + DISCLAIMER_RU
+    )
 
 
 def admin_get_weekly_leaderboard_stats(week_key: str | None = None) -> dict:
