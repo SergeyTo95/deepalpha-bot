@@ -8968,13 +8968,16 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     parts = (message.text or "").split()
     if cmd == "airdrop_leaderboard_status":
         st = admin_get_weekly_leaderboard_stats()
-        top = "\n".join([f"{r['rank']}. {r['user_id']} — {format_points_amount(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
+        top = "\n".join([f"{r['rank']}. {'[seed] '+r.get('public_name', 'Seed') if r.get('is_seeded') else r['user_id']} — {format_points_amount(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
         divs = "\n".join([f"• {name}: {count}" for name, count in (st.get("divisions") or {}).items()]) or "—"
         await message.answer(
             f"Airdrop Weekly Leaderboard\n\n"
             f"Week: {st['week_key']}\n"
-            f"Total ranked users: {st['total_ranked_users']}\n"
-            f"Total weekly points: {format_points_amount(st['total_score'])}\n"
+            f"Total ranked users: {st['total_ranked_users_real']}\n"
+            f"Total displayed rows: {st['total_displayed_rows']}\n"
+            f"Seeded rows: {st['total_seeded_rows']} ({'enabled' if st.get('seeded_enabled') else 'disabled'})\n"
+            f"Total weekly points: {format_points_amount(st['total_score_real'])}\n"
+            f"Displayed weekly points: {format_points_amount(st['total_score_displayed'])}\n"
             f"Share-cards this week: {st['total_share_cards']}\n"
             f"Active referrals this week: {st['total_active_referrals']}\n\n"
             f"Top 10:\n{top}\n\nDivisions:\n{divs}"

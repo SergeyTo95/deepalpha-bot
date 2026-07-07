@@ -20,6 +20,7 @@ sys.modules.setdefault("psycopg2.extras", extras_stub)
 
 
 def reload_services(monkeypatch):
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "0")
     import services.airdrop_points_service as points
     import services.airdrop_referral_service as refs
     import services.airdrop_share_card_service as cards
@@ -180,3 +181,103 @@ def test_non_analysis_point_events_do_not_increment_analyses_this_week(monkeypat
     user = lb.get_weekly_leaderboard(1, "2026-W28")["user"]
     assert user["score"] == Decimal("60.0000")
     assert user["analyses_this_week"] == 0
+
+
+
+def test_seeded_rows_included_when_real_ranked_users_below_threshold(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    data = lb.get_weekly_leaderboard(1, "2026-W28", 10)
+    assert data["total_ranked_users_real"] == 0
+    assert data["total_seeded_rows"] > 0
+    assert any(r["is_seeded"] for r in data["top"])
+
+
+def test_seeded_and_real_reward_eligibility_flags(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("10"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    data = lb.get_weekly_leaderboard(1, "2026-W28", 10)
+    real = next(r for r in data["top"] if r.get("user_id") == 1)
+    seed = next(r for r in data["top"] if r.get("is_seeded"))
+    assert real["is_seeded"] is False
+    assert real["is_reward_eligible"] is True
+    assert seed["user_id"] is None
+    assert seed["is_seeded"] is True
+    assert seed["is_reward_eligible"] is False
+
+
+def test_real_user_can_outrank_seeded_row_with_higher_score(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("9999"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    data = lb.get_weekly_leaderboard(1, "2026-W28", 10)
+    assert data["top"][0]["user_id"] == 1
+    assert data["user"]["rank"] == 1
+
+
+def test_seeded_rows_disappear_when_real_count_reaches_threshold(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    for uid in range(1, 9):
+        points._MEMORY_LEDGER[uid] = [{"user_id": uid, "reason": "analysis_completed", "amount": Decimal(uid), "created_at": "2026-07-07T10:00:00+00:00"}]
+    data = lb.get_weekly_leaderboard(1, "2026-W28", 10)
+    assert data["total_ranked_users_real"] == 8
+    assert data["total_seeded_rows"] == 0
+    assert not any(r.get("is_seeded") for r in data["top"])
+
+
+def test_seeded_rows_do_not_change_admin_real_totals(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("100"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    st = lb.admin_get_weekly_leaderboard_stats("2026-W28")
+    assert st["total_ranked_users_real"] == 1
+    assert st["total_seeded_rows"] > 0
+    assert st["total_score_real"] == Decimal("100.0000")
+    assert st["total_score_displayed"] > st["total_score_real"]
+
+
+def test_admin_stats_separate_real_seeded_and_displayed_counts(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    st = lb.admin_get_weekly_leaderboard_stats("2026-W28")
+    assert st["seeded_enabled"] is True
+    assert st["total_ranked_users"] == 0
+    assert st["total_ranked_users_real"] == 0
+    assert st["total_seeded_rows"] == len(lb.SEEDED_PROFILES)
+    assert st["total_displayed_rows"] == len(lb.SEEDED_PROFILES)
+
+
+def test_public_format_marks_seeded_rows_with_warmup(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "Alpha Scout · Warm-up" in text
+
+
+def test_public_format_warmup_note_only_when_seeded_rows_visible(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    seeded_text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "Warm-up rows keep the early leaderboard active" in seeded_text
+    for uid in range(1, 9):
+        points._MEMORY_LEDGER[uid] = [{"user_id": uid, "reason": "analysis_completed", "amount": Decimal(uid), "created_at": "2026-07-07T10:00:00+00:00"}]
+    real_text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "Warm-up rows keep the early leaderboard active" not in real_text
+
+
+def test_user_rank_is_calculated_after_seed_rows_are_merged(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("100"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    user = lb.get_weekly_leaderboard(1, "2026-W28", 10)["user"]
+    assert user["is_seeded"] is False
+    assert user["rank"] > 1
+
+
+def test_existing_disclaimer_still_exists_with_seeded_rows(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "does not guarantee tokens" in text
