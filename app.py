@@ -72,6 +72,45 @@ async def send_watchlist_pause_message(user_id: int, watchlist_id: int, question
     await telegram_bot.bot.send_message(user_id, text, reply_markup=get_watchlist_pause_keyboard(watchlist_id))
 
 
+def get_watchlist_buy_tokens_keyboard() -> "telegram_bot.InlineKeyboardMarkup":
+    kb = telegram_bot.InlineKeyboardMarkup(row_width=1)
+    kb.add(telegram_bot.InlineKeyboardButton("💎 Buy tokens / cashier", callback_data="buy_tokens"))
+    return kb
+
+
+async def send_watchlist_resolved_insufficient_tokens_message(
+    user_id: int,
+    question: str,
+    actual_outcome: str | None,
+    url: str,
+    lang: str = "ru",
+) -> None:
+    if lang == "en":
+        text = (
+            "🎯 Watchlist — market resolved\n\n"
+            f"📌 {question}\n\n"
+            f"Result: {actual_outcome or 'unknown'}\n\n"
+            "Full paid recap was not sent because there were not enough tokens.\n"
+            "The market was closed and removed from your watchlist."
+        )
+    else:
+        text = (
+            "🎯 Watchlist — рынок закрылся\n\n"
+            f"📌 {question}\n\n"
+            f"Результат: {actual_outcome or 'неизвестен'}\n\n"
+            "Полный paid recap не отправлен: недостаточно токенов.\n"
+            "Рынок закрыт и удалён из watchlist."
+        )
+    if url:
+        text = f"{text}\n\n🔗 {url}"
+    await telegram_bot.bot.send_message(
+        user_id,
+        text,
+        disable_web_page_preview=True,
+        reply_markup=get_watchlist_buy_tokens_keyboard(),
+    )
+
+
 def calculate_tokens_for_amount(ton_amount: float) -> int:
     package = find_package_by_amount(ton_amount, tolerance=0.05)
     if package:
@@ -685,9 +724,12 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
                 )
                 if charge.get("reason") == "insufficient_tokens":
                     try:
-                        await send_watchlist_pause_message(sub["user_id"], sub["id"], question)
+                        await send_watchlist_resolved_insufficient_tokens_message(
+                            sub["user_id"], question, actual_outcome, url
+                        )
+                        mark_watchlist_notified(sub["id"], "resolved")
                     except Exception as e:
-                        print(f"⭐ Failed to notify {sub.get('user_id')} about watchlist pause: {e}")
+                        print(f"⭐ Failed to notify {sub.get('user_id')} about resolved insufficient tokens: {e}")
                     continue
                 text = (
                     f"🎯 Watchlist — рынок закрылся!\n\n"

@@ -4275,9 +4275,6 @@ def get_active_watchlist_items(limit: int = 500) -> List[Dict[str, Any]]:
         SELECT DISTINCT market_slug, market_url, question, category, market_end_date
         FROM watchlist
         WHERE is_closed = 0
-          AND COALESCE(notify_enabled, 1) = 1
-          AND COALESCE(autopilot_enabled, 1) = 1
-          AND (billing_status IS NULL OR billing_status = 'active')
         LIMIT %s
         """, (limit,))
         rows = cursor.fetchall()
