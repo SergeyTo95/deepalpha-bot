@@ -281,12 +281,21 @@ def test_public_seeded_note_ru_and_en_copy(monkeypatch):
     assert "starter positions" in en_text
 
 
-def test_format_leaderboard_points_floors_to_whole_points(monkeypatch):
+def test_format_leaderboard_points_public_starter_scores(monkeypatch):
     _, _, _, lb = reload_services(monkeypatch)
-    assert lb.format_leaderboard_points(Decimal("770.0625")) == "770"
-    assert lb.format_leaderboard_points(Decimal("567.9981")) == "567"
-    assert lb.format_leaderboard_points(Decimal("0.25")) == "0"
-    assert lb.format_leaderboard_points(1000) == "1000"
+    assert lb.format_leaderboard_points(Decimal("0"), public=True) == "0"
+    assert lb.format_leaderboard_points(Decimal("0.25"), public=True) == "100"
+    assert lb.format_leaderboard_points(Decimal("0.5"), public=True) == "120"
+    assert lb.format_leaderboard_points(Decimal("0.9999"), public=True) == "159"
+    assert lb.format_leaderboard_points(Decimal("1.0"), public=True) == "1"
+    assert lb.format_leaderboard_points(Decimal("770.0625"), public=True) == "770"
+    assert lb.format_leaderboard_points(Decimal("0.25"), public=False) == "0"
+
+
+def test_format_leaderboard_points_raw_floor_formatting(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    assert lb.format_leaderboard_points(Decimal("567.9981"), public=False) == "567"
+    assert lb.format_leaderboard_points(1000, public=False) == "1000"
 
 
 def test_public_seeded_point_display_has_no_four_decimal_values(monkeypatch):
@@ -298,13 +307,25 @@ def test_public_seeded_point_display_has_no_four_decimal_values(monkeypatch):
     assert "Alpha Scout — 770 pts" in text
 
 
-def test_user_weekly_score_display_uses_whole_points(monkeypatch):
+def test_real_user_with_fractional_score_displays_starter_points(monkeypatch):
     points, _, _, lb = reload_services(monkeypatch)
     points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("0.25"), "created_at": "2026-07-07T10:00:00+00:00"}]
     text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
-    assert "• Weekly Score: 0" in text
+    assert "User 1 — 100 pts" in text
+    assert "• Weekly Score: 100" in text
     assert "• Weekly Score: 0.25" not in text
 
+
+
+def test_public_display_boost_does_not_change_ranking_order(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("0.25"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    points._MEMORY_LEDGER[2] = [{"user_id": 2, "reason": "analysis_completed", "amount": Decimal("1.0"), "created_at": "2026-07-07T11:00:00+00:00"}]
+    data = lb.get_weekly_leaderboard(1, "2026-W28", 10)
+    assert [row["user_id"] for row in data["top"][:2]] == [2, 1]
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "1. User 2 — 1 pts" in text
+    assert "2. User 1 — 100 pts" in text
 
 def test_admin_top_rows_keep_seeded_identification(monkeypatch):
     _, _, _, lb = reload_services(monkeypatch)
