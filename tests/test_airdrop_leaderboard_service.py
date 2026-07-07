@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib
 import types
@@ -281,3 +281,98 @@ def test_existing_disclaimer_still_exists_with_seeded_rows(monkeypatch):
     monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
     text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
     assert "does not guarantee tokens" in text
+
+
+
+def test_seeded_score_at_week_start_is_below_final_target(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    week = lb.get_week_window("2026-W28")
+    profile = lb.SEEDED_PROFILES[0]
+    target = lb._seed_final_target_score(profile, week["week_key"])
+    score = lb._seed_score(profile, week, now=week["start"])
+    assert score < target
+    assert score == (target * lb.Decimal("0.2500")).quantize(lb.Decimal("0.0001"), rounding=lb.ROUND_FLOOR)
+
+
+def test_seeded_score_at_week_end_is_near_or_equal_final_target(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    week = lb.get_week_window("2026-W28")
+    profile = lb.SEEDED_PROFILES[0]
+    target = lb._seed_final_target_score(profile, week["week_key"])
+    score = lb._seed_score(profile, week, now=week["end"])
+    assert score == target
+
+
+def test_seeded_score_is_deterministic_for_same_time_bucket(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    week = lb.get_week_window("2026-W28")
+    profile = lb.SEEDED_PROFILES[0]
+    t1 = week["start"] + timedelta(hours=12, minutes=1)
+    t2 = week["start"] + timedelta(hours=17, minutes=59)
+    assert lb._seed_score(profile, week, now=t1) == lb._seed_score(profile, week, now=t2)
+
+
+def test_seeded_score_changes_between_time_buckets(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    week = lb.get_week_window("2026-W28")
+    profile = lb.SEEDED_PROFILES[0]
+    early = lb._seed_score(profile, week, now=week["start"] + timedelta(hours=6))
+    later = lb._seed_score(profile, week, now=week["start"] + timedelta(hours=12))
+    assert later > early
+
+
+def test_seeded_score_never_exceeds_final_target(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    week = lb.get_week_window("2026-W28")
+    profile = lb.SEEDED_PROFILES[0]
+    target = lb._seed_final_target_score(profile, week["week_key"])
+    score = lb._seed_score(profile, week, now=week["end"] + timedelta(days=3))
+    assert score <= target
+
+
+def test_seeded_activity_stats_progress_with_week(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    week = lb.get_week_window("2026-W28")
+    early = lb._seeded_rows(week, real_count=0, now=week["start"])[0]
+    later = lb._seeded_rows(week, real_count=0, now=week["start"] + timedelta(days=4))[0]
+    assert later["analyses_this_week"] > early["analyses_this_week"]
+    assert later["share_cards_this_week"] >= early["share_cards_this_week"]
+
+
+def test_seeded_active_referrals_wait_until_progress_is_high(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    week = lb.get_week_window("2026-W28")
+    early = lb._seeded_rows(week, real_count=0, now=week["start"] + timedelta(days=3))[0]
+    end = lb._seeded_rows(week, real_count=0, now=week["end"])[0]
+    assert early["active_referrals_this_week"] == 0
+    assert end["active_referrals_this_week"] == 1
+
+
+def test_real_user_still_outranks_progressed_seeded_row_by_score(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    week = lb.get_week_window("2026-W28")
+    top_seed_target = max(lb._seed_final_target_score(p, week["week_key"]) for p in lb.SEEDED_PROFILES)
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": top_seed_target + lb.Decimal("1"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    assert lb.get_weekly_leaderboard(1, "2026-W28", 10)["top"][0]["user_id"] == 1
+
+
+def test_progressed_seeded_rows_remain_non_reward_eligible(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    week = lb.get_week_window("2026-W28")
+    seed = lb._seeded_rows(week, real_count=0, now=week["start"] + timedelta(days=2))[0]
+    assert seed["is_seeded"] is True
+    assert seed["is_reward_eligible"] is False
+
+
+def test_progressed_seeded_scores_still_excluded_from_real_totals(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("100"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    st = lb.admin_get_weekly_leaderboard_stats("2026-W28")
+    assert st["total_score_real"] == Decimal("100.0000")
+    assert st["total_score_displayed"] > st["total_score_real"]

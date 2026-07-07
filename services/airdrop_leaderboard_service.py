@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Optional
 
 from db.database import get_connection, get_user
@@ -67,6 +67,10 @@ def seeded_leaderboard_min_real_users() -> int:
 
 def seeded_leaderboard_max_rows() -> int:
     return _env_int("AIRDROP_SEEDED_LEADERBOARD_MAX_ROWS", 10, 0, 1000)
+
+
+def seeded_progress_bucket_hours() -> int:
+    return _env_int("AIRDROP_SEEDED_LEADERBOARD_PROGRESS_BUCKET_HOURS", 6, 1, 24)
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -130,6 +134,27 @@ def get_week_window(week_key: str | None = None, now: datetime | None = None) ->
     start = datetime.fromisocalendar(int(year_s), int(week_s), 1).replace(tzinfo=timezone.utc)
     end = start + timedelta(days=7)
     return {"week_key": key, "start": start, "end": end, "start_date": start.date().isoformat(), "end_date": end.date().isoformat()}
+
+
+
+def get_week_progress(week: dict, now: datetime | None = None, bucket_hours: int = 6) -> Decimal:
+    start = _to_utc(week["start"])
+    end = _to_utc(week["end"])
+    current = _to_utc(now or datetime.now(timezone.utc))
+    bucket = max(1, min(24, int(bucket_hours or 6)))
+    if current <= start:
+        bucketed = start
+    elif current >= end:
+        bucketed = end
+    else:
+        elapsed_seconds = int((current - start).total_seconds())
+        bucket_seconds = bucket * 3600
+        bucketed = start + timedelta(seconds=(elapsed_seconds // bucket_seconds) * bucket_seconds)
+    total = Decimal(str(max(1, int((end - start).total_seconds()))))
+    elapsed = Decimal(str(max(0, min(int((end - start).total_seconds()), int((bucketed - start).total_seconds())))))
+    fraction = elapsed / total
+    progress = Decimal("0.25") + (Decimal("0.75") * fraction)
+    return max(Decimal("0.25"), min(Decimal("1"), progress)).quantize(Decimal("0.0001"))
 
 
 def get_division_for_score(score: int | Decimal) -> dict:
@@ -227,14 +252,29 @@ def _db_rows(start: datetime, end: datetime) -> dict[int, dict]:
 
 
 
-def _seed_score(profile: dict, week_key: str) -> Decimal:
+def _seed_final_target_score(profile: dict, week_key: str) -> Decimal:
     base = int(profile.get("score") or 0)
     digest = hashlib.sha256(f"{week_key}:{profile.get('seed_id')}".encode()).hexdigest()
     shift = (int(digest[:4], 16) % 121) - 60
     return _to_decimal(max(0, base + shift))
 
 
-def _seeded_rows(week: dict, real_count: int) -> list[dict]:
+def _seed_score(profile: dict, week: dict, now: datetime | None = None) -> Decimal:
+    target = _seed_final_target_score(profile, week["week_key"])
+    progress = get_week_progress(week, now=now, bucket_hours=seeded_progress_bucket_hours())
+    current = (target * progress).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR)
+    return max(Decimal("0"), min(target, current))
+
+
+def _progress_int(target: int, progress: Decimal, *, minimum_after_initial: bool = False) -> int:
+    target = max(0, int(target or 0))
+    value = int((Decimal(target) * progress).to_integral_value(rounding=ROUND_FLOOR))
+    if minimum_after_initial and target > 0 and progress > Decimal("0.25"):
+        value = max(1, value)
+    return min(target, max(0, value))
+
+
+def _seeded_rows(week: dict, real_count: int, now: datetime | None = None) -> list[dict]:
     if not seeded_leaderboard_enabled():
         return []
     min_real = seeded_leaderboard_min_real_users()
@@ -244,7 +284,8 @@ def _seeded_rows(week: dict, real_count: int) -> list[dict]:
     needed = max(0, min(max_rows - real_count, len(SEEDED_PROFILES)))
     rows = []
     for idx, profile in enumerate(SEEDED_PROFILES[:needed], 1):
-        score = _seed_score(profile, week["week_key"])
+        score = _seed_score(profile, week, now=now)
+        progress = get_week_progress(week, now=now, bucket_hours=seeded_progress_bucket_hours())
         rows.append({
             "user_id": None,
             "seed_id": profile["seed_id"],
@@ -253,9 +294,9 @@ def _seeded_rows(week: dict, real_count: int) -> list[dict]:
             "public_name": profile["public_name"],
             "score": score,
             "weekly_score": score,
-            "active_referrals_this_week": int(profile.get("active_referrals_this_week") or 0),
-            "analyses_this_week": int(profile.get("analyses_this_week") or 0),
-            "share_cards_this_week": int(profile.get("share_cards_this_week") or 0),
+            "active_referrals_this_week": _progress_int(int(profile.get("active_referrals_this_week") or 0), progress),
+            "analyses_this_week": _progress_int(int(profile.get("analyses_this_week") or 0), progress, minimum_after_initial=True),
+            "share_cards_this_week": _progress_int(int(profile.get("share_cards_this_week") or 0), progress),
             "first_activity_at": week["start"] + timedelta(hours=idx),
             "rank": None,
             "division": get_division_for_score(score),
