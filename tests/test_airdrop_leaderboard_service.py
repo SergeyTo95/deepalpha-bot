@@ -249,23 +249,70 @@ def test_admin_stats_separate_real_seeded_and_displayed_counts(monkeypatch):
     assert st["total_displayed_rows"] == len(lb.SEEDED_PROFILES)
 
 
-def test_public_format_marks_seeded_rows_with_warmup(monkeypatch):
+def test_public_format_hides_seeded_internal_labels(monkeypatch):
     _, _, _, lb = reload_services(monkeypatch)
     monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
     text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
-    assert "Alpha Scout · Warm-up" in text
+    assert "Warm-up" not in text
+    assert "[seed]" not in text
+    assert "seed_alpha_01" not in text
+    assert "Alpha Scout —" in text
 
 
 def test_public_format_warmup_note_only_when_seeded_rows_visible(monkeypatch):
     points, _, _, lb = reload_services(monkeypatch)
     monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
     seeded_text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
-    assert "Warm-up rows keep the early leaderboard active" in seeded_text
+    assert "Some starter positions help initialize the early leaderboard" in seeded_text
     for uid in range(1, 9):
         points._MEMORY_LEDGER[uid] = [{"user_id": uid, "reason": "analysis_completed", "amount": Decimal(uid), "created_at": "2026-07-07T10:00:00+00:00"}]
     real_text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
-    assert "Warm-up rows keep the early leaderboard active" not in real_text
+    assert "starter positions" not in real_text
 
+
+
+def test_public_seeded_note_ru_and_en_copy(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    ru_text = lb.format_weekly_leaderboard(1, "ru", "2026-W28")
+    en_text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "стартовые позиции" in ru_text
+    assert "Warm-up" not in ru_text
+    assert "starter positions" in en_text
+
+
+def test_format_leaderboard_points_floors_to_whole_points(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    assert lb.format_leaderboard_points(Decimal("770.0625")) == "770"
+    assert lb.format_leaderboard_points(Decimal("567.9981")) == "567"
+    assert lb.format_leaderboard_points(Decimal("0.25")) == "0"
+    assert lb.format_leaderboard_points(1000) == "1000"
+
+
+def test_public_seeded_point_display_has_no_four_decimal_values(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    monkeypatch.setattr(lb, "_seed_score", lambda profile, week, now=None: Decimal("770.0625"))
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "770.0625" not in text
+    assert "Alpha Scout — 770 pts" in text
+
+
+def test_user_weekly_score_display_uses_whole_points(monkeypatch):
+    points, _, _, lb = reload_services(monkeypatch)
+    points._MEMORY_LEDGER[1] = [{"user_id": 1, "reason": "analysis_completed", "amount": Decimal("0.25"), "created_at": "2026-07-07T10:00:00+00:00"}]
+    text = lb.format_weekly_leaderboard(1, "en", "2026-W28")
+    assert "• Weekly Score: 0" in text
+    assert "• Weekly Score: 0.25" not in text
+
+
+def test_admin_top_rows_keep_seeded_identification(monkeypatch):
+    _, _, _, lb = reload_services(monkeypatch)
+    monkeypatch.setenv("AIRDROP_SEEDED_LEADERBOARD_ENABLED", "1")
+    st = lb.admin_get_weekly_leaderboard_stats("2026-W28")
+    seed = next(r for r in st["top"] if r.get("is_seeded"))
+    assert seed["is_seeded"] is True
+    assert seed["seed_id"]
 
 def test_user_rank_is_calculated_after_seed_rows_are_merged(monkeypatch):
     points, _, _, lb = reload_services(monkeypatch)
