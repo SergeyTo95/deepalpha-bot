@@ -38,7 +38,7 @@ from db.database import (
     add_to_watchlist, remove_from_watchlist, get_user_watchlist,
     count_user_watchlist, can_add_to_watchlist,
     toggle_watchlist_notifications, get_watchlist_by_id,
-    add_watchlist_extra_slots,
+    add_watchlist_extra_slots, resume_watchlist_item, get_watchlist_event_cost,
     set_author_bio, set_ton_wallet, get_all_authors,
     get_top_authors_by_donations, can_author_post_today,
     create_author_post, get_author_post, get_author_posts,
@@ -1581,6 +1581,9 @@ def get_watchlist_item_keyboard(user_id: int, watchlist_id: int, notify_enabled:
         InlineKeyboardButton(mute_label, callback_data=f"wl_mute_{watchlist_id}"),
         InlineKeyboardButton(remove_label, callback_data=f"wl_remove_{watchlist_id}"),
     )
+    item = get_watchlist_by_id(watchlist_id)
+    if item and str(item.get("billing_status") or "active").startswith("paused"):
+        kb.add(InlineKeyboardButton("▶️ Resume watcher", callback_data=f"watchlist_resume:{watchlist_id}"))
     kb.add(InlineKeyboardButton(back_label, callback_data="wl_list"))
     return kb
 
@@ -5023,6 +5026,10 @@ def _format_watchlist_list(user_id: int) -> str:
         current = item.get("last_checked_probability", 0)
         change = current - initial
         mute = "🔕" if not item.get("notify_enabled") else "🔔"
+        status = item.get("billing_status") or "active"
+        status_emoji = "⏸" if str(status).startswith("paused") else "▶️"
+        autopilot = "ON" if item.get("autopilot_enabled", True) else "OFF"
+        spent = int(item.get("tokens_spent") or 0)
 
         if abs(change) >= 0.1:
             change_emoji = "📈" if change > 0 else "📉"
@@ -5034,12 +5041,14 @@ def _format_watchlist_list(user_id: int) -> str:
             text += (
                 f"{i}. {mute} {q}\n"
                 f"   {initial:.1f}% → {current:.1f}%{change_str}\n"
+                f"   {status_emoji} status: {status} | autopilot: {autopilot} | spent: {spent} tok.\n"
                 f"   /wl_{item['id']}\n\n"
             )
         else:
             text += (
                 f"{i}. {mute} {q}\n"
                 f"   {initial:.1f}% → {current:.1f}%{change_str}\n"
+                f"   {status_emoji} status: {status} | autopilot: {autopilot} | spent: {spent} tok.\n"
                 f"   /wl_{item['id']}\n\n"
             )
 
@@ -5059,6 +5068,9 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
     current = item.get("last_checked_probability", 0)
     change = current - initial
     notify = item.get("notify_enabled", True)
+    status = item.get("billing_status") or "active"
+    autopilot = "ВКЛ" if item.get("autopilot_enabled", True) else "ВЫКЛ"
+    spent = int(item.get("tokens_spent") or 0)
     end_date = item.get("market_end_date", "")
     created = item.get("created_at", "")[:10] if item.get("created_at") else ""
 
@@ -5091,6 +5103,9 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
             f"📊 Текущая: {current:.1f}%\n"
             f"{change_line}\n"
             f"{notify_line}\n"
+            f"▶️ Autopilot: {autopilot}\n"
+            f"📍 Статус: {status}\n"
+            f"💳 Потрачено: {spent} токенов\n"
             f"📅 Добавлено: {created}"
             f"{end_line}"
         )
@@ -5103,6 +5118,9 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
             f"📊 Current: {current:.1f}%\n"
             f"{change_line}\n"
             f"{notify_line}\n"
+            f"▶️ Autopilot: {'ON' if item.get('autopilot_enabled', True) else 'OFF'}\n"
+            f"📍 Status: {status}\n"
+            f"💳 Tokens spent: {spent}\n"
             f"📅 Added: {created}"
             f"{end_line}"
         )
@@ -7401,6 +7419,49 @@ async def watchlist_remove_callback(callback: types.CallbackQuery):
         text = _format_watchlist_list(uid)
         try:
             await callback.message.edit_text(text)
+        except Exception:
+            pass
+    else:
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("watchlist_resume:"))
+async def watchlist_resume_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    try:
+        wl_id = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("❌", show_alert=True)
+        return
+
+    item = get_watchlist_by_id(wl_id)
+    if not item or item.get("user_id") != uid:
+        await callback.answer("❌ Не найдено" if lang == "ru" else "❌ Not found", show_alert=True)
+        return
+
+    min_cost = min(
+        get_watchlist_event_cost("probability_change"),
+        get_watchlist_event_cost("closing_soon"),
+        get_watchlist_event_cost("resolved_recap"),
+    )
+    user = get_user(uid) or {}
+    balance = int(user.get("token_balance") or 0)
+    if not user.get("is_vip") and balance < min_cost:
+        await callback.answer(
+            (f"Недостаточно токенов. Нужно минимум {min_cost}, баланс {balance}." if lang == "ru"
+             else f"Insufficient tokens. Need at least {min_cost}, balance {balance}."),
+            show_alert=True,
+        )
+        return
+
+    if resume_watchlist_item(uid, wl_id):
+        await callback.answer("▶️ Watcher resumed" if lang != "ru" else "▶️ Watcher возобновлён")
+        try:
+            await callback.message.edit_text(
+                _format_watchlist_item(uid, wl_id),
+                reply_markup=get_watchlist_item_keyboard(uid, wl_id, item.get("notify_enabled", True)),
+            )
         except Exception:
             pass
     else:

@@ -1251,6 +1251,33 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
 
 def register_admin(dp: Dispatcher):
 
+    @dp.message_handler(commands=["watchlist_billing_on"])
+    async def watchlist_billing_on(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        set_setting("watchlist_token_billing_enabled", "on")
+        await message.answer("✅ Watchlist billing enabled")
+
+    @dp.message_handler(commands=["watchlist_billing_off"])
+    async def watchlist_billing_off(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        set_setting("watchlist_token_billing_enabled", "off")
+        await message.answer("✅ Watchlist billing disabled")
+
+    @dp.message_handler(commands=["watchlist_costs"])
+    async def watchlist_costs(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        await message.answer(
+            "⭐ Watchlist billing costs\n"
+            f"Billing: {get_setting('watchlist_token_billing_enabled', 'on')}\n"
+            f"Probability alert: {get_setting('watchlist_probability_alert_cost_tokens', '5')} tokens\n"
+            f"Closing soon: {get_setting('watchlist_closing_soon_cost_tokens', '3')} tokens\n"
+            f"Resolved recap: {get_setting('watchlist_resolved_recap_cost_tokens', '7')} tokens\n"
+            f"AI deep recap: {get_setting('watchlist_ai_deep_recap_cost_tokens', '10')} tokens"
+        )
+
     @dp.message_handler(commands=["admin"])
     async def open_admin(message: types.Message):
         if not is_admin(message.from_user.id):

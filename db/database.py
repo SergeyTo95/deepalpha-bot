@@ -490,13 +490,51 @@ def _init_db_inner(conn, cursor):
         is_closed INTEGER DEFAULT 0,
         extra_slot INTEGER DEFAULT 0,
         created_at TEXT,
-        last_checked_at TEXT
+        last_checked_at TEXT,
+        billing_status TEXT DEFAULT 'active',
+        paused_reason TEXT,
+        paused_at TEXT,
+        last_billed_at TEXT,
+        tokens_spent INTEGER DEFAULT 0,
+        autopilot_enabled INTEGER DEFAULT 1,
+        ai_summary_enabled INTEGER DEFAULT 1
+    )
+    """)
+
+    for migration in [
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS billing_status TEXT DEFAULT 'active'",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS paused_reason TEXT",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS paused_at TEXT",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS last_billed_at TEXT",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS tokens_spent INTEGER DEFAULT 0",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS autopilot_enabled INTEGER DEFAULT 1",
+        "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS ai_summary_enabled INTEGER DEFAULT 1",
+    ]:
+        try:
+            cursor.execute(migration)
+        except Exception:
+            pass
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS watchlist_token_ledger (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        watchlist_id INTEGER NOT NULL,
+        market_slug TEXT,
+        event_type TEXT NOT NULL,
+        event_fingerprint TEXT NOT NULL,
+        tokens INTEGER NOT NULL,
+        created_at TEXT,
+        UNIQUE(user_id, watchlist_id, event_type, event_fingerprint)
     )
     """)
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_slug ON watchlist(market_slug)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_closed ON watchlist(is_closed)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_billing_status ON watchlist(billing_status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_token_ledger_user ON watchlist_token_ledger(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_token_ledger_watchlist ON watchlist_token_ledger(watchlist_id)")
 
     # ═══ AUTHORS & POSTS ═══
 
@@ -782,6 +820,11 @@ def _init_db_inner(conn, cursor):
         ("watchlist_probability_threshold", "10"),
         ("watchlist_closing_hours", "24"),
         ("watchlist_check_interval_hours", "3"),
+        ("watchlist_token_billing_enabled", "on"),
+        ("watchlist_probability_alert_cost_tokens", "5"),
+        ("watchlist_closing_soon_cost_tokens", "3"),
+        ("watchlist_resolved_recap_cost_tokens", "7"),
+        ("watchlist_ai_deep_recap_cost_tokens", "10"),
     ]
     for key, value in watchlist_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
@@ -3968,7 +4011,9 @@ def get_user_watchlist(user_id: int, include_closed: bool = False) -> List[Dict[
                    initial_probability, last_checked_probability,
                    last_probability_change, market_end_date,
                    notify_enabled, is_closed, extra_slot,
-                   created_at, last_checked_at
+                   created_at, last_checked_at, billing_status, paused_reason,
+                   paused_at, last_billed_at, tokens_spent, autopilot_enabled,
+                   ai_summary_enabled
             FROM watchlist WHERE user_id = %s ORDER BY id DESC
             """, (user_id,))
         else:
@@ -3977,7 +4022,9 @@ def get_user_watchlist(user_id: int, include_closed: bool = False) -> List[Dict[
                    initial_probability, last_checked_probability,
                    last_probability_change, market_end_date,
                    notify_enabled, is_closed, extra_slot,
-                   created_at, last_checked_at
+                   created_at, last_checked_at, billing_status, paused_reason,
+                   paused_at, last_billed_at, tokens_spent, autopilot_enabled,
+                   ai_summary_enabled
             FROM watchlist WHERE user_id = %s AND is_closed = 0 ORDER BY id DESC
             """, (user_id,))
         rows = cursor.fetchall()
@@ -3993,6 +4040,13 @@ def get_user_watchlist(user_id: int, include_closed: bool = False) -> List[Dict[
             "extra_slot": bool(r[11]) if r[11] else False,
             "created_at": r[12],
             "last_checked_at": r[13],
+            "billing_status": r[14] or "active",
+            "paused_reason": r[15],
+            "paused_at": r[16],
+            "last_billed_at": r[17],
+            "tokens_spent": int(r[18] or 0),
+            "autopilot_enabled": bool(r[19]) if r[19] is not None else True,
+            "ai_summary_enabled": bool(r[20]) if r[20] is not None else True,
         } for r in rows]
     except Exception as e:
         print(f"get_user_watchlist error: {e}")
@@ -4075,13 +4129,153 @@ def toggle_watchlist_notifications(user_id: int, watchlist_id: int, enabled: boo
         conn.close()
 
 
+def get_watchlist_event_cost(event_type: str) -> int:
+    key_map = {
+        "probability_change": "watchlist_probability_alert_cost_tokens",
+        "closing_soon": "watchlist_closing_soon_cost_tokens",
+        "resolved_recap": "watchlist_resolved_recap_cost_tokens",
+        "ai_deep_recap": "watchlist_ai_deep_recap_cost_tokens",
+    }
+    default_map = {
+        "probability_change": "5",
+        "closing_soon": "3",
+        "resolved_recap": "7",
+        "ai_deep_recap": "10",
+    }
+    try:
+        return max(0, int(get_setting(key_map.get(event_type, "watchlist_ai_deep_recap_cost_tokens"), default_map.get(event_type, "10"))))
+    except Exception:
+        return int(default_map.get(event_type, "10"))
+
+
+def pause_watchlist_item(watchlist_id: int, reason: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist
+        SET billing_status = %s, paused_reason = %s, paused_at = %s
+        WHERE id = %s
+        """, (f"paused_{reason}" if not str(reason).startswith("paused_") else reason,
+              reason, datetime.utcnow().isoformat(), watchlist_id))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f"pause_watchlist_item error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def resume_watchlist_item(user_id: int, watchlist_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE watchlist
+        SET billing_status = 'active', paused_reason = NULL, paused_at = NULL
+        WHERE id = %s AND user_id = %s AND is_closed = 0
+        """, (watchlist_id, user_id))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f"resume_watchlist_item error: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def charge_watchlist_event(user_id: int, watchlist_id: int, market_slug: str, event_type: str, event_fingerprint: str) -> dict:
+    if str(get_setting("watchlist_token_billing_enabled", "on")).lower() != "on":
+        return {"charged": False, "reason": "billing_disabled"}
+    if is_user_vip(user_id):
+        return {"charged": False, "reason": "vip"}
+
+    cost = get_watchlist_event_cost(event_type)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT id FROM watchlist_token_ledger
+        WHERE user_id = %s AND watchlist_id = %s AND event_type = %s AND event_fingerprint = %s
+        """, (user_id, watchlist_id, event_type, event_fingerprint))
+        if cursor.fetchone():
+            return {"charged": False, "reason": "duplicate", "cost": cost}
+
+        cursor.execute("SELECT COALESCE(token_balance, 0) FROM users WHERE user_id = %s FOR UPDATE", (user_id,))
+        row = cursor.fetchone()
+        balance = int(row[0] or 0) if row else 0
+        now = datetime.utcnow().isoformat()
+        if balance < cost:
+            cursor.execute("""
+            UPDATE watchlist
+            SET billing_status = 'paused_insufficient_tokens',
+                paused_reason = 'insufficient_tokens',
+                paused_at = %s
+            WHERE id = %s AND user_id = %s
+            """, (now, watchlist_id, user_id))
+            conn.commit()
+            return {"charged": False, "reason": "insufficient_tokens", "cost": cost, "balance": balance}
+
+        new_balance = balance - cost
+        cursor.execute("""
+        UPDATE users SET token_balance = %s, updated_at = %s WHERE user_id = %s
+        """, (new_balance, now, user_id))
+        cursor.execute("""
+        INSERT INTO watchlist_token_ledger
+            (user_id, watchlist_id, market_slug, event_type, event_fingerprint, tokens, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_id, watchlist_id, event_type, event_fingerprint) DO NOTHING
+        """, (user_id, watchlist_id, market_slug, event_type, event_fingerprint, cost, now))
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return {"charged": False, "reason": "duplicate", "cost": cost, "balance": balance}
+        cursor.execute("""
+        UPDATE watchlist
+        SET tokens_spent = COALESCE(tokens_spent, 0) + %s, last_billed_at = %s
+        WHERE id = %s AND user_id = %s
+        """, (cost, now, watchlist_id, user_id))
+        conn.commit()
+        return {"charged": True, "reason": "charged", "cost": cost, "balance": new_balance}
+    except Exception as e:
+        conn.rollback()
+        print(f"charge_watchlist_event error: {e}")
+        return {"charged": False, "reason": "error", "cost": cost, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def get_watchlist_billing_summary(user_id: int) -> Dict[str, Any]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        SELECT COUNT(*), COALESCE(SUM(tokens_spent), 0),
+               SUM(CASE WHEN billing_status = 'active' OR billing_status IS NULL THEN 1 ELSE 0 END),
+               SUM(CASE WHEN billing_status LIKE 'paused%%' THEN 1 ELSE 0 END)
+        FROM watchlist WHERE user_id = %s AND is_closed = 0
+        """, (user_id,))
+        r = cursor.fetchone() or (0, 0, 0, 0)
+        return {"items": int(r[0] or 0), "tokens_spent": int(r[1] or 0),
+                "active": int(r[2] or 0), "paused": int(r[3] or 0)}
+    except Exception as e:
+        print(f"get_watchlist_billing_summary error: {e}")
+        return {"items": 0, "tokens_spent": 0, "active": 0, "paused": 0}
+    finally:
+        conn.close()
+
+
 def get_active_watchlist_items(limit: int = 500) -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
         SELECT DISTINCT market_slug, market_url, question, category, market_end_date
-        FROM watchlist WHERE is_closed = 0 LIMIT %s
+        FROM watchlist
+        WHERE is_closed = 0
+        LIMIT %s
         """, (limit,))
         rows = cursor.fetchall()
         return [{
@@ -4102,8 +4296,13 @@ def get_watchlist_subscribers(market_slug: str) -> List[Dict[str, Any]]:
         cursor.execute("""
         SELECT id, user_id, initial_probability, last_checked_probability,
                notify_enabled, notified_change, notified_closing_soon,
-               notified_resolved, market_end_date
-        FROM watchlist WHERE market_slug = %s AND is_closed = 0
+               notified_resolved, market_end_date, billing_status,
+               tokens_spent, autopilot_enabled
+        FROM watchlist
+        WHERE market_slug = %s AND is_closed = 0
+          AND COALESCE(notify_enabled, 1) = 1
+          AND COALESCE(autopilot_enabled, 1) = 1
+          AND (billing_status IS NULL OR billing_status = 'active')
         """, (market_slug,))
         rows = cursor.fetchall()
         return [{
@@ -4115,6 +4314,9 @@ def get_watchlist_subscribers(market_slug: str) -> List[Dict[str, Any]]:
             "notified_closing_soon": bool(r[6]) if r[6] else False,
             "notified_resolved": bool(r[7]) if r[7] else False,
             "market_end_date": r[8],
+            "billing_status": r[9] or "active",
+            "tokens_spent": int(r[10] or 0),
+            "autopilot_enabled": bool(r[11]) if r[11] is not None else True,
         } for r in rows]
     except Exception as e:
         print(f"get_watchlist_subscribers error: {e}")
@@ -4251,7 +4453,9 @@ def get_watchlist_by_id(watchlist_id: int) -> Optional[Dict[str, Any]]:
                initial_probability, last_checked_probability,
                last_probability_change, market_end_date,
                notify_enabled, is_closed, extra_slot,
-               created_at, last_checked_at
+               created_at, last_checked_at, billing_status, paused_reason,
+               paused_at, last_billed_at, tokens_spent, autopilot_enabled,
+               ai_summary_enabled
         FROM watchlist WHERE id = %s
         """, (watchlist_id,))
         r = cursor.fetchone()
@@ -4269,6 +4473,13 @@ def get_watchlist_by_id(watchlist_id: int) -> Optional[Dict[str, Any]]:
             "extra_slot": bool(r[12]) if r[12] else False,
             "created_at": r[13],
             "last_checked_at": r[14],
+            "billing_status": r[15] or "active",
+            "paused_reason": r[16],
+            "paused_at": r[17],
+            "last_billed_at": r[18],
+            "tokens_spent": int(r[19] or 0),
+            "autopilot_enabled": bool(r[20]) if r[20] is not None else True,
+            "ai_summary_enabled": bool(r[21]) if r[21] is not None else True,
         }
     except Exception as e:
         print(f"get_watchlist_by_id error: {e}")
