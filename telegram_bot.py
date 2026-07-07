@@ -131,6 +131,9 @@ from services.airdrop_share_card_service import (
     admin_get_share_card_stats, build_share_card_payload, format_share_card_text,
     get_latest_share_card, get_share_card_stats, record_share_card_generated, save_latest_share_card,
 )
+from services.airdrop_leaderboard_service import (
+    admin_get_weekly_leaderboard_stats, format_weekly_leaderboard,
+)
 from services.live_router_agent import LiveRouterAgent
 from services.live_language_service import detect_live_ui_language, get_live_thinking_message
 from services.polymarket_service import resolve_polymarket_market_from_screenshot
@@ -451,6 +454,7 @@ def get_airdrop_keyboard(user_id: int) -> InlineKeyboardMarkup:
     kb.add(InlineKeyboardButton("🎯 Daily Quests", callback_data="airdrop_daily_quests"))
     kb.add(InlineKeyboardButton("👥 Invite Friends" if lang == "en" else "👥 Пригласить друзей", callback_data="airdrop_invite_friends"))
     kb.add(InlineKeyboardButton("📤 Share & Earn", callback_data="airdrop_share_earn"))
+    kb.add(InlineKeyboardButton("🏆 Weekly Leaderboard", callback_data="airdrop_weekly_leaderboard"))
     kb.add(InlineKeyboardButton("🚀 Сделать анализ" if lang == "ru" else "🚀 Make analysis", callback_data="onboarding_send_link"))
     return kb
 
@@ -8900,7 +8904,7 @@ async def _send_latest_share_card_message(target, uid: int) -> None:
     kb.add(InlineKeyboardButton("🔗 Поделиться в Telegram" if lang == "ru" else "🔗 Share in Telegram", url=f"https://t.me/share/url?url={quote(payload.get('referral_link') or '')}&text={quote(share_text)}"))
     await target.answer(f"{share_text}\n\n{note}", reply_markup=kb, disable_web_page_preview=True)
 
-@dp.callback_query_handler(lambda c: c.data in {"airdrop_daily_quests", "quests_open_airdrop", "quests_open_analyst_profile", "airdrop_invite_friends", "airdrop_share_earn", "airdrop_share_latest"}, state="*")
+@dp.callback_query_handler(lambda c: c.data in {"airdrop_daily_quests", "quests_open_airdrop", "quests_open_analyst_profile", "airdrop_invite_friends", "airdrop_share_earn", "airdrop_share_latest", "airdrop_weekly_leaderboard"}, state="*")
 async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.finish()
     uid = callback.from_user.id
@@ -8913,6 +8917,13 @@ async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext
     if callback.data == "airdrop_share_latest":
         await _send_latest_share_card_message(callback.message, uid)
         await callback.answer(); return
+    if callback.data == "airdrop_weekly_leaderboard":
+        text = format_weekly_leaderboard(uid, get_user_lang(uid))
+        try:
+            await callback.message.edit_text(text, reply_markup=get_airdrop_keyboard(uid), disable_web_page_preview=True)
+        except Exception:
+            await callback.message.answer(text, reply_markup=get_airdrop_keyboard(uid), disable_web_page_preview=True)
+        await callback.answer(); return
     if callback.data == "quests_open_analyst_profile":
         try:
             record_profile_daily_quest(uid, source="analyst_profile_open")
@@ -8921,6 +8932,13 @@ async def daily_quests_callback(callback: types.CallbackQuery, state: FSMContext
         await callback.message.edit_text(format_user_analyst_profile(uid, get_user_lang(uid)), reply_markup=get_analyst_profile_keyboard(uid)); await callback.answer(); return
     await callback.message.edit_text(format_daily_quests(uid, get_user_lang(uid)), reply_markup=get_daily_quests_keyboard(uid))
     await callback.answer()
+
+
+@dp.message_handler(commands=["airdrop_leaderboard", "leaderboard"], state="*")
+async def airdrop_leaderboard_command(message: types.Message, state: FSMContext):
+    await state.finish()
+    uid = message.from_user.id
+    await message.answer(format_weekly_leaderboard(uid, get_user_lang(uid)), reply_markup=get_airdrop_keyboard(uid), disable_web_page_preview=True)
 
 
 @dp.message_handler(commands=["airdrop"], state="*")
@@ -8940,7 +8958,7 @@ async def share_latest_message_handler(message: types.Message, state: FSMContext
     await _send_latest_share_card_message(message, message.from_user.id)
 
 
-@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status", "airdrop_checkin_status", "airdrop_referrals_status", "airdrop_share_status"], state="*")
+@dp.message_handler(commands=["live_access", "live_owner_only", "live_whitelist", "live_everyone", "live_disable", "live_add_user", "live_remove_user", "live_whitelist_list", "airdrop_points", "airdrop_add_points", "airdrop_settings", "airdrop_enable", "airdrop_disable", "airdrop_referrals_enable", "airdrop_referrals_disable", "airdrop_set_analysis_points", "airdrop_set_daily_cap", "airdrop_set_referrer_points", "airdrop_set_referred_points", "airdrop_quests_status", "airdrop_checkin_status", "airdrop_referrals_status", "airdrop_share_status", "airdrop_leaderboard_status"], state="*")
 async def live_access_admin_handler(message: types.Message, state: FSMContext):
     if not message.from_user or not _require_live_admin(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -8948,6 +8966,20 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     await state.finish()
     cmd = (message.get_command() or "").lstrip("/")
     parts = (message.text or "").split()
+    if cmd == "airdrop_leaderboard_status":
+        st = admin_get_weekly_leaderboard_stats()
+        top = "\n".join([f"{r['rank']}. {r['user_id']} — {format_points_amount(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
+        divs = "\n".join([f"• {name}: {count}" for name, count in (st.get("divisions") or {}).items()]) or "—"
+        await message.answer(
+            f"Airdrop Weekly Leaderboard\n\n"
+            f"Week: {st['week_key']}\n"
+            f"Total ranked users: {st['total_ranked_users']}\n"
+            f"Total weekly points: {format_points_amount(st['total_score'])}\n"
+            f"Share-cards this week: {st['total_share_cards']}\n"
+            f"Active referrals this week: {st['total_active_referrals']}\n\n"
+            f"Top 10:\n{top}\n\nDivisions:\n{divs}"
+        )
+        return
     if cmd == "airdrop_share_status":
         st = admin_get_share_card_stats()
         top = "\n".join([f"• {r['user_id']}: {r['count']} cards" for r in st.get("top_share_card_users", [])]) or "—"
