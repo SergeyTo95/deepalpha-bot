@@ -194,13 +194,12 @@ def format_public_leaderboard_name(user_row_or_id: Any) -> str:
 def format_leaderboard_points(value: Any, *, public: bool = True) -> str:
     """Format leaderboard display points without decimal precision.
 
-    Public leaderboard output gives tiny positive starter scores a visible
+    Public leaderboard output gives low positive scores a visible minimum
     whole-point display value while keeping raw/admin formatting unchanged.
     """
     dec = _to_decimal(value)
-    if public and Decimal("0") < dec < Decimal("1"):
-        display = Decimal("80") + (dec * Decimal("80"))
-        return format(display.to_integral_value(rounding=ROUND_FLOOR), "f")
+    if public and Decimal("0") < dec < Decimal("100"):
+        return "100"
     whole = dec.to_integral_value(rounding=ROUND_FLOOR)
     return format(whole, "f")
 
