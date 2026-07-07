@@ -191,9 +191,15 @@ def format_public_leaderboard_name(user_row_or_id: Any) -> str:
     return _format_public_name(int(user_row_or_id))
 
 
-def format_leaderboard_points(value: Any) -> str:
-    """Format leaderboard display points without decimal precision."""
+def format_leaderboard_points(value: Any, *, public: bool = True) -> str:
+    """Format leaderboard display points without decimal precision.
+
+    Public leaderboard output gives low positive scores a visible minimum
+    whole-point display value while keeping raw/admin formatting unchanged.
+    """
     dec = _to_decimal(value)
+    if public and Decimal("0") < dec < Decimal("100"):
+        return "100"
     whole = dec.to_integral_value(rounding=ROUND_FLOOR)
     return format(whole, "f")
 
@@ -362,7 +368,7 @@ def _points_to_next_rank(user: dict, top: list[dict]) -> Decimal:
 def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: str | None = None) -> str:
     data = get_weekly_leaderboard(user_id, week_key, 10); week = data["week"]; user = data["user"] or _empty_user(user_id)
     div = user["division"]; top = data["top"]
-    top_lines = [f"{r['rank']}. {r.get('public_name') or format_public_leaderboard_name(r['user_id'])} — {format_leaderboard_points(r['score'])} pts" for r in top] or ["—"]
+    top_lines = [f"{r['rank']}. {r.get('public_name') or format_public_leaderboard_name(r['user_id'])} — {format_leaderboard_points(r['score'], public=True)} pts" for r in top] or ["—"]
     warmup_note = (WARMUP_NOTE_EN if ui_language == "en" else WARMUP_NOTE_RU) if data.get("seeded_rows_shown") else ""
     rank = f"#{user['rank']}" if user.get("rank") else "—"
     next_rank = format_points_amount(user.get("points_to_next_rank", _points_to_next_rank(user, data.get("top", []))))
@@ -370,7 +376,7 @@ def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: s
     if ui_language == "en":
         return (
             f"🏆 Weekly Leaderboard\n\nSeason:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
-            f"Your result:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'])}\n• Division: {div['name']}\n"
+            f"Your result:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'], public=True)}\n• Division: {div['name']}\n"
             f"• To next rank: {next_rank}\n• To next division: {next_div}\n\nTop Analysts this week:\n"
             + "\n".join(top_lines)
             + f"\n\nYour weekly stats:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"
@@ -381,7 +387,7 @@ def format_weekly_leaderboard(user_id: int, ui_language: str = "ru", week_key: s
         )
     return (
         f"🏆 Weekly Leaderboard\n\nСезон:\n{week['week_key']}\n{week['start_date']} — {week['end_date']} UTC\n\n"
-        f"Твой результат:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'])}\n• Division: {div['name']}\n"
+        f"Твой результат:\n• Rank: {rank}\n• Weekly Score: {format_leaderboard_points(user['score'], public=True)}\n• Division: {div['name']}\n"
         f"• До следующего ранга: {next_rank}\n• До следующей division: {next_div}\n\nTop Analysts this week:\n"
         + "\n".join(top_lines)
         + f"\n\nТвои stats за неделю:\n• Analyses: {user['analyses_this_week']}\n• Active referrals: {user['active_referrals_this_week']}\n"

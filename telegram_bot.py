@@ -8968,7 +8968,7 @@ async def live_access_admin_handler(message: types.Message, state: FSMContext):
     parts = (message.text or "").split()
     if cmd == "airdrop_leaderboard_status":
         st = admin_get_weekly_leaderboard_stats()
-        top = "\n".join([f"{r['rank']}. {'[seed] '+r.get('public_name', 'Seed') if r.get('is_seeded') else r['user_id']} — {format_leaderboard_points(r['score'])} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
+        top = "\n".join([f"{r['rank']}. {'[seed] '+r.get('public_name', 'Seed') if r.get('is_seeded') else r['user_id']} — {format_leaderboard_points(r['score'], public=False)} pts / {r['division']['name']}" for r in st.get("top", [])]) or "—"
         divs = "\n".join([f"• {name}: {count}" for name, count in (st.get("divisions") or {}).items()]) or "—"
         await message.answer(
             f"Airdrop Weekly Leaderboard\n\n"
