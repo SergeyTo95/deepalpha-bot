@@ -51,3 +51,30 @@ def test_unsafe_words_are_filtered_from_auto_article_text():
     assert "ставь" not in combined
     assert "гарантия" not in combined
     assert "100%" not in combined
+
+def test_article_command_checks_daily_post_limit():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    start = source.index('async def article_command_handler')
+    end = source.index('@dp.callback_query_handler(lambda c: c.data.startswith("pub_article_"))', start)
+    handler = source[start:end]
+    assert "can_author_post_today(uid)" in handler
+    assert "Дневной лимит публикаций исчерпан" in handler
+    assert "Daily post limit reached" in handler
+
+
+def test_article_deep_link_uses_html_parse_mode():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    start = source.index('elif args.startswith("article_")')
+    end = source.index('elif args.startswith("profile_")', start)
+    block = source[start:end]
+    assert '_format_author_post(post, message.from_user.id, show_author=True)' in block
+    assert 'parse_mode="HTML"' in block
+
+
+def test_post_and_article_view_uses_html_parse_mode():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    start = source.index('async def post_view_handler')
+    end = source.index('# ═══════════════════════════════════════════\n# CALLBACKS: PROFILE / BADGES', start)
+    handler = source[start:end]
+    assert '_format_author_post(post, uid, show_author=True)' in handler
+    assert 'message.answer(text, parse_mode="HTML", reply_markup=kb)' in handler

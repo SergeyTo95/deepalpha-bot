@@ -5141,9 +5141,12 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
         title = _escape(sanitize_article_text(post.get("title") or post.get("question") or "Event Article"))
         author_line = ""
         if show_author:
-            author_username = post.get("author_username") or post.get("author_first_name", "")
+            author_username = post.get("author_username")
+            author_first_name = post.get("author_first_name", "")
             if author_username:
                 author_line = f"👤 Author: @{_escape(author_username)}\n"
+            elif author_first_name:
+                author_line = f"👤 Author: {_escape(author_first_name)}\n"
         market_url = _escape(post.get("market_url") or "")
         event_question = _escape(sanitize_article_text(post.get("event_question") or post.get("question") or ""))
         thesis = _escape(sanitize_article_text(post.get("thesis") or post.get("display_prediction") or ""))
@@ -5563,7 +5566,11 @@ async def start_handler(message: types.Message):
                     if author:
                         post["author_username"] = author.get("username")
                         post["author_first_name"] = author.get("first_name")
-                    await message.answer(_format_author_post(post, message.from_user.id, show_author=True), reply_markup=get_author_post_keyboard(message.from_user.id, post))
+                    await message.answer(
+                        _format_author_post(post, message.from_user.id, show_author=True),
+                        parse_mode="HTML",
+                        reply_markup=get_author_post_keyboard(message.from_user.id, post),
+                    )
                 else:
                     await message.answer("❌ Article not found")
                 return
@@ -7050,6 +7057,9 @@ async def article_command_handler(message: types.Message):
     if not is_author(uid):
         await message.answer("❌ Только для авторов" if lang == "ru" else "❌ Authors only")
         return
+    if not can_author_post_today(uid):
+        await message.answer("❌ Дневной лимит публикаций исчерпан" if lang == "ru" else "❌ Daily post limit reached")
+        return
     analysis = last_analysis_cache.get(uid)
     if not analysis:
         await message.answer("❌ Нет свежего анализа для статьи" if lang == "ru" else "❌ No recent analysis for article")
@@ -7129,7 +7139,7 @@ async def post_view_handler(message: types.Message):
 
     text = _format_author_post(post, uid, show_author=True)
     kb = get_author_post_keyboard(uid, post)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 # ═══════════════════════════════════════════
