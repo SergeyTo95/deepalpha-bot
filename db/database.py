@@ -559,9 +559,30 @@ def _init_db_inner(conn, cursor):
     )
     """)
 
+    for stmt in (
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS event_question TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS article_type TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS thesis TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS reasoning TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS probability_view TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS risks TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS conclusion TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS source_type TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS source_ref_id TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'published'",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS views_count INTEGER DEFAULT 0",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS unique_views_count INTEGER DEFAULT 0",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS shares_count INTEGER DEFAULT 0",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS updated_at TEXT",
+    ):
+        cursor.execute(stmt)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON author_posts(author_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON author_posts(created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_deleted ON author_posts(is_deleted)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_status ON author_posts(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_source ON author_posts(source_type, source_ref_id)")
 
     # ═══ SUBSCRIPTIONS (бесплатные) ═══
 
@@ -3246,7 +3267,7 @@ def get_author_post(post_id: int) -> Optional[Dict[str, Any]]:
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cursor.execute("""
-        SELECT * FROM author_posts WHERE id = %s AND is_deleted = 0
+        SELECT * FROM author_posts WHERE id = %s AND is_deleted = 0 AND COALESCE(status, 'published') = 'published'
         """, (post_id,))
         row = cursor.fetchone()
         if not row:
@@ -3335,6 +3356,69 @@ def update_post_donations(post_id: int, ton_amount: float, is_new_donor: bool) -
         conn.commit()
     except Exception as e:
         print(f"update_post_donations error: {e}")
+    finally:
+        conn.close()
+
+def create_event_article(author_id: int, article: Dict[str, Any]) -> Optional[int]:
+    """Publishes an Event Article using the existing author_posts/donation model."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+        INSERT INTO author_posts (
+            author_id, market_slug, market_url, question, category,
+            display_prediction, confidence, market_probability,
+            alpha_label, author_comment, full_analysis_json,
+            title, event_question, article_type, thesis, reasoning,
+            probability_view, risks, conclusion, source_type, source_ref_id,
+            status, created_at, updated_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """, (
+            author_id,
+            article.get("market_slug", ""), article.get("market_url", ""),
+            article.get("event_question") or article.get("title", ""),
+            article.get("article_type", "event_analysis"),
+            article.get("thesis", ""), "", article.get("probability_view", ""),
+            "", "", json.dumps(article.get("full_analysis") or article),
+            article.get("title", ""), article.get("event_question", ""),
+            article.get("article_type", "event_analysis"), article.get("thesis", ""),
+            article.get("reasoning", ""), article.get("probability_view", ""),
+            article.get("risks", ""), article.get("conclusion", ""),
+            article.get("source_type", "manual"), article.get("source_ref_id"),
+            article.get("status", "published"), now, now,
+        ))
+        post_id = cursor.fetchone()[0]
+        cursor.execute("""
+        UPDATE users SET total_posts = COALESCE(total_posts, 0) + 1,
+            posts_today = COALESCE(posts_today, 0) + 1, updated_at = %s
+        WHERE user_id = %s
+        """, (now, author_id))
+        conn.commit()
+        return post_id
+    except Exception as e:
+        print(f"create_event_article error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def increment_post_share(post_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+        UPDATE author_posts SET shares_count = COALESCE(shares_count, 0) + 1,
+            updated_at = %s
+        WHERE id = %s AND is_deleted = 0 AND COALESCE(status, 'published') = 'published'
+        """, (datetime.utcnow().isoformat(), post_id))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        return ok
+    except Exception as e:
+        print(f"increment_post_share error: {e}")
+        return False
     finally:
         conn.close()
 
