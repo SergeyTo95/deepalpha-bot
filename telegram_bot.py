@@ -42,6 +42,7 @@ from db.database import (
     set_author_bio, set_ton_wallet, get_all_authors,
     get_top_authors_by_donations, can_author_post_today,
     create_author_post, get_author_post, get_author_posts,
+    create_event_article, increment_post_share,
     delete_author_post,
     subscribe_to_author, unsubscribe_from_author,
     is_subscribed_to_author, get_user_subscriptions,
@@ -59,6 +60,7 @@ from services.badge_service import (
 )
 from services.resolved_market_recap_service import render_resolved_market_recap
 from services.native_coin_display import native_wallet_label
+from services.event_article_service import create_article_payload_from_analysis, build_article_share_url, sanitize_article_text
 
 from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
@@ -858,8 +860,10 @@ def get_share_analysis_keyboard(user_id: int, analysis_result: dict) -> InlineKe
 
     # Для автора — кнопка публикации
     if user_is_author:
-        publish_label = "📢 Опубликовать как прогноз" if lang == "ru" else "📢 Publish as forecast"
-        kb.add(InlineKeyboardButton(publish_label, callback_data=f"pub_post_{user_id}"))
+        publish_label = "📝 Publish as Article"
+        kb.add(InlineKeyboardButton(publish_label, callback_data=f"pub_article_{user_id}"))
+        forecast_label = "📢 Опубликовать как прогноз" if lang == "ru" else "📢 Publish as forecast"
+        kb.add(InlineKeyboardButton(forecast_label, callback_data=f"pub_post_{user_id}"))
 
     if lang == "ru":
         watchlist_label = f"⭐ В Watchlist ({watchlist_price} ток.)"
@@ -1641,6 +1645,9 @@ def get_author_post_keyboard(viewer_id: int, post: dict) -> InlineKeyboardMarkup
 
     author_label = "👤 Профиль автора" if lang == "ru" else "👤 Author profile"
     kb.add(InlineKeyboardButton(author_label, callback_data=f"auth_view_{author_id}"))
+
+    share_label = "📤 Share article" if (post.get("title") or post.get("thesis")) else ("📤 Поделиться" if lang == "ru" else "📤 Share")
+    kb.add(InlineKeyboardButton(share_label, callback_data=f"post_share_{post_id}"))
 
     if market_url:
         poly_label = "🔗 Polymarket" if lang == "ru" else "🔗 Polymarket"
@@ -5130,6 +5137,39 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
     """Форматирует один пост автора."""
     lang = get_user_lang(uid)
 
+    if post.get("title") or post.get("thesis"):
+        title = _escape(sanitize_article_text(post.get("title") or post.get("question") or "Event Article"))
+        author_line = ""
+        if show_author:
+            author_username = post.get("author_username") or post.get("author_first_name", "")
+            if author_username:
+                author_line = f"👤 Author: @{_escape(author_username)}\n"
+        market_url = _escape(post.get("market_url") or "")
+        event_question = _escape(sanitize_article_text(post.get("event_question") or post.get("question") or ""))
+        thesis = _escape(sanitize_article_text(post.get("thesis") or post.get("display_prediction") or ""))
+        reasoning = _escape(sanitize_article_text(post.get("reasoning") or ""))
+        probability = _escape(sanitize_article_text(post.get("probability_view") or post.get("market_probability") or ""))
+        risks = _escape(sanitize_article_text(post.get("risks") or ""))
+        conclusion = _escape(sanitize_article_text(post.get("conclusion") or ""))
+        donations = post.get("total_donations_ton", 0) or 0
+        donors = post.get("total_donors", 0) or 0
+        shares = post.get("shares_count", 0) or 0
+        created = post.get("created_at", "")[:16].replace("T", " ") if post.get("created_at") else ""
+        lines = [f"📝 <b>{title}</b>", author_line.rstrip(), f"📌 {event_question}" if event_question else ""]
+        if market_url:
+            lines.append(f"🔗 Market: {market_url}")
+        lines.extend([
+            f"\n<b>Thesis</b>\n{thesis}" if thesis else "",
+            f"\n<b>Reasoning</b>\n{reasoning}" if reasoning else "",
+            f"\n<b>Probability view</b>\n{probability}" if probability else "",
+            f"\n<b>Risks</b>\n{risks}" if risks else "",
+            f"\n<b>Conclusion</b>\n{conclusion}" if conclusion else "",
+            f"\n💝 Donations: {donations:.2f} Gram from {donors} supporters" if donations > 0 else "",
+            f"📤 Shares: {shares}" if shares else "",
+            f"📅 {created}" if created else "",
+        ])
+        return "\n".join([line for line in lines if line])
+
     q = _escape(post.get("question", ""))
     category = post.get("category", "")
     display_pred = _escape(post.get("display_prediction", ""))
@@ -5510,6 +5550,23 @@ async def start_handler(message: types.Message):
                 referral_visit = register_referral_visit(referred_by, message.from_user.id, source="telegram_start")
                 if not referral_visit.get("registered"):
                     referred_by = None
+        elif args.startswith("article_"):
+            try:
+                post_id = int(args.replace("article_", ""))
+            except ValueError:
+                post_id = 0
+            if post_id:
+                _register_user(message, referred_by=None)
+                post = get_author_post(post_id)
+                if post:
+                    author = get_author_profile(post["author_id"])
+                    if author:
+                        post["author_username"] = author.get("username")
+                        post["author_first_name"] = author.get("first_name")
+                    await message.answer(_format_author_post(post, message.from_user.id, show_author=True), reply_markup=get_author_post_keyboard(message.from_user.id, post))
+                else:
+                    await message.answer("❌ Article not found")
+                return
         elif args.startswith("profile_"):
             try:
                 show_profile_of = int(args.replace("profile_", ""))
@@ -6983,12 +7040,77 @@ async def author_view_handler(message: types.Message):
     await message.answer(text, reply_markup=kb)
 
 
-@dp.message_handler(lambda m: m.text and m.text.startswith("/post_"))
+
+@dp.message_handler(commands=["article"])
+async def article_command_handler(message: types.Message):
+    """Manual MVP: publish latest analysis as an Event Article."""
+    _register_user(message)
+    uid = message.from_user.id
+    lang = get_user_lang(uid)
+    if not is_author(uid):
+        await message.answer("❌ Только для авторов" if lang == "ru" else "❌ Authors only")
+        return
+    analysis = last_analysis_cache.get(uid)
+    if not analysis:
+        await message.answer("❌ Нет свежего анализа для статьи" if lang == "ru" else "❌ No recent analysis for article")
+        return
+    article = create_article_payload_from_analysis(analysis, author_id=uid, source_type="manual")
+    post_id = create_event_article(uid, article)
+    if not post_id:
+        await message.answer("❌ Ошибка публикации" if lang == "ru" else "❌ Publish error")
+        return
+    await message.answer(f"✅ Article published!\n\n📝 /article_{post_id}")
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("pub_article_"))
+async def publish_article_callback(callback: types.CallbackQuery):
+    """Publish latest analysis as an Event Article."""
+    uid = callback.from_user.id
+    lang = get_user_lang(uid)
+    if not is_author(uid):
+        await callback.answer("❌ Authors only", show_alert=True)
+        return
+    if not can_author_post_today(uid):
+        await callback.answer("❌ Daily post limit", show_alert=True)
+        return
+    analysis = last_analysis_cache.get(uid)
+    if not analysis:
+        await callback.answer("Expired", show_alert=True)
+        return
+    article = create_article_payload_from_analysis(analysis, author_id=uid, source_type="quick_analysis")
+    post_id = create_event_article(uid, article)
+    if not post_id:
+        await callback.answer("Publish error", show_alert=True)
+        return
+    await callback.message.answer(f"✅ Article published!\n\n📝 /article_{post_id}")
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("post_share_"))
+async def post_share_callback(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    try:
+        post_id = int(callback.data.replace("post_share_", ""))
+    except ValueError:
+        await callback.answer("Invalid article", show_alert=True)
+        return
+    post = get_author_post(post_id)
+    if not post:
+        await callback.answer("Article not found", show_alert=True)
+        return
+    increment_post_share(post_id)
+    share_url = build_article_share_url(BOT_USERNAME, post_id, post.get("title") or post.get("question") or "DeepAlpha article")
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📤 Share article", url=share_url))
+    await callback.message.answer("📤 Share this article", reply_markup=kb)
+    await callback.answer()
+
+@dp.message_handler(lambda m: m.text and (m.text.startswith("/post_") or m.text.startswith("/article_")))
 async def post_view_handler(message: types.Message):
     _register_user(message)
     uid = message.from_user.id
     try:
-        post_id = int(message.text.replace("/post_", "").strip())
+        post_id = int(message.text.replace("/post_", "").replace("/article_", "").strip())
     except ValueError:
         await message.answer("❌ Неверный ID")
         return
