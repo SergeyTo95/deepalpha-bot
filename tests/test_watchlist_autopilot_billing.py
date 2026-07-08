@@ -55,3 +55,64 @@ def test_probability_change_insufficient_tokens_keeps_generic_pause_resume_messa
 
     assert "send_watchlist_pause_message" in insufficient_block
     assert "send_watchlist_resolved_insufficient_tokens_message" not in insufficient_block
+
+
+def test_watchlist_ai_settings_defaults_exist():
+    assert '("watchlist_ai_summary_enabled", "on")' in DB_SOURCE
+    assert '("watchlist_ai_summary_max_bullets", "3")' in DB_SOURCE
+
+
+def test_watchlist_ai_called_after_charge_in_source():
+    body = _function_body(APP_SOURCE, "_check_subscriber_notifications")
+    charge_pos = body.index('charge = charge_watchlist_event(user_id, watchlist_id')
+    insufficient_pos = body.index('if charge.get("reason") == "insufficient_tokens":', charge_pos)
+    ai_pos = body.index('build_watchlist_ai_summary(', insufficient_pos)
+    assert charge_pos < insufficient_pos < ai_pos
+
+
+def test_insufficient_tokens_block_does_not_call_ai_summary_in_source():
+    body = _function_body(APP_SOURCE, "_check_subscriber_notifications")
+    insufficient_block = body.split('if charge.get("reason") == "insufficient_tokens":', 1)[1].split("return", 1)[0]
+    assert "build_watchlist_ai_summary" not in insufficient_block
+
+
+def test_watchlist_alerts_append_deepalpha_view_in_source():
+    body = _function_body(APP_SOURCE, "_check_subscriber_notifications")
+    resolved_body = _function_body(APP_SOURCE, "_handle_resolved_market")
+    assert body.count('format_watchlist_ai_summary(ai_summary)') >= 2
+    assert 'event_type="probability_change"' in body
+    assert 'event_type="closing_soon"' in body
+    assert 'event_type="resolved_recap"' in resolved_body
+
+
+def test_provider_failure_returns_fallback_summary(monkeypatch):
+    import services.watchlist_ai_summary_service as svc
+
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(svc, "get_setting", lambda key, default=None: default)
+
+    result = svc.build_watchlist_ai_summary(
+        "probability_change",
+        "Will event happen?",
+        initial_probability=40,
+        current_probability=56,
+        probability_change=16,
+        lang="en",
+    )
+    assert result["fallback"] is True
+    assert result["summary"]
+    assert result["label"] in svc.SAFE_LABELS
+
+
+def test_forbidden_words_not_present_in_fallback(monkeypatch):
+    import services.watchlist_ai_summary_service as svc
+
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda *args, **kwargs: "")
+    monkeypatch.setattr(svc, "get_setting", lambda key, default=None: default)
+
+    result = svc.build_watchlist_ai_summary("closing_soon", "Question", current_probability=51, closing_hours=6, lang="en")
+    text = " ".join([result["summary"], result["label"], " ".join(result["watch_next"])])
+    lowered = text.lower()
+    assert "100%" not in lowered
+    for word in ("bet", "buy", "guaranteed"):
+        assert word not in lowered

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telegram_bot
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
+from services.watchlist_ai_summary_service import build_watchlist_ai_summary, format_watchlist_ai_summary
 from services.polymarket_service import (
     list_markets, list_events, normalize_market_data,
     normalize_event_for_channel, build_market_url,
@@ -37,6 +38,11 @@ register_admin(telegram_bot.dp)
 CATEGORIES = ["Politics", "Crypto", "Sports", "Economy", "Tech"]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
+
+
+def _watchlist_ai_summary_enabled() -> bool:
+    return str(get_setting("watchlist_ai_summary_enabled", "on") or "on").strip().lower() == "on"
+
 
 
 def format_watchlist_charge_footer(charged_result: dict, lang: str = "ru") -> str:
@@ -652,6 +658,18 @@ async def _check_subscriber_notifications(
             except Exception as e:
                 print(f"⭐ Failed to notify {user_id} about watchlist pause: {e}")
             return
+        ai_block = ""
+        if _watchlist_ai_summary_enabled():
+            ai_summary = build_watchlist_ai_summary(
+                event_type="probability_change",
+                question=question,
+                market_slug=item.get("market_slug", ""),
+                market_url=url,
+                initial_probability=initial_prob,
+                current_probability=current_prob,
+                probability_change=change,
+            )
+            ai_block = format_watchlist_ai_summary(ai_summary)
         text = (
             f"{direction} Watchlist — изменение рынка!\n\n"
             f"📌 {question}\n\n"
@@ -659,6 +677,7 @@ async def _check_subscriber_notifications(
             f"Стало: {current_prob:.1f}%\n"
             f"Изменение: {'+' if change > 0 else ''}{change:.1f}%\n\n"
             f"🔗 {url}"
+            f"{ai_block}"
             f"{format_watchlist_charge_footer(charge)}"
         )
         try:
@@ -683,12 +702,25 @@ async def _check_subscriber_notifications(
                     except Exception as e:
                         print(f"⭐ Failed to notify {user_id} about watchlist pause: {e}")
                     return
+                ai_block = ""
+                if _watchlist_ai_summary_enabled():
+                    ai_summary = build_watchlist_ai_summary(
+                        event_type="closing_soon",
+                        question=question,
+                        market_slug=item.get("market_slug", ""),
+                        market_url=url,
+                        initial_probability=initial_prob,
+                        current_probability=current_prob,
+                        closing_hours=int(hours_left),
+                    )
+                    ai_block = format_watchlist_ai_summary(ai_summary)
                 text = (
                     f"⏰ Watchlist — рынок скоро закроется!\n\n"
                     f"📌 {question}\n\n"
                     f"Осталось: ~{int(hours_left)} часов\n"
                     f"Текущая вероятность: {current_prob:.1f}%\n\n"
                     f"🔗 {url}"
+                    f"{ai_block}"
                     f"{format_watchlist_charge_footer(charge)}"
                 )
                 await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
@@ -731,12 +763,23 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
                     except Exception as e:
                         print(f"⭐ Failed to notify {sub.get('user_id')} about resolved insufficient tokens: {e}")
                     continue
+                ai_block = ""
+                if _watchlist_ai_summary_enabled():
+                    ai_summary = build_watchlist_ai_summary(
+                        event_type="resolved_recap",
+                        question=question,
+                        market_slug=slug,
+                        market_url=url,
+                        actual_outcome=actual_outcome,
+                    )
+                    ai_block = format_watchlist_ai_summary(ai_summary)
                 text = (
                     f"🎯 Watchlist — рынок закрылся!\n\n"
                     f"📌 {question}\n\n"
                     f"Результат: {actual_outcome or 'неизвестен'}\n\n"
                     f"🔗 {url}\n\n"
                     f"Рынок удалён из watchlist."
+                    f"{ai_block}"
                     f"{format_watchlist_charge_footer(charge)}"
                 )
                 await telegram_bot.bot.send_message(
