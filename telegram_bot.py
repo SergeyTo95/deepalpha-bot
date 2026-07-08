@@ -42,7 +42,7 @@ from db.database import (
     set_author_bio, set_ton_wallet, get_all_authors,
     get_top_authors_by_donations, can_author_post_today,
     create_author_post, get_author_post, get_author_posts,
-    create_event_article, increment_post_share,
+    create_event_article, create_manual_article, increment_post_share,
     delete_author_post,
     subscribe_to_author, unsubscribe_from_author,
     is_subscribed_to_author, get_user_subscriptions,
@@ -223,6 +223,12 @@ class AuthorStates(StatesGroup):
     waiting_wallet = State()
     waiting_post_comment = State()
     waiting_donation_amount = State()
+    waiting_article_title = State()
+    waiting_article_body = State()
+    waiting_article_url = State()
+    waiting_article_image = State()
+    waiting_article_attach = State()
+    waiting_article_preview = State()
 
 
 class CryptoStates(StatesGroup):
@@ -5139,7 +5145,7 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
     """Форматирует один пост автора."""
     lang = get_user_lang(uid)
 
-    if post.get("title") or post.get("thesis"):
+    if post.get("body_text") or post.get("title") or post.get("thesis"):
         title = _escape(sanitize_article_text(post.get("title") or post.get("question") or "Event Article"))
         author_line = ""
         if show_author:
@@ -5151,6 +5157,7 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
                 author_line = f"👤 Author: {_escape(author_first_name)}\n"
         market_url = _escape(post.get("market_url") or "")
         event_question = _escape(sanitize_article_text(post.get("event_question") or post.get("question") or ""))
+        body_text = _escape(sanitize_article_text(post.get("body_text") or ""))
         thesis = _escape(sanitize_article_text(post.get("thesis") or post.get("display_prediction") or ""))
         reasoning = _escape(sanitize_article_text(post.get("reasoning") or ""))
         probability = _escape(sanitize_article_text(post.get("probability_view") or post.get("market_probability") or ""))
@@ -5164,6 +5171,8 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
         if market_url:
             lines.append(f"🔗 Market: {market_url}")
         lines.extend([
+            f"\n{body_text}" if body_text else "",
+            f"\n<b>Attached analysis</b>" if post.get("attached_analysis_json") else "",
             f"\n<b>Thesis</b>\n{thesis}" if thesis else "",
             f"\n<b>Reasoning</b>\n{reasoning}" if reasoning else "",
             f"\n<b>Probability view</b>\n{probability}" if probability else "",
@@ -7069,6 +7078,128 @@ async def author_view_handler(message: types.Message):
 
 
 
+
+
+def _manual_article_keyboard(attached: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("✅ Publish", callback_data="manual_article_publish"))
+    kb.add(InlineKeyboardButton("✏️ Edit title", callback_data="manual_article_edit_title"), InlineKeyboardButton("✏️ Edit text", callback_data="manual_article_edit_text"))
+    kb.add(InlineKeyboardButton("🖼 Change image", callback_data="manual_article_change_image"), InlineKeyboardButton("📎 Remove analysis" if attached else "📎 Attach analysis", callback_data="manual_article_toggle_analysis"))
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="manual_article_cancel"))
+    return kb
+
+
+def _article_attach_keyboard(has_analysis: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    if has_analysis:
+        kb.add(InlineKeyboardButton("📎 Attach latest analysis", callback_data="manual_article_attach_yes"))
+    kb.add(InlineKeyboardButton("📝 Publish without analysis", callback_data="manual_article_attach_no"))
+    return kb
+
+async def _show_manual_article_preview(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    post = {"title": data.get("title"), "body_text": data.get("body_text"), "market_url": data.get("market_url"), "cover_image_file_id": data.get("cover_image_file_id"), "attached_analysis_json": json.dumps(data.get("attached_analysis"), ensure_ascii=False) if data.get("attached_analysis") else None, "author_id": message.chat.id, "created_at": datetime.utcnow().isoformat()}
+    text = "<b>Preview</b>\n\n" + _format_author_post(post, message.chat.id, show_author=False)
+    kb = _manual_article_keyboard(bool(data.get("attached_analysis")))
+    if data.get("cover_image_file_id"):
+        if len(text) <= 1000:
+            await message.answer_photo(data["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await message.answer_photo(data["cover_image_file_id"])
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await AuthorStates.waiting_article_preview.set()
+
+
+@dp.message_handler(commands=["write_article", "new_article"])
+async def write_article_command_handler(message: types.Message, state: FSMContext):
+    _register_user(message)
+    uid = message.from_user.id
+    if not is_author(uid):
+        await message.answer("❌ Authors only")
+        return
+    if not can_author_post_today(uid):
+        await message.answer("❌ Daily post limit reached")
+        return
+    await state.finish()
+    await AuthorStates.waiting_article_title.set()
+    await message.answer("📝 Write Article\n\nSend the article title.")
+
+
+@dp.message_handler(state=AuthorStates.waiting_article_title)
+async def manual_article_title_handler(message: types.Message, state: FSMContext):
+    await state.update_data(title=sanitize_article_text(message.text or "")[:160])
+    await AuthorStates.waiting_article_body.set()
+    await message.answer("Send the main article text/body.")
+
+
+@dp.message_handler(state=AuthorStates.waiting_article_body)
+async def manual_article_body_handler(message: types.Message, state: FSMContext):
+    await state.update_data(body_text=sanitize_article_text(message.text or "")[:8000])
+    await AuthorStates.waiting_article_url.set()
+    await message.answer("Send optional market/event URL, or /skip.")
+
+
+@dp.message_handler(commands=["skip"], state=AuthorStates.waiting_article_url)
+async def manual_article_skip_url(message: types.Message, state: FSMContext):
+    await state.update_data(market_url="")
+    await AuthorStates.waiting_article_image.set()
+    await message.answer("Send optional cover photo, or /skip.")
+
+
+@dp.message_handler(state=AuthorStates.waiting_article_url)
+async def manual_article_url_handler(message: types.Message, state: FSMContext):
+    await state.update_data(market_url=sanitize_article_text(message.text or "")[:500])
+    await AuthorStates.waiting_article_image.set()
+    await message.answer("Send optional cover photo, or /skip.")
+
+
+@dp.message_handler(commands=["skip"], state=AuthorStates.waiting_article_image)
+async def manual_article_skip_image(message: types.Message, state: FSMContext):
+    await AuthorStates.waiting_article_attach.set()
+    await message.answer("Attach latest analysis if available?", reply_markup=_article_attach_keyboard(bool(last_analysis_cache.get(message.from_user.id))))
+
+
+@dp.message_handler(content_types=types.ContentType.PHOTO, state=AuthorStates.waiting_article_image)
+async def manual_article_photo_handler(message: types.Message, state: FSMContext):
+    await state.update_data(cover_image_file_id=message.photo[-1].file_id)
+    await AuthorStates.waiting_article_attach.set()
+    await message.answer("Attach latest analysis if available?", reply_markup=_article_attach_keyboard(bool(last_analysis_cache.get(message.from_user.id))))
+
+
+@dp.callback_query_handler(lambda c: c.data in ["manual_article_attach_yes", "manual_article_attach_no"], state=AuthorStates.waiting_article_attach)
+async def manual_article_attach_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data.endswith("yes"):
+        await state.update_data(attached_analysis=last_analysis_cache.get(callback.from_user.id) or {})
+    else:
+        await state.update_data(attached_analysis=None)
+    await _show_manual_article_preview(callback.message, state)
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("manual_article_"), state=AuthorStates.waiting_article_preview)
+async def manual_article_preview_callback(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    data = await state.get_data()
+    action = callback.data.replace("manual_article_", "")
+    if action == "cancel":
+        await state.finish(); await callback.message.answer("❌ Cancelled"); await callback.answer(); return
+    if action == "toggle_analysis":
+        await state.update_data(attached_analysis=None if data.get("attached_analysis") else (last_analysis_cache.get(uid) or {}))
+        await _show_manual_article_preview(callback.message, state); await callback.answer(); return
+    if action == "publish":
+        payload = {"title": sanitize_article_text(data.get("title")), "body_text": sanitize_article_text(data.get("body_text")), "market_url": sanitize_article_text(data.get("market_url")), "cover_image_file_id": data.get("cover_image_file_id"), "attached_analysis": data.get("attached_analysis"), "source_type": "manual_editor", "source_ref_id": "last_analysis_cache" if data.get("attached_analysis") else None, "article_type": "manual", "status": "published"}
+        post_id = create_manual_article(uid, payload)
+        await state.finish()
+        if not post_id:
+            await callback.message.answer("❌ Publish error"); await callback.answer(); return
+        award_article_published_points(uid, post_id, metadata={"source":"manual_editor"})
+        award_article_referral_activation_points(uid, "article_published", metadata={"source":"manual_editor","article_id":post_id})
+        await callback.message.answer(f"✅ Article published!\n\n📝 /article_{post_id}", reply_markup=_share_hub_keyboard(post_id, payload.get("title"), str(uid)))
+        await callback.answer(); return
+    await callback.answer("Send /write_article to edit in MVP", show_alert=True)
+
 @dp.message_handler(commands=["article"])
 async def article_command_handler(message: types.Message):
     """Manual MVP: publish latest analysis as an Event Article."""
@@ -7119,21 +7250,40 @@ async def publish_article_callback(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query_handler(lambda c: c.data.startswith("post_share_"))
+
+def _article_deep_link(post_id: int, referral_code: str | None = None) -> str:
+    suffix = f"_ref_{sanitize_article_text(referral_code)}" if referral_code else ""
+    return f"https://t.me/{BOT_USERNAME}?start=article_{post_id}{suffix}"
+
+
+def _share_hub_keyboard(post_id: int, title: str, referral_code: str | None) -> InlineKeyboardMarkup:
+    link = _article_deep_link(post_id, referral_code)
+    safe_title = sanitize_article_text(title or "DeepAlpha article")
+    text = f"📄 DeepAlpha article: {safe_title}"
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("Telegram Share", url=f"https://t.me/share/url?url={quote(link)}&text={quote(text)}"))
+    kb.add(InlineKeyboardButton("X / Twitter", url=f"https://twitter.com/intent/tweet?text={quote(text)}&url={quote(link)}"))
+    kb.add(InlineKeyboardButton("Reddit", url=f"https://www.reddit.com/submit?url={quote(link)}&title={quote(safe_title)}"))
+    kb.add(InlineKeyboardButton("WhatsApp", url=f"https://wa.me/?text={quote(text + ' ' + link)}"))
+    kb.add(InlineKeyboardButton("Medium copy draft", callback_data=f"post_share_medium_{post_id}"))
+    kb.add(InlineKeyboardButton("Instagram copy caption", callback_data=f"post_share_instagram_{post_id}"))
+    return kb
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("post_share_hub_") or (c.data.startswith("post_share_") and not c.data.startswith("post_share_medium_") and not c.data.startswith("post_share_instagram_")))
 async def post_share_callback(callback: types.CallbackQuery):
     uid = callback.from_user.id
+    raw = callback.data.replace("post_share_hub_", "").replace("post_share_", "")
     try:
-        post_id = int(callback.data.replace("post_share_", ""))
+        post_id = int(raw)
     except ValueError:
-        await callback.answer("Invalid article", show_alert=True)
-        return
+        await callback.answer("Invalid article", show_alert=True); return
     post = get_author_post(post_id)
     if not post:
-        await callback.answer("Article not found", show_alert=True)
-        return
+        await callback.answer("Article not found", show_alert=True); return
     increment_post_share(post_id)
     try:
-        award_article_shared_points(uid, post_id, metadata={"source": "telegram_article_screen"})
+        award_article_shared_points(uid, post_id, metadata={"source":"share_hub"})
     except Exception as exc:
         logger.warning("article_share_award_failed user_id=%s article_id=%s error=%s", uid, post_id, type(exc).__name__)
     try:
@@ -7141,10 +7291,16 @@ async def post_share_callback(callback: types.CallbackQuery):
         referral_code = get_or_create_referral_code(uid)
     except Exception:
         referral_code = str(uid)
-    share_url = build_article_share_url(BOT_USERNAME, post_id, post.get("title") or post.get("question") or "DeepAlpha article", referral_code=referral_code)
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("📤 Share article", url=share_url))
-    await callback.message.answer("📤 Share this article", reply_markup=kb)
+    await callback.message.answer("📤 Share Hub\n\nMedium: Copy this draft and paste it into Medium.\nInstagram: Copy caption/link and post manually to Stories/Bio/DM.", reply_markup=_share_hub_keyboard(post_id, post.get("title") or post.get("question"), referral_code))
+    await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("post_share_medium_") or c.data.startswith("post_share_instagram_"))
+async def post_share_copy_callback(callback: types.CallbackQuery):
+    if callback.data.startswith("post_share_medium_"):
+        await callback.message.answer("Copy this draft and paste it into Medium")
+    else:
+        await callback.message.answer("Copy caption/link and post manually to Stories/Bio/DM")
     await callback.answer()
 
 @dp.message_handler(lambda m: m.text and (m.text.startswith("/post_") or m.text.startswith("/article_")))
@@ -7175,7 +7331,14 @@ async def post_view_handler(message: types.Message):
         logger.warning("article_unique_view_award_failed user_id=%s article_id=%s error=%s", uid, post_id, type(exc).__name__)
     text = _format_author_post(post, uid, show_author=True)
     kb = get_author_post_keyboard(uid, post)
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if post.get("cover_image_file_id"):
+        if len(text) <= 1000:
+            await message.answer_photo(post["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await message.answer_photo(post["cover_image_file_id"])
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 # ═══════════════════════════════════════════
@@ -8212,6 +8375,12 @@ async def _escape_state_and_route_main_menu(message: types.Message, state: FSMCo
         AuthorStates.waiting_wallet,
         AuthorStates.waiting_post_comment,
         AuthorStates.waiting_donation_amount,
+        AuthorStates.waiting_article_title,
+        AuthorStates.waiting_article_body,
+        AuthorStates.waiting_article_url,
+        AuthorStates.waiting_article_image,
+        AuthorStates.waiting_article_attach,
+        AuthorStates.waiting_article_preview,
         MarketRecapStates.waiting_market_title,
         MarketRecapStates.waiting_market_outcome,
     ],

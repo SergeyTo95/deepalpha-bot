@@ -27,6 +27,7 @@ from services.ton_wallet_service import (
     calculate_ton_withdraw_platform_fee,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
+from services.airdrop_points_service import award_article_unique_view_points
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -37,7 +38,7 @@ from services.referral_rewards_service import process_token_purchase_referral_re
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
-    get_all_authors, get_author_profile, get_author_post,
+    get_all_authors, get_author_profile, get_author_post, list_public_articles, get_public_article,
     is_author, create_donation, add_pending,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account, get_web_account,
@@ -45,7 +46,7 @@ from db.database import (
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
     add_tokens, get_connection,
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
-    fail_ton_purchase_intent,
+    fail_ton_purchase_intent, increment_post_share,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -323,6 +324,65 @@ async def handle_post_details(request):
         traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
 
+
+
+def _article_api_payload(post: dict) -> dict:
+    body = post.get("body_text") or post.get("thesis") or post.get("reasoning") or ""
+    title = post.get("title") or post.get("question") or "Article"
+    return {
+        "id": post.get("id"),
+        "title": title,
+        "body_text": body,
+        "excerpt": body[:240],
+        "author_id": post.get("author_id"),
+        "author_name": post.get("author_username") or post.get("author_first_name") or str(post.get("author_id")),
+        "market_url": post.get("market_url") or "",
+        "category": post.get("category") or post.get("article_type") or "manual",
+        "article_type": post.get("article_type") or "manual",
+        "tags": [t.strip() for t in (post.get("article_tags") or "").split(",") if t.strip()],
+        "cover_image_url": post.get("cover_image_url") or "",
+        "total_donations_ton": post.get("total_donations_ton") or 0,
+        "total_donors": post.get("total_donors") or 0,
+        "shares_count": post.get("shares_count") or 0,
+        "views_count": post.get("views_count") or 0,
+        "unique_views_count": post.get("unique_views_count") or 0,
+        "created_at": post.get("created_at") or "",
+        "donate_url": f"?tab=donate&author={post.get('author_id')}&post={post.get('id')}",
+    }
+
+
+async def handle_articles_api(request):
+    q = request.query
+    articles = list_public_articles(
+        limit=_safe_int(q.get("limit", 20), 20, 1, 50),
+        offset=_safe_int(q.get("offset", 0), 0, 0),
+        category=q.get("category"), tag=q.get("tag"), author_id=q.get("author_id"),
+        search=q.get("search"), sort=q.get("sort", "new"),
+    )
+    return _json_response({"ok": True, "articles": [_article_api_payload(a) for a in articles]})
+
+
+async def handle_article_api(request):
+    post_id = _safe_int(request.match_info.get("post_id"), 0, 1)
+    post = get_public_article(post_id)
+    if not post:
+        return _json_response({"error": "Not found"}, status=404)
+    return _json_response({"ok": True, "article": _article_api_payload(post)})
+
+
+async def handle_article_view_api(request):
+    post_id = _safe_int(request.match_info.get("post_id"), 0, 1)
+    post = get_public_article(post_id)
+    if not post:
+        return _json_response({"error": "Not found"}, status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    viewer_id = data.get("user_id")
+    if viewer_id:
+        award_article_unique_view_points(post["author_id"], post_id, int(viewer_id), metadata={"source":"webapp_articles"})
+    return _json_response({"ok": True})
 
 async def handle_create_donation(request):
     try:
@@ -1215,6 +1275,10 @@ app.router.add_route("OPTIONS", "/api/pending", handle_options)
 app.router.add_get("/api/authors", handle_authors_list)
 app.router.add_get("/api/author/{author_id}", handle_author_profile)
 app.router.add_get("/api/post/{post_id}", handle_post_details)
+app.router.add_get("/api/articles", handle_articles_api)
+app.router.add_get("/api/articles/{post_id}", handle_article_api)
+app.router.add_post("/api/articles/{post_id}/view", handle_article_view_api)
+app.router.add_route("OPTIONS", "/api/articles/{post_id}/view", handle_options)
 app.router.add_post("/api/donation/create", handle_create_donation)
 app.router.add_route("OPTIONS", "/api/donation/create", handle_options)
 app.router.add_get("/api/settings/public", handle_public_settings)

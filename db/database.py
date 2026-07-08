@@ -575,6 +575,13 @@ def _init_db_inner(conn, cursor):
         "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS unique_views_count INTEGER DEFAULT 0",
         "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS shares_count INTEGER DEFAULT 0",
         "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS updated_at TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS body_text TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS cover_image_file_id TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS cover_image_url TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS attached_analysis_json TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS article_tags TEXT",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS article_language TEXT DEFAULT 'en'",
+        "ALTER TABLE author_posts ADD COLUMN IF NOT EXISTS published_to_profile INTEGER DEFAULT 1",
     ):
         cursor.execute(stmt)
 
@@ -3403,6 +3410,117 @@ def create_event_article(author_id: int, article: Dict[str, Any]) -> Optional[in
     finally:
         conn.close()
 
+
+
+def create_manual_article(author_id: int, article_payload: Dict[str, Any]) -> Optional[int]:
+    """Publish a standalone manual article in author_posts."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        now = datetime.utcnow().isoformat()
+        attached = article_payload.get("attached_analysis") or article_payload.get("attached_analysis_json")
+        if isinstance(attached, (dict, list)):
+            attached_json = json.dumps(attached, ensure_ascii=False)
+        else:
+            attached_json = attached or None
+        full = attached_json or json.dumps(article_payload, ensure_ascii=False)
+        cursor.execute("""
+        INSERT INTO author_posts (
+            author_id, market_slug, market_url, question, category, display_prediction,
+            confidence, market_probability, alpha_label, author_comment, full_analysis_json,
+            title, event_question, article_type, thesis, reasoning, probability_view, risks,
+            conclusion, source_type, source_ref_id, status, created_at, updated_at, body_text,
+            cover_image_file_id, cover_image_url, attached_analysis_json, article_tags,
+            article_language, published_to_profile
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        RETURNING id
+        """, (
+            author_id, article_payload.get("market_slug", ""), article_payload.get("market_url", ""),
+            article_payload.get("title", ""), article_payload.get("category", "manual"),
+            article_payload.get("thesis", ""), "", "", "", "", full,
+            article_payload.get("title", ""), article_payload.get("event_question", ""),
+            article_payload.get("article_type", "manual"), article_payload.get("thesis", ""),
+            article_payload.get("reasoning", ""), article_payload.get("probability_view", ""),
+            article_payload.get("risks", ""), article_payload.get("conclusion", ""),
+            article_payload.get("source_type", "manual_editor"), article_payload.get("source_ref_id"),
+            article_payload.get("status", "published"), now, now, article_payload.get("body_text", ""),
+            article_payload.get("cover_image_file_id"), article_payload.get("cover_image_url"), attached_json,
+            article_payload.get("article_tags", ""), article_payload.get("article_language", "en"),
+            int(article_payload.get("published_to_profile", 1)),
+        ))
+        post_id = cursor.fetchone()[0]
+        cursor.execute("""
+        UPDATE users SET total_posts = COALESCE(total_posts, 0) + 1,
+            posts_today = COALESCE(posts_today, 0) + 1, updated_at = %s
+        WHERE user_id = %s
+        """, (now, author_id))
+        conn.commit()
+        return post_id
+    except Exception as e:
+        print(f"create_manual_article error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def update_article_fields(post_id: int, author_id: int, fields: Dict[str, Any]) -> bool:
+    allowed = {"title", "body_text", "market_url", "cover_image_file_id", "cover_image_url", "attached_analysis_json", "article_tags", "article_language", "status"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return False
+    conn = get_connection(); cursor = conn.cursor()
+    try:
+        parts = [f"{k} = %s" for k in updates]
+        values = list(updates.values()) + [datetime.utcnow().isoformat(), post_id, author_id]
+        cursor.execute(f"UPDATE author_posts SET {', '.join(parts)}, updated_at = %s WHERE id = %s AND author_id = %s", values)
+        ok = cursor.rowcount > 0
+        conn.commit(); return ok
+    except Exception as e:
+        print(f"update_article_fields error: {e}"); return False
+    finally:
+        conn.close()
+
+
+def _article_row_to_dict(row):
+    data = dict(row)
+    for key in ("full_analysis_json", "attached_analysis_json"):
+        if data.get(key):
+            try: data[key.replace("_json", "")] = json.loads(data[key])
+            except Exception: pass
+    return data
+
+
+def list_public_articles(limit: int = 20, offset: int = 0, category=None, tag=None, author_id=None, search=None, sort: str = "new") -> List[Dict[str, Any]]:
+    conn = get_connection(); cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        where = ["p.is_deleted = 0", "COALESCE(p.status, 'published') = 'published'", "(COALESCE(p.title,'') <> '' OR COALESCE(p.body_text,'') <> '' OR COALESCE(p.thesis,'') <> '')"]
+        params = []
+        if category and category not in ("all", "new", "popular"):
+            where.append("(LOWER(COALESCE(p.category,'')) = LOWER(%s) OR LOWER(COALESCE(p.article_type,'')) = LOWER(%s))"); params += [category, category]
+        if tag:
+            where.append("LOWER(COALESCE(p.article_tags,'')) LIKE LOWER(%s)"); params.append(f"%{tag}%")
+        if author_id:
+            where.append("p.author_id = %s"); params.append(int(author_id))
+        if search:
+            where.append("(LOWER(COALESCE(p.title,'')) LIKE LOWER(%s) OR LOWER(COALESCE(p.body_text,'')) LIKE LOWER(%s) OR LOWER(COALESCE(p.thesis,'')) LIKE LOWER(%s))"); params += [f"%{search}%"]*3
+        order = {"popular": "COALESCE(p.views_count,0) DESC", "donations": "COALESCE(p.total_donations_ton,0) DESC", "shares": "COALESCE(p.shares_count,0) DESC"}.get(sort, "p.created_at DESC")
+        cursor.execute(f"""SELECT p.*, u.username AS author_username, u.first_name AS author_first_name FROM author_posts p LEFT JOIN users u ON u.user_id=p.author_id WHERE {' AND '.join(where)} ORDER BY {order} LIMIT %s OFFSET %s""", params + [limit, offset])
+        return [_article_row_to_dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        print(f"list_public_articles error: {e}"); return []
+    finally:
+        conn.close()
+
+
+def get_public_article(post_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_connection(); cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("""SELECT p.*, u.username AS author_username, u.first_name AS author_first_name FROM author_posts p LEFT JOIN users u ON u.user_id=p.author_id WHERE p.id=%s AND p.is_deleted=0 AND COALESCE(p.status,'published')='published'""", (post_id,))
+        row=cursor.fetchone(); return _article_row_to_dict(row) if row else None
+    except Exception as e:
+        print(f"get_public_article error: {e}"); return None
+    finally:
+        conn.close()
 
 def increment_post_share(post_id: int) -> bool:
     conn = get_connection()

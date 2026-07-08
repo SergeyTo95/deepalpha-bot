@@ -923,3 +923,70 @@ async function init() {
 }
 
 init();
+
+// Articles WebApp tab (?tab=articles): cards, filters, search, detail, donate/share links.
+async function callArticles(params = {}) {
+  const q = new URLSearchParams(params);
+  const r = await fetch(`/api/articles?${q.toString()}`, { credentials: "include" });
+  return r.json();
+}
+async function callArticleDetail(id, userId) {
+  const r = await fetch(`/api/articles/${encodeURIComponent(id)}`, { credentials: "include" });
+  const data = await r.json();
+  if (userId) {
+    fetch(`/api/articles/${encodeURIComponent(id)}/view`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId }) });
+  }
+  return data;
+}
+function articleShareLinks(article) {
+  const link = `${location.origin}/app?tab=articles&article=${encodeURIComponent(article.id)}`;
+  const text = `DeepAlpha article: ${article.title}`;
+  return {
+    telegram: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`,
+    twitter: `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}`,
+    reddit: `https://www.reddit.com/submit?url=${encodeURIComponent(link)}&title=${encodeURIComponent(article.title)}`,
+    whatsapp: `https://wa.me/?text=${encodeURIComponent(text + " " + link)}`,
+    medium: "Copy this draft and paste it into Medium",
+    instagram: "Copy caption/link and post manually to Stories/Bio/DM"
+  };
+}
+function renderArticleCard(article) {
+  return `<article class="card article-card">
+    ${article.cover_image_url ? `<img src="${escapeHtml(article.cover_image_url)}" alt="" class="article-cover">` : ""}
+    <h3>${escapeHtml(article.title)}</h3>
+    <p>${escapeHtml(article.excerpt)}</p>
+    <p class="muted">${escapeHtml(article.author_name)} · ${escapeHtml(article.category)} · 💝 ${article.total_donations_ton} · 📤 ${article.shares_count}</p>
+    <button data-article-id="${article.id}">Open</button>
+    <a href="?tab=donate&author=${encodeURIComponent(article.author_id)}&post=${encodeURIComponent(article.id)}">Donate</a>
+  </article>`;
+}
+async function renderArticlesPage() {
+  const root = document.getElementById("appRoot");
+  if (!root) return;
+  root.innerHTML = `<section class="card"><h2>Articles</h2><input id="articleSearch" placeholder="Search articles"><div id="articleFilters">
+    ${["All","Polymarket","Crypto","Sports","Politics","Manual","Popular","New"].map(x => `<button data-filter="${x.toLowerCase()}">${x}</button>`).join("")}
+  </div><div id="articlesList">Loading...</div></section>`;
+  async function load(filter = "all") {
+    const search = document.getElementById("articleSearch")?.value || "";
+    const params = { search, sort: filter === "popular" ? "popular" : "new" };
+    if (!["all","popular","new"].includes(filter)) params.category = filter;
+    const data = await callArticles(params);
+    document.getElementById("articlesList").innerHTML = (data.articles || []).map(renderArticleCard).join("") || "<p>No articles yet.</p>";
+  }
+  root.onclick = async (ev) => {
+    const filter = ev.target?.dataset?.filter;
+    if (filter) load(filter);
+    const id = ev.target?.dataset?.articleId;
+    if (id) {
+      const data = await callArticleDetail(id, window.Telegram?.WebApp?.initDataUnsafe?.user?.id);
+      const a = data.article;
+      const links = articleShareLinks(a);
+      document.getElementById("articlesList").innerHTML = `<section class="card"><h2>${escapeHtml(a.title)}</h2><p>${escapeHtml(a.body_text)}</p><a href="${a.donate_url}">Donate</a><br><a href="${links.telegram}">Telegram Share</a> · <a href="${links.twitter}">X / Twitter</a> · <a href="${links.reddit}">Reddit</a> · <a href="${links.whatsapp}">WhatsApp</a><p>${links.medium}</p><p>${links.instagram}</p></section>`;
+    }
+  };
+  document.getElementById("articleSearch").addEventListener("input", () => load("all"));
+  load("all");
+}
+if (new URLSearchParams(location.search).get("tab") === "articles") {
+  renderArticlesPage();
+}
