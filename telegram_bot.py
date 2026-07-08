@@ -117,6 +117,7 @@ from services.live_access_control_service import (
 from services.airdrop_points_service import (
     award_airdrop_points, award_analysis_points, format_airdrop_status, format_points_amount, get_airdrop_points_balance,
     get_airdrop_points_history, get_referral_activation_count, points_enabled, points_per_analysis, daily_cap, referral_points_enabled, referrer_points, referred_user_points,
+    award_article_published_points, award_article_shared_points, award_article_unique_view_points, record_article_referral_visit, award_article_referral_activation_points,
 )
 from services.airdrop_referral_service import (
     admin_get_referral_stats, format_invite_friends,
@@ -1646,7 +1647,7 @@ def get_author_post_keyboard(viewer_id: int, post: dict) -> InlineKeyboardMarkup
     author_label = "👤 Профиль автора" if lang == "ru" else "👤 Author profile"
     kb.add(InlineKeyboardButton(author_label, callback_data=f"auth_view_{author_id}"))
 
-    share_label = "📤 Share article" if (post.get("title") or post.get("thesis")) else ("📤 Поделиться" if lang == "ru" else "📤 Share")
+    share_label = "📤 Share article & earn Airdrop Points" if (post.get("title") or post.get("thesis")) else ("📤 Поделиться" if lang == "ru" else "📤 Share")
     kb.add(InlineKeyboardButton(share_label, callback_data=f"post_share_{post_id}"))
 
     if market_url:
@@ -2272,6 +2273,7 @@ async def _run_top_analysis_for_user(uid: int, lang: str, analysis: dict, respon
             # Only award after successful user-facing analysis completion.
             award_result = award_analysis_points(uid, source="top_analysis", metadata={"market": input_data.get("question", "")})
             record_referred_user_activity(uid, "analysis_completed", metadata={"source": "top_analysis", "mode": "top_analysis", "question": input_data.get("question", "")})
+            award_article_referral_activation_points(uid, "analysis_completed", metadata={"source": "top_analysis"})
             logger.info("airdrop_points_top_analysis_awarded user_id=%s source=%s amount=%s", uid, "top_analysis", award_result.get("amount", 0))
         except Exception as exc:
             logger.info("airdrop_points_top_analysis_award_skipped user_id=%s source=%s reason=%s", uid, "top_analysis", type(exc).__name__)
@@ -5560,17 +5562,31 @@ async def start_handler(message: types.Message):
                     referred_by = None
         elif args.startswith("article_"):
             try:
-                post_id = int(args.replace("article_", ""))
+                parts = args.split("_ref_", 1)
+                post_id = int(parts[0].replace("article_", ""))
+                ref_code = parts[1].strip() if len(parts) > 1 else ""
             except ValueError:
                 post_id = 0
+                ref_code = ""
             if post_id:
                 _register_user(message, referred_by=None)
                 post = get_author_post(post_id)
+                if post and ref_code:
+                    try:
+                        referrer_id = resolve_referral_code(ref_code)
+                        if referrer_id:
+                            record_article_referral_visit(post_id, referrer_id, message.from_user.id)
+                    except Exception as exc:
+                        logger.warning("article_referral_visit_failed user_id=%s article_id=%s error=%s", message.from_user.id, post_id, type(exc).__name__)
                 if post:
                     author = get_author_profile(post["author_id"])
                     if author:
                         post["author_username"] = author.get("username")
                         post["author_first_name"] = author.get("first_name")
+                    try:
+                        award_article_unique_view_points(post["author_id"], post_id, message.from_user.id, metadata={"source": "telegram_start"})
+                    except Exception as exc:
+                        logger.warning("article_unique_view_award_failed user_id=%s article_id=%s error=%s", message.from_user.id, post_id, type(exc).__name__)
                     await message.answer(
                         _format_author_post(post, message.from_user.id, show_author=True),
                         parse_mode="HTML",
@@ -7074,6 +7090,7 @@ async def article_command_handler(message: types.Message):
     if not post_id:
         await message.answer("❌ Ошибка публикации" if lang == "ru" else "❌ Publish error")
         return
+    award_article_published_points(uid, post_id, metadata={"source": "manual"})
     await message.answer(f"✅ Article published!\n\n📝 /article_{post_id}")
 
 
@@ -7097,6 +7114,7 @@ async def publish_article_callback(callback: types.CallbackQuery):
     if not post_id:
         await callback.answer("Publish error", show_alert=True)
         return
+    award_article_published_points(uid, post_id, metadata={"source": "quick_analysis"})
     await callback.message.answer(f"✅ Article published!\n\n📝 /article_{post_id}")
     await callback.answer()
 
@@ -7114,7 +7132,16 @@ async def post_share_callback(callback: types.CallbackQuery):
         await callback.answer("Article not found", show_alert=True)
         return
     increment_post_share(post_id)
-    share_url = build_article_share_url(BOT_USERNAME, post_id, post.get("title") or post.get("question") or "DeepAlpha article")
+    try:
+        award_article_shared_points(uid, post_id, metadata={"source": "telegram_article_screen"})
+    except Exception as exc:
+        logger.warning("article_share_award_failed user_id=%s article_id=%s error=%s", uid, post_id, type(exc).__name__)
+    try:
+        from services.airdrop_referral_service import get_or_create_referral_code
+        referral_code = get_or_create_referral_code(uid)
+    except Exception:
+        referral_code = str(uid)
+    share_url = build_article_share_url(BOT_USERNAME, post_id, post.get("title") or post.get("question") or "DeepAlpha article", referral_code=referral_code)
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("📤 Share article", url=share_url))
     await callback.message.answer("📤 Share this article", reply_markup=kb)
@@ -7142,6 +7169,10 @@ async def post_view_handler(message: types.Message):
         post["author_username"] = author.get("username")
         post["author_first_name"] = author.get("first_name")
 
+    try:
+        award_article_unique_view_points(post["author_id"], post_id, uid, metadata={"source": "telegram_command"})
+    except Exception as exc:
+        logger.warning("article_unique_view_award_failed user_id=%s article_id=%s error=%s", uid, post_id, type(exc).__name__)
     text = _format_author_post(post, uid, show_author=True)
     kb = get_author_post_keyboard(uid, post)
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -9661,6 +9692,7 @@ async def live_text_handler(message: types.Message, state: FSMContext):
             award_analysis_points(uid, source="telegram_live_text")
             record_analysis_for_daily_quests(uid, source="telegram_live_text", domain=(router_result or {}).get("mode"), metadata=router_result if isinstance(router_result, dict) else None)
             record_referred_user_activity(uid, "analysis_completed", metadata={"source": "telegram_live_text", "mode": "live", "domain": (router_result or {}).get("mode"), "activity_fingerprint": hashlib.sha256((text or "").strip().lower()[:1000].encode()).hexdigest()})
+            award_article_referral_activation_points(uid, "analysis_completed", metadata={"source": "telegram_live_text"})
         except Exception as exc:
             logger.warning("airdrop_points_live_award_failed user_id=%s error=%s", uid, exc)
     logger.info(
@@ -10163,6 +10195,7 @@ async def _run_normal_polymarket_analysis(message: types.Message, url_override: 
             award_analysis_points(uid, source="telegram_quick_analysis", metadata={"url": url})
             record_analysis_for_daily_quests(uid, source="telegram_quick_analysis", domain=(result or {}).get("category_type") or (result or {}).get("analysis_mode"), metadata={"url": url, **(result if isinstance(result, dict) else {})})
             record_referred_user_activity(uid, "analysis_completed", metadata={"source": "telegram_quick_analysis", "mode": "quick_analysis", "market": url, "domain": (result or {}).get("category_type") or (result or {}).get("analysis_mode")})
+            award_article_referral_activation_points(uid, "analysis_completed", metadata={"source": "telegram_quick_analysis"})
         except Exception as exc:
             logger.warning("airdrop_points_analysis_award_failed user_id=%s error=%s", uid, exc)
         try:
