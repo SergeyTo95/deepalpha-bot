@@ -354,6 +354,8 @@ def init_db():
         ("watchlist_probability_threshold", "10"),
         ("watchlist_closing_hours", "24"),
         ("watchlist_check_interval_hours", "3"),
+        ("watchlist_ai_summary_enabled", "on"),
+        ("watchlist_ai_summary_max_bullets", "3"),
     ]
     for key, value in watchlist_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
