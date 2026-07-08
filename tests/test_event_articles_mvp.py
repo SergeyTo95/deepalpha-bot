@@ -78,3 +78,14 @@ def test_post_and_article_view_uses_html_parse_mode():
     handler = source[start:end]
     assert '_format_author_post(post, uid, show_author=True)' in handler
     assert 'message.answer(text, parse_mode="HTML", reply_markup=kb)' in handler
+
+
+def test_legacy_author_post_fields_are_escaped_for_html_parse_mode():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    start = source.index('q = _escape(post.get("question", ""))')
+    end = source.index('donations_line = ""', start)
+    legacy_branch = source[start:end]
+    assert 'category = _escape(post.get("category", ""))' in legacy_branch
+    assert 'safe_username = _escape(author_username)' in legacy_branch
+    assert 'safe_first_name = _escape(author_first_name)' in legacy_branch
+    assert 'f"📢 {safe_first_name}' in legacy_branch

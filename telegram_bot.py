@@ -5174,7 +5174,7 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
         return "\n".join([line for line in lines if line])
 
     q = _escape(post.get("question", ""))
-    category = post.get("category", "")
+    category = _escape(post.get("category", ""))
     display_pred = _escape(post.get("display_prediction", ""))
     confidence_raw = post.get("confidence", "")
     confidence = _translate_confidence(confidence_raw, lang)
@@ -5188,9 +5188,14 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
 
     author_line = ""
     if show_author:
-        author_username = post.get("author_username") or post.get("author_first_name", "")
+        author_username = post.get("author_username")
+        author_first_name = post.get("author_first_name", "")
         if author_username:
-            author_line = f"📢 @{author_username}\n\n" if lang == "ru" else f"📢 @{author_username}\n\n"
+            safe_username = _escape(author_username)
+            author_line = f"📢 @{safe_username}\n\n" if lang == "ru" else f"📢 @{safe_username}\n\n"
+        elif author_first_name:
+            safe_first_name = _escape(author_first_name)
+            author_line = f"📢 {safe_first_name}\n\n" if lang == "ru" else f"📢 {safe_first_name}\n\n"
 
     donations_line = ""
     if total_donations > 0:
