@@ -3702,6 +3702,11 @@ def complete_donation(donation_id: int, tx_hash: str) -> bool:
             is_new_donor = existing == 0
 
             update_post_donations(post_id, ton_amount, is_new_donor)
+            try:
+                from services.airdrop_points_service import award_article_donation_received_points
+                award_article_donation_received_points(author_id, donor_id, article_id=post_id, donation_id=donation_id, metadata={"ton_amount": ton_amount})
+            except Exception as exc:
+                print(f"award_article_donation_received_points error: {type(exc).__name__}")
 
         return True
     except Exception as e:

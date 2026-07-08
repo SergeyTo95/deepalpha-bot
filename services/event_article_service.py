@@ -77,7 +77,8 @@ def create_article_payload_from_analysis(
     }
 
 
-def build_article_share_url(bot_username: str, article_id: int, title: str) -> str:
-    deep_link = f"https://t.me/{bot_username}?start=article_{article_id}"
+def build_article_share_url(bot_username: str, article_id: int, title: str, referral_code: str | None = None) -> str:
+    suffix = f"_ref_{sanitize_article_text(referral_code)}" if referral_code else ""
+    deep_link = f"https://t.me/{bot_username}?start=article_{article_id}{suffix}"
     text = f"📄 DeepAlpha article: {sanitize_article_text(title)}"
     return f"https://t.me/share/url?url={quote(deep_link)}&text={quote(text)}"

@@ -14,6 +14,9 @@ def reload_points(monkeypatch):
     svc._MEMORY_LEDGER.clear()
     svc._MEMORY_ID = 1
     svc._MEMORY_REFERRAL_ACTIVATIONS.clear()
+    svc._MEMORY_ARTICLE_VIEWS.clear()
+    svc._MEMORY_ARTICLE_REFERRALS.clear()
+    svc._MEMORY_ARTICLE_REFERRAL_ACTIVATIONS.clear()
     return svc
 
 
@@ -247,3 +250,62 @@ def test_invalid_admin_setting_falls_back(monkeypatch):
     assert svc.points_per_analysis() == 15
     assert svc.daily_cap() == 200
     assert svc.award_analysis_points(1, "top_analysis")["amount"] == 15
+
+
+def test_article_published_awards_once_and_respects_daily_cap(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.award_article_published_points(1, 101)["amount"] == 25
+    assert svc.award_article_published_points(1, 102)["awarded"] is True
+    assert svc.award_article_published_points(1, 103)["awarded"] is True
+    assert svc.award_article_published_points(1, 104)["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 75
+
+
+def test_article_shared_awards_points_with_daily_cap(monkeypatch):
+    svc = reload_points(monkeypatch)
+    for i in range(5):
+        assert svc.award_article_shared_points(1, 200 + i)["awarded"] is True
+    assert svc.award_article_shared_points(1, 299)["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 25
+
+
+def test_unique_view_awards_once_per_article_viewer(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.award_article_unique_view_points(10, 501, 20)["awarded"] is True
+    assert svc.award_article_unique_view_points(10, 501, 20)["awarded"] is False
+    assert svc.award_article_unique_view_points(10, 501, 21)["awarded"] is True
+    assert svc.get_airdrop_points_balance(10)["points"] == 4
+
+
+def test_self_view_awards_zero(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.award_article_unique_view_points(10, 501, 10)["awarded"] is False
+    assert svc.get_airdrop_points_balance(10)["points"] == 0
+
+
+def test_donation_from_another_user_awards_donation_points(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.award_article_donation_received_points(10, 11, article_id=55, donation_id=9)["awarded"] is True
+    assert svc.get_airdrop_points_balance(10)["points"] == 30
+
+
+def test_self_donation_awards_zero(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.award_article_donation_received_points(10, 10, article_id=55)["awarded"] is False
+    assert svc.get_airdrop_points_balance(10)["points"] == 0
+
+
+def test_article_referral_activation_requires_useful_activity(monkeypatch):
+    svc = reload_points(monkeypatch)
+    assert svc.record_article_referral_visit(77, 1, 2)["registered"] is True
+    assert svc.award_article_referral_activation_points(2, "opened_link")["awarded"] is False
+    assert svc.award_article_referral_activation_points(2, "analysis_completed")["awarded"] is True
+    assert svc.award_article_referral_activation_points(2, "analysis_completed")["awarded"] is False
+    assert svc.get_airdrop_points_balance(1)["points"] == 75
+
+
+def test_airdrop_leaderboard_includes_article_points_through_existing_ledger(monkeypatch):
+    svc = reload_points(monkeypatch)
+    svc.award_article_published_points(1, 101)
+    svc.award_article_unique_view_points(1, 101, 2)
+    assert svc.get_airdrop_points_balance(1)["points"] == 27

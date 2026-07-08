@@ -20,9 +20,18 @@ AIRDROP_POINTS_PER_ANALYSIS = 10
 AIRDROP_DAILY_CAP = 200
 AIRDROP_REFERRER_POINTS = 50
 AIRDROP_REFERRED_USER_POINTS = 20
+ARTICLE_POINTS_DEFAULTS = {
+    "article_published": 25,
+    "article_shared": 5,
+    "article_unique_view": 2,
+    "article_donation_received": 30,
+    "article_referral_activated": 75,
+}
+ARTICLE_DAILY_LIMITS = {"article_published": 3, "article_shared": 5, "article_donation_received": 10}
+_ARTICLE_REASONS = set(ARTICLE_POINTS_DEFAULTS)
 _ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
 _REFERRAL_REASONS = {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
-_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus", "referral_milestone_confirmed"}
+_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | _ARTICLE_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus", "referral_milestone_confirmed"}
 
 
 def _is_supported_reason(reason: str) -> bool:
@@ -31,6 +40,9 @@ _TABLE_READY = False
 _MEMORY_LEDGER: Dict[int, List[dict]] = defaultdict(list)
 _MEMORY_ID = 1
 _MEMORY_REFERRAL_ACTIVATIONS: Dict[int, dict] = {}
+_MEMORY_ARTICLE_VIEWS: set[tuple[int, int]] = set()
+_MEMORY_ARTICLE_REFERRALS: Dict[int, dict] = {}
+_MEMORY_ARTICLE_REFERRAL_ACTIVATIONS: set[int] = set()
 
 
 def _now() -> datetime:
@@ -162,6 +174,22 @@ def referred_user_points() -> int:
     return _env_int_bounded("AIRDROP_REFERRED_USER_POINTS", AIRDROP_REFERRED_USER_POINTS, 0, 100000)
 
 
+def article_points(reason: str) -> int:
+    default = ARTICLE_POINTS_DEFAULTS.get(str(reason), 0)
+    setting = _setting_int(f"airdrop_{reason}_points", 0, 100000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded(f"AIRDROP_{str(reason).upper()}_POINTS", default, 0, 100000)
+
+
+def article_daily_limit(reason: str) -> int:
+    default = ARTICLE_DAILY_LIMITS.get(str(reason), 0)
+    setting = _setting_int(f"airdrop_{reason}_daily_limit", 0, 1000)
+    if setting is not None:
+        return setting
+    return _env_int_bounded(f"AIRDROP_{str(reason).upper()}_DAILY_LIMIT", default, 0, 1000)
+
+
 def _ensure_table(cursor) -> None:
     cursor.execute(
         """
@@ -205,6 +233,38 @@ def _ensure_table(cursor) -> None:
             referrer_user_id BIGINT NOT NULL,
             created_at TIMESTAMP DEFAULT NOW(),
             source TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS airdrop_article_views (
+            article_id BIGINT NOT NULL,
+            viewer_id BIGINT NOT NULL,
+            author_id BIGINT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (article_id, viewer_id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS airdrop_article_referral_visits (
+            referred_user_id BIGINT NOT NULL UNIQUE,
+            article_id BIGINT NOT NULL,
+            referrer_user_id BIGINT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS airdrop_article_referral_activations (
+            referred_user_id BIGINT NOT NULL UNIQUE,
+            article_id BIGINT NOT NULL,
+            referrer_user_id BIGINT NOT NULL,
+            useful_activity TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
         )
         """
     )
@@ -283,7 +343,7 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[Any] = None
     if not _is_supported_reason(reason):
         balance = get_airdrop_points_balance(uid)
         return {"ok": False, "awarded": False, "amount": 0, "reason": "unsupported_reason", **balance}
-    requested = _to_decimal(points_per_analysis() if amount is None else amount)
+    requested = _to_decimal(article_points(reason) if amount is None and reason in _ARTICLE_REASONS else points_per_analysis() if amount is None else amount)
     if requested <= 0:
         balance = get_airdrop_points_balance(uid)
         return {"ok": True, "awarded": False, "amount": 0, "reason": reason, **balance}
@@ -310,6 +370,13 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[Any] = None
                 conn.commit()
                 balance = get_airdrop_points_balance(uid)
                 return {"ok": True, "awarded": False, "amount": 0, "reason": "cap_reached", **balance}
+            limit = article_daily_limit(reason) if reason in _ARTICLE_REASONS else 0
+            if limit > 0:
+                cur.execute("SELECT COUNT(*) FROM airdrop_points_ledger WHERE user_id=%s AND reason=%s AND amount > 0 AND created_at::date=%s::date", (uid, reason, today))
+                if int((cur.fetchone() or [0])[0] or 0) >= limit:
+                    conn.commit()
+                    balance = get_airdrop_points_balance(uid)
+                    return {"ok": True, "awarded": False, "amount": 0, "reason": "article_daily_limit", **balance}
             if reason.startswith("daily_quest:"):
                 cur.execute(
                     """
@@ -347,8 +414,12 @@ def award_airdrop_points(user_id: int, reason: str, amount: Optional[Any] = None
         if requested <= 0:
             balance = _fallback_balance(uid)
             return {"ok": True, "awarded": False, "amount": 0, "reason": "cap_reached", **balance}
+        today = _now().date().isoformat()
+        limit = article_daily_limit(reason) if reason in _ARTICLE_REASONS else 0
+        if limit > 0 and sum(1 for row in _MEMORY_LEDGER[int(uid)] if str(row.get("created_at") or "")[:10] == today and row.get("reason") == reason and _to_decimal(row.get("amount") or 0) > 0) >= limit:
+            balance = _fallback_balance(uid)
+            return {"ok": True, "awarded": False, "amount": 0, "reason": "article_daily_limit", **balance}
         if reason.startswith("daily_quest:"):
-            today = _now().date().isoformat()
             if any(str(row.get("created_at") or "")[:10] == today and row.get("reason") == reason for row in _MEMORY_LEDGER[int(uid)]):
                 balance = _fallback_balance(uid)
                 return {"ok": True, "awarded": False, "amount": 0, "reason": "already_awarded", **balance}
@@ -368,6 +439,118 @@ def award_analysis_points(user_id: int, source: str, metadata: dict | None = Non
     result = award_airdrop_points(user_id, reason="analysis_completed", metadata=meta)
     return result
 
+
+
+def award_article_published_points(author_id: int, article_id: int, metadata: dict | None = None) -> dict:
+    meta = {"article_id": int(article_id)}
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    return award_airdrop_points(author_id, "article_published", metadata=meta)
+
+
+def award_article_shared_points(user_id: int, article_id: int, metadata: dict | None = None) -> dict:
+    meta = {"article_id": int(article_id)}
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    return award_airdrop_points(user_id, "article_shared", metadata=meta)
+
+
+def award_article_unique_view_points(author_id: int, article_id: int, viewer_id: int | None, metadata: dict | None = None) -> dict:
+    aid, article_id = int(author_id), int(article_id)
+    if not viewer_id:
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "anonymous_view"}
+    vid = int(viewer_id)
+    if vid == aid:
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "self_view"}
+    meta = {"article_id": article_id, "viewer_id": vid}
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute("INSERT INTO airdrop_article_views (article_id, viewer_id, author_id, created_at) VALUES (%s,%s,%s,NOW()) ON CONFLICT DO NOTHING RETURNING article_id", (article_id, vid, aid))
+            inserted = cur.fetchone()
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+        if not inserted:
+            return {"ok": True, "awarded": False, "amount": 0, "reason": "already_viewed"}
+    except Exception:
+        key = (article_id, vid)
+        if key in _MEMORY_ARTICLE_VIEWS:
+            return {"ok": True, "awarded": False, "amount": 0, "reason": "already_viewed"}
+        _MEMORY_ARTICLE_VIEWS.add(key)
+    return award_airdrop_points(aid, "article_unique_view", metadata=meta)
+
+
+def award_article_donation_received_points(author_id: int, donor_id: int, article_id: int | None = None, donation_id: int | None = None, metadata: dict | None = None) -> dict:
+    if int(author_id) == int(donor_id):
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "self_donation"}
+    meta = {"donor_id": int(donor_id)}
+    if article_id:
+        meta["article_id"] = int(article_id)
+    if donation_id:
+        meta["donation_id"] = int(donation_id)
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    return award_airdrop_points(author_id, "article_donation_received", metadata=meta)
+
+
+def record_article_referral_visit(article_id: int, referrer_user_id: int, referred_user_id: int) -> dict:
+    aid, ref, user = int(article_id), int(referrer_user_id), int(referred_user_id)
+    if ref == user:
+        return {"registered": False, "reason": "self_referral"}
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute("INSERT INTO airdrop_article_referral_visits (referred_user_id, article_id, referrer_user_id, created_at) VALUES (%s,%s,%s,NOW()) ON CONFLICT DO NOTHING RETURNING referred_user_id", (user, aid, ref))
+            inserted = cur.fetchone(); conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+        return {"registered": bool(inserted), "reason": "registered" if inserted else "already_registered"}
+    except Exception:
+        if user in _MEMORY_ARTICLE_REFERRALS:
+            return {"registered": False, "reason": "already_registered"}
+        _MEMORY_ARTICLE_REFERRALS[user] = {"article_id": aid, "referrer_user_id": ref}
+        return {"registered": True, "reason": "registered"}
+
+
+def award_article_referral_activation_points(referred_user_id: int, useful_activity: str, metadata: dict | None = None) -> dict:
+    if useful_activity not in {"analysis_completed", "article_published", "donation_completed"}:
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "activity_not_useful"}
+    uid = int(referred_user_id)
+    visit = None
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute("SELECT article_id, referrer_user_id FROM airdrop_article_referral_visits WHERE referred_user_id=%s", (uid,))
+            row = cur.fetchone()
+            if row:
+                cur.execute("INSERT INTO airdrop_article_referral_activations (referred_user_id, article_id, referrer_user_id, useful_activity, created_at) VALUES (%s,%s,%s,%s,NOW()) ON CONFLICT DO NOTHING RETURNING referred_user_id", (uid, int(row[0]), int(row[1]), useful_activity))
+                inserted = cur.fetchone()
+                if inserted:
+                    visit = {"article_id": int(row[0]), "referrer_user_id": int(row[1])}
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+    except Exception:
+        if uid in _MEMORY_ARTICLE_REFERRAL_ACTIVATIONS:
+            return {"ok": True, "awarded": False, "amount": 0, "reason": "already_activated"}
+        visit = _MEMORY_ARTICLE_REFERRALS.get(uid)
+        if visit:
+            _MEMORY_ARTICLE_REFERRAL_ACTIVATIONS.add(uid)
+    if not visit:
+        return {"ok": True, "awarded": False, "amount": 0, "reason": "no_article_referral"}
+    meta = {"referred_user_id": uid, "article_id": visit.get("article_id"), "activation": useful_activity}
+    if isinstance(metadata, dict):
+        meta.update(metadata)
+    return award_airdrop_points(int(visit["referrer_user_id"]), "article_referral_activated", metadata=meta)
 
 def _get_referrer_user_id(referred_user_id: int) -> int:
     user = get_user(int(referred_user_id)) or {}
@@ -476,15 +659,51 @@ def get_airdrop_points_history(user_id: int, limit: int = 20) -> list[dict]:
         return list(reversed(_MEMORY_LEDGER[int(uid)]))[:limit]
 
 
+def get_article_airdrop_stats(user_id: int) -> dict:
+    uid = int(user_id)
+    reasons = {"article_published": "articles_published", "article_shared": "article_shares", "article_unique_view": "unique_readers", "article_donation_received": "article_donations"}
+    stats = {v: 0 for v in reasons.values()}
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute("SELECT reason, COUNT(*) FROM airdrop_points_ledger WHERE user_id=%s AND reason = ANY(%s) AND amount > 0 GROUP BY reason", (uid, list(reasons)))
+            for reason, count in cur.fetchall() or []:
+                if reason in reasons:
+                    stats[reasons[reason]] = int(count or 0)
+        finally:
+            conn.close()
+    except Exception:
+        for row in _MEMORY_LEDGER[int(uid)]:
+            if row.get("reason") in reasons and _to_decimal(row.get("amount") or 0) > 0:
+                stats[reasons[row["reason"]]] += 1
+    return stats
+
+
 def format_airdrop_status(user_id: int, ui_language: str = "ru") -> str:
     balance = get_airdrop_points_balance(user_id)
     points = format_points_amount(balance.get("points") or 0)
+    stats = get_article_airdrop_stats(user_id)
+    article_stats_en = (
+        "Article stats:\n"
+        f"• Published: {stats['articles_published']}\n"
+        f"• Shares: {stats['article_shares']}\n"
+        f"• Unique readers: {stats['unique_readers']}\n"
+        f"• Article donations: {stats['article_donations']}\n\n"
+    )
+    article_stats_ru = (
+        "Статистика статей:\n"
+        f"• Опубликовано: {stats['articles_published']}\n"
+        f"• Шеров: {stats['article_shares']}\n"
+        f"• Уникальных читателей: {stats['unique_readers']}\n"
+        f"• Донатов за статьи: {stats['article_donations']}\n\n"
+    )
     if ui_language == "en":
         return (
             "🎁 Airdrop\n\n"
             f"Your Points: {points}\n\n"
-            "Earn DeepAlpha Points for every successful analysis.\n"
+            "Earn DeepAlpha Points for every successful analysis and useful Event Article activity.\n"
             "Top Analysis also earns points.\n\n"
+            f"{article_stats_en}"
             "Invite friends:\n"
             f"+{referrer_points()} points for you after your friend’s first successful analysis.\n"
             f"+{referred_user_points()} points for your friend after their first successful analysis.\n\n"
@@ -493,8 +712,9 @@ def format_airdrop_status(user_id: int, ui_language: str = "ru") -> str:
     return (
         "🎁 Airdrop\n\n"
         f"Твои баллы: {points}\n\n"
-        "Получай DeepAlpha Points за каждый успешный анализ.\n"
+        "Получай DeepAlpha Points за успешный анализ и полезную активность в Event Articles.\n"
         "Топ-анализ тоже приносит баллы.\n\n"
+        f"{article_stats_ru}"
         "Приглашай друзей:\n"
         f"+{referrer_points()} points тебе после первого успешного анализа друга.\n"
         f"+{referred_user_points()} points другу после его первого успешного анализа.\n\n"

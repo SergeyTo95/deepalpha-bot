@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 from agents.chief_agent import ChiefAgent
 from services.webapp_report_formatter import build_webapp_analysis_report, save_analysis_to_web_history
-from services.airdrop_points_service import award_analysis_points
+from services.airdrop_points_service import award_analysis_points, award_article_referral_activation_points
 from services.airdrop_referral_service import record_referred_user_activity
 from services.airdrop_quest_service import record_analysis_for_daily_quests
 
@@ -94,6 +94,7 @@ async def run_webapp_quick_analysis(user_id: int, url: str, lang: str = "en") ->
         award_result = award_analysis_points(user_id, source="webapp_analysis", metadata={"market_url": market_url})
         record_analysis_for_daily_quests(user_id, source="webapp_analysis", domain=(result or {}).get("category_type") or (result or {}).get("analysis_mode"), metadata={"market_url": market_url, **(result if isinstance(result, dict) else {})})
         record_referred_user_activity(user_id, "analysis_completed", metadata={"source": "webapp_analysis", "mode": "webapp", "market": market_url, "domain": (result or {}).get("category_type") or (result or {}).get("analysis_mode")})
+        award_article_referral_activation_points(user_id, "analysis_completed", metadata={"source": "webapp_analysis"})
     except Exception:
         pass
 
