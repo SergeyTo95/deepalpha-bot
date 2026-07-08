@@ -825,6 +825,8 @@ def _init_db_inner(conn, cursor):
         ("watchlist_closing_soon_cost_tokens", "3"),
         ("watchlist_resolved_recap_cost_tokens", "7"),
         ("watchlist_ai_deep_recap_cost_tokens", "10"),
+        ("watchlist_ai_summary_enabled", "on"),
+        ("watchlist_ai_summary_max_bullets", "3"),
     ]
     for key, value in watchlist_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
