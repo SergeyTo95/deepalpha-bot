@@ -229,6 +229,9 @@ class AuthorStates(StatesGroup):
     waiting_article_image = State()
     waiting_article_attach = State()
     waiting_article_preview = State()
+    waiting_article_edit_title = State()
+    waiting_article_edit_body = State()
+    waiting_article_edit_image = State()
 
 
 class CryptoStates(StatesGroup):
@@ -7196,9 +7199,50 @@ async def manual_article_preview_callback(callback: types.CallbackQuery, state: 
             await callback.message.answer("❌ Publish error"); await callback.answer(); return
         award_article_published_points(uid, post_id, metadata={"source":"manual_editor"})
         award_article_referral_activation_points(uid, "article_published", metadata={"source":"manual_editor","article_id":post_id})
-        await callback.message.answer(f"✅ Article published!\n\n📝 /article_{post_id}", reply_markup=_share_hub_keyboard(post_id, payload.get("title"), str(uid)))
+        try:
+            from services.airdrop_referral_service import get_or_create_referral_code
+            referral_code = get_or_create_referral_code(uid)
+        except Exception:
+            referral_code = None
+        await callback.message.answer(f"✅ Article published!\n\n📝 /article_{post_id}", reply_markup=_share_hub_keyboard(post_id, payload.get("title"), referral_code))
         await callback.answer(); return
-    await callback.answer("Send /write_article to edit in MVP", show_alert=True)
+    if action == "edit_title":
+        await AuthorStates.waiting_article_edit_title.set()
+        await callback.message.answer("Send new title")
+        await callback.answer(); return
+    if action == "edit_text":
+        await AuthorStates.waiting_article_edit_body.set()
+        await callback.message.answer("Send new article text")
+        await callback.answer(); return
+    if action == "change_image":
+        await AuthorStates.waiting_article_edit_image.set()
+        await callback.message.answer("Send new cover photo, or /skip to remove cover")
+        await callback.answer(); return
+    await callback.answer("Unknown action", show_alert=True)
+
+
+@dp.message_handler(state=AuthorStates.waiting_article_edit_title)
+async def manual_article_edit_title_handler(message: types.Message, state: FSMContext):
+    await state.update_data(title=sanitize_article_text(message.text or "")[:160])
+    await _show_manual_article_preview(message, state)
+
+
+@dp.message_handler(state=AuthorStates.waiting_article_edit_body)
+async def manual_article_edit_body_handler(message: types.Message, state: FSMContext):
+    await state.update_data(body_text=sanitize_article_text(message.text or "")[:8000])
+    await _show_manual_article_preview(message, state)
+
+
+@dp.message_handler(commands=["skip"], state=AuthorStates.waiting_article_edit_image)
+async def manual_article_edit_image_skip(message: types.Message, state: FSMContext):
+    await state.update_data(cover_image_file_id=None)
+    await _show_manual_article_preview(message, state)
+
+
+@dp.message_handler(content_types=types.ContentType.PHOTO, state=AuthorStates.waiting_article_edit_image)
+async def manual_article_edit_image_photo(message: types.Message, state: FSMContext):
+    await state.update_data(cover_image_file_id=message.photo[-1].file_id)
+    await _show_manual_article_preview(message, state)
 
 @dp.message_handler(commands=["article"])
 async def article_command_handler(message: types.Message):
@@ -8381,6 +8425,9 @@ async def _escape_state_and_route_main_menu(message: types.Message, state: FSMCo
         AuthorStates.waiting_article_image,
         AuthorStates.waiting_article_attach,
         AuthorStates.waiting_article_preview,
+        AuthorStates.waiting_article_edit_title,
+        AuthorStates.waiting_article_edit_body,
+        AuthorStates.waiting_article_edit_image,
         MarketRecapStates.waiting_market_title,
         MarketRecapStates.waiting_market_outcome,
     ],

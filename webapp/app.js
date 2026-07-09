@@ -905,25 +905,6 @@ function renderAuthed(summary, lang) {
   loadHistory(true);
 }
 
-async function init() {
-  await telegramAuthIfAvailable();
-
-  const me = await callMe();
-  if (!(me && me.ok && me.auth && me.auth.authenticated)) {
-    return renderGuest(guestLangFallback());
-  }
-
-  const summaryResp = await callSummary();
-  if (!summaryResp.ok) {
-    return renderGuest(guestLangFallback());
-  }
-
-  const lang = normalizeLang(summaryResp.data?.language || summaryResp.data?.user?.language || "en");
-  renderAuthed(summaryResp.data, lang);
-}
-
-init();
-
 // Articles WebApp tab (?tab=articles): cards, filters, search, detail, donate/share links.
 async function callArticles(params = {}) {
   const q = new URLSearchParams(params);
@@ -987,6 +968,26 @@ async function renderArticlesPage() {
   document.getElementById("articleSearch").addEventListener("input", () => load("all"));
   load("all");
 }
-if (new URLSearchParams(location.search).get("tab") === "articles") {
-  renderArticlesPage();
+
+async function init() {
+  await telegramAuthIfAvailable();
+
+  const me = await callMe();
+  if (!(me && me.ok && me.auth && me.auth.authenticated)) {
+    return renderGuest(guestLangFallback());
+  }
+
+  const summaryResp = await callSummary();
+  if (!summaryResp.ok) {
+    return renderGuest(guestLangFallback());
+  }
+
+  const lang = normalizeLang(summaryResp.data?.language || summaryResp.data?.user?.language || "en");
+  const tab = new URLSearchParams(location.search).get("tab");
+  if (tab === "articles") {
+    return renderArticlesPage();
+  }
+  renderAuthed(summaryResp.data, lang);
 }
+
+init();

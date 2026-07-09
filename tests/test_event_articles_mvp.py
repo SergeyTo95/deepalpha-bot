@@ -89,3 +89,37 @@ def test_legacy_author_post_fields_are_escaped_for_html_parse_mode():
     assert 'safe_username = _escape(author_username)' in legacy_branch
     assert 'safe_first_name = _escape(author_first_name)' in legacy_branch
     assert 'f"📢 {safe_first_name}' in legacy_branch
+
+
+def test_manual_publish_share_hub_uses_real_referral_code_helper():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    assert '_share_hub_keyboard(post_id, payload.get("title"), str(uid))' not in source
+    start = source.index('async def manual_article_preview_callback')
+    end = source.index('@dp.message_handler(state=AuthorStates.waiting_article_edit_title)', start)
+    block = source[start:end]
+    assert 'get_or_create_referral_code' in block
+    assert 'referral_code = None' in block
+    assert '_share_hub_keyboard(post_id, payload.get("title"), referral_code)' in block
+
+
+def test_webapp_articles_routing_happens_inside_init_before_render_authed():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    assert 'if (new URLSearchParams(location.search).get("tab") === "articles") {\n  renderArticlesPage();\n}' not in source
+    init_start = source.index('async function init()')
+    init_end = source.index('init();', init_start)
+    init_block = source[init_start:init_end]
+    assert 'const tab = new URLSearchParams(location.search).get("tab");' in init_block
+    assert 'return renderArticlesPage();' in init_block
+    assert init_block.index('return renderArticlesPage();') < init_block.index('renderAuthed(summaryResp.data, lang);')
+    assert source.index('async function renderArticlesPage') < source.index('async function init()')
+
+
+def test_manual_article_preview_edit_buttons_have_handlers():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    assert 'waiting_article_edit_title' in source
+    assert 'waiting_article_edit_body' in source
+    assert 'waiting_article_edit_image' in source
+    assert 'manual_article_edit_title_handler' in source
+    assert 'manual_article_edit_body_handler' in source
+    assert 'manual_article_edit_image_photo' in source
+    assert 'manual_article_edit_image_skip' in source
