@@ -30,7 +30,7 @@ def test_map_dimensions_bounds_terrain_and_secret(polydb):
     assert m.in_bounds(0,0) and not m.in_bounds(10000,0)
     c=polydb(); row=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone(); secret=row['secret_seed']; c.close()
     assert m.terrain_at(secret,123,456)==m.terrain_at(secret,123,456)
-    assert m.terrain_at(secret,123,456)!=m.terrain_at(secret+'x',123,456) or m.terrain_at(secret,124,456)!=m.terrain_at(secret+'x',124,456)
+    assert any(m.terrain_at(secret,x,y)!=m.terrain_at(secret+'x',x,y) for x in range(0,600,50) for y in range(0,600,50))
     chunk=m.build_chunks(1,[(0,0)]); assert 'secret_seed' not in str(chunk) and chunk['map_width']==10000
     with pytest.raises(ValueError, match='too_many_chunks'): m.build_chunks(1,[(i,0) for i in range(10)])
 
@@ -44,7 +44,7 @@ def test_starting_bases_safe_inside_and_non_overlapping(polydb):
         seen.append(b)
 
 def test_capture_rules_energy_idempotency_stats(polydb):
-    state=join(10,1); s=state['season']; c=polydb(); secret=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); bx,by=m.FACTION_BASES[1]
+    state=join(10,1); s=state['season']; c=polydb(); secret=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); bx,by=m.faction_base_positions()[1]
     x,y=bx+8,by # adjacent to старт square edge
     assert m.terrain_at(secret,x,y) not in {'water','river'}
     r=m.capture_cell(10,x,y,'a'); assert r['ok'] and r['energy']['current_energy']==9
@@ -55,7 +55,7 @@ def test_capture_rules_energy_idempotency_stats(polydb):
     with pytest.raises(ValueError, match='not_adjacent'): m.capture_cell(10,5000,5000,'far')
 
 def test_capture_without_faction_insufficient_and_terrain_costs(polydb):
-    s=seed(polydb); c=polydb(); secret=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); bx,by=m.FACTION_BASES[1]
+    s=seed(polydb); c=polydb(); secret=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); bx,by=m.faction_base_positions()[1]
     with pytest.raises(ValueError, match='faction_required'): m.capture_cell(99,bx+8,by,'nf')
     join(11,1); c=polydb(); c.execute('update polywar_players set current_energy=0 where user_id=11'); c.commit(); c.close()
     with pytest.raises(ValueError, match='insufficient_energy'): m.capture_cell(11,bx+8,by,'low')
@@ -66,7 +66,7 @@ def test_capture_without_faction_insufficient_and_terrain_costs(polydb):
     with pytest.raises(ValueError, match='river_not_capturable'): m.capture_cell(11,rx,ry,'r')
 
 def test_single_cell_concurrent_capture_and_client_user_id_ignored(polydb):
-    state=join(21,1); join(22,1); bx,by=m.FACTION_BASES[1]; x,y=bx+8,by; results=[]; errs=[]
+    state=join(21,1); join(22,1); bx,by=m.faction_base_positions()[1]; x,y=bx+8,by; results=[]; errs=[]
     def worker(uid,key):
         try: results.append(m.capture_cell(uid,x,y,key)['ok'])
         except ValueError as e: errs.append(str(e))
@@ -80,3 +80,32 @@ def test_single_cell_concurrent_capture_and_client_user_id_ignored(polydb):
 def test_canvas_page_and_routes_present():
     assert '<canvas id="polywarCanvas"' in Path('webapp/polywar.js').read_text()
     w=Path('web.py').read_text(); assert '/api/polywar/map/chunks' in w and '/api/polywar/action' in w and 'app.router.add_get("/polywar", handle_polywar_page)' in w
+
+def test_two_parallel_captures_same_player_spend_energy_once(polydb):
+    state = join(31, 1); sid = state['season']['id']; bx, by = m.faction_base_positions()[1]
+    c = polydb(); c.execute('update polywar_players set current_energy=1 where user_id=31'); c.commit(); c.close()
+    cells = [(bx + 8, by), (bx, by + 8)]
+    results, errs = [], []
+    def worker(cell, key):
+        try: results.append(m.capture_cell(31, cell[0], cell[1], key))
+        except ValueError as e: errs.append(str(e))
+    ts = [threading.Thread(target=worker, args=(cells[0], 'one')), threading.Thread(target=worker, args=(cells[1], 'two'))]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(results) == 1
+    assert 'insufficient_energy' in errs or 'cell_conflict' in errs
+    c = polydb()
+    assert c.execute('select current_energy from polywar_players where user_id=31 and season_id=?', (sid,)).fetchone()[0] == 0
+    assert c.execute('select count(*) from polywar_actions where user_id=31 and season_id=?', (sid,)).fetchone()[0] == 1
+    c.close()
+
+def test_relative_bases_for_supported_map_sizes(polydb, monkeypatch):
+    for size in (10000, 2000, 512):
+        monkeypatch.setattr(polywar, 'get_setting', lambda k, d='', size=size: str(size) if k in {'polywar_map_width','polywar_map_height'} else d)
+        bases = m.get_starting_bases()
+        assert len(bases) == 7
+        seen = []
+        for b in bases:
+            assert 0 <= b['x'] < size and 0 <= b['y'] < size
+            for o in seen:
+                assert abs(b['x'] - o['x']) > b['size'] or abs(b['y'] - o['y']) > b['size']
+            seen.append(b)

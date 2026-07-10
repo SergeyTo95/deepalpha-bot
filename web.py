@@ -787,7 +787,7 @@ async def handle_polywar_chunks_api(request):
                 chunks.append((int(cx), int(cy)))
         else:
             chunks.append((int(request.query.get("chunk_x", "0")), int(request.query.get("chunk_y", "0"))))
-        return _json_response(get_polywar_chunks(int(current.get("user_id") or 0), chunks))
+        return _json_response(await asyncio.to_thread(get_polywar_chunks, int(current.get("user_id") or 0), chunks))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=400)
 
@@ -803,7 +803,7 @@ async def handle_polywar_action_api(request):
     try:
         if (data.get("action_type") or "capture") != "capture":
             raise ValueError("unsupported_action")
-        return _json_response(capture_polywar_cell(int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        return _json_response(await asyncio.to_thread(capture_polywar_cell, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
     except ValueError as e:
         code = str(e)
         status = 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
