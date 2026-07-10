@@ -1,4 +1,5 @@
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -24,8 +25,20 @@ def get_setting(key: str, default: str = ""):
     return _get_setting(key, default)
 
 
+def get_airdrop_points_balance(user_id: int) -> dict:
+    try:
+        from services.airdrop_points_service import get_airdrop_points_balance as _get_balance
+        return _get_balance(user_id)
+    except Exception:
+        return {"total": 0, "balance": 0}
+
+
 def _now() -> datetime:
     return datetime.utcnow()
+
+
+def _is_sqlite(conn) -> bool:
+    return conn.__class__.__module__.startswith("sqlite3")
 
 
 def _iso(dt: Any) -> Optional[str]:
@@ -56,16 +69,26 @@ def _setting_int(key: str, default: int, min_value: int = 1, max_value: int = 36
 
 
 def is_enabled() -> bool:
-    return str(get_setting("polywar_enabled", "true") or "true").strip().lower() not in {"0", "false", "off", "no"}
+    return str(get_setting("polywar_enabled", "true") or "true").strip().lower() not in {"0", "false", "off", "no", "disabled"}
 
 
 def _execute(cursor, sql: str, params=()):
-    try:
-        return cursor.execute(sql, params)
-    except Exception:
-        if "%s" in sql:
-            return cursor.execute(sql.replace("%s", "?"), params)
-        raise
+    rendered = sql
+    last_error = None
+    for attempt in range(8):
+        try:
+            return cursor.execute(rendered, params)
+        except Exception as exc:
+            text = str(exc).lower()
+            last_error = exc
+            if "%s" in rendered:
+                rendered = rendered.replace("%s", "?")
+                continue
+            if "locked" in text:
+                time.sleep(0.025 * (attempt + 1))
+                continue
+            raise
+    raise last_error
 
 
 def _fetchone(cursor, sql: str, params=()):
@@ -78,12 +101,33 @@ def _fetchall(cursor, sql: str, params=()) -> List[Dict[str, Any]]:
     return [dict(r) for r in cursor.fetchall()]
 
 
+def _rowcount(cursor) -> int:
+    try:
+        return int(cursor.rowcount or 0)
+    except Exception:
+        return 0
+
+
+def _safe_commit(conn):
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _safe_rollback(conn):
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
 def init_polywar_schema(conn=None) -> None:
     own = conn is None
     conn = conn or get_connection()
     c = conn.cursor()
     try:
-        id_sql = "INTEGER PRIMARY KEY AUTOINCREMENT" if conn.__class__.__module__.startswith("sqlite3") else "SERIAL PRIMARY KEY"
+        id_sql = "INTEGER PRIMARY KEY AUTOINCREMENT" if _is_sqlite(conn) else "SERIAL PRIMARY KEY"
         c.execute(f"""
         CREATE TABLE IF NOT EXISTS polywar_seasons (
             id {id_sql},
@@ -103,9 +147,20 @@ def init_polywar_schema(conn=None) -> None:
             slug TEXT NOT NULL UNIQUE,
             color TEXT NOT NULL,
             description TEXT NOT NULL,
-            seasonal_influence_score BIGINT NOT NULL DEFAULT 0,
-            active_members_count INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS polywar_faction_season_stats (
+            season_id INTEGER NOT NULL,
+            faction_id INTEGER NOT NULL,
+            influence_score BIGINT NOT NULL DEFAULT 0,
+            active_members_count INTEGER NOT NULL DEFAULT 0,
+            controlled_cells_count INTEGER NOT NULL DEFAULT 0,
+            controlled_sectors_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (season_id, faction_id)
         )
         """)
         c.execute("""
@@ -117,7 +172,6 @@ def init_polywar_schema(conn=None) -> None:
             max_energy INTEGER NOT NULL DEFAULT 10,
             energy_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             locked_until TIMESTAMP NULL,
-            lifetime_earned_points BIGINT NOT NULL DEFAULT 0,
             season_spendable_points BIGINT NOT NULL DEFAULT 0,
             faction_contribution BIGINT NOT NULL DEFAULT 0,
             joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -136,11 +190,24 @@ def init_polywar_schema(conn=None) -> None:
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # Idempotent additive migrations for databases created by the first Phase 1 draft.
+        for sql in [
+            "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS seasonal_influence_score",
+            "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS active_members_count",
+            "ALTER TABLE polywar_players DROP COLUMN IF EXISTS lifetime_earned_points",
+        ]:
+            if not _is_sqlite(conn):
+                try:
+                    c.execute(sql)
+                except Exception:
+                    pass
         for sql in [
             "CREATE INDEX IF NOT EXISTS idx_polywar_seasons_status ON polywar_seasons(status)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_players_user ON polywar_players(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_players_faction ON polywar_players(season_id, faction_id)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_events_season_created ON polywar_events(season_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_polywar_faction_stats_season ON polywar_faction_season_stats(season_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_active_season ON polywar_seasons(status) WHERE status = 'active'",
         ]:
             c.execute(sql)
         conn.commit()
@@ -165,34 +232,85 @@ def ensure_factions(conn=None) -> List[Dict[str, Any]]:
         if own: conn.close()
 
 
+def _public_season(row):
+    return {k: _iso(v) if k.endswith("_at") else v for k, v in row.items() if k != "secret_seed"}
+
+
+def _complete_expired_active_seasons(conn, now: datetime) -> None:
+    c = conn.cursor()
+    _execute(c, "UPDATE polywar_seasons SET status = %s, completed_at = %s WHERE status = %s AND ends_at <= %s", ("completed", now, "active", now))
+
+
+def _next_season_name(conn) -> str:
+    c = conn.cursor()
+    row = _fetchone(c, "SELECT COUNT(*) AS count FROM polywar_seasons") or {}
+    return f"Season {int(row.get('count') or 0) + 1}"
+
+
+def _ensure_faction_stats_for_season(conn, season_id: int) -> None:
+    c = conn.cursor()
+    for fid, *_ in FACTIONS:
+        _execute(c, """
+        INSERT INTO polywar_faction_season_stats (season_id, faction_id, influence_score, active_members_count, controlled_cells_count, controlled_sectors_count, created_at, updated_at)
+        VALUES (%s, %s, 0, 0, 0, 0, %s, %s)
+        ON CONFLICT (season_id, faction_id) DO NOTHING
+        """, (season_id, fid, _now(), _now()))
+
+
 def ensure_active_season(conn=None) -> Dict[str, Any]:
     own = conn is None
     conn = conn or get_connection(); c = conn.cursor()
     try:
+        now = _now()
+        _complete_expired_active_seasons(conn, now)
         row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
         if row:
+            _ensure_faction_stats_for_season(conn, int(row["id"]))
+            conn.commit()
             return _public_season(row)
-        start = _now(); end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
-        _execute(c, """
-        INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-        """, ("Season 1", "active", start, end, secrets.token_hex(32), start))
-        row = _dict(c.fetchone())
+        start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
+        try:
+            _execute(c, """
+            INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+            """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
+            row = _dict(c.fetchone())
+        except Exception:
+            _safe_rollback(conn)
+            row = None
         if not row:
             row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
+        if not row:
+            raise RuntimeError("polywar_active_season_unavailable")
+        _ensure_faction_stats_for_season(conn, int(row["id"]))
         conn.commit(); return _public_season(row)
     finally:
         if own: conn.close()
-
-
-def _public_season(row):
-    return {k: _iso(v) if k.endswith("_at") else v for k, v in row.items() if k != "secret_seed"}
 
 
 def list_factions(conn=None) -> List[Dict[str, Any]]:
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
     try:
         return _fetchall(c, "SELECT * FROM polywar_factions ORDER BY id")
+    finally:
+        if own: conn.close()
+
+
+def list_factions_with_stats(season_id: int, conn=None) -> List[Dict[str, Any]]:
+    own = conn is None; conn = conn or get_connection(); c = conn.cursor()
+    try:
+        _ensure_faction_stats_for_season(conn, int(season_id))
+        rows = _fetchall(c, """
+        SELECT f.id, f.name, f.slug, f.color, f.description, f.created_at,
+               COALESCE(s.influence_score, 0) AS influence_score,
+               COALESCE(s.active_members_count, 0) AS active_members_count,
+               COALESCE(s.controlled_cells_count, 0) AS controlled_cells_count,
+               COALESCE(s.controlled_sectors_count, 0) AS controlled_sectors_count
+        FROM polywar_factions f
+        LEFT JOIN polywar_faction_season_stats s ON s.faction_id = f.id AND s.season_id = %s
+        ORDER BY f.id
+        """, (int(season_id),))
+        return rows
     finally:
         if own: conn.close()
 
@@ -215,15 +333,20 @@ def _energy(player: Dict[str, Any]) -> Dict[str, Any]:
     return {"current_energy": cur, "max_energy": max_energy, "recharge_minutes": recharge, "seconds_until_next_energy": seconds_next, "locked_until": _iso(locked_until), "is_locked": is_locked, "energy_updated_at": updated}
 
 
+def _insert_player_if_missing(conn, user_id: int, season_id: int) -> None:
+    c = conn.cursor(); now = _now(); maxe = _setting_int("polywar_energy_max", 10, 1, 1000)
+    _execute(c, """
+    INSERT INTO polywar_players (user_id, season_id, current_energy, max_energy, energy_updated_at, joined_at, last_active_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (user_id, season_id) DO NOTHING
+    """, (user_id, season_id, maxe, maxe, now, now, now))
+
+
 def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, Any]:
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
     try:
+        _insert_player_if_missing(conn, int(user_id), int(season_id))
         row = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id = %s AND season_id = %s", (user_id, season_id))
-        if not row:
-            now = _now(); maxe = _setting_int("polywar_energy_max", 10, 1, 1000)
-            _execute(c, """INSERT INTO polywar_players (user_id, season_id, current_energy, max_energy, energy_updated_at, joined_at, last_active_at)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s)""", (user_id, season_id, maxe, maxe, now, now, now))
-            conn.commit(); row = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id = %s AND season_id = %s", (user_id, season_id))
         e = _energy(row)
         _execute(c, "UPDATE polywar_players SET current_energy = %s, energy_updated_at = %s, last_active_at = %s WHERE user_id = %s AND season_id = %s", (e["current_energy"], e["energy_updated_at"], _now(), user_id, season_id))
         conn.commit(); row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
@@ -238,14 +361,36 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     conn = get_connection(); c = conn.cursor()
     try:
         init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
-        faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (int(faction_id),))
-        if not faction: raise ValueError("unknown_faction")
-        player = get_or_create_player(user_id, season["id"], conn)
-        if player.get("faction_id"): raise ValueError("faction_already_selected")
-        _execute(c, "UPDATE polywar_players SET faction_id = %s, last_active_at = %s WHERE user_id = %s AND season_id = %s", (faction_id, _now(), user_id, season["id"]))
-        _execute(c, "UPDATE polywar_factions SET active_members_count = active_members_count + 1 WHERE id = %s", (faction_id,))
-        _execute(c, "INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at) VALUES (%s,%s,%s,%s,%s,%s)", (season["id"], user_id, faction_id, "join", f"Player joined {faction['name']}", _now()))
-        conn.commit(); return get_state(user_id, conn)
+        faction_id = int(faction_id)
+        faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
+        if not faction:
+            raise ValueError("unknown_faction")
+        try:
+            _insert_player_if_missing(conn, int(user_id), int(season["id"]))
+            _execute(c, """
+            UPDATE polywar_players
+            SET faction_id = %s, last_active_at = %s
+            WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
+            """, (faction_id, _now(), int(user_id), int(season["id"])))
+            if _rowcount(c) != 1:
+                _safe_rollback(conn)
+                raise ValueError("faction_already_selected")
+            _execute(c, """
+            UPDATE polywar_faction_season_stats
+            SET active_members_count = active_members_count + 1, updated_at = %s
+            WHERE season_id = %s AND faction_id = %s
+            """, (_now(), int(season["id"]), faction_id))
+            _execute(c, """
+            INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
+            conn.commit()
+        except ValueError:
+            raise
+        except Exception:
+            _safe_rollback(conn)
+            raise
+        return get_state(user_id, conn)
     finally:
         conn.close()
 
@@ -260,16 +405,29 @@ def get_events(season_id: Optional[int] = None, limit: int = 20, conn=None):
         if own: conn.close()
 
 
+def _lifetime_airdrop_points(user_id: int) -> int:
+    balance = get_airdrop_points_balance(int(user_id)) or {}
+    for key in ("total", "lifetime", "earned", "balance"):
+        try:
+            return int(float(balance.get(key) or 0))
+        except Exception:
+            continue
+    return 0
+
+
 def get_state(user_id: int, conn=None) -> Dict[str, Any]:
     if not is_enabled():
-        return {"ok": True, "enabled": False, "feature_flags": {"polywar_enabled": False}}
+        return {"ok": True, "enabled": False, "message": "PolyWar is temporarily unavailable", "feature_flags": {"polywar_enabled": False}}
     own = conn is None; conn = conn or get_connection()
     try:
         init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
-        factions = list_factions(conn); faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
+        factions = list_factions_with_stats(int(season["id"]), conn)
+        faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
         e = _energy(player)
-        public_player = {k: _iso(v) if k.endswith("_at") or k == "locked_until" else v for k, v in player.items()}
-        return {"ok": True, "enabled": True, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": sorted(factions, key=lambda f: (-int(f.get("seasonal_influence_score") or 0), f["id"])), "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": False, "boosts_enabled": False, "purchases_enabled": False}}
+        public_player = {k: _iso(v) if k.endswith("_at") or k == "locked_until" else v for k, v in player.items() if k != "lifetime_earned_points"}
+        public_player["lifetime_airdrop_points"] = _lifetime_airdrop_points(int(user_id))
+        ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
+        return {"ok": True, "enabled": True, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": False, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()

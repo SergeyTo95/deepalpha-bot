@@ -46,3 +46,20 @@ def test_polywar_join_accepts_only_faction_id_payload():
 def test_polywar_api_does_not_render_inside_approot():
     assert "polywarRoot" in Path("webapp/polywar.html").read_text()
     assert "appRoot" not in Path("webapp/polywar.html").read_text()
+
+
+def test_polywar_js_has_live_energy_countdown_sync_and_unavailable_state():
+    js = Path("webapp/polywar.js").read_text()
+    assert "setInterval" in js
+    assert "seconds_until_next_energy" in js
+    assert "syncTimer" in js
+    assert "clearTimers" in js
+    assert "PolyWar is temporarily unavailable" in js
+
+
+def test_polywar_stats_are_season_scoped_not_global_faction_stats():
+    service = Path("services/polywar_service.py").read_text()
+    assert "polywar_faction_season_stats" in service
+    create_factions = service[service.index("CREATE TABLE IF NOT EXISTS polywar_factions"):service.index("CREATE TABLE IF NOT EXISTS polywar_faction_season_stats")]
+    assert "seasonal_influence_score" not in create_factions
+    assert "active_members_count" not in create_factions
