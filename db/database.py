@@ -940,6 +940,17 @@ def _init_db_inner(conn, cursor):
         ("polywar_chunk_size", "64"),
         ("polywar_max_chunks_per_request", "9"),
         ("polywar_starting_area_size", "15"),
+        ("polywar_mine_lock_minutes", "180"),
+        ("polywar_mine_density_plain_bp", "400"),
+        ("polywar_mine_density_forest_bp", "700"),
+        ("polywar_mine_density_mountain_bp", "1000"),
+        ("polywar_mine_density_swamp_bp", "900"),
+        ("polywar_mine_density_desert_bp", "500"),
+        ("polywar_mine_density_road_bp", "200"),
+        ("polywar_mine_density_ruins_bp", "1400"),
+        ("polywar_scan_3_energy_cost", "2"),
+        ("polywar_scan_5_energy_cost", "4"),
+        ("polywar_max_flags_per_player", "100"),
     ]
     for key, value in polywar_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))

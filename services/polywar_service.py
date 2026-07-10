@@ -214,6 +214,8 @@ def init_polywar_schema(conn=None) -> None:
         try:
             from services.polywar_map_service import init_polywar_map_schema
             init_polywar_map_schema(conn)
+            from services.polywar_mine_service import init_polywar_mine_schema
+            init_polywar_mine_schema(conn)
         except Exception:
             pass
         conn.commit()
@@ -336,7 +338,7 @@ def _energy(player: Dict[str, Any]) -> Dict[str, Any]:
     seconds_next = 0 if cur >= max_energy else max(0, recharge * 60 - int((_now() - updated).total_seconds()))
     locked_until = player.get("locked_until")
     is_locked = bool(locked_until and _iso(locked_until) > _iso(_now()))
-    return {"current_energy": cur, "max_energy": max_energy, "recharge_minutes": recharge, "seconds_until_next_energy": seconds_next, "locked_until": _iso(locked_until), "is_locked": is_locked, "energy_updated_at": updated}
+    return {"current_energy": cur, "max_energy": max_energy, "recharge_minutes": recharge, "seconds_until_next_energy": seconds_next, "locked_until": _iso(locked_until), "is_locked": is_locked, "lock_seconds_remaining": max(0, int((locked_until - _now()).total_seconds())) if is_locked and not isinstance(locked_until, str) else (max(0, int((datetime.fromisoformat(locked_until) - _now()).total_seconds())) if is_locked else 0), "lock_reason": "mine_hit" if is_locked else None, "energy_updated_at": updated}
 
 
 def _insert_player_if_missing(conn, user_id: int, season_id: int) -> None:
