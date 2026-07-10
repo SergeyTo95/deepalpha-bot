@@ -16,7 +16,7 @@ def test_polywar_page_route_and_redirect_are_registered():
     assert 'app.router.add_get("/polywar", handle_polywar_page)' in source
     assert 'web.HTTPFound("/polywar")' in source
     assert Path("webapp/polywar.html").read_text().count("telegram-web-app.js") == 1
-    assert "Global War Map — coming in Phase 2" in Path("webapp/polywar.js").read_text()
+    assert "polywarCanvas" in Path("webapp/polywar.js").read_text()
 
 
 def test_polywar_endpoints_are_registered():

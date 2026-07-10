@@ -210,6 +210,12 @@ def init_polywar_schema(conn=None) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_active_season ON polywar_seasons(status) WHERE status = 'active'",
         ]:
             c.execute(sql)
+        
+        try:
+            from services.polywar_map_service import init_polywar_map_schema
+            init_polywar_map_schema(conn)
+        except Exception:
+            pass
         conn.commit()
     finally:
         if own:
@@ -428,6 +434,7 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         public_player = {k: _iso(v) if k.endswith("_at") or k == "locked_until" else v for k, v in player.items() if k != "lifetime_earned_points"}
         public_player["lifetime_airdrop_points"] = _lifetime_airdrop_points(int(user_id))
         ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
-        return {"ok": True, "enabled": True, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": False, "boosts_enabled": False, "purchases_enabled": False}}
+        from services.polywar_map_service import map_width, map_height, chunk_size, get_starting_bases
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "bases": get_starting_bases()}, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()

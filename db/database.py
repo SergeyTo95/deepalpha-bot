@@ -935,6 +935,11 @@ def _init_db_inner(conn, cursor):
         ("polywar_season_days", "30"),
         ("polywar_energy_max", "10"),
         ("polywar_energy_recharge_minutes", "60"),
+        ("polywar_map_width", "10000"),
+        ("polywar_map_height", "10000"),
+        ("polywar_chunk_size", "64"),
+        ("polywar_max_chunks_per_request", "9"),
+        ("polywar_starting_area_size", "15"),
     ]
     for key, value in polywar_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
