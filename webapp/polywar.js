@@ -109,9 +109,10 @@ class PolyWarMap {
       const batch = unique.slice(i, i + limit);
       const d = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
       batch.forEach(([x, y]) => this.loading.delete(`${x},${y}`));
-      if (this.destroyed || seq !== this.loadSeq) return;
+      if (this.destroyed) return;
+      if (d.ok) d.chunks.forEach(ch => this.cache.set(`${ch.chunk_x},${ch.chunk_y}`, ch));
+      if (seq !== this.loadSeq) { this.requestDraw(); this.ensureChunks(); return; }
       if (!d.ok) { this.status(d.error || "Chunk error"); continue; }
-      d.chunks.forEach(ch => this.cache.set(`${ch.chunk_x},${ch.chunk_y}`, ch));
       this.pruneCache();
       this.requestDraw();
       this.updatePanel();

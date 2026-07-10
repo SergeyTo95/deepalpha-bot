@@ -63,3 +63,10 @@ def test_polywar_stats_are_season_scoped_not_global_faction_stats():
     create_factions = service[service.index("CREATE TABLE IF NOT EXISTS polywar_factions"):service.index("CREATE TABLE IF NOT EXISTS polywar_faction_season_stats")]
     assert "seasonal_influence_score" not in create_factions
     assert "active_members_count" not in create_factions
+
+def test_polywar_stale_chunk_responses_cache_before_sequence_check():
+    js = Path("webapp/polywar.js").read_text()
+    cache_pos = js.index('if (d.ok) d.chunks.forEach')
+    stale_pos = js.index('if (seq !== this.loadSeq)')
+    assert cache_pos < stale_pos
+    assert 'this.ensureChunks(); return;' in js[stale_pos:stale_pos + 120]

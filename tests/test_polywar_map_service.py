@@ -51,7 +51,10 @@ def test_capture_rules_energy_idempotency_stats(polydb):
     dup=m.capture_cell(10,x,y,'a'); assert dup['duplicate'] and dup['energy']['current_energy']==9
     c=polydb(); assert c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=1',(s['id'],)).fetchone()[0]==1; c.close()
     with pytest.raises(ValueError, match='already_owned'): m.capture_cell(10,x,y,'b')
-    with pytest.raises(ValueError, match='not_adjacent'): m.capture_cell(10,bx+30,by+30,'diag')
+    far_x, far_y = find_near(secret, bx, by, None, True)
+    if abs(far_x - bx) <= 15 and abs(far_y - by) <= 15:
+        far_x, far_y = bx + 200, by
+    with pytest.raises(ValueError, match='not_adjacent'): m.capture_cell(10, far_x, far_y, 'diag')
     with pytest.raises(ValueError, match='not_adjacent'): m.capture_cell(10,5000,5000,'far')
 
 def test_capture_without_faction_insufficient_and_terrain_costs(polydb):
@@ -109,3 +112,33 @@ def test_relative_bases_for_supported_map_sizes(polydb, monkeypatch):
             for o in seen:
                 assert abs(b['x'] - o['x']) > b['size'] or abs(b['y'] - o['y']) > b['size']
             seen.append(b)
+
+def test_recovered_energy_is_spent_and_timestamp_persisted(polydb):
+    from datetime import datetime, timedelta
+    state = join(41, 1); sid = state['season']['id']; bx, by = m.faction_base_positions()[1]
+    old = datetime.utcnow() - timedelta(minutes=61)
+    c = polydb(); c.execute('update polywar_players set current_energy=0, max_energy=1, energy_updated_at=? where user_id=41 and season_id=?', (old, sid)); c.commit(); c.close()
+    result = m.capture_cell(41, bx + 8, by, 'recovered')
+    assert result['ok'] is True
+    assert result['energy']['current_energy'] == 0
+    assert 0 < result['energy']['seconds_until_next_energy'] <= 3600
+    c = polydb(); row = c.execute('select current_energy, energy_updated_at from polywar_players where user_id=41 and season_id=?', (sid,)).fetchone(); c.close()
+    assert row['current_energy'] == 0
+    assert str(row['energy_updated_at']) != str(old)
+
+
+def test_concurrent_same_key_same_cell_returns_duplicate_without_double_spend(polydb):
+    state = join(42, 1); sid = state['season']['id']; bx, by = m.faction_base_positions()[1]
+    results, errs = [], []
+    def worker():
+        try: results.append(m.capture_cell(42, bx + 8, by, 'same-key'))
+        except ValueError as e: errs.append(str(e))
+    ts = [threading.Thread(target=worker), threading.Thread(target=worker)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert errs == []
+    assert len(results) == 2
+    assert sorted(bool(r.get('duplicate')) for r in results) == [False, True]
+    c = polydb()
+    assert c.execute('select count(*) from polywar_actions where user_id=42 and season_id=?', (sid,)).fetchone()[0] == 1
+    assert c.execute('select current_energy from polywar_players where user_id=42 and season_id=?', (sid,)).fetchone()[0] == 9
+    c.close()

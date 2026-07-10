@@ -234,6 +234,12 @@ def _is_expected_unique_error(exc: Exception) -> bool:
     return "unique" in text or "duplicate" in text or "constraint" in text or "integrity" in text
 
 
+def _duplicate_response(conn, season_id: int, seed: str, user_id: int, action: Dict[str, Any]):
+    player = polywar.get_or_create_player(user_id, season_id, conn)
+    e = polywar._energy(player)
+    return {"ok": True, "duplicate": True, "cell": {"x": action["x"], "y": action["y"], "terrain": terrain_at(seed, action["x"], action["y"]), "owner_faction_id": action["faction_id"], "energy_cost": action["energy_cost"]}, "energy": {k: v for k, v in e.items() if k != "energy_updated_at"}}
+
+
 def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     if not idempotency_key or len(str(idempotency_key)) > 120:
         raise ValueError("bad_idempotency_key")
@@ -246,19 +252,28 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         sid, seed = int(season["id"]), season["secret_seed"]
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing:
-            player = polywar.get_or_create_player(user_id, sid, conn)
-            e = polywar._energy(player)
-            return {"ok": True, "duplicate": True, "cell": {"x": existing["x"], "y": existing["y"], "terrain": terrain_at(seed, existing["x"], existing["y"]), "owner_faction_id": existing["faction_id"], "energy_cost": existing["energy_cost"]}, "energy": {k: v for k, v in e.items() if k != "energy_updated_at"}}
+            return _duplicate_response(conn, sid, seed, user_id, existing)
         if polywar._is_sqlite(conn):
-            c.execute("BEGIN IMMEDIATE")
+            began = False
+            last_lock_error = None
+            for attempt in range(20):
+                try:
+                    c.execute("BEGIN IMMEDIATE")
+                    began = True
+                    break
+                except Exception as exc:
+                    if "locked" not in str(exc).lower():
+                        raise
+                    last_lock_error = exc
+                    time.sleep(0.025 * (attempt + 1))
+            if not began:
+                raise last_lock_error
         else:
             polywar._execute(c, "BEGIN")
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing:
             conn.commit()
-            player = polywar.get_or_create_player(user_id, sid, conn)
-            e = polywar._energy(player)
-            return {"ok": True, "duplicate": True, "cell": {"x": existing["x"], "y": existing["y"], "terrain": terrain_at(seed, existing["x"], existing["y"]), "owner_faction_id": existing["faction_id"], "energy_cost": existing["energy_cost"]}, "energy": {k: v for k, v in e.items() if k != "energy_updated_at"}}
+            return _duplicate_response(conn, sid, seed, user_id, existing)
         if not in_bounds(x, y):
             raise ValueError("out_of_bounds")
         polywar._insert_player_if_missing(conn, int(user_id), sid)
@@ -266,6 +281,10 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
             player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s FOR UPDATE", (user_id, sid))
         else:
             player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s", (user_id, sid))
+        existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
+        if existing:
+            conn.commit()
+            return _duplicate_response(conn, sid, seed, user_id, existing)
         fid = player.get("faction_id")
         if not fid:
             raise ValueError("faction_required")
@@ -289,12 +308,13 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         new_energy = int(e["current_energy"]) - cost
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid, x, y, fid, now, user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid, user_id, fid, "capture", x, y, cost, idempotency_key, now))
-        polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s AND current_energy >= %s", (new_energy, e["energy_updated_at"], now, user_id, sid, cost))
+        polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy, e["energy_updated_at"], now, user_id, sid))
         if polywar._rowcount(c) != 1:
-            raise ValueError("insufficient_energy")
+            raise RuntimeError("polywar_player_energy_update_failed")
         polywar._execute(c, "UPDATE polywar_faction_season_stats SET controlled_cells_count=controlled_cells_count+1, updated_at=%s WHERE season_id=%s AND faction_id=%s", (now, sid, fid))
         conn.commit()
         player["current_energy"] = new_energy
+        player["energy_updated_at"] = e["energy_updated_at"]
         en = polywar._energy(player)
         return {"ok": True, "cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost}, "energy": {k: v for k, v in en.items() if k != "energy_updated_at"}}
     except ValueError:
@@ -303,6 +323,12 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     except Exception as exc:
         polywar._safe_rollback(conn)
         if _is_expected_unique_error(exc):
+            try:
+                existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
+                if existing:
+                    return _duplicate_response(conn, sid, seed, user_id, existing)
+            except Exception:
+                logger.exception("Failed to load duplicate PolyWar action after unique conflict")
             raise ValueError("cell_conflict") from exc
         logger.exception("Unexpected PolyWar capture failure")
         raise
