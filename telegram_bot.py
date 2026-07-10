@@ -5147,23 +5147,28 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
 
 
 
-def _truncate_plain_text(value: str, limit: int) -> str:
+def _escape_article_html(value: Any) -> str:
+    return html.escape(str(value or ""), quote=False)
+
+
+def _plain_article_excerpt(value: Any, limit: int) -> str:
     value = sanitize_article_text(value or "")
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _attached_analysis_summary(post: dict, limit: int = 700) -> str:
+def _attached_analysis_summary(post: dict, *, field_limit: int = 120, max_fields: int = 5) -> str:
     raw = post.get("attached_analysis")
     if not raw and post.get("attached_analysis_json"):
         try:
             raw = json.loads(post.get("attached_analysis_json") or "{}")
         except Exception:
             raw = {}
-    if not isinstance(raw, dict) or not raw:
+    if not isinstance(raw, dict) or not raw or max_fields <= 0:
         return ""
     lines = ["📎 <b>Attached DeepAlpha analysis</b>"]
+    added = 0
     for label, keys in (
         ("Question", ("question", "event_question")),
         ("Forecast", ("display_prediction", "thesis", "alpha_label")),
@@ -5173,27 +5178,41 @@ def _attached_analysis_summary(post: dict, limit: int = 700) -> str:
     ):
         value = next((raw.get(k) for k in keys if raw.get(k)), "")
         if value:
-            lines.append(f"{label}: {_escape(_truncate_plain_text(str(value), 160))}")
-    return _truncate_plain_text("\n".join(lines), limit)
+            plain = _plain_article_excerpt(value, field_limit)
+            lines.append(f"{label}: {_escape_article_html(plain)}")
+            added += 1
+            if added >= max_fields:
+                break
+    return "\n".join(lines) if added else ""
 
 
-def _format_author_article_compact(post: dict, uid: int, show_author: bool = True, body_limit: int = 1800) -> str:
-    title = _escape(_truncate_plain_text(post.get("title") or post.get("question") or "Article", 160))
-    lines = [f"📝 <b>{title}</b>"]
+def _format_author_article_compact(
+    post: dict,
+    uid: int,
+    show_author: bool = True,
+    body_limit: int = 1500,
+    title_limit: int = 140,
+    market_limit: int = 180,
+    analysis_field_limit: int = 120,
+    max_analysis_fields: int = 5,
+) -> str:
+    title_plain = _plain_article_excerpt(post.get("title") or post.get("question") or "Article", title_limit)
+    lines = [f"📝 <b>{_escape_article_html(title_plain)}</b>"]
     if show_author:
-        author_username = post.get("author_username")
-        author_first_name = post.get("author_first_name", "")
+        author_username = _plain_article_excerpt(post.get("author_username") or "", 80)
+        author_first_name = _plain_article_excerpt(post.get("author_first_name") or "", 80)
         if author_username:
-            lines.append(f"👤 Author: @{_escape(author_username)}")
+            lines.append(f"👤 Author: @{_escape_article_html(author_username)}")
         elif author_first_name:
-            lines.append(f"👤 Author: {_escape(author_first_name)}")
+            lines.append(f"👤 Author: {_escape_article_html(author_first_name)}")
     market_url = post.get("market_url") or ""
     if market_url:
-        lines.append(f"🔗 Market: {_escape(_truncate_plain_text(market_url, 220))}")
-    body = _escape(_truncate_plain_text(post.get("body_text") or post.get("thesis") or post.get("reasoning") or "", body_limit))
-    if body:
-        lines.append(f"\n{body}")
-    attached = _attached_analysis_summary(post)
+        market_plain = _plain_article_excerpt(market_url, market_limit)
+        lines.append(f"🔗 Market: {_escape_article_html(market_plain)}")
+    body_plain = _plain_article_excerpt(post.get("body_text") or post.get("thesis") or post.get("reasoning") or "", body_limit)
+    if body_plain:
+        lines.append(f"\n{_escape_article_html(body_plain)}")
+    attached = _attached_analysis_summary(post, field_limit=analysis_field_limit, max_fields=max_analysis_fields)
     if attached:
         lines.append(f"\n{attached}")
     donations = post.get("total_donations_ton", 0) or 0
@@ -5207,16 +5226,29 @@ def _format_author_article_compact(post: dict, uid: int, show_author: bool = Tru
 
 
 async def send_author_article(message, post: dict, uid: int, keyboard=None, preview: bool = False, show_author: bool = True):
-    caption_limit = 850
-    text_limit = 3200
-    body_limit = 550 if post.get("cover_image_file_id") else 1700
-    text = ("<b>Preview</b>\n\n" if preview else "") + _format_author_article_compact(post, uid, show_author=show_author, body_limit=body_limit)
-    if len(text) > text_limit:
-        text = text[: text_limit - 1].rstrip() + "…"
     if post.get("cover_image_file_id"):
-        caption = text if len(text) <= caption_limit else text[: caption_limit - 1].rstrip() + "…"
-        await message.answer_photo(post["cover_image_file_id"], caption=caption, parse_mode="HTML", reply_markup=keyboard)
+        text = ("<b>Preview</b>\n\n" if preview else "") + _format_author_article_compact(
+            post,
+            uid,
+            show_author=show_author,
+            body_limit=220,
+            title_limit=100,
+            market_limit=90,
+            analysis_field_limit=55,
+            max_analysis_fields=2,
+        )
+        await message.answer_photo(post["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=keyboard)
     else:
+        text = ("<b>Preview</b>\n\n" if preview else "") + _format_author_article_compact(
+            post,
+            uid,
+            show_author=show_author,
+            body_limit=1500,
+            title_limit=140,
+            market_limit=180,
+            analysis_field_limit=120,
+            max_analysis_fields=5,
+        )
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
@@ -5224,23 +5256,23 @@ def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
     lang = get_user_lang(uid)
 
     if post.get("body_text") or post.get("title") or post.get("thesis"):
-        title = _escape(sanitize_article_text(post.get("title") or post.get("question") or "Event Article"))
+        title = _escape_article_html(sanitize_article_text(post.get("title") or post.get("question") or "Event Article"))
         author_line = ""
         if show_author:
             author_username = post.get("author_username")
             author_first_name = post.get("author_first_name", "")
             if author_username:
-                author_line = f"👤 Author: @{_escape(author_username)}\n"
+                author_line = f"👤 Author: @{_escape_article_html(author_username)}\n"
             elif author_first_name:
-                author_line = f"👤 Author: {_escape(author_first_name)}\n"
-        market_url = _escape(post.get("market_url") or "")
-        event_question = _escape(sanitize_article_text(post.get("event_question") or post.get("question") or ""))
-        body_text = _escape(sanitize_article_text(post.get("body_text") or ""))
-        thesis = _escape(sanitize_article_text(post.get("thesis") or post.get("display_prediction") or ""))
-        reasoning = _escape(sanitize_article_text(post.get("reasoning") or ""))
-        probability = _escape(sanitize_article_text(post.get("probability_view") or post.get("market_probability") or ""))
-        risks = _escape(sanitize_article_text(post.get("risks") or ""))
-        conclusion = _escape(sanitize_article_text(post.get("conclusion") or ""))
+                author_line = f"👤 Author: {_escape_article_html(author_first_name)}\n"
+        market_url = _escape_article_html(post.get("market_url") or "")
+        event_question = _escape_article_html(sanitize_article_text(post.get("event_question") or post.get("question") or ""))
+        body_text = _escape_article_html(sanitize_article_text(post.get("body_text") or ""))
+        thesis = _escape_article_html(sanitize_article_text(post.get("thesis") or post.get("display_prediction") or ""))
+        reasoning = _escape_article_html(sanitize_article_text(post.get("reasoning") or ""))
+        probability = _escape_article_html(sanitize_article_text(post.get("probability_view") or post.get("market_probability") or ""))
+        risks = _escape_article_html(sanitize_article_text(post.get("risks") or ""))
+        conclusion = _escape_article_html(sanitize_article_text(post.get("conclusion") or ""))
         donations = post.get("total_donations_ton", 0) or 0
         donors = post.get("total_donors", 0) or 0
         shares = post.get("shares_count", 0) or 0
