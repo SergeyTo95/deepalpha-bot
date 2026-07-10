@@ -379,7 +379,7 @@ def _article_api_payload(post: dict) -> dict:
         "unique_views_count": post.get("unique_views_count") or 0,
         "created_at": post.get("created_at") or "",
         "attached_analysis": _safe_attached_analysis(post),
-        "donate_url": f"?tab=donate&post={post.get('id')}",
+        "donate_url": f"/?tab=donate&post={post.get('id')}",
     }
 
 

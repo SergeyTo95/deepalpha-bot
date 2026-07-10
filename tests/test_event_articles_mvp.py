@@ -389,7 +389,7 @@ def test_public_article_payload_hides_author_id_and_donate_url_uses_post_only():
     end = source.index('async def handle_articles_api', start)
     payload = source[start:end]
     assert '"author_id"' not in payload
-    assert '?tab=donate&post=' in payload
+    assert '/?tab=donate&post=' in payload
     assert '?tab=donate&author=' not in payload
 
 
@@ -412,4 +412,24 @@ def test_webapp_article_cards_do_not_reference_public_author_id():
     render_end = source.index('async function renderArticlesPage', render_start)
     card = source[render_start:render_end]
     assert 'article.author_id' not in card
-    assert '?tab=donate&post=' in card
+    assert '/?tab=donate&post=' in card
+    assert '/app?tab=donate' not in card
+
+
+def test_public_article_donate_url_uses_root_donation_webapp():
+    source = open("web.py", encoding="utf-8").read()
+    start = source.index('def _article_api_payload')
+    end = source.index('async def handle_articles_api', start)
+    payload = source[start:end]
+    assert '"donate_url": f"/?tab=donate&post={post.get(\'id\')}"' in payload
+    assert '"author_id"' not in payload
+    assert '/app?tab=donate' not in payload
+
+
+def test_webapp_article_card_uses_root_donation_webapp():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    start = source.index('function renderArticleCard')
+    end = source.index('async function renderArticlesPage', start)
+    card = source[start:end]
+    assert 'href="/?tab=donate&post=${encodeURIComponent(article.id)}"' in card
+    assert '/app?tab=donate' not in card
