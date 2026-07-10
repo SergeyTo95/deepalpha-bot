@@ -820,6 +820,13 @@ def _init_db_inner(conn, cursor):
         except Exception:
             pass
 
+
+    # PolyWar: Battle for Consensus additive tables.
+    try:
+        from services.polywar_service import init_polywar_schema
+        init_polywar_schema(conn)
+    except Exception as e:
+        print(f"init polywar schema error: {e}")
     conn.commit()
 
     cursor.execute("SELECT COUNT(*) FROM token_packages")
@@ -923,6 +930,18 @@ def _init_db_inner(conn, cursor):
             VALUES (%s, %s, %s)
             """, (key, value, datetime.utcnow().isoformat()))
     conn.commit()
+    polywar_defaults = [
+        ("polywar_enabled", "true"),
+        ("polywar_season_days", "30"),
+        ("polywar_energy_max", "10"),
+        ("polywar_energy_recharge_minutes", "60"),
+    ]
+    for key, value in polywar_defaults:
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO settings (key, value, updated_at) VALUES (%s, %s, %s)", (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+
     referral_defaults = [
         ("referral_rewards_enabled", "false"),
         ("referral_reward_percent", "10"),
