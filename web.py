@@ -29,6 +29,7 @@ from services.ton_wallet_service import (
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
 from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction
+from services.polywar_map_service import build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -774,6 +775,41 @@ async def handle_polywar_join_api(request):
         return _json_response({"ok": False, "error": code}, status=status)
 
 
+async def handle_polywar_chunks_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        chunks = []
+        if request.query.get("chunks"):
+            for item in request.query.get("chunks", "").split(";"):
+                cx, cy = item.split(",", 1)
+                chunks.append((int(cx), int(cy)))
+        else:
+            chunks.append((int(request.query.get("chunk_x", "0")), int(request.query.get("chunk_y", "0"))))
+        return _json_response(await asyncio.to_thread(get_polywar_chunks, int(current.get("user_id") or 0), chunks))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=400)
+
+
+async def handle_polywar_action_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        if (data.get("action_type") or "capture") != "capture":
+            raise ValueError("unsupported_action")
+        return _json_response(await asyncio.to_thread(capture_polywar_cell, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+    except ValueError as e:
+        code = str(e)
+        status = 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
+        return _json_response({"ok": False, "error": code}, status=status)
+
+
 async def handle_webapp_summary(request):
     token = request.cookies.get("deepalpha_session", "")
     current = get_user_by_session(token) if token else None
@@ -1454,6 +1490,9 @@ app.router.add_get("/api/polywar/factions", handle_polywar_factions_api)
 app.router.add_get("/api/polywar/player", handle_polywar_player_api)
 app.router.add_get("/api/polywar/events", handle_polywar_events_api)
 app.router.add_post("/api/polywar/join", handle_polywar_join_api)
+app.router.add_get("/api/polywar/map/chunks", handle_polywar_chunks_api)
+app.router.add_post("/api/polywar/action", handle_polywar_action_api)
+app.router.add_route("OPTIONS", "/api/polywar/action", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/join", handle_options)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)

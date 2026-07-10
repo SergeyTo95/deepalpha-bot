@@ -16,7 +16,7 @@ def test_polywar_page_route_and_redirect_are_registered():
     assert 'app.router.add_get("/polywar", handle_polywar_page)' in source
     assert 'web.HTTPFound("/polywar")' in source
     assert Path("webapp/polywar.html").read_text().count("telegram-web-app.js") == 1
-    assert "Global War Map — coming in Phase 2" in Path("webapp/polywar.js").read_text()
+    assert "polywarCanvas" in Path("webapp/polywar.js").read_text()
 
 
 def test_polywar_endpoints_are_registered():
@@ -63,3 +63,10 @@ def test_polywar_stats_are_season_scoped_not_global_faction_stats():
     create_factions = service[service.index("CREATE TABLE IF NOT EXISTS polywar_factions"):service.index("CREATE TABLE IF NOT EXISTS polywar_faction_season_stats")]
     assert "seasonal_influence_score" not in create_factions
     assert "active_members_count" not in create_factions
+
+def test_polywar_stale_chunk_responses_cache_before_sequence_check():
+    js = Path("webapp/polywar.js").read_text()
+    cache_pos = js.index('if (d.ok) d.chunks.forEach')
+    stale_pos = js.index('if (seq !== this.loadSeq)')
+    assert cache_pos < stale_pos
+    assert 'this.ensureChunks(); return;' in js[stale_pos:stale_pos + 120]
