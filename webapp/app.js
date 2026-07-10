@@ -92,7 +92,9 @@ const I18N = {
     tonHistoryEmpty: "No Gram transactions yet.",
     refreshHistory: "Refresh transactions",
     openInTonviewer: "Open in Tonviewer",
-    buyWithTon: "Buy tokens with Gram wallet"
+    buyWithTon: "Buy tokens with Gram wallet",
+    articles: "📰 Articles",
+    articlesDesc: "Read analysis from authors"
   },
   ru: {
     title: "Личный кабинет",
@@ -163,7 +165,9 @@ const I18N = {
     tonHistoryEmpty: "Gram транзакций пока нет.",
     refreshHistory: "Обновить транзакции",
     openInTonviewer: "Открыть в Tonviewer",
-    buyWithTon: "Купить токены с Gram кошелька"
+    buyWithTon: "Купить токены с Gram кошелька",
+    articles: "📰 Статьи",
+    articlesDesc: "Читать аналитику авторов"
   }
 };
 
@@ -418,6 +422,8 @@ function renderAuthed(summary, lang) {
     <section class="card">
       <h2>${t.actions}</h2>
       <div class="inline-links">
+        <a href="?tab=articles"><button class="btn btn-primary">${t.articles}</button></a>
+        <span class="small">${t.articlesDesc}</span>
         <a href="/pay"><button class="btn btn-secondary">${t.openCashier}</button></a>
         <button id="logoutBtn" class="btn btn-secondary">${t.logout}</button>
       </div>
@@ -911,13 +917,21 @@ async function callArticles(params = {}) {
   const r = await fetch(`/api/articles?${q.toString()}`, { credentials: "include" });
   return r.json();
 }
-async function callArticleDetail(id, userId) {
+async function callArticleDetail(id) {
   const r = await fetch(`/api/articles/${encodeURIComponent(id)}`, { credentials: "include" });
   const data = await r.json();
-  if (userId) {
-    fetch(`/api/articles/${encodeURIComponent(id)}/view`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId }) });
-  }
+  fetch(`/api/articles/${encodeURIComponent(id)}/view`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
   return data;
+}
+async function trackArticleShare(id) {
+  return fetch(`/api/articles/${encodeURIComponent(id)}/share`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => null);
+}
+function isSafeHttpUrl(value) {
+  const url = String(value || "").trim();
+  return url.startsWith("https://") || url.startsWith("http://");
+}
+function formatArticleBody(value) {
+  return escapeHtml(value || "").replace(/\n/g, "<br>");
 }
 function articleShareLinks(article) {
   const link = `${location.origin}/app?tab=articles&article=${encodeURIComponent(article.id)}`;
@@ -933,7 +947,7 @@ function articleShareLinks(article) {
 }
 function renderArticleCard(article) {
   return `<article class="card article-card">
-    ${article.cover_image_url ? `<img src="${escapeHtml(article.cover_image_url)}" alt="" class="article-cover">` : ""}
+    ${article.cover_image_url ? `<img src="${escapeHtml(article.cover_image_url)}" alt="" class="article-cover" onerror="this.style.display='none'">` : ""}
     <h3>${escapeHtml(article.title)}</h3>
     <p>${escapeHtml(article.excerpt)}</p>
     <p class="muted">${escapeHtml(article.author_name)} · ${escapeHtml(article.category)} · 💝 ${article.total_donations_ton} · 📤 ${article.shares_count}</p>
@@ -956,18 +970,53 @@ async function renderArticlesPage() {
     document.getElementById("articlesList").innerHTML = (data.articles || []).map(renderArticleCard).join("") || "<p>No articles yet.</p>";
   }
   async function openArticleDetail(id) {
-    const data = await callArticleDetail(id, window.Telegram?.WebApp?.initDataUnsafe?.user?.id);
+    const list = document.getElementById("articlesList");
+    list.innerHTML = "<p>Loading article...</p>";
+    let data;
+    try {
+      data = await callArticleDetail(id);
+    } catch (e) {
+      list.innerHTML = "<p>Network error. Please try again.</p>";
+      return;
+    }
     const a = data.article;
     if (!a) {
-      document.getElementById("articlesList").innerHTML = "<p>Article not found.</p>";
+      list.innerHTML = "<p>Article not found.</p>";
       return;
     }
     const links = articleShareLinks(a);
-    document.getElementById("articlesList").innerHTML = `<section class="card"><h2>${escapeHtml(a.title)}</h2><p>${escapeHtml(a.body_text)}</p><a href="${a.donate_url}">Donate</a><br><a href="${links.telegram}">Telegram Share</a> · <a href="${links.twitter}">X / Twitter</a> · <a href="${links.reddit}">Reddit</a> · <a href="${links.whatsapp}">WhatsApp</a><p>${links.medium}</p><p>${links.instagram}</p></section>`;
+    const safeMarket = isSafeHttpUrl(a.market_url) ? `<p><a href="${escapeHtml(a.market_url)}" target="_blank" rel="noopener">${escapeHtml(a.market_url)}</a></p>` : "";
+    const analysis = a.attached_analysis || {};
+    const analysisHtml = (analysis.question || analysis.display_prediction || analysis.summary) ? `<div class="card"><h3>Attached DeepAlpha analysis</h3><p>${escapeHtml(analysis.question || "")}</p><p>${escapeHtml(analysis.display_prediction || "")}</p><p>${escapeHtml(analysis.confidence || "")} ${escapeHtml(analysis.market_probability || "")}</p><p>${escapeHtml(analysis.summary || "")}</p></div>` : "";
+    list.innerHTML = `<section class="card">
+      ${a.cover_image_url ? `<img src="${escapeHtml(a.cover_image_url)}" alt="" class="article-cover" onerror="this.style.display='none'">` : ""}
+      <h2>${escapeHtml(a.title)}</h2>
+      <p class="muted">${escapeHtml(a.author_name)} · ${escapeHtml(a.category || a.article_type || "")} · ${escapeHtml(a.created_at || "")}</p>
+      ${safeMarket}
+      <p>${formatArticleBody(a.body_text)}</p>
+      ${analysisHtml}
+      <p class="muted">💝 ${escapeHtml(a.total_donations_ton)} from ${escapeHtml(a.total_donors)} donors · 👁 ${escapeHtml(a.views_count)} · 📤 ${escapeHtml(a.shares_count)}</p>
+      <a href="${escapeHtml(a.donate_url)}"><button class="btn btn-primary">Donate</button></a>
+      <div class="inline-links">
+        <a data-share-kind="telegram" data-share-id="${escapeHtml(a.id)}" href="${escapeHtml(links.telegram)}">Telegram Share</a>
+        <a data-share-kind="twitter" data-share-id="${escapeHtml(a.id)}" href="${escapeHtml(links.twitter)}">X / Twitter</a>
+        <a data-share-kind="reddit" data-share-id="${escapeHtml(a.id)}" href="${escapeHtml(links.reddit)}">Reddit</a>
+        <a data-share-kind="whatsapp" data-share-id="${escapeHtml(a.id)}" href="${escapeHtml(links.whatsapp)}">WhatsApp</a>
+      </div>
+      <p data-share-kind="medium" data-share-id="${escapeHtml(a.id)}">${escapeHtml(links.medium)}</p>
+      <p data-share-kind="instagram" data-share-id="${escapeHtml(a.id)}">${escapeHtml(links.instagram)}</p>
+      <button id="backArticlesBtn" class="btn btn-secondary">Back to Articles</button>
+    </section>`;
+    document.getElementById("backArticlesBtn").onclick = () => load("all");
   }
   root.onclick = async (ev) => {
     const filter = ev.target?.dataset?.filter;
     if (filter) load(filter);
+    const shareId = ev.target?.dataset?.shareId;
+    if (shareId && !ev.target.dataset.shareTracked) {
+      ev.target.dataset.shareTracked = "1";
+      trackArticleShare(shareId);
+    }
     const id = ev.target?.dataset?.articleId;
     if (id) openArticleDetail(id);
   };
@@ -981,6 +1030,11 @@ async function renderArticlesPage() {
 
 async function init() {
   await telegramAuthIfAvailable();
+  const params = new URLSearchParams(location.search);
+  const tab = params.get("tab");
+  if (tab === "articles") {
+    return renderArticlesPage();
+  }
 
   const me = await callMe();
   if (!(me && me.ok && me.auth && me.auth.authenticated)) {
@@ -993,10 +1047,6 @@ async function init() {
   }
 
   const lang = normalizeLang(summaryResp.data?.language || summaryResp.data?.user?.language || "en");
-  const tab = new URLSearchParams(location.search).get("tab");
-  if (tab === "articles") {
-    return renderArticlesPage();
-  }
   renderAuthed(summaryResp.data, lang);
 }
 

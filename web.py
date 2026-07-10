@@ -27,7 +27,7 @@ from services.ton_wallet_service import (
     calculate_ton_withdraw_platform_fee,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
-from services.airdrop_points_service import award_article_unique_view_points
+from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -326,9 +326,41 @@ async def handle_post_details(request):
 
 
 
+
+def _get_authenticated_web_user_id(request) -> int | None:
+    token = request.cookies.get("deepalpha_session", "")
+    current = get_user_by_session(token) if token else None
+    try:
+        return int(current.get("user_id")) if current and current.get("user_id") else None
+    except Exception:
+        return None
+
+
+def _safe_public_url(value: str) -> str:
+    value = (value or "").strip()
+    if value.startswith("http://") or value.startswith("https://") or value.startswith("/api/articles/"):
+        return value
+    return ""
+
+
+def _safe_attached_analysis(post: dict) -> dict:
+    raw = post.get("attached_analysis") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        "question": str(raw.get("question") or raw.get("event_question") or "")[:240],
+        "display_prediction": str(raw.get("display_prediction") or raw.get("thesis") or raw.get("alpha_label") or "")[:240],
+        "confidence": str(raw.get("confidence") or "")[:80],
+        "market_probability": str(raw.get("market_probability") or raw.get("probability") or "")[:80],
+        "summary": str(raw.get("summary") or raw.get("conclusion") or raw.get("reasoning") or "")[:500],
+    }
+
 def _article_api_payload(post: dict) -> dict:
     body = post.get("body_text") or post.get("thesis") or post.get("reasoning") or ""
     title = post.get("title") or post.get("question") or "Article"
+    cover = _safe_public_url(post.get("cover_image_url") or "")
+    if not cover and post.get("cover_image_file_id") and post.get("id"):
+        cover = f"/api/articles/{int(post.get('id'))}/cover"
     return {
         "id": post.get("id"),
         "title": title,
@@ -340,13 +372,14 @@ def _article_api_payload(post: dict) -> dict:
         "category": post.get("category") or post.get("article_type") or "manual",
         "article_type": post.get("article_type") or "manual",
         "tags": [t.strip() for t in (post.get("article_tags") or "").split(",") if t.strip()],
-        "cover_image_url": post.get("cover_image_url") or "",
+        "cover_image_url": cover,
         "total_donations_ton": post.get("total_donations_ton") or 0,
         "total_donors": post.get("total_donors") or 0,
         "shares_count": post.get("shares_count") or 0,
         "views_count": post.get("views_count") or 0,
         "unique_views_count": post.get("unique_views_count") or 0,
         "created_at": post.get("created_at") or "",
+        "attached_analysis": _safe_attached_analysis(post),
         "donate_url": f"?tab=donate&author={post.get('author_id')}&post={post.get('id')}",
     }
 
@@ -375,14 +408,63 @@ async def handle_article_view_api(request):
     post = get_public_article(post_id)
     if not post:
         return _json_response({"error": "Not found"}, status=404)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    viewer_id = data.get("user_id")
+    viewer_id = _get_authenticated_web_user_id(request)
+    awarded = False
     if viewer_id:
-        award_article_unique_view_points(post["author_id"], post_id, int(viewer_id), metadata={"source":"webapp_articles"})
-    return _json_response({"ok": True})
+        try:
+            result = award_article_unique_view_points(post["author_id"], post_id, viewer_id, metadata={"source":"webapp_articles"})
+            awarded = bool(result.get("awarded")) if isinstance(result, dict) else False
+        except Exception as exc:
+            print(f"article_view_points_error: {type(exc).__name__}")
+    return _json_response({"ok": True, "authenticated_view": bool(viewer_id), "points_awarded": awarded})
+
+
+async def handle_article_share_api(request):
+    post_id = _safe_int(request.match_info.get("post_id"), 0, 1)
+    post = get_public_article(post_id)
+    if not post:
+        return _json_response({"error": "Not found"}, status=404)
+    increment_post_share(post_id)
+    user_id = _get_authenticated_web_user_id(request)
+    awarded = False
+    if user_id:
+        try:
+            result = award_article_shared_points(user_id, post_id, metadata={"source": "webapp_share_hub"})
+            awarded = bool(result.get("awarded")) if isinstance(result, dict) else False
+        except Exception as exc:
+            print(f"article_share_points_error: {type(exc).__name__}")
+    return _json_response({"ok": True, "authenticated_share": bool(user_id), "points_awarded": awarded})
+
+
+async def handle_article_cover_api(request):
+    post_id = _safe_int(request.match_info.get("post_id"), 0, 1)
+    post = get_public_article(post_id)
+    if not post or not post.get("cover_image_file_id"):
+        return web.Response(text="Not found", status=404)
+    bot_token = os.getenv("BOT_TOKEN", "")
+    if not bot_token:
+        return web.Response(text="Not found", status=404)
+    try:
+        file_id = str(post.get("cover_image_file_id"))
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://api.telegram.org/bot{bot_token}/getFile", params={"file_id": file_id}, timeout=10) as meta_resp:
+                if meta_resp.status != 200:
+                    return web.Response(text="Not found", status=404)
+                meta = await meta_resp.json()
+            file_path = ((meta.get("result") or {}).get("file_path") or "").strip()
+            if not file_path:
+                return web.Response(text="Not found", status=404)
+            async with session.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}", timeout=15) as file_resp:
+                if file_resp.status != 200:
+                    return web.Response(text="Not found", status=404)
+                content = await file_resp.read()
+                if len(content) > 8 * 1024 * 1024:
+                    return web.Response(text="Too large", status=413)
+                content_type = file_resp.headers.get("Content-Type", "image/jpeg")
+        return web.Response(body=content, content_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as exc:
+        print(f"article_cover_error: {type(exc).__name__}")
+        return web.Response(text="Not found", status=404)
 
 async def handle_create_donation(request):
     try:
@@ -1277,8 +1359,11 @@ app.router.add_get("/api/author/{author_id}", handle_author_profile)
 app.router.add_get("/api/post/{post_id}", handle_post_details)
 app.router.add_get("/api/articles", handle_articles_api)
 app.router.add_get("/api/articles/{post_id}", handle_article_api)
+app.router.add_get("/api/articles/{post_id}/cover", handle_article_cover_api)
 app.router.add_post("/api/articles/{post_id}/view", handle_article_view_api)
+app.router.add_post("/api/articles/{post_id}/share", handle_article_share_api)
 app.router.add_route("OPTIONS", "/api/articles/{post_id}/view", handle_options)
+app.router.add_route("OPTIONS", "/api/articles/{post_id}/share", handle_options)
 app.router.add_post("/api/donation/create", handle_create_donation)
 app.router.add_route("OPTIONS", "/api/donation/create", handle_options)
 app.router.add_get("/api/settings/public", handle_public_settings)

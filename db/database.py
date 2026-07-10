@@ -3300,11 +3300,15 @@ def get_author_posts(author_id: int, limit: int = 20) -> List[Dict[str, Any]]:
     try:
         cursor.execute("""
         SELECT id, author_id, market_slug, market_url, question, category,
-               display_prediction, confidence, market_probability,
-               alpha_label, author_comment,
-               total_donations_ton, total_donors, created_at
+               display_prediction, confidence, market_probability, alpha_label, author_comment,
+               title, body_text, event_question, article_type, thesis, reasoning, probability_view,
+               risks, conclusion, cover_image_file_id, cover_image_url, attached_analysis_json,
+               article_tags, article_language, published_to_profile, source_type, status, shares_count,
+               views_count, unique_views_count, total_donations_ton, total_donors, created_at
         FROM author_posts
         WHERE author_id = %s AND is_deleted = 0
+          AND COALESCE(status, 'published') = 'published'
+          AND COALESCE(published_to_profile, 1) = 1
         ORDER BY created_at DESC LIMIT %s
         """, (author_id, limit))
         rows = cursor.fetchall()
@@ -3417,7 +3421,13 @@ def create_manual_article(author_id: int, article_payload: Dict[str, Any]) -> Op
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        from services.event_article_service import sanitize_article_text
         now = datetime.utcnow().isoformat()
+        title = sanitize_article_text(article_payload.get("title", ""))[:160]
+        body_text = sanitize_article_text(article_payload.get("body_text", ""))[:12000]
+        if not title or not body_text:
+            conn.rollback()
+            return None
         attached = article_payload.get("attached_analysis") or article_payload.get("attached_analysis_json")
         if isinstance(attached, (dict, list)):
             attached_json = json.dumps(attached, ensure_ascii=False)
@@ -3436,14 +3446,14 @@ def create_manual_article(author_id: int, article_payload: Dict[str, Any]) -> Op
         RETURNING id
         """, (
             author_id, article_payload.get("market_slug", ""), article_payload.get("market_url", ""),
-            article_payload.get("title", ""), article_payload.get("category", "manual"),
+            title, article_payload.get("category", "manual"),
             article_payload.get("thesis", ""), "", "", "", "", full,
-            article_payload.get("title", ""), article_payload.get("event_question", ""),
+            title, article_payload.get("event_question", ""),
             article_payload.get("article_type", "manual"), article_payload.get("thesis", ""),
             article_payload.get("reasoning", ""), article_payload.get("probability_view", ""),
             article_payload.get("risks", ""), article_payload.get("conclusion", ""),
             article_payload.get("source_type", "manual_editor"), article_payload.get("source_ref_id"),
-            article_payload.get("status", "published"), now, now, article_payload.get("body_text", ""),
+            article_payload.get("status", "published"), now, now, body_text,
             article_payload.get("cover_image_file_id"), article_payload.get("cover_image_url"), attached_json,
             article_payload.get("article_tags", ""), article_payload.get("article_language", "en"),
             int(article_payload.get("published_to_profile", 1)),
@@ -3457,6 +3467,7 @@ def create_manual_article(author_id: int, article_payload: Dict[str, Any]) -> Op
         conn.commit()
         return post_id
     except Exception as e:
+        conn.rollback()
         print(f"create_manual_article error: {e}")
         return None
     finally:
@@ -3466,6 +3477,8 @@ def create_manual_article(author_id: int, article_payload: Dict[str, Any]) -> Op
 def update_article_fields(post_id: int, author_id: int, fields: Dict[str, Any]) -> bool:
     allowed = {"title", "body_text", "market_url", "cover_image_file_id", "cover_image_url", "attached_analysis_json", "article_tags", "article_language", "status"}
     updates = {k: v for k, v in fields.items() if k in allowed}
+    if "attached_analysis_json" in updates and isinstance(updates["attached_analysis_json"], (dict, list)):
+        updates["attached_analysis_json"] = json.dumps(updates["attached_analysis_json"], ensure_ascii=False)
     if not updates:
         return False
     conn = get_connection(); cursor = conn.cursor()
@@ -3476,6 +3489,7 @@ def update_article_fields(post_id: int, author_id: int, fields: Dict[str, Any]) 
         ok = cursor.rowcount > 0
         conn.commit(); return ok
     except Exception as e:
+        conn.rollback()
         print(f"update_article_fields error: {e}"); return False
     finally:
         conn.close()
@@ -3491,6 +3505,8 @@ def _article_row_to_dict(row):
 
 
 def list_public_articles(limit: int = 20, offset: int = 0, category=None, tag=None, author_id=None, search=None, sort: str = "new") -> List[Dict[str, Any]]:
+    limit = max(1, min(int(limit or 20), 50))
+    offset = max(0, int(offset or 0))
     conn = get_connection(); cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         where = ["p.is_deleted = 0", "COALESCE(p.status, 'published') = 'published'", "(COALESCE(p.title,'') <> '' OR COALESCE(p.body_text,'') <> '' OR COALESCE(p.thesis,'') <> '')"]
@@ -3699,11 +3715,13 @@ def get_subscription_feed(subscriber_id: int, limit: int = 20) -> List[Dict[str,
                p.display_prediction, p.confidence, p.market_probability,
                p.alpha_label, p.author_comment,
                p.total_donations_ton, p.total_donors, p.created_at,
-               u.username, u.first_name
+               u.username, u.first_name, p.title, p.body_text, p.article_type, p.cover_image_file_id, p.cover_image_url
         FROM author_posts p
         JOIN author_subscriptions s ON s.author_id = p.author_id
         JOIN users u ON u.user_id = p.author_id
         WHERE s.subscriber_id = %s AND p.is_deleted = 0
+          AND COALESCE(p.status, 'published') = 'published'
+          AND COALESCE(p.published_to_profile, 1) = 1
         ORDER BY p.created_at DESC LIMIT %s
         """, (subscriber_id, limit))
         rows = cursor.fetchall()
@@ -3717,6 +3735,8 @@ def get_subscription_feed(subscriber_id: int, limit: int = 20) -> List[Dict[str,
             "created_at": r[11],
             "author_username": r[12],
             "author_first_name": r[13],
+            "title": r[14], "body_text": r[15], "article_type": r[16],
+            "cover_image_file_id": r[17], "cover_image_url": r[18],
         } for r in rows]
     except Exception as e:
         print(f"get_subscription_feed error: {e}")
@@ -4908,6 +4928,8 @@ def update_live_analyst_session(session_id: int, **fields) -> bool:
         "last_image_summary", "memory_summary", "closed_at",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
+    if "attached_analysis_json" in updates and isinstance(updates["attached_analysis_json"], (dict, list)):
+        updates["attached_analysis_json"] = json.dumps(updates["attached_analysis_json"], ensure_ascii=False)
     if not updates:
         return False
     conn = get_connection()

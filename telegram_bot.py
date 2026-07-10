@@ -425,7 +425,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🎁 Чеки"))
         kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Касса"))
-        kb.add(KeyboardButton("👤 Профиль"))
+        kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("📰 Статьи"))
         kb.add(KeyboardButton("⚙️ Ещё"))
     else:
         kb.add(KeyboardButton("🔍 Analysis"))
@@ -433,7 +433,7 @@ def get_main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         kb.add(KeyboardButton("🎁 Checks"))
         kb.add(KeyboardButton("🎁 Airdrop"))
         kb.add(KeyboardButton("💳 Cashier"))
-        kb.add(KeyboardButton("👤 Profile"))
+        kb.add(KeyboardButton("👤 Profile"), KeyboardButton("📰 Articles"))
         kb.add(KeyboardButton("⚙️ More"))
     return kb
 
@@ -1658,6 +1658,8 @@ def get_author_post_keyboard(viewer_id: int, post: dict) -> InlineKeyboardMarkup
 
     share_label = "📤 Share article & earn Airdrop Points" if (post.get("title") or post.get("thesis")) else ("📤 Поделиться" if lang == "ru" else "📤 Share")
     kb.add(InlineKeyboardButton(share_label, callback_data=f"post_share_{post_id}"))
+    if post_id and (post.get("body_text") or post.get("title")):
+        kb.add(InlineKeyboardButton("🌐 Read full article", web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=articles&article={post_id}")))
 
     if market_url:
         poly_label = "🔗 Polymarket" if lang == "ru" else "🔗 Polymarket"
@@ -5144,6 +5146,79 @@ def _format_watchlist_item(user_id: int, watchlist_id: int) -> str:
         )
 
 
+
+def _truncate_plain_text(value: str, limit: int) -> str:
+    value = sanitize_article_text(value or "")
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _attached_analysis_summary(post: dict, limit: int = 700) -> str:
+    raw = post.get("attached_analysis")
+    if not raw and post.get("attached_analysis_json"):
+        try:
+            raw = json.loads(post.get("attached_analysis_json") or "{}")
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict) or not raw:
+        return ""
+    lines = ["📎 <b>Attached DeepAlpha analysis</b>"]
+    for label, keys in (
+        ("Question", ("question", "event_question")),
+        ("Forecast", ("display_prediction", "thesis", "alpha_label")),
+        ("Confidence", ("confidence",)),
+        ("Market", ("market_probability", "probability")),
+        ("Summary", ("summary", "conclusion")),
+    ):
+        value = next((raw.get(k) for k in keys if raw.get(k)), "")
+        if value:
+            lines.append(f"{label}: {_escape(_truncate_plain_text(str(value), 160))}")
+    return _truncate_plain_text("\n".join(lines), limit)
+
+
+def _format_author_article_compact(post: dict, uid: int, show_author: bool = True, body_limit: int = 1800) -> str:
+    title = _escape(_truncate_plain_text(post.get("title") or post.get("question") or "Article", 160))
+    lines = [f"📝 <b>{title}</b>"]
+    if show_author:
+        author_username = post.get("author_username")
+        author_first_name = post.get("author_first_name", "")
+        if author_username:
+            lines.append(f"👤 Author: @{_escape(author_username)}")
+        elif author_first_name:
+            lines.append(f"👤 Author: {_escape(author_first_name)}")
+    market_url = post.get("market_url") or ""
+    if market_url:
+        lines.append(f"🔗 Market: {_escape(_truncate_plain_text(market_url, 220))}")
+    body = _escape(_truncate_plain_text(post.get("body_text") or post.get("thesis") or post.get("reasoning") or "", body_limit))
+    if body:
+        lines.append(f"\n{body}")
+    attached = _attached_analysis_summary(post)
+    if attached:
+        lines.append(f"\n{attached}")
+    donations = post.get("total_donations_ton", 0) or 0
+    donors = post.get("total_donors", 0) or 0
+    shares = post.get("shares_count", 0) or 0
+    if donations > 0:
+        lines.append(f"\n💝 Donations: {donations:.2f} Gram from {donors} supporters")
+    if shares:
+        lines.append(f"📤 Shares: {shares}")
+    return "\n".join([line for line in lines if line])
+
+
+async def send_author_article(message, post: dict, uid: int, keyboard=None, preview: bool = False, show_author: bool = True):
+    caption_limit = 850
+    text_limit = 3200
+    body_limit = 550 if post.get("cover_image_file_id") else 1700
+    text = ("<b>Preview</b>\n\n" if preview else "") + _format_author_article_compact(post, uid, show_author=show_author, body_limit=body_limit)
+    if len(text) > text_limit:
+        text = text[: text_limit - 1].rstrip() + "…"
+    if post.get("cover_image_file_id"):
+        caption = text if len(text) <= caption_limit else text[: caption_limit - 1].rstrip() + "…"
+        await message.answer_photo(post["cover_image_file_id"], caption=caption, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
 def _format_author_post(post: dict, uid: int, show_author: bool = True) -> str:
     """Форматирует один пост автора."""
     lang = get_user_lang(uid)
@@ -5599,11 +5674,7 @@ async def start_handler(message: types.Message):
                         award_article_unique_view_points(post["author_id"], post_id, message.from_user.id, metadata={"source": "telegram_start"})
                     except Exception as exc:
                         logger.warning("article_unique_view_award_failed user_id=%s article_id=%s error=%s", message.from_user.id, post_id, type(exc).__name__)
-                    await message.answer(
-                        _format_author_post(post, message.from_user.id, show_author=True),
-                        parse_mode="HTML",
-                        reply_markup=get_author_post_keyboard(message.from_user.id, post),
-                    )
+                    await send_author_article(message, post, message.from_user.id, keyboard=get_author_post_keyboard(message.from_user.id, post), preview=False, show_author=True)
                 else:
                     await message.answer("❌ Article not found")
                 return
@@ -7102,18 +7173,24 @@ def _article_attach_keyboard(has_analysis: bool) -> InlineKeyboardMarkup:
 async def _show_manual_article_preview(message: types.Message, state: FSMContext):
     data = await state.get_data()
     post = {"title": data.get("title"), "body_text": data.get("body_text"), "market_url": data.get("market_url"), "cover_image_file_id": data.get("cover_image_file_id"), "attached_analysis_json": json.dumps(data.get("attached_analysis"), ensure_ascii=False) if data.get("attached_analysis") else None, "author_id": message.chat.id, "created_at": datetime.utcnow().isoformat()}
-    text = "<b>Preview</b>\n\n" + _format_author_post(post, message.chat.id, show_author=False)
     kb = _manual_article_keyboard(bool(data.get("attached_analysis")))
-    if data.get("cover_image_file_id"):
-        if len(text) <= 1000:
-            await message.answer_photo(data["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await message.answer_photo(data["cover_image_file_id"])
-            await message.answer(text, parse_mode="HTML", reply_markup=kb)
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await send_author_article(message, post, message.chat.id, keyboard=kb, preview=True, show_author=False)
     await AuthorStates.waiting_article_preview.set()
 
+
+
+
+@dp.message_handler(commands=["articles"])
+async def articles_command_handler(message: types.Message):
+    lang = get_user_lang(message.from_user.id)
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📰 Статьи" if lang == "ru" else "📰 Articles", web_app=types.WebAppInfo(url=f"{WEBAPP_URL}?tab=articles")))
+    await message.answer("📰 Читать аналитику авторов" if lang == "ru" else "📰 Read analysis from authors", reply_markup=kb)
+
+
+@dp.message_handler(lambda m: m.text in ["📰 Articles", "📰 Статьи"])
+async def articles_button_handler(message: types.Message):
+    await articles_command_handler(message)
 
 @dp.message_handler(commands=["write_article", "new_article"])
 async def write_article_command_handler(message: types.Message, state: FSMContext):
@@ -7373,15 +7450,11 @@ async def post_view_handler(message: types.Message):
         award_article_unique_view_points(post["author_id"], post_id, uid, metadata={"source": "telegram_command"})
     except Exception as exc:
         logger.warning("article_unique_view_award_failed user_id=%s article_id=%s error=%s", uid, post_id, type(exc).__name__)
-    text = _format_author_post(post, uid, show_author=True)
     kb = get_author_post_keyboard(uid, post)
-    if post.get("cover_image_file_id"):
-        if len(text) <= 1000:
-            await message.answer_photo(post["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await message.answer_photo(post["cover_image_file_id"])
-            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if post.get("body_text") or post.get("title"):
+        await send_author_article(message, post, uid, keyboard=kb, preview=False, show_author=True)
     else:
+        text = _format_author_post(post, uid, show_author=True)
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -7965,10 +8038,12 @@ async def author_posts_callback(callback: types.CallbackQuery):
             text = f"📝 Posts by @{name} ({len(posts)})\n\n"
 
         for i, p in enumerate(posts, 1):
-            q = p.get("question", "")[:55]
-            pred = p.get("display_prediction", "")[:30]
+            is_article = bool(p.get("title") or p.get("body_text"))
+            kind = "📰 Article" if is_article else "📊 Forecast"
+            q = (p.get("title") or p.get("question") or "Article")[:55]
+            pred = (p.get("body_text") or p.get("display_prediction") or p.get("thesis") or "")[:30]
             donations = p.get("total_donations_ton", 0) or 0
-            text += f"{i}. 📌 {q}\n   🎯 {pred}\n"
+            text += f"{i}. {kind} {q}\n   🎯 {pred}\n"
             if donations > 0:
                 text += f"   💝 {donations:.2f} Gram\n"
             text += f"   /post_{p['id']}\n\n"

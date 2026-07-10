@@ -67,8 +67,8 @@ def test_article_deep_link_uses_html_parse_mode():
     start = source.index('elif args.startswith("article_")')
     end = source.index('elif args.startswith("profile_")', start)
     block = source[start:end]
-    assert '_format_author_post(post, message.from_user.id, show_author=True)' in block
-    assert 'parse_mode="HTML"' in block
+    assert 'send_author_article(message, post, message.from_user.id' in block
+    assert 'get_author_post_keyboard(message.from_user.id, post)' in block
 
 
 def test_post_and_article_view_uses_html_parse_mode():
@@ -109,7 +109,8 @@ def test_webapp_articles_routing_happens_inside_init_before_render_authed():
     init_start = source.index('async function init()')
     init_end = source.index('init();', init_start)
     init_block = source[init_start:init_end]
-    assert 'const tab = new URLSearchParams(location.search).get("tab");' in init_block
+    assert 'const params = new URLSearchParams(location.search);' in init_block
+    assert 'const tab = params.get("tab");' in init_block
     assert 'return renderArticlesPage();' in init_block
     assert init_block.index('return renderArticlesPage();') < init_block.index('renderAuthed(summaryResp.data, lang);')
     assert source.index('async function renderArticlesPage') < source.index('async function init()')
@@ -134,6 +135,86 @@ def test_webapp_article_query_param_opens_detail():
     render_start = source.index('async function renderArticlesPage')
     render_end = source.index('async function init()', render_start)
     render_block = source[render_start:render_end]
-    assert 'callArticleDetail(id,' in render_block
+    assert 'callArticleDetail(id)' in render_block
     assert 'if (initialArticleId)' in render_block
     assert 'openArticleDetail(initialArticleId)' in render_block
+
+
+def test_articles_public_init_before_dashboard_auth():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    init_start = source.index('async function init()')
+    init_end = source.index('init();', init_start)
+    init_block = source[init_start:init_end]
+    assert init_block.index('if (tab === "articles")') < init_block.index('const me = await callMe();')
+    assert 'return renderGuest(guestLangFallback());' in init_block
+
+
+def test_webapp_article_view_and_share_do_not_send_user_id():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    assert 'JSON.stringify({ user_id' not in source
+    assert '/view`' in source and 'JSON.stringify({})' in source
+    assert '/share`' in source
+
+
+def test_web_article_view_share_use_server_session_identity():
+    source = open("web.py", encoding="utf-8").read()
+    assert 'def _get_authenticated_web_user_id(request)' in source
+    assert 'request.cookies.get("deepalpha_session"' in source
+    assert 'get_user_by_session(token)' in source
+    view_start = source.index('async def handle_article_view_api')
+    share_start = source.index('async def handle_article_share_api')
+    view_block = source[view_start:share_start]
+    assert 'await request.json' not in view_block
+    assert '_get_authenticated_web_user_id(request)' in view_block
+    assert 'award_article_unique_view_points' in view_block
+    share_block = source[share_start:source.index('async def handle_article_cover_api', share_start)]
+    assert '_get_authenticated_web_user_id(request)' in share_block
+    assert 'award_article_shared_points' in share_block
+    assert 'increment_post_share(post_id)' in share_block
+
+
+def test_article_cover_endpoint_and_payload_are_token_safe():
+    source = open("web.py", encoding="utf-8").read()
+    assert 'handle_article_cover_api' in source
+    assert 'cover = f"/api/articles/{int(post.get(\'id\'))}/cover"' in source
+    payload_start = source.index('def _article_api_payload')
+    payload_end = source.index('async def handle_articles_api', payload_start)
+    payload = source[payload_start:payload_end]
+    assert 'BOT_TOKEN' not in payload
+    assert 'cover_image_file_id' in payload
+
+
+def test_telegram_article_compact_rendering_and_full_link():
+    source = open("telegram_bot.py", encoding="utf-8").read()
+    assert 'async def send_author_article' in source
+    assert 'caption_limit = 850' in source
+    assert 'text_limit = 3200' in source
+    assert '?tab=articles&article={post_id}' in source
+    assert '_truncate_plain_text' in source
+
+
+def test_author_posts_profile_query_includes_article_fields_and_filters():
+    source = open("db/database.py", encoding="utf-8").read()
+    start = source.index('def get_author_posts')
+    end = source.index('def delete_author_post', start)
+    block = source[start:end]
+    assert 'body_text' in block
+    assert 'cover_image_file_id' in block
+    assert "COALESCE(status, 'published') = 'published'" in block
+    assert 'COALESCE(published_to_profile, 1) = 1' in block
+
+
+def test_manual_article_db_safety_source_checks():
+    source = open("db/database.py", encoding="utf-8").read()
+    start = source.index('def create_manual_article')
+    end = source.index('def update_article_fields', start)
+    block = source[start:end]
+    assert 'conn.rollback()' in block
+    assert 'if not title or not body_text' in block
+    assert 'sanitize_article_text' in block
+    update_start = source.index('def update_article_fields')
+    update_end = source.index('def _article_row_to_dict', update_start)
+    update_block = source[update_start:update_end]
+    assert 'allowed = {' in update_block
+    assert 'json.dumps(updates["attached_analysis_json"]' in update_block
+    assert 'conn.rollback()' in update_block
