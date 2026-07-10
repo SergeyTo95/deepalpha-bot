@@ -28,6 +28,7 @@ from services.ton_wallet_service import (
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
+from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -81,8 +82,19 @@ async def handle_manifest(request):
 
 
 async def handle_app(request):
+    if (request.query.get("tab") or "").strip().lower() == "polywar":
+        raise web.HTTPFound("/polywar")
     try:
         with open("webapp/app.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html")
+    except FileNotFoundError:
+        return web.Response(text="Not found", status=404)
+
+
+async def handle_polywar_page(request):
+    try:
+        with open("webapp/polywar.html", "r", encoding="utf-8") as f:
             content = f.read()
         return web.Response(text=content, content_type="text/html")
     except FileNotFoundError:
@@ -703,6 +715,63 @@ async def handle_auth_me(request):
     })
 
 
+
+
+def _current_web_user(request):
+    token = request.cookies.get("deepalpha_session", "")
+    return get_user_by_session(token) if token else None
+
+
+def _polywar_unauthorized():
+    return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+
+async def handle_polywar_state_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    return _json_response(get_polywar_state(int(current.get("user_id") or 0)))
+
+
+async def handle_polywar_player_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    state = get_polywar_state(int(current.get("user_id") or 0))
+    return _json_response({"ok": True, "player": state.get("player"), "energy": state.get("energy"), "selected_faction": state.get("selected_faction")})
+
+
+async def handle_polywar_factions_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    state = get_polywar_state(int(current.get("user_id") or 0))
+    return _json_response({"ok": True, "factions": state.get("factions", []), "faction_ranking": state.get("faction_ranking", [])})
+
+
+async def handle_polywar_events_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    state = get_polywar_state(int(current.get("user_id") or 0))
+    return _json_response({"ok": True, "events": state.get("events", [])})
+
+
+async def handle_polywar_join_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        faction_id = int(data.get("faction_id") or 0)
+        return _json_response(join_polywar_faction(int(current.get("user_id") or 0), faction_id))
+    except ValueError as e:
+        code = str(e)
+        status = 404 if code == "unknown_faction" else 409 if code == "faction_already_selected" else 400
+        return _json_response({"ok": False, "error": code}, status=status)
 
 
 async def handle_webapp_summary(request):
@@ -1348,6 +1417,7 @@ app = web.Application()
 app.router.add_get("/", handle_index)
 app.router.add_get("/pay", handle_index)
 app.router.add_get("/app", handle_app)
+app.router.add_get("/polywar", handle_polywar_page)
 app.router.add_get("/tonconnect-manifest.json", handle_manifest)
 app.router.add_get("/webapp/{filename}", handle_static)
 
@@ -1379,6 +1449,12 @@ app.router.add_get("/api/pricing", handle_api_pricing)
 app.router.add_post("/api/auth/telegram", handle_auth_telegram)
 app.router.add_route("OPTIONS", "/api/auth/telegram", handle_options)
 app.router.add_get("/api/auth/me", handle_auth_me)
+app.router.add_get("/api/polywar/state", handle_polywar_state_api)
+app.router.add_get("/api/polywar/factions", handle_polywar_factions_api)
+app.router.add_get("/api/polywar/player", handle_polywar_player_api)
+app.router.add_get("/api/polywar/events", handle_polywar_events_api)
+app.router.add_post("/api/polywar/join", handle_polywar_join_api)
+app.router.add_route("OPTIONS", "/api/polywar/join", handle_options)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
 app.router.add_post("/api/webapp/analyze/start", handle_webapp_analyze_start)

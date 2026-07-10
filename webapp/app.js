@@ -422,7 +422,8 @@ function renderAuthed(summary, lang) {
     <section class="card">
       <h2>${t.actions}</h2>
       <div class="inline-links">
-        <a href="?tab=articles"><button class="btn btn-primary">${t.articles}</button></a>
+        <a href="/polywar"><button class="btn btn-primary">PolyWar</button></a>
+        <a href="?tab=articles"><button class="btn btn-secondary">${t.articles}</button></a>
         <span class="small">${t.articlesDesc}</span>
         <a href="/pay"><button class="btn btn-secondary">${t.openCashier}</button></a>
         <button id="logoutBtn" class="btn btn-secondary">${t.logout}</button>
@@ -1032,6 +1033,10 @@ async function init() {
   await telegramAuthIfAvailable();
   const params = new URLSearchParams(location.search);
   const tab = params.get("tab");
+  if (tab === "polywar") {
+    window.location.replace("/polywar");
+    return;
+  }
   if (tab === "articles") {
     return renderArticlesPage();
   }
