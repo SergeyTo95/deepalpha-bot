@@ -7334,7 +7334,7 @@ async def post_share_callback(callback: types.CallbackQuery):
         from services.airdrop_referral_service import get_or_create_referral_code
         referral_code = get_or_create_referral_code(uid)
     except Exception:
-        referral_code = str(uid)
+        referral_code = None
     await callback.message.answer("📤 Share Hub\n\nMedium: Copy this draft and paste it into Medium.\nInstagram: Copy caption/link and post manually to Stories/Bio/DM.", reply_markup=_share_hub_keyboard(post_id, post.get("title") or post.get("question"), referral_code))
     await callback.answer()
 

@@ -944,6 +944,7 @@ function renderArticleCard(article) {
 async function renderArticlesPage() {
   const root = document.getElementById("appRoot");
   if (!root) return;
+  const initialArticleId = new URLSearchParams(location.search).get("article");
   root.innerHTML = `<section class="card"><h2>Articles</h2><input id="articleSearch" placeholder="Search articles"><div id="articleFilters">
     ${["All","Polymarket","Crypto","Sports","Politics","Manual","Popular","New"].map(x => `<button data-filter="${x.toLowerCase()}">${x}</button>`).join("")}
   </div><div id="articlesList">Loading...</div></section>`;
@@ -954,19 +955,28 @@ async function renderArticlesPage() {
     const data = await callArticles(params);
     document.getElementById("articlesList").innerHTML = (data.articles || []).map(renderArticleCard).join("") || "<p>No articles yet.</p>";
   }
+  async function openArticleDetail(id) {
+    const data = await callArticleDetail(id, window.Telegram?.WebApp?.initDataUnsafe?.user?.id);
+    const a = data.article;
+    if (!a) {
+      document.getElementById("articlesList").innerHTML = "<p>Article not found.</p>";
+      return;
+    }
+    const links = articleShareLinks(a);
+    document.getElementById("articlesList").innerHTML = `<section class="card"><h2>${escapeHtml(a.title)}</h2><p>${escapeHtml(a.body_text)}</p><a href="${a.donate_url}">Donate</a><br><a href="${links.telegram}">Telegram Share</a> · <a href="${links.twitter}">X / Twitter</a> · <a href="${links.reddit}">Reddit</a> · <a href="${links.whatsapp}">WhatsApp</a><p>${links.medium}</p><p>${links.instagram}</p></section>`;
+  }
   root.onclick = async (ev) => {
     const filter = ev.target?.dataset?.filter;
     if (filter) load(filter);
     const id = ev.target?.dataset?.articleId;
-    if (id) {
-      const data = await callArticleDetail(id, window.Telegram?.WebApp?.initDataUnsafe?.user?.id);
-      const a = data.article;
-      const links = articleShareLinks(a);
-      document.getElementById("articlesList").innerHTML = `<section class="card"><h2>${escapeHtml(a.title)}</h2><p>${escapeHtml(a.body_text)}</p><a href="${a.donate_url}">Donate</a><br><a href="${links.telegram}">Telegram Share</a> · <a href="${links.twitter}">X / Twitter</a> · <a href="${links.reddit}">Reddit</a> · <a href="${links.whatsapp}">WhatsApp</a><p>${links.medium}</p><p>${links.instagram}</p></section>`;
-    }
+    if (id) openArticleDetail(id);
   };
   document.getElementById("articleSearch").addEventListener("input", () => load("all"));
-  load("all");
+  if (initialArticleId) {
+    openArticleDetail(initialArticleId);
+  } else {
+    load("all");
+  }
 }
 
 async function init() {

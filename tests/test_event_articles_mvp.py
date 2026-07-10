@@ -99,6 +99,7 @@ def test_manual_publish_share_hub_uses_real_referral_code_helper():
     block = source[start:end]
     assert 'get_or_create_referral_code' in block
     assert 'referral_code = None' in block
+    assert 'referral_code = str(uid)' not in source
     assert '_share_hub_keyboard(post_id, payload.get("title"), referral_code)' in block
 
 
@@ -123,3 +124,16 @@ def test_manual_article_preview_edit_buttons_have_handlers():
     assert 'manual_article_edit_body_handler' in source
     assert 'manual_article_edit_image_photo' in source
     assert 'manual_article_edit_image_skip' in source
+
+
+def test_webapp_article_query_param_opens_detail():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    assert 'new URLSearchParams(location.search).get("article")' in source
+    assert 'const initialArticleId =' in source
+    assert 'async function openArticleDetail(id)' in source
+    render_start = source.index('async function renderArticlesPage')
+    render_end = source.index('async function init()', render_start)
+    render_block = source[render_start:render_end]
+    assert 'callArticleDetail(id,' in render_block
+    assert 'if (initialArticleId)' in render_block
+    assert 'openArticleDetail(initialArticleId)' in render_block
