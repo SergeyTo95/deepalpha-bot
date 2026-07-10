@@ -366,8 +366,7 @@ def _article_api_payload(post: dict) -> dict:
         "title": title,
         "body_text": body,
         "excerpt": body[:240],
-        "author_id": post.get("author_id"),
-        "author_name": post.get("author_username") or post.get("author_first_name") or str(post.get("author_id")),
+        "author_name": post.get("author_username") or post.get("author_first_name") or "Author",
         "market_url": post.get("market_url") or "",
         "category": post.get("category") or post.get("article_type") or "manual",
         "article_type": post.get("article_type") or "manual",
@@ -380,7 +379,7 @@ def _article_api_payload(post: dict) -> dict:
         "unique_views_count": post.get("unique_views_count") or 0,
         "created_at": post.get("created_at") or "",
         "attached_analysis": _safe_attached_analysis(post),
-        "donate_url": f"?tab=donate&author={post.get('author_id')}&post={post.get('id')}",
+        "donate_url": f"?tab=donate&post={post.get('id')}",
     }
 
 
@@ -470,19 +469,32 @@ async def handle_create_donation(request):
     try:
         data = await request.json()
         donor_id = int(data.get("donor_id", 0))
-        author_id = int(data.get("author_id", 0))
+        supplied_author_id = int(data.get("author_id", 0) or 0)
         ton_amount = float(data.get("ton_amount", 0))
         post_id_raw = data.get("post_id")
         comment = (data.get("comment", "") or "").strip()[:500]
 
         if donor_id <= 0:
             return _json_response({"error": "Invalid donor_id"}, status=400)
-        if author_id <= 0:
-            return _json_response({"error": "Invalid author_id"}, status=400)
-        if donor_id == author_id:
-            return _json_response({"error": "Cannot donate to yourself"}, status=400)
         if ton_amount <= 0:
             return _json_response({"error": "Invalid amount"}, status=400)
+
+        post_id = None
+        author_id = supplied_author_id
+        if post_id_raw:
+            try:
+                post_id = int(post_id_raw)
+            except (ValueError, TypeError):
+                return _json_response({"error": "invalid_post"}, status=400)
+            post = get_author_post(post_id)
+            if not post:
+                return _json_response({"error": "invalid_post"}, status=400)
+            author_id = int(post["author_id"])
+        elif author_id <= 0:
+            return _json_response({"error": "Invalid author_id"}, status=400)
+
+        if donor_id == author_id:
+            return _json_response({"error": "Cannot donate to yourself"}, status=400)
 
         if get_setting("donations_enabled", "on") != "on":
             return _json_response({"error": "Donations disabled"}, status=400)
@@ -495,16 +507,6 @@ async def handle_create_donation(request):
 
         if not is_author(author_id):
             return _json_response({"error": "User is not an author"}, status=400)
-
-        post_id = None
-        if post_id_raw:
-            try:
-                post_id = int(post_id_raw)
-                post = get_author_post(post_id)
-                if not post or post.get("author_id") != author_id:
-                    post_id = None
-            except (ValueError, TypeError):
-                post_id = None
 
         donation_id = create_donation(
             donor_id=donor_id,

@@ -5151,23 +5151,42 @@ def _escape_article_html(value: Any) -> str:
     return html.escape(str(value or ""), quote=False)
 
 
-def _plain_article_excerpt(value: Any, limit: int) -> str:
-    value = sanitize_article_text(value or "")
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - 1)].rstrip() + "…"
+def _escape_article_html_limited(value: Any, max_escaped_length: int) -> str:
+    plain = sanitize_article_text(value or "")
+    if max_escaped_length <= 0:
+        return ""
+    out: List[str] = []
+    used = 0
+    truncated = False
+    for ch in plain:
+        escaped = html.escape(ch, quote=False)
+        if used + len(escaped) > max_escaped_length:
+            truncated = True
+            break
+        out.append(escaped)
+        used += len(escaped)
+    if truncated:
+        ellipsis = "…"
+        if used + len(ellipsis) <= max_escaped_length:
+            out.append(ellipsis)
+        elif out and max_escaped_length >= len(ellipsis):
+            while out and used + len(ellipsis) > max_escaped_length:
+                used -= len(out.pop())
+            out.append(ellipsis)
+    return "".join(out)
 
 
-def _attached_analysis_summary(post: dict, *, field_limit: int = 120, max_fields: int = 5) -> str:
+def _attached_analysis_summary(post: dict, *, field_budget: int = 120, max_fields: int = 5, total_budget: int = 700) -> str:
     raw = post.get("attached_analysis")
     if not raw and post.get("attached_analysis_json"):
         try:
             raw = json.loads(post.get("attached_analysis_json") or "{}")
         except Exception:
             raw = {}
-    if not isinstance(raw, dict) or not raw or max_fields <= 0:
+    if not isinstance(raw, dict) or not raw or max_fields <= 0 or total_budget < 48:
         return ""
     lines = ["📎 <b>Attached DeepAlpha analysis</b>"]
+    used = len(lines[0])
     added = 0
     for label, keys in (
         ("Question", ("question", "event_question")),
@@ -5177,12 +5196,23 @@ def _attached_analysis_summary(post: dict, *, field_limit: int = 120, max_fields
         ("Summary", ("summary", "conclusion")),
     ):
         value = next((raw.get(k) for k in keys if raw.get(k)), "")
-        if value:
-            plain = _plain_article_excerpt(value, field_limit)
-            lines.append(f"{label}: {_escape_article_html(plain)}")
-            added += 1
-            if added >= max_fields:
-                break
+        if not value:
+            continue
+        prefix = f"{label}: "
+        remaining = total_budget - used - 1 - len(prefix)
+        if remaining <= 8:
+            break
+        escaped = _escape_article_html_limited(value, min(field_budget, remaining))
+        if not escaped:
+            continue
+        line = f"{prefix}{escaped}"
+        if used + 1 + len(line) > total_budget:
+            break
+        lines.append(line)
+        used += 1 + len(line)
+        added += 1
+        if added >= max_fields:
+            break
     return "\n".join(lines) if added else ""
 
 
@@ -5190,38 +5220,57 @@ def _format_author_article_compact(
     post: dict,
     uid: int,
     show_author: bool = True,
-    body_limit: int = 1500,
-    title_limit: int = 140,
-    market_limit: int = 180,
-    analysis_field_limit: int = 120,
+    body_budget: int = 2200,
+    title_budget: int = 300,
+    author_budget: int = 180,
+    market_budget: int = 240,
+    analysis_field_budget: int = 120,
+    analysis_total_budget: int = 650,
     max_analysis_fields: int = 5,
+    max_total_length: int = 3500,
 ) -> str:
-    title_plain = _plain_article_excerpt(post.get("title") or post.get("question") or "Article", title_limit)
-    lines = [f"📝 <b>{_escape_article_html(title_plain)}</b>"]
+    lines: List[str] = []
+    title = _escape_article_html_limited(post.get("title") or post.get("question") or "Article", title_budget)
+    lines.append(f"📝 <b>{title}</b>")
     if show_author:
-        author_username = _plain_article_excerpt(post.get("author_username") or "", 80)
-        author_first_name = _plain_article_excerpt(post.get("author_first_name") or "", 80)
+        author_username = _escape_article_html_limited(post.get("author_username") or "", author_budget)
+        author_first_name = _escape_article_html_limited(post.get("author_first_name") or "", author_budget)
         if author_username:
-            lines.append(f"👤 Author: @{_escape_article_html(author_username)}")
+            lines.append(f"👤 Author: @{author_username}")
         elif author_first_name:
-            lines.append(f"👤 Author: {_escape_article_html(author_first_name)}")
+            lines.append(f"👤 Author: {author_first_name}")
     market_url = post.get("market_url") or ""
     if market_url:
-        market_plain = _plain_article_excerpt(market_url, market_limit)
-        lines.append(f"🔗 Market: {_escape_article_html(market_plain)}")
-    body_plain = _plain_article_excerpt(post.get("body_text") or post.get("thesis") or post.get("reasoning") or "", body_limit)
-    if body_plain:
-        lines.append(f"\n{_escape_article_html(body_plain)}")
-    attached = _attached_analysis_summary(post, field_limit=analysis_field_limit, max_fields=max_analysis_fields)
+        market = _escape_article_html_limited(market_url, market_budget)
+        if market:
+            lines.append(f"🔗 Market: {market}")
+    reserved = 260 + analysis_total_budget
+    fixed_len = len("\n".join(lines)) + 2
+    body_allowed = max(0, min(body_budget, max_total_length - fixed_len - reserved))
+    body = _escape_article_html_limited(post.get("body_text") or post.get("thesis") or post.get("reasoning") or "", body_allowed)
+    if body:
+        lines.append(f"\n{body}")
+    remaining_after_body = max_total_length - len("\n".join(lines)) - 2
+    attached = _attached_analysis_summary(
+        post,
+        field_budget=analysis_field_budget,
+        max_fields=max_analysis_fields,
+        total_budget=min(analysis_total_budget, max(0, remaining_after_body - 140)),
+    )
     if attached:
         lines.append(f"\n{attached}")
     donations = post.get("total_donations_ton", 0) or 0
     donors = post.get("total_donors", 0) or 0
     shares = post.get("shares_count", 0) or 0
+    stat_lines: List[str] = []
     if donations > 0:
-        lines.append(f"\n💝 Donations: {donations:.2f} Gram from {donors} supporters")
+        stat_lines.append(f"💝 Donations: {donations:.2f} Gram from {donors} supporters")
     if shares:
-        lines.append(f"📤 Shares: {shares}")
+        stat_lines.append(f"📤 Shares: {shares}")
+    for stat in stat_lines:
+        candidate = "\n".join([line for line in lines + [stat] if line])
+        if len(candidate) <= max_total_length:
+            lines.append(stat)
     return "\n".join([line for line in lines if line])
 
 
@@ -5231,11 +5280,14 @@ async def send_author_article(message, post: dict, uid: int, keyboard=None, prev
             post,
             uid,
             show_author=show_author,
-            body_limit=220,
-            title_limit=100,
-            market_limit=90,
-            analysis_field_limit=55,
+            body_budget=360,
+            title_budget=180,
+            author_budget=120,
+            market_budget=120,
+            analysis_field_budget=55,
+            analysis_total_budget=140,
             max_analysis_fields=2,
+            max_total_length=850 if not preview else 820,
         )
         await message.answer_photo(post["cover_image_file_id"], caption=text, parse_mode="HTML", reply_markup=keyboard)
     else:
@@ -5243,11 +5295,14 @@ async def send_author_article(message, post: dict, uid: int, keyboard=None, prev
             post,
             uid,
             show_author=show_author,
-            body_limit=1500,
-            title_limit=140,
-            market_limit=180,
-            analysis_field_limit=120,
+            body_budget=2200,
+            title_budget=300,
+            author_budget=180,
+            market_budget=240,
+            analysis_field_budget=120,
+            analysis_total_budget=650,
             max_analysis_fields=5,
+            max_total_length=3300 if not preview else 3200,
         )
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 

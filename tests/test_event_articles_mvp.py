@@ -187,10 +187,10 @@ def test_article_cover_endpoint_and_payload_are_token_safe():
 def test_telegram_article_compact_rendering_and_full_link():
     source = open("telegram_bot.py", encoding="utf-8").read()
     assert 'async def send_author_article' in source
-    assert 'body_limit=220' in source
-    assert 'body_limit=1500' in source
+    assert 'body_budget=360' in source
+    assert 'body_budget=2200' in source
     assert '?tab=articles&article={post_id}' in source
-    assert '_plain_article_excerpt' in source
+    assert '_escape_article_html_limited' in source
 
 
 def test_author_posts_profile_query_includes_article_fields_and_filters():
@@ -239,7 +239,7 @@ def _load_telegram_bot_for_article_formatters(monkeypatch):
 
     class Helpers:
         _escape_article_html = staticmethod(namespace["_escape_article_html"])
-        _plain_article_excerpt = staticmethod(namespace["_plain_article_excerpt"])
+        _escape_article_html_limited = staticmethod(namespace["_escape_article_html_limited"])
         _attached_analysis_summary = staticmethod(namespace["_attached_analysis_summary"])
         _format_author_article_compact = staticmethod(namespace["_format_author_article_compact"])
 
@@ -279,11 +279,13 @@ def test_long_article_with_cover_caption_is_safe_runtime(monkeypatch):
         {"title": "Cover < Article", "body_text": body, "cover_image_file_id": "abc"},
         uid=1,
         show_author=False,
-        body_limit=220,
-        title_limit=100,
-        market_limit=90,
-        analysis_field_limit=55,
+        body_budget=360,
+        title_budget=180,
+        market_budget=120,
+        analysis_field_budget=55,
+        analysis_total_budget=140,
         max_analysis_fields=2,
+        max_total_length=850,
     )
     assert len(output) < 850
     assert "&lt;tag&gt; &amp; text" in output
@@ -323,3 +325,91 @@ def test_article_html_source_regressions():
     format_start = source.index('def _format_author_article_compact')
     format_end = source.index('async def send_author_article', format_start)
     assert '_escape_article_html' in source[format_start:format_end]
+
+
+def _has_no_broken_basic_entities(value: str) -> bool:
+    import re
+    for match in re.finditer(r"&", value):
+        tail = value[match.start():match.start() + 6]
+        if not (tail.startswith("&amp;") or tail.startswith("&lt;") or tail.startswith("&gt;")):
+            return False
+    return True
+
+
+def test_worst_case_escaped_regular_article_stays_under_limit(monkeypatch):
+    tb = _load_telegram_bot_for_article_formatters(monkeypatch)
+    post = {
+        "title": "&" * 500,
+        "body_text": "&" * 8000,
+        "attached_analysis": {
+            "question": "&" * 500,
+            "display_prediction": "&" * 500,
+            "confidence": "&" * 100,
+            "market_probability": "&" * 100,
+            "summary": "&" * 500,
+        },
+    }
+    output = tb._format_author_article_compact(post, uid=1, show_author=False, max_total_length=3500)
+    assert len(output) < 3500
+    assert _html_tags_balanced(output)
+    assert _has_no_broken_basic_entities(output)
+
+
+def test_worst_case_escaped_cover_caption_stays_under_limit(monkeypatch):
+    tb = _load_telegram_bot_for_article_formatters(monkeypatch)
+    post = {
+        "title": "&" * 500,
+        "body_text": "&" * 8000,
+        "cover_image_file_id": "cover",
+        "attached_analysis": {"question": "&" * 500, "display_prediction": "&" * 500},
+    }
+    output = tb._format_author_article_compact(
+        post, uid=1, show_author=False, body_budget=360, title_budget=180,
+        market_budget=120, analysis_field_budget=55, analysis_total_budget=140,
+        max_analysis_fields=2, max_total_length=850,
+    )
+    assert len(output) < 900
+    assert _html_tags_balanced(output)
+    assert _has_no_broken_basic_entities(output)
+
+
+def test_mixed_html_entities_are_literal_and_complete(monkeypatch):
+    tb = _load_telegram_bot_for_article_formatters(monkeypatch)
+    output = tb._format_author_article_compact({"title": "<>&" * 200, "body_text": "<b>hello</b> <>&" * 500}, uid=1, show_author=False)
+    assert "&lt;&gt;&amp;" in output
+    assert "&lt;b&gt;hello&lt;/b&gt;" in output
+    assert "<b>hello</b>" not in output
+    assert _html_tags_balanced(output)
+    assert _has_no_broken_basic_entities(output)
+
+
+def test_public_article_payload_hides_author_id_and_donate_url_uses_post_only():
+    source = open("web.py", encoding="utf-8").read()
+    start = source.index('def _article_api_payload')
+    end = source.index('async def handle_articles_api', start)
+    payload = source[start:end]
+    assert '"author_id"' not in payload
+    assert '?tab=donate&post=' in payload
+    assert '?tab=donate&author=' not in payload
+
+
+def test_post_donation_derives_author_server_side():
+    source = open("web.py", encoding="utf-8").read()
+    start = source.index('async def handle_create_donation')
+    end = source.index('async def handle_public_settings', start)
+    block = source[start:end]
+    assert 'supplied_author_id' in block
+    assert 'post = get_author_post(post_id)' in block
+    assert 'author_id = int(post["author_id"])' in block
+    assert 'if not post:' in block
+    assert 'elif author_id <= 0' in block
+    assert 'post.get("author_id") != author_id' not in block
+
+
+def test_webapp_article_cards_do_not_reference_public_author_id():
+    source = open("webapp/app.js", encoding="utf-8").read()
+    render_start = source.index('function renderArticleCard')
+    render_end = source.index('async function renderArticlesPage', render_start)
+    card = source[render_start:render_end]
+    assert 'article.author_id' not in card
+    assert '?tab=donate&post=' in card

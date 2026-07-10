@@ -952,7 +952,7 @@ function renderArticleCard(article) {
     <p>${escapeHtml(article.excerpt)}</p>
     <p class="muted">${escapeHtml(article.author_name)} · ${escapeHtml(article.category)} · 💝 ${article.total_donations_ton} · 📤 ${article.shares_count}</p>
     <button data-article-id="${article.id}">Open</button>
-    <a href="?tab=donate&author=${encodeURIComponent(article.author_id)}&post=${encodeURIComponent(article.id)}">Donate</a>
+    <a href="?tab=donate&post=${encodeURIComponent(article.id)}">Donate</a>
   </article>`;
 }
 async function renderArticlesPage() {
