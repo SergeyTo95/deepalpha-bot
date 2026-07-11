@@ -238,6 +238,7 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         capitals.enrich_chunks(conn, sid, out)
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
+        conn.commit()
         for ch in out:
             ch.pop("user_id", None)
         return {"ok": True, "season_id": sid, "chunks": out, "chunk_size": cs, "map_width": map_width(), "map_height": map_height(), "server_timestamp": int(time.time())}

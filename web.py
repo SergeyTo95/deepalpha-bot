@@ -873,7 +873,11 @@ async def handle_polywar_nominate_api(request):
     except Exception:
         data = {}
     try:
-        return _json_response(await asyncio.to_thread(polywar_nominate, int(current.get("user_id") or 0), str(data.get("statement") or ""), bool(data.get("active", True))))
+        
+        if "active" in data and not isinstance(data.get("active"), bool):
+            raise ValueError("invalid_active")
+        active = data.get("active", True)
+        return _json_response(await asyncio.to_thread(polywar_nominate, int(current.get("user_id") or 0), str(data.get("statement") or ""), active))
     except ValueError as e:
         code = str(e)
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
@@ -903,7 +907,11 @@ async def handle_polywar_orders_api(request):
     except Exception:
         data = {}
     try:
-        return _json_response(await asyncio.to_thread(polywar_upsert_order, int(current.get("user_id") or 0), data.get("order_id"), str(data.get("order_type") or ""), int(data.get("x") or 0), int(data.get("y") or 0), str(data.get("message") or ""), bool(data.get("active", True))))
+        
+        if "active" in data and not isinstance(data.get("active"), bool):
+            raise ValueError("invalid_active")
+        active = data.get("active", True)
+        return _json_response(await asyncio.to_thread(polywar_upsert_order, int(current.get("user_id") or 0), data.get("order_id"), str(data.get("order_type") or ""), int(data.get("x") or 0), int(data.get("y") or 0), str(data.get("message") or ""), active))
     except ValueError as e:
         code = str(e)
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)

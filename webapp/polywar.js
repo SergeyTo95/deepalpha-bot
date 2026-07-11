@@ -276,3 +276,56 @@ window.polywarPhase5 = Object.assign(window.polywarPhase5 || {}, {
   hasGovernanceUi: true,
   softSyncKeepsCanvas: true
 });
+
+// Phase 5 concrete UI helpers: capital cache, capital/governance panels, and order marker soft-sync.
+const polywarCapitalUi = window.polywarCapitalUi = window.polywarCapitalUi || {
+  cache: new Map(),
+  max: 128,
+  async refresh() {
+    const data = await api('/api/polywar/capitals');
+    if (data.ok) {
+      this.cache.clear();
+      (data.capitals || []).slice(0, this.max).forEach(c => this.cache.set(`${c.x},${c.y}`, c));
+      map?.markDirty?.('capitals');
+    }
+    return data;
+  },
+  draw(ctx, worldToScreen, factions = []) {
+    const byId = new Map(factions.map(f => [f.id, f]));
+    for (const cap of this.cache.values()) {
+      const p = worldToScreen ? worldToScreen(cap.x, cap.y) : { x: cap.x, y: cap.y };
+      const original = byId.get(cap.original_faction_id)?.color || '#ffffff';
+      const controller = byId.get(cap.controller_faction_id)?.color || original;
+      ctx.save();
+      ctx.fillStyle = controller;
+      ctx.strokeStyle = original;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (cap.original_faction_id !== cap.controller_faction_id) { ctx.fillStyle = '#ffd166'; ctx.fillRect(p.x - 3, p.y - 14, 6, 4); }
+      if (cap.is_under_siege) {
+        ctx.strokeStyle = byId.get(cap.besieging_faction_id)?.color || '#ff006e';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, cap.siege_progress / cap.siege_required)); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  },
+  panel(cap, state) {
+    const rules = state?.rules?.capitals || {};
+    return `<section class="glass card polywar-capital-panel"><h3>Capital</h3><p>Original faction: ${cap.original_faction_id}</p><p>Controller: ${cap.controller_faction_id}</p><p>Besieging faction: ${cap.besieging_faction_id || 'none'}</p><p>Siege progress: ${cap.siege_progress}/${cap.siege_required} (${cap.siege_percent || 0}%)</p><p>Siege cost: terrain + ${rules.siege_extra_energy ?? 0}</p><p>Repair cost: ${rules.repair_energy_cost ?? 0}</p><button data-polywar-action="siege">Siege capital</button><button data-polywar-action="repair_capital">Repair capital</button></section>`;
+  }
+};
+
+const polywarGovernanceUi = window.polywarGovernanceUi = window.polywarGovernanceUi || {
+  orders: [],
+  async refresh() { const data = await api('/api/polywar/governance'); if (data.ok) { this.orders = data.orders || []; this.render(data); map?.markDirty?.('orders'); } return data; },
+  render(data) {
+    const root = document.getElementById('polywarGovernancePanel') || document.querySelector('[data-polywar-governance]');
+    if (!root) return;
+    const candidates = (data.candidates || []).map(c => `<li><b>${c.user_id}</b> — ${c.statement || ''} — votes: ${c.vote_count || 0}<button data-polywar-vote="${c.user_id}">${Number(data.current_user_vote) === Number(c.user_id) ? 'Current vote' : 'Vote / Change vote'}</button></li>`).join('');
+    const orders = (data.orders || []).map(o => `<li><button data-polywar-goto-order="${o.x},${o.y}">${o.order_type} ${o.x},${o.y}</button> ${o.message || ''}<button data-polywar-cancel-order="${o.id}">Cancel</button></li>`).join('');
+    root.innerHTML = `<h3>Governance</h3><p>Commander: ${data.commander?.commander_user_id || 'none'}</p><p>Term ends: ${data.commander?.commander_term_ends_at || '—'}</p><p>Election ends: ${data.active_election?.ends_at || '—'}</p><ul>${candidates}</ul><button data-polywar-nominate="true">Nominate myself</button><button data-polywar-nominate="false">Withdraw</button><h4>Orders</h4><ul>${orders}</ul>`;
+  },
+  drawOrders(ctx, worldToScreen) {
+    for (const o of this.orders || []) { const p = worldToScreen ? worldToScreen(o.x, o.y) : o; ctx.save(); ctx.strokeStyle = '#fff'; ctx.strokeRect(p.x - 6, p.y - 6, 12, 12); ctx.fillText(o.order_type, p.x + 8, p.y); ctx.restore(); }
+  }
+};
