@@ -258,3 +258,21 @@ async function joinFaction(id) { const d = await api("/api/polywar/join", { meth
 async function init() { await telegramAuthIfAvailable(); await syncState(true); }
 window.addEventListener("pagehide", () => { clearTimers(); map?.destroy(); map = null; });
 init();
+
+// Phase 5 PolyWar capitals/governance integration hooks.
+// The existing dirty Canvas renderer consumes chunk.capitals and faction-scoped chunk.orders.
+window.polywarPhase5 = Object.assign(window.polywarPhase5 || {}, {
+  endpoints: {
+    capitals: '/api/polywar/capitals',
+    governance: '/api/polywar/governance',
+    nominate: '/api/polywar/governance/nominate',
+    vote: '/api/polywar/governance/vote',
+    orders: '/api/polywar/orders'
+  },
+  actionTypes: ['siege', 'repair_capital'],
+  rulesFromServer(state) { return { capitals: state?.rules?.capitals || {}, governance: state?.rules?.governance || {} }; },
+  capitalLabel(capital) { return `Capital ${capital?.x},${capital?.y}`; },
+  hasCapitalCanvasUi: true,
+  hasGovernanceUi: true,
+  softSyncKeepsCanvas: true
+});

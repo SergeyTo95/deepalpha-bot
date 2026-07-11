@@ -961,6 +961,20 @@ def _init_db_inner(conn, cursor):
         ("polywar_sector_control_percent", "60"),
         ("polywar_sector_influence_value", "100"),
         ("polywar_max_sectors_per_request", "100"),
+        ("polywar_capital_siege_required", "1000"),
+        ("polywar_capital_siege_progress_per_action", "100"),
+        ("polywar_capital_siege_extra_energy", "2"),
+        ("polywar_capital_repair_energy_cost", "2"),
+        ("polywar_capital_repair_progress_per_action", "75"),
+        ("polywar_capital_influence_value", "1000"),
+        ("polywar_capital_order_duration_hours", "24"),
+        ("polywar_capital_event_cooldown_seconds", "30"),
+        ("polywar_commander_election_hours", "24"),
+        ("polywar_commander_term_hours", "168"),
+        ("polywar_commander_min_contribution", "5"),
+        ("polywar_commander_min_members_for_election", "2"),
+        ("polywar_commander_max_statement_length", "280"),
+        ("polywar_commander_order_limit", "5"),
     ]
     for key, value in polywar_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))

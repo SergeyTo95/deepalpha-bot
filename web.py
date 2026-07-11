@@ -32,6 +32,8 @@ from services.polywar_service import get_state as get_polywar_state, join_factio
 from services.polywar_map_service import build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
 from services.polywar_combat_service import combat_action as polywar_combat_action
 from services.polywar_sector_service import get_sectors as get_polywar_sectors
+from services.polywar_capital_service import get_capitals as get_polywar_capitals, capital_action as polywar_capital_action
+from services.polywar_governance_service import get_governance as get_polywar_governance, nominate as polywar_nominate, vote as polywar_vote, upsert_order as polywar_upsert_order
 from services.polywar_mine_service import scan_area as scan_polywar_area, set_flag as set_polywar_flag
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
@@ -830,12 +832,81 @@ async def handle_polywar_action_api(request):
             return _json_response(await asyncio.to_thread(capture_polywar_cell, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
         if action_type in {"attack", "reinforce"}:
             return _json_response(await asyncio.to_thread(polywar_combat_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        if action_type in {"siege", "repair_capital"}:
+            return _json_response(await asyncio.to_thread(polywar_capital_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
         raise ValueError("bad_action_type")
     except ValueError as e:
         code = str(e)
         status = 429 if code == "rate_limited" else 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
         return _json_response({"ok": False, "error": code}, status=status)
 
+
+
+async def handle_polywar_capitals_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        return _json_response(await asyncio.to_thread(get_polywar_capitals, int(current.get("user_id") or 0)))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+
+
+async def handle_polywar_governance_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        return _json_response(await asyncio.to_thread(get_polywar_governance, int(current.get("user_id") or 0)))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+
+
+async def handle_polywar_nominate_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        return _json_response(await asyncio.to_thread(polywar_nominate, int(current.get("user_id") or 0), str(data.get("statement") or ""), bool(data.get("active", True))))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+
+
+async def handle_polywar_vote_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        return _json_response(await asyncio.to_thread(polywar_vote, int(current.get("user_id") or 0), int(data.get("candidate_user_id") or 0)))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+
+
+async def handle_polywar_orders_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        return _json_response(await asyncio.to_thread(polywar_upsert_order, int(current.get("user_id") or 0), data.get("order_id"), str(data.get("order_type") or ""), int(data.get("x") or 0), int(data.get("y") or 0), str(data.get("message") or ""), bool(data.get("active", True))))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
 
 async def handle_polywar_scan_api(request):
     current = _current_web_user(request)
@@ -1554,9 +1625,17 @@ app.router.add_post("/api/polywar/join", handle_polywar_join_api)
 app.router.add_get("/api/polywar/map/chunks", handle_polywar_chunks_api)
 app.router.add_get("/api/polywar/map/sectors", handle_polywar_sectors_api)
 app.router.add_post("/api/polywar/action", handle_polywar_action_api)
+app.router.add_get("/api/polywar/capitals", handle_polywar_capitals_api)
+app.router.add_get("/api/polywar/governance", handle_polywar_governance_api)
+app.router.add_post("/api/polywar/governance/nominate", handle_polywar_nominate_api)
+app.router.add_post("/api/polywar/governance/vote", handle_polywar_vote_api)
+app.router.add_post("/api/polywar/orders", handle_polywar_orders_api)
 app.router.add_post("/api/polywar/scan", handle_polywar_scan_api)
 app.router.add_post("/api/polywar/flag", handle_polywar_flag_api)
 app.router.add_route("OPTIONS", "/api/polywar/action", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/governance/nominate", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/governance/vote", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/orders", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/map/sectors", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/scan", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/flag", handle_options)

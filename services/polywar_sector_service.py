@@ -117,7 +117,13 @@ def _upsert_stat(conn, sid, sx, sy, fid, delta, now):
 
 
 def recalc_influence(conn, sid, fid, now):
-    polywar._execute(conn.cursor(), 'UPDATE polywar_faction_season_stats SET influence_score=controlled_cells_count + controlled_sectors_count * %s, updated_at=%s WHERE season_id=%s AND faction_id=%s', (influence_value(), now, sid, fid))
+    
+    try:
+        from services.polywar_capital_service import influence_value as cap_value
+        cap = cap_value()
+    except Exception:
+        cap = 0
+    polywar._execute(conn.cursor(), 'UPDATE polywar_faction_season_stats SET influence_score=controlled_cells_count + controlled_sectors_count * %s + COALESCE(controlled_capitals_count,0) * %s, updated_at=%s WHERE season_id=%s AND faction_id=%s', (influence_value(), cap, now, sid, fid))
 
 
 def recalc_sector(conn, sid, sx, sy, now):
