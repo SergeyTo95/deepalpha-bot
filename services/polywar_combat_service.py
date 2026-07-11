@@ -137,7 +137,12 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         e = polywar._energy(player)
         if e.get('is_locked'): raise ValueError('player_locked')
         sectors.ensure_starting_territories_bootstrap(conn, sid)
+        from services import polywar_capital_service as capitals
+        capitals.ensure_capitals_initialized(conn, sid)
         if not m.in_bounds(x, y): raise ValueError('out_of_bounds')
+        cap = capitals.get_capital_at(conn, sid, x, y)
+        if cap:
+            raise ValueError('capital_requires_repair' if action_type == 'reinforce' else 'capital_requires_siege')
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         now = datetime.utcnow(); owner = _owner(conn, sid, x, y)

@@ -232,7 +232,13 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             contested = [{"x": int(r["x"]), "y": int(r["y"]), "owner_faction_id": int(r["owner_faction_id"]), "contesting_faction_id": r.get("contesting_faction_id"), "contest_progress": int(r.get("contest_progress") or 0), "contest_required": _setting_int("polywar_capture_progress_required",100,1,1000), "contested_at": polywar._iso(r.get("contested_at"))} for r in rows if int(r.get("contest_progress") or 0) > 0]
             out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": cs, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "contested_cells": contested, "user_id": user_id})
         player = polywar.get_or_create_player(user_id, sid, conn)
+        from services import polywar_capital_service as capitals
+        from services import polywar_governance_service as governance
+        capitals.ensure_capitals_initialized(conn, sid)
+        capitals.enrich_chunks(conn, sid, out)
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
+        governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
+        conn.commit()
         for ch in out:
             ch.pop("user_id", None)
         return {"ok": True, "season_id": sid, "chunks": out, "chunk_size": cs, "map_width": map_width(), "map_height": map_height(), "server_timestamp": int(time.time())}
@@ -273,6 +279,9 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
         if not in_bounds(x, y): raise ValueError("out_of_bounds")
+        from services import polywar_capital_service as capitals
+        capitals.ensure_capitals_initialized(conn, sid)
+        if capitals.get_capital_at(conn, sid, x, y): raise ValueError("capital_requires_siege")
         polywar._insert_player_if_missing(conn, int(user_id), sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
