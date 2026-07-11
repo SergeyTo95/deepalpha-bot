@@ -236,6 +236,12 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
 
 
 
+
+def legacy_action_duplicate_response(conn, season_id: int, seed: str, user_id: int, action: Dict[str, Any]):
+    player = polywar.get_or_create_player(user_id, season_id, conn)
+    e = {k: v for k, v in polywar._energy(player).items() if k != "energy_updated_at"}
+    return {"ok": True, "duplicate": True, "outcome": "captured", "cell": {"x": action["x"], "y": action["y"], "terrain": terrain_at(seed, action["x"], action["y"]), "owner_faction_id": action.get("faction_id"), "energy_cost": action["energy_cost"]}, "energy": e}
+
 def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     if not idempotency_key or len(str(idempotency_key)) > 120:
         raise ValueError("bad_idempotency_key")
@@ -247,7 +253,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
-        if existing: return _duplicate_response(conn, sid, seed, user_id, existing)
+        if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
         if polywar._is_sqlite(conn):
             began = False; last_lock_error = None
             for attempt in range(20):
@@ -260,10 +266,16 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
-        if existing: conn.commit(); return _duplicate_response(conn, sid, seed, user_id, existing)
+        if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
         if not in_bounds(x, y): raise ValueError("out_of_bounds")
         polywar._insert_player_if_missing(conn, int(user_id), sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
+        dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
+        if dup:
+            conn.commit(); return dup
+        existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
+        if existing:
+            conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
         fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
         e = polywar._energy(player)
@@ -278,7 +290,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if int(e["current_energy"]) < cost: raise ValueError("insufficient_energy")
         now = datetime.utcnow(); new_energy = int(e["current_energy"]) - cost
         mine = mines.active_mine_at(conn, sid, seed, x, y, terr)
-        if mine:
+        if mine and mines.try_trigger_mine(conn, sid, x, y, user_id, fid, idempotency_key, now):
             locked_until = now + timedelta(minutes=mines.mine_lock_minutes())
             polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
             mines.record_triggered_mine(conn, sid, fid, user_id, x, y, idempotency_key, seed, now)
@@ -287,6 +299,11 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
             payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": None, "energy_cost": cost}, "mine_hit": True, "locked_until": polywar._iso(locked_until), "energy": energy}
             mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "mine_hit", cost, payload, now)
             conn.commit(); payload.update({"ok": True, "outcome": "mine_hit"}); return payload
+        owner = _owner_at(conn, sid, x, y)
+        if owner == fid: raise ValueError("already_owned")
+        if owner is not None: raise ValueError("enemy_capture_unavailable")
+        if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
+            raise ValueError("not_adjacent")
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy,e["energy_updated_at"],now,user_id,sid))
@@ -305,7 +322,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
                 dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
                 if dup: return dup
                 existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid,user_id,idempotency_key))
-                if existing: return _duplicate_response(conn, sid, seed, user_id, existing)
+                if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
             except Exception:
                 logger.exception("Failed to load duplicate PolyWar action after unique conflict")
             raise ValueError("cell_conflict") from exc

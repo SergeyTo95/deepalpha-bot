@@ -836,9 +836,9 @@ async def handle_polywar_flag_api(request):
     except Exception:
         data = {}
     try:
-        if "active" not in data:
-            raise ValueError("active_required")
-        return _json_response(await asyncio.to_thread(set_polywar_flag, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), bool(data.get("active"))))
+        if "active" not in data or not isinstance(data.get("active"), bool):
+            raise ValueError("invalid_active")
+        return _json_response(await asyncio.to_thread(set_polywar_flag, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), data.get("active")))
     except ValueError as e:
         code = str(e)
         status = 429 if code == "rate_limited" else 400

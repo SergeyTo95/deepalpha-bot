@@ -88,6 +88,22 @@ def _rate(bucket, user_id, maximum):
                     bucket.pop(key, None)
 
 
+def public_energy_for_player(player):
+    return {k: v for k, v in polywar._energy(player).items() if k != "energy_updated_at"}
+
+
+def duplicate_outcome_response(conn, season_id, user_id, idempotency_key):
+    import json
+    row = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_action_outcomes WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (season_id, user_id, idempotency_key))
+    if not row:
+        return None
+    payload = json.loads(row.get("payload_json") or "{}")
+    player = polywar.get_or_create_player(user_id, season_id, conn)
+    payload["energy"] = public_energy_for_player(player)
+    payload.update({"ok": True, "duplicate": True, "outcome": row["outcome"], "energy_cost": row["energy_cost"]})
+    return payload
+
+
 def _bucket(secret_seed: str, season_id: int, x: int, y: int) -> int:
     msg = f"{GENERATION_VERSION}:{season_id}:{x}:{y}".encode()
     digest = hmac.new(str(secret_seed).encode(), msg, hashlib.sha256).digest()
@@ -154,25 +170,23 @@ def upsert_safe_hint(conn, season_id, faction_id, x, y, user_id, secret_seed, no
     return n
 
 
+def try_trigger_mine(conn, season_id, x, y, user_id, faction_id, idempotency_key, now=None) -> bool:
+    now = now or datetime.utcnow()
+    c = conn.cursor()
+    if polywar._is_sqlite(conn):
+        polywar._execute(c, "INSERT OR IGNORE INTO polywar_mine_events (season_id,x,y,event_type,triggered_by_user_id,triggered_by_faction_id,triggered_at,idempotency_key) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", (season_id, x, y, "triggered", user_id, faction_id, now, idempotency_key))
+        return polywar._rowcount(c) == 1
+    polywar._execute(c, "INSERT INTO polywar_mine_events (season_id,x,y,event_type,triggered_by_user_id,triggered_by_faction_id,triggered_at,idempotency_key) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y) DO NOTHING", (season_id, x, y, "triggered", user_id, faction_id, now, idempotency_key))
+    return polywar._rowcount(c) == 1
+
+
 def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None):
     now = now or datetime.utcnow()
-    polywar._execute(conn.cursor(), "INSERT INTO polywar_mine_events (season_id,x,y,event_type,triggered_by_user_id,triggered_by_faction_id,triggered_at,idempotency_key) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y) DO NOTHING", (season_id, x, y, "triggered", user_id, faction_id, now, idempotency_key))
     polywar._execute(conn.cursor(), "INSERT INTO polywar_cell_intel (season_id,faction_id,x,y,intel_type,adjacent_mines,discovered_by_user_id,discovered_at,updated_at) VALUES (%s,%s,%s,%s,%s,NULL,%s,%s,%s) ON CONFLICT (season_id,faction_id,x,y,intel_type) DO UPDATE SET updated_at=excluded.updated_at", (season_id, faction_id, x, y, "triggered_mine", user_id, now, now))
-    for yy in range(y - 1, y + 2):
-        for xx in range(x - 1, x + 2):
-            row = polywar._fetchone(conn.cursor(), "SELECT id FROM polywar_cell_intel WHERE season_id=%s AND faction_id=%s AND x=%s AND y=%s AND intel_type=%s", (season_id, faction_id, xx, yy, "safe_hint"))
-            if row:
-                upsert_safe_hint(conn, season_id, faction_id, xx, yy, user_id, secret_seed, now)
+    rows = polywar._fetchall(conn.cursor(), "SELECT DISTINCT faction_id,x,y FROM polywar_cell_intel WHERE season_id=%s AND intel_type=%s AND x >= %s AND x <= %s AND y >= %s AND y <= %s", (season_id, "safe_hint", x - 1, x + 1, y - 1, y + 1))
+    for row in rows:
+        upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now)
 
-
-def duplicate_outcome_response(conn, season_id, user_id, idempotency_key):
-    import json
-    row = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_action_outcomes WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (season_id, user_id, idempotency_key))
-    if not row:
-        return None
-    payload = json.loads(row.get("payload_json") or "{}")
-    payload.update({"ok": True, "duplicate": True, "outcome": row["outcome"], "energy_cost": row["energy_cost"]})
-    return payload
 
 
 def insert_outcome(conn, season_id, user_id, idempotency_key, action_type, x, y, outcome, energy_cost, payload, now=None):
@@ -219,10 +233,26 @@ def _area_has_own(conn, season_id, faction_id, cx, cy, size):
     return any(m.in_bounds(x,y) and m._owner_at(conn, season_id, x, y) == faction_id for y in range(cy-half, cy+half+1) for x in range(cx-half, cx+half+1))
 
 
+def _begin_immediate_retry(conn, cursor):
+    if not polywar._is_sqlite(conn):
+        polywar._execute(cursor, "BEGIN")
+        return
+    last = None
+    for attempt in range(20):
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            return
+        except Exception as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            last = exc
+            time.sleep(0.025 * (attempt + 1))
+    raise last
+
+
 def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency_key: str):
     if not idempotency_key or len(str(idempotency_key)) > 120: raise ValueError("bad_idempotency_key")
     if int(size) not in {3,5}: raise ValueError("bad_scan_size")
-    _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
     from services import polywar_map_service as m
     conn = polywar.get_connection(); c = conn.cursor()
     try:
@@ -230,11 +260,14 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
-        c.execute("BEGIN IMMEDIATE") if polywar._is_sqlite(conn) else polywar._execute(c, "BEGIN")
+        _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
+        _begin_immediate_retry(conn, c)
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
+        dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
+        if dup: conn.commit(); return dup
         fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
         e = polywar._energy(player)
@@ -252,13 +285,18 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         now = datetime.utcnow(); new_energy = int(e["current_energy"]) - cost
         polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy, e["energy_updated_at"], now, user_id, sid))
         polywar._execute(c, "INSERT INTO polywar_scans (season_id,user_id,faction_id,center_x,center_y,scan_size,active_mine_count,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,center_x,center_y,size,count,cost,idempotency_key,now))
-        payload = {"center_x": center_x, "center_y": center_y, "size": size, "active_mine_count": count, "energy_cost": cost, "created_at": polywar._iso(now), "energy": {"current_energy": new_energy, "max_energy": e["max_energy"], "recharge_minutes": e["recharge_minutes"], "seconds_until_next_energy": e["seconds_until_next_energy"], "is_locked": e["is_locked"], "locked_until": e["locked_until"]}}
+        energy = public_energy_for_player({**player, "current_energy": new_energy, "energy_updated_at": e["energy_updated_at"]})
+        payload = {"center_x": center_x, "center_y": center_y, "size": size, "active_mine_count": count, "energy_cost": cost, "created_at": polywar._iso(now), "energy": energy}
         insert_outcome(conn, sid, user_id, idempotency_key, "scan", center_x, center_y, "scanned", cost, payload, now)
         conn.commit(); payload.update({"ok": True, "outcome": "scanned"}); return payload
     except ValueError:
         polywar._safe_rollback(conn); raise
-    except Exception:
-        polywar._safe_rollback(conn); logger.exception("Unexpected PolyWar scan failure"); raise
+    except Exception as exc:
+        polywar._safe_rollback(conn)
+        if "unique" in str(exc).lower() or "constraint" in str(exc).lower() or "duplicate" in str(exc).lower():
+            dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
+            if dup: return dup
+        logger.exception("Unexpected PolyWar scan failure"); raise
     finally:
         conn.close()
 
@@ -270,23 +308,29 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
-        player = polywar.get_or_create_player(user_id, sid, conn); fid = player.get("faction_id")
+        _begin_immediate_retry(conn, c)
+        polywar._insert_player_if_missing(conn, user_id, sid)
+        player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
+        fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
         if not m.in_bounds(x, y): raise ValueError("out_of_bounds")
+        existing = polywar._fetchone(c, "SELECT id FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid, user_id, x, y))
+        if not active:
+            polywar._execute(c, "DELETE FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid,user_id,x,y))
+            conn.commit(); return {"ok": True, "x": x, "y": y, "active": False}
+        if existing:
+            conn.commit(); return {"ok": True, "x": x, "y": y, "active": True, "duplicate": True}
         terr = m.terrain_at(seed, x, y)
         if terr not in _CAPTURABLE: raise ValueError("not_capturable")
         owner = m._owner_at(conn, sid, x, y)
         if owner is not None: raise ValueError("not_neutral")
-        if active:
-            n = polywar._fetchone(c, "SELECT COUNT(*) AS count FROM polywar_flags WHERE season_id=%s AND user_id=%s", (sid, user_id))["count"]
-            if int(n) >= max_flags_per_player(): raise ValueError("flag_limit")
-            in_scan = bool(polywar._fetchone(c, "SELECT id FROM polywar_scans WHERE season_id=%s AND faction_id=%s AND ABS(center_x-%s) <= scan_size/2 AND ABS(center_y-%s) <= scan_size/2 LIMIT 1", (sid, fid, x, y)))
-            if not (in_scan or _near_own_territory(conn, sid, fid, x, y, 5)): raise ValueError("flag_too_far")
-            now = datetime.utcnow()
-            polywar._execute(c, "INSERT INTO polywar_flags (season_id,faction_id,user_id,x,y,flag_type,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,user_id,x,y) DO UPDATE SET updated_at=excluded.updated_at, flag_type=excluded.flag_type", (sid,fid,user_id,x,y,"suspected_mine",now,now))
-        else:
-            polywar._execute(c, "DELETE FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid,user_id,x,y))
-        conn.commit(); return {"ok": True, "x": x, "y": y, "active": bool(active)}
+        n = polywar._fetchone(c, "SELECT COUNT(*) AS count FROM polywar_flags WHERE season_id=%s AND user_id=%s", (sid, user_id))["count"]
+        if int(n) >= max_flags_per_player(): raise ValueError("flag_limit")
+        in_scan = bool(polywar._fetchone(c, "SELECT id FROM polywar_scans WHERE season_id=%s AND faction_id=%s AND ABS(center_x-%s) <= scan_size/2 AND ABS(center_y-%s) <= scan_size/2 LIMIT 1", (sid, fid, x, y)))
+        if not (in_scan or _near_own_territory(conn, sid, fid, x, y, 5)): raise ValueError("flag_too_far")
+        now = datetime.utcnow()
+        polywar._execute(c, "INSERT INTO polywar_flags (season_id,faction_id,user_id,x,y,flag_type,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", (sid,fid,user_id,x,y,"suspected_mine",now,now))
+        conn.commit(); return {"ok": True, "x": x, "y": y, "active": True}
     except ValueError:
         polywar._safe_rollback(conn); raise
     finally:
