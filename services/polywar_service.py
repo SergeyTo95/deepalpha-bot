@@ -257,7 +257,7 @@ def init_polywar_schema(conn=None) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar phase6 schema sync failed")
-        if own or not getattr(conn, "in_transaction", False): conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()
@@ -321,6 +321,9 @@ def ensure_active_season(conn=None) -> Dict[str, Any]:
     try:
         now = _now()
         _complete_expired_active_seasons(conn, now)
+        finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
+        if finalizing:
+            raise RuntimeError("polywar_season_finalizing")
         row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
         if row:
             _ensure_faction_stats_for_season(conn, int(row["id"]))
@@ -337,14 +340,12 @@ def ensure_active_season(conn=None) -> Dict[str, Any]:
             _safe_rollback(conn)
             row = None
         if not row:
-            finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
-            if finalizing:
-                raise RuntimeError("polywar_season_finalizing")
             row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
         if not row:
             raise RuntimeError("polywar_active_season_unavailable")
         _ensure_faction_stats_for_season(conn, int(row["id"]))
-        conn.commit(); return _public_season(row)
+        conn.commit()
+        return _public_season(row)
     finally:
         if own: conn.close()
 

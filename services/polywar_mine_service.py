@@ -67,7 +67,7 @@ def init_polywar_mine_schema(conn=None):
             "CREATE INDEX IF NOT EXISTS idx_polywar_flags_chunk ON polywar_flags(season_id,faction_id,x,y)",
         ]:
             c.execute(sql)
-        if own or not getattr(conn, "in_transaction", False): conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()
@@ -325,6 +325,7 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        conn.commit()
         _begin_immediate_retry(conn, c)
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))

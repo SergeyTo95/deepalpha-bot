@@ -42,6 +42,24 @@ def begin_world_transaction(conn):
     _execute(c,'BEGIN')
     return c
 
+
+def _start_world_transaction(conn):
+    try:
+        begin_world_transaction(conn)
+        return True
+    except Exception as exc:
+        if 'within a transaction' in str(exc).lower() or 'already a transaction' in str(exc).lower():
+            return False
+        raise
+
+def _finish_world_transaction(conn, managed, ok=True):
+    if not managed:
+        return
+    if ok:
+        conn.commit()
+    else:
+        polywar._safe_rollback(conn)
+
 def lock_world_rows(conn, season_id:int):
     c=conn.cursor()
     suffix='' if _is_sqlite(conn) else ' FOR UPDATE'
@@ -53,6 +71,8 @@ def init_world_schema(conn=None):
     own=conn is None; conn=conn or polywar.get_connection(); c=conn.cursor(); id_sql='INTEGER PRIMARY KEY AUTOINCREMENT' if _is_sqlite(conn) else 'SERIAL PRIMARY KEY'
     try:
         _add_polywar_columns(conn)
+        try: sectors.init_polywar_sector_schema(conn)
+        except Exception: logger.exception('polywar_sector_schema_init_failed'); raise
         c.execute("""CREATE TABLE IF NOT EXISTS polywar_null_state (season_id INTEGER PRIMARY KEY,status TEXT NOT NULL,activation_at TIMESTAMP NOT NULL,activated_at TIMESTAMP NULL,next_tick_at TIMESTAMP NOT NULL,last_tick_at TIMESTAMP NULL,tick_index BIGINT NOT NULL DEFAULT 0,corruption_level INTEGER NOT NULL DEFAULT 0,controlled_cells_count INTEGER NOT NULL DEFAULT 0,controlled_sectors_count INTEGER NOT NULL DEFAULT 0,controlled_capitals_count INTEGER NOT NULL DEFAULT 0,defeated_at TIMESTAMP NULL,created_at TIMESTAMP NOT NULL,updated_at TIMESTAMP NOT NULL)""")
         c.execute(f"""CREATE TABLE IF NOT EXISTS polywar_null_rifts (id {id_sql},season_id INTEGER NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,status TEXT NOT NULL,health INTEGER NOT NULL,max_health INTEGER NOT NULL,spawned_at TIMESTAMP NOT NULL,last_action_at TIMESTAMP NULL,sealed_at TIMESTAMP NULL,sealed_by_user_id BIGINT NULL,sealed_by_faction_id INTEGER NULL,created_at TIMESTAMP NOT NULL,updated_at TIMESTAMP NOT NULL,UNIQUE(season_id,x,y))""")
         c.execute("""CREATE TABLE IF NOT EXISTS polywar_null_frontier (season_id INTEGER NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,source_rift_id INTEGER NULL,discovered_at TIMESTAMP NOT NULL,priority INTEGER NOT NULL DEFAULT 0,UNIQUE(season_id,x,y))""")
@@ -140,21 +160,26 @@ def update_frontier_for_cell(conn,sid,x,y,source=None):
     _execute(conn.cursor(),'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,x,y))
 
 def activate_if_due(conn,season_id:int,now=None):
-    now=now or _now(); ensure_world_initialized(conn,season_id); c=conn.cursor();
+    now=now or _now(); init_world_schema(conn)
     if not enabled(): return False
-    st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,))
-    if not st or st['status']!='dormant' or str(st['activation_at'])>polywar._iso(now): return False
-    _execute(c,"UPDATE polywar_null_state SET status='active',activated_at=%s,updated_at=%s WHERE season_id=%s AND status='dormant'",(now,now,season_id))
-    if polywar._rowcount(c)!=1: return False
-    seed=(_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)) or {}).get('secret_seed','seed')
-    for r in _fetchall(c,"SELECT * FROM polywar_null_rifts WHERE season_id=%s AND status='dormant'",(season_id,)):
-        old_owner=m._owner_at(conn,season_id,r['x'],r['y'])
-        _execute(c,"UPDATE polywar_null_rifts SET status='active',updated_at=%s WHERE id=%s",(now,r['id']))
-        _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,capture_progress=100,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,r['x'],r['y'],NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
-        sectors.transfer_cell_ownership(conn,season_id,r['x'],r['y'],old_owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,r['x'],r['y'],r['id'])
-        _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'rift_opened',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'Null rift opened at {r["x"]},{r["y"]}',now))
-    _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_state_activated','The Null State has activated.',%s)",(season_id,NULL_STATE_FACTION_ID,now))
-    _recount(conn,season_id); logger.info('polywar_null_state_activated season_id=%s',season_id); return True
+    managed=_start_world_transaction(conn); ok=False
+    try:
+        ensure_world_initialized(conn,season_id); lock_world_rows(conn,season_id); c=conn.cursor()
+        st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+        if not st or st['status']!='dormant' or str(st['activation_at'])>polywar._iso(now): ok=True; return False
+        _execute(c,"UPDATE polywar_null_state SET status='active',activated_at=%s,updated_at=%s WHERE season_id=%s AND status='dormant'",(now,now,season_id))
+        if polywar._rowcount(c)!=1: ok=True; return False
+        seed=(_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)) or {}).get('secret_seed','seed')
+        for r in _fetchall(c,"SELECT * FROM polywar_null_rifts WHERE season_id=%s AND status='dormant'"+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,)):
+            old_owner=m._owner_at(conn,season_id,r['x'],r['y'])
+            _execute(c,"UPDATE polywar_null_rifts SET status='active',updated_at=%s WHERE id=%s",(now,r['id']))
+            _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,capture_progress=100,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,r['x'],r['y'],NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
+            sectors.transfer_cell_ownership(conn,season_id,r['x'],r['y'],old_owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,r['x'],r['y'],r['id'])
+            _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'rift_opened',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'Null rift opened at {r["x"]},{r["y"]}',now))
+        _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_state_activated','The Null State has activated.',%s)",(season_id,NULL_STATE_FACTION_ID,now))
+        _recount(conn,season_id); logger.info('polywar_null_state_activated season_id=%s',season_id); ok=True; return True
+    finally:
+        _finish_world_transaction(conn,managed,ok)
 
 def _ordered_frontier(conn,sid,seed,tick,limit):
     rows=_fetchall(conn.cursor(),'SELECT * FROM polywar_null_frontier WHERE season_id=%s ORDER BY priority DESC,x,y LIMIT %s',(sid,max(limit*20,limit)))
@@ -162,7 +187,14 @@ def _ordered_frontier(conn,sid,seed,tick,limit):
 
 def _apply_null_capital_pressure(conn, sid, cap, now):
     from services import polywar_capital_service as caps
-    c=conn.cursor(); before=int(cap.get('siege_progress') or 0); bes=cap.get('besieging_faction_id'); req=caps.siege_required(); power=capital_siege_per_tick()
+    c=conn.cursor(); cap=_fetchone(c,'SELECT * FROM polywar_capitals WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(cap['id'],)) or cap
+    before=int(cap.get('siege_progress') or 0); bes=cap.get('besieging_faction_id'); req=caps.siege_required(); power=capital_siege_per_tick()
+    if int(cap.get('controller_faction_id') or 0)==NULL_STATE_FACTION_ID:
+        if before or bes:
+            _execute(c,'UPDATE polywar_capitals SET siege_progress=0, besieging_faction_id=NULL, siege_started_at=NULL, last_siege_at=NULL, updated_at=%s WHERE id=%s',(now,cap['id']))
+        _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,cap['x'],cap['y']))
+        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None)
+        return {'type':'null_capital_already_controlled','x':cap['x'],'y':cap['y']}
     if bes and int(bes)!=NULL_STATE_FACTION_ID:
         after=max(0,before-power); new_bes=bes if after>0 else None
         _execute(c,'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=%s, last_siege_at=%s, updated_at=%s WHERE id=%s',(after,new_bes,cap.get('siege_started_at') if after>0 else None,now,now,cap['id']))
@@ -171,6 +203,8 @@ def _apply_null_capital_pressure(conn, sid, cap, now):
     after=min(req,before+power)
     if after>=req:
         caps.transfer_capital_control(conn,sid,cap,NULL_STATE_FACTION_ID,None,now)
+        _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,cap['x'],cap['y']))
+        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None)
         _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_capital_captured',%s,%s)",(sid,NULL_STATE_FACTION_ID,f'The Null State captured capital {cap["x"]},{cap["y"]}',now))
         return {'type':'null_capital_captured','x':cap['x'],'y':cap['y']}
     _execute(c,'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=COALESCE(siege_started_at,%s), last_siege_at=%s, updated_at=%s WHERE id=%s',(after,NULL_STATE_FACTION_ID,now,now,now,cap['id']))
@@ -178,39 +212,53 @@ def _apply_null_capital_pressure(conn, sid, cap, now):
     return {'type':'null_capital_siege','x':cap['x'],'y':cap['y'],'progress_after':after}
 
 def process_due_tick(conn,season_id:int,now=None):
-    now=now or _now(); ensure_world_initialized(conn,season_id);
+    now=now or _now(); init_world_schema(conn)
     if not enabled(): return {'processed':False,'reason':'null_state_disabled'}
-    activate_if_due(conn,season_id,now); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,))
-    if not st or st['status']!='active' or str(st['next_tick_at'])>polywar._iso(now): return {'processed':False,'reason':'not_due'}
-    tick=int(st.get('tick_index') or 0)+1
-    if _is_sqlite(conn):
-        _execute(c,"INSERT OR IGNORE INTO polywar_world_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at) VALUES (%s,%s,%s,%s,'processing',%s)",(season_id,tick,st['next_tick_at'],now,now))
-    else:
-        _execute(c,"INSERT INTO polywar_world_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at) VALUES (%s,%s,%s,%s,'processing',%s) ON CONFLICT (season_id,tick_index) DO NOTHING",(season_id,tick,st['next_tick_at'],now,now))
-    if polywar._rowcount(c)!=1: return {'processed':False,'reason':'world_tick_conflict'}
-    season=_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)); actions=[]
-    for cand in _ordered_frontier(conn,season_id,season.get('secret_seed','seed'),tick,expansions_per_tick()):
-        x,y=int(cand['x']),int(cand['y'])
-        if m.TERRAIN_COSTS.get(m.terrain_at(season.get('secret_seed','seed'),x,y)) is None: continue
-        if is_rift(conn,season_id,x,y,'sealed'): continue
-        if not any(m._owner_at(conn,season_id,nx,ny)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)):
-            _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(season_id,x,y)); continue
-        try:
-            from services import polywar_capital_service as caps
-            cap=caps.get_capital_at(conn,season_id,x,y)
-        except Exception:
-            cap=None
-        if cap:
-            actions.append(_apply_null_capital_pressure(conn,season_id,cap,now)); continue
-        owner=m._owner_at(conn,season_id,x,y)
-        if owner==NULL_STATE_FACTION_ID: continue
-        _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,x,y,NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
-        sectors.transfer_cell_ownership(conn,season_id,x,y,owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,x,y,cand.get('source_rift_id')); actions.append({'type':'null_cell_captured','x':x,'y':y,'old_owner':owner})
-        _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_cell_captured',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'The Null State captured {x},{y}',now))
-    prev=st.get('next_tick_at')
-    if isinstance(prev,str): prev=datetime.fromisoformat(prev)
-    nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
-    _execute(c,"UPDATE polywar_null_state SET tick_index=%s,last_tick_at=%s,next_tick_at=%s,corruption_level=corruption_level+%s,updated_at=%s WHERE season_id=%s",(tick,now,nxt,len(actions),now,season_id)); _recount(conn,season_id); check_defeat(conn,season_id,now); return {'processed':True,'tick_index':tick,'actions_count':len(actions)}
+    managed=_start_world_transaction(conn); ok=False
+    try:
+        ensure_world_initialized(conn,season_id); lock_world_rows(conn,season_id); activate_if_due(conn,season_id,now); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+        if not st or st['status']!='active' or str(st['next_tick_at'])>polywar._iso(now): ok=True; return {'processed':False,'reason':'not_due'}
+        tick=int(st.get('tick_index') or 0)+1
+        stale_before=now-timedelta(minutes=max(2,tick_minutes()*2))
+        old=_fetchone(c,"SELECT * FROM polywar_world_ticks WHERE season_id=%s AND tick_index=%s",(season_id,tick))
+        if old and old.get('status')=='processing' and str(old.get('started_at'))>polywar._iso(stale_before): ok=True; return {'processed':False,'reason':'world_tick_conflict'}
+        if old and old.get('status')=='processing':
+            _execute(c,"UPDATE polywar_world_ticks SET status='failed',processed_at=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,json.dumps({'recovered_stale_processing':True}),season_id,tick))
+            _execute(c,"DELETE FROM polywar_world_ticks WHERE season_id=%s AND tick_index=%s AND status='failed'",(season_id,tick))
+            old=None
+        if _is_sqlite(conn):
+            _execute(c,"INSERT OR IGNORE INTO polywar_world_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at) VALUES (%s,%s,%s,%s,'processing',%s)",(season_id,tick,st['next_tick_at'],now,now))
+        else:
+            _execute(c,"INSERT INTO polywar_world_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at) VALUES (%s,%s,%s,%s,'processing',%s) ON CONFLICT (season_id,tick_index) DO NOTHING",(season_id,tick,st['next_tick_at'],now,now))
+        if polywar._rowcount(c)!=1 and not (old and old.get('status')=='processing'):
+            ok=True; return {'processed':False,'reason':'world_tick_conflict'}
+        season=_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)); actions=[]
+        for cand in _ordered_frontier(conn,season_id,season.get('secret_seed','seed'),tick,expansions_per_tick()):
+            x,y=int(cand['x']),int(cand['y'])
+            if m.TERRAIN_COSTS.get(m.terrain_at(season.get('secret_seed','seed'),x,y)) is None: continue
+            if is_rift(conn,season_id,x,y,'sealed'): continue
+            if not any(m._owner_at(conn,season_id,nx,ny)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)):
+                _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(season_id,x,y)); continue
+            try:
+                from services import polywar_capital_service as caps
+                cap=caps.get_capital_at(conn,season_id,x,y)
+            except Exception:
+                cap=None
+            if cap:
+                actions.append(_apply_null_capital_pressure(conn,season_id,cap,now)); update_frontier_for_cell(conn,season_id,x,y,None); continue
+            owner=m._owner_at(conn,season_id,x,y)
+            if owner==NULL_STATE_FACTION_ID: continue
+            _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,x,y,NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
+            sectors.transfer_cell_ownership(conn,season_id,x,y,owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,x,y,cand.get('source_rift_id')); actions.append({'type':'null_cell_captured','x':x,'y':y,'old_owner':owner})
+            _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_cell_captured',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'The Null State captured {x},{y}',now))
+        prev=st.get('next_tick_at')
+        if isinstance(prev,str): prev=datetime.fromisoformat(prev)
+        nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
+        _execute(c,"UPDATE polywar_null_state SET tick_index=%s,last_tick_at=%s,next_tick_at=%s,corruption_level=corruption_level+%s,updated_at=%s WHERE season_id=%s",(tick,now,nxt,len(actions),now,season_id)); _recount(conn,season_id); check_defeat(conn,season_id,now); ok=True; return {'processed':True,'tick_index':tick,'actions_count':len(actions)}
+    except Exception:
+        logger.exception('polywar_world_tick_failed season_id=%s',season_id); raise
+    finally:
+        _finish_world_transaction(conn,managed,ok)
 
 def ensure_world_caught_up(conn,season_id:int,now=None):
     now=now or _now(); out=[]
@@ -221,11 +269,12 @@ def ensure_world_caught_up(conn,season_id:int,now=None):
 
 def _recount(conn,sid):
     c=conn.cursor(); cells=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
+    sec=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_sectors WHERE season_id=%s AND controller_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
     caps=0
     try: caps=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s AND controller_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
     except Exception: pass
-    _execute(c,'UPDATE polywar_null_state SET controlled_cells_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s',(cells,caps,_now(),sid))
-    _execute(c,'UPDATE polywar_faction_season_stats SET controlled_cells_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s AND faction_id=%s',(cells,caps,_now(),sid,NULL_STATE_FACTION_ID))
+    _execute(c,'UPDATE polywar_null_state SET controlled_cells_count=%s,controlled_sectors_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s',(cells,sec,caps,_now(),sid))
+    _execute(c,'UPDATE polywar_faction_season_stats SET controlled_cells_count=%s,controlled_sectors_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s AND faction_id=%s',(cells,sec,caps,_now(),sid,NULL_STATE_FACTION_ID))
     sectors.recalc_influence(conn,sid,NULL_STATE_FACTION_ID,_now())
 
 def check_defeat(conn,sid,now=None):

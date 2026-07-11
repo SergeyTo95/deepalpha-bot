@@ -1,4 +1,4 @@
-import sqlite3, uuid, sys
+import sqlite3, uuid, sys, threading
 from pathlib import Path
 import types
 if "db.database" not in sys.modules:
@@ -168,3 +168,36 @@ def test_null_capital_siege_progress_and_rival_reduction(db):
     c.commit(); world.process_due_tick(c,sid,datetime.utcnow()); c.commit()
     cap2=c.execute('select * from polywar_capitals where id=?',(cap['id'],)).fetchone()
     assert cap2['siege_progress']<=10 or cap2['besieging_faction_id'] is None
+
+
+def test_null_capital_capture_not_repeated_on_next_tick(db):
+    connect,settings=db; settings['polywar_null_expansions_per_tick']='10'; settings['polywar_null_capital_siege_per_tick']='100000'
+    sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid)
+    seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]
+    x=y=70
+    while world.m.TERRAIN_COSTS.get(world.m.terrain_at(seed,x,y)) is None or world.m.TERRAIN_COSTS.get(world.m.terrain_at(seed,x-1,y)) is None:
+        x+=1; y+=1
+    now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,x,y,1,now,now)); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,8)',(sid,x-1,y)); world.update_frontier_for_cell(c,sid,x-1,y,None)
+    c.execute('delete from polywar_null_frontier where season_id=? and not (x=? and y=?)',(sid,x,y)); c.execute('insert or replace into polywar_null_frontier (season_id,x,y,discovered_at,priority) values (?,?,?,?,?)',(sid,x,y,now,999)); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(now-timedelta(minutes=1),sid)); c.commit()
+    world.process_due_tick(c,sid,datetime.utcnow()); c.commit(); c.execute('insert or replace into polywar_null_frontier (season_id,x,y,discovered_at,priority) values (?,?,?,?,?)',(sid,x,y,datetime.utcnow(),999)); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()-timedelta(minutes=1),sid)); c.commit(); world.process_due_tick(c,sid,datetime.utcnow()); c.commit()
+    cap=c.execute('select * from polywar_capitals where season_id=? and x=? and y=?',(sid,x,y)).fetchone(); events=c.execute("select count(*) from polywar_events where season_id=? and event_type='null_capital_captured'",(sid,)).fetchone()[0]
+    assert cap['controller_faction_id']==8 and int(cap['siege_progress'] or 0)==0 and cap['besieging_faction_id'] is None and events==1
+
+
+def test_threaded_concurrent_world_initialization_and_activation(db):
+    connect,_=db; sid=active(connect); errs=[]
+    def worker():
+        try:
+            c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid,datetime.utcnow()); c.commit(); c.close()
+        except Exception as exc: errs.append(exc)
+    ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert not errs; assert c.execute('select count(*) from polywar_null_state where season_id=?',(sid,)).fetchone()[0]==1; assert c.execute('select count(*) from polywar_null_rifts where season_id=?',(sid,)).fetchone()[0]==world.rift_count()
+
+
+def test_stale_processing_tick_recovery(db):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid); past=datetime.utcnow()-timedelta(hours=3); c.execute('update polywar_null_state set next_tick_at=?,tick_index=0 where season_id=?',(past,sid)); c.execute('delete from polywar_world_ticks where season_id=?',(sid,)); c.execute("insert or ignore into polywar_world_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at) values (?,?,?,?,?,?)",(sid,1,past,past,'processing',past)); c.commit(); out=world.process_due_tick(c,sid,datetime.utcnow()); c.commit(); assert out['processed'] is True; assert c.execute("select count(*) from polywar_world_ticks where season_id=? and tick_index=1 and status='completed'",(sid,)).fetchone()[0]==1
+
+
+def test_finalize_source_uses_begin_helper():
+    src=Path('services/polywar_finalization_service.py').read_text()
+    assert '_begin(conn)' in src and "status='finalizing'" in src
