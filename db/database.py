@@ -951,6 +951,16 @@ def _init_db_inner(conn, cursor):
         ("polywar_scan_3_energy_cost", "2"),
         ("polywar_scan_5_energy_cost", "4"),
         ("polywar_max_flags_per_player", "100"),
+        ("polywar_enemy_attack_extra_energy", "1"),
+        ("polywar_attack_progress_per_action", "50"),
+        ("polywar_capture_progress_required", "100"),
+        ("polywar_reinforce_energy_cost", "1"),
+        ("polywar_reinforce_progress_per_action", "50"),
+        ("polywar_sector_size", "100"),
+        ("polywar_sector_min_claimed_cells", "25"),
+        ("polywar_sector_control_percent", "60"),
+        ("polywar_sector_influence_value", "100"),
+        ("polywar_max_sectors_per_request", "100"),
     ]
     for key, value in polywar_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))

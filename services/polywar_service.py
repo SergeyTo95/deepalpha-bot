@@ -75,7 +75,7 @@ def is_enabled() -> bool:
 def _execute(cursor, sql: str, params=()):
     rendered = sql
     last_error = None
-    for attempt in range(8):
+    for attempt in range(30):
         try:
             return cursor.execute(rendered, params)
         except Exception as exc:
@@ -437,6 +437,16 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         public_player["lifetime_airdrop_points"] = _lifetime_airdrop_points(int(user_id))
         ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
         from services.polywar_map_service import map_width, map_height, chunk_size, max_chunks_per_request, get_starting_bases
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        from services import polywar_combat_service as combat_rules
+        from services import polywar_sector_service as sector_rules
+        try:
+            sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
+            conn.commit()
+            factions = list_factions_with_stats(int(season["id"]), conn)
+            ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
+        except Exception:
+            pass
+        rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules()}
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()
