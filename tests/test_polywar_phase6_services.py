@@ -296,3 +296,11 @@ def test_frontend_results_claim_and_countdown_source_runtime_hooks():
     src=Path('webapp/polywar.js').read_text()
     assert 'polywarClaimKeys' in src and 'startWorldCountdownTimer' in src
     assert "#polywarClaimReward" in src and 'renderResultsPanel(currentState)' in src
+
+def test_public_world_includes_domination_hold_state(db):
+    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_domination_hold_hours']='2'; sid=active(connect); c=connect(); now=datetime.utcnow(); world.ensure_world_initialized(c,sid)
+    c.execute('update polywar_seasons set domination_faction_id=1, domination_started_at=? where id=?',(now,sid))
+    c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,92,90,1,now,now))
+    c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,93,90,1,now,now))
+    c.commit(); st=world.get_public_world_state(c,sid)
+    assert st['domination_faction_id']==1 and st['domination_hold_hours']==2 and st['domination_hold_until'] and st['victory_candidate_type']=='domination'

@@ -262,11 +262,10 @@ def process_due_tick(conn,season_id:int,now=None):
         if isinstance(prev,str): prev=datetime.fromisoformat(prev)
         nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
         _execute(c,"UPDATE polywar_null_state SET tick_index=%s,last_tick_at=%s,next_tick_at=%s,corruption_level=corruption_level+%s,updated_at=%s WHERE season_id=%s",(tick,now,nxt,len(actions),now,season_id)); _recount(conn,season_id); check_defeat(conn,season_id,now)
-        try:
-            from services import polywar_finalization_service as finalization
-            finalization.maybe_finalize(conn,season_id,now)
-        except Exception:
-            logger.exception('polywar_world_finalization_check_failed season_id=%s',season_id)
+        from services import polywar_finalization_service as finalization
+        decision=finalization.maybe_finalize_in_transaction(conn,season_id,now)
+        if decision.get('should_finalize'):
+            finalization.finalize_season_in_transaction(conn,season_id,decision.get('victory_type','time'),decision.get('winner_faction_id'),now)
         ok=True; return {'processed':True,'tick_index':tick,'actions_count':len(actions)}
     except Exception:
         logger.exception('polywar_world_tick_failed season_id=%s',season_id); raise
@@ -298,16 +297,23 @@ def check_defeat(conn,sid,now=None):
 
 def get_public_world_state(conn,season_id:int):
     ensure_world_initialized(conn,season_id)
-    try:
-        from services import polywar_finalization_service as finalization
-        finalization.maybe_finalize(conn,season_id,_now())
-    except Exception:
-        pass
+    from services import polywar_finalization_service as finalization
+    finalization.maybe_finalize(conn,season_id,_now())
     c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {}; rifts=_fetchall(c,'SELECT * FROM polywar_null_rifts WHERE season_id=%s ORDER BY id',(season_id,))
     def rr(r):
         hp=0 if not r.get('max_health') else round(100*int(r.get('health') or 0)/int(r.get('max_health') or 1),2)
         return {'x':r['x'],'y':r['y'],'status':r['status'],'health':r['health'],'max_health':r['max_health'],'health_percent':hp,'sealed_by_faction_id':r.get('sealed_by_faction_id'),'sealed_at':polywar._iso(r.get('sealed_at'))}
-    return {'season_id':season_id,'status':('disabled' if not enabled() else st.get('status')),'activation_at':polywar._iso(st.get('activation_at')),'activated_at':polywar._iso(st.get('activated_at')),'next_tick_at':polywar._iso(st.get('next_tick_at')),'tick_index':st.get('tick_index',0),'corruption_level':st.get('corruption_level',0),'controlled_cells_count':st.get('controlled_cells_count',0),'controlled_sectors_count':st.get('controlled_sectors_count',0),'controlled_capitals_count':st.get('controlled_capitals_count',0),'active_rifts':[rr(r) for r in rifts if r['status']=='active'],'sealed_rifts':[rr(r) for r in rifts if r['status']=='sealed'],'rifts':[rr(r) for r in rifts],'defeated_at':polywar._iso(st.get('defeated_at')),'server_timestamp':int(time.time()),'rules':public_rules()}
+    season=polywar._fetchone(c,'SELECT domination_faction_id,domination_started_at FROM polywar_seasons WHERE id=%s',(season_id,)) or {}
+    hold_hours=0; cand=None
+    if season.get('domination_faction_id'):
+        cand='null_state' if int(season.get('domination_faction_id') or 0)==NULL_STATE_FACTION_ID else 'domination'; hold_hours=_setting_int('polywar_null_victory_hold_hours' if cand=='null_state' else 'polywar_domination_hold_hours',12 if cand=='null_state' else 24,0,8760)
+    started=season.get('domination_started_at')
+    if isinstance(started,str):
+        try: started=datetime.fromisoformat(started)
+        except Exception: started=None
+    hold_until=(started+timedelta(hours=hold_hours)) if started else None
+    remaining=max(0,int((hold_until-_now()).total_seconds())) if hold_until else 0
+    return {'season_id':season_id,'status':('disabled' if not enabled() else st.get('status')),'activation_at':polywar._iso(st.get('activation_at')),'activated_at':polywar._iso(st.get('activated_at')),'next_tick_at':polywar._iso(st.get('next_tick_at')),'tick_index':st.get('tick_index',0),'corruption_level':st.get('corruption_level',0),'controlled_cells_count':st.get('controlled_cells_count',0),'controlled_sectors_count':st.get('controlled_sectors_count',0),'controlled_capitals_count':st.get('controlled_capitals_count',0),'active_rifts':[rr(r) for r in rifts if r['status']=='active'],'sealed_rifts':[rr(r) for r in rifts if r['status']=='sealed'],'rifts':[rr(r) for r in rifts],'defeated_at':polywar._iso(st.get('defeated_at')),'domination_faction_id':season.get('domination_faction_id'),'domination_started_at':polywar._iso(started),'domination_hold_hours':hold_hours,'domination_hold_until':polywar._iso(hold_until),'domination_remaining_seconds':remaining,'victory_candidate_type':cand,'server_timestamp':int(time.time()),'rules':public_rules()}
 
 def public_rules(): return {'seal_energy_cost':seal_cost(),'seal_progress':seal_progress(),'tick_minutes':tick_minutes(),'expansions_per_tick':expansions_per_tick(),'capital_siege_per_tick':capital_siege_per_tick()}
 

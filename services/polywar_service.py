@@ -337,7 +337,7 @@ def ensure_active_season(conn=None) -> Dict[str, Any]:
             """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
             row = _dict(c.fetchone())
         except Exception:
-            _safe_rollback(conn)
+            if own: _safe_rollback(conn)
             row = None
         if not row:
             row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
@@ -539,9 +539,15 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         from services import polywar_sector_service as sector_rules
         from services import polywar_capital_service as capital_rules
         from services import polywar_governance_service as governance_rules
+        if own:
+            try: conn.commit()
+            except Exception: pass
         try:
             sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
             capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
+            if own:
+                try: conn.commit()
+                except Exception: pass
             if player.get("faction_id"):
                 c = conn.cursor()
                 governance_rules._begin(conn, c)

@@ -35,93 +35,119 @@ def domination_hold_hours(): return _setting_int('polywar_domination_hold_hours'
 def null_victory_capitals_required(): return _setting_int('polywar_null_victory_capitals_required',7,1,100)
 def null_victory_hold_hours(): return _setting_int('polywar_null_victory_hold_hours',12,0,8760)
 
-def maybe_finalize(conn,season_id:int,now=None):
-    init_finalization_schema(conn); c=conn.cursor(); now=now or _now(); season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,))
-    if not season or season.get('status')=='completed': return False
-    if season.get('status')!='active': return False
-    # Domination / Null State hold tracking before time expiry.
+def maybe_finalize_in_transaction(conn,season_id:int,now=None):
+    now=now or _now(); c=conn.cursor()
+    season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+    if not season or season.get('status')!='active': return {'should_finalize':False}
     caps=polywar._fetchall(c,'SELECT controller_faction_id,COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s GROUP BY controller_faction_id',(season_id,))
     counts={int(r['controller_faction_id']):int(r['n']) for r in caps if r.get('controller_faction_id') is not None}
-    null_count=counts.get(NULL_STATE_FACTION_ID,0)
+    def _event_once(event_type,fid,msg):
+        exists=polywar._fetchone(c,'SELECT id FROM polywar_events WHERE season_id=%s AND event_type=%s AND COALESCE(faction_id,0)=COALESCE(%s,0) LIMIT 1',(season_id,event_type,fid))
+        if not exists: polywar._execute(c,'INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s)',(season_id,fid,event_type,msg,now))
     playable=[(fid,n) for fid,n in counts.items() if fid!=NULL_STATE_FACTION_ID and n>=domination_capitals_required()]
+    candidate_type=None; candidate_fid=None; hold_hours=0
     if playable:
-        fid=sorted(playable,key=lambda x:(-x[1],x[0]))[0][0]
-        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==fid else None
+        candidate_fid=sorted(playable,key=lambda x:(-x[1],x[0]))[0][0]; candidate_type='domination'; hold_hours=domination_hold_hours()
+    elif counts.get(NULL_STATE_FACTION_ID,0)>=null_victory_capitals_required():
+        candidate_fid=NULL_STATE_FACTION_ID; candidate_type='null_state'; hold_hours=null_victory_hold_hours()
+    if candidate_type:
+        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==int(candidate_fid) else None
         if not started:
-            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(fid,now,season_id)); polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'domination_started','Domination hold started.',%s)",(season_id,fid,now)); return False
+            polywar._execute(c,'UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s',(candidate_fid,now,season_id)); _event_once('domination_started',candidate_fid,'Domination hold started.'); return {'should_finalize':False}
         if isinstance(started,str): started=datetime.fromisoformat(started)
-        if now>=started+timedelta(hours=domination_hold_hours()):
-            return finalize_season(conn,season_id,'domination',fid,now)
-    elif null_count>=null_victory_capitals_required():
-        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==NULL_STATE_FACTION_ID else None
-        if not started:
-            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(NULL_STATE_FACTION_ID,now,season_id)); polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'domination_started','Null State victory hold started.',%s)",(season_id,NULL_STATE_FACTION_ID,now)); return False
-        if isinstance(started,str): started=datetime.fromisoformat(started)
-        if now>=started+timedelta(hours=null_victory_hold_hours()):
-            return finalize_season(conn,season_id,'null_state',None,now)
-    elif season.get('domination_faction_id'):
-        polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s",(season_id,)); polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) VALUES (%s,'domination_cancelled','Domination hold cancelled.',%s)",(season_id,now))
-    if str(season.get('ends_at'))>polywar._iso(now): return False
-    return finalize_season(conn,season_id,'time',None,now)
-def _mark_finalization_failed(conn, season_id:int, exc:Exception):
+        if now>=started+timedelta(hours=hold_hours):
+            return {'should_finalize':True,'victory_type':candidate_type,'winner_faction_id':(None if candidate_type=='null_state' else candidate_fid)}
+        return {'should_finalize':False}
+    if season.get('domination_faction_id'):
+        polywar._execute(c,'UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s',(season_id,)); _event_once('domination_cancelled',None,'Domination hold cancelled.')
+    ends=season.get('ends_at')
+    if isinstance(ends,str): ends=datetime.fromisoformat(ends)
+    if ends and now>=ends: return {'should_finalize':True,'victory_type':'time','winner_faction_id':None}
+    return {'should_finalize':False}
+
+def maybe_finalize(conn,season_id:int,now=None):
+    init_finalization_schema(conn); managed=False; nested=False
     try:
-        c=conn.cursor(); now=_now()
+        try:
+            _begin(conn); managed=True
+        except Exception as exc:
+            if 'within a transaction' in str(exc).lower() or 'already a transaction' in str(exc).lower():
+                nested=True
+            else:
+                raise
+        decision=maybe_finalize_in_transaction(conn,season_id,now or _now())
+        if decision.get('should_finalize'):
+            finalize_season_in_transaction(conn,season_id,decision.get('victory_type','time'),decision.get('winner_faction_id'),now or _now())
+            if managed: conn.commit()
+            return True
+        if managed: conn.commit()
+        return False
+    except Exception:
+        if managed:
+            try: conn.rollback()
+            except Exception: pass
+        logger.exception('polywar_maybe_finalize_failed season_id=%s',season_id)
+        raise
+
+def _mark_finalization_failed(season_id:int, exc:Exception):
+    conn=polywar.get_connection()
+    try:
+        _begin(conn); c=conn.cursor(); now=_now()
         polywar._execute(c,"INSERT INTO polywar_season_finalizations (season_id,version,status,started_at,created_at,updated_at,error_message) VALUES (%s,1,'failed',%s,%s,%s,%s) ON CONFLICT (season_id) DO UPDATE SET status='failed',error_message=%s,updated_at=%s",(season_id,now,now,now,type(exc).__name__,type(exc).__name__,now))
         conn.commit()
     except Exception:
         try: conn.rollback()
         except Exception: pass
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+def finalize_season_in_transaction(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
+    now=now or _now(); c=conn.cursor()
+    season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+    if not season: return False
+    marker=polywar._fetchone(c,"SELECT * FROM polywar_season_finalizations WHERE season_id=%s"+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+    if season.get('status')=='completed' or (marker and marker.get('status')=='completed'): return False
+    polywar._execute(c,"INSERT INTO polywar_season_finalizations (season_id,version,status,started_at,created_at,updated_at) VALUES (%s,1,'processing',%s,%s,%s) ON CONFLICT (season_id) DO NOTHING",(season_id,now,now,now))
+    polywar._execute(c,"UPDATE polywar_seasons SET status='finalizing',victory_type=%s,winner_faction_id=%s,finalization_started_at=%s WHERE id=%s AND status IN ('active','finalizing')",(victory_type,winner_faction_id,now,season_id))
+    stats=polywar._fetchall(c,'SELECT s.*,f.is_system FROM polywar_faction_season_stats s JOIN polywar_factions f ON f.id=s.faction_id WHERE s.season_id=%s ORDER BY s.faction_id'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+    contrib={r['faction_id']:r['total'] for r in polywar._fetchall(c,'SELECT faction_id,COALESCE(SUM(faction_contribution),0) AS total FROM polywar_players WHERE season_id=%s GROUP BY faction_id',(season_id,))}
+    rift_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT sealed_by_faction_id AS faction_id,COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s AND status='sealed' AND sealed_by_faction_id IS NOT NULL GROUP BY sealed_by_faction_id",(season_id,))}
+    sup_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.support_contribution>0 GROUP BY rc.faction_id",(season_id,))}
+    suppress_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.suppress_contribution>0 GROUP BY rc.faction_id",(season_id,))}
+    playable=sorted([s for s in stats if int(s.get('is_system') or 0)==0],key=lambda s:(-int(s.get('influence_score') or 0),-int(s.get('controlled_capitals_count') or 0),-int(s.get('controlled_sectors_count') or 0),-int(s.get('controlled_cells_count') or 0),-int(contrib.get(s['faction_id']) or 0),int(s['faction_id'])))
+    ranks={s['faction_id']:i+1 for i,s in enumerate(playable)}
+    if winner_faction_id is None and playable and victory_type!='null_state': winner_faction_id=playable[0]['faction_id']
+    for srow in stats:
+        fid=int(srow['faction_id']); is_system=1 if fid==NULL_STATE_FACTION_ID or int(srow.get('is_system') or 0) else 0; rank=None if is_system else ranks.get(fid)
+        snap={'faction_id':fid,'rank':rank,'is_system':is_system,'influence_score':int(srow.get('influence_score') or 0),'controlled_cells_count':int(srow.get('controlled_cells_count') or 0),'controlled_sectors_count':int(srow.get('controlled_sectors_count') or 0),'controlled_capitals_count':int(srow.get('controlled_capitals_count') or 0),'active_members_count':int(srow.get('active_members_count') or 0),'total_faction_contribution':int(contrib.get(fid) or 0),'rifts_sealed_count':int(rift_counts.get(fid) or 0),'rebellions_supported_count':int(sup_counts.get(fid) or 0),'rebellions_suppressed_count':int(suppress_counts.get(fid) or 0),'is_winner':1 if fid==winner_faction_id else 0}
+        polywar._execute(c,'INSERT INTO polywar_season_results (season_id,faction_id,rank,is_system,influence_score,controlled_cells_count,controlled_sectors_count,controlled_capitals_count,active_members_count,total_faction_contribution,rifts_sealed_count,rebellions_supported_count,rebellions_suppressed_count,is_winner,snapshot_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,faction_id) DO NOTHING',(season_id,fid,rank,is_system,snap['influence_score'],snap['controlled_cells_count'],snap['controlled_sectors_count'],snap['controlled_capitals_count'],snap['active_members_count'],snap['total_faction_contribution'],snap['rifts_sealed_count'],snap['rebellions_supported_count'],snap['rebellions_suppressed_count'],snap['is_winner'],json.dumps(snap,sort_keys=True),now))
+    _calculate_rewards(conn,season_id,ranks,winner_faction_id)
+    result_rows=polywar._fetchall(c,'SELECT faction_id,rank,is_system,influence_score,controlled_cells_count,controlled_sectors_count,controlled_capitals_count,active_members_count,total_faction_contribution,rifts_sealed_count,rebellions_supported_count,rebellions_suppressed_count,is_winner FROM polywar_season_results WHERE season_id=%s ORDER BY faction_id',(season_id,))
+    reward_rows=polywar._fetchall(c,'SELECT user_id,faction_id,faction_rank,faction_contribution,participation_reward,contribution_reward,placement_reward,null_state_reward,total_reward,status,claim_reference FROM polywar_player_season_rewards WHERE season_id=%s ORDER BY user_id',(season_id,))
+    snapshot={'season_id':season_id,'version':1,'victory_type':victory_type,'winner_faction_id':winner_faction_id,'completed_at':polywar._iso(now),'factions':result_rows,'rewards':reward_rows}
+    h=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
+    polywar._execute(c,"UPDATE polywar_season_finalizations SET status='completed',completed_at=%s,results_hash=%s,error_message=NULL,updated_at=%s WHERE season_id=%s",(now,h,now,season_id))
+    polywar._execute(c,"UPDATE polywar_seasons SET status='completed',completed_at=%s,finalized_at=%s,results_hash=%s,winner_faction_id=%s,victory_type=%s WHERE id=%s",(now,now,h,winner_faction_id,victory_type,season_id))
+    polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) SELECT %s,'season_completed','PolyWar season completed.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='season_completed')",(season_id,now,season_id))
+    if victory_type=='null_state': polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) SELECT %s,'null_state_victory','The Null State has won.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='null_state_victory')",(season_id,now,season_id))
+    elif winner_faction_id: polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) SELECT %s,%s,'season_winner','Season winner determined.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='season_winner')",(season_id,winner_faction_id,now,season_id))
+    if not polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='active' LIMIT 1"):
+        start=now; end=start+timedelta(days=polywar._setting_int('polywar_season_days',30,1,365)); polywar._execute(c,"INSERT INTO polywar_seasons (name,status,starts_at,ends_at,secret_seed,created_at) VALUES (%s,'active',%s,%s,%s,%s)",('Season next',start,end,secrets.token_hex(32),start))
+    return True
 
 def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
-    now=now or _now(); init_finalization_schema(conn); managed=False
+    init_finalization_schema(conn); managed=False
     try:
         _begin(conn); managed=True
-        c=conn.cursor()
-        season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
-        if not season:
-            if managed: conn.rollback()
-            return False
-        marker=polywar._fetchone(c,"SELECT * FROM polywar_season_finalizations WHERE season_id=%s"+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
-        if season.get('status')=='completed' or (marker and marker.get('status')=='completed'):
-            if managed: conn.commit()
-            return False
-        polywar._execute(c,"INSERT INTO polywar_season_finalizations (season_id,version,status,started_at,created_at,updated_at) VALUES (%s,1,'processing',%s,%s,%s) ON CONFLICT (season_id) DO NOTHING",(season_id,now,now,now))
-        marker=polywar._fetchone(c,"SELECT * FROM polywar_season_finalizations WHERE season_id=%s"+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
-        if marker and marker.get('status')=='completed':
-            if managed: conn.commit()
-            return False
-        polywar._execute(c,"UPDATE polywar_seasons SET status='finalizing',victory_type=%s,winner_faction_id=%s,finalization_started_at=%s WHERE id=%s AND status IN ('active','finalizing')",(victory_type,winner_faction_id,now,season_id))
-        stats=polywar._fetchall(c,'SELECT s.*,f.is_system FROM polywar_faction_season_stats s JOIN polywar_factions f ON f.id=s.faction_id WHERE s.season_id=%s ORDER BY s.faction_id'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
-        contrib={r['faction_id']:r['total'] for r in polywar._fetchall(c,'SELECT faction_id,COALESCE(SUM(faction_contribution),0) AS total FROM polywar_players WHERE season_id=%s GROUP BY faction_id',(season_id,))}
-        rift_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT sealed_by_faction_id AS faction_id,COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s AND status='sealed' AND sealed_by_faction_id IS NOT NULL GROUP BY sealed_by_faction_id",(season_id,))}
-        sup_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.support_contribution>0 GROUP BY rc.faction_id",(season_id,))}
-        suppress_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.suppress_contribution>0 GROUP BY rc.faction_id",(season_id,))}
-        playable=sorted([s for s in stats if int(s.get('is_system') or 0)==0],key=lambda s:(-int(s.get('influence_score') or 0),-int(s.get('controlled_capitals_count') or 0),-int(s.get('controlled_sectors_count') or 0),-int(s.get('controlled_cells_count') or 0),-int(contrib.get(s['faction_id']) or 0),int(s['faction_id'])))
-        ranks={s['faction_id']:i+1 for i,s in enumerate(playable)}
-        if winner_faction_id is None and playable and victory_type!='null_state': winner_faction_id=playable[0]['faction_id']
-        for srow in stats:
-            fid=int(srow['faction_id']); is_system=1 if fid==NULL_STATE_FACTION_ID or int(srow.get('is_system') or 0) else 0; rank=None if is_system else ranks.get(fid)
-            snap={'faction_id':fid,'rank':rank,'is_system':is_system,'influence_score':int(srow.get('influence_score') or 0),'controlled_cells_count':int(srow.get('controlled_cells_count') or 0),'controlled_sectors_count':int(srow.get('controlled_sectors_count') or 0),'controlled_capitals_count':int(srow.get('controlled_capitals_count') or 0),'active_members_count':int(srow.get('active_members_count') or 0),'total_faction_contribution':int(contrib.get(fid) or 0),'rifts_sealed_count':int(rift_counts.get(fid) or 0),'rebellions_supported_count':int(sup_counts.get(fid) or 0),'rebellions_suppressed_count':int(suppress_counts.get(fid) or 0),'is_winner':1 if fid==winner_faction_id else 0}
-            polywar._execute(c,'INSERT INTO polywar_season_results (season_id,faction_id,rank,is_system,influence_score,controlled_cells_count,controlled_sectors_count,controlled_capitals_count,active_members_count,total_faction_contribution,rifts_sealed_count,rebellions_supported_count,rebellions_suppressed_count,is_winner,snapshot_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,faction_id) DO NOTHING',(season_id,fid,rank,is_system,snap['influence_score'],snap['controlled_cells_count'],snap['controlled_sectors_count'],snap['controlled_capitals_count'],snap['active_members_count'],snap['total_faction_contribution'],snap['rifts_sealed_count'],snap['rebellions_supported_count'],snap['rebellions_suppressed_count'],snap['is_winner'],json.dumps(snap,sort_keys=True),now))
-        _calculate_rewards(conn,season_id,ranks,winner_faction_id)
-        result_rows=polywar._fetchall(c,'SELECT faction_id,rank,is_system,influence_score,controlled_cells_count,controlled_sectors_count,controlled_capitals_count,active_members_count,total_faction_contribution,rifts_sealed_count,rebellions_supported_count,rebellions_suppressed_count,is_winner FROM polywar_season_results WHERE season_id=%s ORDER BY faction_id',(season_id,))
-        reward_rows=polywar._fetchall(c,'SELECT user_id,faction_id,faction_rank,faction_contribution,participation_reward,contribution_reward,placement_reward,null_state_reward,total_reward,status,claim_reference FROM polywar_player_season_rewards WHERE season_id=%s ORDER BY user_id',(season_id,))
-        snapshot={'season_id':season_id,'version':1,'victory_type':victory_type,'winner_faction_id':winner_faction_id,'completed_at':polywar._iso(now),'factions':result_rows,'rewards':reward_rows}
-        h=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
-        polywar._execute(c,"UPDATE polywar_season_finalizations SET status='completed',completed_at=%s,results_hash=%s,error_message=NULL,updated_at=%s WHERE season_id=%s",(now,h,now,season_id))
-        polywar._execute(c,"UPDATE polywar_seasons SET status='completed',completed_at=%s,finalized_at=%s,results_hash=%s,winner_faction_id=%s,victory_type=%s WHERE id=%s",(now,now,h,winner_faction_id,victory_type,season_id))
-        polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) SELECT %s,'season_completed','PolyWar season completed.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='season_completed')",(season_id,now,season_id))
-        if victory_type=='null_state': polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) SELECT %s,'null_state_victory','The Null State has won.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='null_state_victory')",(season_id,now,season_id))
-        elif winner_faction_id: polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) SELECT %s,%s,'season_winner','Season winner determined.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='season_winner')",(season_id,winner_faction_id,now,season_id))
-        if not polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='active' LIMIT 1"):
-            start=now; end=start+timedelta(days=polywar._setting_int('polywar_season_days',30,1,365)); polywar._execute(c,"INSERT INTO polywar_seasons (name,status,starts_at,ends_at,secret_seed,created_at) VALUES (%s,'active',%s,%s,%s,%s)",('Season next',start,end,secrets.token_hex(32),start))
+        out=finalize_season_in_transaction(conn,season_id,victory_type,winner_faction_id,now or _now())
         if managed: conn.commit()
-        return True
+        return out
     except Exception as exc:
         if managed:
             try: conn.rollback()
             except Exception: pass
-        _mark_finalization_failed(conn, season_id, exc)
+            _mark_finalization_failed(season_id, exc)
         raise
 def _calculate_rewards(conn,sid,ranks,winner):
     c=conn.cursor(); rules=public_rules(); out=[]; defeated=bool(polywar._fetchone(c,"SELECT 1 FROM polywar_null_state WHERE season_id=%s AND status='defeated'",(sid,)))
@@ -148,11 +174,13 @@ def get_results(conn,season_id=None,user_id=None):
     rows=polywar._fetchall(c,'SELECT * FROM polywar_season_results WHERE season_id=%s ORDER BY COALESCE(rank,999),faction_id',(season_id,)); reward=polywar._fetchone(c,'SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s',(season_id,user_id)) if user_id else None
     return {'ok':True,'season':{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in season.items()},'faction_ranking':[r for r in rows if not int(r.get('is_system') or 0)],'null_state_result':next((r for r in rows if int(r.get('is_system') or 0)),None),'current_user_reward':reward}
 def _ledger_entry(ref):
-    try:
-        from services.airdrop_points_service import get_airdrop_points_ledger_entry_by_reference
-        return get_airdrop_points_ledger_entry_by_reference(ref)
-    except Exception:
-        return None
+    from services.airdrop_points_service import get_airdrop_points_ledger_entry_by_reference
+    return get_airdrop_points_ledger_entry_by_reference(ref)
+
+def _validate_ledger_reward(entry, reward, user_id):
+    from services.airdrop_points_service import _to_decimal
+    if int(entry.get('user_id') or 0) != int(user_id) or str(entry.get('reason')) != 'polywar_season_reward' or _to_decimal(entry.get('amount')) != _to_decimal(reward.get('total_reward')):
+        raise RuntimeError('airdrop_external_reference_mismatch')
 
 def _claim_tx_begin():
     conn=polywar.get_connection(); _begin(conn); return conn
@@ -173,6 +201,7 @@ def claim_reward(user_id:int,season_id:int,idempotency_key:str):
         if r.get('status')=='processing':
             ref=r['claim_reference']; entry=_ledger_entry(ref)
             if entry:
+                _validate_ledger_reward(entry,r,user_id)
                 polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='claimed',claimed_at=COALESCE(claimed_at,%s) WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id)); conn.commit(); return {'ok':True,'claimed':True,'duplicate':True,'reward':r}
             conn.commit(); return {'ok':False,'error':'reward_claim_processing'}
         if r.get('status') not in ('pending','failed'): raise ValueError('reward_ineligible')
@@ -202,6 +231,7 @@ def claim_reward(user_id:int,season_id:int,idempotency_key:str):
             conn.commit(); return {'ok':True,'claimed':True,'duplicate':True,'airdrop':res}
         polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='claimed',claimed_at=%s WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id))
         if polywar._rowcount(c)!=1: raise ValueError('reward_claim_processing')
+        polywar._execute(c,"INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) SELECT %s,%s,%s,'season_reward_claimed','Season reward claimed.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND user_id=%s AND event_type='season_reward_claimed')",(season_id,user_id,r.get('faction_id') if r else None,_now(),season_id,user_id))
         conn.commit(); return {'ok':True,'claimed':True,'airdrop':res}
     except Exception:
         polywar._safe_rollback(conn); raise

@@ -123,6 +123,16 @@ def _prepare_context_before_transaction(conn):
     capitals.init_polywar_capital_schema(conn)
     init_polywar_governance_schema(conn)
     season = polywar.ensure_active_season(conn)
+    try:
+        from services import polywar_finalization_service as finalization
+        finalization.maybe_finalize(conn, int(season['id']))
+        refreshed = polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_seasons WHERE id=%s', (int(season['id']),))
+        if refreshed and refreshed.get('status') == 'completed':
+            season = polywar.ensure_active_season(conn)
+    except Exception:
+        raise
+    try: conn.commit()
+    except Exception: pass
     return int(season['id'])
 
 def _governance_context_in_transaction(conn, user_id, season_id):
