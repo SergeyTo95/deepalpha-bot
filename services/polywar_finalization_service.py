@@ -1,4 +1,4 @@
-import hashlib,json,logging,time
+import hashlib,json,logging,time,secrets
 from datetime import datetime,timedelta
 from services import polywar_service as polywar
 from services.polywar_world_service import NULL_STATE_FACTION_ID
@@ -30,10 +30,36 @@ def init_finalization_schema(conn=None):
     finally:
         if own: conn.close()
 def public_rules(): return {'min_contribution':_setting_int('polywar_reward_min_contribution',5,0,1000000),'participation':_setting_int('polywar_reward_participation',25,0,1000000),'per_contribution':_setting_int('polywar_reward_per_contribution',1,0,1000000),'contribution_cap':_setting_int('polywar_reward_contribution_cap',500,0,1000000),'first_place':_setting_int('polywar_reward_first_place',500,0,1000000),'second_place':_setting_int('polywar_reward_second_place',250,0,1000000),'third_place':_setting_int('polywar_reward_third_place',100,0,1000000),'null_state_defeat':_setting_int('polywar_reward_null_state_defeat',100,0,1000000),'max_per_player':_setting_int('polywar_reward_max_per_player',2000,0,10000000)}
+def domination_capitals_required(): return _setting_int('polywar_domination_capitals_required',7,1,100)
+def domination_hold_hours(): return _setting_int('polywar_domination_hold_hours',24,0,8760)
+def null_victory_capitals_required(): return _setting_int('polywar_null_victory_capitals_required',7,1,100)
+def null_victory_hold_hours(): return _setting_int('polywar_null_victory_hold_hours',12,0,8760)
+
 def maybe_finalize(conn,season_id:int,now=None):
     init_finalization_schema(conn); c=conn.cursor(); now=now or _now(); season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,))
     if not season or season.get('status')=='completed': return False
-    if season.get('status')=='active' and str(season.get('ends_at'))>polywar._iso(now): return False
+    if season.get('status')!='active': return False
+    # Domination / Null State hold tracking before time expiry.
+    caps=polywar._fetchall(c,'SELECT controller_faction_id,COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s GROUP BY controller_faction_id',(season_id,))
+    counts={int(r['controller_faction_id']):int(r['n']) for r in caps if r.get('controller_faction_id') is not None}
+    null_count=counts.get(NULL_STATE_FACTION_ID,0)
+    playable=[(fid,n) for fid,n in counts.items() if fid!=NULL_STATE_FACTION_ID and n>=domination_capitals_required()]
+    if playable:
+        fid=sorted(playable,key=lambda x:(-x[1],x[0]))[0][0]
+        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==fid else None
+        if not started:
+            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(fid,now,season_id)); conn.commit(); return False
+        if isinstance(started,str): started=datetime.fromisoformat(started)
+        if now>=started+timedelta(hours=domination_hold_hours()): return finalize_season(conn,season_id,'domination',fid,now)
+    elif null_count>=null_victory_capitals_required():
+        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==NULL_STATE_FACTION_ID else None
+        if not started:
+            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(NULL_STATE_FACTION_ID,now,season_id)); conn.commit(); return False
+        if isinstance(started,str): started=datetime.fromisoformat(started)
+        if now>=started+timedelta(hours=null_victory_hold_hours()): return finalize_season(conn,season_id,'null_state',None,now)
+    elif season.get('domination_faction_id'):
+        polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s",(season_id,)); conn.commit()
+    if str(season.get('ends_at'))>polywar._iso(now): return False
     return finalize_season(conn,season_id,'time',None,now)
 def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
     now=now or _now(); init_finalization_schema(conn); managed=False
@@ -67,6 +93,8 @@ def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=Non
     snapshot={'season_id':season_id,'version':1,'victory_type':victory_type,'winner_faction_id':winner_faction_id,'completed_at':polywar._iso(now),'factions':result_rows,'rewards':reward_rows}
     h=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
     polywar._execute(c,"UPDATE polywar_season_finalizations SET status='completed',completed_at=%s,results_hash=%s,updated_at=%s WHERE season_id=%s",(now,h,now,season_id)); polywar._execute(c,"UPDATE polywar_seasons SET status='completed',completed_at=%s,finalized_at=%s,results_hash=%s,winner_faction_id=%s,victory_type=%s WHERE id=%s",(now,now,h,winner_faction_id,victory_type,season_id)); polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) VALUES (%s,'season_completed','PolyWar season completed.',%s)",(season_id,now));
+    if not polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='active' LIMIT 1"):
+        start=now; end=start+timedelta(days=polywar._setting_int('polywar_season_days',30,1,365)); polywar._execute(c,"INSERT INTO polywar_seasons (name,status,starts_at,ends_at,secret_seed,created_at) VALUES (%s,'active',%s,%s,%s,%s)",('Season next',start,end,secrets.token_hex(32),start))
     if managed: conn.commit()
     return True
 def _calculate_rewards(conn,sid,ranks,winner):

@@ -252,6 +252,12 @@ def process_due_tick(conn,season_id:int,now=None):
             _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,x,y,NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
             sectors.transfer_cell_ownership(conn,season_id,x,y,owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,x,y,cand.get('source_rift_id')); actions.append({'type':'null_cell_captured','x':x,'y':y,'old_owner':owner})
             _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_cell_captured',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'The Null State captured {x},{y}',now))
+        
+        try:
+            from services import polywar_rebellion_service as rebellion
+            for ev in rebellion.process_rebellion_tick(conn,season_id,now,limit=10): actions.append({'type':ev})
+        except Exception:
+            logger.exception('polywar_rebellion_tick_failed season_id=%s',season_id)
         prev=st.get('next_tick_at')
         if isinstance(prev,str): prev=datetime.fromisoformat(prev)
         nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
@@ -299,34 +305,54 @@ def reconcile_polywar_season(conn,season_id:int,fix:bool=False):
 def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
     if not idempotency_key or len(str(idempotency_key))>120: raise ValueError('bad_idempotency_key')
     from services import polywar_mine_service as mines
-    conn=polywar.get_connection(); c=conn.cursor()
+    conn=polywar.get_connection(); c=conn.cursor(); managed=False; ok=False
     try:
-        polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_world_schema(conn); season=m._private_active_season(conn); sid=int(season['id']);
+        # Schema/world preparation is intentionally outside the gameplay transaction.
+        polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_world_schema(conn)
+        season=m._private_active_season(conn); sid=int(season['id'])
         if not enabled(): raise ValueError('null_state_disabled')
-        ensure_world_caught_up(conn,sid)
+        ensure_world_initialized(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
-        player=polywar.get_or_create_player(user_id,sid,conn); fid=player.get('faction_id')
+        # Lazy catch-up remains bounded and happens before the mutation lock.
+        ensure_world_caught_up(conn,sid); conn.commit()
+        managed=_start_world_transaction(conn)
+        lock_world_rows(conn,sid); polywar.assert_gameplay_mutation_allowed(conn,sid,_now())
+        suffix='' if _is_sqlite(conn) else ' FOR UPDATE'
+        player=polywar.get_or_create_player(user_id,sid,conn)
+        player=_fetchone(c,'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s'+suffix,(user_id,sid)) or player
+        dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
+        if dup: ok=True; return dup
+        fid=player.get('faction_id')
         if not fid or int(fid)==NULL_STATE_FACTION_ID: raise ValueError('faction_required')
-        e=polywar._energy(player)
-        if e.get('is_locked'): raise ValueError('player_locked')
-        st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(sid,))
+        st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+suffix,(sid,))
         if not st or st.get('status')!='active': raise ValueError('null_state_dormant')
-        r=is_rift(conn,sid,x,y)
+        r=_fetchone(c,'SELECT * FROM polywar_null_rifts WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
         if not r: raise ValueError('rift_required')
+        _fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
+        dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
+        if dup: ok=True; return dup
         if r['status']=='sealed': raise ValueError('rift_already_sealed')
         if r['status']!='active': raise ValueError('rift_inactive')
         if not any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)): raise ValueError('rift_not_frontline')
+        e=polywar._energy(player)
+        if e.get('is_locked'): raise ValueError('player_locked')
         cost=seal_cost()
         if int(e['current_energy'])<cost: raise ValueError('insufficient_energy')
         now=_now(); before=int(r['health']); after=max(0,before-seal_progress()); _,_,energy=mines.spend_player_energy(conn,player,cost,now); sealed=after<=0
         status='sealed' if sealed else 'active'; outcome='rift_sealed' if sealed else 'rift_damaged'
-        _execute(c,'UPDATE polywar_null_rifts SET health=%s,status=%s,last_action_at=%s,sealed_at=%s,sealed_by_user_id=%s,sealed_by_faction_id=%s,updated_at=%s WHERE id=%s',(after,status,now,now if sealed else None,user_id if sealed else None,fid if sealed else None,now,r['id']))
+        _execute(c,'UPDATE polywar_null_rifts SET health=%s,status=%s,last_action_at=%s,sealed_at=%s,sealed_by_user_id=%s,sealed_by_faction_id=%s,updated_at=%s WHERE id=%s AND status=%s',(after,status,now,now if sealed else None,user_id if sealed else None,fid if sealed else None,now,r['id'],r['status']))
+        if polywar._rowcount(c)!=1: raise ValueError('rift_inactive')
         _execute(c,"INSERT INTO polywar_rift_contributions (season_id,rift_id,user_id,faction_id,contribution,first_contributed_at,last_contributed_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rift_id,user_id) DO UPDATE SET contribution=contribution+%s,last_contributed_at=%s",(sid,r['id'],user_id,fid,before-after,now,now,before-after,now))
         if sealed:
-            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,NULL_STATE_FACTION_ID,fid,user_id,now); update_frontier_for_cell(conn,sid,x,y,None)
-        _execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); _recount(conn,sid); check_defeat(conn,sid,now)
+            old_owner=m._owner_at(conn,sid,x,y)
+            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,old_owner,fid,user_id,now); update_frontier_for_cell(conn,sid,x,y,None)
         payload={'coordinate':{'x':x,'y':y},'rift_status':status,'health_before':before,'health_after':after,'progress':before-after,'energy_cost':cost,'sealed':sealed,'sealing_faction_id':fid if sealed else None,'energy':energy}
-        mines.insert_outcome(conn,sid,user_id,idempotency_key,'seal_rift',x,y,outcome,cost,payload,now); conn.commit(); payload.update({'ok':True,'outcome':outcome}); return payload
-    except ValueError: polywar._safe_rollback(conn); raise
-    finally: conn.close()
+        _execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); _recount(conn,sid); check_defeat(conn,sid,now)
+        mines.insert_outcome(conn,sid,user_id,idempotency_key,'seal_rift',x,y,outcome,cost,payload,now)
+        ok=True; _finish_world_transaction(conn,managed,ok); managed=False; payload.update({'ok':True,'outcome':outcome}); return payload
+    except ValueError:
+        raise
+    finally:
+        if managed: _finish_world_transaction(conn,managed,ok)
+        conn.close()

@@ -226,3 +226,28 @@ def test_threaded_concurrent_activation_event_once(db):
 def test_results_snapshot_includes_phase6_aggregates_source():
     src=Path('services/polywar_finalization_service.py').read_text()
     assert 'rifts_sealed_count' in src and 'rebellions_supported_count' in src and 'JOIN polywar_rebellions' in src
+
+
+def test_threaded_same_key_seal_rift_one_damage_and_energy(db):
+    connect,settings=db; settings['polywar_null_rift_seal_progress']='100'; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid); r=c.execute("select * from polywar_null_rifts where season_id=? and status='active' limit 1",(sid,)).fetchone(); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,r['x']+1,r['y'])); c.execute('update polywar_players set current_energy=50,max_energy=50 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()+timedelta(days=1),sid)); c.commit(); c.close(); out=[]
+    def worker():
+        try: out.append(world.seal_rift_action(100,r['x'],r['y'],'thread-seal'))
+        except Exception as exc: out.append({'error':type(exc).__name__})
+    ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); row=c.execute('select health from polywar_null_rifts where id=?',(r['id'],)).fetchone(); p=c.execute('select current_energy from polywar_players where user_id=100 and season_id=?',(sid,)).fetchone(); assert row['health']==int(r['health'])-100 and p['current_energy']==47; assert c.execute('select count(*) from polywar_action_outcomes where season_id=? and idempotency_key=?',(sid,'thread-seal')).fetchone()[0]==1
+
+
+def test_threaded_final_seal_once_event_and_owner(db):
+    connect,settings=db; settings['polywar_null_rift_seal_progress']='100000'; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid); r=c.execute("select * from polywar_null_rifts where season_id=? and status='active' limit 1",(sid,)).fetchone(); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,r['x']+1,r['y'])); c.execute('update polywar_players set current_energy=50,max_energy=50 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()+timedelta(days=1),sid)); c.commit(); c.close()
+    ts=[threading.Thread(target=lambda: world.seal_rift_action(100,r['x'],r['y'],'thread-final-seal')) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute('select status,sealed_by_faction_id from polywar_null_rifts where id=?',(r['id'],)).fetchone()['status']=='sealed'; assert c.execute('select owner_faction_id from polywar_cells where season_id=? and x=? and y=?',(sid,r['x'],r['y'])).fetchone()[0]==1; assert c.execute("select count(*) from polywar_events where season_id=? and event_type='rift_sealed'",(sid,)).fetchone()[0]==1
+
+
+def test_threaded_same_key_rebellion_support_one_progress_and_energy(db):
+    connect,_=db; sid=active(connect); polywar.join_faction(200,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,44,44,2,now,now,datetime.utcnow())); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,43,44)); c.execute('update polywar_players set current_energy=50,max_energy=50 where user_id=100 and season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); c.close()
+    ts=[threading.Thread(target=lambda: rebellion.rebellion_action(100,'support_rebellion',44,44,'thread-support')) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); reb=c.execute('select progress from polywar_rebellions where season_id=? and capital_original_faction_id=1',(sid,)).fetchone(); p=c.execute('select current_energy from polywar_players where user_id=100 and season_id=?',(sid,)).fetchone(); assert reb['progress']==rebellion.public_rules()['support_progress'] and p['current_energy']==48; assert c.execute('select count(*) from polywar_action_outcomes where idempotency_key=?',('thread-support',)).fetchone()[0]==1
+
+
+def test_domination_and_null_victory_settings_are_bounded(db):
+    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_null_victory_capitals_required']='2'; c=connect(); assert finalization.domination_capitals_required()==2 and finalization.null_victory_capitals_required()==2

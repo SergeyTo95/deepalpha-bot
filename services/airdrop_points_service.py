@@ -733,19 +733,25 @@ def award_airdrop_points_idempotent(user_id: int, reason: str, amount: Any, meta
         conn, cur = _connect_ready()
         try:
             _ensure_table(cur)
-            try:
-                cur.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
-                cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_points_external_reference ON airdrop_points_ledger(external_reference) WHERE external_reference IS NOT NULL")
-            except Exception:
-                pass
-            cur.execute("SELECT id, amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
+            cur.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_points_external_reference ON airdrop_points_ledger(external_reference) WHERE external_reference IS NOT NULL")
+            expected_amount = _to_decimal(amount)
+            cur.execute("SELECT id,user_id,reason,amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
             row = cur.fetchone()
             if row:
+                if int(row[1]) != uid or str(row[2]) != str(reason) or _to_decimal(row[3]) != expected_amount:
+                    raise RuntimeError("airdrop_external_reference_mismatch")
                 conn.commit(); bal = get_airdrop_points_balance(uid)
-                return {"ok": True, "awarded": False, "duplicate": True, "entry_id": int(row[0]), "amount": row[1], **bal}
-            cur.execute("INSERT INTO airdrop_points_ledger (user_id, reason, amount, metadata, external_reference, created_at) VALUES (%s,%s,%s,%s,%s,NOW()) RETURNING id", (uid, reason, _to_decimal(amount), json.dumps(meta, ensure_ascii=False), ref))
-            row = cur.fetchone(); conn.commit(); bal = get_airdrop_points_balance(uid)
-            return {"ok": True, "awarded": True, "duplicate": False, "entry_id": int(row[0]) if row else None, "amount": _to_decimal(amount), **bal}
+                return {"ok": True, "awarded": False, "duplicate": True, "entry_id": int(row[0]), "amount": row[3], **bal}
+            cur.execute("INSERT INTO airdrop_points_ledger (user_id, reason, amount, metadata, external_reference, created_at) VALUES (%s,%s,%s,%s,%s,NOW()) ON CONFLICT DO NOTHING RETURNING id", (uid, reason, expected_amount, json.dumps(meta, ensure_ascii=False), ref))
+            row = cur.fetchone()
+            if not row:
+                cur.execute("SELECT id,user_id,reason,amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,)); row=cur.fetchone()
+                if not row or int(row[1]) != uid or str(row[2]) != str(reason) or _to_decimal(row[3]) != expected_amount:
+                    raise RuntimeError("airdrop_external_reference_mismatch")
+                conn.commit(); bal=get_airdrop_points_balance(uid); return {"ok": True, "awarded": False, "duplicate": True, "entry_id": int(row[0]), "amount": row[3], **bal}
+            conn.commit(); bal = get_airdrop_points_balance(uid)
+            return {"ok": True, "awarded": True, "duplicate": False, "entry_id": int(row[0]) if row else None, "amount": expected_amount, **bal}
         except Exception:
             conn.rollback(); raise
         finally:

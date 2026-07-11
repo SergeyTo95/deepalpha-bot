@@ -20,8 +20,21 @@ def init_rebellion_schema(conn=None):
     finally:
         if own: conn.close()
 
+def _original_presence(conn,sid,orig,x,y):
+    if _adjacent_owner(conn,sid,x,y,orig): return True
+    # Bounded neighbouring-sector presence check.
+    sx,sy=int(x)//64,int(y)//64
+    rows=polywar._fetchall(conn.cursor(),'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s AND x>=%s AND x<%s AND y>=%s AND y<%s LIMIT 1',(sid,orig,max(0,(sx-1)*64),(sx+2)*64,max(0,(sy-1)*64),(sy+2)*64))
+    if rows: return True
+    # Legacy/test seasons may not have materialized original territory yet; active members still allow lazy rebellion creation.
+    any_orig=polywar._fetchone(conn.cursor(),'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s LIMIT 1',(sid,orig))
+    return not bool(any_orig)
+
 def ensure_rebellions(conn,season_id:int):
     init_rebellion_schema(conn); c=conn.cursor(); now=_now(); rules=public_rules()
+    if str(polywar.get_setting('polywar_rebellion_enabled','true')).lower() in {'0','false','off','no'}: return []
+    season=polywar._fetchone(c,'SELECT status FROM polywar_seasons WHERE id=%s',(season_id,))
+    if not season or season.get('status')!='active': return []
     try: caps=polywar._fetchall(c,'SELECT * FROM polywar_capitals WHERE season_id=%s',(season_id,))
     except Exception: return []
     made=[]
@@ -29,13 +42,15 @@ def ensure_rebellions(conn,season_id:int):
         orig=int(cap['original_faction_id']); ctrl=int(cap['controller_faction_id'])
         open_reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND status IN ('pending','active')",(season_id,orig))
         if open_reb and int(open_reb.get('controller_faction_id') or 0)!=ctrl:
-            polywar._execute(c,"UPDATE polywar_rebellions SET status='cancelled',resolved_at=%s,updated_at=%s WHERE id=%s",(now,now,open_reb['id'])); open_reb=None
+            polywar._execute(c,"UPDATE polywar_rebellions SET status='cancelled',resolved_at=%s,updated_at=%s WHERE id=%s AND status IN ('pending','active')",(now,now,open_reb['id'])); open_reb=None
         if open_reb and open_reb['status']=='pending' and str(open_reb['eligible_at'])<=polywar._iso(now):
-            polywar._execute(c,"UPDATE polywar_rebellions SET status='active',started_at=COALESCE(started_at,%s),updated_at=%s WHERE id=%s",(now,now,open_reb['id']))
-            continue
+            polywar._execute(c,"UPDATE polywar_rebellions SET status='active',started_at=COALESCE(started_at,%s),updated_at=%s WHERE id=%s AND status='pending'",(now,now,open_reb['id'])); continue
         if ctrl==orig or ctrl==NULL_STATE_FACTION_ID or open_reb: continue
+        occ=polywar._fetchone(c,'SELECT is_playable,is_system FROM polywar_factions WHERE id=%s',(ctrl,)) or {}
+        if int(occ.get('is_playable') or 0)!=1 or int(occ.get('is_system') or 0)==1: continue
         active_members=(polywar._fetchone(c,'SELECT COUNT(*) AS n FROM polywar_players WHERE season_id=%s AND faction_id=%s',(season_id,orig)) or {}).get('n') or 0
         if int(active_members)<=0: continue
+        if not _original_presence(conn,season_id,orig,int(cap['x']),int(cap['y'])): continue
         started=cap.get('captured_at') or cap.get('controlled_since') or now
         if isinstance(started,str): started=datetime.fromisoformat(started)
         eligible=started+timedelta(hours=rules['grace_hours'])
@@ -50,23 +65,51 @@ def get_public_rebellions(conn,season_id:int):
 def _adjacent_owner(conn,sid,x,y,fid):
     return any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny))
 
+def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10):
+    now=now or _now(); ensure_rebellions(conn,season_id); c=conn.cursor(); changed=[]
+    rows=polywar._fetchall(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status='active' ORDER BY id LIMIT %s",(season_id,limit))
+    for reb in rows:
+        cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND original_faction_id=%s',(season_id,reb['capital_original_faction_id']))
+        if not cap or int(cap['controller_faction_id'])!=int(reb['controller_faction_id']): continue
+        if not _original_presence(conn,season_id,int(reb['capital_original_faction_id']),int(cap['x']),int(cap['y'])): continue
+        req=int(reb['required_progress']); after=min(req,int(reb['progress'] or 0)+_setting_int('polywar_rebellion_tick_progress',25,0,100000))
+        status='active'; resolved=None; outcome='rebellion_progress'
+        if after>=req:
+            from services import polywar_capital_service as caps
+            caps.transfer_capital_control(conn,season_id,cap,int(reb['capital_original_faction_id']),None,now)
+            polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(int(reb['capital_original_faction_id']),season_id,cap['x'],cap['y']))
+            status='succeeded'; resolved=now; outcome='rebellion_succeeded'
+        polywar._execute(c,'UPDATE polywar_rebellions SET progress=%s,status=%s,last_tick_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s AND status=\'active\'',(after,status,now,resolved,now,reb['id']))
+        if polywar._rowcount(c):
+            polywar._execute(c,'INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s)',(season_id,int(reb['capital_original_faction_id']),outcome,outcome,now)); changed.append(outcome)
+    return changed
+
 def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str):
     if action_type not in {'support_rebellion','suppress_rebellion'}: raise ValueError('bad_action_type')
     if not idempotency_key or len(idempotency_key)>120: raise ValueError('bad_idempotency_key')
     from services import polywar_world_service as world
-    conn=polywar.get_connection(); c=conn.cursor()
+    conn=polywar.get_connection(); c=conn.cursor(); managed=False; ok=False
     try:
-        polywar.init_polywar_schema(conn); init_rebellion_schema(conn); season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_caught_up(conn,sid)
+        polywar.init_polywar_schema(conn); init_rebellion_schema(conn); world.init_world_schema(conn)
+        season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_initialized(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
-        player=polywar.get_or_create_player(user_id,sid,conn); fid=player.get('faction_id')
+        managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid); polywar.assert_gameplay_mutation_allowed(conn,sid,_now())
+        suffix='' if polywar._is_sqlite(conn) else ' FOR UPDATE'
+        player=polywar.get_or_create_player(user_id,sid,conn)
+        player=polywar._fetchone(c,'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s'+suffix,(user_id,sid)) or player
+        dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
+        if dup: ok=True; return dup
+        fid=player.get('faction_id')
         if not fid: raise ValueError('faction_required')
-        e=polywar._energy(player)
-        if e.get('is_locked'): raise ValueError('player_locked')
-        cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND x=%s AND y=%s',(sid,x,y))
+        cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
         if not cap: raise ValueError('rebellion_required')
-        ensure_rebellions(conn,sid); reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND controller_faction_id=%s AND status='active'",(sid,cap['original_faction_id'],cap['controller_faction_id']))
+        _=polywar._fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
+        ensure_rebellions(conn,sid)
+        reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND controller_faction_id=%s AND status='active'"+suffix,(sid,cap['original_faction_id'],cap['controller_faction_id']))
         if not reb: raise ValueError('rebellion_inactive')
+        dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
+        if dup: ok=True; return dup
         orig=int(reb['capital_original_faction_id']); ctrl=int(reb['controller_faction_id']); before=int(reb['progress']); req=int(reb['required_progress']); now=_now()
         if action_type=='support_rebellion':
             if int(fid)!=orig: raise ValueError('rebellion_support_forbidden')
@@ -76,20 +119,25 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
             if int(fid)!=ctrl: raise ValueError('rebellion_suppress_forbidden')
             if not _adjacent_owner(conn,sid,x,y,ctrl): raise ValueError('rebellion_not_eligible')
             cost=public_rules()['suppress_energy_cost']; delta=-public_rules()['suppress_progress']; after=max(0,before+delta); outcome='rebellion_suppressed_progress' if after>0 else 'rebellion_fully_suppressed'
+        e=polywar._energy(player)
+        if e.get('is_locked'): raise ValueError('player_locked')
         if int(e['current_energy'])<cost: raise ValueError('insufficient_energy')
         _,_,energy=mines.spend_player_energy(conn,player,cost,now)
         status='active'; transfer=False
-        if action_type=='suppress_rebellion' and after<=0:
-            status='suppressed'
-        if after>=req:
-            status='succeeded'; outcome='rebellion_succeeded'; transfer=True
-        polywar._execute(c,'UPDATE polywar_rebellions SET progress=%s,status=%s,last_action_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s',(after,status,now,now if status!='active' else None,now,reb['id']))
+        if action_type=='suppress_rebellion' and after<=0: status='suppressed'
+        if after>=req: status='succeeded'; outcome='rebellion_succeeded'; transfer=True
+        polywar._execute(c,'UPDATE polywar_rebellions SET progress=%s,status=%s,last_action_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s AND status=\'active\'',(after,status,now,now if status!='active' else None,now,reb['id']))
+        if polywar._rowcount(c)!=1: raise ValueError('rebellion_inactive')
         polywar._execute(c,"INSERT INTO polywar_rebellion_contributions (rebellion_id,user_id,faction_id,support_contribution,suppress_contribution,first_action_at,last_action_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rebellion_id,user_id) DO UPDATE SET support_contribution=support_contribution+%s,suppress_contribution=suppress_contribution+%s,last_action_at=%s",(reb['id'],user_id,fid,delta if delta>0 else 0,-delta if delta<0 else 0,now,now,delta if delta>0 else 0,-delta if delta<0 else 0,now))
         if transfer:
             from services import polywar_capital_service as caps
-            caps.transfer_capital_control(conn,sid,cap,orig,user_id,now) if hasattr(caps,'transfer_capital_control') else polywar._execute(c,'UPDATE polywar_capitals SET controller_faction_id=%s WHERE id=%s',(orig,cap['id']))
+            caps.transfer_capital_control(conn,sid,cap,orig,user_id,now)
             polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(orig,sid,x,y))
         payload={'capital':{'x':x,'y':y},'original_faction_id':orig,'controller_faction_id':ctrl,'progress_before':before,'progress_after':after,'required':req,'energy_cost':cost,'resolved_status':status,'capital_transfer':transfer,'energy':energy}
-        mines.insert_outcome(conn,sid,user_id,idempotency_key,action_type,x,y,outcome,cost,payload,now); polywar._execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); conn.commit(); payload.update({'ok':True,'outcome':outcome}); return payload
-    except ValueError: polywar._safe_rollback(conn); raise
-    finally: conn.close()
+        mines.insert_outcome(conn,sid,user_id,idempotency_key,action_type,x,y,outcome,cost,payload,now); polywar._execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now))
+        ok=True; world._finish_world_transaction(conn,managed,ok); managed=False; payload.update({'ok':True,'outcome':outcome}); return payload
+    except ValueError:
+        raise
+    finally:
+        if managed: world._finish_world_transaction(conn,managed,ok)
+        conn.close()
