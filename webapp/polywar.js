@@ -72,7 +72,7 @@ class PolyWarMap {
     this.resize();
     this.select(b.x, b.y);
     this.refreshCapitals();
-    polywarGovernanceUi?.refresh?.();
+    this.refreshGovernance();
   }
   bind() {
     const signal = this.abort.signal;
@@ -214,8 +214,8 @@ class PolyWarMap {
     document.getElementById("flagAddBtn").disabled = !fid || !!c.owner || base == null || this.pending;
     document.getElementById("flagRemoveBtn").disabled = !c.flags?.current_user_flagged || this.pending;
   }
-  async refreshCapitals() { const d = await polywarCapitalUi.refresh(); this.requestDraw(); this.updatePanel(); return d; }
-  async refreshGovernance() { const d = await polywarGovernanceUi.refresh(); this.requestDraw(); return d; }
+  async refreshCapitals() { const d = await polywarCapitalUi.refresh(this); this.requestDraw(); this.updatePanel(); return d; }
+  async refreshGovernance() { const d = await polywarGovernanceUi.refresh(this); this.requestDraw(); return d; }
   async capture() { if (!this.selected || this.pending) return; this.pending = true; this.updatePanel(); const d = await api("/api/polywar/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action_type: (["attack","reinforce","siege","repair_capital"].includes(actionMode)) ? actionMode : "capture", x: this.selected.x, y: this.selected.y, idempotency_key: `cap-${Date.now()}-${Math.random().toString(16).slice(2)}` }) }); this.pending = false; if (!d.ok) { alert(d.error || "Action failed"); this.updatePanel(); return; } currentState.energy = d.energy; if (d.mine_hit) { this.blast = {x:this.selected.x,y:this.selected.y,t:Date.now()}; alert(`Mine hit — actions locked until ${d.locked_until || d.energy?.locked_until || "server unlock"} (${fmtTime(d.energy?.lock_seconds_remaining || 0)} remaining)`); } const cs = this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x / cs)},${Math.floor(this.selected.y / cs)}`); await this.refreshCapitals(); await this.refreshSelectedSector(); await syncState(false, { soft: true }); updateEnergyUI(); if (d.outcome) alert(d.outcome); this.updatePanel(); this.requestDraw(); }
   async scan(size) { if (!this.selected || this.pending) return; if (!confirm(`Scan ${size}×${size} around ${this.selected.x},${this.selected.y}?`)) return; this.pending = true; this.updatePanel(); const d = await api("/api/polywar/scan", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({center_x:this.selected.x, center_y:this.selected.y, size, idempotency_key:`scan-${size}-${Date.now()}-${Math.random().toString(16).slice(2)}`})}); this.pending=false; if(!d.ok){ alert(d.error || "Scan failed"); this.updatePanel(); return; } currentState.energy=d.energy; alert(`Active mines detected: ${d.active_mine_count}`); const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x/cs)},${Math.floor(this.selected.y/cs)}`); updateEnergyUI(); this.updatePanel(); this.requestDraw(); }
   async flag(active) { if (!this.selected || this.pending) return; this.pending=true; this.updatePanel(); const d=await api("/api/polywar/flag", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({x:this.selected.x,y:this.selected.y,active})}); this.pending=false; if(!d.ok){ alert(d.error || "Flag failed"); this.updatePanel(); return; } const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x/cs)},${Math.floor(this.selected.y/cs)}`); this.updatePanel(); this.requestDraw(); }
@@ -296,16 +296,16 @@ const polywarCapitalUi = window.polywarCapitalUi = window.polywarCapitalUi || {
   max: 128,
   seq: 0,
   lastServerTimestamp: 0,
-  async refresh() {
-    const seq = ++this.seq, owner = map;
+  async refresh(expectedMap = map) {
+    const seq = ++this.seq;
     const data = await api('/api/polywar/capitals');
-    if (seq !== this.seq || owner !== map || owner?.destroyed) return { ok:false, stale:true };
+    if (seq !== this.seq || expectedMap !== map || expectedMap?.destroyed) return { ok:false, stale:true };
     const stamp = Number(data.server_timestamp || 0);
     if (data.ok && stamp >= this.lastServerTimestamp) {
       this.lastServerTimestamp = stamp;
       this.cache.clear();
       (data.capitals || []).slice(0, this.max).forEach(c => this.cache.set(`${c.x},${c.y}`, c));
-      map?.requestDraw?.();
+      expectedMap?.requestDraw?.();
     }
     return data;
   },
@@ -339,16 +339,18 @@ const polywarCapitalUi = window.polywarCapitalUi = window.polywarCapitalUi || {
 
 const polywarGovernanceUi = window.polywarGovernanceUi = window.polywarGovernanceUi || {
   orders: [],
+  editingOrderId: null,
   seq: 0,
   lastServerTimestamp: 0,
-  async refresh() { const seq = ++this.seq, owner = map; const data = await api('/api/polywar/governance'); if (seq !== this.seq || owner !== map || owner?.destroyed) return {ok:false, stale:true}; const stamp = Number(data.server_timestamp || 0); if (data.ok && stamp >= this.lastServerTimestamp) { this.lastServerTimestamp = stamp; this.orders = data.orders || []; this.render(data); map?.requestDraw?.(); } return data; },
+  async refresh(expectedMap = map) { const seq = ++this.seq; const data = await api('/api/polywar/governance'); if (seq !== this.seq || expectedMap !== map || expectedMap?.destroyed) return {ok:false, stale:true}; const stamp = Number(data.server_timestamp || 0); if (data.ok && stamp >= this.lastServerTimestamp) { this.lastServerTimestamp = stamp; this.orders = data.orders || []; this.render(data); expectedMap?.requestDraw?.(); } return data; },
+  setEditingOrder(id, type = 'attack', message = '') { this.editingOrderId = id ? Number(id) : null; const msg = document.getElementById('polywarOrderMessage'); const typ = document.getElementById('polywarOrderType'); const btn = document.querySelector('[data-polywar-update-order]'); const status = document.getElementById('polywarEditingOrder'); if (msg) msg.value = message || ''; if (typ) typ.value = type || 'attack'; if (btn) btn.disabled = !this.editingOrderId; if (status) status.textContent = this.editingOrderId ? `Editing order #${this.editingOrderId}` : 'No order selected for edit'; },
   render(data) {
     const root = document.getElementById('polywarGovernancePanel') || document.querySelector('[data-polywar-governance]');
     if (!root) return;
     const candidates = (data.candidates || []).map(c => `<li><b>${esc(c.user_id)}</b> — ${esc(c.statement || '')} — votes: ${esc(c.vote_count || 0)}<button data-polywar-vote="${c.user_id}">${Number(data.current_user_vote) === Number(c.user_id) ? 'Current vote' : 'Vote / Change vote'}</button></li>`).join('');
     const isCommander = Number(data.commander?.commander_user_id || 0) === Number(currentState?.player?.user_id || 0);
     const orders = (data.orders || []).map(o => `<li><button data-polywar-goto-order="${o.x},${o.y}">${esc(o.order_type)} ${esc(o.x)},${esc(o.y)}</button> ${esc(o.message || '')}${isCommander ? `<button data-polywar-edit-order="${o.id}" data-order-type="${esc(o.order_type)}" data-order-message="${esc(o.message || '')}">Edit</button><button data-polywar-cancel-order="${o.id}">Cancel</button>` : ''}</li>`).join('');
-    const controls = isCommander ? `<div class="order-controls"><select id="polywarOrderType"><option value="attack">attack</option><option value="defend">defend</option><option value="rally">rally</option><option value="recon">recon</option><option value="siege">siege</option></select><input id="polywarOrderMessage" maxlength="280" placeholder="Order message"><button data-polywar-create-order="true">Create order</button><button data-polywar-update-order="true">Update order</button><span>${esc((data.orders||[]).length)}/${esc(data.rules?.max_orders || '')} active</span></div>` : '';
+    const controls = isCommander ? `<div class="order-controls"><select id="polywarOrderType"><option value="attack">attack</option><option value="defend">defend</option><option value="rally">rally</option><option value="recon">recon</option><option value="siege">siege</option></select><input id="polywarOrderMessage" maxlength="280" placeholder="Order message"><button data-polywar-create-order="true">Create order</button><button data-polywar-update-order="true" ${this.editingOrderId ? '' : 'disabled'}>Update order</button><span id="polywarEditingOrder">${this.editingOrderId ? `Editing order #${esc(this.editingOrderId)}` : 'No order selected for edit'}</span><span>${esc((data.orders||[]).length)}/${esc(data.rules?.max_orders || '')} active</span></div>` : '';
     root.innerHTML = `<h3>Governance</h3><p>Commander: ${esc(data.commander?.commander_user_id || 'none')}</p><p>Term ends: ${esc(data.commander?.commander_term_ends_at || '—')}</p><p>Election ends: ${esc(data.active_election?.ends_at || '—')}</p><ul>${candidates}</ul><button data-polywar-nominate="true">Nominate myself</button><button data-polywar-nominate="false">Withdraw</button><h4>Orders</h4>${controls}<ul>${orders}</ul>`;
   },
   drawOrders(ctx, worldToScreen) {
@@ -369,9 +371,10 @@ async function handlePolywarUiClick(e) {
   if (action) { actionMode = action.dataset.polywarAction; map?.updatePanel(); await map?.capture(); return; }
   if (vote) { const d = await api('/api/polywar/governance/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({candidate_user_id:Number(vote.dataset.polywarVote)})}); if(!d.ok) alert(d.error || 'Vote failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (nom) { const active = nom.dataset.polywarNominate === 'true'; const statement = active ? (prompt('Candidate statement') || '') : ''; const d = await api('/api/polywar/governance/nominate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, statement})}); if(!d.ok) alert(d.error || 'Nomination failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
-  if (editOrder) { const msg = document.getElementById('polywarOrderMessage'); const typ = document.getElementById('polywarOrderType'); if (msg) msg.value = editOrder.dataset.orderMessage || ''; if (typ) typ.value = editOrder.dataset.orderType || 'attack'; polywarGovernanceUi.editingOrderId = Number(editOrder.dataset.polywarEditOrder); return; }
-  if (createOrder || updateOrder) { const order_id = updateOrder ? (polywarGovernanceUi.editingOrderId || null) : null; const order_type = document.getElementById('polywarOrderType')?.value || 'attack'; const message = document.getElementById('polywarOrderMessage')?.value || ''; const x = map?.selected?.x, y = map?.selected?.y; const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id, order_type, x, y, message, active:true})}); if(!d.ok) alert(d.error || 'Order save failed'); else { polywarGovernanceUi.editingOrderId = null; polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
-  if (cancelOrder) { const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id:Number(cancelOrder.dataset.polywarCancelOrder), active:false})}); if(!d.ok) alert(d.error || 'Order cancel failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
+  if (editOrder) { polywarGovernanceUi.setEditingOrder(Number(editOrder.dataset.polywarEditOrder), editOrder.dataset.orderType || 'attack', editOrder.dataset.orderMessage || ''); return; }
+  if (createOrder) { const order_id = null; const order_type = document.getElementById('polywarOrderType')?.value || 'attack'; const message = document.getElementById('polywarOrderMessage')?.value || ''; const x = map?.selected?.x, y = map?.selected?.y; const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id, order_type, x, y, message, active:true})}); if(!d.ok) alert(d.error || 'Order save failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
+  if (updateOrder) { if (!polywarGovernanceUi.editingOrderId) { alert('Choose an order to edit first'); return; } const order_id = polywarGovernanceUi.editingOrderId; const order_type = document.getElementById('polywarOrderType')?.value || 'attack'; const message = document.getElementById('polywarOrderMessage')?.value || ''; const x = map?.selected?.x, y = map?.selected?.y; const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id, order_type, x, y, message, active:true})}); if(!d.ok) alert(d.error || 'Order save failed'); else { polywarGovernanceUi.setEditingOrder(null); polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
+  if (cancelOrder) { const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id:Number(cancelOrder.dataset.polywarCancelOrder), active:false})}); if(!d.ok) alert(d.error || 'Order cancel failed'); else { polywarGovernanceUi.setEditingOrder(null); polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (gotoOrder) { const [x,y] = gotoOrder.dataset.polywarGotoOrder.split(',').map(Number); if (map) { map.cx=x; map.cy=y; map.clamp(); map.ensureChunks(); map.ensureSectors(); map.select(x,y); map.requestDraw(); } }
 }
 

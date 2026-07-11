@@ -95,7 +95,7 @@ def test_concurrent_order_creation_limit_one(polydb):
 
 def test_frontend_real_phase5_calls_and_xss_escape():
     js=open('webapp/polywar.js',encoding='utf-8').read()
-    for token in ['this.refreshCapitals()','polywarGovernanceUi?.refresh','polywarCapitalUi.draw(ctx','polywarGovernanceUi.drawOrders','id="polywarGovernancePanel"','actionMode === "siege"','actionMode === "repair_capital"','/api/polywar/action','handlePolywarUiClick','data-polywar-vote']:
+    for token in ['this.refreshCapitals()','this.refreshGovernance()','polywarCapitalUi.draw(ctx','polywarGovernanceUi.drawOrders','id="polywarGovernancePanel"','actionMode === "siege"','actionMode === "repair_capital"','/api/polywar/action','handlePolywarUiClick','data-polywar-vote']:
         assert token in js
     assert 'esc(c.statement' in js and 'esc(o.message' in js
     assert '<img src=x onerror=alert(1)>' not in js
@@ -118,5 +118,20 @@ def test_committed_mutation_ignores_exhausted_governance_get_limiter(polydb):
 def test_frontend_latest_phase5_source_guards():
     js=open('webapp/polywar.js',encoding='utf-8').read()
     assert js.count('init();') == 1
-    for token in ['seq !== this.seq','lastServerTimestamp','data-polywar-create-order','data-polywar-update-order','polywarOrderType','polywarOrderMessage','isCommander ?','canSiege','canRepair','controlled_since','siege_percent']:
+    for token in ['refresh(this)','refresh(expectedMap = map)','expectedMap !== map','expectedMap?.destroyed','lastServerTimestamp','data-polywar-create-order','data-polywar-update-order','polywarOrderType','polywarOrderMessage','isCommander ?','canSiege','canRepair','controlled_since','siege_percent','No order selected for edit','Choose an order to edit first']:
         assert token in js
+
+
+def test_frontend_initial_refresh_and_order_update_source_guards():
+    js=open('webapp/polywar.js',encoding='utf-8').read()
+    assert 'this.refreshCapitals();\n    this.refreshGovernance();' in js
+    assert 'polywarCapitalUi.refresh(this)' in js
+    assert 'polywarGovernanceUi.refresh(this)' in js
+    assert 'const seq = ++this.seq' in js and 'expectedMap !== map' in js and 'expectedMap?.destroyed' in js
+    assert 'owner !== map' not in js
+    assert "data-polywar-update-order=\"true\" ${this.editingOrderId ? '' : 'disabled'}" in js
+    assert "if (!polywarGovernanceUi.editingOrderId)" in js
+    assert "const order_id = null" in js
+    assert "const order_id = polywarGovernanceUi.editingOrderId" in js
+    assert "order_id = updateOrder ? (polywarGovernanceUi.editingOrderId || null) : null" not in js
+    assert 'polywarGovernanceUi.setEditingOrder(null)' in js
