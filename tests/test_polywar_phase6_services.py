@@ -70,7 +70,7 @@ def test_rebellion_creation_and_action_rules(db):
 
 def test_finalization_results_hash_rewards_and_claim(db, monkeypatch):
     connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit()
-    assert finalization.maybe_finalize(c,sid,datetime.utcnow()); c.commit()
+    assert finalization.maybe_finalize(sid,datetime.utcnow())
     res=finalization.get_results(c,sid,100); assert res['ok'] and res['season']['results_hash']
     calls=[]
     monkeypatch.setattr('services.airdrop_points_service.award_airdrop_points_idempotent', lambda *a,**k: calls.append(a) or {'ok':True,'awarded':True})
@@ -103,11 +103,11 @@ def test_rebellion_full_suppression_status(db):
 
 
 def test_results_hash_excludes_secret_and_rows_are_immutable(db):
-    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(c,sid,datetime.utcnow()); h1=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]; snap='\n'.join(r[0] for r in c.execute('select snapshot_json from polywar_season_results where season_id=?',(sid,)).fetchall()); assert seed not in snap; finalization.finalize_season(c,sid); h2=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; assert h1==h2
+    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(sid,datetime.utcnow()); h1=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]; snap='\n'.join(r[0] for r in c.execute('select snapshot_json from polywar_season_results where season_id=?',(sid,)).fetchall()); assert seed not in snap; finalization.finalize_season(sid); h2=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; assert h1==h2
 
 
 def test_claim_validation_and_foreign_reward_forbidden(db):
-    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(c,sid,datetime.utcnow()); c.commit()
+    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(sid,datetime.utcnow())
     with pytest.raises(ValueError): finalization.claim_reward(100,sid,'')
     with pytest.raises(ValueError): finalization.claim_reward(999,sid,'x')
 
@@ -259,7 +259,7 @@ def test_rebellion_requires_real_original_presence(db):
 
 
 def test_domination_timer_start_reset_and_victory(db):
-    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_domination_hold_hours']='0'; sid=active(connect); c=connect(); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,80,80,1,now,now)); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,81,80,1,now,now)); c.commit(); assert finalization.maybe_finalize(c,sid,now) is False; c.commit(); assert c.execute('select domination_faction_id from polywar_seasons where id=?',(sid,)).fetchone()[0]==1; assert finalization.maybe_finalize(c,sid,now+timedelta(seconds=1)) is True; c.commit(); assert c.execute('select victory_type from polywar_seasons where id=?',(sid,)).fetchone()[0]=='domination'
+    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_domination_hold_hours']='0'; sid=active(connect); c=connect(); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,80,80,1,now,now)); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,81,80,1,now,now)); c.commit(); assert finalization.maybe_finalize(sid,now) is False; assert c.execute('select domination_faction_id from polywar_seasons where id=?',(sid,)).fetchone()[0]==1; assert finalization.maybe_finalize(sid,now+timedelta(seconds=1)) is True; assert c.execute('select victory_type from polywar_seasons where id=?',(sid,)).fetchone()[0]=='domination'
 
 
 def test_reconcile_fix_false_performs_zero_update(db, monkeypatch):
@@ -274,8 +274,8 @@ def test_finalize_concurrent_one_next_season_no_old_players(db):
     connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
     def worker():
         cc=connect()
-        try: finalization.finalize_season(cc,sid,'time',None,datetime.utcnow())
-        finally: cc.commit(); cc.close()
+        try: finalization.finalize_season(sid,'time',None,datetime.utcnow())
+        finally: cc.close()
     ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
     c=connect(); new_sid=c.execute("select id from polywar_seasons where status='active' and id<>?",(sid,)).fetchone()[0]; assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0]==1; assert c.execute('select count(*) from polywar_players where season_id=?',(new_sid,)).fetchone()[0]==0; assert c.execute('select count(*) from polywar_null_rifts where season_id=?',(new_sid,)).fetchone()[0]==0
 
@@ -304,3 +304,32 @@ def test_public_world_includes_domination_hold_state(db):
     c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,93,90,1,now,now))
     c.commit(); st=world.get_public_world_state(c,sid)
     assert st['domination_faction_id']==1 and st['domination_hold_hours']==2 and st['domination_hold_until'] and st['victory_candidate_type']=='domination'
+
+def test_public_maybe_finalize_rejects_caller_connection_signature(db):
+    connect,_=db; sid=active(connect); c=connect()
+    with pytest.raises(TypeError): finalization.maybe_finalize(c,sid,datetime.utcnow())
+
+
+def test_maybe_finalize_in_transaction_no_commit_or_begin(db, monkeypatch):
+    connect,_=db; sid=active(connect); c=connect(); calls=[]; monkeypatch.setattr(polywar,'_is_sqlite',lambda conn: True)
+    class Cur:
+        def __init__(self, inner): self.inner=inner
+        def execute(self, sql, params=()):
+            if str(sql).upper().startswith(('BEGIN','COMMIT','ROLLBACK')): calls.append(sql)
+            return self.inner.execute(sql, params)
+        def fetchone(self): return self.inner.fetchone()
+        def fetchall(self): return self.inner.fetchall()
+        @property
+        def rowcount(self): return self.inner.rowcount
+    class Wrap:
+        def __init__(self, inner): self.inner=inner
+        def cursor(self): return Cur(self.inner.cursor())
+        def commit(self): calls.append('COMMIT'); raise AssertionError('no commit')
+        def rollback(self): calls.append('ROLLBACK'); raise AssertionError('no rollback')
+        def __getattr__(self, name): return getattr(self.inner,name)
+    finalization.maybe_finalize_in_transaction(Wrap(c),sid,datetime.utcnow())
+    assert calls==[]
+
+
+def test_time_expiry_wins_over_unmatured_domination_hold(db):
+    connect,settings=db; settings['polywar_domination_capitals_required']='1'; settings['polywar_domination_hold_hours']='24'; sid=active(connect); c=connect(); now=datetime.utcnow(); c.execute('update polywar_seasons set ends_at=? where id=?',(now-timedelta(seconds=1),sid)); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,111,111,1,now,now)); c.commit(); assert finalization.maybe_finalize(sid,now) is True; assert c.execute('select victory_type from polywar_seasons where id=?',(sid,)).fetchone()[0]=='time'

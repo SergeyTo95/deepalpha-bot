@@ -939,7 +939,6 @@ async def handle_polywar_reward_claim_api(request):
     except Exception:
         data = {}
     try:
-        _polywar_rate_limit('polywar_claim', int(current.get("user_id") or 0), 10)
         return _json_response(await asyncio.to_thread(claim_polywar_reward, int(current.get("user_id") or 0), int(data.get("season_id") or 0), str(data.get("idempotency_key") or "")))
     except ValueError as e:
         code = str(e)

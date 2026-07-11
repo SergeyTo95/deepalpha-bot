@@ -230,7 +230,7 @@ def enrich_chunks(conn, season_id, faction_id, chunks):
 
 
 def _private_season(conn):
-    s = polywar.ensure_active_season(conn)
+    s = polywar.ensure_active_season_in_transaction(conn)
     row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id=%s", (int(s["id"]),))
     s["secret_seed"] = row["secret_seed"]
     return s
@@ -278,7 +278,9 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
         from services import polywar_finalization_service as finalization
-        finalization.maybe_finalize(conn, sid)
+        decision=finalization.maybe_finalize_in_transaction(conn,sid)
+        if decision.get("should_finalize"): finalization.finalize_season_in_transaction(conn,sid,decision.get("victory_type","time"),decision.get("winner_faction_id"))
+        conn.commit()
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
         _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
@@ -329,7 +331,8 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
         from services import polywar_finalization_service as finalization
-        finalization.maybe_finalize(conn, sid)
+        decision=finalization.maybe_finalize_in_transaction(conn,sid)
+        if decision.get("should_finalize"): finalization.finalize_season_in_transaction(conn,sid,decision.get("victory_type","time"),decision.get("winner_faction_id"))
         conn.commit()
         _begin_immediate_retry(conn, c)
         polywar._insert_player_if_missing(conn, user_id, sid)

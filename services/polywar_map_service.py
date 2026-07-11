@@ -163,7 +163,7 @@ def _start_owner(x, y):
 
 
 def _private_active_season(conn):
-    s = polywar.ensure_active_season(conn)
+    s = polywar.ensure_active_season_in_transaction(conn)
     row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id = %s", (int(s["id"]),))
     s["secret_seed"] = row["secret_seed"]
     return s

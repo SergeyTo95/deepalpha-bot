@@ -35,8 +35,8 @@ def polydb(monkeypatch):
 
 def test_first_season_and_idempotent_initialization(polydb):
     conn = polydb()
-    first = polywar.ensure_active_season(conn)
-    second = polywar.ensure_active_season(conn)
+    first = polywar.ensure_active_season(); conn.commit()
+    second = polywar.ensure_active_season_in_transaction(conn); conn.commit()
     polywar.init_polywar_schema(conn)
     assert first["id"] == second["id"]
     assert first["status"] == "active"
@@ -53,7 +53,7 @@ def test_expired_season_is_completed_and_next_season_created(polydb):
         ("Expired", "active", expired_start, expired_end, "server-only", expired_start),
     )
     conn.commit()
-    active = polywar.ensure_active_season(conn)
+    active = polywar.ensure_active_season_in_transaction(conn); conn.commit()
     completed = conn.execute("SELECT status, completed_at FROM polywar_seasons WHERE name = 'Expired'").fetchone()
     assert active["name"] != "Expired"
     assert completed["status"] == "completed"
@@ -67,7 +67,7 @@ def test_concurrent_initialization_leaves_single_active_season(polydb):
     def worker():
         conn = polydb()
         try:
-            polywar.ensure_active_season(conn)
+            polywar.ensure_active_season()
         except Exception as exc:  # pragma: no cover - surfaced by assertion
             errors.append(exc)
         finally:
@@ -89,7 +89,7 @@ def test_concurrent_initialization_leaves_single_active_season(polydb):
 def test_seven_factions_and_season_stats_created(polydb):
     conn = polydb()
     factions = polywar.ensure_factions(conn)
-    season = polywar.ensure_active_season(conn)
+    season = polywar.ensure_active_season_in_transaction(conn)
     with_stats = polywar.list_factions_with_stats(season["id"], conn)
     stats_count = conn.execute("SELECT COUNT(*) FROM polywar_faction_season_stats WHERE season_id = ?", (season["id"],)).fetchone()[0]
     assert len(factions) == 7
@@ -145,7 +145,7 @@ def test_two_competing_join_attempts_create_one_membership_event_and_stat(polydb
 def test_energy_recovers_offline_and_caps_at_max(polydb):
     conn = polydb()
     polywar.ensure_factions(conn)
-    season = polywar.ensure_active_season(conn)
+    season = polywar.ensure_active_season_in_transaction(conn)
     polywar.get_or_create_player(55, season["id"], conn)
     old = datetime.utcnow() - timedelta(hours=20)
     conn.execute(

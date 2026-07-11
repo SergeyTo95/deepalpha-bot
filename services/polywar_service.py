@@ -294,9 +294,9 @@ def _complete_expired_active_seasons(conn, now: datetime) -> None:
     rows = _fetchall(c, "SELECT * FROM polywar_seasons WHERE status = %s AND ends_at <= %s ORDER BY ends_at", ("active", now))
     if not rows:
         return
-    from services.polywar_finalization_service import finalize_season
+    from services.polywar_finalization_service import finalize_season_in_transaction
     for row in rows:
-        finalize_season(conn, int(row["id"]), "time", None, now)
+        finalize_season_in_transaction(conn, int(row["id"]), "time", None, now)
 
 
 def _next_season_name(conn) -> str:
@@ -315,39 +315,45 @@ def _ensure_faction_stats_for_season(conn, season_id: int) -> None:
         """, (season_id, fid, _now(), _now()))
 
 
-def ensure_active_season(conn=None) -> Dict[str, Any]:
-    own = conn is None
-    conn = conn or get_connection(); c = conn.cursor()
-    try:
-        now = _now()
-        _complete_expired_active_seasons(conn, now)
-        finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
-        if finalizing:
-            raise RuntimeError("polywar_season_finalizing")
-        row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
-        if row:
-            _ensure_faction_stats_for_season(conn, int(row["id"]))
-            conn.commit()
-            return _public_season(row)
-        start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
-        try:
-            _execute(c, """
-            INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-            """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
-            row = _dict(c.fetchone())
-        except Exception:
-            if own: _safe_rollback(conn)
-            row = None
-        if not row:
-            row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
-        if not row:
-            raise RuntimeError("polywar_active_season_unavailable")
+def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
+    c = conn.cursor(); now = _now()
+    _complete_expired_active_seasons(conn, now)
+    finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
+    if finalizing:
+        raise RuntimeError("polywar_season_finalizing")
+    row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if row:
         _ensure_faction_stats_for_season(conn, int(row["id"]))
-        conn.commit()
         return _public_season(row)
+    start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
+    try:
+        _execute(c, """
+        INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+        """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
+        row = _dict(c.fetchone())
+    except Exception:
+        row = None
+    if not row:
+        row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if not row:
+        raise RuntimeError("polywar_active_season_unavailable")
+    _ensure_faction_stats_for_season(conn, int(row["id"]))
+    return _public_season(row)
+
+def ensure_active_season() -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        try: c.execute('BEGIN IMMEDIATE')
+        except Exception: pass
+        row = ensure_active_season_in_transaction(conn)
+        conn.commit()
+        return row
+    except Exception:
+        _safe_rollback(conn); raise
     finally:
-        if own: conn.close()
+        conn.close()
 
 
 def list_factions(conn=None) -> List[Dict[str, Any]]:
@@ -449,7 +455,7 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
         raise ValueError("polywar_disabled")
     conn = get_connection(); c = conn.cursor()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season_in_transaction(conn)
         faction_id = int(faction_id)
         faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
         if not faction:
@@ -511,17 +517,19 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         return {"ok": True, "enabled": False, "message": "PolyWar is temporarily unavailable", "feature_flags": {"polywar_enabled": False}}
     own = conn is None; conn = conn or get_connection()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season_in_transaction(conn)
         completed_season_id = None
         try:
             from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
             ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]));
             from services import polywar_finalization_service as finalization
-            finalization.maybe_finalize(conn, int(season["id"]))
+            decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+            if decision.get("should_finalize"):
+                finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
             refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
             if refreshed and refreshed.get("status") == "completed":
                 completed_season_id = int(refreshed["id"])
-                season = ensure_active_season(conn)
+                season = ensure_active_season_in_transaction(conn)
                 ensure_world_initialized(conn, int(season["id"]))
             elif refreshed:
                 season = refreshed

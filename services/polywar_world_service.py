@@ -297,8 +297,6 @@ def check_defeat(conn,sid,now=None):
 
 def get_public_world_state(conn,season_id:int):
     ensure_world_initialized(conn,season_id)
-    from services import polywar_finalization_service as finalization
-    finalization.maybe_finalize(conn,season_id,_now())
     c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {}; rifts=_fetchall(c,'SELECT * FROM polywar_null_rifts WHERE season_id=%s ORDER BY id',(season_id,))
     def rr(r):
         hp=0 if not r.get('max_health') else round(100*int(r.get('health') or 0)/int(r.get('max_health') or 1),2)

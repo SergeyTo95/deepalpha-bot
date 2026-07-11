@@ -14,7 +14,7 @@ def polydb(monkeypatch):
     c=connect(); polywar.init_polywar_schema(c); c.close(); yield connect; keeper.close()
 
 def seed(polydb):
-    c=polydb(); polywar.ensure_factions(c); s=polywar.ensure_active_season(c); c.close(); return s
+    c=polydb(); polywar.ensure_factions(c); s=polywar.ensure_active_season_in_transaction(c); c.commit(); c.close(); return s
 
 def join(uid,fid): return polywar.join_faction(uid,fid)
 def find_near(seedstr,bx,by,terrain=None,capturable=True):

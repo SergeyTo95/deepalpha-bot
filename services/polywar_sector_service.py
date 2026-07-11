@@ -284,7 +284,7 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
         raise ValueError('too_many_sectors')
     conn = polywar.get_connection()
     try:
-        polywar.init_polywar_schema(conn); init_polywar_sector_schema(conn); season = polywar.ensure_active_season(conn); sid = int(season['id'])
+        polywar.init_polywar_schema(conn); init_polywar_sector_schema(conn); season = polywar.ensure_active_season_in_transaction(conn); sid = int(season['id'])
         ensure_starting_territories_bootstrap(conn, sid)
         _check_rate(user_id)
         now = datetime.utcnow()

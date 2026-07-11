@@ -118,7 +118,7 @@ def test_frontend_sector_api_and_server_rules_usage():
     assert 'new Set(["capture", "attack", "reinforce", "siege", "repair_capital"])' in js
 
 def manual_player(connect, uid, fid):
-    c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season(c); polywar._insert_player_if_missing(c, uid, s['id']); c.execute('update polywar_players set faction_id=? where user_id=? and season_id=?',(fid,uid,s['id'])); c.commit(); c.close(); return s
+    c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season_in_transaction(c); polywar._insert_player_if_missing(c, uid, s['id']); c.execute('update polywar_players set faction_id=? where user_id=? and season_id=?',(fid,uid,s['id'])); c.commit(); c.close(); return s
 
 def test_combat_bootstraps_implicit_starting_cell_without_state(polydb):
     connect,settings=polydb; s=manual_player(connect,401,1); manual_player(connect,402,2); sid=s['id']; bx,by=m.faction_base_positions()[2]; bx=bx+5

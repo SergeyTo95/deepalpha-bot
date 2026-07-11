@@ -4,6 +4,7 @@ from services import polywar_service as polywar
 from services import polywar_map_service as m
 from services import polywar_mine_service as mines
 from services.polywar_world_service import NULL_STATE_FACTION_ID
+from services import polywar_sector_service as sectors
 logger=logging.getLogger(__name__)
 def _now(): return datetime.utcnow()
 def _setting_int(k,d,lo,hi): return polywar._setting_int(k,d,lo,hi)
@@ -22,10 +23,13 @@ def init_rebellion_schema(conn=None):
 
 def _original_presence(conn,sid,orig,x,y):
     if _adjacent_owner(conn,sid,x,y,orig): return True
-    # Bounded neighbouring-sector presence check.
-    sx,sy=int(x)//64,int(y)//64
-    rows=polywar._fetchall(conn.cursor(),'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s AND x>=%s AND x<%s AND y>=%s AND y<%s LIMIT 1',(sid,orig,max(0,(sx-1)*64),(sx+2)*64,max(0,(sy-1)*64),(sy+2)*64))
-    return bool(rows)
+    size=sectors.sector_size(); sx,sy=sectors.sector_coords(x,y); checks=[(sx,sy),(sx-1,sy),(sx+1,sy),(sx,sy-1),(sx,sy+1)]
+    c=conn.cursor()
+    for cx,cy in checks:
+        if cx<0 or cy<0: continue
+        rows=polywar._fetchall(c,'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s AND x>=%s AND x<%s AND y>=%s AND y<%s LIMIT 1',(sid,orig,cx*size,(cx+1)*size,cy*size,(cy+1)*size))
+        if rows: return True
+    return False
 
 def ensure_rebellions(conn,season_id:int):
     init_rebellion_schema(conn); c=conn.cursor(); now=_now(); rules=public_rules()

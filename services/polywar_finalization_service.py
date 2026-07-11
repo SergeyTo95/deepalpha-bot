@@ -1,4 +1,5 @@
-import hashlib,json,logging,time,secrets
+import hashlib,json,logging,time,secrets,threading
+from collections import defaultdict, deque
 from datetime import datetime,timedelta
 from services import polywar_service as polywar
 from services.polywar_world_service import NULL_STATE_FACTION_ID
@@ -41,8 +42,11 @@ def maybe_finalize_in_transaction(conn,season_id:int,now=None):
     if not season or season.get('status')!='active': return {'should_finalize':False}
     caps=polywar._fetchall(c,'SELECT controller_faction_id,COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s GROUP BY controller_faction_id',(season_id,))
     counts={int(r['controller_faction_id']):int(r['n']) for r in caps if r.get('controller_faction_id') is not None}
+    ends=season.get('ends_at')
+    if isinstance(ends,str): ends=datetime.fromisoformat(ends)
+    time_due=bool(ends and now>=ends)
     def _event_once(event_type,fid,msg):
-        exists=polywar._fetchone(c,'SELECT id FROM polywar_events WHERE season_id=%s AND event_type=%s AND COALESCE(faction_id,0)=COALESCE(%s,0) LIMIT 1',(season_id,event_type,fid))
+        exists=polywar._fetchone(c,'SELECT id FROM polywar_events WHERE season_id=%s AND event_type=%s AND COALESCE(faction_id,0)=COALESCE(%s,0) AND created_at=%s LIMIT 1',(season_id,event_type,fid,now))
         if not exists: polywar._execute(c,'INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s)',(season_id,fid,event_type,msg,now))
     playable=[(fid,n) for fid,n in counts.items() if fid!=NULL_STATE_FACTION_ID and n>=domination_capitals_required()]
     candidate_type=None; candidate_fid=None; hold_hours=0
@@ -51,43 +55,40 @@ def maybe_finalize_in_transaction(conn,season_id:int,now=None):
     elif counts.get(NULL_STATE_FACTION_ID,0)>=null_victory_capitals_required():
         candidate_fid=NULL_STATE_FACTION_ID; candidate_type='null_state'; hold_hours=null_victory_hold_hours()
     if candidate_type:
-        started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==int(candidate_fid) else None
+        previous_fid=int(season.get('domination_faction_id') or 0)
+        started=season.get('domination_started_at') if previous_fid==int(candidate_fid) else None
+        if previous_fid and previous_fid!=int(candidate_fid): _event_once('domination_cancelled',previous_fid,'Domination hold cancelled.')
         if not started:
+            if time_due: return {'should_finalize':True,'victory_type':'time','winner_faction_id':None}
             polywar._execute(c,'UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s',(candidate_fid,now,season_id)); _event_once('domination_started',candidate_fid,'Domination hold started.'); return {'should_finalize':False}
         if isinstance(started,str): started=datetime.fromisoformat(started)
         if now>=started+timedelta(hours=hold_hours):
             return {'should_finalize':True,'victory_type':candidate_type,'winner_faction_id':(None if candidate_type=='null_state' else candidate_fid)}
+        if time_due: return {'should_finalize':True,'victory_type':'time','winner_faction_id':None}
         return {'should_finalize':False}
     if season.get('domination_faction_id'):
-        polywar._execute(c,'UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s',(season_id,)); _event_once('domination_cancelled',None,'Domination hold cancelled.')
-    ends=season.get('ends_at')
-    if isinstance(ends,str): ends=datetime.fromisoformat(ends)
-    if ends and now>=ends: return {'should_finalize':True,'victory_type':'time','winner_faction_id':None}
+        polywar._execute(c,'UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s',(season_id,)); _event_once('domination_cancelled',int(season.get('domination_faction_id') or 0) or None,'Domination hold cancelled.')
+    if time_due: return {'should_finalize':True,'victory_type':'time','winner_faction_id':None}
     return {'should_finalize':False}
 
-def maybe_finalize(conn,season_id:int,now=None):
-    init_finalization_schema(conn); managed=False; nested=False
+def maybe_finalize(season_id:int,now=None):
+    conn=polywar.get_connection(); init_finalization_schema(conn); managed=False
     try:
-        try:
-            _begin(conn); managed=True
-        except Exception as exc:
-            if 'within a transaction' in str(exc).lower() or 'already a transaction' in str(exc).lower():
-                nested=True
-            else:
-                raise
+        _begin(conn); managed=True
         decision=maybe_finalize_in_transaction(conn,season_id,now or _now())
         if decision.get('should_finalize'):
             finalize_season_in_transaction(conn,season_id,decision.get('victory_type','time'),decision.get('winner_faction_id'),now or _now())
-            if managed: conn.commit()
-            return True
-        if managed: conn.commit()
-        return False
+            conn.commit(); return True
+        conn.commit(); return False
     except Exception:
         if managed:
             try: conn.rollback()
             except Exception: pass
         logger.exception('polywar_maybe_finalize_failed season_id=%s',season_id)
         raise
+    finally:
+        try: conn.close()
+        except Exception: pass
 
 def _mark_finalization_failed(season_id:int, exc:Exception):
     conn=polywar.get_connection()
@@ -108,8 +109,13 @@ def finalize_season_in_transaction(conn,season_id:int,victory_type='time',winner
     if not season: return False
     marker=polywar._fetchone(c,"SELECT * FROM polywar_season_finalizations WHERE season_id=%s"+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
     if season.get('status')=='completed' or (marker and marker.get('status')=='completed'): return False
+    existing_results=polywar._fetchone(c,'SELECT COUNT(*) AS n FROM polywar_season_results WHERE season_id=%s',(season_id,))
+    existing_rewards=polywar._fetchone(c,'SELECT COUNT(*) AS n FROM polywar_player_season_rewards WHERE season_id=%s',(season_id,))
+    if int((existing_results or {}).get('n') or 0)>0 or int((existing_rewards or {}).get('n') or 0)>0:
+        raise RuntimeError('finalization_integrity_error')
     polywar._execute(c,"INSERT INTO polywar_season_finalizations (season_id,version,status,started_at,created_at,updated_at) VALUES (%s,1,'processing',%s,%s,%s) ON CONFLICT (season_id) DO NOTHING",(season_id,now,now,now))
     polywar._execute(c,"UPDATE polywar_seasons SET status='finalizing',victory_type=%s,winner_faction_id=%s,finalization_started_at=%s WHERE id=%s AND status IN ('active','finalizing')",(victory_type,winner_faction_id,now,season_id))
+    polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) SELECT %s,'season_finalizing','PolyWar season finalization started.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND event_type='season_finalizing')",(season_id,now,season_id))
     stats=polywar._fetchall(c,'SELECT s.*,f.is_system FROM polywar_faction_season_stats s JOIN polywar_factions f ON f.id=s.faction_id WHERE s.season_id=%s ORDER BY s.faction_id'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
     contrib={r['faction_id']:r['total'] for r in polywar._fetchall(c,'SELECT faction_id,COALESCE(SUM(faction_contribution),0) AS total FROM polywar_players WHERE season_id=%s GROUP BY faction_id',(season_id,))}
     rift_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT sealed_by_faction_id AS faction_id,COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s AND status='sealed' AND sealed_by_faction_id IS NOT NULL GROUP BY sealed_by_faction_id",(season_id,))}
@@ -136,19 +142,22 @@ def finalize_season_in_transaction(conn,season_id:int,victory_type='time',winner
         start=now; end=start+timedelta(days=polywar._setting_int('polywar_season_days',30,1,365)); polywar._execute(c,"INSERT INTO polywar_seasons (name,status,starts_at,ends_at,secret_seed,created_at) VALUES (%s,'active',%s,%s,%s,%s)",('Season next',start,end,secrets.token_hex(32),start))
     return True
 
-def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
-    init_finalization_schema(conn); managed=False
+def finalize_season(season_id:int,victory_type='time',winner_faction_id=None,now=None):
+    conn=polywar.get_connection(); init_finalization_schema(conn); managed=False
     try:
         _begin(conn); managed=True
         out=finalize_season_in_transaction(conn,season_id,victory_type,winner_faction_id,now or _now())
-        if managed: conn.commit()
-        return out
+        conn.commit(); return out
     except Exception as exc:
         if managed:
             try: conn.rollback()
             except Exception: pass
             _mark_finalization_failed(season_id, exc)
         raise
+    finally:
+        try: conn.close()
+        except Exception: pass
+
 def _calculate_rewards(conn,sid,ranks,winner):
     c=conn.cursor(); rules=public_rules(); out=[]; defeated=bool(polywar._fetchone(c,"SELECT 1 FROM polywar_null_state WHERE season_id=%s AND status='defeated'",(sid,)))
     players=polywar._fetchall(c,'SELECT * FROM polywar_players WHERE season_id=%s AND faction_id IS NOT NULL',(sid,))
@@ -162,10 +171,10 @@ def get_results(conn,season_id=None,user_id=None):
     if season_id:
         candidate=polywar._fetchone(c,'SELECT id,status FROM polywar_seasons WHERE id=%s',(season_id,))
         if candidate and candidate.get('status')=='active':
-            maybe_finalize(conn,int(season_id))
+            maybe_finalize(int(season_id))
     else:
         active=polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='active' ORDER BY id DESC LIMIT 1")
-        if active: maybe_finalize(conn,int(active['id']))
+        if active: maybe_finalize(int(active['id']))
         row=polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='completed' ORDER BY completed_at DESC LIMIT 1")
         if not row: raise ValueError('results_not_ready')
         season_id=row['id']
@@ -181,6 +190,22 @@ def _validate_ledger_reward(entry, reward, user_id):
     from services.airdrop_points_service import _to_decimal
     if int(entry.get('user_id') or 0) != int(user_id) or str(entry.get('reason')) != 'polywar_season_reward' or _to_decimal(entry.get('amount')) != _to_decimal(reward.get('total_reward')):
         raise RuntimeError('airdrop_external_reference_mismatch')
+
+
+_CLAIM_RATE_LOCK=threading.Lock(); _CLAIM_RATE=defaultdict(deque)
+def _claim_limiter(user_id,limit=10,window=60,max_entries=4096):
+    now=time.time(); key=int(user_id or 0)
+    with _CLAIM_RATE_LOCK:
+        for k in list(_CLAIM_RATE.keys()):
+            q=_CLAIM_RATE[k]
+            while q and now-q[0]>window: q.popleft()
+            if not q: _CLAIM_RATE.pop(k,None)
+        if key not in _CLAIM_RATE and len(_CLAIM_RATE)>=max_entries:
+            oldest=min(_CLAIM_RATE, key=lambda k: _CLAIM_RATE[k][0] if _CLAIM_RATE[k] else now)
+            _CLAIM_RATE.pop(oldest,None)
+        q=_CLAIM_RATE[key]
+        if len(q)>=limit: raise ValueError('rate_limited')
+        q.append(now)
 
 def _claim_tx_begin():
     conn=polywar.get_connection(); _begin(conn); return conn
@@ -205,6 +230,7 @@ def claim_reward(user_id:int,season_id:int,idempotency_key:str):
                 polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='claimed',claimed_at=COALESCE(claimed_at,%s) WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id)); conn.commit(); return {'ok':True,'claimed':True,'duplicate':True,'reward':r}
             conn.commit(); return {'ok':False,'error':'reward_claim_processing'}
         if r.get('status') not in ('pending','failed'): raise ValueError('reward_ineligible')
+        _claim_limiter(user_id)
         now=_now(); polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='processing',claim_started_at=%s,failed_at=NULL,failure_reason=NULL WHERE season_id=%s AND user_id=%s AND status IN ('pending','failed')",(now,season_id,user_id))
         if polywar._rowcount(c)!=1: raise ValueError('reward_claim_processing')
         conn.commit(); reward=r
