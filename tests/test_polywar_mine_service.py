@@ -143,3 +143,60 @@ def test_web_source_strict_boolean_and_client_ignored():
     src=Path('web.py').read_text(); block=src[src.index('async def handle_polywar_flag_api'):src.index('async def handle_webapp_summary')]
     assert 'isinstance(data.get("active"), bool)' in block and 'invalid_active' in block and 'bool(data.get("active"))' not in block
     assert 'data.get("user_id")' not in block and 'data.get("faction_id")' not in block and 'data.get("season_id")' not in block and 'data.get("mine_count")' not in block
+
+def test_energy_spend_from_full_resets_recharge_countdown_for_capture_scan_and_mine(polydb):
+    connect,_=polydb
+    # capture from full should reset banked max time
+    st=join(120,1); sid=st['season']['id']; x,y=near_cell(); old=datetime.utcnow()-timedelta(hours=5)
+    c=connect(); c.execute('update polywar_players set current_energy=10,max_energy=10,energy_updated_at=? where user_id=120 and season_id=?',(old,sid)); c.commit(); c.close()
+    r=m.capture_cell(120,x,y,'full-cap')
+    assert r['energy']['current_energy']==9 and 3500 <= r['energy']['seconds_until_next_energy'] <= 3600
+    # scan from full should do the same
+    st=join(121,1); sid=st['season']['id']; sx,sy=near_cell(); old=datetime.utcnow()-timedelta(hours=5)
+    c=connect(); c.execute('update polywar_players set current_energy=10,max_energy=10,energy_updated_at=? where user_id=121 and season_id=?',(old,sid)); c.commit(); c.close()
+    sr=mines.scan_area(121,sx,sy,3,'full-scan')
+    assert sr['energy']['current_energy']==8 and 3500 <= sr['energy']['seconds_until_next_energy'] <= 3600
+    # mine hit from full should not reuse stale countdown either
+    s,sec,mx,my,t=find_mine(connect); join(122,1)
+    old=datetime.utcnow()-timedelta(hours=5)
+    c=connect(); c.execute('insert into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(s['id'],mx-1,my)); c.execute('update polywar_players set current_energy=10,max_energy=10,energy_updated_at=? where user_id=122 and season_id=?',(old,s['id'])); c.commit(); c.close()
+    mr=m.capture_cell(122,mx,my,'full-mine')
+    assert mr['mine_hit'] and mr['energy']['current_energy'] in {8,9} and 3500 <= mr['energy']['seconds_until_next_energy'] <= 3600
+
+
+def test_offline_recovered_partial_interval_survives_spend(polydb):
+    connect,_=polydb; st=join(123,1); sid=st['season']['id']; x,y=near_cell()
+    old=datetime.utcnow()-timedelta(minutes=75)
+    c=connect(); c.execute('update polywar_players set current_energy=5,max_energy=10,energy_updated_at=? where user_id=123 and season_id=?',(old,sid)); c.commit(); c.close()
+    r=m.capture_cell(123,x,y,'partial-cap')
+    assert r['energy']['current_energy']==5  # 5 + 1 recovered - 1 spent
+    assert 2600 <= r['energy']['seconds_until_next_energy'] <= 2700
+
+
+def test_flag_idempotent_repeats_bypass_rate_limit(polydb, monkeypatch):
+    connect,_=polydb; monkeypatch.setattr(mines, 'FLAG_RATE_MAX', 2); join(124,1); x,y=near_cell()
+    assert mines.set_flag(124,x,y,True)['ok']
+    for _ in range(5):
+        r=mines.set_flag(124,x,y,True)
+        assert r['ok'] and r.get('duplicate')
+    assert mines.set_flag(124,x,y,False)['ok']
+    for _ in range(5):
+        r=mines.set_flag(124,x,y,False)
+        assert r['ok'] and r.get('duplicate')
+
+
+def test_real_flag_mutations_are_rate_limited_and_concurrent_limit_holds(polydb, monkeypatch):
+    connect,settings=polydb; settings['polywar_max_flags_per_player']='1'; monkeypatch.setattr(mines, 'FLAG_RATE_MAX', 2); join(125,1)
+    x,y=near_cell(); assert mines.set_flag(125,x,y,True)['ok']
+    assert mines.set_flag(125,x,y,False)['ok']
+    with pytest.raises(ValueError, match='rate_limited'):
+        mines.set_flag(125,x+1,y,True)
+    # separate user validates concurrent max flag protection independent of rate bucket
+    monkeypatch.setattr(mines, 'FLAG_RATE_MAX', 100); join(126,1); out=[]; err=[]
+    def worker(dx):
+        try: out.append(mines.set_flag(126,x+dx,y,True))
+        except ValueError as e: err.append(str(e))
+    ts=[threading.Thread(target=worker,args=(i,)) for i in (0,1)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); count=c.execute('select count(*) from polywar_flags where user_id=126').fetchone()[0]; c.close()
+    assert count <= 1 and (err or len(out)==1)

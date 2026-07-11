@@ -288,14 +288,13 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
             raise ValueError("not_adjacent")
         if int(e["current_energy"]) < cost: raise ValueError("insufficient_energy")
-        now = datetime.utcnow(); new_energy = int(e["current_energy"]) - cost
+        now = datetime.utcnow()
         mine = mines.active_mine_at(conn, sid, seed, x, y, terr)
         if mine and mines.try_trigger_mine(conn, sid, x, y, user_id, fid, idempotency_key, now):
             locked_until = now + timedelta(minutes=mines.mine_lock_minutes())
             polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
             mines.record_triggered_mine(conn, sid, fid, user_id, x, y, idempotency_key, seed, now)
-            polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, locked_until=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy,e["energy_updated_at"],locked_until,now,user_id,sid))
-            energy = {"current_energy": new_energy, "max_energy": e["max_energy"], "recharge_minutes": e["recharge_minutes"], "seconds_until_next_energy": e["seconds_until_next_energy"], "is_locked": True, "locked_until": polywar._iso(locked_until), "lock_seconds_remaining": int((locked_until-now).total_seconds()), "lock_reason": "mine_hit"}
+            new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now, locked_until)
             payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": None, "energy_cost": cost}, "mine_hit": True, "locked_until": polywar._iso(locked_until), "energy": energy}
             mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "mine_hit", cost, payload, now)
             conn.commit(); payload.update({"ok": True, "outcome": "mine_hit"}); return payload
@@ -306,10 +305,9 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
             raise ValueError("not_adjacent")
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
-        polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy,e["energy_updated_at"],now,user_id,sid))
+        new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
         polywar._execute(c, "UPDATE polywar_faction_season_stats SET controlled_cells_count=controlled_cells_count+1, updated_at=%s WHERE season_id=%s AND faction_id=%s", (now,sid,fid))
         hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now)
-        energy = {k:v for k,v in polywar._energy({**player, "current_energy": new_energy, "energy_updated_at": e["energy_updated_at"]}).items() if k != "energy_updated_at"}
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}
         mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "captured", cost, payload, now)
         conn.commit(); payload.update({"ok": True, "outcome": "captured"}); return payload

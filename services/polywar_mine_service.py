@@ -92,6 +92,19 @@ def public_energy_for_player(player):
     return {k: v for k, v in polywar._energy(player).items() if k != "energy_updated_at"}
 
 
+def spend_player_energy(conn, player, cost: int, now, locked_until=None):
+    e = polywar._energy(player)
+    if int(e["current_energy"]) < int(cost):
+        raise ValueError("insufficient_energy")
+    new_energy = int(e["current_energy"]) - int(cost)
+    updated_at = now if int(e["current_energy"]) >= int(e["max_energy"]) else e["energy_updated_at"]
+    uid, sid = int(player["user_id"]), int(player["season_id"])
+    polywar._execute(conn.cursor(), "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, locked_until=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy, updated_at, locked_until if locked_until is not None else player.get("locked_until"), now, uid, sid))
+    next_player = dict(player)
+    next_player.update({"current_energy": new_energy, "energy_updated_at": updated_at, "locked_until": locked_until if locked_until is not None else player.get("locked_until")})
+    return new_energy, updated_at, public_energy_for_player(next_player)
+
+
 def duplicate_outcome_response(conn, season_id, user_id, idempotency_key):
     import json
     row = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_action_outcomes WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (season_id, user_id, idempotency_key))
@@ -282,10 +295,8 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
             for xx in range(center_x-half, center_x+half+1):
                 if m.in_bounds(xx, yy) and active_mine_at(conn, sid, seed, xx, yy, m.terrain_at(seed, xx, yy)):
                     count += 1
-        now = datetime.utcnow(); new_energy = int(e["current_energy"]) - cost
-        polywar._execute(c, "UPDATE polywar_players SET current_energy=%s, energy_updated_at=%s, last_active_at=%s WHERE user_id=%s AND season_id=%s", (new_energy, e["energy_updated_at"], now, user_id, sid))
+        now = datetime.utcnow(); new_energy, _, energy = spend_player_energy(conn, player, cost, now)
         polywar._execute(c, "INSERT INTO polywar_scans (season_id,user_id,faction_id,center_x,center_y,scan_size,active_mine_count,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,center_x,center_y,size,count,cost,idempotency_key,now))
-        energy = public_energy_for_player({**player, "current_energy": new_energy, "energy_updated_at": e["energy_updated_at"]})
         payload = {"center_x": center_x, "center_y": center_y, "size": size, "active_mine_count": count, "energy_cost": cost, "created_at": polywar._iso(now), "energy": energy}
         insert_outcome(conn, sid, user_id, idempotency_key, "scan", center_x, center_y, "scanned", cost, payload, now)
         conn.commit(); payload.update({"ok": True, "outcome": "scanned"}); return payload
@@ -302,7 +313,6 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
 
 
 def set_flag(user_id: int, x: int, y: int, active: bool):
-    _rate(_FLAG_RATE, user_id, FLAG_RATE_MAX)
     from services import polywar_map_service as m
     conn = polywar.get_connection(); c = conn.cursor()
     try:
@@ -315,11 +325,14 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         if not fid: raise ValueError("faction_required")
         if not m.in_bounds(x, y): raise ValueError("out_of_bounds")
         existing = polywar._fetchone(c, "SELECT id FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid, user_id, x, y))
+        if active and existing:
+            conn.commit(); return {"ok": True, "x": x, "y": y, "active": True, "duplicate": True}
+        if not active and not existing:
+            conn.commit(); return {"ok": True, "x": x, "y": y, "active": False, "duplicate": True}
+        _rate(_FLAG_RATE, user_id, FLAG_RATE_MAX)
         if not active:
             polywar._execute(c, "DELETE FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid,user_id,x,y))
             conn.commit(); return {"ok": True, "x": x, "y": y, "active": False}
-        if existing:
-            conn.commit(); return {"ok": True, "x": x, "y": y, "active": True, "duplicate": True}
         terr = m.terrain_at(seed, x, y)
         if terr not in _CAPTURABLE: raise ValueError("not_capturable")
         owner = m._owner_at(conn, sid, x, y)
