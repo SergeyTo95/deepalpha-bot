@@ -235,6 +235,15 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         from services import polywar_capital_service as capitals
         from services import polywar_governance_service as governance
         capitals.ensure_capitals_initialized(conn, sid)
+        try:
+            from services import polywar_world_service as world
+            world.ensure_world_caught_up(conn, sid)
+            for ch in out:
+                x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+                rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
+                ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
+        except Exception:
+            logger.exception("PolyWar chunk world enrichment failed")
         capitals.enrich_chunks(conn, sid, out)
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
@@ -282,6 +291,13 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
         if capitals.get_capital_at(conn, sid, x, y): raise ValueError("capital_requires_siege")
+        try:
+            from services import polywar_world_service as world
+            if world.is_rift(conn, sid, x, y): raise ValueError("rift_requires_seal")
+        except ValueError:
+            raise
+        except Exception:
+            pass
         polywar._insert_player_if_missing(conn, int(user_id), sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)

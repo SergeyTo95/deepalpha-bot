@@ -143,6 +143,13 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         cap = capitals.get_capital_at(conn, sid, x, y)
         if cap:
             raise ValueError('capital_requires_repair' if action_type == 'reinforce' else 'capital_requires_siege')
+        try:
+            from services import polywar_world_service as world
+            if world.is_rift(conn, sid, x, y): raise ValueError('rift_requires_seal')
+        except ValueError:
+            raise
+        except Exception:
+            pass
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         now = datetime.utcnow(); owner = _owner(conn, sid, x, y)

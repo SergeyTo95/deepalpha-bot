@@ -4,3 +4,4 @@
 
 /* Phase 5 capital/governance affordances for existing PolyWar panels. */
 .polywar-capital-badge,.polywar-order-marker{border:1px solid rgba(255,255,255,.5);border-radius:999px;padding:2px 6px}.polywar-governance-panel{display:grid;gap:10px}.polywar-siege-progress{height:6px;border-radius:999px;background:linear-gradient(90deg,#ffb703,var(--polywar-faction-color,#8ecae6))}
+.polywar-world-hud,.polywar-results-panel,.polywar-rift-panel,.polywar-rebellion-panel{display:grid;gap:8px}.polywar-world-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.polywar-world-stat{border:1px solid var(--stroke);border-radius:14px;padding:8px;background:rgba(255,255,255,.06)}.polywar-null-cell{background:repeating-linear-gradient(45deg,rgba(0,0,0,.8),rgba(0,0,0,.8) 4px,rgba(168,85,247,.45) 4px,rgba(168,85,247,.45) 8px)}@media(max-width:560px){.polywar-world-grid{grid-template-columns:1fr 1fr}}

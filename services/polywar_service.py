@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
+NULL_STATE_FACTION_ID = 8
+
 FACTIONS = [
     (1, "Blue Coalition", "blue-coalition", "blue", "A disciplined bloc built on coordination and protocol trust."),
     (2, "Red Alliance", "red-alliance", "red", "Aggressive consensus challengers who favor decisive action."),
@@ -137,7 +139,15 @@ def init_polywar_schema(conn=None) -> None:
             ends_at TIMESTAMP NOT NULL,
             secret_seed TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP NULL
+            completed_at TIMESTAMP NULL,
+            winner_faction_id INTEGER NULL,
+            victory_type TEXT NULL,
+            finalization_started_at TIMESTAMP NULL,
+            finalized_at TIMESTAMP NULL,
+            domination_faction_id INTEGER NULL,
+            domination_started_at TIMESTAMP NULL,
+            results_hash TEXT NULL,
+            finalization_version INTEGER NOT NULL DEFAULT 1
         )
         """)
         c.execute("""
@@ -147,7 +157,9 @@ def init_polywar_schema(conn=None) -> None:
             slug TEXT NOT NULL UNIQUE,
             color TEXT NOT NULL,
             description TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_playable INTEGER NOT NULL DEFAULT 1,
+            is_system INTEGER NOT NULL DEFAULT 0
         )
         """)
         c.execute("""
@@ -191,6 +203,18 @@ def init_polywar_schema(conn=None) -> None:
         )
         """)
         # Idempotent additive migrations for databases created by the first Phase 1 draft.
+        for spec in ["is_playable INTEGER NOT NULL DEFAULT 1", "is_system INTEGER NOT NULL DEFAULT 0"]:
+            try:
+                from services.polywar_sector_service import _add_col
+                _add_col(conn, "polywar_factions", spec)
+            except Exception:
+                pass
+        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1"]:
+            try:
+                from services.polywar_sector_service import _add_col
+                _add_col(conn, "polywar_seasons", spec)
+            except Exception:
+                pass
         for sql in [
             "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS seasonal_influence_score",
             "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS active_members_count",
@@ -223,6 +247,16 @@ def init_polywar_schema(conn=None) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar state lifecycle sync failed")
+        try:
+            from services.polywar_world_service import init_world_schema
+            init_world_schema(conn)
+            from services.polywar_rebellion_service import init_rebellion_schema
+            init_rebellion_schema(conn)
+            from services.polywar_finalization_service import init_finalization_schema
+            init_finalization_schema(conn)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("PolyWar phase6 schema sync failed")
         conn.commit()
     finally:
         if own:
@@ -240,6 +274,12 @@ def ensure_factions(conn=None) -> List[Dict[str, Any]]:
             ON CONFLICT (id) DO NOTHING
             """, (fid, name, slug, color, desc, _now()))
         conn.commit()
+        try:
+            from services.polywar_world_service import ensure_null_faction
+            season = _fetchone(c, "SELECT id FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+            if season: ensure_null_faction(conn, int(season['id']))
+        except Exception:
+            pass
         return list_factions(conn)
     finally:
         if own: conn.close()
@@ -304,6 +344,14 @@ def ensure_active_season(conn=None) -> Dict[str, Any]:
 def list_factions(conn=None) -> List[Dict[str, Any]]:
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
     try:
+        return _fetchall(c, "SELECT * FROM polywar_factions WHERE COALESCE(is_playable,1)=1 ORDER BY id")
+    finally:
+        if own: conn.close()
+
+
+def list_all_polywar_factions(conn=None) -> List[Dict[str, Any]]:
+    own = conn is None; conn = conn or get_connection(); c = conn.cursor()
+    try:
         return _fetchall(c, "SELECT * FROM polywar_factions ORDER BY id")
     finally:
         if own: conn.close()
@@ -322,6 +370,7 @@ def list_factions_with_stats(season_id: int, conn=None) -> List[Dict[str, Any]]:
                COALESCE(s.controlled_capitals_count, 0) AS controlled_capitals_count
         FROM polywar_factions f
         LEFT JOIN polywar_faction_season_stats s ON s.faction_id = f.id AND s.season_id = %s
+        WHERE COALESCE(f.is_playable,1)=1
         ORDER BY f.id
         """, (int(season_id),))
         return rows
@@ -379,6 +428,8 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
         faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
         if not faction:
             raise ValueError("unknown_faction")
+        if not int(faction.get("is_playable", 1) or 0) or int(faction.get("is_system", 0) or 0):
+            raise ValueError("unknown_faction")
         try:
             _insert_player_if_missing(conn, int(user_id), int(season["id"]))
             _execute(c, """
@@ -435,6 +486,11 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
     own = conn is None; conn = conn or get_connection()
     try:
         init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        try:
+            from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
+            ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]))
+        except Exception:
+            import logging; logging.getLogger(__name__).exception("PolyWar world lifecycle sync failed")
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
         factions = list_factions_with_stats(int(season["id"]), conn)
         faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
@@ -463,6 +519,14 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
             logging.getLogger(__name__).exception("PolyWar governance lifecycle sync failed")
             _safe_rollback(conn)
         rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        world = {}
+        try:
+            from services.polywar_world_service import get_public_world_state, public_rules as world_rules
+            from services.polywar_rebellion_service import public_rules as rebellion_rules
+            from services.polywar_finalization_service import public_rules as reward_rules, get_results
+            world = get_public_world_state(conn, int(season["id"])); rules.update({"world": world_rules(), "rebellions": rebellion_rules(), "rewards": reward_rules()})
+        except Exception:
+            world = {}
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": None, "current_user_pending_reward": None, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()
