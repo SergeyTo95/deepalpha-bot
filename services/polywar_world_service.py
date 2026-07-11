@@ -261,7 +261,13 @@ def process_due_tick(conn,season_id:int,now=None):
         prev=st.get('next_tick_at')
         if isinstance(prev,str): prev=datetime.fromisoformat(prev)
         nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
-        _execute(c,"UPDATE polywar_null_state SET tick_index=%s,last_tick_at=%s,next_tick_at=%s,corruption_level=corruption_level+%s,updated_at=%s WHERE season_id=%s",(tick,now,nxt,len(actions),now,season_id)); _recount(conn,season_id); check_defeat(conn,season_id,now); ok=True; return {'processed':True,'tick_index':tick,'actions_count':len(actions)}
+        _execute(c,"UPDATE polywar_null_state SET tick_index=%s,last_tick_at=%s,next_tick_at=%s,corruption_level=corruption_level+%s,updated_at=%s WHERE season_id=%s",(tick,now,nxt,len(actions),now,season_id)); _recount(conn,season_id); check_defeat(conn,season_id,now)
+        try:
+            from services import polywar_finalization_service as finalization
+            finalization.maybe_finalize(conn,season_id,now)
+        except Exception:
+            logger.exception('polywar_world_finalization_check_failed season_id=%s',season_id)
+        ok=True; return {'processed':True,'tick_index':tick,'actions_count':len(actions)}
     except Exception:
         logger.exception('polywar_world_tick_failed season_id=%s',season_id); raise
     finally:
@@ -291,7 +297,13 @@ def check_defeat(conn,sid,now=None):
     return False
 
 def get_public_world_state(conn,season_id:int):
-    ensure_world_initialized(conn,season_id); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {}; rifts=_fetchall(c,'SELECT * FROM polywar_null_rifts WHERE season_id=%s ORDER BY id',(season_id,))
+    ensure_world_initialized(conn,season_id)
+    try:
+        from services import polywar_finalization_service as finalization
+        finalization.maybe_finalize(conn,season_id,_now())
+    except Exception:
+        pass
+    c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {}; rifts=_fetchall(c,'SELECT * FROM polywar_null_rifts WHERE season_id=%s ORDER BY id',(season_id,))
     def rr(r):
         hp=0 if not r.get('max_health') else round(100*int(r.get('health') or 0)/int(r.get('max_health') or 1),2)
         return {'x':r['x'],'y':r['y'],'status':r['status'],'health':r['health'],'max_health':r['max_health'],'health_percent':hp,'sealed_by_faction_id':r.get('sealed_by_faction_id'),'sealed_at':polywar._iso(r.get('sealed_at'))}
@@ -300,7 +312,18 @@ def get_public_world_state(conn,season_id:int):
 def public_rules(): return {'seal_energy_cost':seal_cost(),'seal_progress':seal_progress(),'tick_minutes':tick_minutes(),'expansions_per_tick':expansions_per_tick(),'capital_siege_per_tick':capital_siege_per_tick()}
 
 def reconcile_polywar_season(conn,season_id:int,fix:bool=False):
-    report={'ok':True,'season_id':season_id,'mismatches':[],'fixed':False}; _recount(conn,season_id); return report
+    c=conn.cursor(); report={'ok':True,'season_id':season_id,'mismatches':[],'fixed':False}
+    stored=_fetchone(c,'SELECT controlled_cells_count,controlled_sectors_count,controlled_capitals_count FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {}
+    actual_cells=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s',(season_id,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
+    if int(stored.get('controlled_cells_count') or 0)!=int(actual_cells): report['mismatches'].append({'type':'null_cells','expected':actual_cells,'actual':stored.get('controlled_cells_count')})
+    for cap in _fetchall(c,'SELECT x,y,controller_faction_id FROM polywar_capitals WHERE season_id=%s',(season_id,)):
+        cell=_fetchone(c,'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s',(season_id,cap['x'],cap['y'])) or {}
+        if cell.get('owner_faction_id') is not None and int(cell.get('owner_faction_id'))!=int(cap.get('controller_faction_id') or 0): report['mismatches'].append({'type':'capital_cell_owner','coordinates':{'x':cap['x'],'y':cap['y']},'expected':cap.get('controller_faction_id'),'actual':cell.get('owner_faction_id')})
+    report['ok']=not report['mismatches']
+    if fix and report['mismatches']:
+        season=_fetchone(c,'SELECT status FROM polywar_seasons WHERE id=%s',(season_id,)) or {}
+        if season.get('status')!='active': raise ValueError('reconciliation_fix_forbidden')
+    return report
 
 def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
     if not idempotency_key or len(str(idempotency_key))>120: raise ValueError('bad_idempotency_key')

@@ -48,17 +48,19 @@ def maybe_finalize(conn,season_id:int,now=None):
         fid=sorted(playable,key=lambda x:(-x[1],x[0]))[0][0]
         started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==fid else None
         if not started:
-            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(fid,now,season_id)); conn.commit(); return False
+            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(fid,now,season_id)); polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'domination_started','Domination hold started.',%s)",(season_id,fid,now)); return False
         if isinstance(started,str): started=datetime.fromisoformat(started)
-        if now>=started+timedelta(hours=domination_hold_hours()): return finalize_season(conn,season_id,'domination',fid,now)
+        if now>=started+timedelta(hours=domination_hold_hours()):
+            polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'season_winner','Domination victory secured.',%s)",(season_id,fid,now)); return finalize_season(conn,season_id,'domination',fid,now)
     elif null_count>=null_victory_capitals_required():
         started=season.get('domination_started_at') if int(season.get('domination_faction_id') or 0)==NULL_STATE_FACTION_ID else None
         if not started:
-            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(NULL_STATE_FACTION_ID,now,season_id)); conn.commit(); return False
+            polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=%s,domination_started_at=%s WHERE id=%s",(NULL_STATE_FACTION_ID,now,season_id)); polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'domination_started','Null State victory hold started.',%s)",(season_id,NULL_STATE_FACTION_ID,now)); return False
         if isinstance(started,str): started=datetime.fromisoformat(started)
-        if now>=started+timedelta(hours=null_victory_hold_hours()): return finalize_season(conn,season_id,'null_state',None,now)
+        if now>=started+timedelta(hours=null_victory_hold_hours()):
+            polywar._execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_state_victory','The Null State has won.',%s)",(season_id,NULL_STATE_FACTION_ID,now)); return finalize_season(conn,season_id,'null_state',None,now)
     elif season.get('domination_faction_id'):
-        polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s",(season_id,)); conn.commit()
+        polywar._execute(c,"UPDATE polywar_seasons SET domination_faction_id=NULL,domination_started_at=NULL WHERE id=%s",(season_id,)); polywar._execute(c,"INSERT INTO polywar_events (season_id,event_type,message,created_at) VALUES (%s,'domination_cancelled','Domination hold cancelled.',%s)",(season_id,now))
     if str(season.get('ends_at'))>polywar._iso(now): return False
     return finalize_season(conn,season_id,'time',None,now)
 def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
@@ -69,9 +71,13 @@ def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=Non
         if 'within a transaction' not in str(exc).lower() and 'already a transaction' not in str(exc).lower(): raise
     c=conn.cursor()
     season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
-    if not season or season.get('status')=='completed': return False
+    if not season or season.get('status')=='completed':
+        if managed: conn.commit()
+        return False
     existing=polywar._fetchone(c,"SELECT * FROM polywar_season_finalizations WHERE season_id=%s AND status='completed'",(season_id,))
-    if existing: return False
+    if existing:
+        if managed: conn.commit()
+        return False
     polywar._execute(c,"INSERT INTO polywar_season_finalizations (season_id,version,status,started_at,created_at,updated_at) VALUES (%s,1,'processing',%s,%s,%s) ON CONFLICT (season_id) DO NOTHING",(season_id,now,now,now))
     polywar._execute(c,"UPDATE polywar_seasons SET status='finalizing',victory_type=%s,winner_faction_id=%s,finalization_started_at=%s WHERE id=%s AND status IN ('active','finalizing')",(victory_type,winner_faction_id,now,season_id))
     stats=polywar._fetchall(c,'SELECT s.*,f.is_system FROM polywar_faction_season_stats s JOIN polywar_factions f ON f.id=s.faction_id WHERE s.season_id=%s ORDER BY s.faction_id',(season_id,))

@@ -25,10 +25,7 @@ def _original_presence(conn,sid,orig,x,y):
     # Bounded neighbouring-sector presence check.
     sx,sy=int(x)//64,int(y)//64
     rows=polywar._fetchall(conn.cursor(),'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s AND x>=%s AND x<%s AND y>=%s AND y<%s LIMIT 1',(sid,orig,max(0,(sx-1)*64),(sx+2)*64,max(0,(sy-1)*64),(sy+2)*64))
-    if rows: return True
-    # Legacy/test seasons may not have materialized original territory yet; active members still allow lazy rebellion creation.
-    any_orig=polywar._fetchone(conn.cursor(),'SELECT 1 FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s LIMIT 1',(sid,orig))
-    return not bool(any_orig)
+    return bool(rows)
 
 def ensure_rebellions(conn,season_id:int):
     init_rebellion_schema(conn); c=conn.cursor(); now=_now(); rules=public_rules()

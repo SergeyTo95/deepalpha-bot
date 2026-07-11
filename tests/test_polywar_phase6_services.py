@@ -95,11 +95,11 @@ def test_activation_transfers_preowned_rift_cell(db):
 
 
 def test_rebellion_pending_becomes_active_and_cancels_on_controller_change(db):
-    connect,settings=db; settings['polywar_rebellion_grace_hours']='24'; sid=active(connect); polywar.join_faction(201,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,20,20,2,now,now,now)); c.commit(); rebellion.ensure_rebellions(c,sid); row=c.execute('select status from polywar_rebellions where season_id=? and capital_original_faction_id=1',(sid,)).fetchone(); assert row['status']=='pending'; c.execute('update polywar_rebellions set eligible_at=?',(datetime.utcnow()-timedelta(seconds=1),)); rebellion.ensure_rebellions(c,sid); assert c.execute('select status from polywar_rebellions where season_id=?',(sid,)).fetchone()[0]=='active'; c.execute('update polywar_capitals set controller_faction_id=3 where season_id=? and original_faction_id=1',(sid,)); rebellion.ensure_rebellions(c,sid); assert c.execute("select count(*) from polywar_rebellions where season_id=? and status='cancelled'",(sid,)).fetchone()[0]>=1
+    connect,settings=db; settings['polywar_rebellion_grace_hours']='24'; sid=active(connect); polywar.join_faction(201,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,20,20,2,now,now,now)); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,19,20)); c.commit(); rebellion.ensure_rebellions(c,sid); row=c.execute('select status from polywar_rebellions where season_id=? and capital_original_faction_id=1',(sid,)).fetchone(); assert row['status']=='pending'; c.execute('update polywar_rebellions set eligible_at=?',(datetime.utcnow()-timedelta(seconds=1),)); rebellion.ensure_rebellions(c,sid); assert c.execute('select status from polywar_rebellions where season_id=?',(sid,)).fetchone()[0]=='active'; c.execute('update polywar_capitals set controller_faction_id=3 where season_id=? and original_faction_id=1',(sid,)); rebellion.ensure_rebellions(c,sid); assert c.execute("select count(*) from polywar_rebellions where season_id=? and status='cancelled'",(sid,)).fetchone()[0]>=1
 
 
 def test_rebellion_full_suppression_status(db):
-    connect,_=db; sid=active(connect); polywar.join_faction(202,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,30,30,2,now,now,datetime.utcnow())); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,31,30)); c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); out=rebellion.rebellion_action(202,'suppress_rebellion',30,30,'suppr1'); assert out['resolved_status']=='suppressed'
+    connect,_=db; sid=active(connect); polywar.join_faction(202,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,30,30,2,now,now,datetime.utcnow())); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,29,30)); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,31,30)); c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); out=rebellion.rebellion_action(202,'suppress_rebellion',30,30,'suppr1'); assert out['resolved_status']=='suppressed'
 
 
 def test_results_hash_excludes_secret_and_rows_are_immutable(db):
@@ -128,7 +128,7 @@ def test_world_source_uses_conflict_safe_tick_insert_and_no_python_hash():
     assert 'ON CONFLICT (season_id,tick_index) DO NOTHING' in src and 'INSERT OR IGNORE INTO polywar_world_ticks' in src and 'hash(' not in src
 
 def test_build_chunks_runtime_rebellion_metadata(db):
-    connect,_=db; sid=active(connect); polywar.join_faction(203,2); c=connect(); from services import polywar_map_service as mm; rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,64,64,2,now,now,datetime.utcnow())); c.commit(); c.close()
+    connect,_=db; sid=active(connect); polywar.join_faction(203,2); c=connect(); from services import polywar_map_service as mm; rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,64,64,2,now,now,datetime.utcnow())); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,63,64)); c.commit(); c.close()
     out=mm.build_chunks(100, [(1,1)])
     ch=out['chunks'][0]
     assert ch['rebellions'] and ch['rebellions'][0]['x']==64 and ch['rebellions'][0]['y']==64
@@ -251,3 +251,30 @@ def test_threaded_same_key_rebellion_support_one_progress_and_energy(db):
 
 def test_domination_and_null_victory_settings_are_bounded(db):
     connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_null_victory_capitals_required']='2'; c=connect(); assert finalization.domination_capitals_required()==2 and finalization.null_victory_capitals_required()==2
+
+
+
+def test_rebellion_requires_real_original_presence(db):
+    connect,_=db; sid=active(connect); polywar.join_faction(210,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,70,70,2,now,now,now)); c.commit(); rebellion.ensure_rebellions(c,sid); assert c.execute('select count(*) from polywar_rebellions where season_id=?',(sid,)).fetchone()[0]==0; c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,69,70)); rebellion.ensure_rebellions(c,sid); assert c.execute('select count(*) from polywar_rebellions where season_id=?',(sid,)).fetchone()[0]==1
+
+
+def test_domination_timer_start_reset_and_victory(db):
+    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_domination_hold_hours']='0'; sid=active(connect); c=connect(); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,80,80,1,now,now)); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,81,80,1,now,now)); c.commit(); assert finalization.maybe_finalize(c,sid,now) is False; c.commit(); assert c.execute('select domination_faction_id from polywar_seasons where id=?',(sid,)).fetchone()[0]==1; assert finalization.maybe_finalize(c,sid,now+timedelta(seconds=1)) is True; c.commit(); assert c.execute('select victory_type from polywar_seasons where id=?',(sid,)).fetchone()[0]=='domination'
+
+
+def test_reconcile_fix_false_performs_zero_update(db, monkeypatch):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); calls=[]; orig=polywar._execute
+    def spy(cur, sql, params=()):
+        if str(sql).lstrip().upper().startswith('UPDATE'): calls.append(sql)
+        return orig(cur, sql, params)
+    monkeypatch.setattr(polywar,'_execute',spy); report=world.reconcile_polywar_season(c,sid,fix=False); assert 'mismatches' in report and calls==[]
+
+
+def test_finalize_concurrent_one_next_season_no_old_players(db):
+    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
+    def worker():
+        cc=connect()
+        try: finalization.finalize_season(cc,sid,'time',None,datetime.utcnow())
+        finally: cc.commit(); cc.close()
+    ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); new_sid=c.execute("select id from polywar_seasons where status='active' and id<>?",(sid,)).fetchone()[0]; assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0]==1; assert c.execute('select count(*) from polywar_players where season_id=?',(new_sid,)).fetchone()[0]==0; assert c.execute('select count(*) from polywar_null_rifts where season_id=?',(new_sid,)).fetchone()[0]==0

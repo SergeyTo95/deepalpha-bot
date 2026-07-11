@@ -199,9 +199,10 @@ class PolyWarMap {
     const isCapital = !!c.capital;
     const siegeCost = base == null ? null : base + Number(capRules.siege_extra_energy || 0);
     const repairCost = Number(capRules.repair_energy_cost || 0);
-    const canCapture = !isCapital && !locked && fid && c.terrain && base != null && !c.owner && !this.pending && +currentState.energy.current_energy >= base;
-    const canAttack = !isCapital && !locked && fid && c.terrain && base != null && c.owner && +c.owner !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= attackCost;
-    const canReinforce = !isCapital && !locked && fid && c.terrain && base != null && +c.owner === +fid && c.contest && +c.contest.contest_progress > 0 && !this.pending && +currentState.energy.current_energy >= reinforceCost;
+    const isActiveRift = !!(c.rift && c.rift.status === 'active');
+    const canCapture = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && !c.owner && !this.pending && +currentState.energy.current_energy >= base;
+    const canAttack = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && c.owner && +c.owner !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= attackCost;
+    const canReinforce = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && +c.owner === +fid && c.contest && +c.contest.contest_progress > 0 && !this.pending && +currentState.energy.current_energy >= reinforceCost;
     const canSiege = isCapital && !locked && fid && +c.capital.controller_faction_id !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= siegeCost;
     const canRepair = isCapital && !locked && fid && +c.capital.controller_faction_id === +fid && +c.capital.siege_progress > 0 && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= repairCost;
     if (c.capital) { c.capital.canSiege = canSiege; c.capital.canRepair = canRepair; c.capital.frontline = this.isFrontline(s.x,s.y,fid); }
@@ -215,7 +216,7 @@ class PolyWarMap {
     btn.disabled = !canMain; btn.textContent = this.pending ? "Working…" : (!fid ? "Choose faction" : actionMode === "attack" ? `Attack — ${attackCost} energy` : actionMode === "reinforce" ? `Reinforce — ${reinforceCost} energy` : actionMode === "siege" ? `Siege capital — ${siegeCost} energy` : actionMode === "repair_capital" ? `Repair capital — ${repairCost} energy` : "Capture");
     document.getElementById("scan3Btn").disabled = locked || this.pending || +currentState.energy.current_energy < 2;
     document.getElementById("scan5Btn").disabled = locked || this.pending || +currentState.energy.current_energy < 4;
-    document.getElementById("flagAddBtn").disabled = !fid || !!c.owner || base == null || this.pending;
+    document.getElementById("flagAddBtn").disabled = isActiveRift || !fid || !!c.owner || base == null || this.pending;
     document.getElementById("flagRemoveBtn").disabled = !c.flags?.current_user_flagged || this.pending;
   }
   async refreshCapitals() { const d = await polywarCapitalUi.refresh(this); this.requestDraw(); this.updatePanel(); return d; }

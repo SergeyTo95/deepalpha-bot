@@ -514,7 +514,9 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
         try:
             from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
-            ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]))
+            ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]));
+            from services import polywar_finalization_service as finalization
+            finalization.maybe_finalize(conn, int(season["id"]))
         except Exception:
             import logging; logging.getLogger(__name__).exception("PolyWar world lifecycle sync failed")
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
