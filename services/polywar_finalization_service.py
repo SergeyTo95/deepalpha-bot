@@ -51,8 +51,8 @@ def finalize_season(conn,season_id:int,victory_type='time',winner_faction_id=Non
     stats=polywar._fetchall(c,'SELECT s.*,f.is_system FROM polywar_faction_season_stats s JOIN polywar_factions f ON f.id=s.faction_id WHERE s.season_id=%s ORDER BY s.faction_id',(season_id,))
     contrib={r['faction_id']:r['total'] for r in polywar._fetchall(c,'SELECT faction_id,COALESCE(SUM(faction_contribution),0) AS total FROM polywar_players WHERE season_id=%s GROUP BY faction_id',(season_id,))}
     rift_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT sealed_by_faction_id AS faction_id,COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s AND status='sealed' AND sealed_by_faction_id IS NOT NULL GROUP BY sealed_by_faction_id",(season_id,))}
-    sup_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions WHERE support_contribution>0 GROUP BY faction_id",())}
-    suppress_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions WHERE suppress_contribution>0 GROUP BY faction_id",())}
+    sup_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.support_contribution>0 GROUP BY rc.faction_id",(season_id,))}
+    suppress_counts={r['faction_id']:r['n'] for r in polywar._fetchall(c,"SELECT rc.faction_id,COUNT(*) AS n FROM polywar_rebellion_contributions rc JOIN polywar_rebellions r ON r.id=rc.rebellion_id WHERE r.season_id=%s AND rc.suppress_contribution>0 GROUP BY rc.faction_id",(season_id,))}
     playable=[s for s in stats if int(s.get('is_system') or 0)==0]
     playable=sorted(playable,key=lambda s:(-int(s.get('influence_score') or 0),-int(s.get('controlled_capitals_count') or 0),-int(s.get('controlled_sectors_count') or 0),-int(s.get('controlled_cells_count') or 0),-int(contrib.get(s['faction_id']) or 0),int(s['faction_id'])))
     ranks={s['faction_id']:i+1 for i,s in enumerate(playable)}

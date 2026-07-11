@@ -82,7 +82,7 @@ def init_polywar_sector_schema(conn=None):
             'CREATE INDEX IF NOT EXISTS idx_polywar_sector_init_xy ON polywar_sector_initializations(season_id,sector_x,sector_y)',
         ]:
             c.execute(sql)
-        conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()

@@ -129,8 +129,9 @@ def choose_rift_coordinates(seed,count=None):
         if picked: coords.append(picked)
     return coords
 
-def ensure_world_initialized(conn,season_id:int):
-    init_world_schema(conn); ensure_null_faction(conn,season_id)
+def ensure_world_initialized(conn,season_id:int,schema:bool=True):
+    if schema: init_world_schema(conn)
+    ensure_null_faction(conn,season_id)
     c=conn.cursor(); season=_fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)); now=_now(); start=season.get('starts_at') or now
     if isinstance(start,str): start=datetime.fromisoformat(start)
     activation=start+timedelta(hours=activation_hours())
@@ -164,7 +165,7 @@ def activate_if_due(conn,season_id:int,now=None):
     if not enabled(): return False
     managed=_start_world_transaction(conn); ok=False
     try:
-        ensure_world_initialized(conn,season_id); lock_world_rows(conn,season_id); c=conn.cursor()
+        ensure_world_initialized(conn,season_id,False); lock_world_rows(conn,season_id); c=conn.cursor()
         st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
         if not st or st['status']!='dormant' or str(st['activation_at'])>polywar._iso(now): ok=True; return False
         _execute(c,"UPDATE polywar_null_state SET status='active',activated_at=%s,updated_at=%s WHERE season_id=%s AND status='dormant'",(now,now,season_id))
@@ -216,7 +217,7 @@ def process_due_tick(conn,season_id:int,now=None):
     if not enabled(): return {'processed':False,'reason':'null_state_disabled'}
     managed=_start_world_transaction(conn); ok=False
     try:
-        ensure_world_initialized(conn,season_id); lock_world_rows(conn,season_id); activate_if_due(conn,season_id,now); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+        ensure_world_initialized(conn,season_id,False); lock_world_rows(conn,season_id); activate_if_due(conn,season_id,now); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
         if not st or st['status']!='active' or str(st['next_tick_at'])>polywar._iso(now): ok=True; return {'processed':False,'reason':'not_due'}
         tick=int(st.get('tick_index') or 0)+1
         stale_before=now-timedelta(minutes=max(2,tick_minutes()*2))

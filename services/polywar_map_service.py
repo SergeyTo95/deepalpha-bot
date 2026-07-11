@@ -65,7 +65,7 @@ def init_polywar_map_schema(conn=None):
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_cells_owner ON polywar_cells(season_id,owner_faction_id,x,y)")
         from services import polywar_sector_service as sectors
         sectors.init_polywar_sector_schema(conn)
-        conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()

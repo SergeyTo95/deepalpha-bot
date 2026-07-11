@@ -273,7 +273,7 @@ def ensure_factions(conn=None) -> List[Dict[str, Any]]:
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING
             """, (fid, name, slug, color, desc, _now()))
-        conn.commit()
+        if own: conn.commit()
         try:
             from services.polywar_world_service import ensure_null_faction
             season = _fetchone(c, "SELECT id FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))

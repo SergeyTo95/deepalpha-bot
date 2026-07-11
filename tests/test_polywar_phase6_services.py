@@ -201,3 +201,28 @@ def test_stale_processing_tick_recovery(db):
 def test_finalize_source_uses_begin_helper():
     src=Path('services/polywar_finalization_service.py').read_text()
     assert '_begin(conn)' in src and "status='finalizing'" in src
+
+
+def test_threaded_concurrent_same_tick_one_marker(db):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()-timedelta(minutes=1),sid)); c.commit(); c.close(); out=[]
+    def run_tick():
+        cc=connect()
+        try: out.append(world.process_due_tick(cc,sid,datetime.utcnow()))
+        finally: cc.commit(); cc.close()
+    ts=[threading.Thread(target=run_tick) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute('select count(*) from polywar_world_ticks where season_id=? and tick_index=1',(sid,)).fetchone()[0]==1; assert any(r.get('processed') for r in out); assert c.execute('select count(*) from polywar_world_ticks where season_id=? and tick_index=1 and status=\'completed\'',(sid,)).fetchone()[0]==1
+
+
+def test_threaded_concurrent_activation_event_once(db):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); c.execute("update polywar_null_state set status='dormant',activation_at=? where season_id=?",(datetime.utcnow()-timedelta(seconds=1),sid)); c.execute("update polywar_null_rifts set status='dormant' where season_id=?",(sid,)); c.commit(); c.close()
+    def run_activation():
+        cc=connect()
+        try: world.activate_if_due(cc,sid,datetime.utcnow())
+        finally: cc.commit(); cc.close()
+    ts=[threading.Thread(target=run_activation) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='null_state_activated'",(sid,)).fetchone()[0]==1
+
+
+def test_results_snapshot_includes_phase6_aggregates_source():
+    src=Path('services/polywar_finalization_service.py').read_text()
+    assert 'rifts_sealed_count' in src and 'rebellions_supported_count' in src and 'JOIN polywar_rebellions' in src
