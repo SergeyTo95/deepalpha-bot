@@ -125,3 +125,48 @@ def test_capital_event_cooldown_and_recapture(polydb):
     c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='capital_captured'",(sid,)).fetchone()[0]==1; c.close()
     caps.capital_action(81,'siege',bx,by,'recap')
     c=connect(); assert c.execute('select controller_faction_id from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0]==2; assert c.execute("select count(*) from polywar_events where season_id=? and event_type='capital_recaptured'",(sid,)).fetchone()[0]==1; c.close()
+
+def test_concurrent_get_capitals_retries_under_sqlite_contention(polydb):
+    connect,_=polydb; st=join(90,1); sid=st['season']['id']; out=[]
+    lock=connect(); lock.execute('BEGIN IMMEDIATE')
+    def call():
+        try: out.append(caps.get_capitals(90))
+        except Exception as e: out.append(e)
+    t=threading.Thread(target=call); t.start()
+    import time; time.sleep(0.08); lock.commit(); lock.close(); t.join()
+    assert len(out)==1 and isinstance(out[0],dict) and out[0]['ok']
+    c=connect(); assert c.execute('select count(*) from polywar_capitals where season_id=?',(sid,)).fetchone()[0]==7; c.close()
+
+def test_concurrent_same_key_siege_strict_once(polydb):
+    connect,settings=polydb; settings['polywar_capital_siege_required']='400'; st=join(91,1); join(92,2); sid=st['season']['id']; full_energy(connect,sid,91); bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    out=[]
+    def run():
+        try: out.append(caps.capital_action(91,'siege',bx,by,'strict-siege'))
+        except Exception as e: out.append(e)
+    ts=[threading.Thread(target=run) for _ in range(5)]; [t.start() for t in ts]; [t.join() for t in ts]
+    assert not [r for r in out if isinstance(r,Exception)]
+    normal=[r for r in out if isinstance(r,dict) and not r.get('duplicate')]; dups=[r for r in out if isinstance(r,dict) and r.get('duplicate')]
+    assert len(normal)==1 and len(dups)==4
+    c=connect();
+    assert c.execute('select siege_progress from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0]==100
+    assert c.execute('select count(*) from polywar_action_outcomes where season_id=? and user_id=? and idempotency_key=?',(sid,91,'strict-siege')).fetchone()[0]==1
+    assert c.execute('select current_energy from polywar_players where season_id=? and user_id=?',(sid,91)).fetchone()[0] < 50
+    c.close()
+
+def test_concurrent_same_key_repair_strict_once(polydb):
+    connect,settings=polydb; settings['polywar_capital_repair_progress_per_action']='75'; st=join(93,1); join(94,2); sid=st['season']['id']; full_energy(connect,sid,94); bx,by=m.faction_base_positions()[2]
+    c=connect(); caps.ensure_capitals_initialized(c,sid); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,bx+1,by)); c.execute('update polywar_capitals set siege_progress=100, besieging_faction_id=1 where season_id=? and original_faction_id=2',(sid,)); before_energy=c.execute('select current_energy from polywar_players where season_id=? and user_id=?',(sid,94)).fetchone()[0]; c.commit(); c.close()
+    out=[]
+    def run():
+        try: out.append(caps.capital_action(94,'repair_capital',bx,by,'strict-repair'))
+        except Exception as e: out.append(e)
+    ts=[threading.Thread(target=run) for _ in range(5)]; [t.start() for t in ts]; [t.join() for t in ts]
+    assert not [r for r in out if isinstance(r,Exception)]
+    normal=[r for r in out if isinstance(r,dict) and not r.get('duplicate')]; dups=[r for r in out if isinstance(r,dict) and r.get('duplicate')]
+    assert len(normal)==1 and len(dups)==4
+    c=connect();
+    assert c.execute('select siege_progress from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0]==25
+    assert c.execute('select count(*) from polywar_action_outcomes where season_id=? and user_id=? and idempotency_key=?',(sid,94,'strict-repair')).fetchone()[0]==1
+    assert c.execute('select current_energy from polywar_players where season_id=? and user_id=?',(sid,94)).fetchone()[0] == before_energy - caps.repair_cost()
+    c.close()

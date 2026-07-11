@@ -99,3 +99,24 @@ def test_frontend_real_phase5_calls_and_xss_escape():
         assert token in js
     assert 'esc(c.statement' in js and 'esc(o.message' in js
     assert '<img src=x onerror=alert(1)>' not in js
+
+def test_committed_mutation_ignores_exhausted_governance_get_limiter(polydb):
+    connect,_=polydb; st=join(231,1); join(232,1); sid=st['season']['id']; contribute(connect,sid,231,232)
+    gov.get_governance(231); gov.nominate(231,'cmd',True)
+    from collections import deque
+    import time
+    gov._GET_RATE[232]=deque([time.monotonic()] * gov.GET_RATE_MAX)
+    voted=gov.vote(232,231)
+    assert voted['ok'] and voted['current_user_vote']==231
+    c=connect(); assert c.execute('select candidate_user_id from polywar_commander_votes where voter_user_id=?',(232,)).fetchone()[0]==231; c.close()
+    elect_now(connect,sid,1,231)
+    bx,by=m.faction_base_positions()[2]; caps.get_capitals(231); c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    gov._GET_RATE[231]=deque([time.monotonic()] * gov.GET_RATE_MAX)
+    ordered=gov.upsert_order(231,None,'siege',bx,by,'go',True)
+    assert ordered['ok'] and len(ordered['orders'])==1
+
+def test_frontend_latest_phase5_source_guards():
+    js=open('webapp/polywar.js',encoding='utf-8').read()
+    assert js.count('init();') == 1
+    for token in ['seq !== this.seq','lastServerTimestamp','data-polywar-create-order','data-polywar-update-order','polywarOrderType','polywarOrderMessage','isCommander ?','canSiege','canRepair','controlled_since','siege_percent']:
+        assert token in js

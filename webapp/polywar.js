@@ -178,7 +178,7 @@ class PolyWarMap {
   pruneCache() { const keep = new Set(this.visibleChunks().map(c => c.join(","))); for (const k of this.cache.keys()) if (!keep.has(k) && this.cache.size > 80) this.cache.delete(k); }
   status(t) { const el = document.getElementById("chunkStatus"); if (el) el.textContent = t; }
   select(x, y) { if (x < 0 || y < 0 || x >= this.state.map.width || y >= this.state.map.height) return; this.selected = { x, y }; this.ensureChunks(); this.updatePanel(); this.requestDraw(); }
-  getCell(x, y) { const cs = this.state.map.chunk_size, cx = Math.floor(x / cs), cy = Math.floor(y / cs), ch = this.cache.get(`${cx},${cy}`); if (!ch) return {}; const lx = x - cx * cs, ly = y - cy * cs; const intel=(ch.intel||[]).find(i=>+i.x===+x&&+i.y===+y); const flags=(ch.flags||[]).find(f=>+f.x===+x&&+f.y===+y); const contest=(ch.contested_cells||[]).find(q=>+q.x===+x&&+q.y===+y); const capital=(ch.capitals||[]).find(q=>+q.x===+x&&+q.y===+y); const orders=(ch.orders||[]).filter(o=>+o.x===+x&&+o.y===+y); return { terrain: ch.terrain?.[ly]?.[lx], owner: ch.owners?.[ly]?.[lx], intel, flags, contest, capital, orders }; }
+  getCell(x, y) { const cs = this.state.map.chunk_size, cx = Math.floor(x / cs), cy = Math.floor(y / cs), ch = this.cache.get(`${cx},${cy}`); if (!ch) return {}; const lx = x - cx * cs, ly = y - cy * cs; const intel=(ch.intel||[]).find(i=>+i.x===+x&&+i.y===+y); const flags=(ch.flags||[]).find(f=>+f.x===+x&&+f.y===+y); const contest=(ch.contested_cells||[]).find(q=>+q.x===+x&&+q.y===+y); const chunkCapital=(ch.capitals||[]).find(q=>+q.x===+x&&+q.y===+y); const cachedCapital=polywarCapitalUi?.cache?.get(`${x},${y}`); const capital=cachedCapital ? {...chunkCapital, ...cachedCapital} : chunkCapital; const orders=(ch.orders||[]).filter(o=>+o.x===+x&&+o.y===+y); return { terrain: ch.terrain?.[ly]?.[lx], owner: ch.owners?.[ly]?.[lx], intel, flags, contest, capital, orders }; }
   isFrontline(x, y, fid) { return [[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy]) => +this.getCell(x+dx,y+dy).owner === +fid); }
   updatePanel() {
     const s = this.selected || {}, c = this.getCell(s.x, s.y), fid = currentState?.selected_faction?.id, base = TERRAIN_COST[c.terrain], locked=!!currentState?.energy?.is_locked;
@@ -191,8 +191,6 @@ class PolyWarMap {
     document.getElementById("cellHint").textContent = c.intel?.intel_type === "safe_hint" ? c.intel.adjacent_mines : "—";
     document.getElementById("cellMineIntel").textContent = c.contest ? `Contested by Faction ${c.contest.contesting_faction_id}: ${c.contest.contest_progress}/${c.contest.contest_required}` : (c.intel?.intel_type === "triggered_mine" ? "Triggered mine" : "—");
     document.getElementById("cellFlags").textContent = c.flags ? `${c.flags.flag_count}${c.flags.current_user_flagged ? " (yours)" : ""}` : "0";
-    const capPanel = document.getElementById("capitalPanel");
-    if (capPanel) capPanel.innerHTML = c.capital ? polywarCapitalUi.panel(c.capital, currentState) : "";
     const capRules = this.rules().capitals || {};
     const isCapital = !!c.capital;
     const siegeCost = base == null ? null : base + Number(capRules.siege_extra_energy || 0);
@@ -200,8 +198,11 @@ class PolyWarMap {
     const canCapture = !isCapital && !locked && fid && c.terrain && base != null && !c.owner && !this.pending && +currentState.energy.current_energy >= base;
     const canAttack = !isCapital && !locked && fid && c.terrain && base != null && c.owner && +c.owner !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= attackCost;
     const canReinforce = !isCapital && !locked && fid && c.terrain && base != null && +c.owner === +fid && c.contest && +c.contest.contest_progress > 0 && !this.pending && +currentState.energy.current_energy >= reinforceCost;
-    const canSiege = isCapital && !locked && fid && +c.capital.controller_faction_id !== +fid && !this.pending && +currentState.energy.current_energy >= siegeCost;
-    const canRepair = isCapital && !locked && fid && +c.capital.controller_faction_id === +fid && +c.capital.siege_progress > 0 && !this.pending && +currentState.energy.current_energy >= repairCost;
+    const canSiege = isCapital && !locked && fid && +c.capital.controller_faction_id !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= siegeCost;
+    const canRepair = isCapital && !locked && fid && +c.capital.controller_faction_id === +fid && +c.capital.siege_progress > 0 && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= repairCost;
+    if (c.capital) { c.capital.canSiege = canSiege; c.capital.canRepair = canRepair; c.capital.frontline = this.isFrontline(s.x,s.y,fid); }
+    const capPanel = document.getElementById("capitalPanel");
+    if (capPanel) capPanel.innerHTML = c.capital ? polywarCapitalUi.panel(c.capital, currentState) : "";
     const combatModes = new Set(["capture", "attack", "reinforce", "siege", "repair_capital"]);
     if (combatModes.has(actionMode)) { if (canSiege) actionMode = "siege"; else if (canRepair) actionMode = "repair_capital"; else if (canAttack) actionMode = "attack"; else if (canReinforce) actionMode = "reinforce"; else if (canCapture) actionMode = "capture"; }
     document.getElementById("currentMode").textContent = actionMode;
@@ -270,7 +271,6 @@ async function syncState(showErrors = true, opts = {}) {
 async function joinFaction(id) { const d = await api("/api/polywar/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ faction_id: Number(id) }) }); if (!d.ok) { alert(d.error || "Join failed"); await syncState(false, { soft: true }); return; } render(d); }
 async function init() { await telegramAuthIfAvailable(); await syncState(true); }
 window.addEventListener("pagehide", () => { clearTimers(); map?.destroy(); map = null; });
-init();
 
 // Phase 5 PolyWar capitals/governance integration hooks.
 // The existing dirty Canvas renderer consumes chunk.capitals and faction-scoped chunk.orders.
@@ -294,9 +294,15 @@ window.polywarPhase5 = Object.assign(window.polywarPhase5 || {}, {
 const polywarCapitalUi = window.polywarCapitalUi = window.polywarCapitalUi || {
   cache: new Map(),
   max: 128,
+  seq: 0,
+  lastServerTimestamp: 0,
   async refresh() {
+    const seq = ++this.seq, owner = map;
     const data = await api('/api/polywar/capitals');
-    if (data.ok) {
+    if (seq !== this.seq || owner !== map || owner?.destroyed) return { ok:false, stale:true };
+    const stamp = Number(data.server_timestamp || 0);
+    if (data.ok && stamp >= this.lastServerTimestamp) {
+      this.lastServerTimestamp = stamp;
       this.cache.clear();
       (data.capitals || []).slice(0, this.max).forEach(c => this.cache.set(`${c.x},${c.y}`, c));
       map?.requestDraw?.();
@@ -324,19 +330,26 @@ const polywarCapitalUi = window.polywarCapitalUi = window.polywarCapitalUi || {
   },
   panel(cap, state) {
     const rules = state?.rules?.capitals || {};
-    return `<section class="glass card polywar-capital-panel"><h3>Capital</h3><p>Original faction: ${esc(cap.original_faction_id)}</p><p>Controller: ${esc(cap.controller_faction_id)}</p><p>Besieging faction: ${esc(cap.besieging_faction_id || 'none')}</p><p>Siege progress: ${esc(cap.siege_progress)}/${esc(cap.siege_required)} (${cap.siege_percent || 0}%)</p><p>Siege cost: terrain + ${rules.siege_extra_energy ?? 0}</p><p>Repair cost: ${rules.repair_energy_cost ?? 0}</p><button data-polywar-action="siege">Siege capital</button><button data-polywar-action="repair_capital">Repair capital</button></section>`;
+    const percent = cap.siege_percent ?? Math.floor((Number(cap.siege_progress || 0) * 100) / Math.max(1, Number(cap.siege_required || rules.siege_required || 1)));
+    const siegeBtn = cap.canSiege ? '<button data-polywar-action="siege">Siege capital</button>' : '';
+    const repairBtn = cap.canRepair ? '<button data-polywar-action="repair_capital">Repair capital</button>' : '';
+    return `<section class="glass card polywar-capital-panel"><h3>Capital</h3><p>Original faction: ${esc(cap.original_faction_id)}</p><p>Controller: ${esc(cap.controller_faction_id)}</p><p>Besieging faction: ${esc(cap.besieging_faction_id || 'none')}</p><p>Siege progress: ${esc(cap.siege_progress)}/${esc(cap.siege_required || rules.siege_required)} (${esc(percent)}%)</p><p>Siege cost: terrain + ${esc(rules.siege_extra_energy ?? 0)}</p><p>Repair cost: ${esc(rules.repair_energy_cost ?? 0)}</p><p>Controlled since: ${esc(cap.controlled_since || '—')}</p><p>Captured at: ${esc(cap.captured_at || '—')}</p>${siegeBtn}${repairBtn}</section>`;
   }
 };
 
 const polywarGovernanceUi = window.polywarGovernanceUi = window.polywarGovernanceUi || {
   orders: [],
-  async refresh() { const data = await api('/api/polywar/governance'); if (data.ok) { this.orders = data.orders || []; this.render(data); map?.requestDraw?.(); } return data; },
+  seq: 0,
+  lastServerTimestamp: 0,
+  async refresh() { const seq = ++this.seq, owner = map; const data = await api('/api/polywar/governance'); if (seq !== this.seq || owner !== map || owner?.destroyed) return {ok:false, stale:true}; const stamp = Number(data.server_timestamp || 0); if (data.ok && stamp >= this.lastServerTimestamp) { this.lastServerTimestamp = stamp; this.orders = data.orders || []; this.render(data); map?.requestDraw?.(); } return data; },
   render(data) {
     const root = document.getElementById('polywarGovernancePanel') || document.querySelector('[data-polywar-governance]');
     if (!root) return;
     const candidates = (data.candidates || []).map(c => `<li><b>${esc(c.user_id)}</b> — ${esc(c.statement || '')} — votes: ${esc(c.vote_count || 0)}<button data-polywar-vote="${c.user_id}">${Number(data.current_user_vote) === Number(c.user_id) ? 'Current vote' : 'Vote / Change vote'}</button></li>`).join('');
-    const orders = (data.orders || []).map(o => `<li><button data-polywar-goto-order="${o.x},${o.y}">${esc(o.order_type)} ${esc(o.x)},${esc(o.y)}</button> ${esc(o.message || '')}<button data-polywar-cancel-order="${o.id}">Cancel</button></li>`).join('');
-    root.innerHTML = `<h3>Governance</h3><p>Commander: ${esc(data.commander?.commander_user_id || 'none')}</p><p>Term ends: ${esc(data.commander?.commander_term_ends_at || '—')}</p><p>Election ends: ${esc(data.active_election?.ends_at || '—')}</p><ul>${candidates}</ul><button data-polywar-nominate="true">Nominate myself</button><button data-polywar-nominate="false">Withdraw</button><h4>Orders</h4><ul>${orders}</ul>`;
+    const isCommander = Number(data.commander?.commander_user_id || 0) === Number(currentState?.player?.user_id || 0);
+    const orders = (data.orders || []).map(o => `<li><button data-polywar-goto-order="${o.x},${o.y}">${esc(o.order_type)} ${esc(o.x)},${esc(o.y)}</button> ${esc(o.message || '')}${isCommander ? `<button data-polywar-edit-order="${o.id}" data-order-type="${esc(o.order_type)}" data-order-message="${esc(o.message || '')}">Edit</button><button data-polywar-cancel-order="${o.id}">Cancel</button>` : ''}</li>`).join('');
+    const controls = isCommander ? `<div class="order-controls"><select id="polywarOrderType"><option value="attack">attack</option><option value="defend">defend</option><option value="rally">rally</option><option value="recon">recon</option><option value="siege">siege</option></select><input id="polywarOrderMessage" maxlength="280" placeholder="Order message"><button data-polywar-create-order="true">Create order</button><button data-polywar-update-order="true">Update order</button><span>${esc((data.orders||[]).length)}/${esc(data.rules?.max_orders || '')} active</span></div>` : '';
+    root.innerHTML = `<h3>Governance</h3><p>Commander: ${esc(data.commander?.commander_user_id || 'none')}</p><p>Term ends: ${esc(data.commander?.commander_term_ends_at || '—')}</p><p>Election ends: ${esc(data.active_election?.ends_at || '—')}</p><ul>${candidates}</ul><button data-polywar-nominate="true">Nominate myself</button><button data-polywar-nominate="false">Withdraw</button><h4>Orders</h4>${controls}<ul>${orders}</ul>`;
   },
   drawOrders(ctx, worldToScreen) {
     for (const o of this.orders || []) { const p = worldToScreen ? worldToScreen(o.x, o.y) : o; ctx.save(); ctx.strokeStyle = '#fff'; ctx.strokeRect(p.x - 6, p.y - 6, 12, 12); ctx.fillText(o.order_type, p.x + 8, p.y); ctx.restore(); }
@@ -350,9 +363,14 @@ async function handlePolywarUiClick(e) {
   const action = e.target.closest('[data-polywar-action]');
   const gotoOrder = e.target.closest('[data-polywar-goto-order]');
   const cancelOrder = e.target.closest('[data-polywar-cancel-order]');
+  const editOrder = e.target.closest('[data-polywar-edit-order]');
+  const createOrder = e.target.closest('[data-polywar-create-order]');
+  const updateOrder = e.target.closest('[data-polywar-update-order]');
   if (action) { actionMode = action.dataset.polywarAction; map?.updatePanel(); await map?.capture(); return; }
   if (vote) { const d = await api('/api/polywar/governance/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({candidate_user_id:Number(vote.dataset.polywarVote)})}); if(!d.ok) alert(d.error || 'Vote failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (nom) { const active = nom.dataset.polywarNominate === 'true'; const statement = active ? (prompt('Candidate statement') || '') : ''; const d = await api('/api/polywar/governance/nominate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, statement})}); if(!d.ok) alert(d.error || 'Nomination failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
+  if (editOrder) { const msg = document.getElementById('polywarOrderMessage'); const typ = document.getElementById('polywarOrderType'); if (msg) msg.value = editOrder.dataset.orderMessage || ''; if (typ) typ.value = editOrder.dataset.orderType || 'attack'; polywarGovernanceUi.editingOrderId = Number(editOrder.dataset.polywarEditOrder); return; }
+  if (createOrder || updateOrder) { const order_id = updateOrder ? (polywarGovernanceUi.editingOrderId || null) : null; const order_type = document.getElementById('polywarOrderType')?.value || 'attack'; const message = document.getElementById('polywarOrderMessage')?.value || ''; const x = map?.selected?.x, y = map?.selected?.y; const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id, order_type, x, y, message, active:true})}); if(!d.ok) alert(d.error || 'Order save failed'); else { polywarGovernanceUi.editingOrderId = null; polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (cancelOrder) { const d = await api('/api/polywar/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order_id:Number(cancelOrder.dataset.polywarCancelOrder), active:false})}); if(!d.ok) alert(d.error || 'Order cancel failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (gotoOrder) { const [x,y] = gotoOrder.dataset.polywarGotoOrder.split(',').map(Number); if (map) { map.cx=x; map.cy=y; map.clamp(); map.ensureChunks(); map.ensureSectors(); map.select(x,y); map.requestDraw(); } }
 }

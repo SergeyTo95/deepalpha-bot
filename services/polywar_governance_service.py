@@ -134,6 +134,21 @@ def _prepare_faction(conn,sid,fid):
     now=datetime.utcnow(); finalize_due(conn,sid,int(fid),now); _ensure_election(conn,sid,int(fid),now)
 
 
+
+
+def _build_governance_response(conn, sid, player, faction_id, user_id):
+    if not faction_id:
+        return {'ok': True, 'season_id': sid, 'faction_required': True, 'rules': public_rules()}
+    e = _active_election(conn, sid, faction_id)
+    stat = polywar._fetchone(conn.cursor(), 'SELECT commander_user_id,commander_since,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s', (sid, faction_id)) or {}
+    candidates = []; vote = None
+    if e:
+        rows = polywar._fetchall(conn.cursor(), '''SELECT c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at,COUNT(v.voter_user_id) vote_count FROM polywar_commander_candidates c LEFT JOIN polywar_commander_votes v ON v.election_id=c.election_id AND v.candidate_user_id=c.user_id WHERE c.election_id=%s GROUP BY c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at''', (e['id'],))
+        candidates = [dict(r) for r in rows]
+        vr = polywar._fetchone(conn.cursor(), 'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s', (e['id'], user_id))
+        vote = vr and vr['candidate_user_id']
+    return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= min_contribution()}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(), 'server_timestamp': int(time.time())}
+
 def get_governance(user_id:int):
     conn=polywar.get_connection(); c=conn.cursor()
     try:
@@ -142,13 +157,7 @@ def get_governance(user_id:int):
         _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
         if fid: _prepare_faction(conn,sid,fid)
         conn.commit()
-        if not fid: return {'ok':True,'season_id':sid,'faction_required':True,'rules':public_rules()}
-        e=_active_election(conn,sid,fid); stat=polywar._fetchone(conn.cursor(),'SELECT commander_user_id,commander_since,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s',(sid,fid)) or {}
-        candidates=[]; vote=None
-        if e:
-            rows=polywar._fetchall(conn.cursor(),'''SELECT c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at,COUNT(v.voter_user_id) vote_count FROM polywar_commander_candidates c LEFT JOIN polywar_commander_votes v ON v.election_id=c.election_id AND v.candidate_user_id=c.user_id WHERE c.election_id=%s GROUP BY c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at''',(e['id'],))
-            candidates=[dict(r) for r in rows]; vr=polywar._fetchone(conn.cursor(),'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s',(e['id'],user_id)); vote=vr and vr['candidate_user_id']
-        return {'ok':True,'season_id':sid,'commander':stat,'active_election':e,'candidates':candidates,'current_user_vote':vote,'current_user_is_candidate':any(int(c['user_id'])==user_id and not c.get('withdrawn_at') for c in candidates),'nomination_eligibility':{'eligible':int(p.get('faction_contribution') or 0)>=min_contribution()},'orders':list_orders(conn,sid,fid),'rules':public_rules(),'server_timestamp':int(time.time())}
+        return _build_governance_response(conn, sid, p, fid, user_id)
     except Exception:
         polywar._safe_rollback(conn); raise
     finally: conn.close()
@@ -167,14 +176,14 @@ def nominate(user_id:int, statement:str='', active=True):
         if _dt(e['ends_at']) <= datetime.utcnow(): finalize_due(conn,sid,fid,datetime.utcnow()); raise ValueError('election_closed')
         row=polywar._fetchone(c,'SELECT * FROM polywar_commander_candidates WHERE election_id=%s AND user_id=%s',(e['id'],user_id))
         duplicate = bool(row and ((active and not row.get('withdrawn_at') and (row.get('statement') or '') == (statement or '')) or ((not active) and row.get('withdrawn_at'))))
-        if duplicate: conn.commit(); res=get_governance(user_id); res['duplicate']=True; return res
+        if duplicate: conn.commit(); res=_build_governance_response(conn, sid, p, fid, user_id); res['duplicate']=True; return res
         _rate(user_id); now=datetime.utcnow()
         if active:
             if int(p.get('faction_contribution') or 0)<min_contribution(): raise ValueError('contribution_required')
             polywar._execute(c,'INSERT INTO polywar_commander_candidates (election_id,user_id,faction_id,statement,contribution_at_nomination,nominated_at,withdrawn_at) VALUES (%s,%s,%s,%s,%s,%s,NULL) ON CONFLICT (election_id,user_id) DO UPDATE SET statement=excluded.statement, withdrawn_at=NULL',(e['id'],user_id,fid,statement or '',int(p.get('faction_contribution') or 0),now))
         else:
             polywar._execute(c,'UPDATE polywar_commander_candidates SET withdrawn_at=COALESCE(withdrawn_at,%s) WHERE election_id=%s AND user_id=%s',(now,e['id'],user_id))
-        conn.commit(); return get_governance(user_id)
+        conn.commit(); return _build_governance_response(conn, sid, p, fid, user_id)
     except ValueError:
         polywar._safe_rollback(conn); raise
     finally: conn.close()
@@ -193,10 +202,10 @@ def vote(user_id:int,candidate_user_id:int):
         if not cand: raise ValueError('candidate_not_found')
         if cand.get('withdrawn_at'): raise ValueError('candidate_withdrawn')
         now=datetime.utcnow(); existing=polywar._fetchone(c,'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s',(e['id'],user_id)); dup=existing and int(existing['candidate_user_id'])==int(candidate_user_id)
-        if dup: conn.commit(); res=get_governance(user_id); res['duplicate']=True; return res
+        if dup: conn.commit(); res=_build_governance_response(conn, sid, p, fid, user_id); res['duplicate']=True; return res
         _rate(user_id)
         polywar._execute(c,'INSERT INTO polywar_commander_votes (election_id,voter_user_id,candidate_user_id,faction_id,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (election_id,voter_user_id) DO UPDATE SET candidate_user_id=excluded.candidate_user_id, updated_at=excluded.updated_at',(e['id'],user_id,candidate_user_id,fid,now,now))
-        conn.commit(); return get_governance(user_id)
+        conn.commit(); return _build_governance_response(conn, sid, p, fid, user_id)
     except ValueError:
         polywar._safe_rollback(conn); raise
     finally: conn.close()
@@ -255,8 +264,8 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
             row=polywar._fetchone(c,'SELECT * FROM polywar_faction_orders WHERE id=%s AND season_id=%s AND faction_id=%s AND commander_user_id=%s',(order_id,sid,fid,user_id))
             if not row: raise ValueError('invalid_order_target')
             dup = not bool(row.get('active')) or row.get('cancelled_at')
-            if dup: conn.commit(); res=get_governance(user_id); res['duplicate']=True; return res
-            _rate(user_id); polywar._execute(c,'UPDATE polywar_faction_orders SET active=0,cancelled_at=%s,updated_at=%s WHERE id=%s AND season_id=%s AND faction_id=%s',(now,now,order_id,sid,fid)); conn.commit(); return get_governance(user_id)
+            if dup: conn.commit(); res=_build_governance_response(conn, sid, p, fid, user_id); res['duplicate']=True; return res
+            _rate(user_id); polywar._execute(c,'UPDATE polywar_faction_orders SET active=0,cancelled_at=%s,updated_at=%s WHERE id=%s AND season_id=%s AND faction_id=%s',(now,now,order_id,sid,fid)); conn.commit(); return _build_governance_response(conn, sid, p, fid, user_id)
         if order_type not in {'attack','defend','rally','recon','siege'} or not m.in_bounds(x,y): raise ValueError('invalid_order_target')
         capitals.ensure_capitals_initialized(conn,sid)
         if not _valid_order_target(conn,sid,fid,order_type,x,y): raise ValueError('invalid_order_target')
@@ -269,7 +278,7 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
             cnt=polywar._fetchone(c,'SELECT COUNT(*) n FROM polywar_faction_orders WHERE season_id=%s AND faction_id=%s AND active=1 AND cancelled_at IS NULL AND expires_at>%s',(sid,fid,now))['n']
             if int(cnt)>=max_orders(): raise ValueError('order_limit')
             polywar._execute(c,'INSERT INTO polywar_faction_orders (season_id,faction_id,commander_user_id,order_type,x,y,sector_x,sector_y,message,active,created_at,expires_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s)',(sid,fid,user_id,order_type,x,y,sx,sy,msg,now,exp,now))
-        conn.commit(); return get_governance(user_id)
+        conn.commit(); return _build_governance_response(conn, sid, p, fid, user_id)
     except ValueError:
         polywar._safe_rollback(conn); raise
     finally: conn.close()

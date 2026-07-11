@@ -221,7 +221,8 @@ def init_polywar_schema(conn=None) -> None:
             from services.polywar_governance_service import init_polywar_governance_schema
             init_polywar_governance_schema(conn)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).exception("PolyWar state lifecycle sync failed")
         conn.commit()
     finally:
         if own:
@@ -449,11 +450,18 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         try:
             sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
             capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
+            if player.get("faction_id"):
+                c = conn.cursor()
+                governance_rules._begin(conn, c)
+                tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
+                governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
             conn.commit()
             factions = list_factions_with_stats(int(season["id"]), conn)
             ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).exception("PolyWar governance lifecycle sync failed")
+            _safe_rollback(conn)
         rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
         return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:

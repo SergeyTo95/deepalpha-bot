@@ -276,11 +276,7 @@ def get_capitals(user_id: int = None):
     conn = polywar.get_connection()
     try:
         polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); season = polywar.ensure_active_season(conn); sid = int(season['id'])
-        own_tx = False
-        if polywar._is_sqlite(conn) and not getattr(conn, 'in_transaction', False):
-            conn.cursor().execute('BEGIN IMMEDIATE'); own_tx = True
         ensure_capitals_initialized(conn, sid)
-        if own_tx: conn.commit()
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = siege_required()
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
     finally:
