@@ -114,7 +114,7 @@ def test_frontend_sector_api_and_server_rules_usage():
     js=Path('webapp/polywar.js').read_text()
     assert '/api/polywar/map/sectors' in js and 'sectorRules()' in js and 'combatRules()' in js
     assert 'enemy_attack_extra_energy' in js and 'reinforce_energy_cost' in js and 'syncState(false, { soft: true })' in js
-    assert 'new Set(["capture", "attack", "reinforce"])' in js
+    assert 'new Set(["capture", "attack", "reinforce", "siege", "repair_capital"])' in js
 
 def manual_player(connect, uid, fid):
     c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season(c); polywar._insert_player_if_missing(c, uid, s['id']); c.execute('update polywar_players set faction_id=? where user_id=? and season_id=?',(fid,uid,s['id'])); c.commit(); c.close(); return s

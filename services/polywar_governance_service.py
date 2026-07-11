@@ -7,7 +7,7 @@ from services import polywar_map_service as m
 from services import polywar_sector_service as sectors
 from services import polywar_capital_service as capitals
 
-_RATE_LOCK = threading.Lock(); _RATE: "OrderedDict[int, deque]" = OrderedDict(); RATE_WINDOW = 10; RATE_MAX = 30; RATE_MAX_USERS = 5000
+_RATE_LOCK = threading.Lock(); _RATE: "OrderedDict[int, deque]" = OrderedDict(); _GET_RATE: "OrderedDict[int, deque]" = OrderedDict(); RATE_WINDOW = 10; RATE_MAX = 30; GET_RATE_MAX = 120; RATE_MAX_USERS = 5000
 
 
 def _setting_int(k,d,lo,hi): return polywar._setting_int(k,d,lo,hi)
@@ -22,19 +22,22 @@ def order_duration_hours(): return _setting_int('polywar_capital_order_duration_
 def public_rules(): return {'election_hours':election_hours(),'term_hours':term_hours(),'min_contribution':min_contribution(),'min_members':min_members(),'max_statement_length':max_statement_length(),'max_orders':max_orders(),'order_duration_hours':order_duration_hours()}
 
 
-def _rate(uid):
+def _rate_bucket(bucket, uid, maximum):
     now=time.monotonic(); uid=int(uid)
     with _RATE_LOCK:
-        for key in list(_RATE.keys()):
-            q=_RATE[key]
+        for key in list(bucket.keys()):
+            q=bucket[key]
             while q and now-q[0]>RATE_WINDOW: q.popleft()
-            if not q: _RATE.pop(key,None)
-        q=_RATE.get(uid)
+            if not q: bucket.pop(key,None)
+        q=bucket.get(uid)
         if q is None:
-            if len(_RATE)>=RATE_MAX_USERS: _RATE.popitem(last=False)
-            q=deque(); _RATE[uid]=q
-        if len(q)>=RATE_MAX: raise ValueError('rate_limited')
-        q.append(now); _RATE.move_to_end(uid)
+            if len(bucket)>=RATE_MAX_USERS: bucket.popitem(last=False)
+            q=deque(); bucket[uid]=q
+        if len(q)>=maximum: raise ValueError('rate_limited')
+        q.append(now); bucket.move_to_end(uid)
+
+def _rate(uid): _rate_bucket(_RATE, uid, RATE_MAX)
+def _rate_get(uid): _rate_bucket(_GET_RATE, uid, GET_RATE_MAX)
 
 
 def _begin(conn,c):
@@ -92,10 +95,10 @@ def _ensure_election(conn,sid,fid,now):
     if int(stat.get('active_members_count') or 0) < min_members(): return None
     e=_active_election(conn,sid,fid,lock=True)
     if e: return e
-    try:
-        polywar._execute(conn.cursor(),'INSERT INTO polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,fid,'open',now,now+timedelta(hours=election_hours()),now))
-    except Exception:
-        pass
+    if polywar._is_sqlite(conn):
+        polywar._execute(conn.cursor(),'INSERT OR IGNORE INTO polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,fid,'open',now,now+timedelta(hours=election_hours()),now))
+    else:
+        polywar._execute(conn.cursor(),'INSERT INTO polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,created_at) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',(sid,fid,'open',now,now+timedelta(hours=election_hours()),now))
     return _active_election(conn,sid,fid,lock=True)
 
 
@@ -115,8 +118,16 @@ def finalize_due(conn,sid,fid,now):
     return None if winner else _ensure_election(conn,sid,fid,now)
 
 
-def _ctx(conn,user_id,tx=False):
-    polywar.init_polywar_schema(conn); init_polywar_governance_schema(conn); s=polywar.ensure_active_season(conn); sid=int(s['id']); polywar._insert_player_if_missing(conn,user_id,sid); p=polywar._fetchone(conn.cursor(),'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s',(user_id,sid)); return sid,p
+def _prepare_context_before_transaction(conn):
+    polywar.init_polywar_schema(conn)
+    capitals.init_polywar_capital_schema(conn)
+    init_polywar_governance_schema(conn)
+    season = polywar.ensure_active_season(conn)
+    return int(season['id'])
+
+def _governance_context_in_transaction(conn, user_id, season_id):
+    polywar._insert_player_if_missing(conn,user_id,season_id)
+    return polywar._fetchone(conn.cursor(),'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(user_id,season_id))
 
 
 def _prepare_faction(conn,sid,fid):
@@ -126,7 +137,9 @@ def _prepare_faction(conn,sid,fid):
 def get_governance(user_id:int):
     conn=polywar.get_connection(); c=conn.cursor()
     try:
-        _begin(conn,c); sid,p=_ctx(conn,user_id); fid=p.get('faction_id')
+        _rate_get(user_id)
+        sid = _prepare_context_before_transaction(conn)
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
         if fid: _prepare_faction(conn,sid,fid)
         conn.commit()
         if not fid: return {'ok':True,'season_id':sid,'faction_required':True,'rules':public_rules()}
@@ -146,7 +159,8 @@ def nominate(user_id:int, statement:str='', active=True):
     try:
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if active and len(statement or '') > max_statement_length(): raise ValueError('invalid_statement')
-        _begin(conn,c); sid,p=_ctx(conn,user_id); fid=p.get('faction_id')
+        sid = _prepare_context_before_transaction(conn)
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid); e=_active_election(conn,sid,fid,lock=True)
         if not e: raise ValueError('election_unavailable')
@@ -169,7 +183,8 @@ def nominate(user_id:int, statement:str='', active=True):
 def vote(user_id:int,candidate_user_id:int):
     conn=polywar.get_connection(); c=conn.cursor()
     try:
-        _begin(conn,c); sid,p=_ctx(conn,user_id); fid=p.get('faction_id')
+        sid = _prepare_context_before_transaction(conn)
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid); e=_active_election(conn,sid,fid,lock=True)
         if not e: raise ValueError('election_unavailable')
@@ -216,7 +231,10 @@ def _valid_order_target(conn,sid,fid,order_type,x,y):
     if order_type=='attack': return (owner is not None and int(owner)!=int(fid)) or (contested and cell.get('contesting_faction_id')==fid)
     if order_type=='defend': return owner==fid or (contested and owner==fid)
     if order_type=='rally': return owner==fid
-    if order_type=='recon': return owner is None and m.TERRAIN_COSTS[m.terrain_at(polywar._fetchone(conn.cursor(),'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(sid,))['secret_seed'],x,y)] is not None
+    if order_type=='recon':
+        from services import polywar_mine_service as mines
+        seed = polywar._fetchone(conn.cursor(),'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(sid,))['secret_seed']
+        return owner is None and m.TERRAIN_COSTS[m.terrain_at(seed,x,y)] is not None and (mines._area_has_own(conn,sid,fid,x,y,3) or mines._near_own_territory(conn,sid,fid,x,y,5))
     if order_type=='siege':
         cap=capitals.get_capital_at(conn,sid,x,y); return bool(cap and int(cap['controller_faction_id'])!=int(fid))
     return False
@@ -227,7 +245,8 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
     try:
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if len(message or '')>280: raise ValueError('invalid_statement')
-        _begin(conn,c); sid,p=_ctx(conn,user_id); fid=p.get('faction_id')
+        sid = _prepare_context_before_transaction(conn)
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid)
         if not _is_commander(conn,sid,fid,user_id): raise ValueError('commander_required')
@@ -243,7 +262,7 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
         if not _valid_order_target(conn,sid,fid,order_type,x,y): raise ValueError('invalid_order_target')
         _rate(user_id); sx,sy=sectors.sector_coords(x,y); exp=now+timedelta(hours=order_duration_hours()); msg=message or ''
         if order_id:
-            row=polywar._fetchone(c,'SELECT * FROM polywar_faction_orders WHERE id=%s AND season_id=%s AND faction_id=%s AND commander_user_id=%s',(order_id,sid,fid,user_id))
+            row=polywar._fetchone(c,'SELECT * FROM polywar_faction_orders WHERE id=%s AND season_id=%s AND faction_id=%s AND commander_user_id=%s AND active=1 AND cancelled_at IS NULL AND expires_at>%s',(order_id,sid,fid,user_id,now))
             if not row: raise ValueError('invalid_order_target')
             polywar._execute(c,'UPDATE polywar_faction_orders SET order_type=%s,x=%s,y=%s,sector_x=%s,sector_y=%s,message=%s,active=1,expires_at=%s,cancelled_at=NULL,updated_at=%s WHERE id=%s',(order_type,x,y,sx,sy,msg,exp,now,order_id))
         else:

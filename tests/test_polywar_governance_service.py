@@ -66,3 +66,36 @@ def test_frontend_phase5_real_ui_source():
     js=open('webapp/polywar.js',encoding='utf-8').read()
     for token in ['polywarCapitalUi','/api/polywar/capitals','Siege capital','polywarGovernanceUi','data-polywar-vote','data-polywar-goto-order']:
         assert token in js
+
+def test_governance_context_keeps_transaction_active_and_pg_insert_source(polydb):
+    connect,_=polydb; st=join(201,1); sid=st['season']['id']; c=connect(); gov._begin(c,c.cursor()); p=gov._governance_context_in_transaction(c,201,sid); assert p['user_id']==201 and c.in_transaction; c.rollback(); c.close()
+    src=open('services/polywar_governance_service.py',encoding='utf-8').read(); assert 'ON CONFLICT DO NOTHING' in src and 'INSERT OR IGNORE INTO polywar_commander_elections' in src and 'except Exception:\n        pass' not in src
+
+def test_concurrent_finalization_and_term_expiry_single_events(polydb):
+    connect,_=polydb; st=join(211,1); join(212,1); sid=st['season']['id']; contribute(connect,sid,211,212); gov.get_governance(211); gov.nominate(211,'a',True); gov.vote(212,211)
+    c=connect(); c.execute('update polywar_commander_elections set ends_at=? where season_id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
+    out=[]
+    def fin():
+        try: out.append(gov.get_governance(211))
+        except Exception as e: out.append(e)
+    import threading
+    ts=[threading.Thread(target=fin) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_elected'",(sid,)).fetchone()[0]==1; c.execute('update polywar_faction_season_stats set commander_term_ends_at=? where season_id=? and faction_id=1',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
+    ts=[threading.Thread(target=fin) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_term_ended'",(sid,)).fetchone()[0]==1; c.close()
+
+def test_concurrent_order_creation_limit_one(polydb):
+    connect,settings=polydb; settings['polywar_commander_order_limit']='1'; st=join(221,1); join(222,1); join(223,2); sid=st['season']['id']; elect_now(connect,sid,1,221); bx,by=m.faction_base_positions()[2]; caps.get_capitals(221); c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    out=[]; import threading
+    def create():
+        try: out.append(gov.upsert_order(221,None,'siege',bx,by,'msg',True))
+        except Exception as e: out.append(e)
+    ts=[threading.Thread(target=create) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute('select count(*) from polywar_faction_orders where season_id=? and faction_id=1 and active=1',(sid,)).fetchone()[0]==1; c.close()
+
+def test_frontend_real_phase5_calls_and_xss_escape():
+    js=open('webapp/polywar.js',encoding='utf-8').read()
+    for token in ['this.refreshCapitals()','polywarGovernanceUi?.refresh','polywarCapitalUi.draw(ctx','polywarGovernanceUi.drawOrders','id="polywarGovernancePanel"','actionMode === "siege"','actionMode === "repair_capital"','/api/polywar/action','handlePolywarUiClick','data-polywar-vote']:
+        assert token in js
+    assert 'esc(c.statement' in js and 'esc(o.message' in js
+    assert '<img src=x onerror=alert(1)>' not in js

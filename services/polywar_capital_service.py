@@ -81,7 +81,7 @@ def _upsert_capital(conn, sid, fid, owner, x, y, now):
     else:
         polywar._execute(c, 'INSERT INTO polywar_capitals (season_id,original_faction_id,controller_faction_id,x,y,controlled_since,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,original_faction_id) DO NOTHING', (sid, fid, owner, x, y, now, now))
         polywar._execute(c, 'INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO NOTHING', (sid, x, y, owner, now))
-    polywar._execute(c, 'UPDATE polywar_cells SET owner_faction_id=%s, updated_at=%s WHERE season_id=%s AND x=%s AND y=%s', (owner, now, sid, x, y))
+    polywar._execute(c, 'UPDATE polywar_cells SET owner_faction_id=%s, contesting_faction_id=NULL, contest_progress=0, contested_at=NULL, updated_at=%s WHERE season_id=%s AND x=%s AND y=%s', (owner, now, sid, x, y))
 
 
 def _recount_capitals(conn, sid, now):
@@ -95,26 +95,35 @@ def _recount_capitals(conn, sid, now):
 
 
 def ensure_capitals_initialized(conn, season_id: int):
-    # Schema must already be initialized by caller; no commit here.
-    sectors.ensure_starting_territories_bootstrap(conn, season_id)
-    c = conn.cursor(); now = datetime.utcnow()
-    if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
-        return False
-    if not polywar._is_sqlite(conn):
-        # Serializes concurrent initializers against season row in Postgres.
-        polywar._fetchone(c, 'SELECT id FROM polywar_seasons WHERE id=%s FOR UPDATE', (season_id,))
+    # Safe in any entry point: own SQLite transaction only when caller is not already in one.
+    own_tx = False
+    if polywar._is_sqlite(conn) and not getattr(conn, 'in_transaction', False):
+        _begin(conn, conn.cursor()); own_tx = True
+    try:
+        sectors.ensure_starting_territories_bootstrap(conn, season_id)
+        c = conn.cursor(); now = datetime.utcnow()
         if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
+            if own_tx: conn.commit()
             return False
-    for fid, (x, y) in m.faction_base_positions().items():
-        row = polywar._fetchone(c, 'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s', (season_id, x, y))
-        owner = int(row['owner_faction_id']) if row else int(m._owner_at(conn, season_id, x, y) or fid)
-        _upsert_capital(conn, season_id, fid, owner, x, y, now)
-    _recount_capitals(conn, season_id, now)
-    if polywar._is_sqlite(conn):
-        polywar._execute(c, 'INSERT OR IGNORE INTO polywar_capital_initializations (season_id,initialized_at) VALUES (%s,%s)', (season_id, now))
-    else:
-        polywar._execute(c, 'INSERT INTO polywar_capital_initializations (season_id,initialized_at) VALUES (%s,%s) ON CONFLICT (season_id) DO NOTHING', (season_id, now))
-    return True
+        if not polywar._is_sqlite(conn):
+            # Serializes concurrent initializers against season row in Postgres.
+            polywar._fetchone(c, 'SELECT id FROM polywar_seasons WHERE id=%s FOR UPDATE', (season_id,))
+            if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
+                return False
+        for fid, (x, y) in m.faction_base_positions().items():
+            row = polywar._fetchone(c, 'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s', (season_id, x, y))
+            owner = int(row['owner_faction_id']) if row else int(m._owner_at(conn, season_id, x, y) or fid)
+            _upsert_capital(conn, season_id, fid, owner, x, y, now)
+        _recount_capitals(conn, season_id, now)
+        if polywar._is_sqlite(conn):
+            polywar._execute(c, 'INSERT OR IGNORE INTO polywar_capital_initializations (season_id,initialized_at) VALUES (%s,%s)', (season_id, now))
+        else:
+            polywar._execute(c, 'INSERT INTO polywar_capital_initializations (season_id,initialized_at) VALUES (%s,%s) ON CONFLICT (season_id) DO NOTHING', (season_id, now))
+        if own_tx: conn.commit()
+        return True
+    except Exception:
+        if own_tx: polywar._safe_rollback(conn)
+        raise
 
 
 def get_capital_at(conn, sid, x, y):
@@ -199,7 +208,6 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: return dup
-        _rate_mut(user_id)
         _begin(conn, c)
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: conn.commit(); return dup
@@ -218,6 +226,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         if not cell: raise ValueError('capital_required')
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: conn.commit(); return dup
+        _rate_mut(user_id)
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         if not _has_adjacent(conn, sid, x, y, fid): raise ValueError('capital_not_frontline')

@@ -79,3 +79,49 @@ def test_capital_begin_raises_on_locked_sqlite(polydb):
     c=connect()
     with pytest.raises(Exception): caps._begin(c,c.cursor())
     lock.rollback(); lock.close(); c.close()
+
+def test_legacy_contested_capital_migration_clears_contest(polydb):
+    connect,_=polydb; st=join(40,1); join(41,2); sid=st['season']['id']; bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('delete from polywar_capital_initializations where season_id=?',(sid,)); c.execute('delete from polywar_capitals where season_id=?',(sid,)); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at) values (?,?,?,?,?,?,?)',(sid,bx,by,1,2,50,datetime.utcnow())); c.commit(); c.close()
+    caps.get_capitals(40)
+    c=connect(); row=c.execute('select owner_faction_id,contesting_faction_id,contest_progress,contested_at from polywar_cells where season_id=? and x=? and y=?',(sid,bx,by)).fetchone(); assert row['owner_faction_id']==1 and row['contesting_faction_id'] is None and row['contest_progress']==0 and row['contested_at'] is None; c.close()
+
+def test_capital_duplicate_does_not_consume_mutation_rate(polydb, monkeypatch):
+    connect,_=polydb; st=join(50,1); join(51,2); sid=st['season']['id']; full_energy(connect,sid,50); bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    calls=[]; monkeypatch.setattr(caps,'_rate_mut',lambda uid: calls.append(uid))
+    caps.capital_action(50,'siege',bx,by,'same'); caps.capital_action(50,'siege',bx,by,'same')
+    assert calls==[50]
+
+def test_concurrent_same_key_siege_and_repair(polydb):
+    connect,settings=polydb; settings['polywar_capital_siege_required']='400'; st=join(60,1); join(61,2); sid=st['season']['id']; full_energy(connect,sid,60,61); bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    out=[]
+    def siege():
+        try: out.append(caps.capital_action(60,'siege',bx,by,'ck'))
+        except Exception as e: out.append(e)
+    ts=[threading.Thread(target=siege) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
+    assert sum(1 for r in out if isinstance(r,dict) and r.get('duplicate'))>=1
+    c=connect(); assert c.execute('select siege_progress from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0]==100; c.close()
+    out.clear()
+    def repair():
+        try: out.append(caps.capital_action(61,'repair_capital',bx,by,'rk'))
+        except Exception as e: out.append(e)
+    ts=[threading.Thread(target=repair) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert c.execute('select siege_progress from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0] in (25,100); c.close()
+
+def test_public_build_chunks_concurrent_initialization(polydb):
+    connect,_=polydb; st=join(70,1); sid=st['season']['id']; errs=[]
+    def run():
+        try: m.build_chunks(70, [(0,0)])
+        except Exception as e: errs.append(e)
+    ts=[threading.Thread(target=run) for _ in range(2)]; [t.start() for t in ts]; [t.join() for t in ts]
+    c=connect(); assert not errs and c.execute('select count(*) from polywar_capitals where season_id=?',(sid,)).fetchone()[0]==7; c.close()
+
+def test_capital_event_cooldown_and_recapture(polydb):
+    connect,settings=polydb; settings['polywar_capital_event_cooldown_seconds']='999'; settings['polywar_capital_siege_required']='100'; st=join(80,1); join(81,2); sid=st['season']['id']; full_energy(connect,sid,80,81); bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,bx+1,by)); c.commit(); c.close()
+    caps.capital_action(80,'siege',bx,by,'cap1')
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='capital_captured'",(sid,)).fetchone()[0]==1; c.close()
+    caps.capital_action(81,'siege',bx,by,'recap')
+    c=connect(); assert c.execute('select controller_faction_id from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0]==2; assert c.execute("select count(*) from polywar_events where season_id=? and event_type='capital_recaptured'",(sid,)).fetchone()[0]==1; c.close()
