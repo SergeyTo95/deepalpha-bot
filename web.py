@@ -30,6 +30,8 @@ from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_t
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
 from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction
 from services.polywar_map_service import build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
+from services.polywar_combat_service import combat_action as polywar_combat_action
+from services.polywar_sector_service import get_sectors as get_polywar_sectors
 from services.polywar_mine_service import scan_area as scan_polywar_area, set_flag as set_polywar_flag
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
@@ -793,6 +795,26 @@ async def handle_polywar_chunks_api(request):
         return _json_response({"ok": False, "error": str(e)}, status=400)
 
 
+async def handle_polywar_sectors_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        q = request.query
+        return _json_response(await asyncio.to_thread(
+            get_polywar_sectors,
+            int(current.get("user_id") or 0),
+            int(q.get("min_sector_x", 0)),
+            int(q.get("max_sector_x", 0)),
+            int(q.get("min_sector_y", 0)),
+            int(q.get("max_sector_y", 0)),
+        ))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=400)
+    except Exception as e:
+        print(f"handle_polywar_sectors_api error: {e}")
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
+
 async def handle_polywar_action_api(request):
     current = _current_web_user(request)
     if not current:
@@ -802,9 +824,12 @@ async def handle_polywar_action_api(request):
     except Exception:
         data = {}
     try:
-        if (data.get("action_type") or "capture") != "capture":
-            raise ValueError("unsupported_action")
-        return _json_response(await asyncio.to_thread(capture_polywar_cell, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        action_type = str(data.get("action_type") or "capture").strip().lower()
+        if action_type == "capture":
+            return _json_response(await asyncio.to_thread(capture_polywar_cell, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        if action_type in {"attack", "reinforce"}:
+            return _json_response(await asyncio.to_thread(polywar_combat_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        raise ValueError("bad_action_type")
     except ValueError as e:
         code = str(e)
         status = 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
@@ -1526,10 +1551,12 @@ app.router.add_get("/api/polywar/player", handle_polywar_player_api)
 app.router.add_get("/api/polywar/events", handle_polywar_events_api)
 app.router.add_post("/api/polywar/join", handle_polywar_join_api)
 app.router.add_get("/api/polywar/map/chunks", handle_polywar_chunks_api)
+app.router.add_get("/api/polywar/map/sectors", handle_polywar_sectors_api)
 app.router.add_post("/api/polywar/action", handle_polywar_action_api)
 app.router.add_post("/api/polywar/scan", handle_polywar_scan_api)
 app.router.add_post("/api/polywar/flag", handle_polywar_flag_api)
 app.router.add_route("OPTIONS", "/api/polywar/action", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/map/sectors", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/scan", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/flag", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/join", handle_options)

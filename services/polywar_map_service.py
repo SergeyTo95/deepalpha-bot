@@ -53,13 +53,18 @@ def init_polywar_map_schema(conn=None):
     c = conn.cursor()
     id_sql = "INTEGER PRIMARY KEY AUTOINCREMENT" if polywar._is_sqlite(conn) else "SERIAL PRIMARY KEY"
     try:
-        c.execute("""CREATE TABLE IF NOT EXISTS polywar_cells (season_id INTEGER NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,owner_faction_id INTEGER NOT NULL,capture_progress INTEGER NOT NULL DEFAULT 100,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_by_user_id BIGINT NULL,UNIQUE(season_id,x,y))""")
+        c.execute("""CREATE TABLE IF NOT EXISTS polywar_cells (season_id INTEGER NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,owner_faction_id INTEGER NOT NULL,capture_progress INTEGER NOT NULL DEFAULT 100,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_by_user_id BIGINT NULL,contesting_faction_id INTEGER NULL,contest_progress INTEGER NOT NULL DEFAULT 0,contested_at TIMESTAMP NULL,last_attacked_at TIMESTAMP NULL,last_attacked_by_user_id BIGINT NULL,UNIQUE(season_id,x,y))""")
+        from services import polywar_sector_service as sectors
+        for spec in ["contesting_faction_id INTEGER NULL", "contest_progress INTEGER NOT NULL DEFAULT 0", "contested_at TIMESTAMP NULL", "last_attacked_at TIMESTAMP NULL", "last_attacked_by_user_id BIGINT NULL"]:
+            sectors._add_col(conn, "polywar_cells", spec)
         c.execute(f"""CREATE TABLE IF NOT EXISTS polywar_actions (id {id_sql},season_id INTEGER NOT NULL,user_id BIGINT NOT NULL,faction_id INTEGER NOT NULL,action_type TEXT NOT NULL,x INTEGER NOT NULL,y INTEGER NOT NULL,energy_cost INTEGER NOT NULL,idempotency_key TEXT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(season_id,user_id,idempotency_key))""")
         if not polywar._is_sqlite(conn):
             c.execute("ALTER TABLE polywar_actions DROP CONSTRAINT IF EXISTS polywar_actions_user_id_idempotency_key_key")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_actions_idempotency ON polywar_actions(season_id,user_id,idempotency_key)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_cells_range ON polywar_cells(season_id,x,y)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_cells_owner ON polywar_cells(season_id,owner_faction_id,x,y)")
+        from services import polywar_sector_service as sectors
+        sectors.init_polywar_sector_schema(conn)
         conn.commit()
     finally:
         if own:
@@ -221,11 +226,12 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             x0, y0 = cx * cs, cy * cs
             terrain = _terrain_chunk(sid, seed, cx, cy, cs)
             h, w = len(terrain), len(terrain[0]) if terrain else 0
-            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + w, y0, y0 + h))
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + w, y0, y0 + h))
             sparse = {(int(r["x"]), int(r["y"])): int(r["owner_faction_id"]) for r in rows}
             owners = [[sparse.get((xx, yy)) or _start_owner(xx, yy) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
             bases = [b for b in get_starting_bases() if x0 <= b["x"] < x0 + w and y0 <= b["y"] < y0 + h]
-            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": cs, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "user_id": user_id})
+            contested = [{"x": int(r["x"]), "y": int(r["y"]), "owner_faction_id": int(r["owner_faction_id"]), "contesting_faction_id": r.get("contesting_faction_id"), "contest_progress": int(r.get("contest_progress") or 0), "contest_required": _setting_int("polywar_capture_progress_required",100,1,1000), "contested_at": polywar._iso(r.get("contested_at"))} for r in rows if int(r.get("contest_progress") or 0) > 0]
+            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": cs, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "contested_cells": contested, "user_id": user_id})
         player = polywar.get_or_create_player(user_id, sid, conn)
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         for ch in out:
@@ -306,7 +312,8 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
-        polywar._execute(c, "UPDATE polywar_faction_season_stats SET controlled_cells_count=controlled_cells_count+1, updated_at=%s WHERE season_id=%s AND faction_id=%s", (now,sid,fid))
+        from services import polywar_sector_service as sectors
+        sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now)
         hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now)
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}
         mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "captured", cost, payload, now)
