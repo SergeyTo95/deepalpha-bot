@@ -183,10 +183,24 @@ def initialize_sector(conn, sid, sx, sy, now=None):
 
 def ensure_starting_territories_bootstrap(conn, sid):
     from services import polywar_map_service as m
+    own_tx = False
+    if polywar._is_sqlite(conn) and not getattr(conn, "in_transaction", False):
+        last = None
+        for i in range(20):
+            try:
+                conn.cursor().execute("BEGIN IMMEDIATE"); own_tx = True; break
+            except Exception as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+                last = exc; time.sleep(0.025 * (i + 1))
+        if not own_tx and last:
+            raise last
     now = datetime.utcnow(); c = conn.cursor()
     marker = (-1, -1)
     _sector_lock(conn, sid, marker[0], marker[1], now)
     if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, marker[0], marker[1])):
+        if own_tx:
+            conn.commit()
         return
     sectors_seen = set()
     half = m.starting_area_size() // 2
@@ -208,6 +222,8 @@ def ensure_starting_territories_bootstrap(conn, sid):
         polywar._execute(c, 'INSERT OR IGNORE INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s)', (sid, marker[0], marker[1], now))
     else:
         polywar._execute(c, 'INSERT INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s) ON CONFLICT (season_id,sector_x,sector_y) DO NOTHING', (sid, marker[0], marker[1], now))
+    if own_tx:
+        conn.commit()
 
 
 def apply_materialized_starting_cell(conn, sid, x, y, owner, now):

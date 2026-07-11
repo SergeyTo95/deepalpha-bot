@@ -136,6 +136,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         if not fid: raise ValueError('faction_required')
         e = polywar._energy(player)
         if e.get('is_locked'): raise ValueError('player_locked')
+        sectors.ensure_starting_territories_bootstrap(conn, sid)
         if not m.in_bounds(x, y): raise ValueError('out_of_bounds')
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')

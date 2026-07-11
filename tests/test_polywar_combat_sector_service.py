@@ -115,3 +115,31 @@ def test_frontend_sector_api_and_server_rules_usage():
     assert '/api/polywar/map/sectors' in js and 'sectorRules()' in js and 'combatRules()' in js
     assert 'enemy_attack_extra_energy' in js and 'reinforce_energy_cost' in js and 'syncState(false, { soft: true })' in js
     assert 'new Set(["capture", "attack", "reinforce"])' in js
+
+def manual_player(connect, uid, fid):
+    c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season(c); polywar._insert_player_if_missing(c, uid, s['id']); c.execute('update polywar_players set faction_id=? where user_id=? and season_id=?',(fid,uid,s['id'])); c.commit(); c.close(); return s
+
+def test_combat_bootstraps_implicit_starting_cell_without_state(polydb):
+    connect,settings=polydb; s=manual_player(connect,401,1); manual_player(connect,402,2); sid=s['id']; bx,by=m.faction_base_positions()[2]
+    c=connect(); c.execute('insert into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
+    r=combat.combat_action(401,'attack',bx,by,'implicit-a1'); assert r['outcome']=='attack_progress'
+    c=connect(); defender_before=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=2',(sid,)).fetchone()[0]; attacker_before=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=1',(sid,)).fetchone()[0]; row=c.execute('select owner_faction_id,contest_progress from polywar_cells where season_id=? and x=? and y=?',(sid,bx,by)).fetchone(); assert defender_before >= m.starting_area_size()**2 - 1 and row['owner_faction_id']==2 and row['contest_progress']==50; c.close()
+    r2=combat.combat_action(401,'attack',bx,by,'implicit-a2'); assert r2['outcome']=='territory_captured'
+    c=connect(); defender_after=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=2',(sid,)).fetchone()[0]; attacker_after=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=1',(sid,)).fetchone()[0]; sectors.ensure_starting_territories_bootstrap(c,sid); c.commit(); defender_again=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=2',(sid,)).fetchone()[0]; assert defender_after==defender_before-1 and attacker_after==attacker_before+1 and defender_again==defender_after; c.close()
+
+def test_concurrent_starting_bootstrap_is_idempotent(polydb):
+    connect,settings=polydb; s=manual_player(connect,411,1); sid=s['id']; counts=[]
+    def worker():
+        c=connect(); sectors.ensure_starting_territories_bootstrap(c,sid); c.commit(); counts.append(c.execute('select sum(controlled_cells_count) from polywar_faction_season_stats where season_id=?',(sid,)).fetchone()[0]); c.close()
+    ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(set(counts))==1
+    c=connect(); assert c.execute('select count(*) from polywar_sector_initializations where season_id=? and sector_x=-1 and sector_y=-1',(sid,)).fetchone()[0]==1; c.close()
+
+def test_frontend_sector_stale_retry_batching_and_bounds_source():
+    js=Path('webapp/polywar.js').read_text()
+    assert 'sectorColumns()' in js and 'sectorRows()' in js and 'Math.min(cols-1' in js and 'Math.min(rows-1' in js
+    assert 'sectorTiles(r, max)' in js and 'tileW' in js and 'tileH' in js
+    assert 'seq !== this.sectorSeq' in js and 'this.ensureSectors(); return' in js
+    assert 'missing.forEach(([sx,sy])=>this.sectorLoading.delete' in js
+    assert '_loadedAt' in js and 'stamp>=oldStamp' in js
+    assert 'updateFactionRanking();' in js and 'updateLatestEvents();' in js and 'updateFactionStats();' in js

@@ -285,6 +285,8 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if not fid: raise ValueError("faction_required")
         e = polywar._energy(player)
         if e.get("is_locked"): raise ValueError("player_locked")
+        from services import polywar_sector_service as sectors
+        sectors.ensure_starting_territories_bootstrap(conn, sid)
         terr = terrain_at(seed, x, y); cost = TERRAIN_COSTS[terr]
         if cost is None: raise ValueError(f"{terr}_not_capturable")
         owner = _owner_at(conn, sid, x, y)
@@ -308,7 +310,6 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if owner is not None: raise ValueError("enemy_capture_unavailable")
         if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
             raise ValueError("not_adjacent")
-        from services import polywar_sector_service as sectors
         sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y), now)
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))

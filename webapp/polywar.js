@@ -108,7 +108,10 @@ class PolyWarMap {
   combatRules() { return this.rules().combat || {}; }
   sectorRules() { return this.rules().sectors || {}; }
   sectorSize() { return Number(this.sectorRules().sector_size || 100); }
-  visibleSectorRange() { const ss=this.sectorSize(), min=this.screenToCell(0,0), max=this.screenToCell(this.w,this.h); return {minX:Math.max(0,Math.floor(min.x/ss)), maxX:Math.max(0,Math.floor(max.x/ss)), minY:Math.max(0,Math.floor(min.y/ss)), maxY:Math.max(0,Math.floor(max.y/ss))}; }
+  sectorColumns() { return Math.max(1, Math.ceil(Number(this.state.map.width || 1) / this.sectorSize())); }
+  sectorRows() { return Math.max(1, Math.ceil(Number(this.state.map.height || 1) / this.sectorSize())); }
+  visibleSectorRange() { const ss=this.sectorSize(), min=this.screenToCell(0,0), max=this.screenToCell(this.w,this.h), cols=this.sectorColumns(), rows=this.sectorRows(); return {minX:Math.max(0,Math.min(cols-1,Math.floor(min.x/ss))), maxX:Math.max(0,Math.min(cols-1,Math.floor(max.x/ss))), minY:Math.max(0,Math.min(rows-1,Math.floor(min.y/ss))), maxY:Math.max(0,Math.min(rows-1,Math.floor(max.y/ss)))}; }
+  sectorTiles(r, max) { const tiles=[]; max=Math.max(1, Number(max||100)); const width=r.maxX-r.minX+1; const tileW=Math.max(1, Math.min(width, max)); const tileH=Math.max(1, Math.floor(max/tileW)); for(let y=r.minY;y<=r.maxY;y+=tileH) for(let x=r.minX;x<=r.maxX;x+=tileW) tiles.push({minX:x,maxX:Math.min(r.maxX,x+tileW-1),minY:y,maxY:Math.min(r.maxY,y+tileH-1)}); return tiles; }
   visibleChunks() {
     const cs = this.state.map.chunk_size, min = this.screenToCell(-this.w * 0.25, -this.h * 0.25), max = this.screenToCell(this.w * 1.25, this.h * 1.25), out = [];
     for (let cy = Math.floor(min.y / cs); cy <= Math.floor(max.y / cs); cy++) for (let cx = Math.floor(min.x / cs); cx <= Math.floor(max.x / cs); cx++) if (cx >= 0 && cy >= 0 && cx * cs < this.state.map.width && cy * cs < this.state.map.height) out.push([cx, cy]);
@@ -143,20 +146,30 @@ class PolyWarMap {
   async ensureSectors(forceKey) {
     if (this.destroyed) return;
     const seq = ++this.sectorSeq, r = this.visibleSectorRange(), max = Number(this.sectorRules().max_sectors_per_request || 100);
-    const wanted = [];
-    for (let sy=r.minY; sy<=r.maxY; sy++) for (let sx=r.minX; sx<=r.maxX; sx++) wanted.push([sx,sy]);
     if (forceKey) this.sectorCache.delete(forceKey);
-    const missing = wanted.filter(([sx,sy]) => !this.sectorCache.has(`${sx},${sy}`) && !this.sectorLoading.has(`${sx},${sy}`));
-    for (let i=0; i<missing.length && !this.destroyed; i+=max) {
-      const batch = missing.slice(i, i+max); if (!batch.length) continue;
-      const minX=Math.min(...batch.map(c=>c[0])), maxX=Math.max(...batch.map(c=>c[0])), minY=Math.min(...batch.map(c=>c[1])), maxY=Math.max(...batch.map(c=>c[1]));
-      batch.forEach(([sx,sy]) => this.sectorLoading.add(`${sx},${sy}`));
-      const d = await api(`/api/polywar/map/sectors?min_sector_x=${minX}&max_sector_x=${maxX}&min_sector_y=${minY}&max_sector_y=${maxY}`);
-      batch.forEach(([sx,sy]) => this.sectorLoading.delete(`${sx},${sy}`));
-      if (this.destroyed || seq !== this.sectorSeq) return;
-      if (d.ok) (d.sectors||[]).forEach(sec => this.sectorCache.set(`${sec.sector_x},${sec.sector_y}`, sec));
+    const tiles = this.sectorTiles(r, max);
+    for (const tile of tiles) {
+      if (this.destroyed) return;
+      const wanted=[];
+      for(let sy=tile.minY; sy<=tile.maxY; sy++) for(let sx=tile.minX; sx<=tile.maxX; sx++) wanted.push([sx,sy]);
+      const missing=wanted.filter(([sx,sy])=>!this.sectorCache.has(`${sx},${sy}`)&&!this.sectorLoading.has(`${sx},${sy}`));
+      if(!missing.length) continue;
+      missing.forEach(([sx,sy])=>this.sectorLoading.add(`${sx},${sy}`));
+      let d;
+      try {
+        d = await api(`/api/polywar/map/sectors?min_sector_x=${tile.minX}&max_sector_x=${tile.maxX}&min_sector_y=${tile.minY}&max_sector_y=${tile.maxY}`);
+      } finally {
+        missing.forEach(([sx,sy])=>this.sectorLoading.delete(`${sx},${sy}`));
+      }
+      if (this.destroyed) return;
+      if (seq !== this.sectorSeq) { this.requestDraw(); this.ensureSectors(); return; }
+      if (d?.ok) {
+        const stamp=Number(d.server_timestamp || Date.now());
+        (d.sectors||[]).forEach(sec=>{ const key=`${sec.sector_x},${sec.sector_y}`, old=this.sectorCache.get(key), oldStamp=Number(old?._loadedAt||0); if(stamp>=oldStamp) this.sectorCache.set(key,{...sec,_loadedAt:stamp}); });
+      }
       this.pruneSectorCache(); this.requestDraw();
     }
+    this.requestDraw();
   }
   pruneSectorCache() { const r=this.visibleSectorRange(); for (const k of this.sectorCache.keys()) { const [sx,sy]=k.split(',').map(Number); if ((sx<r.minX-1||sx>r.maxX+1||sy<r.minY-1||sy>r.maxY+1) && this.sectorCache.size>200) this.sectorCache.delete(k); } }
   refreshSelectedSector() { if (!this.selected) return; const ss=this.sectorSize(), key=`${Math.floor(this.selected.x/ss)},${Math.floor(this.selected.y/ss)}`; return this.ensureSectors(key); }
@@ -203,16 +216,35 @@ function render(state) {
   if (state && state.enabled === false) { renderUnavailable(state.message); return; }
   const p = state.player || {}, e = state.energy || {}, season = state.season || {}, selected = state.selected_faction, needsJoin = !selected;
   map?.destroy();
-  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><canvas id="polywarCanvas"></canvas><div class="action-panel"><b>Cell <span id="cellCoords">—</span></b><span>Terrain: <b id="cellTerrain">—</b></span><span>Owner: <b id="cellOwner">—</b></span><span>Cost: <b id="cellCost">—</b></span><span>Sector: <b id="cellSector">—</b></span><span>Hint: <b id="cellHint">—</b></span><span>Mine intel: <b id="cellMineIntel">—</b></span><span>Flags: <b id="cellFlags">0</b></span><span>Mode: <b id="currentMode">capture</b></span><div class="mode-row"><button class="btn mini" data-mode="capture">Capture</button><button class="btn mini" data-mode="attack">Attack</button><button class="btn mini" data-mode="reinforce">Reinforce</button><button class="btn mini" data-mode="scan3">Scan 3×3</button><button class="btn mini" data-mode="scan5">Scan 5×5</button><button class="btn mini" data-mode="flag">Flag mine</button></div><button class="btn" id="captureBtn" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn" id="scan3Btn">Scan 3×3</button><button class="btn" id="scan5Btn">Scan 5×5</button><button class="btn" id="flagAddBtn">Add mine flag</button><button class="btn" id="flagRemoveBtn">Remove my flag</button></div></section><section class="grid"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2>${(state.faction_ranking || []).map((f, i) => `<div class="rank"><span>${i + 1}. ${factionDot(f)}${esc(f.name)}</span><b>${esc(f.influence_score || 0)}</b></div>`).join("")}</section><section class="glass card"><h2>Latest events</h2>${(state.events || []).length ? (state.events || []).map(ev => `<div class="event"><b>${esc(ev.message)}</b><p class="muted">${esc(ev.created_at || "")}</p></div>`).join("") : '<p class="muted">No events yet.</p>'}</section>`;
+  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><canvas id="polywarCanvas"></canvas><div class="action-panel"><b>Cell <span id="cellCoords">—</span></b><span>Terrain: <b id="cellTerrain">—</b></span><span>Owner: <b id="cellOwner">—</b></span><span>Cost: <b id="cellCost">—</b></span><span>Sector: <b id="cellSector">—</b></span><span>Hint: <b id="cellHint">—</b></span><span>Mine intel: <b id="cellMineIntel">—</b></span><span>Flags: <b id="cellFlags">0</b></span><span>Mode: <b id="currentMode">capture</b></span><div class="mode-row"><button class="btn mini" data-mode="capture">Capture</button><button class="btn mini" data-mode="attack">Attack</button><button class="btn mini" data-mode="reinforce">Reinforce</button><button class="btn mini" data-mode="scan3">Scan 3×3</button><button class="btn mini" data-mode="scan5">Scan 5×5</button><button class="btn mini" data-mode="flag">Flag mine</button></div><button class="btn" id="captureBtn" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn" id="scan3Btn">Scan 3×3</button><button class="btn" id="scan5Btn">Scan 5×5</button><button class="btn" id="flagAddBtn">Add mine flag</button><button class="btn" id="flagRemoveBtn">Remove my flag</button></div></section><section class="grid" id="factionStats"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2><div id="factionRanking"></div></section><section class="glass card"><h2>Latest events</h2><div id="latestEvents"></div></section>`;
   document.querySelectorAll("[data-faction]").forEach(b => b.onclick = () => joinFaction(b.dataset.faction));
+  updateFactionStats();
+  updateFactionRanking();
+  updateLatestEvents();
   map = new PolyWarMap(state);
   startEnergyTimers();
+}
+
+function updateFactionStats() {
+  const p=currentState?.player||{}, el=document.getElementById("factionStats");
+  if (el) el.innerHTML = `<div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div>`;
+}
+function updateFactionRanking() {
+  const el=document.getElementById("factionRanking"); if(!el) return;
+  el.innerHTML=(currentState?.faction_ranking||[]).map((f,i)=>`<div class="rank"><span>${i+1}. ${factionDot(f)}${esc(f.name)} <small class="muted">cells ${esc(f.controlled_cells_count||0)} · sectors ${esc(f.controlled_sectors_count||0)}</small></span><b>${esc(f.influence_score||0)}</b></div>`).join("");
+}
+function updateLatestEvents() {
+  const el=document.getElementById("latestEvents"); if(!el) return; const events=currentState?.events||[];
+  el.innerHTML=events.length ? events.map(ev=>`<div class="event"><b>${esc(ev.message)}</b><p class="muted">${esc(ev.created_at||"")}</p></div>`).join("") : '<p class="muted">No events yet.</p>';
 }
 
 function softUpdate(state) {
   if (!currentState || !state.ok || currentState.selected_faction?.id !== state.selected_faction?.id) { render(state); return; }
   currentState = { ...currentState, ...state };
   updateEnergyUI();
+  updateFactionStats();
+  updateFactionRanking();
+  updateLatestEvents();
   map?.updateState(currentState);
 }
 
