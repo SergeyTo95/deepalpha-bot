@@ -170,11 +170,10 @@ def _private_active_season(conn):
 
 
 def _owner_at(conn, season_id, x, y):
-    start_owner = _start_owner(x, y)
-    if start_owner:
-        return start_owner
     row = polywar._fetchone(conn.cursor(), "SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s", (season_id, x, y))
-    return int(row["owner_faction_id"]) if row else None
+    if row:
+        return int(row["owner_faction_id"])
+    return _start_owner(x, y)
 
 
 def _terrain_chunk(season_id, seed, cx, cy, cs):
@@ -309,10 +308,11 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if owner is not None: raise ValueError("enemy_capture_unavailable")
         if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
             raise ValueError("not_adjacent")
+        from services import polywar_sector_service as sectors
+        sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y), now)
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
-        from services import polywar_sector_service as sectors
         sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now)
         hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now)
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}

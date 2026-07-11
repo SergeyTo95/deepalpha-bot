@@ -810,7 +810,8 @@ async def handle_polywar_sectors_api(request):
             int(q.get("max_sector_y", 0)),
         ))
     except ValueError as e:
-        return _json_response({"ok": False, "error": str(e)}, status=400)
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
     except Exception as e:
         print(f"handle_polywar_sectors_api error: {e}")
         return _json_response({"ok": False, "error": "server_error"}, status=500)
@@ -832,7 +833,7 @@ async def handle_polywar_action_api(request):
         raise ValueError("bad_action_type")
     except ValueError as e:
         code = str(e)
-        status = 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
+        status = 429 if code == "rate_limited" else 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
         return _json_response({"ok": False, "error": code}, status=status)
 
 
