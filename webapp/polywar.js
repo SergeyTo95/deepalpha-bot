@@ -5,6 +5,8 @@ let polywarRewardSeq = 0;
 const tg = window.Telegram?.WebApp;
 let energyTimer = null;
 let syncTimer = null;
+let worldCountdownTimer = null;
+const polywarClaimKeys = new Map();
 let currentState = null;
 let map = null;
 let actionMode = "capture"; // Capture, Attack, Reinforce, Scan 3×3, Scan 5×5, Flag mine
@@ -19,7 +21,7 @@ async function telegramAuthIfAvailable() { const initData = tg?.initData || ""; 
 async function api(path, opts) { const r = await fetch(path, opts); const d = await r.json().catch(() => ({ ok: false, error: "bad_json" })); if (!r.ok) d.httpStatus = r.status; return d; }
 function fmtTime(sec) { sec = Math.max(0, Number(sec || 0)); return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`; }
 function factionDot(f) { return `<span class="dot" style="background:${esc(f?.color || "#777")}"></span>`; }
-function clearTimers() { if (energyTimer) clearInterval(energyTimer); if (syncTimer) clearInterval(syncTimer); energyTimer = syncTimer = null; }
+function clearTimers() { if (energyTimer) clearInterval(energyTimer); if (syncTimer) clearInterval(syncTimer); if (worldCountdownTimer) clearInterval(worldCountdownTimer); energyTimer = syncTimer = worldCountdownTimer = null; }
 function baseFor(fid) { return (currentState?.map?.bases || []).find(b => +b.faction_id === +fid); }
 
 function updateEnergyUI() {
@@ -235,12 +237,14 @@ class PolyWarMap {
 
 function renderUnavailable(message) { clearTimers(); map?.destroy(); map = null; root.innerHTML = `<section class="glass card"><h2>PolyWar is temporarily unavailable</h2><p class="muted">${esc(message || "Please check back later.")}</p><a class="btn" href="/app">Back to DeepAlpha</a></section>`; }
 
-function renderWorldHud(state){ const w=state.world||{}; return `<div class="polywar-world-grid"><div class="polywar-world-stat">Null State<br><b>${esc(w.status||"dormant")}</b></div><div class="polywar-world-stat">Activation<br><b data-countdown="${esc(w.activation_at||"")}">${esc(w.activation_at||"—")}</b></div><div class="polywar-world-stat">Next tick<br><b>${esc(w.next_tick_at||"—")}</b></div><div class="polywar-world-stat">Corruption<br><b>${esc(w.corruption_level||0)}</b></div><div class="polywar-world-stat">Cells / Sectors / Capitals<br><b>${esc(w.controlled_cells_count||0)} / ${esc(w.controlled_sectors_count||0)} / ${esc(w.controlled_capitals_count||0)}</b></div><div class="polywar-world-stat">Rifts<br><b>${esc((w.active_rifts||[]).length)} active · ${esc((w.sealed_rifts||[]).length)} sealed</b></div></div><p class="muted">Season countdown uses server_timestamp ${esc(w.server_timestamp||0)}.</p>`; }
-function polywarRiftPanel(rift, cell, state){ const rules=state.rules?.world||{}; const canSeal = rift.status === "active"; return `<section class="glass card polywar-rift-panel"><h3>Rift</h3><p>Status: ${esc(rift.status)}</p><p>Health: ${esc(rift.health)}/${esc(rift.max_health)} (${esc(rift.health_percent||0)}%)</p><p>Seal energy cost: ${esc(rules.seal_energy_cost||0)}</p><p>Frontline eligibility: ${esc(canSeal ? "requires adjacent faction cell" : "inactive")}</p>${canSeal ? `<button class="btn" data-polywar-action="seal_rift">Seal Rift</button>` : ""}</section>`; }
+function renderWorldHud(state){ const w=state.world||{}, season=state.season||{}; return `<div class="polywar-world-grid"><div class="polywar-world-stat">Null State<br><b>${esc(w.status||"dormant")}</b></div><div class="polywar-world-stat">Activation<br><b id="polywarActivationCountdown" data-countdown="${esc(w.activation_at||"")}">${esc(w.activation_at||"—")}</b></div><div class="polywar-world-stat">Next tick<br><b id="polywarNextTickCountdown" data-countdown="${esc(w.next_tick_at||"")}">${esc(w.next_tick_at||"—")}</b></div><div class="polywar-world-stat">Season end<br><b id="polywarSeasonCountdown" data-countdown="${esc(season.ends_at||"")}">${esc(season.ends_at||"—")}</b></div><div class="polywar-world-stat">Domination hold<br><b id="polywarDominationCountdown" data-countdown="${esc(w.domination_hold_until||"")}">${esc(w.domination_hold_until||"—")}</b></div><div class="polywar-world-stat">Corruption<br><b>${esc(w.corruption_level||0)}</b></div><div class="polywar-world-stat">Cells / Sectors / Capitals<br><b>${esc(w.controlled_cells_count||0)} / ${esc(w.controlled_sectors_count||0)} / ${esc(w.controlled_capitals_count||0)}</b></div><div class="polywar-world-stat">Rifts<br><b>${esc((w.active_rifts||[]).length)} active · ${esc((w.sealed_rifts||[]).length)} sealed</b></div></div><p class="muted">Countdowns corrected by server_timestamp ${esc(w.server_timestamp||0)}.</p>`; }
+function hasOwnAdjacent(cell,state){ const fid=Number(state.player?.faction_id||0); return !!fid && !!(cell?.neighbors||[]).find(n=>Number(n.owner_faction_id||n.owner)===fid); }
+function startWorldCountdownTimer(){ if(worldCountdownTimer) clearInterval(worldCountdownTimer); const offset=(Number(currentState?.world?.server_timestamp||0)*1000)-Date.now(); const tick=()=>document.querySelectorAll('[data-countdown]').forEach(el=>{ const target=Date.parse(el.dataset.countdown||''); el.textContent=Number.isFinite(target)?fmtTime(Math.ceil((target-(Date.now()+offset))/1000)):'—'; }); tick(); worldCountdownTimer=setInterval(tick,1000); }
+function polywarRiftPanel(rift, cell, state){ const rules=state.rules?.world||{}; const cost=Number(rules.seal_energy_cost||0); const canSeal = rift.status === "active" && Number(state.player?.faction_id||0)>0 && hasOwnAdjacent(cell,state) && Number(state.energy?.current_energy||0)>=cost && !state.energy?.is_locked && !map?.pending; return `<section class="glass card polywar-rift-panel"><h3>Rift</h3><p>Status: ${esc(rift.status)}</p><p>Health: ${esc(rift.health)}/${esc(rift.max_health)} (${esc(rift.health_percent||0)}%)</p><p>Seal energy cost: ${esc(cost)}</p><p>Frontline eligibility: ${esc(canSeal ? "ready" : "requires active rift, energy and adjacent faction cell")}</p>${canSeal ? `<button class="btn" data-polywar-action="seal_rift">Seal Rift</button>` : ""}</section>`; }
 function polywarRebellionPanel(rebellion, cell, state){ const rules=state.rules?.rebellions||{}; const fid=Number(state.player?.faction_id||0); const canSupport=fid===Number(rebellion.capital_original_faction_id); const canSuppress=fid===Number(rebellion.controller_faction_id); return `<section class="glass card polywar-rebellion-panel"><h3>Capital rebellion</h3><p>Original faction: ${esc(rebellion.capital_original_faction_id)}</p><p>Occupier: ${esc(rebellion.controller_faction_id)}</p><p>Status: ${esc(rebellion.status)}</p><p>Progress: ${esc(rebellion.progress)}/${esc(rebellion.required_progress)}</p><p>Support cost: ${esc(rules.support_energy_cost||0)} · Suppress cost: ${esc(rules.suppress_energy_cost||0)}</p>${canSupport ? `<button class="btn" data-polywar-action="support_rebellion">Support rebellion</button>` : ""}${canSuppress ? `<button class="btn" data-polywar-action="suppress_rebellion">Suppress rebellion</button>` : ""}</section>`; }
 function renderResultsPanel(state){ const r=state.latest_completed_season||state.results||{}; const rew=state.current_user_pending_reward||{}; return `<p>Victory type: ${esc(r.victory_type||"—")}</p><p>Winner: ${esc(r.winner_faction_id||"—")}</p><p>Results hash: ${esc((r.results_hash||"").slice(0,12))}</p><p>Reward: ${esc(rew.total_reward||0)} · ${esc(rew.status||"not ready")}</p>${rew.total_reward ? `<button class="btn" id="polywarClaimReward">Claim reward</button>` : ""}`; }
-async function syncPolywarResults(){ const seq=++polywarResultsSeq; const d=await api('/api/polywar/results/latest'); if(seq!==polywarResultsSeq || !d.ok) return d; currentState.results=d; return d; }
-async function claimPolywarReward(season_id){ const seq=++polywarRewardSeq; const d=await api('/api/polywar/rewards/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({season_id,idempotency_key:`claim-${season_id}-${Date.now()}`})}); if(seq!==polywarRewardSeq) return {ok:false,stale:true}; if(d.ok){ await syncState(false,{soft:true}); } return d; }
+async function syncPolywarResults(){ const seq=++polywarResultsSeq, expectedMap=map, expectedSeason=currentState?.latest_completed_season?.id; const d=await api('/api/polywar/results/latest'); if(seq!==polywarResultsSeq || expectedMap!==map || (expectedSeason && d.season?.id && Number(d.season.id)!==Number(expectedSeason)) || !d.ok) return d; currentState.results=d; currentState.current_user_pending_reward=d.current_user_reward||currentState.current_user_pending_reward; const panel=document.getElementById('polywarResultsPanel'); if(panel) panel.innerHTML=`<h2>Season Results</h2>${renderResultsPanel(currentState)}`; return d; }
+async function claimPolywarReward(season_id){ const key=polywarClaimKeys.get(season_id)||`claim-${season_id}-${Date.now()}-${Math.random().toString(16).slice(2)}`; polywarClaimKeys.set(season_id,key); const btn=document.getElementById('polywarClaimReward'); if(btn){ btn.disabled=true; btn.textContent='Claiming…'; } const seq=++polywarRewardSeq; const d=await api('/api/polywar/rewards/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({season_id,idempotency_key:key})}); if(seq!==polywarRewardSeq) return {ok:false,stale:true}; if(d.ok||d.duplicate){ polywarClaimKeys.delete(season_id); await syncPolywarResults(); await syncState(false,{soft:true}); } else if(btn){ btn.disabled=false; btn.textContent='Claim reward'; } return d; }
 
 function render(state) {
   currentState = state;
@@ -256,6 +260,7 @@ function render(state) {
   map = new PolyWarMap(state);
   if (state.latest_completed_season) syncPolywarResults();
   startEnergyTimers();
+  startWorldCountdownTimer();
 }
 
 function updateFactionStats() {
@@ -381,12 +386,14 @@ const polywarGovernanceUi = window.polywarGovernanceUi = window.polywarGovernanc
 async function handlePolywarUiClick(e) {
   const vote = e.target.closest('[data-polywar-vote]');
   const nom = e.target.closest('[data-polywar-nominate]');
+  const claim = e.target.closest('#polywarClaimReward');
   const action = e.target.closest('[data-polywar-action]');
   const gotoOrder = e.target.closest('[data-polywar-goto-order]');
   const cancelOrder = e.target.closest('[data-polywar-cancel-order]');
   const editOrder = e.target.closest('[data-polywar-edit-order]');
   const createOrder = e.target.closest('[data-polywar-create-order]');
   const updateOrder = e.target.closest('[data-polywar-update-order]');
+  if (claim) { const sid=currentState?.current_user_pending_reward?.season_id || currentState?.latest_completed_season?.id || currentState?.results?.season?.id; const d=await claimPolywarReward(sid); if(!d.ok && !d.duplicate) alert(d.error || 'Claim failed'); return; }
   if (action) { const a=action.dataset.polywarAction; if(a==='seal_rift'){ await map?.sealRift?.(); return; } if(a==='support_rebellion'){ await map?.supportRebellion?.(); return; } if(a==='suppress_rebellion'){ await map?.suppressRebellion?.(); return; } actionMode = a; map?.updatePanel(); await map?.capture(); return; }
   if (vote) { const d = await api('/api/polywar/governance/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({candidate_user_id:Number(vote.dataset.polywarVote)})}); if(!d.ok) alert(d.error || 'Vote failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (nom) { const active = nom.dataset.polywarNominate === 'true'; const statement = active ? (prompt('Candidate statement') || '') : ''; const d = await api('/api/polywar/governance/nominate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, statement})}); if(!d.ok) alert(d.error || 'Nomination failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
@@ -398,3 +405,5 @@ async function handlePolywarUiClick(e) {
 }
 
 init();
+
+window.addEventListener('pagehide', clearTimers);

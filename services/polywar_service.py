@@ -512,11 +512,19 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
     own = conn is None; conn = conn or get_connection()
     try:
         init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        completed_season_id = None
         try:
             from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
             ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]));
             from services import polywar_finalization_service as finalization
             finalization.maybe_finalize(conn, int(season["id"]))
+            refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+            if refreshed and refreshed.get("status") == "completed":
+                completed_season_id = int(refreshed["id"])
+                season = ensure_active_season(conn)
+                ensure_world_initialized(conn, int(season["id"]))
+            elif refreshed:
+                season = refreshed
         except Exception:
             import logging; logging.getLogger(__name__).exception("PolyWar world lifecycle sync failed")
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
@@ -562,6 +570,7 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
                 current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id)))
             except Exception:
                 current_reward = None
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()

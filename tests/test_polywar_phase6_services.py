@@ -278,3 +278,21 @@ def test_finalize_concurrent_one_next_season_no_old_players(db):
         finally: cc.commit(); cc.close()
     ts=[threading.Thread(target=worker) for _ in range(4)]; [t.start() for t in ts]; [t.join() for t in ts]
     c=connect(); new_sid=c.execute("select id from polywar_seasons where status='active' and id<>?",(sid,)).fetchone()[0]; assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0]==1; assert c.execute('select count(*) from polywar_players where season_id=?',(new_sid,)).fetchone()[0]==0; assert c.execute('select count(*) from polywar_null_rifts where season_id=?',(new_sid,)).fetchone()[0]==0
+
+def test_get_state_re_resolves_new_active_after_domination_auto_finalization(db):
+    connect,settings=db; settings['polywar_domination_capitals_required']='2'; settings['polywar_domination_hold_hours']='1'; sid=active(connect); c=connect(); now=datetime.utcnow(); past=now-timedelta(hours=2)
+    c.execute('update polywar_seasons set domination_faction_id=1, domination_started_at=? where id=?',(past,sid))
+    c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,90,90,1,past,now))
+    c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,91,90,1,past,now))
+    c.commit(); c.close()
+    st=polywar.get_state(300)
+    assert st['season']['status']=='active' and int(st['season']['id']) != sid
+    assert int(st['latest_completed_season']['id']) == sid
+    c=connect(); assert c.execute('select count(*) from polywar_players where season_id=? and user_id=300',(st['season']['id'],)).fetchone()[0]==1
+    assert c.execute('select count(*) from polywar_players where season_id=? and user_id=300',(sid,)).fetchone()[0]==0
+    assert st['world']['season_id'] == st['season']['id']
+
+def test_frontend_results_claim_and_countdown_source_runtime_hooks():
+    src=Path('webapp/polywar.js').read_text()
+    assert 'polywarClaimKeys' in src and 'startWorldCountdownTimer' in src
+    assert "#polywarClaimReward" in src and 'renderResultsPanel(currentState)' in src

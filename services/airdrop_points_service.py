@@ -723,6 +723,24 @@ def format_airdrop_status(user_id: int, ui_language: str = "ru") -> str:
 
 
 
+
+def get_airdrop_points_ledger_entry_by_reference(external_reference: str) -> Optional[dict]:
+    ref = str(external_reference)
+    conn, cur = _connect_ready()
+    try:
+        _ensure_table(cur)
+        cur.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
+        cur.execute("SELECT id,user_id,reason,amount,metadata,created_at FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return {"id": row[0], "user_id": row[1], "reason": row[2], "amount": row[3], "metadata": row[4], "created_at": row[5], "external_reference": ref}
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
 def award_airdrop_points_idempotent(user_id: int, reason: str, amount: Any, metadata: Optional[dict], external_reference: str) -> dict:
     """Award points once for a stable external reference."""
     meta = dict(metadata or {})
