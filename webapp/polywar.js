@@ -253,6 +253,7 @@ function render(state) {
   updateFactionRanking();
   updateLatestEvents();
   map = new PolyWarMap(state);
+  if (state.latest_completed_season) syncPolywarResults();
   startEnergyTimers();
 }
 
@@ -385,7 +386,7 @@ async function handlePolywarUiClick(e) {
   const editOrder = e.target.closest('[data-polywar-edit-order]');
   const createOrder = e.target.closest('[data-polywar-create-order]');
   const updateOrder = e.target.closest('[data-polywar-update-order]');
-  if (action) { actionMode = action.dataset.polywarAction; map?.updatePanel(); await map?.capture(); return; }
+  if (action) { const a=action.dataset.polywarAction; if(a==='seal_rift'){ await map?.sealRift?.(); return; } if(a==='support_rebellion'){ await map?.supportRebellion?.(); return; } if(a==='suppress_rebellion'){ await map?.suppressRebellion?.(); return; } actionMode = a; map?.updatePanel(); await map?.capture(); return; }
   if (vote) { const d = await api('/api/polywar/governance/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({candidate_user_id:Number(vote.dataset.polywarVote)})}); if(!d.ok) alert(d.error || 'Vote failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (nom) { const active = nom.dataset.polywarNominate === 'true'; const statement = active ? (prompt('Candidate statement') || '') : ''; const d = await api('/api/polywar/governance/nominate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, statement})}); if(!d.ok) alert(d.error || 'Nomination failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (editOrder) { polywarGovernanceUi.setEditingOrder(Number(editOrder.dataset.polywarEditOrder), editOrder.dataset.orderType || 'attack', editOrder.dataset.orderMessage || ''); return; }

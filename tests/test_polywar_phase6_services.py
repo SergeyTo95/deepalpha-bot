@@ -63,7 +63,7 @@ def test_seal_rift_duplicate_and_defeat_state(db):
 def test_rebellion_creation_and_action_rules(db):
     connect,_=db; sid=active(connect); polywar.join_faction(200,2); c=connect(); rebellion.init_rebellion_schema(c)
     c.execute("insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)",(sid,1,10,10,2,datetime.utcnow()-timedelta(days=2),datetime.utcnow()-timedelta(days=2),datetime.utcnow()))
-    c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); c.close()
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,9,10)); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,11,10)); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()+timedelta(days=1),sid)); c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); c.close()
     out=rebellion.rebellion_action(100,'support_rebellion',10,10,'sup1')
     assert out['outcome']=='rebellion_supported'
     with pytest.raises(ValueError): rebellion.rebellion_action(100,'suppress_rebellion',10,10,'bad')
@@ -76,3 +76,53 @@ def test_finalization_results_hash_rewards_and_claim(db, monkeypatch):
     monkeypatch.setattr('services.airdrop_points_service.award_airdrop_points_idempotent', lambda *a,**k: calls.append(a) or {'ok':True,'awarded':True})
     claim=finalization.claim_reward(100,sid,'claim1')
     assert claim['claimed'] is True and len(calls)==1
+
+def test_null_state_disabled_blocks_ticks_and_seal(db):
+    connect,settings=db; settings['polywar_null_state_enabled']='false'; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); st=world.get_public_world_state(c,sid)
+    assert st['status']=='disabled'
+    assert world.process_due_tick(c,sid,datetime.utcnow())['reason']=='null_state_disabled'
+
+
+def test_catchup_uses_previous_schedule_and_is_bounded(db):
+    connect,settings=db; settings['polywar_null_max_catchup_ticks']='2'; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid); old=datetime.utcnow()-timedelta(minutes=20); c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(old,sid)); c.commit()
+    out=world.ensure_world_caught_up(c,sid,datetime.utcnow()); c.commit(); row=c.execute('select tick_index,next_tick_at from polywar_null_state where season_id=?',(sid,)).fetchone()
+    assert sum(1 for r in out if r.get('processed'))==2 and row['tick_index']>=2
+
+
+def test_activation_transfers_preowned_rift_cell(db):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); c.execute("update polywar_null_state set status='dormant', activation_at=? where season_id=?",(datetime.utcnow()-timedelta(seconds=1),sid)); c.execute("update polywar_null_rifts set status='dormant' where season_id=?",(sid,)); r=c.execute('select * from polywar_null_rifts where season_id=? limit 1',(sid,)).fetchone(); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,r['x'],r['y'])); before=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=1',(sid,)).fetchone()[0] or 0; world.activate_if_due(c,sid); c.commit(); after=c.execute('select controlled_cells_count from polywar_faction_season_stats where season_id=? and faction_id=1',(sid,)).fetchone()[0]
+    assert after <= before and c.execute('select owner_faction_id from polywar_cells where season_id=? and x=? and y=?',(sid,r['x'],r['y'])).fetchone()[0]==8
+
+
+def test_rebellion_pending_becomes_active_and_cancels_on_controller_change(db):
+    connect,settings=db; settings['polywar_rebellion_grace_hours']='24'; sid=active(connect); polywar.join_faction(201,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow(); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,20,20,2,now,now,now)); c.commit(); rebellion.ensure_rebellions(c,sid); row=c.execute('select status from polywar_rebellions where season_id=? and capital_original_faction_id=1',(sid,)).fetchone(); assert row['status']=='pending'; c.execute('update polywar_rebellions set eligible_at=?',(datetime.utcnow()-timedelta(seconds=1),)); rebellion.ensure_rebellions(c,sid); assert c.execute('select status from polywar_rebellions where season_id=?',(sid,)).fetchone()[0]=='active'; c.execute('update polywar_capitals set controller_faction_id=3 where season_id=? and original_faction_id=1',(sid,)); rebellion.ensure_rebellions(c,sid); assert c.execute("select count(*) from polywar_rebellions where season_id=? and status='cancelled'",(sid,)).fetchone()[0]>=1
+
+
+def test_rebellion_full_suppression_status(db):
+    connect,_=db; sid=active(connect); polywar.join_faction(202,2); c=connect(); rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,30,30,2,now,now,datetime.utcnow())); c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,31,30)); c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,)); c.commit(); rebellion.ensure_rebellions(c,sid); c.commit(); out=rebellion.rebellion_action(202,'suppress_rebellion',30,30,'suppr1'); assert out['resolved_status']=='suppressed'
+
+
+def test_results_hash_excludes_secret_and_rows_are_immutable(db):
+    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(c,sid,datetime.utcnow()); h1=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]; snap='\n'.join(r[0] for r in c.execute('select snapshot_json from polywar_season_results where season_id=?',(sid,)).fetchall()); assert seed not in snap; finalization.finalize_season(c,sid); h2=c.execute('select results_hash from polywar_seasons where id=?',(sid,)).fetchone()[0]; assert h1==h2
+
+
+def test_claim_validation_and_foreign_reward_forbidden(db):
+    connect,_=db; sid=active(connect); c=connect(); c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?',(sid,)); c.execute('update polywar_seasons set ends_at=? where id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); finalization.maybe_finalize(c,sid,datetime.utcnow()); c.commit()
+    with pytest.raises(ValueError): finalization.claim_reward(100,sid,'')
+    with pytest.raises(ValueError): finalization.claim_reward(999,sid,'x')
+
+
+def test_airdrop_polywar_reward_no_memory_fallback(monkeypatch):
+    import services.airdrop_points_service as ap
+    monkeypatch.setattr(ap, '_connect_ready', lambda: (_ for _ in ()).throw(RuntimeError('db_down')))
+    with pytest.raises(RuntimeError): ap.award_airdrop_points_idempotent(1,'polywar_season_reward',10,{},'polywar:season:1:user:1')
+
+
+def test_frontend_source_phase6_routes_and_results_fetch():
+    src=Path('webapp/polywar.js').read_text()
+    assert "a==='seal_rift'" in src and 'syncPolywarResults' in src and 'polywarClaimReward' in src and 'supportRebellion' in src
+
+
+def test_world_source_uses_conflict_safe_tick_insert_and_no_python_hash():
+    src=Path('services/polywar_world_service.py').read_text()
+    assert 'ON CONFLICT (season_id,tick_index) DO NOTHING' in src and 'INSERT OR IGNORE INTO polywar_world_ticks' in src and 'hash(' not in src

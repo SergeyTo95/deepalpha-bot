@@ -14,6 +14,8 @@ def init_rebellion_schema(conn=None):
         c.execute(f"""CREATE TABLE IF NOT EXISTS polywar_rebellions (id {id_sql},season_id INTEGER NOT NULL,capital_original_faction_id INTEGER NOT NULL,controller_faction_id INTEGER NOT NULL,status TEXT NOT NULL,progress INTEGER NOT NULL DEFAULT 0,required_progress INTEGER NOT NULL,occupation_started_at TIMESTAMP NOT NULL,eligible_at TIMESTAMP NOT NULL,started_at TIMESTAMP NULL,last_tick_at TIMESTAMP NULL,last_action_at TIMESTAMP NULL,resolved_at TIMESTAMP NULL,created_at TIMESTAMP NOT NULL,updated_at TIMESTAMP NOT NULL)""")
         c.execute("""CREATE TABLE IF NOT EXISTS polywar_rebellion_contributions (rebellion_id INTEGER NOT NULL,user_id BIGINT NOT NULL,faction_id INTEGER NOT NULL,support_contribution INTEGER NOT NULL DEFAULT 0,suppress_contribution INTEGER NOT NULL DEFAULT 0,first_action_at TIMESTAMP NOT NULL,last_action_at TIMESTAMP NOT NULL,UNIQUE(rebellion_id,user_id))""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_rebellions_active ON polywar_rebellions(season_id,status,capital_original_faction_id)")
+        try: c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_open_rebellion ON polywar_rebellions(season_id,capital_original_faction_id) WHERE status IN ('pending','active')")
+        except Exception: pass
         if own: conn.commit()
     finally:
         if own: conn.close()
@@ -25,9 +27,15 @@ def ensure_rebellions(conn,season_id:int):
     made=[]
     for cap in caps:
         orig=int(cap['original_faction_id']); ctrl=int(cap['controller_faction_id'])
-        if ctrl==orig or ctrl==NULL_STATE_FACTION_ID: continue
-        exists=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND status IN ('pending','active')",(season_id,orig))
-        if exists: continue
+        open_reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND status IN ('pending','active')",(season_id,orig))
+        if open_reb and int(open_reb.get('controller_faction_id') or 0)!=ctrl:
+            polywar._execute(c,"UPDATE polywar_rebellions SET status='cancelled',resolved_at=%s,updated_at=%s WHERE id=%s",(now,now,open_reb['id'])); open_reb=None
+        if open_reb and open_reb['status']=='pending' and str(open_reb['eligible_at'])<=polywar._iso(now):
+            polywar._execute(c,"UPDATE polywar_rebellions SET status='active',started_at=COALESCE(started_at,%s),updated_at=%s WHERE id=%s",(now,now,open_reb['id']))
+            continue
+        if ctrl==orig or ctrl==NULL_STATE_FACTION_ID or open_reb: continue
+        active_members=(polywar._fetchone(c,'SELECT COUNT(*) AS n FROM polywar_players WHERE season_id=%s AND faction_id=%s',(season_id,orig)) or {}).get('n') or 0
+        if int(active_members)<=0: continue
         started=cap.get('captured_at') or cap.get('controlled_since') or now
         if isinstance(started,str): started=datetime.fromisoformat(started)
         eligible=started+timedelta(hours=rules['grace_hours'])
@@ -38,6 +46,9 @@ def ensure_rebellions(conn,season_id:int):
 def get_public_rebellions(conn,season_id:int):
     ensure_rebellions(conn,season_id); rows=polywar._fetchall(conn.cursor(),"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status IN ('pending','active') ORDER BY id",(season_id,))
     return [{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in r.items()} for r in rows]
+
+def _adjacent_owner(conn,sid,x,y,fid):
+    return any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny))
 
 def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str):
     if action_type not in {'support_rebellion','suppress_rebellion'}: raise ValueError('bad_action_type')
@@ -59,20 +70,24 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         orig=int(reb['capital_original_faction_id']); ctrl=int(reb['controller_faction_id']); before=int(reb['progress']); req=int(reb['required_progress']); now=_now()
         if action_type=='support_rebellion':
             if int(fid)!=orig: raise ValueError('rebellion_support_forbidden')
+            if not _adjacent_owner(conn,sid,x,y,orig): raise ValueError('rebellion_not_eligible')
             cost=public_rules()['support_energy_cost']; delta=public_rules()['support_progress']; after=min(req,before+delta); outcome='rebellion_supported'
         else:
             if int(fid)!=ctrl: raise ValueError('rebellion_suppress_forbidden')
+            if not _adjacent_owner(conn,sid,x,y,ctrl): raise ValueError('rebellion_not_eligible')
             cost=public_rules()['suppress_energy_cost']; delta=-public_rules()['suppress_progress']; after=max(0,before+delta); outcome='rebellion_suppressed_progress' if after>0 else 'rebellion_fully_suppressed'
         if int(e['current_energy'])<cost: raise ValueError('insufficient_energy')
         _,_,energy=mines.spend_player_energy(conn,player,cost,now)
         status='active'; transfer=False
+        if action_type=='suppress_rebellion' and after<=0:
+            status='suppressed'
         if after>=req:
             status='succeeded'; outcome='rebellion_succeeded'; transfer=True
         polywar._execute(c,'UPDATE polywar_rebellions SET progress=%s,status=%s,last_action_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s',(after,status,now,now if status!='active' else None,now,reb['id']))
         polywar._execute(c,"INSERT INTO polywar_rebellion_contributions (rebellion_id,user_id,faction_id,support_contribution,suppress_contribution,first_action_at,last_action_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rebellion_id,user_id) DO UPDATE SET support_contribution=support_contribution+%s,suppress_contribution=suppress_contribution+%s,last_action_at=%s",(reb['id'],user_id,fid,delta if delta>0 else 0,-delta if delta<0 else 0,now,now,delta if delta>0 else 0,-delta if delta<0 else 0,now))
         if transfer:
             from services import polywar_capital_service as caps
-            caps.transfer_capital_control(conn,sid,orig,orig,user_id,now) if hasattr(caps,'transfer_capital_control') else polywar._execute(c,'UPDATE polywar_capitals SET controller_faction_id=%s WHERE id=%s',(orig,cap['id']))
+            caps.transfer_capital_control(conn,sid,cap,orig,user_id,now) if hasattr(caps,'transfer_capital_control') else polywar._execute(c,'UPDATE polywar_capitals SET controller_faction_id=%s WHERE id=%s',(orig,cap['id']))
             polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(orig,sid,x,y))
         payload={'capital':{'x':x,'y':y},'original_faction_id':orig,'controller_faction_id':ctrl,'progress_before':before,'progress_after':after,'required':req,'energy_cost':cost,'resolved_status':status,'capital_transfer':transfer,'energy':energy}
         mines.insert_outcome(conn,sid,user_id,idempotency_key,action_type,x,y,outcome,cost,payload,now); polywar._execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); conn.commit(); payload.update({'ok':True,'outcome':outcome}); return payload

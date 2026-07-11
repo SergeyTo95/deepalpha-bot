@@ -119,6 +119,9 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
+        from services import polywar_world_service as world
+        world.ensure_world_initialized(conn, sid)
+        conn.commit()
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:
             return dup
@@ -156,6 +159,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         row = _materialize(conn, sid, x, y, owner, now) if owner is not None else None
         if row: owner = int(row['owner_faction_id'])
         before = int((row or {}).get('contest_progress') or 0); contesting = (row or {}).get('contesting_faction_id')
+        polywar.assert_gameplay_mutation_allowed(conn, sid)
         if action_type == 'attack':
             if owner is None: raise ValueError('neutral_cell_requires_capture')
             if owner == fid: raise ValueError('own_cell_cannot_be_attacked')

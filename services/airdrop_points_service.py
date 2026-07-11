@@ -751,6 +751,8 @@ def award_airdrop_points_idempotent(user_id: int, reason: str, amount: Any, meta
         finally:
             conn.close()
     except Exception:
+        if reason == "polywar_season_reward":
+            raise
         if any(r.get("external_reference") == ref for r in _MEMORY_LEDGER[uid]):
             bal = _fallback_balance(uid); return {"ok": True, "awarded": False, "duplicate": True, **bal}
         row = _memory_insert(uid, reason, amount, meta); row["external_reference"] = ref

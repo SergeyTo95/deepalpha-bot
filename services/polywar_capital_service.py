@@ -206,6 +206,9 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
     try:
         polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
+        from services import polywar_world_service as world
+        world.ensure_world_initialized(conn, sid)
+        conn.commit()
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: return dup
         _begin(conn, c)
@@ -232,6 +235,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         if not _has_adjacent(conn, sid, x, y, fid): raise ValueError('capital_not_frontline')
         now = datetime.utcnow(); before = int(cap.get('siege_progress') or 0); previous = int(cap['controller_faction_id']); bes_before = cap.get('besieging_faction_id'); transfer = None
         after = before; bes_after = bes_before; current = previous
+        polywar.assert_gameplay_mutation_allowed(conn, sid)
         if action_type == 'siege':
             if previous == int(fid): raise ValueError('own_capital_cannot_be_sieged')
             cost = int(base) + siege_extra_energy(); _, _, energy = mines.spend_player_energy(conn, player, cost, now); power = siege_power(); req = siege_required()

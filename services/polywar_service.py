@@ -291,7 +291,12 @@ def _public_season(row):
 
 def _complete_expired_active_seasons(conn, now: datetime) -> None:
     c = conn.cursor()
-    _execute(c, "UPDATE polywar_seasons SET status = %s, completed_at = %s WHERE status = %s AND ends_at <= %s", ("completed", now, "active", now))
+    rows = _fetchall(c, "SELECT * FROM polywar_seasons WHERE status = %s AND ends_at <= %s ORDER BY ends_at", ("active", now))
+    if not rows:
+        return
+    from services.polywar_finalization_service import finalize_season
+    for row in rows:
+        finalize_season(conn, int(row["id"]), "time", None, now)
 
 
 def _next_season_name(conn) -> str:
@@ -332,6 +337,9 @@ def ensure_active_season(conn=None) -> Dict[str, Any]:
             _safe_rollback(conn)
             row = None
         if not row:
+            finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
+            if finalizing:
+                raise RuntimeError("polywar_season_finalizing")
             row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
         if not row:
             raise RuntimeError("polywar_active_season_unavailable")
@@ -417,6 +425,22 @@ def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, A
     finally:
         if own: conn.close()
 
+
+
+def assert_gameplay_mutation_allowed(conn, season_id: int, now: Optional[datetime] = None) -> None:
+    now = now or _now()
+    row = _fetchone(conn.cursor(), "SELECT status, ends_at FROM polywar_seasons WHERE id=%s", (season_id,))
+    if not row:
+        raise ValueError("season_ended")
+    if row.get("status") == "finalizing":
+        raise ValueError("season_finalizing")
+    if row.get("status") != "active":
+        raise ValueError("season_ended")
+    ends = row.get("ends_at")
+    if isinstance(ends, str):
+        ends = datetime.fromisoformat(ends)
+    if ends and now >= ends:
+        raise ValueError("season_ended")
 
 def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     if not is_enabled():
@@ -527,6 +551,13 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
             world = get_public_world_state(conn, int(season["id"])); rules.update({"world": world_rules(), "rebellions": rebellion_rules(), "rewards": reward_rules()})
         except Exception:
             world = {}
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": None, "current_user_pending_reward": None, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        latest_completed = _fetchone(conn.cursor(), "SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE status=%s ORDER BY completed_at DESC LIMIT 1", ("completed",))
+        current_reward = None
+        if latest_completed:
+            try:
+                current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id)))
+            except Exception:
+                current_reward = None
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
     finally:
         if own: conn.close()

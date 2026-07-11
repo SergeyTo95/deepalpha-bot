@@ -245,6 +245,14 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         except Exception:
             logger.exception("PolyWar chunk world enrichment failed")
         capitals.enrich_chunks(conn, sid, out)
+        try:
+            from services import polywar_rebellion_service as reb
+            reb.ensure_rebellions(conn, sid)
+            for ch in out:
+                x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+                ch["rebellions"] = [{"x": int(cap["x"]), "y": int(cap["y"]), "status": r["status"], "capital_original_faction_id": r["capital_original_faction_id"], "controller_faction_id": r["controller_faction_id"], "progress": r["progress"], "required_progress": r["required_progress"], "eligible_at": polywar._iso(r.get("eligible_at")), "started_at": polywar._iso(r.get("started_at"))} for r in polywar._fetchall(conn.cursor(), "SELECT r.*,c.x,c.y FROM polywar_rebellions r JOIN polywar_capitals c ON c.season_id=r.season_id AND c.original_faction_id=r.capital_original_faction_id WHERE r.season_id=%s AND c.x >= %s AND c.x < %s AND c.y >= %s AND c.y < %s AND r.status IN ('pending','active')", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))]
+        except Exception:
+            logger.exception("PolyWar chunk rebellion enrichment failed")
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
         conn.commit()
@@ -270,6 +278,9 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     try:
         polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        from services import polywar_world_service as world
+        world.ensure_world_initialized(conn, sid)
+        conn.commit()
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
@@ -287,6 +298,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if dup: conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+        polywar.assert_gameplay_mutation_allowed(conn, sid)
         if not in_bounds(x, y): raise ValueError("out_of_bounds")
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
