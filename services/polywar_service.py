@@ -257,7 +257,7 @@ def init_polywar_schema(conn=None) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar phase6 schema sync failed")
-        conn.commit()
+        if own or not getattr(conn, "in_transaction", False): conn.commit()
     finally:
         if own:
             conn.close()
@@ -420,7 +420,8 @@ def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, A
         row = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id = %s AND season_id = %s", (user_id, season_id))
         e = _energy(row)
         _execute(c, "UPDATE polywar_players SET current_energy = %s, energy_updated_at = %s, last_active_at = %s WHERE user_id = %s AND season_id = %s", (e["current_energy"], e["energy_updated_at"], _now(), user_id, season_id))
-        conn.commit(); row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
+        if own: conn.commit()
+        row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
         return row
     finally:
         if own: conn.close()

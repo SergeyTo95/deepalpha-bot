@@ -126,3 +126,45 @@ def test_frontend_source_phase6_routes_and_results_fetch():
 def test_world_source_uses_conflict_safe_tick_insert_and_no_python_hash():
     src=Path('services/polywar_world_service.py').read_text()
     assert 'ON CONFLICT (season_id,tick_index) DO NOTHING' in src and 'INSERT OR IGNORE INTO polywar_world_ticks' in src and 'hash(' not in src
+
+def test_build_chunks_runtime_rebellion_metadata(db):
+    connect,_=db; sid=active(connect); polywar.join_faction(203,2); c=connect(); from services import polywar_map_service as mm; rebellion.init_rebellion_schema(c); now=datetime.utcnow()-timedelta(days=2); c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,64,64,2,now,now,datetime.utcnow())); c.commit(); c.close()
+    out=mm.build_chunks(100, [(1,1)])
+    ch=out['chunks'][0]
+    assert ch['rebellions'] and ch['rebellions'][0]['x']==64 and ch['rebellions'][0]['y']==64
+
+
+def test_rift_safe_zone_blocks_mines_scans_and_flags(db):
+    connect,_=db; sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); r=c.execute('select * from polywar_null_rifts where season_id=? limit 1',(sid,)).fetchone(); seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]
+    from services import polywar_mine_service as mines
+    assert mines.active_mine_at(c,sid,seed,r['x'],r['y'],world.m.terrain_at(seed,r['x'],r['y'])) is False
+    assert mines.adjacent_mine_count(c,sid,seed,r['x'],r['y']) >= 0
+    c.commit(); c.close()
+    with pytest.raises(ValueError): mines.set_flag(100,r['x'],r['y'],True)
+
+
+def test_null_capital_siege_progress_and_rival_reduction(db):
+    connect,settings=db
+    settings['polywar_null_expansions_per_tick']='10'; settings['polywar_null_capital_siege_per_tick']='50'
+    sid=active(connect); c=connect(); world.ensure_world_initialized(c,sid); world.activate_if_due(c,sid)
+    seed=c.execute('select secret_seed from polywar_seasons where id=?',(sid,)).fetchone()[0]
+    x=y=40
+    while world.m.TERRAIN_COSTS.get(world.m.terrain_at(seed,x,y)) is None or world.m.TERRAIN_COSTS.get(world.m.terrain_at(seed,x-1,y)) is None:
+        x+=1; y+=1
+    now=datetime.utcnow()
+    c.execute('insert into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,x,y,1,now,now))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,8)',(sid,x-1,y))
+    world.update_frontier_for_cell(c,sid,x-1,y,None)
+    c.execute('delete from polywar_null_frontier where season_id=? and not (x=? and y=?)',(sid,x,y))
+    c.execute('insert or replace into polywar_null_frontier (season_id,x,y,discovered_at,priority) values (?,?,?,?,?)',(sid,x,y,datetime.utcnow(),999))
+    c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()-timedelta(minutes=1),sid))
+    c.commit(); out=world.process_due_tick(c,sid,datetime.utcnow()); c.commit()
+    cap=c.execute('select * from polywar_capitals where season_id=? and x=? and y=?',(sid,x,y)).fetchone()
+    assert out['processed'] is True and cap['besieging_faction_id']==8 and cap['siege_progress']>=50
+    c.execute('update polywar_capitals set besieging_faction_id=2,siege_progress=60 where id=?',(cap['id'],))
+    c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()-timedelta(minutes=1),sid))
+    c.execute('delete from polywar_null_frontier where season_id=? and not (x=? and y=?)',(sid,x,y))
+    c.execute('insert or replace into polywar_null_frontier (season_id,x,y,discovered_at,priority) values (?,?,?,?,?)',(sid,x,y,datetime.utcnow(),999))
+    c.commit(); world.process_due_tick(c,sid,datetime.utcnow()); c.commit()
+    cap2=c.execute('select * from polywar_capitals where id=?',(cap['id'],)).fetchone()
+    assert cap2['siege_progress']<=10 or cap2['besieging_faction_id'] is None

@@ -88,9 +88,9 @@ def _digest(seed,*parts): return hashlib.sha256((':'.join([str(seed),*map(str,pa
 def _too_close(x,y,coords,dist): return any((x-a)*(x-a)+(y-b)*(y-b)<dist*dist for a,b in coords)
 def _valid_rift(seed,x,y,coords):
     if not m.in_bounds(x,y) or m.TERRAIN_COSTS.get(m.terrain_at(seed,x,y)) is None: return False
-    half=m.starting_area_size()//2
+    radius=m.starting_area_size()
     for bx,by in m.faction_base_positions().values():
-        if (x,y)==(bx,by) or (abs(x-bx)<=half and abs(y-by)<=half): return False
+        if (x,y)==(bx,by) or (abs(x-bx)<=radius and abs(y-by)<=radius): return False
     return not _too_close(x,y,coords,min_distance())
 
 def choose_rift_coordinates(seed,count=None):
@@ -160,6 +160,23 @@ def _ordered_frontier(conn,sid,seed,tick,limit):
     rows=_fetchall(conn.cursor(),'SELECT * FROM polywar_null_frontier WHERE season_id=%s ORDER BY priority DESC,x,y LIMIT %s',(sid,max(limit*20,limit)))
     return sorted(rows,key=lambda r: hashlib.sha256(f'{seed}:{tick}:{r["x"]}:{r["y"]}'.encode()).hexdigest())[:limit]
 
+def _apply_null_capital_pressure(conn, sid, cap, now):
+    from services import polywar_capital_service as caps
+    c=conn.cursor(); before=int(cap.get('siege_progress') or 0); bes=cap.get('besieging_faction_id'); req=caps.siege_required(); power=capital_siege_per_tick()
+    if bes and int(bes)!=NULL_STATE_FACTION_ID:
+        after=max(0,before-power); new_bes=bes if after>0 else None
+        _execute(c,'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=%s, last_siege_at=%s, updated_at=%s WHERE id=%s',(after,new_bes,cap.get('siege_started_at') if after>0 else None,now,now,cap['id']))
+        _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_capital_siege',%s,%s)",(sid,NULL_STATE_FACTION_ID,f'The Null State weakened rival siege at {cap["x"]},{cap["y"]}',now))
+        return {'type':'null_capital_siege','x':cap['x'],'y':cap['y'],'progress_after':after,'rival_reduced':True}
+    after=min(req,before+power)
+    if after>=req:
+        caps.transfer_capital_control(conn,sid,cap,NULL_STATE_FACTION_ID,None,now)
+        _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_capital_captured',%s,%s)",(sid,NULL_STATE_FACTION_ID,f'The Null State captured capital {cap["x"]},{cap["y"]}',now))
+        return {'type':'null_capital_captured','x':cap['x'],'y':cap['y']}
+    _execute(c,'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=COALESCE(siege_started_at,%s), last_siege_at=%s, updated_at=%s WHERE id=%s',(after,NULL_STATE_FACTION_ID,now,now,now,cap['id']))
+    _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_capital_siege',%s,%s)",(sid,NULL_STATE_FACTION_ID,f'The Null State pressured capital {cap["x"]},{cap["y"]}',now))
+    return {'type':'null_capital_siege','x':cap['x'],'y':cap['y'],'progress_after':after}
+
 def process_due_tick(conn,season_id:int,now=None):
     now=now or _now(); ensure_world_initialized(conn,season_id);
     if not enabled(): return {'processed':False,'reason':'null_state_disabled'}
@@ -178,6 +195,13 @@ def process_due_tick(conn,season_id:int,now=None):
         if is_rift(conn,season_id,x,y,'sealed'): continue
         if not any(m._owner_at(conn,season_id,nx,ny)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)):
             _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(season_id,x,y)); continue
+        try:
+            from services import polywar_capital_service as caps
+            cap=caps.get_capital_at(conn,season_id,x,y)
+        except Exception:
+            cap=None
+        if cap:
+            actions.append(_apply_null_capital_pressure(conn,season_id,cap,now)); continue
         owner=m._owner_at(conn,season_id,x,y)
         if owner==NULL_STATE_FACTION_ID: continue
         _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,x,y,NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
@@ -250,7 +274,7 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
         _execute(c,'UPDATE polywar_null_rifts SET health=%s,status=%s,last_action_at=%s,sealed_at=%s,sealed_by_user_id=%s,sealed_by_faction_id=%s,updated_at=%s WHERE id=%s',(after,status,now,now if sealed else None,user_id if sealed else None,fid if sealed else None,now,r['id']))
         _execute(c,"INSERT INTO polywar_rift_contributions (season_id,rift_id,user_id,faction_id,contribution,first_contributed_at,last_contributed_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rift_id,user_id) DO UPDATE SET contribution=contribution+%s,last_contributed_at=%s",(sid,r['id'],user_id,fid,before-after,now,now,before-after,now))
         if sealed:
-            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,NULL_STATE_FACTION_ID,fid,user_id,now); _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND source_rift_id=%s',(sid,r['id']))
+            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,NULL_STATE_FACTION_ID,fid,user_id,now); update_frontier_for_cell(conn,sid,x,y,None)
         _execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); _recount(conn,sid); check_defeat(conn,sid,now)
         payload={'coordinate':{'x':x,'y':y},'rift_status':status,'health_before':before,'health_after':after,'progress':before-after,'energy_cost':cost,'sealed':sealed,'sealing_faction_id':fid if sealed else None,'energy':energy}
         mines.insert_outcome(conn,sid,user_id,idempotency_key,'seal_rift',x,y,outcome,cost,payload,now); conn.commit(); payload.update({'ok':True,'outcome':outcome}); return payload
