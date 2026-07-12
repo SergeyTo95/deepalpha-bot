@@ -149,3 +149,60 @@ def test_get_sectors_uses_config_sector_size_without_get_setting(monkeypatch):
     monkeypatch.setattr(sectors, '_set_read_timeouts', lambda c: None)
     out = sectors.get_sectors(1, 0, 0, 0, 0)
     assert out['ok'] and out['sector_size'] == 77 and conn_count['n'] == 1
+
+
+def test_polywar_mobile_marker_render_hierarchy_is_simplified():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'drawBaseMarkers(ctx)' in js
+    assert 'Math.min(14, this.cell*.36)' in js
+    assert 'this.cell * 0.9' not in js
+    assert 'drawSelectedCell(ctx)' in js
+    selected = js.split('drawSelectedCell(ctx)', 1)[1].split('drawPendingPulse(ctx)', 1)[0]
+    assert selected.count('strokeRect') == 1
+    assert 'rgba(53,166,255,.16)' in selected
+    assert 'drawPendingPulse(ctx)' in js and 'setLineDash([3,3])' not in js
+
+
+def test_polywar_no_noisy_sector_dominance_labels_at_normal_zoom():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'dominance_percent??0' not in js
+    assert 'fillText(`${sx},${sy}' not in js
+
+
+def test_polywar_compact_sheet_collapses_secondary_actions_and_uses_status_pill():
+    css = Path('webapp/polywar.css').read_text()
+    js = Path('webapp/polywar.js').read_text()
+    assert 'max-height:132px' in css and 'max-height:min(140px' in css
+    assert '.compact-cell-sheet:not(.compact-cell-sheet--expanded) .secondary-actions{display:none}' in css
+    assert '.compact-cell-sheet--expanded{max-height:40vh;overflow-y:auto}' in css
+    assert 'btn.classList.toggle("status-pill", !primary.enabled && !this.pending)' in js
+    assert 'shortCellReason(primary.reason || "Ready")' in js
+
+
+def test_polywar_more_toggle_accessible_and_resets_on_cell_or_primary():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'more.setAttribute("aria-expanded", String(this.moreOpen))' in js
+    assert 'more.classList.toggle("is-open", !!this.moreOpen)' in js
+    assert 'Less <span class="more-chevron">▴</span>' in js and 'More <span class="more-chevron">▾</span>' in js
+    assert 'if (this.selected?.x !== x || this.selected?.y !== y) this.moreOpen = false' in js
+    assert 'this.moreOpen = false;\n    this.pending = true; this.pendingCellKey = target.key' in js
+
+
+def test_polywar_primary_and_secondary_actions_are_separate_compact_containers():
+    css = Path('webapp/polywar.css').read_text()
+    js = Path('webapp/polywar.js').read_text()
+    assert '<div class="sheet-actions"><button class="btn" id="primaryActionBtn"' in js
+    assert '<div id="secondaryActionsMenu" class="secondary-actions" hidden>' in js
+    assert 'class="secondary-action-pill" data-polywar-secondary' in js
+    assert 'class="btn mini" data-polywar-secondary' not in js
+    assert '.secondary-actions{grid-column:1/-1;border-top:' in css
+    assert '.secondary-action-pill{min-height:38px' in css
+
+
+def test_polywar_owner_reason_truncation_and_one_row_actions():
+    css = Path('webapp/polywar.css').read_text()
+    assert '.cell-owner-line{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' in css
+    assert '.compact-cell-sheet #cellReason{display:-webkit-box;-webkit-line-clamp:1' in css
+    assert '.compact-cell-sheet--expanded #cellReason{-webkit-line-clamp:2}' in css
+    assert '.sheet-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px' in css
+    assert '.compact-cell-sheet .sheet-actions .btn{grid-column:auto;width:auto' in css
