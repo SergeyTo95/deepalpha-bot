@@ -129,12 +129,18 @@ def ensure_world_initialized_in_transaction(conn,season_id:int):
     c=conn.cursor(); season=_fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)); now=_now(); start=season.get('starts_at') or now
     if isinstance(start,str): start=datetime.fromisoformat(start)
     activation=start+timedelta(hours=activation_hours())
+    before_null = int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {'n':0}).get('n') or 0)
     _execute(c,"""INSERT INTO polywar_null_state (season_id,status,activation_at,next_tick_at,tick_index,created_at,updated_at) VALUES (%s,'dormant',%s,%s,0,%s,%s) ON CONFLICT (season_id) DO NOTHING""",(season_id,activation,activation,now,now))
     existing=_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s',(season_id,)) or {'n':0}
     if int(existing.get('n') or 0)<rift_count():
         for x,y in choose_rift_coordinates(season.get('secret_seed','seed'),rift_count()):
             _execute(c,"""INSERT INTO polywar_null_rifts (season_id,x,y,status,health,max_health,spawned_at,created_at,updated_at) VALUES (%s,%s,%s,'dormant',%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y) DO NOTHING""",(season_id,x,y,rift_health(),rift_health(),activation,now,now))
-    logger.info('polywar_world_initialized season_id=%s',season_id)
+    after_null = int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {'n':0}).get('n') or 0)
+    after_rifts = int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s',(season_id,)) or {'n':0}).get('n') or 0)
+    if after_null > before_null or after_rifts > int(existing.get('n') or 0):
+        logger.info('polywar_world_initialized season_id=%s',season_id)
+    else:
+        logger.debug('polywar_world_initialized_noop season_id=%s',season_id)
 
 
 def ensure_world_initialized(season_id:int):

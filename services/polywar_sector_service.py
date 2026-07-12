@@ -187,9 +187,86 @@ def initialize_sector(conn, sid, sx, sy, now=None):
     return True
 
 
+def _starting_rects(width, height, area_size, bases):
+    half = int(area_size) // 2
+    rects = []
+    for fid, (bx, by) in bases.items():
+        x0 = max(0, int(bx) - half); y0 = max(0, int(by) - half)
+        x1 = min(int(width), int(bx) + half + 1); y1 = min(int(height), int(by) + half + 1)
+        if x0 < x1 and y0 < y1:
+            rects.append({'fid': int(fid), 'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1})
+    return rects
+
+
+def _rect_intersection(a, b):
+    x0 = max(a['x0'], b['x0']); y0 = max(a['y0'], b['y0'])
+    x1 = min(a['x1'], b['x1']); y1 = min(a['y1'], b['y1'])
+    if x0 >= x1 or y0 >= y1:
+        return None
+    return {'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1}
+
+
+def _rect_area(r):
+    return max(0, int(r['x1']) - int(r['x0'])) * max(0, int(r['y1']) - int(r['y0']))
+
+
+def _implicit_owner_from_rects(x, y, rects):
+    for r in rects:
+        if r['x0'] <= x < r['x1'] and r['y0'] <= y < r['y1']:
+            return r['fid']
+    return None
+
+
+def _starting_sector_rects(rects, size):
+    out = {}
+    for r in rects:
+        for sx in range(r['x0'] // size, (r['x1'] - 1) // size + 1):
+            for sy in range(r['y0'] // size, (r['y1'] - 1) // size + 1):
+                sr = {'x0': sx * size, 'y0': sy * size, 'x1': (sx + 1) * size, 'y1': (sy + 1) * size}
+                out[(sx, sy)] = sr
+    return out
+
+
+def initialize_starting_sectors_in_transaction(conn, sid, rects, sectors_seen, now=None):
+    now = now or datetime.utcnow(); c = conn.cursor()
+    sector_deltas = {}; global_deltas = {}
+    for sx, sy in sorted(sectors_seen):
+        _sector_lock(conn, sid, sx, sy, now)
+        if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, sx, sy)):
+            continue
+        sr = sectors_seen[(sx, sy)]
+        counts = {}
+        for r in rects:
+            inter = _rect_intersection(r, sr)
+            if inter:
+                n = _rect_area(inter)
+                counts[r['fid']] = counts.get(r['fid'], 0) + n
+                global_deltas[r['fid']] = global_deltas.get(r['fid'], 0) + n
+        rows = polywar._fetchall(c, 'SELECT x,y,owner_faction_id FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s', (sid, sr['x0'], sr['x1'], sr['y0'], sr['y1']))
+        for row in rows:
+            x = int(row['x']); y = int(row['y']); actual = int(row['owner_faction_id'])
+            implicit = _implicit_owner_from_rects(x, y, rects)
+            if implicit:
+                counts[implicit] = counts.get(implicit, 0) - 1
+                global_deltas[implicit] = global_deltas.get(implicit, 0) - 1
+            counts[actual] = counts.get(actual, 0) + 1
+        for fid, n in counts.items():
+            if n:
+                _upsert_stat(conn, sid, sx, sy, fid, n, now)
+        if polywar._is_sqlite(conn):
+            polywar._execute(c, 'INSERT OR IGNORE INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s)', (sid, sx, sy, now))
+        else:
+            polywar._execute(c, 'INSERT INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s) ON CONFLICT (season_id,sector_x,sector_y) DO NOTHING', (sid, sx, sy, now))
+        recalc_sector(conn, sid, sx, sy, now)
+    return global_deltas
+
+
 def ensure_starting_territories_bootstrap(conn, sid):
     from services import polywar_map_service as m
     own_tx = False
+    if not polywar._is_sqlite(conn):
+        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '5s'")
+        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '20s'")
     if polywar._is_sqlite(conn) and not getattr(conn, "in_transaction", False):
         last = None
         for i in range(20):
@@ -201,36 +278,29 @@ def ensure_starting_territories_bootstrap(conn, sid):
                 last = exc; time.sleep(0.025 * (i + 1))
         if not own_tx and last:
             raise last
-    now = datetime.utcnow(); c = conn.cursor()
-    marker = (-1, -1)
-    _sector_lock(conn, sid, marker[0], marker[1], now)
-    if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, marker[0], marker[1])):
-        if own_tx:
-            conn.commit()
-        return
-    sectors_seen = set()
-    half = m.starting_area_size() // 2
-    implicit_counts = {}
-    for fid, (bx, by) in m.faction_base_positions().items():
-        for y in range(max(0, by - half), min(m.map_height(), by + half + 1)):
-            for x in range(max(0, bx - half), min(m.map_width(), bx + half + 1)):
-                sx, sy = sector_coords(x, y); sectors_seen.add((sx, sy))
-                row = polywar._fetchone(c, 'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s', (sid, x, y))
-                if row:
-                    continue
-                implicit_counts[fid] = implicit_counts.get(fid, 0) + 1
-    for sx, sy in sectors_seen:
-        initialize_sector(conn, sid, sx, sy, now)
-    for fid, n in implicit_counts.items():
-        polywar._execute(c, 'UPDATE polywar_faction_season_stats SET controlled_cells_count=controlled_cells_count+%s, updated_at=%s WHERE season_id=%s AND faction_id=%s', (n, now, sid, fid))
-        recalc_influence(conn, sid, fid, now)
-    if polywar._is_sqlite(conn):
-        polywar._execute(c, 'INSERT OR IGNORE INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s)', (sid, marker[0], marker[1], now))
-    else:
-        polywar._execute(c, 'INSERT INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s) ON CONFLICT (season_id,sector_x,sector_y) DO NOTHING', (sid, marker[0], marker[1], now))
-    if own_tx:
-        conn.commit()
-
+    now = datetime.utcnow(); c = conn.cursor(); marker = (-1, -1)
+    try:
+        _sector_lock(conn, sid, marker[0], marker[1], now)
+        if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, marker[0], marker[1])):
+            if own_tx: conn.commit()
+            return False
+        width = m.map_width(); height = m.map_height(); area = m.starting_area_size(); size = sector_size(); bases = m.faction_base_positions(width, height)
+        rects = _starting_rects(width, height, area, bases)
+        sectors_seen = _starting_sector_rects(rects, size)
+        global_deltas = initialize_starting_sectors_in_transaction(conn, sid, rects, sectors_seen, now)
+        for fid, n in global_deltas.items():
+            if n:
+                polywar._execute(c, 'UPDATE polywar_faction_season_stats SET controlled_cells_count=controlled_cells_count+%s, updated_at=%s WHERE season_id=%s AND faction_id=%s', (n, now, sid, fid))
+                recalc_influence(conn, sid, fid, now)
+        if polywar._is_sqlite(conn):
+            polywar._execute(c, 'INSERT OR IGNORE INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s)', (sid, marker[0], marker[1], now))
+        else:
+            polywar._execute(c, 'INSERT INTO polywar_sector_initializations (season_id,sector_x,sector_y,initialized_at) VALUES (%s,%s,%s,%s) ON CONFLICT (season_id,sector_x,sector_y) DO NOTHING', (sid, marker[0], marker[1], now))
+        if own_tx: conn.commit()
+        return True
+    except Exception:
+        if own_tx: polywar._safe_rollback(conn)
+        raise
 
 def apply_materialized_starting_cell(conn, sid, x, y, owner, now):
     initialize_sector(conn, sid, *sector_coords(x, y), now)

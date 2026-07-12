@@ -94,13 +94,14 @@ def _recount_capitals(conn, sid, now):
         recalc_influence(conn, sid, fid, now)
 
 
-def ensure_capitals_initialized(conn, season_id: int):
+def ensure_capitals_initialized(conn, season_id: int, starting_bootstrap_ready: bool = False):
     # Safe in any entry point: own SQLite transaction only when caller is not already in one.
     own_tx = False
     if polywar._is_sqlite(conn) and not getattr(conn, 'in_transaction', False):
         _begin(conn, conn.cursor()); own_tx = True
     try:
-        sectors.ensure_starting_territories_bootstrap(conn, season_id)
+        if not starting_bootstrap_ready:
+            sectors.ensure_starting_territories_bootstrap(conn, season_id)
         c = conn.cursor(); now = datetime.utcnow()
         if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
             if own_tx: conn.commit()
