@@ -137,10 +137,15 @@ def ensure_world_initialized_in_transaction(conn,season_id:int):
     logger.info('polywar_world_initialized season_id=%s',season_id)
 
 
-def ensure_world_initialized(conn,season_id:int,schema:bool=True):
-    if schema:
-        init_world_schema(conn)
-    return ensure_world_initialized_in_transaction(conn,season_id)
+def ensure_world_initialized(season_id:int):
+    conn=polywar.get_connection(); ok=False
+    try:
+        init_world_schema(conn); conn.commit(); begin_world_transaction(conn)
+        out=ensure_world_initialized_in_transaction(conn,int(season_id))
+        conn.commit(); ok=True; return out
+    finally:
+        if not ok: polywar._safe_rollback(conn)
+        conn.close()
 
 def is_rift(conn,season_id,x,y,status=None):
     sql='SELECT * FROM polywar_null_rifts WHERE season_id=%s AND x=%s AND y=%s'; params=[season_id,x,y]
@@ -179,14 +184,15 @@ def activate_if_due_in_transaction(conn,season_id:int,now=None):
     _recount(conn,season_id); logger.info('polywar_null_state_activated season_id=%s',season_id); return True
 
 
-def activate_if_due(conn,season_id:int,now=None):
-    init_world_schema(conn); conn.commit(); ok=False
+def activate_if_due(season_id:int,now=None):
+    conn=polywar.get_connection(); ok=False
     try:
-        begin_world_transaction(conn)
-        out=activate_if_due_in_transaction(conn,season_id,now)
+        init_world_schema(conn); conn.commit(); begin_world_transaction(conn)
+        out=activate_if_due_in_transaction(conn,int(season_id),now)
         conn.commit(); ok=True; return out
     finally:
         if not ok: polywar._safe_rollback(conn)
+        conn.close()
 
 def _ordered_frontier(conn,sid,seed,tick,limit):
     rows=_fetchall(conn.cursor(),'SELECT * FROM polywar_null_frontier WHERE season_id=%s ORDER BY priority DESC,x,y LIMIT %s',(sid,max(limit*20,limit)))
@@ -221,7 +227,18 @@ def _apply_null_capital_pressure(conn, sid, cap, now):
 def process_due_tick_in_transaction(conn,season_id:int,now=None):
     now=now or _now()
     if not enabled(): return {'processed':False,'reason':'null_state_disabled'}
-    ensure_world_initialized_in_transaction(conn,season_id); lock_world_rows(conn,season_id); activate_if_due_in_transaction(conn,season_id,now); c=conn.cursor(); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
+    ensure_world_initialized_in_transaction(conn,season_id); lock_world_rows(conn,season_id); c=conn.cursor()
+    from services import polywar_finalization_service as finalization
+    decision=finalization.maybe_finalize_in_transaction(conn,season_id,now)
+    if decision.get('should_finalize'):
+        finalization.finalize_season_in_transaction(conn,season_id,decision.get('victory_type','time'),decision.get('winner_faction_id'),now)
+        return {'processed':False,'reason':'season_ended'}
+    season_row=_fetchone(c,'SELECT status,ends_at FROM polywar_seasons WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,)) or {}
+    if season_row.get('status')!='active': return {'processed':False,'reason':'season_ended'}
+    ends=season_row.get('ends_at')
+    if isinstance(ends,str): ends=datetime.fromisoformat(ends)
+    if ends and now>=ends: return {'processed':False,'reason':'season_ended'}
+    activate_if_due_in_transaction(conn,season_id,now); st=_fetchone(c,'SELECT * FROM polywar_null_state WHERE season_id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
     if not st or st['status']!='active' or str(st['next_tick_at'])>polywar._iso(now): return {'processed':False,'reason':'not_due'}
     tick=int(st.get('tick_index') or 0)+1
     stale_before=now-timedelta(minutes=max(2,tick_minutes()*2))
@@ -271,16 +288,18 @@ def process_due_tick_in_transaction(conn,season_id:int,now=None):
 
 
 
-def process_due_tick(conn,season_id:int,now=None):
-    init_world_schema(conn); conn.commit(); ok=False
+def process_due_tick(season_id:int,now=None):
+    conn=polywar.get_connection(); ok=False
     try:
-        begin_world_transaction(conn)
-        out=process_due_tick_in_transaction(conn,season_id,now)
+        init_world_schema(conn); conn.commit(); begin_world_transaction(conn)
+        out=process_due_tick_in_transaction(conn,int(season_id),now)
         conn.commit(); ok=True; return out
     except Exception:
         logger.exception('polywar_world_tick_failed season_id=%s',season_id); raise
     finally:
         if not ok: polywar._safe_rollback(conn)
+        conn.close()
+
 
 def ensure_world_caught_up_in_transaction(conn,season_id:int,now=None):
     now=now or _now(); out=[]
@@ -290,14 +309,15 @@ def ensure_world_caught_up_in_transaction(conn,season_id:int,now=None):
     return out
 
 
-def ensure_world_caught_up(conn,season_id:int,now=None):
-    init_world_schema(conn); conn.commit(); ok=False
+def ensure_world_caught_up(season_id:int,now=None):
+    conn=polywar.get_connection(); ok=False
     try:
-        begin_world_transaction(conn)
-        out=ensure_world_caught_up_in_transaction(conn,season_id,now)
+        init_world_schema(conn); conn.commit(); begin_world_transaction(conn)
+        out=ensure_world_caught_up_in_transaction(conn,int(season_id),now)
         conn.commit(); ok=True; return out
     finally:
         if not ok: polywar._safe_rollback(conn)
+        conn.close()
 
 def _recount(conn,sid):
     c=conn.cursor(); cells=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
@@ -357,11 +377,11 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_world_schema(conn)
         season=m._private_active_season(conn); sid=int(season['id'])
         if not enabled(): raise ValueError('null_state_disabled')
-        ensure_world_initialized(conn,sid); conn.commit()
+        ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
         # Lazy catch-up remains bounded and happens before the mutation lock.
-        ensure_world_caught_up(conn,sid); conn.commit()
+        ensure_world_caught_up_in_transaction(conn,sid); conn.commit()
         managed=_start_world_transaction(conn)
         lock_world_rows(conn,sid); polywar.assert_gameplay_mutation_allowed(conn,sid,_now())
         suffix='' if _is_sqlite(conn) else ' FOR UPDATE'

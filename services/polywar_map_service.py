@@ -237,7 +237,7 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         capitals.ensure_capitals_initialized(conn, sid)
         try:
             from services import polywar_world_service as world
-            world.ensure_world_caught_up(conn, sid)
+            world.ensure_world_caught_up_in_transaction(conn, sid)
             for ch in out:
                 x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
                 rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
@@ -279,7 +279,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
         from services import polywar_world_service as world
-        world.ensure_world_initialized(conn, sid)
+        world.ensure_world_initialized_in_transaction(conn, sid)
         conn.commit()
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup

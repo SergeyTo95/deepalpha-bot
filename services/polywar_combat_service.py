@@ -120,7 +120,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
         from services import polywar_world_service as world
-        world.ensure_world_initialized(conn, sid)
+        world.ensure_world_initialized_in_transaction(conn, sid)
         conn.commit()
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:

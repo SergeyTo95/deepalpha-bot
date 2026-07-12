@@ -96,7 +96,7 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
     conn=polywar.get_connection(); c=conn.cursor(); managed=False; ok=False
     try:
         polywar.init_polywar_schema(conn); init_rebellion_schema(conn); world.init_world_schema(conn)
-        season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_initialized(conn,sid); conn.commit()
+        season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
         managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid); polywar.assert_gameplay_mutation_allowed(conn,sid,_now())
