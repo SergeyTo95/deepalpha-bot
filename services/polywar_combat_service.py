@@ -125,11 +125,16 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:
             return dup
-        _rate(user_id)
         _begin(conn, c)
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:
             conn.commit(); return dup
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        _rate(user_id)
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
@@ -160,11 +165,6 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         row = _materialize(conn, sid, x, y, owner, now) if owner is not None else None
         if row: owner = int(row['owner_faction_id'])
         before = int((row or {}).get('contest_progress') or 0); contesting = (row or {}).get('contesting_faction_id')
-        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
-        if not prepared.get('ok'):
-            if prepared.get('season_finalized'):
-                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
-            raise ValueError(prepared.get('error') or 'season_ended')
         if action_type == 'attack':
             if owner is None: raise ValueError('neutral_cell_requires_capture')
             if owner == fid: raise ValueError('own_cell_cannot_be_attacked')

@@ -673,3 +673,78 @@ def test_matured_domination_rebellion_action_commits_finalization_not_rollback(d
     assert c.execute('select count(*) from polywar_player_season_rewards where season_id=?',(sid,)).fetchone()[0] > 0
     assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0] == 1
     c.close()
+
+
+def _mature_domination(connect, sid, fid=1):
+    c = connect(); now = datetime.utcnow(); past = now - timedelta(hours=2)
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,222,222,fid,past,past))
+    c.execute('update polywar_seasons set domination_faction_id=?, domination_started_at=? where id=?',(fid,past,sid))
+    c.commit(); c.close(); return now
+
+
+def test_matured_domination_attack_no_old_season_mutation(db):
+    connect, settings = db; settings['polywar_domination_capitals_required']='1'; settings['polywar_domination_hold_hours']='1'
+    sid = active(connect); _mature_domination(connect, sid, 1)
+    from services import polywar_combat_service as combat
+    c=connect(); before=c.execute('select current_energy from polywar_players where season_id=? and user_id=100',(sid,)).fetchone()[0]; c.close()
+    out = combat.combat_action(100,'attack',333,333,'attack-after-domination')
+    assert out['error'] == 'season_ended'
+    c=connect(); assert c.execute('select status from polywar_seasons where id=?',(sid,)).fetchone()[0]=='completed'
+    assert c.execute('select current_energy from polywar_players where season_id=? and user_id=100',(sid,)).fetchone()[0] == before
+    assert c.execute('select count(*) from polywar_cells where season_id=? and x=333 and y=333',(sid,)).fetchone()[0] == 0
+    assert c.execute('select count(*) from polywar_actions where season_id=? and idempotency_key=?',(sid,'attack-after-domination')).fetchone()[0] == 0
+    c.close()
+
+
+def test_matured_domination_capital_scan_flag_governance_no_mutation(db):
+    connect, settings = db; settings['polywar_domination_capitals_required']='1'; settings['polywar_domination_hold_hours']='1'
+    from services import polywar_capital_service as caps, polywar_mine_service as mines, polywar_governance_service as gov
+
+    sid = active(connect); _mature_domination(connect, sid, 1)
+    c=connect(); now=datetime.utcnow()-timedelta(days=2); caps.init_polywar_capital_schema(c)
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,siege_progress,besieging_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?,?,?)',(sid,2,224,222,2,0,None,now,now))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,223,222))
+    c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=? and user_id=100',(sid,)); c.commit(); c.close()
+    assert caps.capital_action(100,'siege',224,222,'siege-after-domination')['error']=='season_ended'
+    c=connect(); assert c.execute('select siege_progress from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()[0] == 0; c.close()
+
+    sid = active(connect); _mature_domination(connect, sid, 1)
+    c=connect(); mines.init_polywar_mine_schema(c); c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=? and user_id=100',(sid,)); c.commit(); c.close()
+    assert mines.scan_area(100,10,10,3,'scan-after-domination')['error']=='season_ended'
+    c=connect(); assert c.execute('select count(*) from polywar_scans where season_id=?',(sid,)).fetchone()[0] == 0; c.close()
+
+    sid = active(connect); _mature_domination(connect, sid, 1)
+    c=connect(); mines.init_polywar_mine_schema(c); c.commit(); c.close()
+    assert mines.set_flag(100,10,10,True)['error']=='season_ended'
+    c=connect(); assert c.execute('select count(*) from polywar_flags where season_id=?',(sid,)).fetchone()[0] == 0; c.close()
+
+    sid = active(connect); _mature_domination(connect, sid, 1)
+    c=connect(); gov.init_polywar_governance_schema(c); c.commit(); c.close()
+    assert gov.nominate(100,'after domination')['error']=='season_ended'
+    c=connect(); assert c.execute('select count(*) from polywar_commander_candidates').fetchone()[0] == 0; c.close()
+
+
+def test_capital_transfer_updates_domination_tracking_immediately(db):
+    connect, settings = db; settings['polywar_domination_capitals_required']='1'; settings['polywar_domination_hold_hours']='1'
+    sid = active(connect)
+    from services import polywar_capital_service as caps
+    c=connect(); caps.init_polywar_capital_schema(c); now=datetime.utcnow()
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,2,300,300,2,now,now))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,300,300))
+    c.commit(); cap=c.execute('select * from polywar_capitals where season_id=? and original_faction_id=2',(sid,)).fetchone()
+    caps.transfer_capital_control(c,sid,cap,1,100,now); c.commit()
+    row=c.execute('select domination_faction_id,domination_started_at from polywar_seasons where id=?',(sid,)).fetchone()
+    assert row['domination_faction_id'] == 1 and row['domination_started_at']
+    assert c.execute("select count(*) from polywar_events where season_id=? and event_type='domination_started'",(sid,)).fetchone()[0] == 1
+    c.close()
+
+
+def test_get_capitals_uses_serialized_begin(db, monkeypatch):
+    connect, _ = db; active(connect)
+    from services import polywar_capital_service as caps
+    calls=[]; real=caps._begin
+    def wrapped(conn, cursor):
+        calls.append('begin'); return real(conn, cursor)
+    monkeypatch.setattr(caps, '_begin', wrapped)
+    out = caps.get_capitals(100)
+    assert out['ok'] and calls == ['begin']

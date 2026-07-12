@@ -196,6 +196,7 @@ def transfer_capital_control(conn, sid, cap, new_controller, user_id, now):
     recalc_influence(conn, sid, old, now); recalc_influence(conn, sid, int(new_controller), now)
     et = 'capital_recaptured' if int(cap['original_faction_id']) == int(new_controller) else 'capital_captured'
     _emit_event(conn, sid, user_id, int(new_controller), et, x, y, now)
+    polywar.update_domination_tracking_in_transaction(conn, sid, now)
     return change
 
 
@@ -208,12 +209,18 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
         from services import polywar_world_service as world
         world.ensure_world_initialized_in_transaction(conn, sid)
+        ensure_capitals_initialized(conn, sid)
         conn.commit()
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: return dup
         _begin(conn, c)
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
         if dup: conn.commit(); return dup
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
         dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
@@ -221,7 +228,6 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         fid = player.get('faction_id')
         if not fid: raise ValueError('faction_required')
         if polywar._energy(player).get('is_locked'): raise ValueError('player_locked')
-        ensure_capitals_initialized(conn, sid)
         cap0 = get_capital_at(conn, sid, x, y)
         if not cap0: raise ValueError('capital_required')
         cap = _lock_capital(conn, cap0['id'])
@@ -235,11 +241,6 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         if not _has_adjacent(conn, sid, x, y, fid): raise ValueError('capital_not_frontline')
         now = datetime.utcnow(); before = int(cap.get('siege_progress') or 0); previous = int(cap['controller_faction_id']); bes_before = cap.get('besieging_faction_id'); transfer = None
         after = before; bes_after = bes_before; current = previous
-        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
-        if not prepared.get('ok'):
-            if prepared.get('season_finalized'):
-                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
-            raise ValueError(prepared.get('error') or 'season_ended')
         if action_type == 'siege':
             if previous == int(fid): raise ValueError('own_capital_cannot_be_sieged')
             cost = int(base) + siege_extra_energy(); _, _, energy = mines.spend_player_energy(conn, player, cost, now); power = siege_power(); req = siege_required()
@@ -281,15 +282,27 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
 
 def get_capitals(user_id: int = None):
     if user_id is not None: _rate_get(user_id)
-    conn = polywar.get_connection()
+    conn = polywar.get_connection(); sid = None
     try:
-        polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); season = polywar.ensure_active_season_in_transaction(conn); sid = int(season['id'])
+        polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); conn.commit()
+        _begin(conn, conn.cursor())
+        season = polywar.ensure_active_season_in_transaction(conn); sid = int(season['id'])
+        from services import polywar_world_service as world
+        world.ensure_world_initialized_in_transaction(conn, sid)
+        prepared = polywar.prepare_gameplay_mutation_in_transaction(conn, sid)
+        if prepared.get('season_finalized'):
+            active = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE status='active' ORDER BY id DESC LIMIT 1")
+            if active:
+                sid = int(active['id'])
+                world.ensure_world_initialized_in_transaction(conn, sid)
         ensure_capitals_initialized(conn, sid)
-        conn.commit(); rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = siege_required()
+        conn.commit()
+        rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = siege_required()
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
+    except Exception:
+        polywar._safe_rollback(conn); raise
     finally:
         conn.close()
-
 
 def enrich_chunks(conn, sid, chunks):
     req = siege_required(); c = conn.cursor()

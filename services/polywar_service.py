@@ -474,6 +474,12 @@ def prepare_gameplay_mutation_in_transaction(conn, season_id: int, now: Optional
     assert_gameplay_mutation_allowed(conn, int(season_id), now)
     return {"ok": True}
 
+
+def update_domination_tracking_in_transaction(conn, season_id: int, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Refresh domination/null-state candidate timers inside the caller-owned transaction."""
+    from services import polywar_finalization_service as finalization
+    return finalization.maybe_finalize_in_transaction(conn, int(season_id), now or _now())
+
 def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     if not is_enabled():
         raise ValueError("polywar_disabled")

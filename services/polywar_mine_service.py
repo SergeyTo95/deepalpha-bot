@@ -277,23 +277,20 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
-        from services import polywar_finalization_service as finalization
-        decision=finalization.maybe_finalize_in_transaction(conn,sid)
-        if decision.get("should_finalize"): finalization.finalize_season_in_transaction(conn,sid,decision.get("victory_type","time"),decision.get("winner_faction_id"))
         conn.commit()
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
-        _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
         _begin_immediate_retry(conn, c)
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
-        polywar._insert_player_if_missing(conn, user_id, sid)
-        player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
                 conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
             raise ValueError(prepared.get('error') or 'season_ended')
+        _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
+        polywar._insert_player_if_missing(conn, user_id, sid)
+        player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
         fid = player.get("faction_id")
@@ -334,18 +331,15 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
-        from services import polywar_finalization_service as finalization
-        decision=finalization.maybe_finalize_in_transaction(conn,sid)
-        if decision.get("should_finalize"): finalization.finalize_season_in_transaction(conn,sid,decision.get("victory_type","time"),decision.get("winner_faction_id"))
         conn.commit()
         _begin_immediate_retry(conn, c)
-        polywar._insert_player_if_missing(conn, user_id, sid)
-        player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
                 conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
             raise ValueError(prepared.get('error') or 'season_ended')
+        polywar._insert_player_if_missing(conn, user_id, sid)
+        player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
         if not m.in_bounds(x, y): raise ValueError("out_of_bounds")
