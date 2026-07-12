@@ -240,8 +240,8 @@ def test_ambient_animation_is_bounded_and_destroyed_with_map():
     assert "maxBirds: 2" in JS
     assert "lowPowerAmbient" in JS
     assert "cancelAnimationFrame(this.ambientFrame)" in JS
-    assert "scheduleAmbientFrame" in JS
-    assert "1000 / POLYWAR_VISUALS.ambientFps" in JS
+    assert "startAmbientLoop" in JS
+    assert "1000 / fps" in JS
 
 
 def test_map_visual_css_preserves_mobile_touch_and_overlay_layers():
@@ -250,3 +250,58 @@ def test_map_visual_css_preserves_mobile_touch_and_overlay_layers():
     assert "isolation:isolate" in CSS
     assert "height:72vh" in CSS
     assert "z-index:6" in CSS
+
+
+def test_sector_overview_zoom_is_reachable_and_sector_modes_preserved():
+    assert "minCell: 3" in JS or "minCell: 2" in JS
+    assert "defaultCell: 28" in JS
+    assert "baseZoom: 34" in JS
+    assert "if (this.cell < 8)" in JS
+    assert "if (!forceKey && this.cell < 6)" in JS
+
+
+def test_base_button_uses_center_on_base_close_zoom_helper():
+    bind = JS[JS.index('document.getElementById("goBase")'):JS.index('document.getElementById("primaryActionBtn")')]
+    assert "this.centerOnBase()" in bind
+    assert "this.cx = b.x" not in bind
+    assert "this.cy = b.y" not in bind
+    assert "this.cell = Math.min(POLYWAR_VISUALS.maxCell, zoom)" in JS
+
+
+def test_ambient_uses_separate_canvas_and_does_not_full_draw_on_tick():
+    assert 'id="polywarAmbientCanvas"' in JS
+    assert "this.ambientCanvas" in JS
+    assert "this.ambientCtx" in JS
+    ambient = JS[JS.index("startAmbientLoop()"):JS.index("bindAmbientVisibility()")]
+    assert "this.draw(" not in ambient
+    assert "this.drawAmbient" in ambient
+    assert "requestAnimationFrame" in ambient
+    assert "#polywarAmbientCanvas" in CSS
+    assert "pointer-events:none" in CSS
+
+
+def test_ambient_fps_bounds_and_reduced_motion_hidden_document():
+    assert "ambientFps: 12" in JS
+    assert "lowPowerAmbientFps: 8" in JS
+    assert "this.lowPowerAmbient ? POLYWAR_VISUALS.lowPowerAmbientFps : POLYWAR_VISUALS.ambientFps" in JS
+    assert "this.ambientEnabled = !polywarReducedMotion()" in JS
+    assert "document.hidden" in JS
+    assert 'document.addEventListener("visibilitychange"' in JS
+    assert 'document.removeEventListener("visibilitychange"' in JS
+
+
+def test_destroy_cancels_ambient_raf_and_visibility_listener():
+    destroy = JS[JS.index("destroy()") : JS.index("updateState(state)")]
+    assert "cancelAnimationFrame(this.ambientFrame)" in destroy
+    assert "removeEventListener" in destroy
+    assert "this.ambientFrame = null" in destroy
+    assert "this.ambientVisibilityHandler = null" in destroy
+
+
+def test_road_detail_uses_bevel_not_fixed_diagonal():
+    assert "drawRoadBevel" in JS
+    start = JS.index("drawRoadBevel(ctx")
+    road = JS[start : JS.index("drawMountainRelief", start)]
+    assert "cell*.62" not in road
+    assert "cell*.38" not in road
+    assert "p.y + c*.8" in road

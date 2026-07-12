@@ -19,11 +19,12 @@ const TERRAIN_COST = { plain: 1, forest: 1, mountain: 2, swamp: 2, desert: 1, ro
 const TERRAIN_COLOR = { plain: "#76a35b", forest: "#20723d", mountain: "#807a73", swamp: "#476a50", desert: "#c7a35a", road: "#b8935a", ruins: "#8d6e92", water: "#245ea8", river: "#39a7d8" };
 const POLYWAR_VISUALS = {
   defaultCell: 28,
-  minCell: 12,
+  minCell: 3,
   maxCell: 58,
   baseZoom: 34,
   detailedCell: 14,
-  ambientFps: 18,
+  ambientFps: 12,
+  lowPowerAmbientFps: 8,
   maxClouds: 5,
   maxBirds: 2,
   terrainDepth: { plain: .14, forest: .25, mountain: .55, swamp: .2, desert: .16, road: .1, ruins: .28, water: -.08, river: -.04 }
@@ -205,6 +206,8 @@ class PolyWarMap {
     this.state = state;
     this.canvas = document.getElementById("polywarCanvas");
     this.ctx = this.canvas.getContext("2d");
+    this.ambientCanvas = document.getElementById("polywarAmbientCanvas");
+    this.ambientCtx = this.ambientCanvas?.getContext("2d") || null;
     this.cache = new Map();
     this.worldSeq = 0; this.riftCache = new Map(); this.rebellionCache = new Map();
     this.sectorCache = new Map();
@@ -219,6 +222,7 @@ class PolyWarMap {
     this.drawFrame = null;
     this.ambientFrame = null;
     this.lastAmbientDraw = 0;
+    this.ambientVisibilityHandler = null;
     this.ambientEnabled = !polywarReducedMotion();
     this.lowPowerAmbient = polywarLowPowerMode();
     this.loadSeq = 0;
@@ -253,7 +257,7 @@ class PolyWarMap {
     this.canvas.addEventListener("wheel", e => { e.preventDefault(); this.zoom(e.deltaY < 0 ? 1.25 : 0.8); }, { passive: false, signal });
     document.getElementById("zoomIn").addEventListener("click", () => this.zoom(1.25), { signal });
     document.getElementById("zoomOut").addEventListener("click", () => this.zoom(0.8), { signal });
-    document.getElementById("goBase").addEventListener("click", () => { const b = baseFor(currentState?.selected_faction?.id); if (b) { this.cx = b.x; this.cy = b.y; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); } }, { signal });
+    document.getElementById("goBase").addEventListener("click", () => this.centerOnBase(), { signal });
     document.getElementById("primaryActionBtn")?.addEventListener("click", () => this.executePrimaryCellAction(), { signal });
     document.getElementById("quickActionsToggle")?.addEventListener("click", () => { quickActionsEnabled = !quickActionsEnabled; localStorage.setItem("polywar_quick_actions", quickActionsEnabled ? "on" : "off"); this.updatePanel(); }, { signal });
     document.getElementById("moreActionsBtn")?.addEventListener("click", () => { this.moreOpen = !this.moreOpen; this.updatePanel(); }, { signal });
@@ -270,18 +274,20 @@ class PolyWarMap {
     this.abort.abort();
     if (this.drawFrame) cancelAnimationFrame(this.drawFrame);
     if (this.ambientFrame) cancelAnimationFrame(this.ambientFrame);
+    if (this.ambientVisibilityHandler) document.removeEventListener("visibilitychange", this.ambientVisibilityHandler);
     this.drawFrame = null;
     this.ambientFrame = null;
+    this.ambientVisibilityHandler = null;
     this.loading.clear();
     this.pendingRequests.clear();
     this.sectorLoading.clear();
   }
   updateState(state) { this.state = state; this.updatePanel(); }
   async bootstrapInitialLoad() { await this.ensureChunks(); if (this.destroyed) return; this.initialChunksReady = true; await Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]); }
-  resize({ loadData = true } = {}) { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.w = r.width; this.h = r.height; this.clamp(); if (loadData && this.initialChunksReady) { this.ensureChunks(); this.ensureSectors(); } this.requestDraw(); }
+  resize({ loadData = true } = {}) { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); if (this.ambientCanvas && this.ambientCtx) { this.ambientCanvas.width = this.canvas.width; this.ambientCanvas.height = this.canvas.height; this.ambientCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); } this.w = r.width; this.h = r.height; this.clamp(); if (loadData && this.initialChunksReady) { this.ensureChunks(); this.ensureSectors(); } this.requestDraw(); this.requestAmbientDraw(); }
   zoom(f) { this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, this.cell * f)); if (this.cell >= 6) this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
   clamp() { this.cx = Math.max(0, Math.min(this.state.map.width - 1, this.cx)); this.cy = Math.max(0, Math.min(this.state.map.height - 1, this.cy)); }
-  centerOnBase(zoom = POLYWAR_VISUALS.baseZoom) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.max(this.cell, Math.min(POLYWAR_VISUALS.maxCell, zoom)); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
+  centerOnBase(zoom = POLYWAR_VISUALS.baseZoom) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.min(POLYWAR_VISUALS.maxCell, zoom); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); this.requestAmbientDraw(); }
   screenToCell(px, py) { return { x: Math.floor(this.cx + (px - this.w / 2) / this.cell), y: Math.floor(this.cy + (py - this.h / 2) / this.cell) }; }
   cellToScreen(x, y) { return { x: this.w / 2 + (x - this.cx) * this.cell, y: this.h / 2 + (y - this.cy) * this.cell }; }
   rules() { return this.state.rules || {}; }
@@ -566,9 +572,14 @@ class PolyWarMap {
       if (terrain === "mountain") this.drawMountainRelief(ctx, p, x, y);
       else if (terrain === "forest") { ctx.fillStyle = "rgba(7,45,24,.32)"; ctx.beginPath(); ctx.arc(p.x + cell*.62, p.y + cell*.38, cell*.18, 0, Math.PI*2); ctx.fill(); }
       else if (terrain === "water" || terrain === "river") { ctx.strokeStyle = "rgba(180,235,255,.22)"; ctx.beginPath(); ctx.moveTo(p.x + cell*.16, p.y + cell*.58); ctx.quadraticCurveTo(p.x + cell*.5, p.y + cell*.45, p.x + cell*.84, p.y + cell*.58); ctx.stroke(); }
-      else if (terrain === "road") { ctx.strokeStyle = "rgba(75,45,20,.34)"; ctx.lineWidth = Math.max(2, cell*.18); ctx.beginPath(); ctx.moveTo(p.x, p.y + cell*.62); ctx.lineTo(p.x + cell, p.y + cell*.38); ctx.stroke(); ctx.lineWidth = 1; }
+      else if (terrain === "road") { this.drawRoadBevel(ctx, p); }
     }
     ctx.restore();
+  }
+  drawRoadBevel(ctx, p) {
+    const c = this.cell;
+    ctx.strokeStyle = "rgba(255,235,188,.22)"; ctx.lineWidth = 1; ctx.strokeRect(p.x + c*.16, p.y + c*.2, c*.68, c*.6);
+    ctx.strokeStyle = "rgba(52,32,18,.2)"; ctx.beginPath(); ctx.moveTo(p.x + c*.16, p.y + c*.8); ctx.lineTo(p.x + c*.84, p.y + c*.8); ctx.stroke();
   }
   drawMountainRelief(ctx, p) {
     const c = this.cell;
@@ -576,15 +587,18 @@ class PolyWarMap {
     ctx.fillStyle = "rgba(255,255,255,.24)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.36,p.y+c*.58); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
     ctx.fillStyle = "rgba(0,0,0,.22)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.86,p.y+c*.78); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
   }
-  drawAmbient(ctx, now = Date.now()) {
-    if (!this.ambientEnabled || !this.clouds?.length) return;
+  drawAmbient(ctx = this.ambientCtx, now = Date.now()) {
+    if (!this.ambientEnabled || !ctx || !this.clouds?.length || document.hidden) return;
+    ctx.clearRect(0, 0, this.w, this.h);
+    if (this.cell < 8) return;
     ctx.save(); ctx.globalCompositeOperation = "screen";
     for (const cl of this.clouds) {
       const x = ((cl.x + (now * cl.speed / 1000)) % 1.22 - .12) * this.w, y = cl.y * this.h, r = cl.size * Math.min(this.w, this.h);
+      if (x + r < 0 || x - r > this.w) continue;
       ctx.fillStyle = `rgba(255,255,255,${cl.alpha})`;
       ctx.beginPath(); ctx.ellipse(x, y, r*.9, r*.28, 0, 0, Math.PI*2); ctx.ellipse(x+r*.38, y-r*.04, r*.58, r*.22, 0, 0, Math.PI*2); ctx.ellipse(x-r*.42, y+r*.02, r*.52, r*.2, 0, 0, Math.PI*2); ctx.fill();
     }
-    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = "rgba(8,14,30,.34)"; ctx.lineWidth = 1.4;
+    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = "rgba(8,14,30,.28)"; ctx.lineWidth = 1.2;
     for (const bird of this.birds || []) {
       const phase = ((now - bird.start) % 14000) / bird.duration; if (phase < 0 || phase > 1) continue;
       const bx = -24 + phase * (this.w + 48), by = bird.y * this.h + Math.sin(phase * Math.PI * 2) * 16, s = 7 * bird.scale;
@@ -592,14 +606,24 @@ class PolyWarMap {
     }
     ctx.restore();
   }
-  scheduleAmbientFrame() {
-    if (!this.ambientEnabled || this.destroyed || this.ambientFrame) return;
+  requestAmbientDraw() { if (this.ambientEnabled && this.ambientCtx) this.drawAmbient(this.ambientCtx); }
+  startAmbientLoop() {
+    if (!this.ambientEnabled || !this.ambientCtx || this.ambientFrame || document.hidden) return;
+    const fps = this.lowPowerAmbient ? POLYWAR_VISUALS.lowPowerAmbientFps : POLYWAR_VISUALS.ambientFps;
     this.ambientFrame = requestAnimationFrame((now) => {
       this.ambientFrame = null;
-      if (this.destroyed || !this.ambientEnabled) return;
-      if (now - this.lastAmbientDraw >= 1000 / POLYWAR_VISUALS.ambientFps) { this.lastAmbientDraw = now; this.draw(); }
-      this.scheduleAmbientFrame();
+      if (this.destroyed || !this.ambientEnabled || document.hidden) return;
+      if (now - this.lastAmbientDraw >= 1000 / fps) { this.lastAmbientDraw = now; this.drawAmbient(this.ambientCtx, now); }
+      this.startAmbientLoop();
     });
+  }
+  bindAmbientVisibility() {
+    if (this.ambientVisibilityHandler || !this.ambientEnabled) return;
+    this.ambientVisibilityHandler = () => {
+      if (document.hidden) { if (this.ambientFrame) cancelAnimationFrame(this.ambientFrame); this.ambientFrame = null; this.ambientCtx?.clearRect(0, 0, this.w, this.h); }
+      else this.startAmbientLoop();
+    };
+    document.addEventListener("visibilitychange", this.ambientVisibilityHandler);
   }
 
   drawSkeleton(ctx) { const b=this.visibleCellBounds(); if (this.cell < 6) return; for(let y=b.minY;y<=b.maxY;y++) for(let x=b.minX;x<=b.maxX;x++){ const key=`${Math.floor(x/this.state.map.chunk_size)},${Math.floor(y/this.state.map.chunk_size)}`; if(this.cache.has(key)) continue; const p=this.cellToScreen(x,y); ctx.fillStyle=((x+y)&1)?"rgba(255,255,255,.035)":"rgba(0,0,0,.035)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); } }
@@ -608,7 +632,7 @@ class PolyWarMap {
   drawSelectedCell(ctx) { if (!this.selected) return; const p=this.cellToScreen(this.selected.x,this.selected.y); ctx.save(); ctx.fillStyle="rgba(53,166,255,.16)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); ctx.strokeStyle="#70d7ff"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,Math.max(2,this.cell-2),Math.max(2,this.cell-2)); ctx.restore(); }
   drawPendingPulse(ctx) { if (!this.pendingCellKey) return; const [px,py]=this.pendingCellKey.split(",").map(Number), p=this.cellToScreen(px,py), phase=(Date.now()%900)/900, pad=2+phase*Math.max(1,this.cell*.18); ctx.save(); ctx.strokeStyle=`rgba(53,166,255,${.8-phase*.45})`; ctx.lineWidth=2; ctx.strokeRect(p.x+pad,p.y+pad,Math.max(2,this.cell-pad*2),Math.max(2,this.cell-pad*2)); ctx.restore(); setTimeout(()=>this.requestDraw(),120); }
   requestDraw() { if (this.destroyed || this.drawFrame) return; this.drawFrame = requestAnimationFrame(() => { this.drawFrame = null; if (!this.destroyed) this.draw(); }); }
-  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); this.drawSkeleton(ctx); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; this.drawTerrainTile(ctx, ch.terrain[yy][xx], p, x, y); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size);  } } this.drawCellGrid(ctx); this.drawBaseMarkers(ctx); for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || [], this.cell, new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y));  if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } this.drawSelectedCell(ctx); this.drawPendingPulse(ctx); this.drawAmbient(ctx); this.scheduleAmbientFrame(); }
+  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); this.drawSkeleton(ctx); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; this.drawTerrainTile(ctx, ch.terrain[yy][xx], p, x, y); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size);  } } this.drawCellGrid(ctx); this.drawBaseMarkers(ctx); for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || [], this.cell, new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y));  if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } this.drawSelectedCell(ctx); this.drawPendingPulse(ctx); this.requestAmbientDraw(); this.bindAmbientVisibility(); this.startAmbientLoop(); }
 }
 
 function renderUnavailable(message) { clearTimers(); map?.destroy(); map = null; root.innerHTML = `<section class="glass card"><h2>PolyWar is temporarily unavailable</h2><p class="muted">${esc(message || "Please check back later.")}</p><a class="btn" href="/app">Back to DeepAlpha</a></section>`; }
@@ -627,7 +651,7 @@ function render(state) {
   if (state && state.enabled === false) { renderUnavailable(state.message); return; }
   const p = state.player || {}, e = state.energy || {}, season = state.season || {}, selected = state.selected_faction, needsJoin = !selected;
   map?.destroy();
-  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card polywar-world-hud" id="polywarWorldHud"><h2>World HUD</h2>${renderWorldHud(state)}</section><section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="quickActionsToggle" aria-pressed="true">Quick actions: ON</button><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><div class="map-wrap"><canvas id="polywarCanvas" aria-label="PolyWar map. Tap a cell, then press Enter or Space to perform the primary action."></canvas><div class="action-panel compact-cell-sheet" aria-live="polite"><div class="sheet-main"><b>Cell <span id="cellCoords">—</span> · <span id="cellTerrain">—</span></b><span id="cellDetails" class="muted"><b id="cellOwner">Neutral</b> · <b id="cellCost">—</b></span><span id="cellReason" class="muted">Select a cell</span></div><div class="sheet-actions"><button class="btn" id="primaryActionBtn" aria-label="Primary cell action" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn mini" id="moreActionsBtn" aria-expanded="false">More ···</button></div><div id="secondaryActionsMenu" class="secondary-actions" hidden></div></div></div></section><section class="glass card polywar-governance-panel" id="polywarGovernancePanel" data-polywar-governance><h2>Governance</h2></section><section class="grid" id="factionStats"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2><div id="factionRanking"></div></section><section class="glass card polywar-results-panel" id="polywarResultsPanel"><h2>Season Results</h2>${renderResultsPanel(state)}</section><section class="glass card"><h2>Latest events</h2><div id="latestEvents"></div></section>`;
+  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card polywar-world-hud" id="polywarWorldHud"><h2>World HUD</h2>${renderWorldHud(state)}</section><section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="quickActionsToggle" aria-pressed="true">Quick actions: ON</button><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><div class="map-wrap"><canvas id="polywarCanvas" aria-label="PolyWar map. Tap a cell, then press Enter or Space to perform the primary action."></canvas><canvas id="polywarAmbientCanvas" aria-hidden="true"></canvas><div class="action-panel compact-cell-sheet" aria-live="polite"><div class="sheet-main"><b>Cell <span id="cellCoords">—</span> · <span id="cellTerrain">—</span></b><span id="cellDetails" class="muted"><b id="cellOwner">Neutral</b> · <b id="cellCost">—</b></span><span id="cellReason" class="muted">Select a cell</span></div><div class="sheet-actions"><button class="btn" id="primaryActionBtn" aria-label="Primary cell action" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn mini" id="moreActionsBtn" aria-expanded="false">More ···</button></div><div id="secondaryActionsMenu" class="secondary-actions" hidden></div></div></div></section><section class="glass card polywar-governance-panel" id="polywarGovernancePanel" data-polywar-governance><h2>Governance</h2></section><section class="grid" id="factionStats"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2><div id="factionRanking"></div></section><section class="glass card polywar-results-panel" id="polywarResultsPanel"><h2>Season Results</h2>${renderResultsPanel(state)}</section><section class="glass card"><h2>Latest events</h2><div id="latestEvents"></div></section>`;
   document.querySelectorAll("[data-faction]").forEach(b => b.onclick = () => joinFaction(b.dataset.faction));
   root.onclick = handlePolywarUiClick;
   updateFactionStats();
