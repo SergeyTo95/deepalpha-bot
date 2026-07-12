@@ -66,15 +66,41 @@ def _normalize_public_temporal(value: Any) -> Any:
     return value
 
 
-def _dict(row) -> Optional[Dict[str, Any]]:
+def _row_to_dict(cursor, row) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
+
     if isinstance(row, dict):
         return dict(row)
+
+    if hasattr(row, "keys"):
+        try:
+            return {key: row[key] for key in row.keys()}
+        except Exception:
+            pass
+
+    description = getattr(cursor, "description", None) or ()
+    columns = [
+        getattr(column, "name", None) or column[0]
+        for column in description
+    ]
+
+    if columns:
+        values = list(row)
+        if len(columns) != len(values):
+            raise RuntimeError("polywar_row_column_mismatch")
+        return dict(zip(columns, values))
+
     try:
         return dict(row)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise TypeError(
+            f"Unsupported PolyWar row type: {type(row).__name__}"
+        ) from exc
+
+
+def _dict(row) -> Optional[Dict[str, Any]]:
+    return _row_to_dict(None, row)
 
 
 def _setting_int(key: str, default: int, min_value: int = 1, max_value: int = 3650) -> int:
@@ -110,12 +136,15 @@ def _execute(cursor, sql: str, params=()):
 
 def _fetchone(cursor, sql: str, params=()):
     _execute(cursor, sql, params)
-    return _dict(cursor.fetchone())
+    return _row_to_dict(cursor, cursor.fetchone())
 
 
 def _fetchall(cursor, sql: str, params=()) -> List[Dict[str, Any]]:
     _execute(cursor, sql, params)
-    return [dict(r) for r in cursor.fetchall()]
+    return [
+        _row_to_dict(cursor, row)
+        for row in cursor.fetchall()
+    ]
 
 
 def _rowcount(cursor) -> int:
