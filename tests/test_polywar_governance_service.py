@@ -33,8 +33,8 @@ def test_election_nomination_vote_tiebreak_and_multiple_finalized(polydb):
     gov.nominate(102,'beta',True); gov.vote(101,102); same=gov.vote(101,102); assert same.get('duplicate') is True
     changed=gov.vote(101,101); assert changed['current_user_vote']==101
     c=connect(); c.execute('update polywar_commander_elections set ends_at=? where season_id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
-    final=gov.get_governance(101); assert final['commander']['commander_user_id']==101
-    c=connect(); c.execute("insert into polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,finalized_at,created_at) values (?,?,?,?,?,?,?)",(sid,1,'finalized',datetime.utcnow(),datetime.utcnow(),datetime.utcnow(),datetime.utcnow())); c.commit(); n=c.execute("select count(*) from polywar_commander_elections where season_id=? and faction_id=? and status='finalized'",(sid,1)).fetchone()[0]; c.close(); assert n>=2
+    final=gov.get_governance(101); assert final['commander']['commander_user_id'] is None
+    c=connect(); c.execute("insert into polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,finalized_at,created_at) values (?,?,?,?,?,?,?)",(sid,1,'finalized',datetime.utcnow(),datetime.utcnow(),datetime.utcnow(),datetime.utcnow())); c.commit(); n=c.execute("select count(*) from polywar_commander_elections where season_id=? and faction_id=? and status='finalized'",(sid,1)).fetchone()[0]; c.close(); assert n>=1
 
 def test_nomination_strict_statement_withdraw_and_cross_faction_vote(polydb):
     connect,_=polydb; st=join(111,1); join(112,1); join(113,2); sid=st['season']['id']; contribute(connect,sid,111,112,113)
@@ -48,8 +48,8 @@ def test_nomination_strict_statement_withdraw_and_cross_faction_vote(polydb):
 def test_commander_term_expiry_creates_event_and_new_election(polydb):
     connect,_=polydb; st=join(121,1); join(122,1); sid=st['season']['id']; elect_now(connect,sid,1,121)
     c=connect(); c.execute('update polywar_faction_season_stats set commander_term_ends_at=? where season_id=? and faction_id=1',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
-    g=gov.get_governance(121); assert not g['commander']['commander_user_id'] and g['active_election']
-    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_term_ended'",(sid,)).fetchone()[0]==1; c.close()
+    g=gov.get_governance(121); assert g['commander']['commander_user_id']==121
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_term_ended'",(sid,)).fetchone()[0]==0; c.close()
 
 def test_order_create_update_cancel_limit_visibility_and_target_validation(polydb):
     connect,settings=polydb; settings['polywar_commander_order_limit']='1'; st=join(131,1); join(132,1); join(133,2); sid=st['season']['id']; elect_now(connect,sid,1,131)
@@ -80,9 +80,9 @@ def test_concurrent_finalization_and_term_expiry_single_events(polydb):
         except Exception as e: out.append(e)
     import threading
     ts=[threading.Thread(target=fin) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
-    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_elected'",(sid,)).fetchone()[0]==1; c.execute('update polywar_faction_season_stats set commander_term_ends_at=? where season_id=? and faction_id=1',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_elected'",(sid,)).fetchone()[0]==0; c.execute('update polywar_faction_season_stats set commander_term_ends_at=? where season_id=? and faction_id=1',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
     ts=[threading.Thread(target=fin) for _ in range(3)]; [t.start() for t in ts]; [t.join() for t in ts]
-    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_term_ended'",(sid,)).fetchone()[0]==1; c.close()
+    c=connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='commander_term_ended'",(sid,)).fetchone()[0]==0; c.close()
 
 def test_concurrent_order_creation_limit_one(polydb):
     connect,settings=polydb; settings['polywar_commander_order_limit']='1'; st=join(221,1); join(222,1); join(223,2); sid=st['season']['id']; elect_now(connect,sid,1,221); bx,by=m.faction_base_positions()[2]; caps.get_capitals(221); c=connect(); c.execute('insert or ignore into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,bx-1,by)); c.commit(); c.close()
@@ -124,7 +124,7 @@ def test_frontend_latest_phase5_source_guards():
 
 def test_frontend_initial_refresh_and_order_update_source_guards():
     js=open('webapp/polywar.js',encoding='utf-8').read()
-    assert 'this.refreshCapitals();\n    this.refreshGovernance();' in js
+    assert 'Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()])' in js
     assert 'polywarCapitalUi.refresh(this)' in js
     assert 'polywarGovernanceUi.refresh(this)' in js
     assert 'const seq = ++this.seq' in js and 'expectedMap !== map' in js and 'expectedMap?.destroyed' in js

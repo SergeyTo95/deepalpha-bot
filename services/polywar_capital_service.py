@@ -283,30 +283,22 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
 
 def get_capitals(user_id: int = None):
     if user_id is not None: _rate_get(user_id)
-    conn = polywar.get_connection(); sid = None
+    conn = polywar.get_connection()
     try:
-        polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); conn.commit()
-        _begin(conn, conn.cursor())
-        season = polywar.ensure_active_season_in_transaction(conn); sid = int(season['id'])
-        from services import polywar_world_service as world
-        world.ensure_world_initialized_in_transaction(conn, sid)
-        prepared = polywar.prepare_gameplay_mutation_in_transaction(conn, sid)
-        if prepared.get('season_finalized'):
-            active = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE status='active' ORDER BY id DESC LIMIT 1")
-            if active:
-                sid = int(active['id'])
-                world.ensure_world_initialized_in_transaction(conn, sid)
-        ensure_capitals_initialized(conn, sid)
-        conn.commit()
-        rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = siege_required()
+        if not polywar._is_sqlite(conn):
+            m.begin_polywar_readonly(conn)
+        config = m.load_map_config(conn)
+        season = m.get_active_season_readonly(conn); sid = int(season['id'])
+        rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = config.capital_siege_required
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
     except Exception:
         polywar._safe_rollback(conn); raise
     finally:
         conn.close()
 
-def enrich_chunks(conn, sid, chunks):
-    req = siege_required(); c = conn.cursor()
+
+def enrich_chunks(conn, sid, chunks, siege_required_value=None):
+    req = int(siege_required_value or siege_required()); c = conn.cursor()
     for ch in chunks:
         x0, y0, w, h = ch['chunk_x'] * ch['chunk_size'], ch['chunk_y'] * ch['chunk_size'], ch['width'], ch['height']
         rows = polywar._fetchall(c, 'SELECT x,y,original_faction_id,controller_faction_id,besieging_faction_id,siege_progress FROM polywar_capitals WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s', (sid, x0, x0+w, y0, y0+h))

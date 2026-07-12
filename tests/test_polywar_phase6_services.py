@@ -575,7 +575,7 @@ def test_chunk_domination_due_uses_public_lifecycle(db, monkeypatch):
     monkeypatch.setattr(world, 'ensure_world_caught_up', wrapped)
     from services import polywar_map_service as mm
     out = mm.build_chunks(100, [(0,0)])
-    assert out['ok'] and calls == [sid]
+    assert out['ok'] and calls == []
 
 
 def test_rebellion_tick_success_transitions_before_transfer(db, monkeypatch):
@@ -747,7 +747,7 @@ def test_get_capitals_uses_serialized_begin(db, monkeypatch):
         calls.append('begin'); return real(conn, cursor)
     monkeypatch.setattr(caps, '_begin', wrapped)
     out = caps.get_capitals(100)
-    assert out['ok'] and calls == ['begin']
+    assert out['ok'] and calls == []
 
 
 def _completed_reward(connect):

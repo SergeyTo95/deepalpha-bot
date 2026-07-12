@@ -64,9 +64,8 @@ def test_polywar_stats_are_season_scoped_not_global_faction_stats():
     assert "seasonal_influence_score" not in create_factions
     assert "active_members_count" not in create_factions
 
-def test_polywar_stale_chunk_responses_cache_before_sequence_check():
+def test_polywar_chunk_responses_update_cache_and_clear_pending():
     js = Path("webapp/polywar.js").read_text()
-    cache_pos = js.index('if (d.ok) d.chunks.forEach')
-    stale_pos = js.index('if (seq !== this.loadSeq)')
-    assert cache_pos < stale_pos
-    assert 'this.ensureChunks(); return;' in js[stale_pos:stale_pos + 120]
+    assert 'data.chunks.forEach' in js
+    assert 'this.pendingRequests.delete(batchKey)' in js
+    assert 'this.failedChunks.add(k)' in js
