@@ -73,7 +73,7 @@ def maybe_finalize_in_transaction(conn,season_id:int,now=None):
     return {'should_finalize':False}
 
 def maybe_finalize(season_id:int,now=None):
-    conn=polywar.get_connection(); init_finalization_schema(conn); managed=False
+    conn=polywar.get_connection(); init_finalization_schema(conn); conn.commit(); managed=False
     try:
         _begin(conn); managed=True
         decision=maybe_finalize_in_transaction(conn,season_id,now or _now())
@@ -144,7 +144,7 @@ def finalize_season_in_transaction(conn,season_id:int,victory_type='time',winner
     return True
 
 def finalize_season(season_id:int,victory_type='time',winner_faction_id=None,now=None):
-    conn=polywar.get_connection(); init_finalization_schema(conn); managed=False
+    conn=polywar.get_connection(); init_finalization_schema(conn); conn.commit(); managed=False
     try:
         _begin(conn); managed=True
         out=finalize_season_in_transaction(conn,season_id,victory_type,winner_faction_id,now or _now())
@@ -168,7 +168,7 @@ def _calculate_rewards(conn,sid,ranks,winner):
         polywar._execute(c,'INSERT INTO polywar_player_season_rewards (season_id,user_id,faction_id,faction_rank,faction_contribution,participation_reward,contribution_reward,placement_reward,null_state_reward,total_reward,status,claim_reference,calculated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,user_id) DO NOTHING',(sid,p['user_id'],fid,rank,contrib,part,cr,place,ns,total,status,ref,_now())); out.append({'user_id':p['user_id'],'total_reward':total})
     return out
 def get_results(season_id=None,user_id=None):
-    conn=polywar.get_connection(); init_finalization_schema(conn)
+    conn=polywar.get_connection(); init_finalization_schema(conn); conn.commit()
     try:
         _begin(conn)
         if season_id:

@@ -464,42 +464,47 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
         raise ValueError("polywar_disabled")
     conn = get_connection(); c = conn.cursor()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season_in_transaction(conn)
+        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        begin_serialized_transaction(conn)
+        season = ensure_active_season_in_transaction(conn)
+        from services import polywar_finalization_service as finalization
+        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = ensure_active_season_in_transaction(conn)
+        assert_gameplay_mutation_allowed(conn, int(season["id"]))
         faction_id = int(faction_id)
         faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
         if not faction:
             raise ValueError("unknown_faction")
         if not int(faction.get("is_playable", 1) or 0) or int(faction.get("is_system", 0) or 0):
             raise ValueError("unknown_faction")
-        try:
-            _insert_player_if_missing(conn, int(user_id), int(season["id"]))
-            _execute(c, """
-            UPDATE polywar_players
-            SET faction_id = %s, last_active_at = %s
-            WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
-            """, (faction_id, _now(), int(user_id), int(season["id"])))
-            if _rowcount(c) != 1:
-                _safe_rollback(conn)
-                raise ValueError("faction_already_selected")
-            _execute(c, """
-            UPDATE polywar_faction_season_stats
-            SET active_members_count = active_members_count + 1, updated_at = %s
-            WHERE season_id = %s AND faction_id = %s
-            """, (_now(), int(season["id"]), faction_id))
-            _execute(c, """
-            INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
-            conn.commit()
-        except ValueError:
-            raise
-        except Exception:
-            _safe_rollback(conn)
-            raise
-        return get_state(user_id)
+        _insert_player_if_missing(conn, int(user_id), int(season["id"]))
+        _execute(c, """
+        UPDATE polywar_players
+        SET faction_id = %s, last_active_at = %s
+        WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
+        """, (faction_id, _now(), int(user_id), int(season["id"])))
+        if _rowcount(c) != 1:
+            raise ValueError("faction_already_selected")
+        _execute(c, """
+        UPDATE polywar_faction_season_stats
+        SET active_members_count = active_members_count + 1, updated_at = %s
+        WHERE season_id = %s AND faction_id = %s
+        """, (_now(), int(season["id"]), faction_id))
+        _execute(c, """
+        INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
+        conn.commit()
+    except Exception:
+        _safe_rollback(conn)
+        raise
     finally:
         conn.close()
-
+    return get_state(user_id)
 
 def get_events(season_id: Optional[int] = None, limit: int = 20, conn=None):
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
@@ -526,25 +531,33 @@ def get_state(user_id: int) -> Dict[str, Any]:
         return {"ok": True, "enabled": False, "message": "PolyWar is temporarily unavailable", "feature_flags": {"polywar_enabled": False}}
     conn = get_connection()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); conn.commit(); begin_serialized_transaction(conn); season = ensure_active_season_in_transaction(conn)
-        completed_season_id = None
-        try:
-            from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
-            ensure_world_initialized(conn, int(season["id"])); ensure_world_caught_up(conn, int(season["id"]));
-            from services import polywar_finalization_service as finalization
-            decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
-            if decision.get("should_finalize"):
-                finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
-            refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
-            if refreshed and refreshed.get("status") == "completed":
-                completed_season_id = int(refreshed["id"])
-                season = ensure_active_season_in_transaction(conn)
-                ensure_world_initialized(conn, int(season["id"]))
-            elif refreshed:
-                season = refreshed
-        except Exception:
-            import logging; logging.getLogger(__name__).exception("PolyWar world lifecycle sync failed")
+        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        begin_serialized_transaction(conn)
+        season = ensure_active_season_in_transaction(conn)
+        from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up
+        ensure_world_initialized(conn, int(season["id"]))
+        ensure_world_caught_up(conn, int(season["id"]))
+        from services import polywar_finalization_service as finalization
+        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = ensure_active_season_in_transaction(conn)
+            ensure_world_initialized(conn, int(season["id"]))
+        elif refreshed:
+            season = refreshed
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
+        from services import polywar_sector_service as sector_rules
+        from services import polywar_capital_service as capital_rules
+        from services import polywar_governance_service as governance_rules
+        sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
+        capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
+        if player.get("faction_id"):
+            tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
+            governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
+        conn.commit()
+
         factions = list_factions_with_stats(int(season["id"]), conn)
         faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
         e = _energy(player)
@@ -556,42 +569,18 @@ def get_state(user_id: int) -> Dict[str, Any]:
         from services import polywar_sector_service as sector_rules
         from services import polywar_capital_service as capital_rules
         from services import polywar_governance_service as governance_rules
-        try: conn.commit()
-        except Exception: pass
-        try:
-            sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
-            capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
-            try: conn.commit()
-            except Exception: pass
-            if player.get("faction_id"):
-                c = conn.cursor()
-                governance_rules._begin(conn, c)
-                tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
-                governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
-            conn.commit()
-            factions = list_factions_with_stats(int(season["id"]), conn)
-            ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("PolyWar governance lifecycle sync failed")
-            _safe_rollback(conn)
         rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
-        world = {}
-        try:
-            from services.polywar_world_service import get_public_world_state, public_rules as world_rules
-            from services.polywar_rebellion_service import public_rules as rebellion_rules
-            from services.polywar_finalization_service import public_rules as reward_rules, get_results
-            world = get_public_world_state(conn, int(season["id"])); rules.update({"world": world_rules(), "rebellions": rebellion_rules(), "rewards": reward_rules()})
-        except Exception:
-            world = {}
+        from services.polywar_world_service import get_public_world_state, public_rules as world_rules
+        from services.polywar_rebellion_service import public_rules as rebellion_rules
+        from services.polywar_finalization_service import public_rules as reward_rules
+        world = get_public_world_state(conn, int(season["id"]))
+        rules.update({"world": world_rules(), "rebellions": rebellion_rules(), "rewards": reward_rules()})
         latest_completed = _fetchone(conn.cursor(), "SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE status=%s ORDER BY completed_at DESC LIMIT 1", ("completed",))
-        current_reward = None
-        if latest_completed:
-            try:
-                current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id)))
-            except Exception:
-                current_reward = None
+        current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
         public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
         return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+    except Exception:
+        _safe_rollback(conn)
+        raise
     finally:
         conn.close()

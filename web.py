@@ -873,14 +873,49 @@ async def handle_polywar_action_api(request):
 
 
 
+def _load_polywar_world_payload(user_id: int):
+    conn = get_connection()
+    try:
+        from services import polywar_service as _polywar
+        from services import polywar_finalization_service as _finalization
+        from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
+        _polywar.init_polywar_schema(conn); _polywar.ensure_factions(conn); conn.commit()
+        _polywar.begin_serialized_transaction(conn)
+        season = _polywar.ensure_active_season_in_transaction(conn)
+        ensure_world_initialized(conn, int(season["id"]))
+        ensure_world_caught_up(conn, int(season["id"]))
+        decision = _finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            _finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = _polywar.ensure_active_season_in_transaction(conn)
+            ensure_world_initialized(conn, int(season["id"]))
+        elif refreshed:
+            season = refreshed
+        conn.commit()
+        world = get_public_world_state(conn, int(season["id"]))
+        public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
+        return {"ok": True, "world": world, "season": public_season}
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+        raise
+    finally:
+        conn.close()
+
+
 async def handle_polywar_world_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
     try: _polywar_rate_limit('polywar_world', int(current.get("user_id") or 0), 60)
     except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
-    state = get_polywar_state(int(current.get("user_id") or 0))
-    return _json_response({"ok": True, "world": state.get("world", {}), "season": state.get("season")})
+    try:
+        return _json_response(await asyncio.to_thread(_load_polywar_world_payload, int(current.get("user_id") or 0)))
+    except Exception as e:
+        print(f"handle_polywar_world_api error: {e}")
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
 
 
 async def handle_polywar_results_latest_api(request):
@@ -890,7 +925,7 @@ async def handle_polywar_results_latest_api(request):
     try: _polywar_rate_limit('polywar_results_latest', int(current.get("user_id") or 0), 30)
     except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
     try:
-        return _json_response(get_polywar_results(None, int(current.get("user_id") or 0)))
+        return _json_response(await asyncio.to_thread(get_polywar_results, None, int(current.get("user_id") or 0)))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=404)
 
@@ -903,7 +938,7 @@ async def handle_polywar_results_api(request):
     except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
     try:
         sid = int(request.query.get("season_id") or 0) or None
-        return _json_response(get_polywar_results(sid, int(current.get("user_id") or 0)))
+        return _json_response(await asyncio.to_thread(get_polywar_results, sid, int(current.get("user_id") or 0)))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=404)
 

@@ -365,3 +365,12 @@ def test_stale_processing_claim_without_ledger_retries(db, monkeypatch):
     monkeypatch.setattr('services.airdrop_points_service.award_airdrop_points_idempotent',lambda *a,**k:{'ok':True,'duplicate':False})
     out=finalization.claim_reward(100,sid,'retry-stale')
     assert out['ok'] and connect().execute("select status from polywar_player_season_rewards where season_id=? and user_id=100",(sid,)).fetchone()[0]=='claimed'
+
+def test_public_get_state_rejects_caller_connection(db):
+    connect, _ = db
+    conn = connect()
+    try:
+        with pytest.raises(TypeError):
+            polywar.get_state(9001, conn)
+    finally:
+        conn.close()
