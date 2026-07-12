@@ -198,11 +198,14 @@ def _ensure_table(cursor) -> None:
             user_id BIGINT NOT NULL,
             reason TEXT NOT NULL,
             amount NUMERIC(18, 4) NOT NULL,
+            external_reference TEXT NULL,
             metadata TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         )
         """
     )
+    cursor.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_points_external_reference ON airdrop_points_ledger(external_reference) WHERE external_reference IS NOT NULL")
     try:
         cursor.execute("SAVEPOINT airdrop_points_amount_decimal_migration")
         cursor.execute(
@@ -728,8 +731,6 @@ def get_airdrop_points_ledger_entry_by_reference(external_reference: str) -> Opt
     ref = str(external_reference)
     conn, cur = _connect_ready()
     try:
-        _ensure_table(cur)
-        cur.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
         cur.execute("SELECT id,user_id,reason,amount,metadata,created_at FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
         row = cur.fetchone()
         conn.commit()
@@ -750,9 +751,6 @@ def award_airdrop_points_idempotent(user_id: int, reason: str, amount: Any, meta
     try:
         conn, cur = _connect_ready()
         try:
-            _ensure_table(cur)
-            cur.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_points_external_reference ON airdrop_points_ledger(external_reference) WHERE external_reference IS NOT NULL")
             expected_amount = _to_decimal(amount)
             cur.execute("SELECT id,user_id,reason,amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
             row = cur.fetchone()

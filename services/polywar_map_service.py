@@ -218,6 +218,33 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn)
         sid, seed = int(season["id"]), season["secret_seed"]
+        conn.commit()
+        from services import polywar_world_service as world
+        now = datetime.utcnow()
+        due = False
+        wrow = polywar._fetchone(conn.cursor(), "SELECT status,activation_at,next_tick_at FROM polywar_null_state WHERE season_id=%s", (sid,))
+        if not wrow:
+            due = True
+        else:
+            activation_at = wrow.get("activation_at")
+            next_tick_at = wrow.get("next_tick_at")
+            if isinstance(activation_at, str):
+                activation_at = datetime.fromisoformat(activation_at)
+            if isinstance(next_tick_at, str):
+                next_tick_at = datetime.fromisoformat(next_tick_at)
+            due = (wrow.get("status") == "dormant" and activation_at and activation_at <= now) or (wrow.get("status") == "active" and next_tick_at and next_tick_at <= now)
+        ends = season.get("ends_at")
+        if isinstance(ends, str):
+            ends = datetime.fromisoformat(ends)
+        if ends and ends <= now:
+            due = True
+        if due:
+            conn.close()
+            world.ensure_world_caught_up(sid, now)
+            conn = polywar.get_connection()
+            polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); conn.commit()
+            season = _private_active_season(conn)
+            sid, seed = int(season["id"]), season["secret_seed"]
         out = []
         for cx, cy in chunks:
             if cx < 0 or cy < 0 or cx * cs >= map_width() or cy * cs >= map_height():
@@ -235,24 +262,15 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         from services import polywar_capital_service as capitals
         from services import polywar_governance_service as governance
         capitals.ensure_capitals_initialized(conn, sid)
-        try:
-            from services import polywar_world_service as world
-            world.ensure_world_caught_up_in_transaction(conn, sid)
-            for ch in out:
-                x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
-                rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
-                ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
-        except Exception:
-            logger.exception("PolyWar chunk world enrichment failed")
+        for ch in out:
+            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
+            ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
         capitals.enrich_chunks(conn, sid, out)
-        try:
-            from services import polywar_rebellion_service as reb
-            reb.ensure_rebellions(conn, sid)
-            for ch in out:
-                x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
-                ch["rebellions"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "capital_original_faction_id": r["capital_original_faction_id"], "controller_faction_id": r["controller_faction_id"], "progress": r["progress"], "required_progress": r["required_progress"], "eligible_at": polywar._iso(r.get("eligible_at")), "started_at": polywar._iso(r.get("started_at"))} for r in polywar._fetchall(conn.cursor(), "SELECT r.*,c.x,c.y FROM polywar_rebellions r JOIN polywar_capitals c ON c.season_id=r.season_id AND c.original_faction_id=r.capital_original_faction_id WHERE r.season_id=%s AND c.x >= %s AND c.x < %s AND c.y >= %s AND c.y < %s AND r.status IN ('pending','active')", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))]
-        except Exception:
-            logger.exception("PolyWar chunk rebellion enrichment failed")
+        from services import polywar_rebellion_service as reb
+        for ch in out:
+            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            ch["rebellions"] = reb.get_public_rebellions_readonly(conn, sid, (x0, y0, x0 + ch["width"], y0 + ch["height"]))
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
         conn.commit()
@@ -376,4 +394,3 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
 def _is_expected_unique_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "unique" in text or "duplicate" in text or "constraint" in text or "integrity" in text
-

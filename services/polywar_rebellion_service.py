@@ -15,8 +15,7 @@ def init_rebellion_schema(conn=None):
         c.execute(f"""CREATE TABLE IF NOT EXISTS polywar_rebellions (id {id_sql},season_id INTEGER NOT NULL,capital_original_faction_id INTEGER NOT NULL,controller_faction_id INTEGER NOT NULL,status TEXT NOT NULL,progress INTEGER NOT NULL DEFAULT 0,required_progress INTEGER NOT NULL,occupation_started_at TIMESTAMP NOT NULL,eligible_at TIMESTAMP NOT NULL,started_at TIMESTAMP NULL,last_tick_at TIMESTAMP NULL,last_action_at TIMESTAMP NULL,resolved_at TIMESTAMP NULL,created_at TIMESTAMP NOT NULL,updated_at TIMESTAMP NOT NULL)""")
         c.execute("""CREATE TABLE IF NOT EXISTS polywar_rebellion_contributions (rebellion_id INTEGER NOT NULL,user_id BIGINT NOT NULL,faction_id INTEGER NOT NULL,support_contribution INTEGER NOT NULL DEFAULT 0,suppress_contribution INTEGER NOT NULL DEFAULT 0,first_action_at TIMESTAMP NOT NULL,last_action_at TIMESTAMP NOT NULL,UNIQUE(rebellion_id,user_id))""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_rebellions_active ON polywar_rebellions(season_id,status,capital_original_faction_id)")
-        try: c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_open_rebellion ON polywar_rebellions(season_id,capital_original_faction_id) WHERE status IN ('pending','active')")
-        except Exception: pass
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_open_rebellion ON polywar_rebellions(season_id,capital_original_faction_id) WHERE status IN ('pending','active')")
         if own: conn.commit()
     finally:
         if own: conn.close()
@@ -36,8 +35,7 @@ def ensure_rebellions_in_transaction(conn,season_id:int):
     if str(polywar.get_setting('polywar_rebellion_enabled','true')).lower() in {'0','false','off','no'}: return []
     season=polywar._fetchone(c,'SELECT status FROM polywar_seasons WHERE id=%s',(season_id,))
     if not season or season.get('status')!='active': return []
-    try: caps=polywar._fetchall(c,'SELECT * FROM polywar_capitals WHERE season_id=%s',(season_id,))
-    except Exception: return []
+    caps=polywar._fetchall(c,'SELECT * FROM polywar_capitals WHERE season_id=%s',(season_id,))
     made=[]
     for cap in caps:
         orig=int(cap['original_faction_id']); ctrl=int(cap['controller_faction_id'])
@@ -59,13 +57,31 @@ def ensure_rebellions_in_transaction(conn,season_id:int):
         polywar._execute(c,"INSERT INTO polywar_rebellions (season_id,capital_original_faction_id,controller_faction_id,status,progress,required_progress,occupation_started_at,eligible_at,started_at,created_at,updated_at) VALUES (%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s)",(season_id,orig,ctrl,status,rules['required'],started,eligible,now if status=='active' else None,now,now)); made.append(orig)
     return made
 
-def ensure_rebellions(conn,season_id:int):
-    init_rebellion_schema(conn)
-    return ensure_rebellions_in_transaction(conn,season_id)
+def ensure_rebellions(season_id:int):
+    conn=polywar.get_connection(); ok=False
+    try:
+        init_rebellion_schema(conn); conn.commit()
+        from services import polywar_world_service as world
+        world.begin_world_transaction(conn)
+        out=ensure_rebellions_in_transaction(conn,int(season_id))
+        conn.commit(); ok=True; return out
+    finally:
+        if not ok: polywar._safe_rollback(conn)
+        conn.close()
+
+def get_public_rebellions_readonly(conn,season_id:int,bounds=None):
+    c=conn.cursor()
+    sql="""SELECT r.*,c.x,c.y FROM polywar_rebellions r JOIN polywar_capitals c ON c.season_id=r.season_id AND c.original_faction_id=r.capital_original_faction_id WHERE r.season_id=%s AND r.status IN ('pending','active')"""
+    params=[season_id]
+    if bounds:
+        x0,y0,x1,y1=bounds
+        sql+=' AND c.x >= %s AND c.x < %s AND c.y >= %s AND c.y < %s'
+        params.extend([x0,x1,y0,y1])
+    rows=polywar._fetchall(c,sql+' ORDER BY r.id',tuple(params))
+    return [{'capital':{'x':int(r['x']),'y':int(r['y'])},'x':int(r['x']),'y':int(r['y']),'status':r['status'],'capital_original_faction_id':int(r['capital_original_faction_id']),'controller_faction_id':int(r['controller_faction_id']),'progress':int(r.get('progress') or 0),'required_progress':int(r.get('required_progress') or 0),'eligible_at':polywar._iso(r.get('eligible_at')),'started_at':polywar._iso(r.get('started_at'))} for r in rows]
 
 def get_public_rebellions(conn,season_id:int):
-    ensure_rebellions(conn,season_id); rows=polywar._fetchall(conn.cursor(),"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status IN ('pending','active') ORDER BY id",(season_id,))
-    return [{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in r.items()} for r in rows]
+    return get_public_rebellions_readonly(conn,season_id)
 
 def _adjacent_owner(conn,sid,x,y,fid):
     return any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny))
@@ -110,7 +126,7 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
         if not cap: raise ValueError('rebellion_required')
         _=polywar._fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
-        ensure_rebellions(conn,sid)
+        ensure_rebellions_in_transaction(conn,sid)
         reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND controller_faction_id=%s AND status='active'"+suffix,(sid,cap['original_faction_id'],cap['controller_faction_id']))
         if not reb: raise ValueError('rebellion_inactive')
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)

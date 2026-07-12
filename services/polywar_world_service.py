@@ -261,11 +261,8 @@ def process_due_tick_in_transaction(conn,season_id:int,now=None):
         if is_rift(conn,season_id,x,y,'sealed'): continue
         if not any(m._owner_at(conn,season_id,nx,ny)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)):
             _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(season_id,x,y)); continue
-        try:
-            from services import polywar_capital_service as caps
-            cap=caps.get_capital_at(conn,season_id,x,y)
-        except Exception:
-            cap=None
+        from services import polywar_capital_service as caps
+        cap=caps.get_capital_at(conn,season_id,x,y)
         if cap:
             actions.append(_apply_null_capital_pressure(conn,season_id,cap,now)); update_frontier_for_cell(conn,season_id,x,y,None); continue
         owner=m._owner_at(conn,season_id,x,y)
@@ -322,9 +319,7 @@ def ensure_world_caught_up(season_id:int,now=None):
 def _recount(conn,sid):
     c=conn.cursor(); cells=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_cells WHERE season_id=%s AND owner_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
     sec=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_sectors WHERE season_id=%s AND controller_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
-    caps=0
-    try: caps=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s AND controller_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
-    except Exception: pass
+    caps=(_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_capitals WHERE season_id=%s AND controller_faction_id=%s',(sid,NULL_STATE_FACTION_ID)) or {}).get('n') or 0
     _execute(c,'UPDATE polywar_null_state SET controlled_cells_count=%s,controlled_sectors_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s',(cells,sec,caps,_now(),sid))
     _execute(c,'UPDATE polywar_faction_season_stats SET controlled_cells_count=%s,controlled_sectors_count=%s,controlled_capitals_count=%s,updated_at=%s WHERE season_id=%s AND faction_id=%s',(cells,sec,caps,_now(),sid,NULL_STATE_FACTION_ID))
     sectors.recalc_influence(conn,sid,NULL_STATE_FACTION_ID,_now())
@@ -350,7 +345,13 @@ def get_public_world_state(conn,season_id:int):
         except Exception: started=None
     hold_until=(started+timedelta(hours=hold_hours)) if started else None
     remaining=max(0,int((hold_until-_now()).total_seconds())) if hold_until else 0
-    return {'season_id':season_id,'status':('disabled' if not enabled() else st.get('status')),'activation_at':polywar._iso(st.get('activation_at')),'activated_at':polywar._iso(st.get('activated_at')),'next_tick_at':polywar._iso(st.get('next_tick_at')),'tick_index':st.get('tick_index',0),'corruption_level':st.get('corruption_level',0),'controlled_cells_count':st.get('controlled_cells_count',0),'controlled_sectors_count':st.get('controlled_sectors_count',0),'controlled_capitals_count':st.get('controlled_capitals_count',0),'active_rifts':[rr(r) for r in rifts if r['status']=='active'],'sealed_rifts':[rr(r) for r in rifts if r['status']=='sealed'],'rifts':[rr(r) for r in rifts],'defeated_at':polywar._iso(st.get('defeated_at')),'domination_faction_id':season.get('domination_faction_id'),'domination_started_at':polywar._iso(started),'domination_hold_hours':hold_hours,'domination_hold_until':polywar._iso(hold_until),'domination_remaining_seconds':remaining,'victory_candidate_type':cand,'server_timestamp':int(time.time()),'rules':public_rules()}
+    try:
+        from services import polywar_rebellion_service as rebellion
+        rebellions=rebellion.get_public_rebellions_readonly(conn,season_id)
+    except Exception:
+        logger.exception('polywar_world_rebellion_public_read_failed season_id=%s',season_id)
+        raise
+    return {'season_id':season_id,'status':('disabled' if not enabled() else st.get('status')),'activation_at':polywar._iso(st.get('activation_at')),'activated_at':polywar._iso(st.get('activated_at')),'next_tick_at':polywar._iso(st.get('next_tick_at')),'tick_index':st.get('tick_index',0),'corruption_level':st.get('corruption_level',0),'controlled_cells_count':st.get('controlled_cells_count',0),'controlled_sectors_count':st.get('controlled_sectors_count',0),'controlled_capitals_count':st.get('controlled_capitals_count',0),'active_rifts':[rr(r) for r in rifts if r['status']=='active'],'sealed_rifts':[rr(r) for r in rifts if r['status']=='sealed'],'rifts':[rr(r) for r in rifts],'rebellions':rebellions,'defeated_at':polywar._iso(st.get('defeated_at')),'domination_faction_id':season.get('domination_faction_id'),'domination_started_at':polywar._iso(started),'domination_hold_hours':hold_hours,'domination_hold_until':polywar._iso(hold_until),'domination_remaining_seconds':remaining,'victory_candidate_type':cand,'server_timestamp':int(time.time()),'rules':public_rules()}
 
 def public_rules(): return {'seal_energy_cost':seal_cost(),'seal_progress':seal_progress(),'tick_minutes':tick_minutes(),'expansions_per_tick':expansions_per_tick(),'capital_siege_per_tick':capital_siege_per_tick()}
 
