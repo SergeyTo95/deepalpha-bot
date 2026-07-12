@@ -32,6 +32,11 @@ class PolyWarMapConfig:
     starting_area_size: int
     bases: Dict[int, Tuple[int, int]]
     max_chunks_per_request: int
+    capture_progress_required: int
+    sector_size: int
+    max_sectors_per_request: int
+    capital_siege_required: int
+    governance_rules: Dict[str, int]
 
 
 def _clamp_int(value, default, lo, hi):
@@ -43,7 +48,7 @@ def _clamp_int(value, default, lo, hi):
 
 
 def load_map_config(conn) -> PolyWarMapConfig:
-    keys = ("polywar_map_width", "polywar_map_height", "polywar_chunk_size", "polywar_starting_area_size", "polywar_max_chunks_per_request")
+    keys = ("polywar_map_width", "polywar_map_height", "polywar_chunk_size", "polywar_starting_area_size", "polywar_max_chunks_per_request", "polywar_capture_progress_required", "polywar_sector_size", "polywar_max_sectors_per_request", "polywar_capital_siege_required", "polywar_commander_election_hours", "polywar_commander_term_hours", "polywar_commander_min_contribution", "polywar_commander_min_members_for_election", "polywar_commander_max_statement_length", "polywar_commander_order_limit", "polywar_capital_order_duration_hours")
     placeholders = ",".join(["%s"] * len(keys))
     try:
         rows = polywar._fetchall(conn.cursor(), f"SELECT key, value FROM settings WHERE key IN ({placeholders})", keys)
@@ -51,31 +56,49 @@ def load_map_config(conn) -> PolyWarMapConfig:
         if "settings" not in str(exc).lower():
             raise
         polywar._safe_rollback(conn)
-        rows = []
+        if polywar._is_sqlite(conn):
+            rows = [{"key": key, "value": polywar.get_setting(key, "")} for key in keys]
+        else:
+            raise RuntimeError("polywar_not_initialized") from exc
     values = {str(r.get("key")): r.get("value") for r in rows}
     width = _clamp_int(values.get("polywar_map_width"), 10000, 512, 100000)
     height = _clamp_int(values.get("polywar_map_height"), 10000, 512, 100000)
     cs = _clamp_int(values.get("polywar_chunk_size"), 64, 16, 128)
     area = _clamp_int(values.get("polywar_starting_area_size"), 15, 3, 65)
     max_chunks = _clamp_int(values.get("polywar_max_chunks_per_request"), 9, 1, 25)
+    capture_required = _clamp_int(values.get("polywar_capture_progress_required"), 100, 1, 1000)
+    sec_size = _clamp_int(values.get("polywar_sector_size"), 100, 10, 10000)
+    max_sectors = _clamp_int(values.get("polywar_max_sectors_per_request"), 100, 1, 500)
+    siege_required_value = _clamp_int(values.get("polywar_capital_siege_required"), 1000, 100, 100000)
+    governance_rules = {
+        "election_hours": _clamp_int(values.get("polywar_commander_election_hours"), 24, 1, 168),
+        "term_hours": _clamp_int(values.get("polywar_commander_term_hours"), 168, 1, 8760),
+        "min_contribution": _clamp_int(values.get("polywar_commander_min_contribution"), 5, 0, 10**9),
+        "min_members": _clamp_int(values.get("polywar_commander_min_members_for_election"), 2, 1, 1000000),
+        "max_statement_length": _clamp_int(values.get("polywar_commander_max_statement_length"), 280, 0, 1000),
+        "max_orders": _clamp_int(values.get("polywar_commander_order_limit"), 5, 0, 100),
+        "order_duration_hours": _clamp_int(values.get("polywar_capital_order_duration_hours"), 24, 1, 168),
+    }
     margin = max(area + 8, min(width, height) // 10)
     bases = {1: (margin, margin), 2: (width - margin - 1, margin), 3: (margin, height - margin - 1), 4: (width - margin - 1, height - margin - 1), 5: (width // 2, margin), 6: (margin, height // 2), 7: (width - margin - 1, height // 2)}
-    return PolyWarMapConfig(width, height, cs, area, bases, max_chunks)
+    return PolyWarMapConfig(width, height, cs, area, bases, max_chunks, capture_required, sec_size, max_sectors, siege_required_value, governance_rules)
 
 
-def _readonly_active_season(conn):
-    row = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+def get_active_season_readonly(conn, include_secret_seed=False):
+    cols = "id,name,status,starts_at,ends_at,completed_at,victory_type,winner_faction_id,domination_faction_id,domination_started_at,finalization_started_at,created_at"
+    if include_secret_seed:
+        cols += ",secret_seed"
+    row = polywar._fetchone(conn.cursor(), f"SELECT {cols} FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
     if not row:
         raise RuntimeError("polywar_not_initialized")
     return row
 
 
-def get_active_season_readonly(conn, include_secret_seed=False):
-    season = _readonly_active_season(conn)
-    if include_secret_seed and not season.get("secret_seed"):
-        row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
-        season["secret_seed"] = row and row.get("secret_seed")
-    return season
+def begin_polywar_readonly(conn):
+    if not polywar._is_sqlite(conn):
+        polywar._execute(conn.cursor(), "SET TRANSACTION READ ONLY")
+        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
+        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
 
 
 def _setting_int(key, default, lo, hi):
@@ -206,7 +229,7 @@ def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> st
 
 
 def terrain_at(seed, x: int, y: int) -> str:
-    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request(), _setting_int("polywar_capture_progress_required",100,1,1000), 100, 100, 1000, {})
     return terrain_at_with_config(seed, x, y, cfg)
 
 def get_starting_bases():
@@ -222,7 +245,7 @@ def start_owner_with_config(x, y, config: PolyWarMapConfig):
     return None
 
 def _start_owner(x, y):
-    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request(), _setting_int("polywar_capture_progress_required",100,1,1000), 100, 100, 1000, {})
     return start_owner_with_config(x, y, cfg)
 
 
@@ -276,9 +299,7 @@ def _check_chunk_rate(user_id: int, amount: int):
 
 
 def _set_read_timeouts(conn):
-    if not polywar._is_sqlite(conn):
-        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
-        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+    begin_polywar_readonly(conn)
 
 
 def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
@@ -301,18 +322,22 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             ranges.append((cx, cy, x0, y0, min(config.chunk_size, config.width - x0), min(config.chunk_size, config.height - y0)))
         t = time.monotonic()
         materialized = {}
+        requested_chunk_keys = {(int(cx), int(cy)) for cx, cy, *_ in ranges}
         if ranges:
-            min_x = min(r[2] for r in ranges); max_x = max(r[2] + r[4] for r in ranges); min_y = min(r[3] for r in ranges); max_y = max(r[3] + r[5] for r in ranges)
-            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, min_x, max_x, min_y, max_y))
-            wanted = {(x, y) for _, _, x0, y0, w, h in ranges for y in range(y0, y0 + h) for x in range(x0, x0 + w)}
+            predicates = []
+            params = [sid]
+            for _, _, x0, y0, w, h in ranges:
+                predicates.append("(x >= %s AND x < %s AND y >= %s AND y < %s)")
+                params.extend([x0, x0 + w, y0, y0 + h])
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at FROM polywar_cells WHERE season_id=%s AND (" + " OR ".join(predicates) + ")", tuple(params))
             for r in rows:
-                xy = (int(r["x"]), int(r["y"]))
-                if xy in wanted:
-                    materialized[xy] = r
+                x, y = int(r["x"]), int(r["y"])
+                if (x // config.chunk_size, y // config.chunk_size) in requested_chunk_keys:
+                    materialized[(x, y)] = r
         logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=materialized_cells duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
         out = []
         colors = {fid: color for fid, _, _, color, _ in polywar.FACTIONS}
-        contest_required = _setting_int("polywar_capture_progress_required",100,1,1000)
+        contest_required = config.capture_progress_required
         for cx, cy, x0, y0, w, h in ranges:
             t = time.monotonic(); terrain = terrain_chunk_with_config(sid, seed, cx, cy, config); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=terrain duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
             owners = [[int(materialized[(xx, yy)]["owner_faction_id"]) if (xx, yy) in materialized else start_owner_with_config(xx, yy, config) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
@@ -325,7 +350,7 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
             ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
         from services import polywar_capital_service as capitals, polywar_governance_service as governance, polywar_mine_service as mines, polywar_rebellion_service as reb
-        capitals.enrich_chunks(conn, sid, out)
+        capitals.enrich_chunks(conn, sid, out, siege_required_value=config.capital_siege_required)
         player = polywar._fetchone(conn.cursor(), "SELECT faction_id FROM polywar_players WHERE season_id=%s AND user_id=%s", (sid, int(user_id))) or {}
         fid = player.get("faction_id")
         for ch in out:

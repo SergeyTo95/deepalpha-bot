@@ -185,7 +185,8 @@ class PolyWarMap {
     this.sectorSeq = 0;
     this.loading = new Set();
     this.pendingRequests = new Map();
-    this.mapError = null;
+    this.failedChunks = new Set();
+    this.initialChunksReady = false;
     this.abort = new AbortController();
     this.destroyed = false;
     this.drawFrame = null;
@@ -204,9 +205,10 @@ class PolyWarMap {
     this.cx = b.x;
     this.cy = b.y;
     this.bind();
-    this.resize();
+    this.resize({ loadData: false });
     this.select(b.x, b.y);
-    this.ensureChunks().finally(() => Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]));
+    this.requestDraw();
+    this.bootstrapInitialLoad();
   }
   bind() {
     const signal = this.abort.signal;
@@ -241,8 +243,9 @@ class PolyWarMap {
     this.sectorLoading.clear();
   }
   updateState(state) { this.state = state; this.updatePanel(); }
-  resize() { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.w = r.width; this.h = r.height; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
-  zoom(f) { this.cell = Math.max(2, Math.min(36, this.cell * f)); this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
+  async bootstrapInitialLoad() { await this.ensureChunks(); if (this.destroyed) return; this.initialChunksReady = true; await Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]); }
+  resize({ loadData = true } = {}) { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.w = r.width; this.h = r.height; this.clamp(); if (loadData && this.initialChunksReady) { this.ensureChunks(); this.ensureSectors(); } this.requestDraw(); }
+  zoom(f) { this.cell = Math.max(2, Math.min(36, this.cell * f)); if (this.cell >= 6) this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
   clamp() { this.cx = Math.max(0, Math.min(this.state.map.width - 1, this.cx)); this.cy = Math.max(0, Math.min(this.state.map.height - 1, this.cy)); }
   centerOnBase(zoom = 18) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.max(this.cell, zoom); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
   screenToCell(px, py) { return { x: Math.floor(this.cx + (px - this.w / 2) / this.cell), y: Math.floor(this.cy + (py - this.h / 2) / this.cell) }; }
@@ -263,7 +266,9 @@ class PolyWarMap {
   async ensureChunks(forceKey) {
     if (this.destroyed) return;
     const visible = this.visibleChunks();
-    const wanted = forceKey ? [[...forceKey.split(",").map(Number), true]] : visible.map(([x,y]) => [x,y,false]);
+    if (!forceKey && this.cell < 6) { this.ensureSectors(); return; }
+    const retryKeys = !forceKey ? [...this.failedChunks].map(k => k.split(",").map(Number)) : [];
+    const wanted = forceKey ? [[...forceKey.split(",").map(Number), true]] : visible.concat(retryKeys).map(([x,y]) => [x,y,false]);
     const missing = [];
     for (const [x, y, forced] of wanted) {
       const key = `${x},${y}`;
@@ -272,13 +277,13 @@ class PolyWarMap {
     }
     const unique = [...new Map(missing.map(c => [c.join(","), c])).values()];
     if (!unique.length) return;
-    this.mapError = null;
     this.status("Loading chunks…");
     const limit = Math.max(1, Number(this.state.map.max_chunks_per_request || 9));
     const retryable = new Set(["server_error", "request_timeout", "network_error", "deadlock_retryable"]);
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const loadBatch = async (batch) => {
+    const loadBatch = async (batch, batchKey) => {
       const batchKeys = batch.map(c => c.join(","));
+      let promiseForThisBatch = null;
       batchKeys.forEach(k => this.loading.add(k));
       try {
         let data = null;
@@ -289,30 +294,33 @@ class PolyWarMap {
         }
         if (this.destroyed) return data;
         if (data?.ok) {
-          data.chunks.forEach(ch => this.cache.set(`${ch.chunk_x},${ch.chunk_y}`, ch));
+          const returned = new Set();
+          data.chunks.forEach(ch => { const key = `${ch.chunk_x},${ch.chunk_y}`; returned.add(key); this.cache.set(key, ch); this.failedChunks.delete(key); });
+          batchKeys.forEach(k => { if (!returned.has(k)) this.failedChunks.add(k); });
           this.pruneCache();
-          this.mapError = null;
         } else {
-          this.mapError = data?.error || "chunk_error";
-          this.status("Map data unavailable");
-          this.showRetryMap();
+          batchKeys.forEach(k => this.failedChunks.add(k));
         }
+        this.updateChunkStatus();
         this.requestDraw(); this.updatePanel();
         return data;
       } finally {
-        batchKeys.forEach(k => { this.loading.delete(k); this.pendingRequests.delete(k); });
-        if (!this.loading.size && !this.mapError) this.status("");
+        batchKeys.forEach(k => this.loading.delete(k));
+        if (this.pendingRequests.has(batchKey)) this.pendingRequests.delete(batchKey);
+        this.updateChunkStatus();
       }
     };
     const tasks = [];
     for (let i = 0; i < unique.length && !this.destroyed; i += limit) {
       const batch = unique.slice(i, i + limit);
       const key = batch.map(c => c.join(",")).join(";");
-      if (!this.pendingRequests.has(key)) this.pendingRequests.set(key, loadBatch(batch));
+      if (!this.pendingRequests.has(key)) { const promise = loadBatch(batch, key); this.pendingRequests.set(key, promise); }
       tasks.push(this.pendingRequests.get(key));
     }
     await Promise.allSettled(tasks);
   }
+
+  updateChunkStatus() { if (this.loading.size) this.status("Loading chunks…"); else if (this.failedChunks.size) { this.status("Map data unavailable"); this.showRetryMap(); } else this.status(""); }
 
   showRetryMap() {
     let btn = document.getElementById("retryMapBtn");
@@ -320,7 +328,7 @@ class PolyWarMap {
     const status = document.getElementById("chunkStatus");
     btn = document.createElement("button");
     btn.className = "btn mini"; btn.id = "retryMapBtn"; btn.textContent = "Retry map";
-    btn.onclick = () => { btn.remove(); this.mapError = null; this.ensureChunks(); };
+    btn.onclick = () => { btn.remove(); this.ensureChunks(); };
     status?.after(btn);
   }
 

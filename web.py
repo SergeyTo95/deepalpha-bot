@@ -827,6 +827,16 @@ async def handle_polywar_join_api(request):
         return _json_response({"ok": False, "error": code}, status=status)
 
 
+def _polywar_read_error_response(exc):
+    text = str(exc).lower()
+    if isinstance(exc, RuntimeError) and str(exc) == "polywar_not_initialized":
+        return _json_response({"ok": False, "error": "polywar_not_initialized"}, status=503)
+    if "deadlock detected" in text or "serialization failure" in text or "deadlock" in text or "could not serialize" in text:
+        return _json_response({"ok": False, "error": "deadlock_retryable"}, status=503)
+    logger.exception("polywar_read_endpoint_failed")
+    return _json_response({"ok": False, "error": "server_error"}, status=500)
+
+
 async def handle_polywar_chunks_api(request):
     current = _current_web_user(request)
     if not current:
@@ -842,6 +852,8 @@ async def handle_polywar_chunks_api(request):
         return _json_response(await asyncio.to_thread(get_polywar_chunks, int(current.get("user_id") or 0), chunks))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=400)
+    except Exception as e:
+        return _polywar_read_error_response(e)
 
 
 async def handle_polywar_sectors_api(request):
@@ -862,8 +874,7 @@ async def handle_polywar_sectors_api(request):
         code = str(e)
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
     except Exception as e:
-        print(f"handle_polywar_sectors_api error: {e}")
-        return _json_response({"ok": False, "error": "server_error"}, status=500)
+        return _polywar_read_error_response(e)
 
 async def handle_polywar_action_api(request):
     current = _current_web_user(request)
@@ -1003,6 +1014,8 @@ async def handle_polywar_capitals_api(request):
     except ValueError as e:
         code = str(e)
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+    except Exception as e:
+        return _polywar_read_error_response(e)
 
 
 async def handle_polywar_governance_api(request):
@@ -1014,6 +1027,8 @@ async def handle_polywar_governance_api(request):
     except ValueError as e:
         code = str(e)
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
+    except Exception as e:
+        return _polywar_read_error_response(e)
 
 
 async def handle_polywar_nominate_api(request):

@@ -342,9 +342,8 @@ def _check_rate(user_id):
 
 
 def _set_read_timeouts(conn):
-    if not polywar._is_sqlite(conn):
-        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
-        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+    from services import polywar_map_service as m
+    m.begin_polywar_readonly(conn)
 
 
 def _synthetic_sector(sx, sy):
@@ -359,12 +358,12 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
     try:
         _set_read_timeouts(conn)
         config = m.load_map_config(conn)
-        max_x = math.ceil(config.width / sector_size()) - 1
-        max_y = math.ceil(config.height / sector_size()) - 1
+        max_x = math.ceil(config.width / config.sector_size) - 1
+        max_y = math.ceil(config.height / config.sector_size) - 1
         if max_sx > max_x or max_sy > max_y:
             raise ValueError('out_of_bounds')
         count = (max_sx - min_sx + 1) * (max_sy - min_sy + 1)
-        if count > max_sectors_per_request():
+        if count > config.max_sectors_per_request:
             raise ValueError('too_many_sectors')
         _check_rate(user_id)
         season = m.get_active_season_readonly(conn); sid = int(season['id'])

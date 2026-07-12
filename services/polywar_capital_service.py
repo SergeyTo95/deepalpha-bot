@@ -286,11 +286,11 @@ def get_capitals(user_id: int = None):
     conn = polywar.get_connection()
     try:
         if not polywar._is_sqlite(conn):
-            polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
-            polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+            m.begin_polywar_readonly(conn)
         from services import polywar_map_service as m
+        config = m.load_map_config(conn)
         season = m.get_active_season_readonly(conn); sid = int(season['id'])
-        rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = siege_required()
+        rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = config.capital_siege_required
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
     except Exception:
         polywar._safe_rollback(conn); raise
@@ -298,8 +298,8 @@ def get_capitals(user_id: int = None):
         conn.close()
 
 
-def enrich_chunks(conn, sid, chunks):
-    req = siege_required(); c = conn.cursor()
+def enrich_chunks(conn, sid, chunks, siege_required_value=None):
+    req = int(siege_required_value or siege_required()); c = conn.cursor()
     for ch in chunks:
         x0, y0, w, h = ch['chunk_x'] * ch['chunk_size'], ch['chunk_y'] * ch['chunk_size'], ch['width'], ch['height']
         rows = polywar._fetchall(c, 'SELECT x,y,original_faction_id,controller_faction_id,besieging_faction_id,siege_progress FROM polywar_capitals WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s', (sid, x0, x0+w, y0, y0+h))

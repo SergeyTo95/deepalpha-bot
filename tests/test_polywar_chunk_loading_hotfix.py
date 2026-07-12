@@ -40,7 +40,7 @@ def test_read_endpoints_do_not_bootstrap_or_write():
 
 def test_frontend_chunk_loader_grid_retry_and_initial_order():
     js = Path('webapp/polywar.js').read_text()
-    assert 'this.ensureChunks().finally(() => Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]))' in js
+    assert 'bootstrapInitialLoad' in js and 'Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()])' in js
     ensure = js.split('async ensureChunks', 1)[1].split('async ensureSectors', 1)[0]
     assert 'finally' in ensure
     assert '300' in ensure and '1000' in ensure
