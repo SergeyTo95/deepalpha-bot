@@ -61,8 +61,8 @@ def load_map_config(conn) -> PolyWarMapConfig:
         else:
             raise RuntimeError("polywar_not_initialized") from exc
     values = {str(r.get("key")): r.get("value") for r in rows}
-    width = _clamp_int(values.get("polywar_map_width"), 10000, 512, 100000)
-    height = _clamp_int(values.get("polywar_map_height"), 10000, 512, 100000)
+    width = _clamp_int(values.get("polywar_map_width"), 32000, 512, 100000)
+    height = _clamp_int(values.get("polywar_map_height"), 32000, 512, 100000)
     cs = _clamp_int(values.get("polywar_chunk_size"), 64, 16, 128)
     area = _clamp_int(values.get("polywar_starting_area_size"), 15, 3, 65)
     max_chunks = _clamp_int(values.get("polywar_max_chunks_per_request"), 9, 1, 25)
@@ -79,8 +79,7 @@ def load_map_config(conn) -> PolyWarMapConfig:
         "max_orders": _clamp_int(values.get("polywar_commander_order_limit"), 5, 0, 100),
         "order_duration_hours": _clamp_int(values.get("polywar_capital_order_duration_hours"), 24, 1, 168),
     }
-    margin = max(area + 8, min(width, height) // 10)
-    bases = {1: (margin, margin), 2: (width - margin - 1, margin), 3: (margin, height - margin - 1), 4: (width - margin - 1, height - margin - 1), 5: (width // 2, margin), 6: (margin, height // 2), 7: (width - margin - 1, height // 2)}
+    bases = faction_base_positions(width, height)
     return PolyWarMapConfig(width, height, cs, area, bases, max_chunks, capture_required, sec_size, max_sectors, siege_required_value, governance_rules)
 
 
@@ -106,11 +105,11 @@ def _setting_int(key, default, lo, hi):
 
 
 def map_width():
-    return _setting_int("polywar_map_width", 10000, 512, 100000)
+    return _setting_int("polywar_map_width", 32000, 512, 100000)
 
 
 def map_height():
-    return _setting_int("polywar_map_height", 10000, 512, 100000)
+    return _setting_int("polywar_map_height", 32000, 512, 100000)
 
 
 def chunk_size():
@@ -151,15 +150,16 @@ def init_polywar_map_schema(conn=None):
 
 def faction_base_positions(width=None, height=None) -> Dict[int, Tuple[int, int]]:
     w, h = int(width or map_width()), int(height or map_height())
-    margin = max(starting_area_size() + 8, min(w, h) // 10)
+    margin = max(starting_area_size() + 64, min(w, h) // 7)
+    midx, midy = w // 2, h // 2
     return {
         1: (margin, margin),
         2: (w - margin - 1, margin),
         3: (margin, h - margin - 1),
         4: (w - margin - 1, h - margin - 1),
-        5: (w // 2, margin),
-        6: (margin, h // 2),
-        7: (w - margin - 1, h // 2),
+        5: (midx, margin),
+        6: (margin, midy),
+        7: (w - margin - 1, midy),
     }
 
 
@@ -203,31 +203,62 @@ def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> st
     for bx, by in config.bases.values():
         if (abs(x - bx) <= 1 and abs(y - by) < 90) or (abs(y - by) <= 1 and abs(x - bx) < 90):
             return "road"
-    r1 = abs((x * 37 + y * 19 + int(_hash(seed, "river") * 9973)) % 911 - 455)
-    r2 = abs((x * 13 - y * 29 + int(_hash(seed, "river2") * 9973)) % 1327 - 663)
-    if r1 < 3 or r2 < 2:
+    river_a = abs((x * 11 + y * 7 + int(_hash(seed, "river-a") * 20011)) % 2201 - 1100)
+    river_b = abs((x * 5 - y * 13 + int(_hash(seed, "river-b") * 30011)) % 3001 - 1500)
+    if river_a < 5 or river_b < 4:
         return "river"
-    water = _smooth(seed, x, y, 900) * 0.65 + _smooth(seed, x, y, 260) * 0.35
-    if water < 0.23:
+    lake = _smooth(seed + "lake", x, y, 1400) * 0.72 + _smooth(seed + "lake", x, y, 360) * 0.28
+    if lake < 0.18:
         return "water"
-    hills = _smooth(seed + "m", x, y, 520) * 0.7 + _smooth(seed + "m", x, y, 130) * 0.3
-    woods = _smooth(seed + "f", x, y, 380)
-    dry = _smooth(seed + "d", x, y, 700)
-    rare = _hash(seed, "rare", x // 5, y // 5)
-    if hills > 0.78:
+    ridge = abs(_smooth(seed + "ridge", x, y, 1800) - 0.5) + _smooth(seed + "ridge-detail", x, y, 240) * 0.35
+    forest_mass = _smooth(seed + "forest-mass", x, y, 1150) * 0.75 + _smooth(seed + "forest-detail", x, y, 260) * 0.25
+    dry = _smooth(seed + "dry-plains", x, y, 1700)
+    rare = _hash(seed, "old-war", x // 4, y // 4)
+    if ridge > 0.52:
         return "mountain"
-    if water < 0.30 and woods > 0.55:
+    if lake < 0.25 and forest_mass > 0.50:
         return "swamp"
-    if dry > 0.78:
+    if dry > 0.83 and forest_mass < 0.45:
         return "desert"
-    if woods > 0.62:
+    if forest_mass > 0.58:
         return "forest"
-    if rare > 0.995:
+    if rare > 0.992:
         return "ruins"
     return "plain"
 
 
 
+
+
+def world_feature_at_with_config(seed, x: int, y: int, terrain: str, owner, config: PolyWarMapConfig):
+    if terrain in {"water", "river", "mountain"}:
+        return None
+    for fid, (bx, by) in config.bases.items():
+        if abs(x - bx) <= 2 and abs(y - by) <= 2:
+            return {"type": "hq", "faction_id": fid, "label": "HQ"}
+    if owner:
+        age = _hash(seed, "territory-age", x // 2, y // 2)
+        if age > 0.985:
+            return {"type": "factory_smoke", "label": "Workshop"}
+        if age > 0.955:
+            return {"type": "house", "label": "Homestead"}
+        if age > 0.925:
+            return {"type": "flag", "label": "Flag"}
+        if (x + y + int(owner)) % 37 == 0:
+            return {"type": "roadlet", "label": "Patrol road"}
+    cell = _hash(seed, "feature", x // 3, y // 3)
+    spacing = (x % 3 == 1 and y % 3 == 1)
+    if not spacing or cell < 0.965:
+        return None
+    if terrain == "forest":
+        typ = "forest_camp" if cell > 0.988 else "grove"
+    elif terrain == "ruins":
+        typ = "abandoned_outpost" if cell > 0.984 else "battlefield"
+    elif terrain == "road":
+        typ = "radio_tower" if cell > 0.990 else "village"
+    else:
+        typ = "city" if cell > 0.996 else "factory" if cell > 0.990 else "village"
+    return {"type": typ, "label": typ.replace("_", " ").title()}
 
 def _legacy_map_config(chunk_size_override=None):
     return PolyWarMapConfig(
@@ -359,7 +390,13 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             owners = [[int(materialized[(xx, yy)]["owner_faction_id"]) if (xx, yy) in materialized else start_owner_with_config(xx, yy, config) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
             bases = [{"faction_id": fid, "x": bx, "y": by, "size": config.starting_area_size, "color": colors.get(fid)} for fid, (bx, by) in config.bases.items() if x0 <= bx < x0 + w and y0 <= by < y0 + h]
             contested = [{"x": int(r["x"]), "y": int(r["y"]), "owner_faction_id": int(r["owner_faction_id"]), "contesting_faction_id": r.get("contesting_faction_id"), "contest_progress": int(r.get("contest_progress") or 0), "contest_required": contest_required, "contested_at": polywar._iso(r.get("contested_at"))} for r in materialized.values() if x0 <= int(r["x"]) < x0 + w and y0 <= int(r["y"]) < y0 + h and int(r.get("contest_progress") or 0) > 0]
-            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": config.chunk_size, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "contested_cells": contested, "user_id": user_id})
+            features = []
+            for yy in range(h):
+                for xx in range(w):
+                    feat = world_feature_at_with_config(seed, x0 + xx, y0 + yy, terrain[yy][xx], owners[yy][xx], config)
+                    if feat:
+                        features.append({"x": x0 + xx, "y": y0 + yy, **feat})
+            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": config.chunk_size, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "features": features, "contested_cells": contested, "user_id": user_id})
         t = time.monotonic()
         for ch in out:
             x0, y0 = ch["chunk_x"] * config.chunk_size, ch["chunk_y"] * config.chunk_size
