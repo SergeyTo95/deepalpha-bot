@@ -227,6 +227,8 @@ def test_ambient_clouds_and_birds_are_canvas_only_and_reduced_motion_safe():
     assert "drawAmbient" in JS
     assert "this.clouds" in JS
     assert "this.birds" in JS
+    assert "makeCloudDescriptor" in JS
+    assert "makeBirdDescriptor" in JS
     assert "polywarReducedMotion" in JS
     assert "prefers-reduced-motion: reduce" in JS
     assert "ambientFps" in JS
@@ -242,6 +244,44 @@ def test_ambient_animation_is_bounded_and_destroyed_with_map():
     assert "cancelAnimationFrame(this.ambientFrame)" in JS
     assert "startAmbientLoop" in JS
     assert "1000 / fps" in JS
+    assert "lastAmbientTs" in JS
+    assert "updateAmbientEntities(dt)" in JS
+
+
+def test_clouds_use_screen_space_routes_not_camera_offsets():
+    ambient = JS[JS.index("  drawAmbient(ctx = this.ambientCtx"):JS.index("  requestAmbientDraw()", JS.index("  drawAmbient(ctx = this.ambientCtx"))]
+    descriptors = JS[JS.index("  makeCloudDescriptor"):JS.index("  makeBirdDescriptor", JS.index("  makeCloudDescriptor"))]
+    assert "routeStyle" in descriptors
+    assert "driftAmplitude" in descriptors
+    assert "wobblePhase" in descriptors
+    assert "vx" in descriptors and "vy" in descriptors
+    assert "cl.x * this.w" in ambient
+    assert "cl.y + wobble + arc" in ambient
+    assert "this.cx" not in ambient
+    assert "this.cy" not in ambient
+    assert "cellToScreen" not in ambient
+
+
+def test_clouds_and_birds_respawn_without_per_frame_random_jitter():
+    update = JS[JS.index("  updateAmbientEntities(dt)"):JS.index("  drawTerrainTile", JS.index("  updateAmbientEntities(dt)"))]
+    assert "this.makeCloudDescriptor" in update
+    assert "this.makeBirdDescriptor" in update
+    assert "cl.x += cl.vx * dt" in update
+    assert "bird.x += bird.vx * dt" in update
+    assert "Math.random" not in update
+
+
+def test_birds_have_phase_based_wing_flapping_and_screen_space_motion():
+    bird = JS[JS.index("  makeBirdDescriptor"):JS.index("  updateAmbientEntities", JS.index("  makeBirdDescriptor"))]
+    ambient = JS[JS.index("  drawAmbient(ctx = this.ambientCtx"):JS.index("  requestAmbientDraw()", JS.index("  drawAmbient(ctx = this.ambientCtx"))]
+    assert "wingPhase" in bird
+    assert "wingSpeed" in bird
+    assert "bird.wingPhase += bird.wingSpeed * dt" in JS
+    assert "Math.sin(bird.wingPhase)" in ambient
+    assert "bird.x * this.w" in ambient
+    assert "bird.y + bob" in ambient
+    assert "this.cx" not in ambient
+    assert "this.cy" not in ambient
 
 
 def test_map_visual_css_preserves_mobile_touch_and_overlay_layers():
@@ -272,7 +312,7 @@ def test_ambient_uses_separate_canvas_and_does_not_full_draw_on_tick():
     assert 'id="polywarAmbientCanvas"' in JS
     assert "this.ambientCanvas" in JS
     assert "this.ambientCtx" in JS
-    ambient = JS[JS.index("startAmbientLoop()"):JS.index("bindAmbientVisibility()")]
+    ambient = JS[JS.index("  startAmbientLoop() {"):JS.index("  bindAmbientVisibility()", JS.index("  startAmbientLoop() {"))]
     assert "this.draw(" not in ambient
     assert "this.drawAmbient" in ambient
     assert "requestAnimationFrame" in ambient
@@ -295,6 +335,7 @@ def test_destroy_cancels_ambient_raf_and_visibility_listener():
     assert "cancelAnimationFrame(this.ambientFrame)" in destroy
     assert "removeEventListener" in destroy
     assert "this.ambientFrame = null" in destroy
+    assert "this.lastAmbientTs = 0" in JS
     assert "this.ambientVisibilityHandler = null" in destroy
 
 

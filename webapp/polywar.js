@@ -222,6 +222,8 @@ class PolyWarMap {
     this.drawFrame = null;
     this.ambientFrame = null;
     this.lastAmbientDraw = 0;
+    this.lastAmbientTs = 0;
+    this.ambientRespawnSeq = 0;
     this.ambientVisibilityHandler = null;
     this.ambientEnabled = !polywarReducedMotion();
     this.lowPowerAmbient = polywarLowPowerMode();
@@ -243,6 +245,8 @@ class PolyWarMap {
     this.resize({ loadData: false });
     this.select(b.x, b.y);
     this.initAmbient();
+    this.bindAmbientVisibility();
+    this.startAmbientLoop();
     this.requestDraw();
     this.bootstrapInitialLoad();
   }
@@ -543,19 +547,53 @@ class PolyWarMap {
   initAmbient() {
     const seed = (this.state?.season?.id || 1) * 97;
     const clouds = this.lowPowerAmbient ? 3 : POLYWAR_VISUALS.maxClouds;
-    this.clouds = Array.from({ length: clouds }, (_, i) => ({
-      x: ((seed + i * 173) % 1000) / 1000,
-      y: .08 + (((seed + i * 97) % 620) / 1000),
-      size: .14 + (((seed + i * 41) % 90) / 1000),
-      speed: .0025 + i * .00045,
-      alpha: .12 + (i % 3) * .035
-    }));
-    this.birds = Array.from({ length: this.lowPowerAmbient ? 1 : POLYWAR_VISUALS.maxBirds }, (_, i) => ({
-      start: Date.now() + i * 4200,
-      duration: 7600 + i * 1500,
-      y: .2 + i * .22,
-      scale: .7 + i * .15
-    }));
+    this.clouds = Array.from({ length: clouds }, (_, i) => this.makeCloudDescriptor(seed, i));
+    this.birds = Array.from({ length: this.lowPowerAmbient ? 1 : POLYWAR_VISUALS.maxBirds }, (_, i) => this.makeBirdDescriptor(seed, i));
+  }
+  seededAmbientUnit(seed, salt) { return (((seed + salt * 1103515245) >>> 0) % 10000) / 10000; }
+  makeCloudDescriptor(seed, i, fromRespawn = false) {
+    const route = i % 3;
+    const y = .08 + this.seededAmbientUnit(seed, i + 7) * .58;
+    return {
+      x: fromRespawn ? -0.22 - this.seededAmbientUnit(seed, i + 31) * .18 : this.seededAmbientUnit(seed, i + 3) * 1.18 - .12,
+      y,
+      vx: .0032 + this.seededAmbientUnit(seed, i + 11) * .0048,
+      vy: route === 1 ? .0012 : route === 2 ? -.0008 : .0003,
+      scale: .62 + this.seededAmbientUnit(seed, i + 13) * .52,
+      opacity: .075 + this.seededAmbientUnit(seed, i + 17) * .055,
+      wobblePhase: this.seededAmbientUnit(seed, i + 19) * Math.PI * 2,
+      routeStyle: route,
+      driftAmplitude: .012 + this.seededAmbientUnit(seed, i + 23) * .026
+    };
+  }
+  makeBirdDescriptor(seed, i, fromRespawn = false) {
+    const right = i % 2 === 0;
+    return {
+      x: fromRespawn ? (right ? -0.1 : 1.1) : this.seededAmbientUnit(seed, i + 41),
+      y: .16 + this.seededAmbientUnit(seed, i + 43) * .42,
+      vx: (right ? 1 : -1) * (.018 + this.seededAmbientUnit(seed, i + 47) * .012),
+      vy: (this.seededAmbientUnit(seed, i + 53) - .5) * .003,
+      wingPhase: this.seededAmbientUnit(seed, i + 59) * Math.PI * 2,
+      wingSpeed: 4.2 + this.seededAmbientUnit(seed, i + 61) * 1.8,
+      scale: .65 + this.seededAmbientUnit(seed, i + 67) * .28,
+      driftAmplitude: .012 + this.seededAmbientUnit(seed, i + 71) * .018
+    };
+  }
+  updateAmbientEntities(dt) {
+    const seed = (this.state?.season?.id || 1) * 97;
+    for (let i = 0; i < (this.clouds || []).length; i++) {
+      const cl = this.clouds[i];
+      cl.x += cl.vx * dt;
+      cl.y += cl.vy * dt * .12;
+      if (cl.x > 1.24 || cl.y < -.18 || cl.y > .82) this.clouds[i] = this.makeCloudDescriptor(seed + (++this.ambientRespawnSeq * 37), i, true);
+    }
+    for (let i = 0; i < (this.birds || []).length; i++) {
+      const bird = this.birds[i];
+      bird.x += bird.vx * dt;
+      bird.y += bird.vy * dt;
+      bird.wingPhase += bird.wingSpeed * dt;
+      if (bird.x < -.14 || bird.x > 1.14 || bird.y < .06 || bird.y > .7) this.birds[i] = this.makeBirdDescriptor(seed + (++this.ambientRespawnSeq * 37), i, true);
+    }
   }
   drawTerrainTile(ctx, terrain, p, x, y) {
     const cell = this.cell, depth = POLYWAR_VISUALS.terrainDepth[terrain] ?? .12, base = TERRAIN_COLOR[terrain] || "#555";
@@ -587,26 +625,45 @@ class PolyWarMap {
     ctx.fillStyle = "rgba(255,255,255,.24)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.36,p.y+c*.58); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
     ctx.fillStyle = "rgba(0,0,0,.22)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.86,p.y+c*.78); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
   }
-  drawAmbient(ctx = this.ambientCtx, now = Date.now()) {
+  drawAmbient(ctx = this.ambientCtx, now = performance.now()) {
     if (!this.ambientEnabled || !ctx || !this.clouds?.length || document.hidden) return;
+    const previous = this.lastAmbientTs || now;
+    const dt = Math.min(0.35, Math.max(0, (now - previous) / 1000));
+    this.lastAmbientTs = now;
+    this.updateAmbientEntities(dt);
     ctx.clearRect(0, 0, this.w, this.h);
     if (this.cell < 8) return;
     ctx.save(); ctx.globalCompositeOperation = "screen";
     for (const cl of this.clouds) {
-      const x = ((cl.x + (now * cl.speed / 1000)) % 1.22 - .12) * this.w, y = cl.y * this.h, r = cl.size * Math.min(this.w, this.h);
-      if (x + r < 0 || x - r > this.w) continue;
-      ctx.fillStyle = `rgba(255,255,255,${cl.alpha})`;
-      ctx.beginPath(); ctx.ellipse(x, y, r*.9, r*.28, 0, 0, Math.PI*2); ctx.ellipse(x+r*.38, y-r*.04, r*.58, r*.22, 0, 0, Math.PI*2); ctx.ellipse(x-r*.42, y+r*.02, r*.52, r*.2, 0, 0, Math.PI*2); ctx.fill();
+      const wobble = Math.sin(now / 6200 + cl.wobblePhase) * cl.driftAmplitude;
+      const arc = cl.routeStyle === 2 ? Math.sin((cl.x + cl.wobblePhase) * Math.PI) * cl.driftAmplitude * .7 : 0;
+      const x = cl.x * this.w, y = (cl.y + wobble + arc) * this.h, r = cl.scale * Math.min(this.w, this.h) * .11;
+      if (x + r * 1.8 < 0 || x - r * 1.8 > this.w) continue;
+      const glow = ctx.createRadialGradient(x, y, r * .15, x, y, r * 1.35);
+      glow.addColorStop(0, `rgba(255,255,255,${cl.opacity})`);
+      glow.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.ellipse(x, y, r*1.65, r*.52, -.04, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${cl.opacity * .9})`;
+      ctx.beginPath(); ctx.ellipse(x-r*.54, y+r*.03, r*.58, r*.22, 0, 0, Math.PI*2); ctx.ellipse(x, y-r*.08, r*.72, r*.3, 0, 0, Math.PI*2); ctx.ellipse(x+r*.62, y, r*.66, r*.24, 0, 0, Math.PI*2); ctx.fill();
     }
-    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = "rgba(8,14,30,.28)"; ctx.lineWidth = 1.2;
+    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = "rgba(8,14,30,.34)"; ctx.lineWidth = 1.15; ctx.lineCap = "round";
     for (const bird of this.birds || []) {
-      const phase = ((now - bird.start) % 14000) / bird.duration; if (phase < 0 || phase > 1) continue;
-      const bx = -24 + phase * (this.w + 48), by = bird.y * this.h + Math.sin(phase * Math.PI * 2) * 16, s = 7 * bird.scale;
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx+s*.7, by-s*.6, bx+s*1.4, by); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx-s*.7, by-s*.6, bx-s*1.4, by); ctx.stroke();
+      const bob = Math.sin(now / 1900 + bird.wingPhase) * bird.driftAmplitude;
+      const bx = bird.x * this.w, by = (bird.y + bob) * this.h, s = 7 * bird.scale;
+      if (bx < -24 || bx > this.w + 24) continue;
+      const flap = Math.sin(bird.wingPhase) * .65;
+      const dir = bird.vx >= 0 ? 1 : -1;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx + dir * s*.55, by - s*(.35 + flap), bx + dir * s*1.45, by - s*.08);
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx - dir * s*.55, by - s*(.35 - flap), bx - dir * s*1.45, by - s*.08);
+      ctx.stroke();
     }
     ctx.restore();
   }
-  requestAmbientDraw() { if (this.ambientEnabled && this.ambientCtx) this.drawAmbient(this.ambientCtx); }
+  requestAmbientDraw() { if (this.ambientEnabled && this.ambientCtx && !document.hidden) this.drawAmbient(this.ambientCtx); }
   startAmbientLoop() {
     if (!this.ambientEnabled || !this.ambientCtx || this.ambientFrame || document.hidden) return;
     const fps = this.lowPowerAmbient ? POLYWAR_VISUALS.lowPowerAmbientFps : POLYWAR_VISUALS.ambientFps;
@@ -620,8 +677,8 @@ class PolyWarMap {
   bindAmbientVisibility() {
     if (this.ambientVisibilityHandler || !this.ambientEnabled) return;
     this.ambientVisibilityHandler = () => {
-      if (document.hidden) { if (this.ambientFrame) cancelAnimationFrame(this.ambientFrame); this.ambientFrame = null; this.ambientCtx?.clearRect(0, 0, this.w, this.h); }
-      else this.startAmbientLoop();
+      if (document.hidden) { if (this.ambientFrame) cancelAnimationFrame(this.ambientFrame); this.ambientFrame = null; this.lastAmbientTs = 0; this.ambientCtx?.clearRect(0, 0, this.w, this.h); }
+      else { this.lastAmbientTs = 0; this.startAmbientLoop(); }
     };
     document.addEventListener("visibilitychange", this.ambientVisibilityHandler);
   }
