@@ -6,6 +6,9 @@ import secrets
 import asyncio
 import time
 import threading
+import logging
+from datetime import date, datetime
+from decimal import Decimal
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 import aiohttp
@@ -61,6 +64,8 @@ from db.database import (
     create_ton_purchase_intent, submit_ton_purchase_intent, fulfill_ton_purchase_intent,
     fail_ton_purchase_intent, increment_post_share,
 )
+
+logger = logging.getLogger(__name__)
 
 PORT = int(os.getenv("PORT", 3000))
 
@@ -157,9 +162,19 @@ def _polywar_rate_limit(bucket, user_id, limit=30, window=60, max_users=4096):
         q.append(now)
 
 
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
+    )
+
+
 def _json_response(data: dict, status: int = 200) -> web.Response:
     return web.Response(
-        text=json.dumps(data, ensure_ascii=False),
+        text=json.dumps(data, ensure_ascii=False, default=_json_default),
         content_type="application/json",
         headers=CORS_HEADERS,
         status=status,
@@ -757,7 +772,12 @@ async def handle_polywar_state_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
-    return _json_response(get_polywar_state(int(current.get("user_id") or 0)))
+    try:
+        state = await asyncio.to_thread(get_polywar_state, int(current.get("user_id") or 0))
+    except Exception:
+        logger.exception("PolyWar state API unexpected error")
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
+    return _json_response(state)
 
 
 async def handle_polywar_player_api(request):
