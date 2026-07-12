@@ -95,14 +95,14 @@ def test_seven_factions_and_season_stats_created(polydb):
     assert len(factions) == 7
     assert len(with_stats) == 7
     assert stats_count == 7
-    assert {f["slug"] for f in factions} >= {"blue-coalition", "purple-pact"}
+    assert {f["slug"] for f in factions} >= {"red-dominion", "purple-empire"}
     assert "influence_score" in with_stats[0]
     conn.close()
 
 
 def test_join_faction_is_atomic_and_rejects_repeat_or_unknown(polydb):
     state = polywar.join_faction(42, 1)
-    assert state["selected_faction"]["name"] == "Blue Coalition"
+    assert state["selected_faction"]["name"] == "Red Dominion"
     with pytest.raises(ValueError, match="faction_already_selected"):
         polywar.join_faction(42, 2)
     with pytest.raises(ValueError, match="unknown_faction"):

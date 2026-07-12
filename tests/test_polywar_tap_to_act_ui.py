@@ -222,27 +222,23 @@ def test_visual_depth_render_path_and_close_camera_defaults():
     assert "terrainDepth" in JS
 
 
-def test_ambient_clouds_and_birds_are_canvas_only_and_reduced_motion_safe():
-    assert "initAmbient" in JS
-    assert "drawAmbient" in JS
-    assert "this.clouds" in JS
+def test_living_world_replaces_cloud_ambient():
+    assert "initAmbientLife" in JS
+    assert "drawFeature" in JS
+    assert "drawBirds" in JS
     assert "this.birds" in JS
     assert "polywarReducedMotion" in JS
     assert "prefers-reduced-motion: reduce" in JS
-    assert "ambientFps" in JS
-    render = JS[JS.index('root.innerHTML = `'):JS.index('document.querySelectorAll("[data-faction]")')]
-    assert "cloud" not in render.lower()
-    assert "bird" not in render.lower()
+    assert "drawAmbient" not in JS
+    assert "this.clouds" not in JS
+    assert "maxClouds" not in JS
 
 
-def test_ambient_animation_is_bounded_and_destroyed_with_map():
-    assert "maxClouds: 5" in JS
+def test_ambient_birds_are_lightweight_and_no_separate_raf():
     assert "maxBirds: 2" in JS
-    assert "lowPowerAmbient" in JS
-    assert "cancelAnimationFrame(this.ambientFrame)" in JS
-    assert "startAmbientLoop" in JS
-    assert "1000 / fps" in JS
-
+    assert "requestAnimationFrame((now)" not in JS
+    assert "startAmbientLoop" not in JS
+    assert "document.hidden" in JS
 
 def test_map_visual_css_preserves_mobile_touch_and_overlay_layers():
     assert ".map-wrap::before" in CSS
@@ -268,34 +264,13 @@ def test_base_button_uses_center_on_base_close_zoom_helper():
     assert "this.cell = Math.min(POLYWAR_VISUALS.maxCell, zoom)" in JS
 
 
-def test_ambient_uses_separate_canvas_and_does_not_full_draw_on_tick():
+def test_living_world_features_use_main_render_pass():
     assert 'id="polywarAmbientCanvas"' in JS
-    assert "this.ambientCanvas" in JS
-    assert "this.ambientCtx" in JS
-    ambient = JS[JS.index("startAmbientLoop()"):JS.index("bindAmbientVisibility()")]
-    assert "this.draw(" not in ambient
-    assert "this.drawAmbient" in ambient
-    assert "requestAnimationFrame" in ambient
+    assert "drawFeature" in JS
+    assert "ch.features" in JS
+    assert "this.draw(" not in JS[JS.index("drawBirds(ctx"):JS.index("drawSkeleton", JS.index("drawBirds(ctx"))]
     assert "#polywarAmbientCanvas" in CSS
     assert "pointer-events:none" in CSS
-
-
-def test_ambient_fps_bounds_and_reduced_motion_hidden_document():
-    assert "ambientFps: 12" in JS
-    assert "lowPowerAmbientFps: 8" in JS
-    assert "this.lowPowerAmbient ? POLYWAR_VISUALS.lowPowerAmbientFps : POLYWAR_VISUALS.ambientFps" in JS
-    assert "this.ambientEnabled = !polywarReducedMotion()" in JS
-    assert "document.hidden" in JS
-    assert 'document.addEventListener("visibilitychange"' in JS
-    assert 'document.removeEventListener("visibilitychange"' in JS
-
-
-def test_destroy_cancels_ambient_raf_and_visibility_listener():
-    destroy = JS[JS.index("destroy()") : JS.index("updateState(state)")]
-    assert "cancelAnimationFrame(this.ambientFrame)" in destroy
-    assert "removeEventListener" in destroy
-    assert "this.ambientFrame = null" in destroy
-    assert "this.ambientVisibilityHandler = null" in destroy
 
 
 def test_road_detail_uses_bevel_not_fixed_diagonal():
