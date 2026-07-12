@@ -184,6 +184,8 @@ class PolyWarMap {
     this.sectorLoading = new Set();
     this.sectorSeq = 0;
     this.loading = new Set();
+    this.pendingRequests = new Map();
+    this.mapError = null;
     this.abort = new AbortController();
     this.destroyed = false;
     this.drawFrame = null;
@@ -204,8 +206,7 @@ class PolyWarMap {
     this.bind();
     this.resize();
     this.select(b.x, b.y);
-    this.refreshCapitals();
-    this.refreshGovernance();
+    this.ensureChunks().finally(() => Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]));
   }
   bind() {
     const signal = this.abort.signal;
@@ -236,6 +237,7 @@ class PolyWarMap {
     if (this.drawFrame) cancelAnimationFrame(this.drawFrame);
     this.drawFrame = null;
     this.loading.clear();
+    this.pendingRequests.clear();
     this.sectorLoading.clear();
   }
   updateState(state) { this.state = state; this.updatePanel(); }
@@ -260,28 +262,66 @@ class PolyWarMap {
   }
   async ensureChunks(forceKey) {
     if (this.destroyed) return;
-    const seq = ++this.loadSeq;
     const visible = this.visibleChunks();
-    const missing = visible.filter(([x, y]) => !this.cache.has(`${x},${y}`) && !this.loading.has(`${x},${y}`));
-    if (forceKey) { this.cache.delete(forceKey); missing.push(forceKey.split(",").map(Number)); }
+    const wanted = forceKey ? [[...forceKey.split(",").map(Number), true]] : visible.map(([x,y]) => [x,y,false]);
+    const missing = [];
+    for (const [x, y, forced] of wanted) {
+      const key = `${x},${y}`;
+      if (forced) this.cache.delete(key);
+      if (!this.cache.has(key) && !this.loading.has(key)) missing.push([x,y]);
+    }
     const unique = [...new Map(missing.map(c => [c.join(","), c])).values()];
     if (!unique.length) return;
-    unique.forEach(([x, y]) => this.loading.add(`${x},${y}`));
+    this.mapError = null;
     this.status("Loading chunks…");
     const limit = Math.max(1, Number(this.state.map.max_chunks_per_request || 9));
+    const retryable = new Set(["server_error", "request_timeout", "network_error", "deadlock_retryable"]);
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const loadBatch = async (batch) => {
+      const batchKeys = batch.map(c => c.join(","));
+      batchKeys.forEach(k => this.loading.add(k));
+      try {
+        let data = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          data = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
+          if (data?.ok || !retryable.has(data?.error)) break;
+          if (attempt < 2) await sleep(attempt === 0 ? 300 : 1000);
+        }
+        if (this.destroyed) return data;
+        if (data?.ok) {
+          data.chunks.forEach(ch => this.cache.set(`${ch.chunk_x},${ch.chunk_y}`, ch));
+          this.pruneCache();
+          this.mapError = null;
+        } else {
+          this.mapError = data?.error || "chunk_error";
+          this.status("Map data unavailable");
+          this.showRetryMap();
+        }
+        this.requestDraw(); this.updatePanel();
+        return data;
+      } finally {
+        batchKeys.forEach(k => { this.loading.delete(k); this.pendingRequests.delete(k); });
+        if (!this.loading.size && !this.mapError) this.status("");
+      }
+    };
+    const tasks = [];
     for (let i = 0; i < unique.length && !this.destroyed; i += limit) {
       const batch = unique.slice(i, i + limit);
-      const d = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
-      batch.forEach(([x, y]) => this.loading.delete(`${x},${y}`));
-      if (this.destroyed) return;
-      if (d.ok) d.chunks.forEach(ch => this.cache.set(`${ch.chunk_x},${ch.chunk_y}`, ch));
-      if (seq !== this.loadSeq) { this.requestDraw(); this.ensureChunks(); return; }
-      if (!d.ok) { this.status(d.error || "Chunk error"); continue; }
-      this.pruneCache();
-      this.requestDraw();
-      this.updatePanel();
+      const key = batch.map(c => c.join(",")).join(";");
+      if (!this.pendingRequests.has(key)) this.pendingRequests.set(key, loadBatch(batch));
+      tasks.push(this.pendingRequests.get(key));
     }
-    if (!this.loading.size) this.status("");
+    await Promise.allSettled(tasks);
+  }
+
+  showRetryMap() {
+    let btn = document.getElementById("retryMapBtn");
+    if (btn) return;
+    const status = document.getElementById("chunkStatus");
+    btn = document.createElement("button");
+    btn.className = "btn mini"; btn.id = "retryMapBtn"; btn.textContent = "Retry map";
+    btn.onclick = () => { btn.remove(); this.mapError = null; this.ensureChunks(); };
+    status?.after(btn);
   }
 
   async ensureSectors(forceKey) {
@@ -450,8 +490,11 @@ class PolyWarMap {
     if(!d.ok){ toast(d.error || "Flag failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return; }
     const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
   }
+  visibleCellBounds() { const a=this.screenToCell(0,0), b=this.screenToCell(this.w,this.h); return {minX:Math.max(0,Math.floor(Math.min(a.x,b.x))-1), maxX:Math.min(this.state.map.width-1,Math.ceil(Math.max(a.x,b.x))+1), minY:Math.max(0,Math.floor(Math.min(a.y,b.y))-1), maxY:Math.min(this.state.map.height-1,Math.ceil(Math.max(a.y,b.y))+1)}; }
+  drawSkeleton(ctx) { const b=this.visibleCellBounds(); if (this.cell < 6) return; for(let y=b.minY;y<=b.maxY;y++) for(let x=b.minX;x<=b.maxX;x++){ const key=`${Math.floor(x/this.state.map.chunk_size)},${Math.floor(y/this.state.map.chunk_size)}`; if(this.cache.has(key)) continue; const p=this.cellToScreen(x,y); ctx.fillStyle=((x+y)&1)?"rgba(255,255,255,.035)":"rgba(0,0,0,.035)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); } }
+  drawCellGrid(ctx) { const b=this.visibleCellBounds(); if (this.cell < 6) { const ss=this.sectorSize(), r=this.visibleSectorRange(); ctx.strokeStyle="rgba(255,255,255,.24)"; ctx.lineWidth=1; for(let sx=r.minX;sx<=r.maxX+1;sx++){ const p=this.cellToScreen(sx*ss,b.minY); ctx.beginPath(); ctx.moveTo(p.x,0); ctx.lineTo(p.x,this.h); ctx.stroke(); } for(let sy=r.minY;sy<=r.maxY+1;sy++){ const p=this.cellToScreen(b.minX,sy*ss); ctx.beginPath(); ctx.moveTo(0,p.y); ctx.lineTo(this.w,p.y); ctx.stroke(); } return; } ctx.strokeStyle="rgba(255,255,255,.13)"; ctx.lineWidth=1; ctx.beginPath(); for(let x=b.minX;x<=b.maxX+1;x++){ const p=this.cellToScreen(x,b.minY); ctx.moveTo(Math.round(p.x)+.5,0); ctx.lineTo(Math.round(p.x)+.5,this.h); } for(let y=b.minY;y<=b.maxY+1;y++){ const p=this.cellToScreen(b.minX,y); ctx.moveTo(0,Math.round(p.y)+.5); ctx.lineTo(this.w,Math.round(p.y)+.5); } ctx.stroke(); }
   requestDraw() { if (this.destroyed || this.drawFrame) return; this.drawFrame = requestAnimationFrame(() => { this.drawFrame = null; if (!this.destroyed) this.draw(); }); }
-  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; ctx.fillStyle = TERRAIN_COLOR[ch.terrain[yy][xx]] || "#555"; ctx.fillRect(p.x, p.y, this.cell + 0.5, this.cell + 0.5); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size); if(this.cell>3){ ctx.fillStyle="#fff"; ctx.font="11px sans-serif"; ctx.fillText(`${sx},${sy} ${sec?.dominance_percent??0}%`,p.x+4,p.y+14); } } } for (const b of this.state.map.bases || []) { const p = this.cellToScreen(b.x, b.y); ctx.fillStyle = b.color || "#fff"; ctx.beginPath(); ctx.arc(p.x + this.cell / 2, p.y + this.cell / 2, Math.max(5, this.cell * 0.9), 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.stroke(); } for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || []); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y)); if (this.pendingCellKey) { const [px,py]=this.pendingCellKey.split(",").map(Number), p=this.cellToScreen(px,py); ctx.strokeStyle="#35a6ff"; ctx.lineWidth=3; ctx.setLineDash([3,3]); ctx.strokeRect(p.x-2,p.y-2,this.cell+4,this.cell+4); ctx.setLineDash([]); setTimeout(()=>this.requestDraw(),120); } if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } if (this.selected) { const p = this.cellToScreen(this.selected.x, this.selected.y); ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.strokeRect(p.x-1, p.y-1, this.cell+2, this.cell+2); ctx.strokeStyle="#111"; ctx.lineWidth=1; ctx.strokeRect(p.x+2,p.y+2,Math.max(2,this.cell-4),Math.max(2,this.cell-4)); ctx.lineWidth = 1; } }
+  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); this.drawSkeleton(ctx); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; ctx.fillStyle = TERRAIN_COLOR[ch.terrain[yy][xx]] || "#555"; ctx.fillRect(p.x, p.y, this.cell + 0.5, this.cell + 0.5); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size); if(this.cell>3){ ctx.fillStyle="#fff"; ctx.font="11px sans-serif"; ctx.fillText(`${sx},${sy} ${sec?.dominance_percent??0}%`,p.x+4,p.y+14); } } } for (const b of this.state.map.bases || []) { const p = this.cellToScreen(b.x, b.y); ctx.fillStyle = b.color || "#fff"; ctx.beginPath(); ctx.arc(p.x + this.cell / 2, p.y + this.cell / 2, Math.max(5, this.cell * 0.9), 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.stroke(); } for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || []); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y)); if (this.pendingCellKey) { const [px,py]=this.pendingCellKey.split(",").map(Number), p=this.cellToScreen(px,py); ctx.strokeStyle="#35a6ff"; ctx.lineWidth=3; ctx.setLineDash([3,3]); ctx.strokeRect(p.x-2,p.y-2,this.cell+4,this.cell+4); ctx.setLineDash([]); setTimeout(()=>this.requestDraw(),120); } if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } this.drawCellGrid(ctx); if (this.selected) { const p = this.cellToScreen(this.selected.x, this.selected.y); ctx.fillStyle = "rgba(53,166,255,.24)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.strokeRect(p.x-1, p.y-1, this.cell+2, this.cell+2); ctx.strokeStyle="#111"; ctx.lineWidth=1; ctx.strokeRect(p.x+2,p.y+2,Math.max(2,this.cell-4),Math.max(2,this.cell-4)); ctx.lineWidth = 1; } }
 }
 
 function renderUnavailable(message) { clearTimers(); map?.destroy(); map = null; root.innerHTML = `<section class="glass card"><h2>PolyWar is temporarily unavailable</h2><p class="muted">${esc(message || "Please check back later.")}</p><a class="btn" href="/app">Back to DeepAlpha</a></section>`; }

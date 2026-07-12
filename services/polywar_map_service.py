@@ -6,13 +6,14 @@ import threading
 import time
 from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 from services import polywar_service as polywar
 
 logger = logging.getLogger(__name__)
 TERRAIN_COSTS = {"plain": 1, "forest": 1, "mountain": 2, "swamp": 2, "desert": 1, "road": 1, "ruins": 1, "water": None, "river": None}
-_TERRAIN_CACHE: "OrderedDict[Tuple[int, str, int, int, int], List[List[str]]]" = OrderedDict()
+_TERRAIN_CACHE: "OrderedDict[Tuple[Any, ...], List[List[str]]]" = OrderedDict()
 _NOISE_CACHE: "OrderedDict[Tuple[str, int, int, int], float]" = OrderedDict()
 _CACHE_LOCK = threading.RLock()
 _RATE_LOCK = threading.Lock()
@@ -21,6 +22,60 @@ MAX_TERRAIN_CHUNKS = 256
 MAX_NOISE_VALUES = 20000
 CHUNK_RATE_WINDOW = 10
 CHUNK_RATE_MAX = 60
+
+
+@dataclass(frozen=True)
+class PolyWarMapConfig:
+    width: int
+    height: int
+    chunk_size: int
+    starting_area_size: int
+    bases: Dict[int, Tuple[int, int]]
+    max_chunks_per_request: int
+
+
+def _clamp_int(value, default, lo, hi):
+    try:
+        value = int(str(value).strip())
+    except Exception:
+        value = default
+    return max(lo, min(hi, value))
+
+
+def load_map_config(conn) -> PolyWarMapConfig:
+    keys = ("polywar_map_width", "polywar_map_height", "polywar_chunk_size", "polywar_starting_area_size", "polywar_max_chunks_per_request")
+    placeholders = ",".join(["%s"] * len(keys))
+    try:
+        rows = polywar._fetchall(conn.cursor(), f"SELECT key, value FROM settings WHERE key IN ({placeholders})", keys)
+    except Exception as exc:
+        if "settings" not in str(exc).lower():
+            raise
+        polywar._safe_rollback(conn)
+        rows = []
+    values = {str(r.get("key")): r.get("value") for r in rows}
+    width = _clamp_int(values.get("polywar_map_width"), 10000, 512, 100000)
+    height = _clamp_int(values.get("polywar_map_height"), 10000, 512, 100000)
+    cs = _clamp_int(values.get("polywar_chunk_size"), 64, 16, 128)
+    area = _clamp_int(values.get("polywar_starting_area_size"), 15, 3, 65)
+    max_chunks = _clamp_int(values.get("polywar_max_chunks_per_request"), 9, 1, 25)
+    margin = max(area + 8, min(width, height) // 10)
+    bases = {1: (margin, margin), 2: (width - margin - 1, margin), 3: (margin, height - margin - 1), 4: (width - margin - 1, height - margin - 1), 5: (width // 2, margin), 6: (margin, height // 2), 7: (width - margin - 1, height // 2)}
+    return PolyWarMapConfig(width, height, cs, area, bases, max_chunks)
+
+
+def _readonly_active_season(conn):
+    row = polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if not row:
+        raise RuntimeError("polywar_not_initialized")
+    return row
+
+
+def get_active_season_readonly(conn, include_secret_seed=False):
+    season = _readonly_active_season(conn)
+    if include_secret_seed and not season.get("secret_seed"):
+        row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        season["secret_seed"] = row and row.get("secret_seed")
+    return season
 
 
 def _setting_int(key, default, lo, hi):
@@ -119,10 +174,10 @@ def in_bounds(x, y):
     return 0 <= int(x) < map_width() and 0 <= int(y) < map_height()
 
 
-def terrain_at(seed, x: int, y: int) -> str:
-    if not in_bounds(x, y):
+def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> str:
+    if not (0 <= int(x) < config.width and 0 <= int(y) < config.height):
         raise ValueError("out_of_bounds")
-    for bx, by in faction_base_positions().values():
+    for bx, by in config.bases.values():
         if (abs(x - bx) <= 1 and abs(y - by) < 90) or (abs(y - by) <= 1 and abs(x - bx) < 90):
             return "road"
     r1 = abs((x * 37 + y * 19 + int(_hash(seed, "river") * 9973)) % 911 - 455)
@@ -149,17 +204,26 @@ def terrain_at(seed, x: int, y: int) -> str:
     return "plain"
 
 
+
+def terrain_at(seed, x: int, y: int) -> str:
+    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    return terrain_at_with_config(seed, x, y, cfg)
+
 def get_starting_bases():
     colors = {fid: color for fid, _, _, color, _ in polywar.FACTIONS}
     return [{"faction_id": fid, "x": x, "y": y, "size": starting_area_size(), "color": colors.get(fid)} for fid, (x, y) in faction_base_positions().items()]
 
 
-def _start_owner(x, y):
-    half = starting_area_size() // 2
-    for fid, (bx, by) in faction_base_positions().items():
+def start_owner_with_config(x, y, config: PolyWarMapConfig):
+    half = config.starting_area_size // 2
+    for fid, (bx, by) in config.bases.items():
         if abs(x - bx) <= half and abs(y - by) <= half:
             return fid
     return None
+
+def _start_owner(x, y):
+    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    return start_owner_with_config(x, y, cfg)
 
 
 def _private_active_season(conn):
@@ -176,21 +240,27 @@ def _owner_at(conn, season_id, x, y):
     return _start_owner(x, y)
 
 
-def _terrain_chunk(season_id, seed, cx, cy, cs):
-    key = (int(season_id), str(seed), int(cx), int(cy), int(cs))
+def terrain_chunk_with_config(season_id, seed, cx, cy, config: PolyWarMapConfig):
+    cs = config.chunk_size
+    bases_key = tuple(sorted((int(fid), int(x), int(y)) for fid, (x, y) in config.bases.items()))
+    key = (int(season_id), str(seed), int(cx), int(cy), int(cs), int(config.width), int(config.height), int(config.starting_area_size), bases_key)
     with _CACHE_LOCK:
         cached = _TERRAIN_CACHE.get(key)
         if cached is not None:
             _TERRAIN_CACHE.move_to_end(key)
             return copy.deepcopy(cached)
     x0, y0 = cx * cs, cy * cs
-    w, h = min(cs, map_width() - x0), min(cs, map_height() - y0)
-    terrain = [[terrain_at(seed, xx, yy) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
+    w, h = min(cs, config.width - x0), min(cs, config.height - y0)
+    terrain = [[terrain_at_with_config(seed, xx, yy, config) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
     with _CACHE_LOCK:
         _TERRAIN_CACHE[key] = terrain
         if len(_TERRAIN_CACHE) > MAX_TERRAIN_CHUNKS:
             _TERRAIN_CACHE.popitem(last=False)
     return copy.deepcopy(terrain)
+
+def _terrain_chunk(season_id, seed, cx, cy, cs):
+    cfg = PolyWarMapConfig(map_width(), map_height(), cs, starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    return terrain_chunk_with_config(season_id, seed, cx, cy, cfg)
 
 
 def _check_chunk_rate(user_id: int, amount: int):
@@ -205,88 +275,76 @@ def _check_chunk_rate(user_id: int, amount: int):
             q.append(now)
 
 
+def _set_read_timeouts(conn):
+    if not polywar._is_sqlite(conn):
+        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
+        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+
+
 def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
-    if len(chunks) > max_chunks_per_request():
-        raise ValueError("too_many_chunks")
-    _check_chunk_rate(user_id, max(1, len(chunks)))
-    cs = chunk_size()
+    started = time.monotonic()
+    logger.info("polywar_chunks_request_started user_id=%s chunk_count=%s", int(user_id), len(chunks))
     conn = polywar.get_connection()
     try:
-        polywar.init_polywar_schema(conn)
-        init_polywar_map_schema(conn)
-        from services import polywar_mine_service as mines
-        mines.init_polywar_mine_schema(conn)
-        season = _private_active_season(conn)
-        sid, seed = int(season["id"]), season["secret_seed"]
-        conn.commit()
-        from services import polywar_world_service as world
-        now = datetime.utcnow()
-        due = False
-        wrow = polywar._fetchone(conn.cursor(), "SELECT status,activation_at,next_tick_at FROM polywar_null_state WHERE season_id=%s", (sid,))
-        if not wrow:
-            due = True
-        else:
-            activation_at = wrow.get("activation_at")
-            next_tick_at = wrow.get("next_tick_at")
-            if isinstance(activation_at, str):
-                activation_at = datetime.fromisoformat(activation_at)
-            if isinstance(next_tick_at, str):
-                next_tick_at = datetime.fromisoformat(next_tick_at)
-            due = (wrow.get("status") == "dormant" and activation_at and activation_at <= now) or (wrow.get("status") == "active" and next_tick_at and next_tick_at <= now)
-        ends = season.get("ends_at")
-        if isinstance(ends, str):
-            ends = datetime.fromisoformat(ends)
-        if ends and ends <= now:
-            due = True
-        domination_started = season.get("domination_started_at")
-        if not due and season.get("domination_faction_id") and domination_started:
-            if isinstance(domination_started, str):
-                domination_started = datetime.fromisoformat(domination_started)
-            hold_key = "polywar_null_victory_hold_hours" if int(season.get("domination_faction_id") or 0) == 8 else "polywar_domination_hold_hours"
-            hold_default = 12 if hold_key == "polywar_null_victory_hold_hours" else 24
-            due = domination_started + timedelta(hours=_setting_int(hold_key, hold_default, 0, 8760)) <= now
-        if due:
-            conn.close()
-            world.ensure_world_caught_up(sid, now)
-            conn = polywar.get_connection()
-            polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); conn.commit()
-            season = _private_active_season(conn)
-            sid, seed = int(season["id"]), season["secret_seed"]
-        out = []
+        _set_read_timeouts(conn)
+        t = time.monotonic(); config = load_map_config(conn); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=config duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+        if len(chunks) > config.max_chunks_per_request:
+            raise ValueError("too_many_chunks")
+        _check_chunk_rate(user_id, max(1, len(chunks)))
+        t = time.monotonic(); season = get_active_season_readonly(conn, include_secret_seed=True); sid, seed = int(season["id"]), season["secret_seed"]; logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=season duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
         for cx, cy in chunks:
-            if cx < 0 or cy < 0 or cx * cs >= map_width() or cy * cs >= map_height():
+            if cx < 0 or cy < 0 or cx * config.chunk_size >= config.width or cy * config.chunk_size >= config.height:
                 raise ValueError("out_of_bounds")
-            x0, y0 = cx * cs, cy * cs
-            terrain = _terrain_chunk(sid, seed, cx, cy, cs)
-            h, w = len(terrain), len(terrain[0]) if terrain else 0
-            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + w, y0, y0 + h))
-            sparse = {(int(r["x"]), int(r["y"])): int(r["owner_faction_id"]) for r in rows}
-            owners = [[sparse.get((xx, yy)) or _start_owner(xx, yy) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
-            bases = [b for b in get_starting_bases() if x0 <= b["x"] < x0 + w and y0 <= b["y"] < y0 + h]
-            contested = [{"x": int(r["x"]), "y": int(r["y"]), "owner_faction_id": int(r["owner_faction_id"]), "contesting_faction_id": r.get("contesting_faction_id"), "contest_progress": int(r.get("contest_progress") or 0), "contest_required": _setting_int("polywar_capture_progress_required",100,1,1000), "contested_at": polywar._iso(r.get("contested_at"))} for r in rows if int(r.get("contest_progress") or 0) > 0]
-            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": cs, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "contested_cells": contested, "user_id": user_id})
-        player = polywar.get_or_create_player(user_id, sid, conn)
-        from services import polywar_capital_service as capitals
-        from services import polywar_governance_service as governance
-        capitals.ensure_capitals_initialized(conn, sid)
+        ranges = []
+        for cx, cy in chunks:
+            x0, y0 = cx * config.chunk_size, cy * config.chunk_size
+            ranges.append((cx, cy, x0, y0, min(config.chunk_size, config.width - x0), min(config.chunk_size, config.height - y0)))
+        t = time.monotonic()
+        materialized = {}
+        if ranges:
+            min_x = min(r[2] for r in ranges); max_x = max(r[2] + r[4] for r in ranges); min_y = min(r[3] for r in ranges); max_y = max(r[3] + r[5] for r in ranges)
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,owner_faction_id,contesting_faction_id,contest_progress,contested_at FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, min_x, max_x, min_y, max_y))
+            wanted = {(x, y) for _, _, x0, y0, w, h in ranges for y in range(y0, y0 + h) for x in range(x0, x0 + w)}
+            for r in rows:
+                xy = (int(r["x"]), int(r["y"]))
+                if xy in wanted:
+                    materialized[xy] = r
+        logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=materialized_cells duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+        out = []
+        colors = {fid: color for fid, _, _, color, _ in polywar.FACTIONS}
+        contest_required = _setting_int("polywar_capture_progress_required",100,1,1000)
+        for cx, cy, x0, y0, w, h in ranges:
+            t = time.monotonic(); terrain = terrain_chunk_with_config(sid, seed, cx, cy, config); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=terrain duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+            owners = [[int(materialized[(xx, yy)]["owner_faction_id"]) if (xx, yy) in materialized else start_owner_with_config(xx, yy, config) for xx in range(x0, x0 + w)] for yy in range(y0, y0 + h)]
+            bases = [{"faction_id": fid, "x": bx, "y": by, "size": config.starting_area_size, "color": colors.get(fid)} for fid, (bx, by) in config.bases.items() if x0 <= bx < x0 + w and y0 <= by < y0 + h]
+            contested = [{"x": int(r["x"]), "y": int(r["y"]), "owner_faction_id": int(r["owner_faction_id"]), "contesting_faction_id": r.get("contesting_faction_id"), "contest_progress": int(r.get("contest_progress") or 0), "contest_required": contest_required, "contested_at": polywar._iso(r.get("contested_at"))} for r in materialized.values() if x0 <= int(r["x"]) < x0 + w and y0 <= int(r["y"]) < y0 + h and int(r.get("contest_progress") or 0) > 0]
+            out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": config.chunk_size, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "contested_cells": contested, "user_id": user_id})
+        t = time.monotonic()
         for ch in out:
-            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            x0, y0 = ch["chunk_x"] * config.chunk_size, ch["chunk_y"] * config.chunk_size
             rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
             ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
+        from services import polywar_capital_service as capitals, polywar_governance_service as governance, polywar_mine_service as mines, polywar_rebellion_service as reb
         capitals.enrich_chunks(conn, sid, out)
-        from services import polywar_rebellion_service as reb
+        player = polywar._fetchone(conn.cursor(), "SELECT faction_id FROM polywar_players WHERE season_id=%s AND user_id=%s", (sid, int(user_id))) or {}
+        fid = player.get("faction_id")
         for ch in out:
-            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            x0, y0 = ch["chunk_x"] * config.chunk_size, ch["chunk_y"] * config.chunk_size
             ch["rebellions"] = reb.get_public_rebellions_readonly(conn, sid, (x0, y0, x0 + ch["width"], y0 + ch["height"]))
-        mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
-        governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
-        conn.commit()
-        for ch in out:
-            ch.pop("user_id", None)
-        return {"ok": True, "season_id": sid, "chunks": out, "chunk_size": cs, "map_width": map_width(), "map_height": map_height(), "server_timestamp": int(time.time())}
+        mines.enrich_chunks(conn, sid, fid, out)
+        governance.enrich_chunks(conn, sid, fid, out)
+        logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=enrichment duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+        for ch in out: ch.pop("user_id", None)
+        duration = (time.monotonic() - started) * 1000
+        logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=total duration_ms=%.2f", int(user_id), len(chunks), duration)
+        logger.info("polywar_chunks_request_finished user_id=%s chunk_count=%s duration_ms=%.2f", int(user_id), len(chunks), duration)
+        return {"ok": True, "season_id": sid, "chunks": out, "chunk_size": config.chunk_size, "map_width": config.width, "map_height": config.height, "server_timestamp": int(time.time())}
+    except Exception as exc:
+        polywar._safe_rollback(conn)
+        logger.exception("polywar_chunks_request_failed error_type=%s duration_ms=%.2f", type(exc).__name__, (time.monotonic()-started)*1000)
+        raise
     finally:
         conn.close()
-
 
 
 

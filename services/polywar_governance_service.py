@@ -151,14 +151,17 @@ def _build_governance_response(conn, sid, player, faction_id, user_id):
     return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= min_contribution()}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(), 'server_timestamp': int(time.time())}
 
 def get_governance(user_id:int):
-    conn=polywar.get_connection(); c=conn.cursor()
+    conn=polywar.get_connection()
     try:
         _rate_get(user_id)
-        sid = _prepare_context_before_transaction(conn)
-        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); fid=p.get('faction_id')
-        if fid: _prepare_faction(conn,sid,fid)
-        conn.commit()
-        return _build_governance_response(conn, sid, p, fid, user_id)
+        if not polywar._is_sqlite(conn):
+            polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
+            polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+        from services import polywar_map_service as m
+        season = m.get_active_season_readonly(conn); sid = int(season['id'])
+        player = polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_players WHERE season_id=%s AND user_id=%s', (sid, int(user_id))) or {'user_id': int(user_id), 'season_id': sid, 'faction_id': None, 'faction_contribution': 0}
+        fid = player.get('faction_id')
+        return _build_governance_response(conn, sid, player, fid, user_id)
     except Exception:
         polywar._safe_rollback(conn); raise
     finally: conn.close()

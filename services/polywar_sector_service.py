@@ -341,28 +341,42 @@ def _check_rate(user_id):
         q.append(now); _RATE.move_to_end(uid)
 
 
+def _set_read_timeouts(conn):
+    if not polywar._is_sqlite(conn):
+        polywar._execute(conn.cursor(), "SET LOCAL statement_timeout = '15s'")
+        polywar._execute(conn.cursor(), "SET LOCAL lock_timeout = '2s'")
+
+
+def _synthetic_sector(sx, sy):
+    return {"sector_x": sx, "sector_y": sy, "controller_faction_id": None, "total_claimed_cells": 0, "leading_faction_id": None, "leading_cells": 0, "dominance_percent": 0, "is_contested": False, "controlled_since": None}
+
+
 def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
     if min_sx < 0 or min_sy < 0 or max_sx < min_sx or max_sy < min_sy:
         raise ValueError('out_of_bounds')
     from services import polywar_map_service as m
-    max_x = math.ceil(m.map_width() / sector_size()) - 1
-    max_y = math.ceil(m.map_height() / sector_size()) - 1
-    if max_sx > max_x or max_sy > max_y:
-        raise ValueError('out_of_bounds')
-    count = (max_sx - min_sx + 1) * (max_sy - min_sy + 1)
-    if count > max_sectors_per_request():
-        raise ValueError('too_many_sectors')
     conn = polywar.get_connection()
     try:
-        polywar.init_polywar_schema(conn); init_polywar_sector_schema(conn); season = polywar.ensure_active_season_in_transaction(conn); sid = int(season['id'])
-        ensure_starting_territories_bootstrap(conn, sid)
+        _set_read_timeouts(conn)
+        config = m.load_map_config(conn)
+        max_x = math.ceil(config.width / sector_size()) - 1
+        max_y = math.ceil(config.height / sector_size()) - 1
+        if max_sx > max_x or max_sy > max_y:
+            raise ValueError('out_of_bounds')
+        count = (max_sx - min_sx + 1) * (max_sy - min_sy + 1)
+        if count > max_sectors_per_request():
+            raise ValueError('too_many_sectors')
         _check_rate(user_id)
-        now = datetime.utcnow()
-        for sx in range(min_sx, max_sx + 1):
-            for sy in range(min_sy, max_sy + 1):
-                initialize_sector(conn, sid, sx, sy, now)
-        conn.commit()
+        season = m.get_active_season_readonly(conn); sid = int(season['id'])
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_sectors WHERE season_id=%s AND sector_x>=%s AND sector_x<=%s AND sector_y>=%s AND sector_y<=%s', (sid, min_sx, max_sx, min_sy, max_sy))
-        return {'ok': True, 'season_id': sid, 'sector_size': sector_size(), 'sectors': [{k: (polywar._iso(v) if k.endswith('_at') or k == 'controlled_since' else v) for k, v in r.items() if k != 'season_id'} for r in rows], 'server_timestamp': int(time.time())}
+        by_key = {(int(r['sector_x']), int(r['sector_y'])): r for r in rows}
+        sectors = []
+        for sy in range(min_sy, max_sy + 1):
+            for sx in range(min_sx, max_sx + 1):
+                r = by_key.get((sx, sy))
+                sectors.append(({k: (polywar._iso(v) if k.endswith('_at') or k == 'controlled_since' else v) for k, v in r.items() if k != 'season_id'} if r else _synthetic_sector(sx, sy)))
+        return {'ok': True, 'season_id': sid, 'sector_size': sector_size(), 'sectors': sectors, 'server_timestamp': int(time.time())}
+    except Exception:
+        polywar._safe_rollback(conn); raise
     finally:
         conn.close()
