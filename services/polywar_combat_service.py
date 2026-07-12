@@ -160,7 +160,11 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         row = _materialize(conn, sid, x, y, owner, now) if owner is not None else None
         if row: owner = int(row['owner_faction_id'])
         before = int((row or {}).get('contest_progress') or 0); contesting = (row or {}).get('contesting_faction_id')
-        polywar.assert_gameplay_mutation_allowed(conn, sid)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         if action_type == 'attack':
             if owner is None: raise ValueError('neutral_cell_requires_capture')
             if owner == fid: raise ValueError('own_cell_cannot_be_attacked')

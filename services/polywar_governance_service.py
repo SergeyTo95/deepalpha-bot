@@ -178,7 +178,12 @@ def nominate(user_id:int, statement:str='', active=True):
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if active and len(statement or '') > max_statement_length(): raise ValueError('invalid_statement')
         sid = _prepare_context_before_transaction(conn)
-        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); polywar.assert_gameplay_mutation_allowed(conn,sid); fid=p.get('faction_id')
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid); e=_active_election(conn,sid,fid,lock=True)
         if not e: raise ValueError('election_unavailable')
@@ -202,7 +207,12 @@ def vote(user_id:int,candidate_user_id:int):
     conn=polywar.get_connection(); c=conn.cursor()
     try:
         sid = _prepare_context_before_transaction(conn)
-        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); polywar.assert_gameplay_mutation_allowed(conn,sid); fid=p.get('faction_id')
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid); e=_active_election(conn,sid,fid,lock=True)
         if not e: raise ValueError('election_unavailable')
@@ -264,7 +274,12 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if len(message or '')>280: raise ValueError('invalid_statement')
         sid = _prepare_context_before_transaction(conn)
-        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); polywar.assert_gameplay_mutation_allowed(conn,sid); fid=p.get('faction_id')
+        _begin(conn,c); p=_governance_context_in_transaction(conn,user_id,sid); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid)
         if not _is_commander(conn,sid,fid,user_id): raise ValueError('commander_required')

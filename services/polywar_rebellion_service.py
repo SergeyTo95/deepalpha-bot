@@ -124,7 +124,11 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         if dup: return dup
         managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid)
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid,_now())
-        if not prepared.get('ok'): raise ValueError(prepared.get('error') or 'season_ended')
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                ok=True; world._finish_world_transaction(conn,managed,ok); managed=False
+                return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         suffix='' if polywar._is_sqlite(conn) else ' FOR UPDATE'
         player=polywar.get_or_create_player(user_id,sid,conn)
         player=polywar._fetchone(c,'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s'+suffix,(user_id,sid)) or player

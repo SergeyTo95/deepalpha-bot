@@ -624,3 +624,52 @@ def test_capture_rift_guard_fail_closed_on_db_error(db, monkeypatch):
     monkeypatch.setattr(world, 'is_rift', boom)
     with pytest.raises(RuntimeError):
         mm.capture_cell(100, 5, 5, 'capture-rift-error')
+
+
+def test_matured_domination_seal_commits_finalization_not_rollback(db):
+    connect, settings = db
+    settings['polywar_domination_capitals_required']='1'
+    settings['polywar_domination_hold_hours']='1'
+    sid = active(connect)
+    c = connect(); now=datetime.utcnow(); past=now-timedelta(hours=2)
+    world.init_world_schema(c); world.ensure_world_initialized_in_transaction(c,sid); world.activate_if_due_in_transaction(c,sid)
+    r = c.execute("select * from polywar_null_rifts where season_id=? and status='active' limit 1",(sid,)).fetchone()
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,updated_at) values (?,?,?,?,?,?,?)',(sid,1,123,123,1,past,past))
+    c.execute('update polywar_seasons set domination_faction_id=1, domination_started_at=? where id=?',(past,sid))
+    c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(now+timedelta(days=1),sid))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,r['x']+1,r['y']))
+    c.execute('update polywar_players set current_energy=50,max_energy=50 where user_id=100 and season_id=?',(sid,))
+    c.commit(); c.close()
+    out = world.seal_rift_action(100, r['x'], r['y'], 'seal-after-domination')
+    assert out['error'] == 'season_ended'
+    c = connect()
+    row = c.execute('select status,results_hash from polywar_seasons where id=?',(sid,)).fetchone()
+    assert row['status'] == 'completed' and row['results_hash']
+    assert c.execute('select count(*) from polywar_season_results where season_id=?',(sid,)).fetchone()[0] > 0
+    assert c.execute('select count(*) from polywar_player_season_rewards where season_id=?',(sid,)).fetchone()[0] > 0
+    assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0] == 1
+    c.close()
+
+
+def test_matured_domination_rebellion_action_commits_finalization_not_rollback(db):
+    connect, settings = db
+    settings['polywar_domination_capitals_required']='1'
+    settings['polywar_domination_hold_hours']='1'
+    sid = active(connect); polywar.join_faction(211,2)
+    c = connect(); now=datetime.utcnow(); past=now-timedelta(hours=2)
+    rebellion.init_rebellion_schema(c); world.init_world_schema(c); world.ensure_world_initialized_in_transaction(c,sid)
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,55,55,2,past,past,past))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,54,55))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,2)',(sid,56,55))
+    c.execute('update polywar_seasons set domination_faction_id=2, domination_started_at=? where id=?',(past,sid))
+    c.execute('update polywar_players set current_energy=50,max_energy=50 where season_id=?',(sid,))
+    c.commit(); rebellion.ensure_rebellions_in_transaction(c,sid); c.commit(); c.close()
+    out = rebellion.rebellion_action(100,'support_rebellion',55,55,'rebellion-after-domination')
+    assert out['error'] == 'season_ended'
+    c = connect()
+    row = c.execute('select status,results_hash from polywar_seasons where id=?',(sid,)).fetchone()
+    assert row['status'] == 'completed' and row['results_hash']
+    assert c.execute('select count(*) from polywar_season_results where season_id=?',(sid,)).fetchone()[0] > 0
+    assert c.execute('select count(*) from polywar_player_season_rewards where season_id=?',(sid,)).fetchone()[0] > 0
+    assert c.execute("select count(*) from polywar_seasons where status='active'",()).fetchone()[0] == 1
+    c.close()

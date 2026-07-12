@@ -470,7 +470,7 @@ def prepare_gameplay_mutation_in_transaction(conn, season_id: int, now: Optional
     decision = finalization.maybe_finalize_in_transaction(conn, int(season_id), now)
     if decision.get("should_finalize"):
         finalization.finalize_season_in_transaction(conn, int(season_id), decision.get("victory_type", "time"), decision.get("winner_faction_id"), now)
-        return {"ok": False, "error": "season_ended"}
+        return {"ok": False, "error": "season_ended", "season_finalized": True}
     assert_gameplay_mutation_allowed(conn, int(season_id), now)
     return {"ok": True}
 

@@ -235,7 +235,11 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         if not _has_adjacent(conn, sid, x, y, fid): raise ValueError('capital_not_frontline')
         now = datetime.utcnow(); before = int(cap.get('siege_progress') or 0); previous = int(cap['controller_faction_id']); bes_before = cap.get('besieging_faction_id'); transfer = None
         after = before; bes_after = bes_before; current = previous
-        polywar.assert_gameplay_mutation_allowed(conn, sid)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         if action_type == 'siege':
             if previous == int(fid): raise ValueError('own_capital_cannot_be_sieged')
             cost = int(base) + siege_extra_energy(); _, _, energy = mines.spend_player_energy(conn, player, cost, now); power = siege_power(); req = siege_required()

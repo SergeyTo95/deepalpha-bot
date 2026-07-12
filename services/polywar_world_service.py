@@ -376,7 +376,7 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
     try:
         # Schema/world preparation is intentionally outside the gameplay transaction.
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_world_schema(conn)
-        season=m._private_active_season(conn); sid=int(season['id'])
+        season=m._private_active_season(conn); sid=int(season['id']); original_season_id=sid
         if not enabled(): raise ValueError('null_state_disabled')
         ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
@@ -386,13 +386,19 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
         conn=polywar.get_connection(); c=conn.cursor()
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_world_schema(conn)
         season=m._private_active_season(conn); sid=int(season['id'])
+        if int(sid)!=int(original_season_id):
+            return {'ok': False, 'error': 'season_ended', 'season_id': original_season_id, 'current_season_id': sid}
         ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
         managed=_start_world_transaction(conn)
         lock_world_rows(conn,sid)
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid,_now())
-        if not prepared.get('ok'): raise ValueError(prepared.get('error') or 'season_ended')
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                ok=True; _finish_world_transaction(conn,managed,ok); managed=False
+                return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         suffix='' if _is_sqlite(conn) else ' FOR UPDATE'
         player=polywar.get_or_create_player(user_id,sid,conn)
         player=_fetchone(c,'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s'+suffix,(user_id,sid)) or player

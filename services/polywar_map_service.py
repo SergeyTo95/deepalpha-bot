@@ -323,7 +323,11 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if dup: conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
-        polywar.assert_gameplay_mutation_allowed(conn, sid)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         if not in_bounds(x, y): raise ValueError("out_of_bounds")
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
