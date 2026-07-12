@@ -19,7 +19,21 @@ const TERRAIN_COLOR = { plain: "#76a35b", forest: "#20723d", mountain: "#807a73"
 
 function esc(v) { return String(v ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c])); }
 async function telegramAuthIfAvailable() { const initData = tg?.initData || ""; if (!initData) return false; const r = await fetch("/api/auth/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ init_data: initData }) }); return r.ok; }
-async function api(path, opts) { const r = await fetch(path, opts); const d = await r.json().catch(() => ({ ok: false, error: "bad_json" })); if (!r.ok) d.httpStatus = r.status; return d; }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let d = null;
+  try {
+    d = text ? JSON.parse(text) : {};
+  } catch (_) {
+    const contentType = r.headers?.get?.("content-type") || "";
+    const fragment = String(text || "").replace(/\s+/g, " ").slice(0, 120);
+    console.error("PolyWar API invalid JSON", { status: r.status, contentType, fragment });
+    d = { ok: false, error: r.status >= 500 ? "server_error" : "invalid_server_response" };
+  }
+  if (!r.ok) d.httpStatus = r.status;
+  return d;
+}
 function fmtTime(sec) { sec = Math.max(0, Number(sec || 0)); return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`; }
 function factionDot(f) { return `<span class="dot" style="background:${esc(f?.color || "#777")}"></span>`; }
 function clearTimers() { if (energyTimer) clearInterval(energyTimer); if (syncTimer) clearInterval(syncTimer); if (worldCountdownTimer) clearInterval(worldCountdownTimer); energyTimer = syncTimer = worldCountdownTimer = null; }

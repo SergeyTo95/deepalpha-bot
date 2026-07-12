@@ -1,6 +1,6 @@
 import secrets
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
@@ -49,7 +49,21 @@ def _iso(dt: Any) -> Optional[str]:
         return None
     if isinstance(dt, datetime):
         return dt.replace(microsecond=0).isoformat()
+    if isinstance(dt, date):
+        return dt.isoformat()
     return str(dt)
+
+
+def _normalize_public_temporal(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _normalize_public_temporal(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_public_temporal(v) for v in value]
+    if isinstance(value, tuple):
+        return [_normalize_public_temporal(v) for v in value]
+    if isinstance(value, (datetime, date)):
+        return _iso(value)
+    return value
 
 
 def _dict(row) -> Optional[Dict[str, Any]]:
@@ -599,7 +613,8 @@ def get_state(user_id: int) -> Dict[str, Any]:
         latest_completed = _fetchone(conn.cursor(), "SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE status=%s ORDER BY completed_at DESC LIMIT 1", ("completed",))
         current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
         public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        payload = {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        return _normalize_public_temporal(payload)
     except Exception:
         _safe_rollback(conn)
         raise
