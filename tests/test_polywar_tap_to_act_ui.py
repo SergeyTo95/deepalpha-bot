@@ -142,3 +142,72 @@ def test_mobile_sheet_layout_is_compact_overlay():
     assert ".compact-cell-sheet" in CSS
     assert "position:absolute" in CSS
     assert "max-height:150px" in CSS or "max-height:145px" in CSS
+
+
+def test_node_vm_mobile_gesture_and_sheet_css_runtime():
+    import subprocess
+    import textwrap
+
+    script = textwrap.dedent(r'''
+        const assert = require('assert');
+        const fs = require('fs');
+        const css = fs.readFileSync('webapp/polywar.css', 'utf8');
+        assert(css.includes('touch-action:none'));
+        assert(css.includes('user-select:none'));
+        assert(css.includes('-webkit-user-select:none'));
+        assert(css.includes('overscroll-behavior:contain'));
+        assert(/\.compact-cell-sheet\{[^}]*overflow:hidden/.test(css));
+        assert(/\.compact-cell-sheet--expanded\{[^}]*overflow-y:auto/.test(css));
+
+        class Harness {
+          constructor() {
+            this.selected = {x: 1, y: 1};
+            this.pending = false;
+            this.sent = 0;
+            this.taps = 0;
+            this.pointerStarts = new Map();
+            this.hadMultiTouch = false;
+            this.cx = 0;
+            this.cy = 0;
+            this.cell = 10;
+            this.canvas = { setPointerCapture() {} };
+          }
+          select(x, y) { this.selected = {x, y}; }
+          async handleCellTap(x, y) { if (this.pending) return; this.taps++; this.select(x, y); this.sent++; }
+          screenToCell() { return {x: 9, y: 9}; }
+          clamp() {}
+          ensureChunks() {}
+          ensureSectors() {}
+          requestDraw() {}
+          pointerdown(e) { this.canvas.setPointerCapture(e.pointerId); this.pointerStarts.set(e.pointerId, { x:e.clientX, y:e.clientY, cx:this.cx, cy:this.cy, pan:false }); if (this.pointerStarts.size > 1) this.hadMultiTouch = true; }
+          pointermove(e) { const g=this.pointerStarts.get(e.pointerId); if (!g) return; const dist=Math.hypot(e.clientX-g.x, e.clientY-g.y); if (dist > 8) g.pan = true; if (this.hadMultiTouch || !g.pan) return; this.cx = g.cx - (e.clientX - g.x) / this.cell; this.cy = g.cy - (e.clientY - g.y) / this.cell; }
+          pointerup(e) { const g=this.pointerStarts.get(e.pointerId); this.pointerStarts.delete(e.pointerId); const wasMulti=this.hadMultiTouch; if (!this.pointerStarts.size) this.hadMultiTouch = false; if (g && !g.pan && !wasMulti && this.pointerStarts.size === 0) { const p = this.screenToCell(e.offsetX, e.offsetY); this.handleCellTap(p.x, p.y); } }
+          pointercancel(e) { this.pointerStarts.delete(e.pointerId); if (!this.pointerStarts.size) this.hadMultiTouch = false; }
+        }
+
+        const pending = new Harness();
+        pending.pending = true;
+        pending.handleCellTap(2, 2);
+        assert.deepStrictEqual(pending.selected, {x: 1, y: 1});
+        assert.strictEqual(pending.sent, 0);
+
+        const pan = new Harness();
+        pan.pointerdown({pointerId: 1, clientX: 0, clientY: 0});
+        pan.pointermove({pointerId: 1, clientX: 9, clientY: 0});
+        pan.pointerup({pointerId: 1, offsetX: 9, offsetY: 0});
+        assert.strictEqual(pan.taps, 0);
+
+        const multi = new Harness();
+        multi.pointerdown({pointerId: 1, clientX: 0, clientY: 0});
+        multi.pointerdown({pointerId: 2, clientX: 1, clientY: 1});
+        multi.pointerup({pointerId: 1, offsetX: 0, offsetY: 0});
+        multi.pointerup({pointerId: 2, offsetX: 1, offsetY: 1});
+        assert.strictEqual(multi.taps, 0);
+
+        const cancel = new Harness();
+        cancel.pointerdown({pointerId: 1, clientX: 0, clientY: 0});
+        cancel.pointercancel({pointerId: 1});
+        cancel.pointerup({pointerId: 1, offsetX: 0, offsetY: 0});
+        assert.strictEqual(cancel.taps, 0);
+    ''')
+    subprocess.run(["node", "-e", script], check=True)
