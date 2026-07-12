@@ -287,7 +287,6 @@ def get_capitals(user_id: int = None):
     try:
         if not polywar._is_sqlite(conn):
             m.begin_polywar_readonly(conn)
-        from services import polywar_map_service as m
         config = m.load_map_config(conn)
         season = m.get_active_season_readonly(conn); sid = int(season['id'])
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = config.capital_siege_required

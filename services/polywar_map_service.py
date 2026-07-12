@@ -228,8 +228,24 @@ def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> st
 
 
 
+
+def _legacy_map_config(chunk_size_override=None):
+    return PolyWarMapConfig(
+        width=map_width(),
+        height=map_height(),
+        chunk_size=int(chunk_size_override or chunk_size()),
+        starting_area_size=starting_area_size(),
+        bases=faction_base_positions(),
+        max_chunks_per_request=max_chunks_per_request(),
+        capture_progress_required=_setting_int("polywar_capture_progress_required", 100, 1, 1000),
+        sector_size=_setting_int("polywar_sector_size", 100, 10, 10000),
+        max_sectors_per_request=_setting_int("polywar_max_sectors_per_request", 100, 1, 500),
+        capital_siege_required=_setting_int("polywar_capital_siege_required", 1000, 100, 100000),
+        governance_rules={},
+    )
+
 def terrain_at(seed, x: int, y: int) -> str:
-    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request(), _setting_int("polywar_capture_progress_required",100,1,1000), 100, 100, 1000, {})
+    cfg = _legacy_map_config()
     return terrain_at_with_config(seed, x, y, cfg)
 
 def get_starting_bases():
@@ -245,7 +261,7 @@ def start_owner_with_config(x, y, config: PolyWarMapConfig):
     return None
 
 def _start_owner(x, y):
-    cfg = PolyWarMapConfig(map_width(), map_height(), chunk_size(), starting_area_size(), faction_base_positions(), max_chunks_per_request(), _setting_int("polywar_capture_progress_required",100,1,1000), 100, 100, 1000, {})
+    cfg = _legacy_map_config()
     return start_owner_with_config(x, y, cfg)
 
 
@@ -282,7 +298,7 @@ def terrain_chunk_with_config(season_id, seed, cx, cy, config: PolyWarMapConfig)
     return copy.deepcopy(terrain)
 
 def _terrain_chunk(season_id, seed, cx, cy, cs):
-    cfg = PolyWarMapConfig(map_width(), map_height(), cs, starting_area_size(), faction_base_positions(), max_chunks_per_request())
+    cfg = _legacy_map_config(cs)
     return terrain_chunk_with_config(season_id, seed, cx, cy, cfg)
 
 

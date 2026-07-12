@@ -374,7 +374,7 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
             for sx in range(min_sx, max_sx + 1):
                 r = by_key.get((sx, sy))
                 sectors.append(({k: (polywar._iso(v) if k.endswith('_at') or k == 'controlled_since' else v) for k, v in r.items() if k != 'season_id'} if r else _synthetic_sector(sx, sy)))
-        return {'ok': True, 'season_id': sid, 'sector_size': sector_size(), 'sectors': sectors, 'server_timestamp': int(time.time())}
+        return {'ok': True, 'season_id': sid, 'sector_size': config.sector_size, 'sectors': sectors, 'server_timestamp': int(time.time())}
     except Exception:
         polywar._safe_rollback(conn); raise
     finally:

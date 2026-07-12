@@ -140,8 +140,9 @@ def _prepare_faction(conn,sid,fid):
 
 
 def _build_governance_response(conn, sid, player, faction_id, user_id, rules=None):
+    required_contribution = int(rules["min_contribution"]) if rules is not None else min_contribution()
     if not faction_id:
-        return {'ok': True, 'season_id': sid, 'faction_required': True, 'rules': public_rules(rules)}
+        return {'ok': True, 'season_id': sid, 'faction_required': True, 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= required_contribution}, 'rules': public_rules(rules)}
     e = _active_election(conn, sid, faction_id)
     stat = polywar._fetchone(conn.cursor(), 'SELECT commander_user_id,commander_since,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s', (sid, faction_id)) or {}
     candidates = []; vote = None
@@ -150,7 +151,7 @@ def _build_governance_response(conn, sid, player, faction_id, user_id, rules=Non
         candidates = [polywar._row_to_dict(None, r) for r in rows]
         vr = polywar._fetchone(conn.cursor(), 'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s', (e['id'], user_id))
         vote = vr and vr['candidate_user_id']
-    return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= min_contribution()}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(rules), 'server_timestamp': int(time.time())}
+    return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= required_contribution}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(rules), 'server_timestamp': int(time.time())}
 
 def get_governance(user_id:int):
     conn=polywar.get_connection()
@@ -158,7 +159,6 @@ def get_governance(user_id:int):
         _rate_get(user_id)
         if not polywar._is_sqlite(conn):
             m.begin_polywar_readonly(conn)
-        from services import polywar_map_service as m
         config = m.load_map_config(conn)
         season = m.get_active_season_readonly(conn); sid = int(season['id'])
         player = polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_players WHERE season_id=%s AND user_id=%s', (sid, int(user_id))) or {'user_id': int(user_id), 'season_id': sid, 'faction_id': None, 'faction_contribution': 0}
