@@ -1,8 +1,11 @@
+import logging
 import secrets
 import time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+
+logger = logging.getLogger(__name__)
 
 NULL_STATE_FACTION_ID = 8
 
@@ -594,13 +597,19 @@ def get_state(user_id: int) -> Dict[str, Any]:
     if not is_enabled():
         return {"ok": True, "enabled": False, "message": "PolyWar is temporarily unavailable", "feature_flags": {"polywar_enabled": False}}
     conn = get_connection()
+    timings = {}; total_t0 = time.monotonic()
+    def _stage(name, started):
+        timings[name] = (time.monotonic() - started) * 1000
+        logger.info("polywar_state_stage user_id=%s stage=%s duration_ms=%.2f", int(user_id), name, timings[name])
     try:
-        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        t = time.monotonic(); init_polywar_schema(conn); ensure_factions(conn); conn.commit(); _stage("schema", t)
         begin_serialized_transaction(conn)
-        season = ensure_active_season_in_transaction(conn)
+        if not _is_sqlite(conn):
+            _execute(conn.cursor(), "SET LOCAL lock_timeout = '5s'")
+            _execute(conn.cursor(), "SET LOCAL statement_timeout = '20s'")
+        t = time.monotonic(); season = ensure_active_season_in_transaction(conn); _stage("season", t)
         from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction
-        ensure_world_initialized_in_transaction(conn, int(season["id"]))
-        ensure_world_caught_up_in_transaction(conn, int(season["id"]))
+        t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); ensure_world_caught_up_in_transaction(conn, int(season["id"])); _stage("world", t)
         from services import polywar_finalization_service as finalization
         decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
         if decision.get("should_finalize"):
@@ -608,21 +617,23 @@ def get_state(user_id: int) -> Dict[str, Any]:
         refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
         if refreshed and refreshed.get("status") == "completed":
             season = ensure_active_season_in_transaction(conn)
-            ensure_world_initialized_in_transaction(conn, int(season["id"]))
+            t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); _stage("world", t)
         elif refreshed:
             season = refreshed
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
         from services import polywar_sector_service as sector_rules
         from services import polywar_capital_service as capital_rules
         from services import polywar_governance_service as governance_rules
-        sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
-        capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
+        t = time.monotonic(); bootstrap_ready = sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"])); _stage("starting_bootstrap", t)
+        t = time.monotonic(); capital_rules.ensure_capitals_initialized(conn, int(season["id"]), starting_bootstrap_ready=True); _stage("capitals", t)
+        t = time.monotonic()
         if player.get("faction_id"):
             tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
             governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
+        _stage("governance", t)
         conn.commit()
 
-        factions = list_factions_with_stats(int(season["id"]), conn)
+        t = time.monotonic(); factions = list_factions_with_stats(int(season["id"]), conn)
         faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
         e = _energy(player)
         public_player = {k: _iso(v) if k.endswith("_at") or k == "locked_until" else v for k, v in player.items() if k != "lifetime_earned_points"}
@@ -642,7 +653,9 @@ def get_state(user_id: int) -> Dict[str, Any]:
         latest_completed = _fetchone(conn.cursor(), "SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE status=%s ORDER BY completed_at DESC LIMIT 1", ("completed",))
         current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
         public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
+        _stage("response_build", t)
         payload = {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        logger.info("polywar_state_stage user_id=%s stage=total duration_ms=%.2f", int(user_id), (time.monotonic() - total_t0) * 1000)
         return _normalize_public_temporal(payload)
     except Exception:
         _safe_rollback(conn)

@@ -19,8 +19,21 @@ const TERRAIN_COLOR = { plain: "#76a35b", forest: "#20723d", mountain: "#807a73"
 
 function esc(v) { return String(v ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c])); }
 async function telegramAuthIfAvailable() { const initData = tg?.initData || ""; if (!initData) return false; const r = await fetch("/api/auth/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ init_data: initData }) }); return r.ok; }
-async function api(path, opts) {
-  const r = await fetch(path, opts);
+async function api(path, opts = {}) {
+  const controller = new AbortController();
+  const timeoutMs = Number(opts.timeoutMs || 20000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let r;
+  try {
+    const requestOpts = { ...opts, signal: opts.signal || controller.signal };
+    delete requestOpts.timeoutMs;
+    r = await fetch(path, requestOpts);
+  } catch (err) {
+    if (err?.name === "AbortError") return { ok: false, error: "request_timeout", httpStatus: 0 };
+    return { ok: false, error: "network_error", httpStatus: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await r.text();
   let d = null;
   try {
@@ -304,7 +317,7 @@ function softUpdate(state) {
 async function syncState(showErrors = true, opts = {}) {
   const state = await api("/api/polywar/state");
   if (state.httpStatus === 401) { clearTimers(); map?.destroy(); map = null; root.innerHTML = '<section class="glass card"><h2>Telegram auth required</h2><p class="muted">Open PolyWar from the Telegram WebApp and try again.</p><a class="btn" href="/app">Back to DeepAlpha</a></section>'; return; }
-  if (!state.ok && showErrors) { alert(state.error || "Unable to load PolyWar"); return; }
+  if (!state.ok && showErrors) { alert(state.error === "request_timeout" ? "PolyWar is taking too long to initialize. Please retry." : (state.error || "Unable to load PolyWar")); return; }
   opts.soft && map ? softUpdate(state) : render(state);
 }
 async function joinFaction(id) { const d = await api("/api/polywar/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ faction_id: Number(id) }) }); if (!d.ok) { alert(d.error || "Join failed"); await syncState(false, { soft: true }); return; } render(d); }
