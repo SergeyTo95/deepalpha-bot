@@ -26,21 +26,22 @@ def find_near(seedstr,bx,by,terrain=None,capturable=True):
     raise AssertionError('not found')
 
 def test_map_dimensions_bounds_terrain_and_secret(polydb):
-    s=seed(polydb); assert m.map_width()==10000 and m.map_height()==10000 and m.chunk_size()==64
-    assert m.in_bounds(0,0) and not m.in_bounds(10000,0)
+    s=seed(polydb); assert m.map_width()==32000 and m.map_height()==32000 and m.chunk_size()==64
+    assert m.in_bounds(0,0) and not m.in_bounds(32000,0)
     c=polydb(); row=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone(); secret=row['secret_seed']; c.close()
     assert m.terrain_at(secret,123,456)==m.terrain_at(secret,123,456)
     assert any(m.terrain_at(secret,x,y)!=m.terrain_at(secret+'x',x,y) for x in range(0,600,50) for y in range(0,600,50))
-    chunk=m.build_chunks(1,[(0,0)]); assert 'secret_seed' not in str(chunk) and chunk['map_width']==10000
+    chunk=m.build_chunks(1,[(0,0)]); assert 'secret_seed' not in str(chunk) and chunk['map_width']==32000
     with pytest.raises(ValueError, match='too_many_chunks'): m.build_chunks(1,[(i,0) for i in range(10)])
 
-def test_starting_bases_safe_inside_and_non_overlapping(polydb):
+def test_multiple_factions_spawn_far_apart_with_safe_hqs(polydb):
     s=seed(polydb); c=polydb(); secret=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close()
-    bases=m.get_starting_bases(); assert len(bases)==7
+    bases=m.get_starting_bases(); assert len(bases)>=5
     seen=[]
     for b in bases:
         assert m.in_bounds(b['x'],b['y']); assert m.terrain_at(secret,b['x'],b['y']) not in {'water','river'}
-        for o in seen: assert abs(b['x']-o['x'])>b['size'] or abs(b['y']-o['y'])>b['size']
+        for o in seen:
+            assert ((b['x']-o['x'])**2 + (b['y']-o['y'])**2) ** 0.5 >= min(m.map_width(), m.map_height()) // 4
         seen.append(b)
 
 def test_capture_rules_energy_idempotency_stats(polydb):
@@ -105,7 +106,7 @@ def test_two_parallel_captures_same_player_spend_energy_once(polydb):
     c.close()
 
 def test_relative_bases_for_supported_map_sizes(polydb, monkeypatch):
-    for size in (10000, 2000, 512):
+    for size in (32000, 10000, 2000, 512):
         monkeypatch.setattr(polywar, 'get_setting', lambda k, d='', size=size: str(size) if k in {'polywar_map_width','polywar_map_height'} else d)
         bases = m.get_starting_bases()
         assert len(bases) == 7
@@ -145,3 +146,30 @@ def test_concurrent_same_key_same_cell_returns_duplicate_without_double_spend(po
     assert c.execute('select count(*) from polywar_actions where user_id=42 and season_id=?', (sid,)).fetchone()[0] == 1
     assert c.execute('select current_energy from polywar_players where user_id=42 and season_id=?', (sid,)).fetchone()[0] == 9
     c.close()
+
+
+def test_natural_terrain_and_world_features_generated(polydb):
+    s = seed(polydb)
+    c = polydb(); secret = c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close()
+    cfg = m.PolyWarMapConfig(32000, 32000, 64, 15, m.faction_base_positions(32000, 32000), 9, 100, 100, 100, 1000, {})
+    sample = [m.terrain_at_with_config(secret, x, y, cfg) for x in range(2000, 8000, 700) for y in range(2000, 8000, 700)]
+    assert {'plain', 'forest', 'mountain'} <= set(sample)
+    assert any(t in {'river', 'water'} for t in sample)
+    found = []
+    for y in range(3001, 3600, 3):
+        for x in range(3001, 9000, 3):
+            feat = m.world_feature_at_with_config(secret, x, y, 'plain', None, cfg)
+            if feat:
+                found.append(feat['type'])
+            if len(found) >= 2:
+                break
+        if len(found) >= 2:
+            break
+    assert found
+
+
+def test_chunk_payload_features_and_minimap_compatible(polydb):
+    seed(polydb)
+    chunk = m.build_chunks(1, [(0, 0)])
+    assert chunk['map_width'] == m.map_width() and chunk['map_height'] == m.map_height()
+    assert 'features' in chunk['chunks'][0]

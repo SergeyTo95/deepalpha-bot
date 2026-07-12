@@ -10,13 +10,13 @@ logger = logging.getLogger(__name__)
 NULL_STATE_FACTION_ID = 8
 
 FACTIONS = [
-    (1, "Blue Coalition", "blue-coalition", "blue", "A disciplined bloc built on coordination and protocol trust."),
-    (2, "Red Alliance", "red-alliance", "red", "Aggressive consensus challengers who favor decisive action."),
-    (3, "Green Union", "green-union", "green", "Sustainable strategists focused on steady network growth."),
-    (4, "Black Dominion", "black-dominion", "black", "Shadow operators who win through patience and leverage."),
-    (5, "White Republic", "white-republic", "white", "Transparent defenders of order, rules, and open governance."),
-    (6, "Orange League", "orange-league", "orange", "High-energy builders optimizing for speed and adoption."),
-    (7, "Purple Pact", "purple-pact", "purple", "Diplomatic tacticians specializing in alliances and influence."),
+    (1, "Red Dominion", "red-dominion", "#ef4444", "A disciplined empire of forward bases, armored columns, and decisive expansion."),
+    (2, "Blue Alliance", "blue-alliance", "#3b82f6", "Coordinated strategists who secure territory through logistics and protocol trust."),
+    (3, "Green Collective", "green-collective", "#22c55e", "Sustainable builders who turn forests, villages, and resource zones into strongholds."),
+    (4, "Purple Empire", "purple-empire", "#a855f7", "Diplomatic tacticians who project influence from distant capitals and radio towers."),
+    (5, "Orange Republic", "orange-republic", "#f97316", "High-energy industrialists optimized for rapid scouting, roads, and factory growth."),
+    (6, "White League", "white-league", "#e5e7eb", "Transparent defenders of order, rules, and open governance."),
+    (7, "Black Pact", "black-pact", "#111827", "Shadow operators who win through patience, ruins, and leverage."),
 ]
 
 
