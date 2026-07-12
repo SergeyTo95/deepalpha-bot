@@ -211,3 +211,42 @@ def test_node_vm_mobile_gesture_and_sheet_css_runtime():
         assert.strictEqual(cancel.taps, 0);
     ''')
     subprocess.run(["node", "-e", script], check=True)
+
+
+def test_visual_depth_render_path_and_close_camera_defaults():
+    assert "const POLYWAR_VISUALS" in JS
+    assert "defaultCell: 28" in JS
+    assert "baseZoom: 34" in JS
+    assert "drawTerrainTile" in JS
+    assert "drawMountainRelief" in JS
+    assert "terrainDepth" in JS
+
+
+def test_ambient_clouds_and_birds_are_canvas_only_and_reduced_motion_safe():
+    assert "initAmbient" in JS
+    assert "drawAmbient" in JS
+    assert "this.clouds" in JS
+    assert "this.birds" in JS
+    assert "polywarReducedMotion" in JS
+    assert "prefers-reduced-motion: reduce" in JS
+    assert "ambientFps" in JS
+    render = JS[JS.index('root.innerHTML = `'):JS.index('document.querySelectorAll("[data-faction]")')]
+    assert "cloud" not in render.lower()
+    assert "bird" not in render.lower()
+
+
+def test_ambient_animation_is_bounded_and_destroyed_with_map():
+    assert "maxClouds: 5" in JS
+    assert "maxBirds: 2" in JS
+    assert "lowPowerAmbient" in JS
+    assert "cancelAnimationFrame(this.ambientFrame)" in JS
+    assert "scheduleAmbientFrame" in JS
+    assert "1000 / POLYWAR_VISUALS.ambientFps" in JS
+
+
+def test_map_visual_css_preserves_mobile_touch_and_overlay_layers():
+    assert ".map-wrap::before" in CSS
+    assert "pointer-events:none" in CSS
+    assert "isolation:isolate" in CSS
+    assert "height:72vh" in CSS
+    assert "z-index:6" in CSS

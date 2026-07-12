@@ -17,6 +17,19 @@ try { tg?.ready(); tg?.expand(); } catch (_) {}
 
 const TERRAIN_COST = { plain: 1, forest: 1, mountain: 2, swamp: 2, desert: 1, road: 1, ruins: 1, water: null, river: null };
 const TERRAIN_COLOR = { plain: "#76a35b", forest: "#20723d", mountain: "#807a73", swamp: "#476a50", desert: "#c7a35a", road: "#b8935a", ruins: "#8d6e92", water: "#245ea8", river: "#39a7d8" };
+const POLYWAR_VISUALS = {
+  defaultCell: 28,
+  minCell: 12,
+  maxCell: 58,
+  baseZoom: 34,
+  detailedCell: 14,
+  ambientFps: 18,
+  maxClouds: 5,
+  maxBirds: 2,
+  terrainDepth: { plain: .14, forest: .25, mountain: .55, swamp: .2, desert: .16, road: .1, ruins: .28, water: -.08, river: -.04 }
+};
+function polywarReducedMotion() { return !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches; }
+function polywarLowPowerMode() { return polywarReducedMotion() || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2); }
 
 function selectedFactionId(state = currentState) { return Number(state?.selected_faction?.id || state?.player?.faction_id || 0); }
 function terrainEnergyCost(terrain) { return Object.prototype.hasOwnProperty.call(TERRAIN_COST, terrain) ? TERRAIN_COST[terrain] : null; }
@@ -204,9 +217,13 @@ class PolyWarMap {
     this.abort = new AbortController();
     this.destroyed = false;
     this.drawFrame = null;
+    this.ambientFrame = null;
+    this.lastAmbientDraw = 0;
+    this.ambientEnabled = !polywarReducedMotion();
+    this.lowPowerAmbient = polywarLowPowerMode();
     this.loadSeq = 0;
     this.selected = null;
-    this.cell = 10;
+    this.cell = POLYWAR_VISUALS.defaultCell;
     this.pending = false;
     this.pendingCellKey = null;
     this.lastTap = null;
@@ -221,6 +238,7 @@ class PolyWarMap {
     this.bind();
     this.resize({ loadData: false });
     this.select(b.x, b.y);
+    this.initAmbient();
     this.requestDraw();
     this.bootstrapInitialLoad();
   }
@@ -251,7 +269,9 @@ class PolyWarMap {
     this.destroyed = true;
     this.abort.abort();
     if (this.drawFrame) cancelAnimationFrame(this.drawFrame);
+    if (this.ambientFrame) cancelAnimationFrame(this.ambientFrame);
     this.drawFrame = null;
+    this.ambientFrame = null;
     this.loading.clear();
     this.pendingRequests.clear();
     this.sectorLoading.clear();
@@ -259,9 +279,9 @@ class PolyWarMap {
   updateState(state) { this.state = state; this.updatePanel(); }
   async bootstrapInitialLoad() { await this.ensureChunks(); if (this.destroyed) return; this.initialChunksReady = true; await Promise.allSettled([this.ensureSectors(), this.refreshCapitals(), this.refreshGovernance()]); }
   resize({ loadData = true } = {}) { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.w = r.width; this.h = r.height; this.clamp(); if (loadData && this.initialChunksReady) { this.ensureChunks(); this.ensureSectors(); } this.requestDraw(); }
-  zoom(f) { this.cell = Math.max(2, Math.min(36, this.cell * f)); if (this.cell >= 6) this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
+  zoom(f) { this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, this.cell * f)); if (this.cell >= 6) this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
   clamp() { this.cx = Math.max(0, Math.min(this.state.map.width - 1, this.cx)); this.cy = Math.max(0, Math.min(this.state.map.height - 1, this.cy)); }
-  centerOnBase(zoom = 18) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.max(this.cell, zoom); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
+  centerOnBase(zoom = POLYWAR_VISUALS.baseZoom) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.max(this.cell, Math.min(POLYWAR_VISUALS.maxCell, zoom)); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
   screenToCell(px, py) { return { x: Math.floor(this.cx + (px - this.w / 2) / this.cell), y: Math.floor(this.cy + (py - this.h / 2) / this.cell) }; }
   cellToScreen(x, y) { return { x: this.w / 2 + (x - this.cx) * this.cell, y: this.h / 2 + (y - this.cy) * this.cell }; }
   rules() { return this.state.rules || {}; }
@@ -514,13 +534,81 @@ class PolyWarMap {
     const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
   }
   visibleCellBounds() { const a=this.screenToCell(0,0), b=this.screenToCell(this.w,this.h); return {minX:Math.max(0,Math.floor(Math.min(a.x,b.x))-1), maxX:Math.min(this.state.map.width-1,Math.ceil(Math.max(a.x,b.x))+1), minY:Math.max(0,Math.floor(Math.min(a.y,b.y))-1), maxY:Math.min(this.state.map.height-1,Math.ceil(Math.max(a.y,b.y))+1)}; }
+  initAmbient() {
+    const seed = (this.state?.season?.id || 1) * 97;
+    const clouds = this.lowPowerAmbient ? 3 : POLYWAR_VISUALS.maxClouds;
+    this.clouds = Array.from({ length: clouds }, (_, i) => ({
+      x: ((seed + i * 173) % 1000) / 1000,
+      y: .08 + (((seed + i * 97) % 620) / 1000),
+      size: .14 + (((seed + i * 41) % 90) / 1000),
+      speed: .0025 + i * .00045,
+      alpha: .12 + (i % 3) * .035
+    }));
+    this.birds = Array.from({ length: this.lowPowerAmbient ? 1 : POLYWAR_VISUALS.maxBirds }, (_, i) => ({
+      start: Date.now() + i * 4200,
+      duration: 7600 + i * 1500,
+      y: .2 + i * .22,
+      scale: .7 + i * .15
+    }));
+  }
+  drawTerrainTile(ctx, terrain, p, x, y) {
+    const cell = this.cell, depth = POLYWAR_VISUALS.terrainDepth[terrain] ?? .12, base = TERRAIN_COLOR[terrain] || "#555";
+    ctx.save();
+    ctx.fillStyle = base;
+    ctx.fillRect(p.x, p.y, cell + .6, cell + .6);
+    if (cell >= POLYWAR_VISUALS.detailedCell) {
+      const shade = Math.max(0, depth);
+      ctx.fillStyle = `rgba(255,255,255,${.08 + shade * .18})`;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + cell, p.y); ctx.lineTo(p.x, p.y + cell); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = `rgba(0,0,0,${.08 + Math.abs(depth) * .22})`;
+      ctx.beginPath(); ctx.moveTo(p.x + cell, p.y); ctx.lineTo(p.x + cell, p.y + cell); ctx.lineTo(p.x, p.y + cell); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.strokeRect(p.x + 1, p.y + 1, Math.max(2, cell - 2), Math.max(2, cell - 2));
+      if (terrain === "mountain") this.drawMountainRelief(ctx, p, x, y);
+      else if (terrain === "forest") { ctx.fillStyle = "rgba(7,45,24,.32)"; ctx.beginPath(); ctx.arc(p.x + cell*.62, p.y + cell*.38, cell*.18, 0, Math.PI*2); ctx.fill(); }
+      else if (terrain === "water" || terrain === "river") { ctx.strokeStyle = "rgba(180,235,255,.22)"; ctx.beginPath(); ctx.moveTo(p.x + cell*.16, p.y + cell*.58); ctx.quadraticCurveTo(p.x + cell*.5, p.y + cell*.45, p.x + cell*.84, p.y + cell*.58); ctx.stroke(); }
+      else if (terrain === "road") { ctx.strokeStyle = "rgba(75,45,20,.34)"; ctx.lineWidth = Math.max(2, cell*.18); ctx.beginPath(); ctx.moveTo(p.x, p.y + cell*.62); ctx.lineTo(p.x + cell, p.y + cell*.38); ctx.stroke(); ctx.lineWidth = 1; }
+    }
+    ctx.restore();
+  }
+  drawMountainRelief(ctx, p) {
+    const c = this.cell;
+    ctx.fillStyle = "rgba(40,38,42,.42)"; ctx.beginPath(); ctx.moveTo(p.x+c*.18,p.y+c*.78); ctx.lineTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.86,p.y+c*.78); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.24)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.36,p.y+c*.58); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,.22)"; ctx.beginPath(); ctx.moveTo(p.x+c*.52,p.y+c*.16); ctx.lineTo(p.x+c*.86,p.y+c*.78); ctx.lineTo(p.x+c*.58,p.y+c*.48); ctx.closePath(); ctx.fill();
+  }
+  drawAmbient(ctx, now = Date.now()) {
+    if (!this.ambientEnabled || !this.clouds?.length) return;
+    ctx.save(); ctx.globalCompositeOperation = "screen";
+    for (const cl of this.clouds) {
+      const x = ((cl.x + (now * cl.speed / 1000)) % 1.22 - .12) * this.w, y = cl.y * this.h, r = cl.size * Math.min(this.w, this.h);
+      ctx.fillStyle = `rgba(255,255,255,${cl.alpha})`;
+      ctx.beginPath(); ctx.ellipse(x, y, r*.9, r*.28, 0, 0, Math.PI*2); ctx.ellipse(x+r*.38, y-r*.04, r*.58, r*.22, 0, 0, Math.PI*2); ctx.ellipse(x-r*.42, y+r*.02, r*.52, r*.2, 0, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = "rgba(8,14,30,.34)"; ctx.lineWidth = 1.4;
+    for (const bird of this.birds || []) {
+      const phase = ((now - bird.start) % 14000) / bird.duration; if (phase < 0 || phase > 1) continue;
+      const bx = -24 + phase * (this.w + 48), by = bird.y * this.h + Math.sin(phase * Math.PI * 2) * 16, s = 7 * bird.scale;
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx+s*.7, by-s*.6, bx+s*1.4, by); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx-s*.7, by-s*.6, bx-s*1.4, by); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  scheduleAmbientFrame() {
+    if (!this.ambientEnabled || this.destroyed || this.ambientFrame) return;
+    this.ambientFrame = requestAnimationFrame((now) => {
+      this.ambientFrame = null;
+      if (this.destroyed || !this.ambientEnabled) return;
+      if (now - this.lastAmbientDraw >= 1000 / POLYWAR_VISUALS.ambientFps) { this.lastAmbientDraw = now; this.draw(); }
+      this.scheduleAmbientFrame();
+    });
+  }
+
   drawSkeleton(ctx) { const b=this.visibleCellBounds(); if (this.cell < 6) return; for(let y=b.minY;y<=b.maxY;y++) for(let x=b.minX;x<=b.maxX;x++){ const key=`${Math.floor(x/this.state.map.chunk_size)},${Math.floor(y/this.state.map.chunk_size)}`; if(this.cache.has(key)) continue; const p=this.cellToScreen(x,y); ctx.fillStyle=((x+y)&1)?"rgba(255,255,255,.035)":"rgba(0,0,0,.035)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); } }
   drawCellGrid(ctx) { const b=this.visibleCellBounds(); if (this.cell < 6) { const ss=this.sectorSize(), r=this.visibleSectorRange(); ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=1; ctx.beginPath(); for(let sx=r.minX;sx<=r.maxX+1;sx++){ const p=this.cellToScreen(sx*ss,b.minY); ctx.moveTo(Math.round(p.x)+.5,0); ctx.lineTo(Math.round(p.x)+.5,this.h); } for(let sy=r.minY;sy<=r.maxY+1;sy++){ const p=this.cellToScreen(b.minX,sy*ss); ctx.moveTo(0,Math.round(p.y)+.5); ctx.lineTo(this.w,Math.round(p.y)+.5); } ctx.stroke(); return; } ctx.strokeStyle="rgba(255,255,255,.10)"; ctx.lineWidth=1; ctx.beginPath(); for(let x=b.minX;x<=b.maxX+1;x++){ const p=this.cellToScreen(x,b.minY); ctx.moveTo(Math.round(p.x)+.5,0); ctx.lineTo(Math.round(p.x)+.5,this.h); } for(let y=b.minY;y<=b.maxY+1;y++){ const p=this.cellToScreen(b.minX,y); ctx.moveTo(0,Math.round(p.y)+.5); ctx.lineTo(this.w,Math.round(p.y)+.5); } ctx.stroke(); }
   drawBaseMarkers(ctx) { const capitalKeys = polywarCapitalUi?.cache || new Map(); for (const b of this.state.map.bases || []) { if (capitalKeys.has(`${b.x},${b.y}`)) continue; const p=this.cellToScreen(b.x,b.y); const cx=p.x+this.cell/2, cy=p.y+this.cell/2, r=Math.max(4, Math.min(14, this.cell*.36)); ctx.save(); ctx.shadowColor=b.color||"#fff"; ctx.shadowBlur=8; ctx.fillStyle=b.color||"#fff"; ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.lineWidth=1.25; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0; ctx.stroke(); ctx.fillStyle="rgba(7,10,24,.82)"; ctx.font=`${Math.max(8,Math.min(13,r*1.15))}px sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("⌂",cx,cy+.5); ctx.restore(); } }
   drawSelectedCell(ctx) { if (!this.selected) return; const p=this.cellToScreen(this.selected.x,this.selected.y); ctx.save(); ctx.fillStyle="rgba(53,166,255,.16)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); ctx.strokeStyle="#70d7ff"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,Math.max(2,this.cell-2),Math.max(2,this.cell-2)); ctx.restore(); }
   drawPendingPulse(ctx) { if (!this.pendingCellKey) return; const [px,py]=this.pendingCellKey.split(",").map(Number), p=this.cellToScreen(px,py), phase=(Date.now()%900)/900, pad=2+phase*Math.max(1,this.cell*.18); ctx.save(); ctx.strokeStyle=`rgba(53,166,255,${.8-phase*.45})`; ctx.lineWidth=2; ctx.strokeRect(p.x+pad,p.y+pad,Math.max(2,this.cell-pad*2),Math.max(2,this.cell-pad*2)); ctx.restore(); setTimeout(()=>this.requestDraw(),120); }
   requestDraw() { if (this.destroyed || this.drawFrame) return; this.drawFrame = requestAnimationFrame(() => { this.drawFrame = null; if (!this.destroyed) this.draw(); }); }
-  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); this.drawSkeleton(ctx); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; ctx.fillStyle = TERRAIN_COLOR[ch.terrain[yy][xx]] || "#555"; ctx.fillRect(p.x, p.y, this.cell + 0.5, this.cell + 0.5); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size);  } } this.drawCellGrid(ctx); this.drawBaseMarkers(ctx); for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || [], this.cell, new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y));  if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } this.drawSelectedCell(ctx); this.drawPendingPulse(ctx); }
+  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); this.drawSkeleton(ctx); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; this.drawTerrainTile(ctx, ch.terrain[yy][xx], p, x, y); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size);  } } this.drawCellGrid(ctx); this.drawBaseMarkers(ctx); for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || [], this.cell, new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y));  if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } this.drawSelectedCell(ctx); this.drawPendingPulse(ctx); this.drawAmbient(ctx); this.scheduleAmbientFrame(); }
 }
 
 function renderUnavailable(message) { clearTimers(); map?.destroy(); map = null; root.innerHTML = `<section class="glass card"><h2>PolyWar is temporarily unavailable</h2><p class="muted">${esc(message || "Please check back later.")}</p><a class="btn" href="/app">Back to DeepAlpha</a></section>`; }
@@ -546,7 +634,7 @@ function render(state) {
   updateFactionRanking();
   updateLatestEvents();
   map = new PolyWarMap(state);
-  if (selected) map.centerOnBase(18);
+  if (selected) map.centerOnBase();
   if (state.latest_completed_season) syncPolywarResults();
   startEnergyTimers();
   startWorldCountdownTimer();
