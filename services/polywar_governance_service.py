@@ -122,6 +122,7 @@ def _prepare_context_before_transaction(conn):
     polywar.init_polywar_schema(conn)
     capitals.init_polywar_capital_schema(conn)
     init_polywar_governance_schema(conn)
+    conn.commit()
     season = polywar.ensure_active_season()
     try:
         from services import polywar_finalization_service as finalization

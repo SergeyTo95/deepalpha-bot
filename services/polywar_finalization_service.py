@@ -30,6 +30,7 @@ def init_finalization_schema(conn=None):
         if own: conn.commit()
     finally:
         if own: conn.close()
+def claim_stale_seconds(): return polywar._setting_int('polywar_reward_claim_stale_seconds',300,30,86400)
 def public_rules(): return {'min_contribution':_setting_int('polywar_reward_min_contribution',5,0,1000000),'participation':_setting_int('polywar_reward_participation',25,0,1000000),'per_contribution':_setting_int('polywar_reward_per_contribution',1,0,1000000),'contribution_cap':_setting_int('polywar_reward_contribution_cap',500,0,1000000),'first_place':_setting_int('polywar_reward_first_place',500,0,1000000),'second_place':_setting_int('polywar_reward_second_place',250,0,1000000),'third_place':_setting_int('polywar_reward_third_place',100,0,1000000),'null_state_defeat':_setting_int('polywar_reward_null_state_defeat',100,0,1000000),'max_per_player':_setting_int('polywar_reward_max_per_player',2000,0,10000000)}
 def domination_capitals_required(): return _setting_int('polywar_domination_capitals_required',7,1,100)
 def domination_hold_hours(): return _setting_int('polywar_domination_hold_hours',24,0,8760)
@@ -166,22 +167,35 @@ def _calculate_rewards(conn,sid,ranks,winner):
         part=rules['participation'] if eligible else 0; cr=min(contrib*rules['per_contribution'],rules['contribution_cap']) if eligible else 0; place={1:rules['first_place'],2:rules['second_place'],3:rules['third_place']}.get(rank,0) if eligible else 0; ns=rules['null_state_defeat'] if eligible and defeated else 0; total=max(0,min(rules['max_per_player'],part+cr+place+ns)); status='pending' if total>0 else 'ineligible'; ref=f'polywar:season:{sid}:user:{int(p["user_id"])}'
         polywar._execute(c,'INSERT INTO polywar_player_season_rewards (season_id,user_id,faction_id,faction_rank,faction_contribution,participation_reward,contribution_reward,placement_reward,null_state_reward,total_reward,status,claim_reference,calculated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,user_id) DO NOTHING',(sid,p['user_id'],fid,rank,contrib,part,cr,place,ns,total,status,ref,_now())); out.append({'user_id':p['user_id'],'total_reward':total})
     return out
-def get_results(conn,season_id=None,user_id=None):
-    init_finalization_schema(conn); c=conn.cursor()
-    if season_id:
-        candidate=polywar._fetchone(c,'SELECT id,status FROM polywar_seasons WHERE id=%s',(season_id,))
-        if candidate and candidate.get('status')=='active':
-            maybe_finalize(int(season_id))
-    else:
-        active=polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='active' ORDER BY id DESC LIMIT 1")
-        if active: maybe_finalize(int(active['id']))
-        row=polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='completed' ORDER BY completed_at DESC LIMIT 1")
-        if not row: raise ValueError('results_not_ready')
-        season_id=row['id']
-    season=polywar._fetchone(c,'SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE id=%s',(season_id,))
-    if not season or season.get('status')!='completed': raise ValueError('results_not_ready')
-    rows=polywar._fetchall(c,'SELECT * FROM polywar_season_results WHERE season_id=%s ORDER BY COALESCE(rank,999),faction_id',(season_id,)); reward=polywar._fetchone(c,'SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s',(season_id,user_id)) if user_id else None
-    return {'ok':True,'season':{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in season.items()},'faction_ranking':[r for r in rows if not int(r.get('is_system') or 0)],'null_state_result':next((r for r in rows if int(r.get('is_system') or 0)),None),'current_user_reward':reward}
+def get_results(season_id=None,user_id=None):
+    conn=polywar.get_connection(); init_finalization_schema(conn)
+    try:
+        _begin(conn)
+        if season_id:
+            candidate=polywar._fetchone(conn.cursor(),'SELECT id,status FROM polywar_seasons WHERE id=%s',(season_id,))
+            if candidate and candidate.get('status')=='active':
+                decision=maybe_finalize_in_transaction(conn,int(season_id))
+                if decision.get('should_finalize'): finalize_season_in_transaction(conn,int(season_id),decision.get('victory_type','time'),decision.get('winner_faction_id'))
+        else:
+            active=polywar._fetchone(conn.cursor(),"SELECT id FROM polywar_seasons WHERE status='active' ORDER BY id DESC LIMIT 1")
+            if active:
+                decision=maybe_finalize_in_transaction(conn,int(active['id']))
+                if decision.get('should_finalize'): finalize_season_in_transaction(conn,int(active['id']),decision.get('victory_type','time'),decision.get('winner_faction_id'))
+        conn.commit()
+        c=conn.cursor()
+        if not season_id:
+            row=polywar._fetchone(c,"SELECT id FROM polywar_seasons WHERE status='completed' ORDER BY completed_at DESC LIMIT 1")
+            if not row: raise ValueError('results_not_ready')
+            season_id=row['id']
+        season=polywar._fetchone(c,'SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE id=%s',(season_id,))
+        if not season or season.get('status')!='completed': raise ValueError('results_not_ready')
+        rows=polywar._fetchall(c,'SELECT * FROM polywar_season_results WHERE season_id=%s ORDER BY COALESCE(rank,999),faction_id',(season_id,)); reward=polywar._fetchone(c,'SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s',(season_id,user_id)) if user_id else None
+        return {'ok':True,'season':{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in season.items()},'faction_ranking':[r for r in rows if not int(r.get('is_system') or 0)],'null_state_result':next((r for r in rows if int(r.get('is_system') or 0)),None),'current_user_reward':reward}
+    except Exception:
+        polywar._safe_rollback(conn); raise
+    finally:
+        conn.close()
+
 def _ledger_entry(ref):
     from services.airdrop_points_service import get_airdrop_points_ledger_entry_by_reference
     return get_airdrop_points_ledger_entry_by_reference(ref)
@@ -227,8 +241,18 @@ def claim_reward(user_id:int,season_id:int,idempotency_key:str):
             ref=r['claim_reference']; entry=_ledger_entry(ref)
             if entry:
                 _validate_ledger_reward(entry,r,user_id)
-                polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='claimed',claimed_at=COALESCE(claimed_at,%s) WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id)); conn.commit(); return {'ok':True,'claimed':True,'duplicate':True,'reward':r}
-            conn.commit(); return {'ok':False,'error':'reward_claim_processing'}
+                polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='claimed',claimed_at=COALESCE(claimed_at,%s) WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id))
+                polywar._execute(c,"INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) SELECT %s,%s,%s,'season_reward_claimed','Season reward claimed.',%s WHERE NOT EXISTS (SELECT 1 FROM polywar_events WHERE season_id=%s AND user_id=%s AND event_type='season_reward_claimed')",(season_id,user_id,r.get('faction_id'),_now(),season_id,user_id))
+                conn.commit(); return {'ok':True,'claimed':True,'duplicate':True,'reward':r}
+            started=r.get('claim_started_at')
+            if isinstance(started,str):
+                try: started=datetime.fromisoformat(started)
+                except Exception: started=None
+            if started and (_now()-started).total_seconds() < claim_stale_seconds():
+                conn.commit(); return {'ok':False,'error':'reward_claim_processing'}
+            polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='failed',failed_at=%s,failure_reason='stale_processing' WHERE season_id=%s AND user_id=%s AND status='processing'",(_now(),season_id,user_id))
+            if polywar._rowcount(c)!=1: raise ValueError('reward_claim_processing')
+            r=dict(r); r['status']='failed'
         if r.get('status') not in ('pending','failed'): raise ValueError('reward_ineligible')
         _claim_limiter(user_id)
         now=_now(); polywar._execute(c,"UPDATE polywar_player_season_rewards SET status='processing',claim_started_at=%s,failed_at=NULL,failure_reason=NULL WHERE season_id=%s AND user_id=%s AND status IN ('pending','failed')",(now,season_id,user_id))

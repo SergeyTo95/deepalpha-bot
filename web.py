@@ -889,13 +889,10 @@ async def handle_polywar_results_latest_api(request):
         return _polywar_unauthorized()
     try: _polywar_rate_limit('polywar_results_latest', int(current.get("user_id") or 0), 30)
     except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
-    conn = get_connection()
     try:
-        return _json_response(get_polywar_results(conn, None, int(current.get("user_id") or 0)))
+        return _json_response(get_polywar_results(None, int(current.get("user_id") or 0)))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=404)
-    finally:
-        conn.close()
 
 
 async def handle_polywar_results_api(request):
@@ -904,14 +901,11 @@ async def handle_polywar_results_api(request):
         return _polywar_unauthorized()
     try: _polywar_rate_limit('polywar_results', int(current.get("user_id") or 0), 30)
     except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
-    conn = get_connection()
     try:
         sid = int(request.query.get("season_id") or 0) or None
-        return _json_response(get_polywar_results(conn, sid, int(current.get("user_id") or 0)))
+        return _json_response(get_polywar_results(sid, int(current.get("user_id") or 0)))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=404)
-    finally:
-        conn.close()
 
 
 async def handle_polywar_rewards_api(request):

@@ -155,8 +155,8 @@ def test_energy_recovers_offline_and_caps_at_max(polydb):
     conn.commit()
     player = polywar.get_or_create_player(55, season["id"], conn)
     assert player["current_energy"] == 10
-    assert polywar.get_state(55, conn)["energy"]["current_energy"] == 10
     conn.close()
+    assert polywar.get_state(55)["energy"]["current_energy"] == 10
 
 
 def test_secret_seed_never_in_state_and_airdrop_lifetime_is_external(polydb):
