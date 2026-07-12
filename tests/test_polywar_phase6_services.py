@@ -557,3 +557,45 @@ def test_airdrop_idempotent_hot_path_has_zero_ddl(monkeypatch):
     assert ap.get_airdrop_points_ledger_entry_by_reference('ref')['id'] == 5
     out = ap.award_airdrop_points_idempotent(1,'polywar_season_reward',10,{},'ref')
     assert out['duplicate'] is True
+
+
+def test_chunk_domination_due_uses_public_lifecycle(db, monkeypatch):
+    connect, settings = db
+    settings['polywar_domination_hold_hours'] = '0'
+    sid = active(connect)
+    c = connect(); world.init_world_schema(c); world.ensure_world_initialized_in_transaction(c, sid)
+    c.execute('update polywar_null_state set status=?, activation_at=?, next_tick_at=? where season_id=?', ('dormant', datetime.utcnow()+timedelta(days=1), datetime.utcnow()+timedelta(days=1), sid))
+    c.execute('update polywar_seasons set domination_faction_id=1, domination_started_at=? where id=?', (datetime.utcnow()-timedelta(seconds=1), sid))
+    c.commit(); c.close()
+    calls=[]
+    original = world.ensure_world_caught_up
+    def wrapped(season_id, now=None):
+        calls.append(season_id)
+        return original(season_id, now)
+    monkeypatch.setattr(world, 'ensure_world_caught_up', wrapped)
+    from services import polywar_map_service as mm
+    out = mm.build_chunks(100, [(0,0)])
+    assert out['ok'] and calls == [sid]
+
+
+def test_rebellion_tick_success_transitions_before_transfer(db, monkeypatch):
+    connect, settings = db
+    settings['polywar_rebellion_tick_progress'] = '1000'
+    sid = active(connect); polywar.join_faction(230,2)
+    c = connect(); rebellion.init_rebellion_schema(c)
+    now = datetime.utcnow()-timedelta(days=2)
+    c.execute('insert or replace into polywar_capitals (season_id,original_faction_id,x,y,controller_faction_id,controlled_since,captured_at,updated_at) values (?,?,?,?,?,?,?,?)',(sid,1,22,22,2,now,now,now))
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,21,22))
+    rebellion.ensure_rebellions_in_transaction(c,sid); c.commit()
+    from services import polywar_capital_service as caps
+    original = caps.transfer_capital_control
+    seen=[]
+    def wrapped(conn, season_id, cap, new_faction_id, user_id=None, now=None):
+        status = conn.execute('select status from polywar_rebellions where season_id=? and capital_original_faction_id=?',(season_id,cap['original_faction_id'])).fetchone()[0]
+        seen.append(status)
+        return original(conn, season_id, cap, new_faction_id, user_id, now)
+    monkeypatch.setattr(caps, 'transfer_capital_control', wrapped)
+    changed = rebellion.process_rebellion_tick(c, sid, datetime.utcnow(), limit=1)
+    assert changed == ['rebellion_succeeded'] and seen == ['succeeded']
+    assert c.execute('select controller_faction_id from polywar_capitals where season_id=? and original_faction_id=1',(sid,)).fetchone()[0] == 1
+    c.close()

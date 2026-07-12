@@ -238,6 +238,13 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
             ends = datetime.fromisoformat(ends)
         if ends and ends <= now:
             due = True
+        domination_started = season.get("domination_started_at")
+        if not due and season.get("domination_faction_id") and domination_started:
+            if isinstance(domination_started, str):
+                domination_started = datetime.fromisoformat(domination_started)
+            hold_key = "polywar_null_victory_hold_hours" if int(season.get("domination_faction_id") or 0) == 8 else "polywar_domination_hold_hours"
+            hold_default = 12 if hold_key == "polywar_null_victory_hold_hours" else 24
+            due = domination_started + timedelta(hours=_setting_int(hold_key, hold_default, 0, 8760)) <= now
         if due:
             conn.close()
             world.ensure_world_caught_up(sid, now)

@@ -88,20 +88,27 @@ def _adjacent_owner(conn,sid,x,y,fid):
 
 def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10):
     now=now or _now(); ensure_rebellions_in_transaction(conn,season_id); c=conn.cursor(); changed=[]
-    rows=polywar._fetchall(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status='active' ORDER BY id LIMIT %s",(season_id,limit))
-    for reb in rows:
-        cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND original_faction_id=%s',(season_id,reb['capital_original_faction_id']))
+    suffix='' if polywar._is_sqlite(conn) else ' FOR UPDATE'
+    rows=polywar._fetchall(c,"SELECT id FROM polywar_rebellions WHERE season_id=%s AND status='active' ORDER BY id LIMIT %s",(season_id,limit))
+    for row in rows:
+        reb=polywar._fetchone(c,'SELECT * FROM polywar_rebellions WHERE id=%s'+suffix,(row['id'],))
+        if not reb or reb.get('status')!='active': continue
+        cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND original_faction_id=%s'+suffix,(season_id,reb['capital_original_faction_id']))
         if not cap or int(cap['controller_faction_id'])!=int(reb['controller_faction_id']): continue
+        _=polywar._fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(season_id,cap['x'],cap['y']))
         if not _original_presence(conn,season_id,int(reb['capital_original_faction_id']),int(cap['x']),int(cap['y'])): continue
         req=int(reb['required_progress']); after=min(req,int(reb['progress'] or 0)+_setting_int('polywar_rebellion_tick_progress',25,0,100000))
-        status='active'; resolved=None; outcome='rebellion_progress'
         if after>=req:
+            polywar._execute(c,"UPDATE polywar_rebellions SET progress=%s,status='succeeded',last_tick_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s AND status='active'",(after,now,now,now,reb['id']))
+            if polywar._rowcount(c)!=1: continue
             from services import polywar_capital_service as caps
             caps.transfer_capital_control(conn,season_id,cap,int(reb['capital_original_faction_id']),None,now)
             polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(int(reb['capital_original_faction_id']),season_id,cap['x'],cap['y']))
-            status='succeeded'; resolved=now; outcome='rebellion_succeeded'
-        polywar._execute(c,'UPDATE polywar_rebellions SET progress=%s,status=%s,last_tick_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s AND status=\'active\'',(after,status,now,resolved,now,reb['id']))
-        if polywar._rowcount(c):
+            outcome='rebellion_succeeded'; did_update=True
+        else:
+            polywar._execute(c,"UPDATE polywar_rebellions SET progress=%s,last_tick_at=%s,updated_at=%s WHERE id=%s AND status='active'",(after,now,now,reb['id']))
+            outcome='rebellion_progress'; did_update=polywar._rowcount(c)==1
+        if did_update:
             polywar._execute(c,'INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s)',(season_id,int(reb['capital_original_faction_id']),outcome,outcome,now)); changed.append(outcome)
     return changed
 
