@@ -183,7 +183,8 @@ def test_polywar_more_toggle_accessible_and_resets_on_cell_or_primary():
     js = Path('webapp/polywar.js').read_text()
     assert 'more.setAttribute("aria-expanded", String(this.moreOpen))' in js
     assert 'more.classList.toggle("is-open", !!this.moreOpen)' in js
-    assert 'Less <span class="more-chevron">▴</span>' in js and 'More <span class="more-chevron">▾</span>' in js
+    assert "`${this.moreOpen ? 'Less' : 'More'} <span class=\"more-chevron\">▾</span>`" in js
+    assert 'Less <span class="more-chevron">▴</span>' not in js
     assert 'if (this.selected?.x !== x || this.selected?.y !== y) this.moreOpen = false' in js
     assert 'this.moreOpen = false;\n    this.pending = true; this.pendingCellKey = target.key' in js
 
@@ -206,3 +207,44 @@ def test_polywar_owner_reason_truncation_and_one_row_actions():
     assert '.compact-cell-sheet--expanded #cellReason{-webkit-line-clamp:2}' in css
     assert '.sheet-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px' in css
     assert '.compact-cell-sheet .sheet-actions .btn{grid-column:auto;width:auto' in css
+
+
+
+def test_polywar_capital_marker_is_centered_and_unified_with_base():
+    js = Path('webapp/polywar.js').read_text()
+    capital_draw = js.split('draw(ctx, worldToScreen, factions = [], cellSize = 16, baseKeys = new Set())', 1)[1].split('panel(cap, state)', 1)[0]
+    assert 'const cx = p.x + cellSize / 2, cy = p.y + cellSize / 2' in capital_draw
+    assert 'ctx.arc(cx, cy, r, 0, Math.PI * 2)' in capital_draw
+    assert 'ctx.arc(p.x, p.y, 8' not in capital_draw
+    assert 'ctx.arc(p.x, p.y, 12' not in capital_draw
+    assert 'if (capitalKeys.has(`${b.x},${b.y}`)) continue' in js
+    assert 'new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))' in js
+
+
+def test_polywar_unified_capital_marker_preserves_fill_stroke_siege_and_home():
+    js = Path('webapp/polywar.js').read_text()
+    capital_draw = js.split('draw(ctx, worldToScreen, factions = [], cellSize = 16, baseKeys = new Set())', 1)[1].split('panel(cap, state)', 1)[0]
+    assert 'ctx.fillStyle = controller' in capital_draw
+    assert 'ctx.strokeStyle = original' in capital_draw
+    assert 'cap.original_faction_id !== cap.controller_faction_id ? 2.5 : 1.5' in capital_draw
+    assert 'baseKeys.has(`${cap.x},${cap.y}`)' in capital_draw and "ctx.fillText('⌂', cx, cy + .5)" in capital_draw
+    assert 'if (cap.is_under_siege)' in capital_draw
+    assert 'ctx.arc(cx, cy, r + 4' in capital_draw
+
+
+def test_polywar_selected_outline_draws_after_unified_marker_without_extra_marker_shape():
+    js = Path('webapp/polywar.js').read_text()
+    draw = js.split('  draw() {', 1)[1].split('\n}', 1)[0]
+    assert draw.index('polywarCapitalUi.draw(ctx') < draw.index('this.drawSelectedCell(ctx)')
+    selected = js.split('drawSelectedCell(ctx)', 1)[1].split('drawPendingPulse(ctx)', 1)[0]
+    assert selected.count('strokeRect') == 1
+    assert 'ctx.arc(' not in selected
+
+
+def test_polywar_more_chevron_uses_fixed_symbol_with_css_rotation_only():
+    js = Path('webapp/polywar.js').read_text()
+    css = Path('webapp/polywar.css').read_text()
+    assert "`${this.moreOpen ? 'Less' : 'More'} <span class=\"more-chevron\">▾</span>`" in js
+    assert 'Less <span class="more-chevron">▴</span>' not in js
+    assert '#moreActionsBtn.is-open .more-chevron{transform:rotate(180deg)}' in css
+    assert 'more.classList.toggle("is-open", !!this.moreOpen)' in js
