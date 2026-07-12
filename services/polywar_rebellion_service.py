@@ -31,8 +31,8 @@ def _original_presence(conn,sid,orig,x,y):
         if rows: return True
     return False
 
-def ensure_rebellions(conn,season_id:int):
-    init_rebellion_schema(conn); c=conn.cursor(); now=_now(); rules=public_rules()
+def ensure_rebellions_in_transaction(conn,season_id:int):
+    c=conn.cursor(); now=_now(); rules=public_rules()
     if str(polywar.get_setting('polywar_rebellion_enabled','true')).lower() in {'0','false','off','no'}: return []
     season=polywar._fetchone(c,'SELECT status FROM polywar_seasons WHERE id=%s',(season_id,))
     if not season or season.get('status')!='active': return []
@@ -59,6 +59,10 @@ def ensure_rebellions(conn,season_id:int):
         polywar._execute(c,"INSERT INTO polywar_rebellions (season_id,capital_original_faction_id,controller_faction_id,status,progress,required_progress,occupation_started_at,eligible_at,started_at,created_at,updated_at) VALUES (%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s)",(season_id,orig,ctrl,status,rules['required'],started,eligible,now if status=='active' else None,now,now)); made.append(orig)
     return made
 
+def ensure_rebellions(conn,season_id:int):
+    init_rebellion_schema(conn)
+    return ensure_rebellions_in_transaction(conn,season_id)
+
 def get_public_rebellions(conn,season_id:int):
     ensure_rebellions(conn,season_id); rows=polywar._fetchall(conn.cursor(),"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status IN ('pending','active') ORDER BY id",(season_id,))
     return [{k:polywar._iso(v) if str(k).endswith('_at') else v for k,v in r.items()} for r in rows]
@@ -67,7 +71,7 @@ def _adjacent_owner(conn,sid,x,y,fid):
     return any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny))
 
 def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10):
-    now=now or _now(); ensure_rebellions(conn,season_id); c=conn.cursor(); changed=[]
+    now=now or _now(); ensure_rebellions_in_transaction(conn,season_id); c=conn.cursor(); changed=[]
     rows=polywar._fetchall(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND status='active' ORDER BY id LIMIT %s",(season_id,limit))
     for reb in rows:
         cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND original_faction_id=%s',(season_id,reb['capital_original_faction_id']))

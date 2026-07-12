@@ -878,19 +878,19 @@ def _load_polywar_world_payload(user_id: int):
     try:
         from services import polywar_service as _polywar
         from services import polywar_finalization_service as _finalization
-        from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up, get_public_world_state
+        from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction, get_public_world_state
         _polywar.init_polywar_schema(conn); _polywar.ensure_factions(conn); conn.commit()
         _polywar.begin_serialized_transaction(conn)
         season = _polywar.ensure_active_season_in_transaction(conn)
-        ensure_world_initialized(conn, int(season["id"]))
-        ensure_world_caught_up(conn, int(season["id"]))
+        ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        ensure_world_caught_up_in_transaction(conn, int(season["id"]))
         decision = _finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
         if decision.get("should_finalize"):
             _finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
         refreshed = _polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
         if refreshed and refreshed.get("status") == "completed":
             season = _polywar.ensure_active_season_in_transaction(conn)
-            ensure_world_initialized(conn, int(season["id"]))
+            ensure_world_initialized_in_transaction(conn, int(season["id"]))
         elif refreshed:
             season = refreshed
         conn.commit()

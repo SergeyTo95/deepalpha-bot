@@ -374,3 +374,54 @@ def test_public_get_state_rejects_caller_connection(db):
             polywar.get_state(9001, conn)
     finally:
         conn.close()
+
+def test_public_world_state_is_read_only(db):
+    connect, _ = db
+    sid = active(connect)
+    conn = connect(); world.ensure_world_initialized(conn, sid); conn.commit()
+    class CursorWrap:
+        def __init__(self, inner): self.inner = inner
+        def execute(self, sql, params=()):
+            head = str(sql).strip().split()[0].upper() if str(sql).strip() else ''
+            assert head not in {'INSERT','UPDATE','DELETE','ALTER','CREATE','BEGIN'}, sql
+            return self.inner.execute(sql, params)
+        def fetchone(self): return self.inner.fetchone()
+        def fetchall(self): return self.inner.fetchall()
+        def __iter__(self): return iter(self.inner)
+        def __getattr__(self, name): return getattr(self.inner, name)
+    class ConnWrap:
+        def __init__(self, inner): self.inner = inner
+        def cursor(self): return CursorWrap(self.inner.cursor())
+        def commit(self): raise AssertionError('read-only helper must not commit')
+        def rollback(self): raise AssertionError('read-only helper must not rollback')
+        def __getattr__(self, name): return getattr(self.inner, name)
+    out = world.get_public_world_state(ConnWrap(conn), sid)
+    assert out['season_id'] == sid
+    conn.close()
+
+
+def test_world_in_transaction_helpers_do_not_begin_or_commit(db):
+    connect, _ = db
+    sid = active(connect)
+    conn = connect()
+    class CursorWrap:
+        def __init__(self, inner): self.inner = inner
+        def execute(self, sql, params=()):
+            assert str(sql).strip().upper() != 'BEGIN IMMEDIATE'
+            assert str(sql).strip().upper() != 'BEGIN'
+            assert not str(sql).lstrip().upper().startswith(('ALTER ', 'CREATE TABLE', 'CREATE INDEX'))
+            return self.inner.execute(sql, params)
+        def fetchone(self): return self.inner.fetchone()
+        def fetchall(self): return self.inner.fetchall()
+        def __iter__(self): return iter(self.inner)
+        def __getattr__(self, name): return getattr(self.inner, name)
+    class ConnWrap:
+        def __init__(self, inner): self.inner = inner
+        def cursor(self): return CursorWrap(self.inner.cursor())
+        def commit(self): raise AssertionError('no commit')
+        def rollback(self): raise AssertionError('no rollback')
+        def __getattr__(self, name): return getattr(self.inner, name)
+    wrapped = ConnWrap(conn)
+    world.ensure_world_initialized_in_transaction(wrapped, sid)
+    world.ensure_world_caught_up_in_transaction(wrapped, sid)
+    conn.close()

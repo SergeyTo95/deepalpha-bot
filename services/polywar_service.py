@@ -40,7 +40,8 @@ def _now() -> datetime:
 
 
 def _is_sqlite(conn) -> bool:
-    return conn.__class__.__module__.startswith("sqlite3")
+    base = getattr(conn, "inner", conn)
+    return base.__class__.__module__.startswith("sqlite3")
 
 
 def _iso(dt: Any) -> Optional[str]:
@@ -534,9 +535,9 @@ def get_state(user_id: int) -> Dict[str, Any]:
         init_polywar_schema(conn); ensure_factions(conn); conn.commit()
         begin_serialized_transaction(conn)
         season = ensure_active_season_in_transaction(conn)
-        from services.polywar_world_service import ensure_world_initialized, ensure_world_caught_up
-        ensure_world_initialized(conn, int(season["id"]))
-        ensure_world_caught_up(conn, int(season["id"]))
+        from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction
+        ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        ensure_world_caught_up_in_transaction(conn, int(season["id"]))
         from services import polywar_finalization_service as finalization
         decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
         if decision.get("should_finalize"):
@@ -544,7 +545,7 @@ def get_state(user_id: int) -> Dict[str, Any]:
         refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
         if refreshed and refreshed.get("status") == "completed":
             season = ensure_active_season_in_transaction(conn)
-            ensure_world_initialized(conn, int(season["id"]))
+            ensure_world_initialized_in_transaction(conn, int(season["id"]))
         elif refreshed:
             season = refreshed
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
