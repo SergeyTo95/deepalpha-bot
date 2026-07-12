@@ -149,3 +149,102 @@ def test_get_sectors_uses_config_sector_size_without_get_setting(monkeypatch):
     monkeypatch.setattr(sectors, '_set_read_timeouts', lambda c: None)
     out = sectors.get_sectors(1, 0, 0, 0, 0)
     assert out['ok'] and out['sector_size'] == 77 and conn_count['n'] == 1
+
+
+def test_polywar_mobile_marker_render_hierarchy_is_simplified():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'drawBaseMarkers(ctx)' in js
+    assert 'Math.min(14, this.cell*.36)' in js
+    assert 'this.cell * 0.9' not in js
+    assert 'drawSelectedCell(ctx)' in js
+    selected = js.split('drawSelectedCell(ctx)', 1)[1].split('drawPendingPulse(ctx)', 1)[0]
+    assert selected.count('strokeRect') == 1
+    assert 'rgba(53,166,255,.16)' in selected
+    assert 'drawPendingPulse(ctx)' in js and 'setLineDash([3,3])' not in js
+
+
+def test_polywar_no_noisy_sector_dominance_labels_at_normal_zoom():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'dominance_percent??0' not in js
+    assert 'fillText(`${sx},${sy}' not in js
+
+
+def test_polywar_compact_sheet_collapses_secondary_actions_and_uses_status_pill():
+    css = Path('webapp/polywar.css').read_text()
+    js = Path('webapp/polywar.js').read_text()
+    assert 'max-height:132px' in css and 'max-height:min(140px' in css
+    assert '.compact-cell-sheet:not(.compact-cell-sheet--expanded) .secondary-actions{display:none}' in css
+    assert '.compact-cell-sheet--expanded{max-height:40vh;overflow-y:auto}' in css
+    assert 'btn.classList.toggle("status-pill", !primary.enabled && !this.pending)' in js
+    assert 'shortCellReason(primary.reason || "Ready")' in js
+
+
+def test_polywar_more_toggle_accessible_and_resets_on_cell_or_primary():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'more.setAttribute("aria-expanded", String(this.moreOpen))' in js
+    assert 'more.classList.toggle("is-open", !!this.moreOpen)' in js
+    assert "`${this.moreOpen ? 'Less' : 'More'} <span class=\"more-chevron\">▾</span>`" in js
+    assert 'Less <span class="more-chevron">▴</span>' not in js
+    assert 'if (this.selected?.x !== x || this.selected?.y !== y) this.moreOpen = false' in js
+    assert 'this.moreOpen = false;\n    this.pending = true; this.pendingCellKey = target.key' in js
+
+
+def test_polywar_primary_and_secondary_actions_are_separate_compact_containers():
+    css = Path('webapp/polywar.css').read_text()
+    js = Path('webapp/polywar.js').read_text()
+    assert '<div class="sheet-actions"><button class="btn" id="primaryActionBtn"' in js
+    assert '<div id="secondaryActionsMenu" class="secondary-actions" hidden>' in js
+    assert 'class="secondary-action-pill" data-polywar-secondary' in js
+    assert 'class="btn mini" data-polywar-secondary' not in js
+    assert '.secondary-actions{grid-column:1/-1;border-top:' in css
+    assert '.secondary-action-pill{min-height:38px' in css
+
+
+def test_polywar_owner_reason_truncation_and_one_row_actions():
+    css = Path('webapp/polywar.css').read_text()
+    assert '.cell-owner-line{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' in css
+    assert '.compact-cell-sheet #cellReason{display:-webkit-box;-webkit-line-clamp:1' in css
+    assert '.compact-cell-sheet--expanded #cellReason{-webkit-line-clamp:2}' in css
+    assert '.sheet-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px' in css
+    assert '.compact-cell-sheet .sheet-actions .btn{grid-column:auto;width:auto' in css
+
+
+
+def test_polywar_capital_marker_is_centered_and_unified_with_base():
+    js = Path('webapp/polywar.js').read_text()
+    capital_draw = js.split('draw(ctx, worldToScreen, factions = [], cellSize = 16, baseKeys = new Set())', 1)[1].split('panel(cap, state)', 1)[0]
+    assert 'const cx = p.x + cellSize / 2, cy = p.y + cellSize / 2' in capital_draw
+    assert 'ctx.arc(cx, cy, r, 0, Math.PI * 2)' in capital_draw
+    assert 'ctx.arc(p.x, p.y, 8' not in capital_draw
+    assert 'ctx.arc(p.x, p.y, 12' not in capital_draw
+    assert 'if (capitalKeys.has(`${b.x},${b.y}`)) continue' in js
+    assert 'new Set((this.state.map.bases || []).map(b => `${b.x},${b.y}`))' in js
+
+
+def test_polywar_unified_capital_marker_preserves_fill_stroke_siege_and_home():
+    js = Path('webapp/polywar.js').read_text()
+    capital_draw = js.split('draw(ctx, worldToScreen, factions = [], cellSize = 16, baseKeys = new Set())', 1)[1].split('panel(cap, state)', 1)[0]
+    assert 'ctx.fillStyle = controller' in capital_draw
+    assert 'ctx.strokeStyle = original' in capital_draw
+    assert 'cap.original_faction_id !== cap.controller_faction_id ? 2.5 : 1.5' in capital_draw
+    assert 'baseKeys.has(`${cap.x},${cap.y}`)' in capital_draw and "ctx.fillText('⌂', cx, cy + .5)" in capital_draw
+    assert 'if (cap.is_under_siege)' in capital_draw
+    assert 'ctx.arc(cx, cy, r + 4' in capital_draw
+
+
+def test_polywar_selected_outline_draws_after_unified_marker_without_extra_marker_shape():
+    js = Path('webapp/polywar.js').read_text()
+    draw = js.split('  draw() {', 1)[1].split('\n}', 1)[0]
+    assert draw.index('polywarCapitalUi.draw(ctx') < draw.index('this.drawSelectedCell(ctx)')
+    selected = js.split('drawSelectedCell(ctx)', 1)[1].split('drawPendingPulse(ctx)', 1)[0]
+    assert selected.count('strokeRect') == 1
+    assert 'ctx.arc(' not in selected
+
+
+def test_polywar_more_chevron_uses_fixed_symbol_with_css_rotation_only():
+    js = Path('webapp/polywar.js').read_text()
+    css = Path('webapp/polywar.css').read_text()
+    assert "`${this.moreOpen ? 'Less' : 'More'} <span class=\"more-chevron\">▾</span>`" in js
+    assert 'Less <span class="more-chevron">▴</span>' not in js
+    assert '#moreActionsBtn.is-open .more-chevron{transform:rotate(180deg)}' in css
+    assert 'more.classList.toggle("is-open", !!this.moreOpen)' in js
