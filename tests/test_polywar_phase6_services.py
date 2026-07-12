@@ -748,3 +748,158 @@ def test_get_capitals_uses_serialized_begin(db, monkeypatch):
     monkeypatch.setattr(caps, '_begin', wrapped)
     out = caps.get_capitals(100)
     assert out['ok'] and calls == ['begin']
+
+
+def _completed_reward(connect):
+    sid = active(connect)
+    c = connect()
+    c.execute('update polywar_players set faction_contribution=10 where user_id=100 and season_id=?', (sid,))
+    c.execute('update polywar_seasons set ends_at=? where id=?', (datetime.utcnow() - timedelta(seconds=1), sid))
+    c.commit(); c.close()
+    finalization.maybe_finalize(sid, datetime.utcnow())
+    c = connect()
+    reward = c.execute('select * from polywar_player_season_rewards where season_id=? and user_id=100', (sid,)).fetchone()
+    assert reward and int(reward['total_reward'] or 0) > 0
+    c.close()
+    return sid, reward
+
+
+def _install_fake_claim_ledger(monkeypatch, connect):
+    c = connect()
+    c.execute('create table if not exists test_airdrop_ledger (id integer primary key autoincrement, user_id integer not null, reason text not null, amount integer not null, external_reference text not null unique)')
+    c.commit(); c.close()
+    state = {'award_calls': 0}
+
+    def ledger_entry(ref):
+        cc = connect()
+        try:
+            row = cc.execute('select * from test_airdrop_ledger where external_reference=?', (ref,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            cc.close()
+
+    def award(user_id, reason, amount, metadata, external_reference):
+        state['award_calls'] += 1
+        cc = connect()
+        try:
+            cc.execute('insert or ignore into test_airdrop_ledger (user_id,reason,amount,external_reference) values (?,?,?,?)', (user_id, reason, int(amount), external_reference))
+            inserted = cc.total_changes > 0
+            cc.commit()
+            row = cc.execute('select * from test_airdrop_ledger where external_reference=?', (external_reference,)).fetchone()
+            assert row is not None
+            return {'ok': True, 'duplicate': not inserted, 'amount': int(row['amount']), 'ledger_id': row['id']}
+        finally:
+            cc.close()
+
+    monkeypatch.setattr(finalization, '_ledger_entry', ledger_entry)
+    import services.airdrop_points_service as ap
+    monkeypatch.setattr(ap, 'award_airdrop_points_idempotent', award)
+    return state, ledger_entry
+
+
+def test_processing_existing_ledger_recovers_claimed_response_and_event_once(db, monkeypatch):
+    connect, _ = db; finalization._CLAIM_RATE.clear(); sid, reward = _completed_reward(connect)
+    state, _ = _install_fake_claim_ledger(monkeypatch, connect)
+    c = connect(); past = datetime.utcnow() - timedelta(minutes=10)
+    c.execute("update polywar_player_season_rewards set status='processing', claim_started_at=? where season_id=? and user_id=100", (past, sid))
+    c.execute('insert into test_airdrop_ledger (user_id,reason,amount,external_reference) values (?,?,?,?)', (100, 'polywar_season_reward', int(reward['total_reward']), reward['claim_reference']))
+    c.commit(); c.close()
+
+    out = finalization.claim_reward(100, sid, 'recover-existing-ledger')
+    assert out['ok'] and out['duplicate'] is True
+    assert out['reward']['status'] == 'claimed'
+    c = connect()
+    assert c.execute("select status from polywar_player_season_rewards where season_id=? and user_id=100", (sid,)).fetchone()[0] == 'claimed'
+    assert c.execute("select count(*) from polywar_events where season_id=? and user_id=100 and event_type='season_reward_claimed'", (sid,)).fetchone()[0] == 1
+    assert c.execute('select count(*) from test_airdrop_ledger where external_reference=?', (reward['claim_reference'],)).fetchone()[0] == 1
+    c.close(); assert state['award_calls'] == 0
+
+
+def test_processing_existing_ledger_mismatch_is_hard_error(db, monkeypatch):
+    connect, _ = db; finalization._CLAIM_RATE.clear(); sid, reward = _completed_reward(connect)
+    _install_fake_claim_ledger(monkeypatch, connect)
+    c = connect(); past = datetime.utcnow() - timedelta(minutes=10)
+    c.execute("update polywar_player_season_rewards set status='processing', claim_started_at=? where season_id=? and user_id=100", (past, sid))
+    c.execute('insert into test_airdrop_ledger (user_id,reason,amount,external_reference) values (?,?,?,?)', (100, 'polywar_season_reward', int(reward['total_reward']) + 1, reward['claim_reference']))
+    c.commit(); c.close()
+    import pytest
+    with pytest.raises(RuntimeError, match='airdrop_external_reference_mismatch'):
+        finalization.claim_reward(100, sid, 'recover-mismatch')
+    c = connect()
+    assert c.execute("select status from polywar_player_season_rewards where season_id=? and user_id=100", (sid,)).fetchone()[0] == 'processing'
+    assert c.execute("select count(*) from polywar_events where season_id=? and event_type='season_reward_claimed'", (sid,)).fetchone()[0] == 0
+    c.close()
+
+
+def test_grant_failure_marks_failed_and_retry_claims(db, monkeypatch):
+    connect, _ = db; finalization._CLAIM_RATE.clear(); sid, _reward = _completed_reward(connect)
+    state, _ = _install_fake_claim_ledger(monkeypatch, connect)
+    import services.airdrop_points_service as ap
+    real_award = ap.award_airdrop_points_idempotent
+    calls = {'n': 0}
+    def flaky_award(*args, **kwargs):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('airdrop_down')
+        return real_award(*args, **kwargs)
+    monkeypatch.setattr(ap, 'award_airdrop_points_idempotent', flaky_award)
+    import pytest
+    with pytest.raises(RuntimeError, match='airdrop_down'):
+        finalization.claim_reward(100, sid, 'grant-fails')
+    c = connect(); row = c.execute('select status,failure_reason from polywar_player_season_rewards where season_id=? and user_id=100', (sid,)).fetchone()
+    assert row['status'] == 'failed' and row['failure_reason'] == 'RuntimeError'
+    c.close()
+    out = finalization.claim_reward(100, sid, 'grant-retry')
+    assert out['ok'] and out['reward']['status'] == 'claimed'
+    assert state['award_calls'] == 1 and calls['n'] == 2
+
+
+def test_transaction_b_failure_recovers_from_existing_ledger_without_second_award(db, monkeypatch):
+    connect, _ = db; finalization._CLAIM_RATE.clear(); sid, reward = _completed_reward(connect)
+    state, _ = _install_fake_claim_ledger(monkeypatch, connect)
+    real_complete = finalization.complete_reward_claim_in_transaction
+    calls = {'complete': 0}
+    def flaky_complete(*args, **kwargs):
+        calls['complete'] += 1
+        if calls['complete'] == 1:
+            raise RuntimeError('tx_b_transient')
+        return real_complete(*args, **kwargs)
+    monkeypatch.setattr(finalization, 'complete_reward_claim_in_transaction', flaky_complete)
+    import pytest
+    with pytest.raises(RuntimeError, match='tx_b_transient'):
+        finalization.claim_reward(100, sid, 'txb-first')
+    c = connect()
+    assert c.execute('select count(*) from test_airdrop_ledger where external_reference=?', (reward['claim_reference'],)).fetchone()[0] == 1
+    assert c.execute("select status from polywar_player_season_rewards where season_id=? and user_id=100", (sid,)).fetchone()[0] == 'processing'
+    c.close()
+    out = finalization.claim_reward(100, sid, 'txb-retry')
+    assert out['ok'] and out['duplicate'] is True and out['reward']['status'] == 'claimed'
+    assert state['award_calls'] == 1
+    c = connect(); assert c.execute("select count(*) from polywar_events where season_id=? and event_type='season_reward_claimed'", (sid,)).fetchone()[0] == 1; c.close()
+
+
+def test_concurrent_stale_processing_retry_awards_once_and_returns_claimed(db, monkeypatch):
+    connect, settings = db; settings['polywar_reward_claim_stale_seconds'] = '30'; finalization._CLAIM_RATE.clear(); sid, reward = _completed_reward(connect)
+    state, _ = _install_fake_claim_ledger(monkeypatch, connect)
+    c = connect(); past = datetime.utcnow() - timedelta(minutes=10)
+    c.execute("update polywar_player_season_rewards set status='processing', claim_started_at=? where season_id=? and user_id=100", (past, sid))
+    c.commit(); c.close()
+    import threading
+    barrier = threading.Barrier(4); errors = []; outputs = []
+    def worker(i):
+        try:
+            barrier.wait()
+            outputs.append(finalization.claim_reward(100, sid, f'stale-retry-{i}'))
+        except Exception as exc:
+            errors.append(exc)
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert errors == []
+    assert len(outputs) == 4
+    assert all(o.get('ok') and o.get('claimed') and o['reward']['status'] == 'claimed' for o in outputs)
+    c = connect()
+    assert c.execute('select count(*) from test_airdrop_ledger where external_reference=?', (reward['claim_reference'],)).fetchone()[0] == 1
+    assert c.execute("select count(*) from polywar_events where season_id=? and event_type='season_reward_claimed'", (sid,)).fetchone()[0] == 1
+    assert c.execute("select status from polywar_player_season_rewards where season_id=? and user_id=100", (sid,)).fetchone()[0] == 'claimed'
+    c.close(); assert state['award_calls'] == 1
