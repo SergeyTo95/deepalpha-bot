@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
+NULL_STATE_FACTION_ID = 8
+
 FACTIONS = [
     (1, "Blue Coalition", "blue-coalition", "blue", "A disciplined bloc built on coordination and protocol trust."),
     (2, "Red Alliance", "red-alliance", "red", "Aggressive consensus challengers who favor decisive action."),
@@ -38,7 +40,8 @@ def _now() -> datetime:
 
 
 def _is_sqlite(conn) -> bool:
-    return conn.__class__.__module__.startswith("sqlite3")
+    base = getattr(conn, "inner", conn)
+    return base.__class__.__module__.startswith("sqlite3")
 
 
 def _iso(dt: Any) -> Optional[str]:
@@ -137,7 +140,15 @@ def init_polywar_schema(conn=None) -> None:
             ends_at TIMESTAMP NOT NULL,
             secret_seed TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP NULL
+            completed_at TIMESTAMP NULL,
+            winner_faction_id INTEGER NULL,
+            victory_type TEXT NULL,
+            finalization_started_at TIMESTAMP NULL,
+            finalized_at TIMESTAMP NULL,
+            domination_faction_id INTEGER NULL,
+            domination_started_at TIMESTAMP NULL,
+            results_hash TEXT NULL,
+            finalization_version INTEGER NOT NULL DEFAULT 1
         )
         """)
         c.execute("""
@@ -147,7 +158,9 @@ def init_polywar_schema(conn=None) -> None:
             slug TEXT NOT NULL UNIQUE,
             color TEXT NOT NULL,
             description TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_playable INTEGER NOT NULL DEFAULT 1,
+            is_system INTEGER NOT NULL DEFAULT 0
         )
         """)
         c.execute("""
@@ -191,6 +204,18 @@ def init_polywar_schema(conn=None) -> None:
         )
         """)
         # Idempotent additive migrations for databases created by the first Phase 1 draft.
+        for spec in ["is_playable INTEGER NOT NULL DEFAULT 1", "is_system INTEGER NOT NULL DEFAULT 0"]:
+            try:
+                from services.polywar_sector_service import _add_col
+                _add_col(conn, "polywar_factions", spec)
+            except Exception:
+                pass
+        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1"]:
+            try:
+                from services.polywar_sector_service import _add_col
+                _add_col(conn, "polywar_seasons", spec)
+            except Exception:
+                pass
         for sql in [
             "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS seasonal_influence_score",
             "ALTER TABLE polywar_factions DROP COLUMN IF EXISTS active_members_count",
@@ -223,7 +248,17 @@ def init_polywar_schema(conn=None) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar state lifecycle sync failed")
-        conn.commit()
+        try:
+            from services.polywar_world_service import init_world_schema
+            init_world_schema(conn)
+            from services.polywar_rebellion_service import init_rebellion_schema
+            init_rebellion_schema(conn)
+            from services.polywar_finalization_service import init_finalization_schema
+            init_finalization_schema(conn)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("PolyWar phase6 schema sync failed")
+        if own: conn.commit()
     finally:
         if own:
             conn.close()
@@ -239,7 +274,13 @@ def ensure_factions(conn=None) -> List[Dict[str, Any]]:
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING
             """, (fid, name, slug, color, desc, _now()))
-        conn.commit()
+        if own: conn.commit()
+        try:
+            from services.polywar_world_service import ensure_null_faction
+            season = _fetchone(c, "SELECT id FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+            if season: ensure_null_faction(conn, int(season['id']))
+        except Exception:
+            pass
         return list_factions(conn)
     finally:
         if own: conn.close()
@@ -251,7 +292,12 @@ def _public_season(row):
 
 def _complete_expired_active_seasons(conn, now: datetime) -> None:
     c = conn.cursor()
-    _execute(c, "UPDATE polywar_seasons SET status = %s, completed_at = %s WHERE status = %s AND ends_at <= %s", ("completed", now, "active", now))
+    rows = _fetchall(c, "SELECT * FROM polywar_seasons WHERE status = %s AND ends_at <= %s ORDER BY ends_at", ("active", now))
+    if not rows:
+        return
+    from services.polywar_finalization_service import finalize_season_in_transaction
+    for row in rows:
+        finalize_season_in_transaction(conn, int(row["id"]), "time", None, now)
 
 
 def _next_season_name(conn) -> str:
@@ -270,38 +316,65 @@ def _ensure_faction_stats_for_season(conn, season_id: int) -> None:
         """, (season_id, fid, _now(), _now()))
 
 
-def ensure_active_season(conn=None) -> Dict[str, Any]:
-    own = conn is None
-    conn = conn or get_connection(); c = conn.cursor()
-    try:
-        now = _now()
-        _complete_expired_active_seasons(conn, now)
-        row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
-        if row:
-            _ensure_faction_stats_for_season(conn, int(row["id"]))
-            conn.commit()
-            return _public_season(row)
-        start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
-        try:
-            _execute(c, """
-            INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-            """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
-            row = _dict(c.fetchone())
-        except Exception:
-            _safe_rollback(conn)
-            row = None
-        if not row:
-            row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
-        if not row:
-            raise RuntimeError("polywar_active_season_unavailable")
+def begin_serialized_transaction(conn, retries:int=20, delay:float=0.01):
+    c=conn.cursor()
+    if _is_sqlite(conn):
+        last=None
+        for _ in range(max(1,retries)):
+            try:
+                c.execute("BEGIN IMMEDIATE"); return c
+            except Exception as exc:
+                if "locked" not in str(exc).lower(): raise
+                last=exc
+                import time; time.sleep(delay)
+        raise last
+    c.execute("BEGIN")
+    return c
+
+def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
+    c = conn.cursor(); now = _now()
+    _complete_expired_active_seasons(conn, now)
+    finalizing = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY finalization_started_at DESC LIMIT 1", ("finalizing",))
+    if finalizing:
+        raise RuntimeError("polywar_season_finalizing")
+    row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if row:
         _ensure_faction_stats_for_season(conn, int(row["id"]))
-        conn.commit(); return _public_season(row)
+        return _public_season(row)
+    start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
+    _execute(c, """
+    INSERT INTO polywar_seasons (name, status, starts_at, ends_at, secret_seed, created_at)
+    VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING
+    """, (_next_season_name(conn), "active", start, end, secrets.token_hex(32), start))
+    row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if not row:
+        raise RuntimeError("polywar_active_season_unavailable")
+    _ensure_faction_stats_for_season(conn, int(row["id"]))
+    return _public_season(row)
+
+def ensure_active_season() -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        begin_serialized_transaction(conn)
+        row = ensure_active_season_in_transaction(conn)
+        conn.commit()
+        return row
+    except Exception:
+        _safe_rollback(conn); raise
+    finally:
+        conn.close()
+
+
+def list_factions(conn=None) -> List[Dict[str, Any]]:
+    own = conn is None; conn = conn or get_connection(); c = conn.cursor()
+    try:
+        return _fetchall(c, "SELECT * FROM polywar_factions WHERE COALESCE(is_playable,1)=1 ORDER BY id")
     finally:
         if own: conn.close()
 
 
-def list_factions(conn=None) -> List[Dict[str, Any]]:
+def list_all_polywar_factions(conn=None) -> List[Dict[str, Any]]:
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
     try:
         return _fetchall(c, "SELECT * FROM polywar_factions ORDER BY id")
@@ -322,6 +395,7 @@ def list_factions_with_stats(season_id: int, conn=None) -> List[Dict[str, Any]]:
                COALESCE(s.controlled_capitals_count, 0) AS controlled_capitals_count
         FROM polywar_factions f
         LEFT JOIN polywar_faction_season_stats s ON s.faction_id = f.id AND s.season_id = %s
+        WHERE COALESCE(f.is_playable,1)=1
         ORDER BY f.id
         """, (int(season_id),))
         return rows
@@ -363,51 +437,95 @@ def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, A
         row = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id = %s AND season_id = %s", (user_id, season_id))
         e = _energy(row)
         _execute(c, "UPDATE polywar_players SET current_energy = %s, energy_updated_at = %s, last_active_at = %s WHERE user_id = %s AND season_id = %s", (e["current_energy"], e["energy_updated_at"], _now(), user_id, season_id))
-        conn.commit(); row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
+        if own: conn.commit()
+        row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
         return row
     finally:
         if own: conn.close()
 
+
+
+def assert_gameplay_mutation_allowed(conn, season_id: int, now: Optional[datetime] = None) -> None:
+    now = now or _now()
+    row = _fetchone(conn.cursor(), "SELECT status, ends_at FROM polywar_seasons WHERE id=%s", (season_id,))
+    if not row:
+        raise ValueError("season_ended")
+    if row.get("status") == "finalizing":
+        raise ValueError("season_finalizing")
+    if row.get("status") != "active":
+        raise ValueError("season_ended")
+    ends = row.get("ends_at")
+    if isinstance(ends, str):
+        ends = datetime.fromisoformat(ends)
+    if ends and now >= ends:
+        raise ValueError("season_ended")
+
+
+def prepare_gameplay_mutation_in_transaction(conn, season_id: int, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Run season lifecycle/finalization checks inside an owned mutation transaction."""
+    now = now or _now()
+    suffix = "" if _is_sqlite(conn) else " FOR UPDATE"
+    _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s" + suffix, (int(season_id),))
+    from services import polywar_finalization_service as finalization
+    decision = finalization.maybe_finalize_in_transaction(conn, int(season_id), now)
+    if decision.get("should_finalize"):
+        finalization.finalize_season_in_transaction(conn, int(season_id), decision.get("victory_type", "time"), decision.get("winner_faction_id"), now)
+        return {"ok": False, "error": "season_ended", "season_finalized": True}
+    assert_gameplay_mutation_allowed(conn, int(season_id), now)
+    return {"ok": True}
+
+
+def update_domination_tracking_in_transaction(conn, season_id: int, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Refresh domination/null-state candidate timers inside the caller-owned transaction."""
+    from services import polywar_finalization_service as finalization
+    return finalization.maybe_finalize_in_transaction(conn, int(season_id), now or _now())
 
 def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     if not is_enabled():
         raise ValueError("polywar_disabled")
     conn = get_connection(); c = conn.cursor()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        begin_serialized_transaction(conn)
+        season = ensure_active_season_in_transaction(conn)
+        from services import polywar_finalization_service as finalization
+        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = ensure_active_season_in_transaction(conn)
+        assert_gameplay_mutation_allowed(conn, int(season["id"]))
         faction_id = int(faction_id)
         faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
         if not faction:
             raise ValueError("unknown_faction")
-        try:
-            _insert_player_if_missing(conn, int(user_id), int(season["id"]))
-            _execute(c, """
-            UPDATE polywar_players
-            SET faction_id = %s, last_active_at = %s
-            WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
-            """, (faction_id, _now(), int(user_id), int(season["id"])))
-            if _rowcount(c) != 1:
-                _safe_rollback(conn)
-                raise ValueError("faction_already_selected")
-            _execute(c, """
-            UPDATE polywar_faction_season_stats
-            SET active_members_count = active_members_count + 1, updated_at = %s
-            WHERE season_id = %s AND faction_id = %s
-            """, (_now(), int(season["id"]), faction_id))
-            _execute(c, """
-            INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
-            conn.commit()
-        except ValueError:
-            raise
-        except Exception:
-            _safe_rollback(conn)
-            raise
-        return get_state(user_id, conn)
+        if not int(faction.get("is_playable", 1) or 0) or int(faction.get("is_system", 0) or 0):
+            raise ValueError("unknown_faction")
+        _insert_player_if_missing(conn, int(user_id), int(season["id"]))
+        _execute(c, """
+        UPDATE polywar_players
+        SET faction_id = %s, last_active_at = %s
+        WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
+        """, (faction_id, _now(), int(user_id), int(season["id"])))
+        if _rowcount(c) != 1:
+            raise ValueError("faction_already_selected")
+        _execute(c, """
+        UPDATE polywar_faction_season_stats
+        SET active_members_count = active_members_count + 1, updated_at = %s
+        WHERE season_id = %s AND faction_id = %s
+        """, (_now(), int(season["id"]), faction_id))
+        _execute(c, """
+        INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
+        conn.commit()
+    except Exception:
+        _safe_rollback(conn)
+        raise
     finally:
         conn.close()
-
+    return get_state(user_id)
 
 def get_events(season_id: Optional[int] = None, limit: int = 20, conn=None):
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
@@ -429,13 +547,38 @@ def _lifetime_airdrop_points(user_id: int) -> int:
     return 0
 
 
-def get_state(user_id: int, conn=None) -> Dict[str, Any]:
+def get_state(user_id: int) -> Dict[str, Any]:
     if not is_enabled():
         return {"ok": True, "enabled": False, "message": "PolyWar is temporarily unavailable", "feature_flags": {"polywar_enabled": False}}
-    own = conn is None; conn = conn or get_connection()
+    conn = get_connection()
     try:
-        init_polywar_schema(conn); ensure_factions(conn); season = ensure_active_season(conn)
+        init_polywar_schema(conn); ensure_factions(conn); conn.commit()
+        begin_serialized_transaction(conn)
+        season = ensure_active_season_in_transaction(conn)
+        from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction
+        ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        ensure_world_caught_up_in_transaction(conn, int(season["id"]))
+        from services import polywar_finalization_service as finalization
+        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = ensure_active_season_in_transaction(conn)
+            ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        elif refreshed:
+            season = refreshed
         player = get_or_create_player(int(user_id), int(season["id"]), conn)
+        from services import polywar_sector_service as sector_rules
+        from services import polywar_capital_service as capital_rules
+        from services import polywar_governance_service as governance_rules
+        sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
+        capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
+        if player.get("faction_id"):
+            tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
+            governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
+        conn.commit()
+
         factions = list_factions_with_stats(int(season["id"]), conn)
         faction = next((f for f in factions if f["id"] == player.get("faction_id")), None)
         e = _energy(player)
@@ -447,22 +590,18 @@ def get_state(user_id: int, conn=None) -> Dict[str, Any]:
         from services import polywar_sector_service as sector_rules
         from services import polywar_capital_service as capital_rules
         from services import polywar_governance_service as governance_rules
-        try:
-            sector_rules.ensure_starting_territories_bootstrap(conn, int(season["id"]))
-            capital_rules.ensure_capitals_initialized(conn, int(season["id"]))
-            if player.get("faction_id"):
-                c = conn.cursor()
-                governance_rules._begin(conn, c)
-                tx_player = governance_rules._governance_context_in_transaction(conn, int(user_id), int(season["id"]))
-                governance_rules._prepare_faction(conn, int(season["id"]), int(tx_player.get("faction_id")))
-            conn.commit()
-            factions = list_factions_with_stats(int(season["id"]), conn)
-            ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("PolyWar governance lifecycle sync failed")
-            _safe_rollback(conn)
         rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
-        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        from services.polywar_world_service import get_public_world_state, public_rules as world_rules
+        from services.polywar_rebellion_service import public_rules as rebellion_rules
+        from services.polywar_finalization_service import public_rules as reward_rules
+        world = get_public_world_state(conn, int(season["id"]))
+        rules.update({"world": world_rules(), "rebellions": rebellion_rules(), "rewards": reward_rules()})
+        latest_completed = _fetchone(conn.cursor(), "SELECT id,name,status,completed_at,victory_type,winner_faction_id,results_hash FROM polywar_seasons WHERE status=%s ORDER BY completed_at DESC LIMIT 1", ("completed",))
+        current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
+        public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
+        return {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+    except Exception:
+        _safe_rollback(conn)
+        raise
     finally:
-        if own: conn.close()
+        conn.close()

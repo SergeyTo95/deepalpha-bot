@@ -65,7 +65,7 @@ def init_polywar_map_schema(conn=None):
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_cells_owner ON polywar_cells(season_id,owner_faction_id,x,y)")
         from services import polywar_sector_service as sectors
         sectors.init_polywar_sector_schema(conn)
-        conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()
@@ -163,7 +163,7 @@ def _start_owner(x, y):
 
 
 def _private_active_season(conn):
-    s = polywar.ensure_active_season(conn)
+    s = polywar.ensure_active_season_in_transaction(conn)
     row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id = %s", (int(s["id"]),))
     s["secret_seed"] = row["secret_seed"]
     return s
@@ -218,6 +218,40 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn)
         sid, seed = int(season["id"]), season["secret_seed"]
+        conn.commit()
+        from services import polywar_world_service as world
+        now = datetime.utcnow()
+        due = False
+        wrow = polywar._fetchone(conn.cursor(), "SELECT status,activation_at,next_tick_at FROM polywar_null_state WHERE season_id=%s", (sid,))
+        if not wrow:
+            due = True
+        else:
+            activation_at = wrow.get("activation_at")
+            next_tick_at = wrow.get("next_tick_at")
+            if isinstance(activation_at, str):
+                activation_at = datetime.fromisoformat(activation_at)
+            if isinstance(next_tick_at, str):
+                next_tick_at = datetime.fromisoformat(next_tick_at)
+            due = (wrow.get("status") == "dormant" and activation_at and activation_at <= now) or (wrow.get("status") == "active" and next_tick_at and next_tick_at <= now)
+        ends = season.get("ends_at")
+        if isinstance(ends, str):
+            ends = datetime.fromisoformat(ends)
+        if ends and ends <= now:
+            due = True
+        domination_started = season.get("domination_started_at")
+        if not due and season.get("domination_faction_id") and domination_started:
+            if isinstance(domination_started, str):
+                domination_started = datetime.fromisoformat(domination_started)
+            hold_key = "polywar_null_victory_hold_hours" if int(season.get("domination_faction_id") or 0) == 8 else "polywar_domination_hold_hours"
+            hold_default = 12 if hold_key == "polywar_null_victory_hold_hours" else 24
+            due = domination_started + timedelta(hours=_setting_int(hold_key, hold_default, 0, 8760)) <= now
+        if due:
+            conn.close()
+            world.ensure_world_caught_up(sid, now)
+            conn = polywar.get_connection()
+            polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); conn.commit()
+            season = _private_active_season(conn)
+            sid, seed = int(season["id"]), season["secret_seed"]
         out = []
         for cx, cy in chunks:
             if cx < 0 or cy < 0 or cx * cs >= map_width() or cy * cs >= map_height():
@@ -235,7 +269,15 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         from services import polywar_capital_service as capitals
         from services import polywar_governance_service as governance
         capitals.ensure_capitals_initialized(conn, sid)
+        for ch in out:
+            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
+            ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
         capitals.enrich_chunks(conn, sid, out)
+        from services import polywar_rebellion_service as reb
+        for ch in out:
+            x0, y0 = ch["chunk_x"] * cs, ch["chunk_y"] * cs
+            ch["rebellions"] = reb.get_public_rebellions_readonly(conn, sid, (x0, y0, x0 + ch["width"], y0 + ch["height"]))
         mines.enrich_chunks(conn, sid, player.get("faction_id"), out)
         governance.enrich_chunks(conn, sid, player.get("faction_id"), out)
         conn.commit()
@@ -261,6 +303,9 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     try:
         polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        from services import polywar_world_service as world
+        world.ensure_world_initialized_in_transaction(conn, sid)
+        conn.commit()
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
@@ -278,10 +323,23 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if dup: conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         if not in_bounds(x, y): raise ValueError("out_of_bounds")
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
         if capitals.get_capital_at(conn, sid, x, y): raise ValueError("capital_requires_siege")
+        try:
+            from services import polywar_world_service as world
+            if world.is_rift(conn, sid, x, y): raise ValueError("rift_requires_seal")
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("polywar_capture_rift_check_failed season_id=%s x=%s y=%s", sid, x, y)
+            raise
         polywar._insert_player_if_missing(conn, int(user_id), sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
@@ -348,4 +406,3 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
 def _is_expected_unique_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "unique" in text or "duplicate" in text or "constraint" in text or "integrity" in text
-

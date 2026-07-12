@@ -31,7 +31,7 @@ ARTICLE_DAILY_LIMITS = {"article_published": 3, "article_shared": 5, "article_do
 _ARTICLE_REASONS = set(ARTICLE_POINTS_DEFAULTS)
 _ANALYSIS_REASONS = {"analysis_completed", "live_analysis_completed"}
 _REFERRAL_REASONS = {"referral_first_analysis_referrer", "referral_first_analysis_referred"}
-_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | _ARTICLE_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus", "referral_milestone_confirmed"}
+_POSITIVE_REASONS = _ANALYSIS_REASONS | _REFERRAL_REASONS | _ARTICLE_REASONS | {"admin_adjustment", "daily_checkin", "daily_checkin_streak_bonus", "referral_milestone_confirmed", "polywar_season_reward"}
 
 
 def _is_supported_reason(reason: str) -> bool:
@@ -198,11 +198,14 @@ def _ensure_table(cursor) -> None:
             user_id BIGINT NOT NULL,
             reason TEXT NOT NULL,
             amount NUMERIC(18, 4) NOT NULL,
+            external_reference TEXT NULL,
             metadata TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         )
         """
     )
+    cursor.execute("ALTER TABLE airdrop_points_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NULL")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_airdrop_points_external_reference ON airdrop_points_ledger(external_reference) WHERE external_reference IS NOT NULL")
     try:
         cursor.execute("SAVEPOINT airdrop_points_amount_decimal_migration")
         cursor.execute(
@@ -720,3 +723,59 @@ def format_airdrop_status(user_id: int, ui_language: str = "ru") -> str:
         f"+{referred_user_points()} points другу после его первого успешного анализа.\n\n"
         "Монета: Soon"
     )
+
+
+
+
+def get_airdrop_points_ledger_entry_by_reference(external_reference: str) -> Optional[dict]:
+    ref = str(external_reference)
+    conn, cur = _connect_ready()
+    try:
+        cur.execute("SELECT id,user_id,reason,amount,metadata,created_at FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return {"id": row[0], "user_id": row[1], "reason": row[2], "amount": row[3], "metadata": row[4], "created_at": row[5], "external_reference": ref}
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
+def award_airdrop_points_idempotent(user_id: int, reason: str, amount: Any, metadata: Optional[dict], external_reference: str) -> dict:
+    """Award points once for a stable external reference."""
+    meta = dict(metadata or {})
+    meta["external_reference"] = str(external_reference)
+    uid = int(user_id)
+    ref = str(external_reference)
+    try:
+        conn, cur = _connect_ready()
+        try:
+            expected_amount = _to_decimal(amount)
+            cur.execute("SELECT id,user_id,reason,amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,))
+            row = cur.fetchone()
+            if row:
+                if int(row[1]) != uid or str(row[2]) != str(reason) or _to_decimal(row[3]) != expected_amount:
+                    raise RuntimeError("airdrop_external_reference_mismatch")
+                conn.commit(); bal = get_airdrop_points_balance(uid)
+                return {"ok": True, "awarded": False, "duplicate": True, "entry_id": int(row[0]), "amount": row[3], **bal}
+            cur.execute("INSERT INTO airdrop_points_ledger (user_id, reason, amount, metadata, external_reference, created_at) VALUES (%s,%s,%s,%s,%s,NOW()) ON CONFLICT DO NOTHING RETURNING id", (uid, reason, expected_amount, json.dumps(meta, ensure_ascii=False), ref))
+            row = cur.fetchone()
+            if not row:
+                cur.execute("SELECT id,user_id,reason,amount FROM airdrop_points_ledger WHERE external_reference=%s LIMIT 1", (ref,)); row=cur.fetchone()
+                if not row or int(row[1]) != uid or str(row[2]) != str(reason) or _to_decimal(row[3]) != expected_amount:
+                    raise RuntimeError("airdrop_external_reference_mismatch")
+                conn.commit(); bal=get_airdrop_points_balance(uid); return {"ok": True, "awarded": False, "duplicate": True, "entry_id": int(row[0]), "amount": row[3], **bal}
+            conn.commit(); bal = get_airdrop_points_balance(uid)
+            return {"ok": True, "awarded": True, "duplicate": False, "entry_id": int(row[0]) if row else None, "amount": expected_amount, **bal}
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+    except Exception:
+        if reason == "polywar_season_reward":
+            raise
+        if any(r.get("external_reference") == ref for r in _MEMORY_LEDGER[uid]):
+            bal = _fallback_balance(uid); return {"ok": True, "awarded": False, "duplicate": True, **bal}
+        row = _memory_insert(uid, reason, amount, meta); row["external_reference"] = ref
+        bal = _fallback_balance(uid); return {"ok": True, "awarded": True, "duplicate": False, "entry_id": row["id"], **bal}

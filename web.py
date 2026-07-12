@@ -4,6 +4,9 @@ import hmac
 import hashlib
 import secrets
 import asyncio
+import time
+import threading
+from collections import defaultdict, deque
 from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
@@ -35,6 +38,9 @@ from services.polywar_sector_service import get_sectors as get_polywar_sectors
 from services.polywar_capital_service import get_capitals as get_polywar_capitals, capital_action as polywar_capital_action
 from services.polywar_governance_service import get_governance as get_polywar_governance, nominate as polywar_nominate, vote as polywar_vote, upsert_order as polywar_upsert_order
 from services.polywar_mine_service import scan_area as scan_polywar_area, set_flag as set_polywar_flag
+from services.polywar_world_service import get_public_world_state as get_polywar_world_state, seal_rift_action as polywar_seal_rift_action
+from services.polywar_rebellion_service import rebellion_action as polywar_rebellion_action
+from services.polywar_finalization_service import get_results as get_polywar_results, claim_reward as claim_polywar_reward
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -134,6 +140,21 @@ async def handle_static(request):
             )
     except FileNotFoundError:
         return web.Response(text="Not found", status=404)
+
+_POLYWAR_RATE_LOCK = threading.Lock()
+_POLYWAR_RATE = defaultdict(deque)
+def _polywar_rate_limit(bucket, user_id, limit=30, window=60, max_users=4096):
+    now = time.time(); key = (bucket, int(user_id or 0))
+    with _POLYWAR_RATE_LOCK:
+        if len(_POLYWAR_RATE) > max_users:
+            for k in list(_POLYWAR_RATE.keys())[: max(1, len(_POLYWAR_RATE)//4)]:
+                q = _POLYWAR_RATE[k]
+                while q and now - q[0] > window: q.popleft()
+                if not q: _POLYWAR_RATE.pop(k, None)
+        q = _POLYWAR_RATE[key]
+        while q and now - q[0] > window: q.popleft()
+        if len(q) >= limit: raise ValueError('rate_limited')
+        q.append(now)
 
 
 def _json_response(data: dict, status: int = 200) -> web.Response:
@@ -743,6 +764,8 @@ async def handle_polywar_player_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_world', int(current.get("user_id") or 0), 60)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
     state = get_polywar_state(int(current.get("user_id") or 0))
     return _json_response({"ok": True, "player": state.get("player"), "energy": state.get("energy"), "selected_faction": state.get("selected_faction")})
 
@@ -751,6 +774,8 @@ async def handle_polywar_factions_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_world', int(current.get("user_id") or 0), 60)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
     state = get_polywar_state(int(current.get("user_id") or 0))
     return _json_response({"ok": True, "factions": state.get("factions", []), "faction_ranking": state.get("faction_ranking", [])})
 
@@ -759,6 +784,8 @@ async def handle_polywar_events_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_world', int(current.get("user_id") or 0), 60)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
     state = get_polywar_state(int(current.get("user_id") or 0))
     return _json_response({"ok": True, "events": state.get("events", [])})
 
@@ -834,12 +861,117 @@ async def handle_polywar_action_api(request):
             return _json_response(await asyncio.to_thread(polywar_combat_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
         if action_type in {"siege", "repair_capital"}:
             return _json_response(await asyncio.to_thread(polywar_capital_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        if action_type == "seal_rift":
+            return _json_response(await asyncio.to_thread(polywar_seal_rift_action, int(current.get("user_id") or 0), int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
+        if action_type in {"support_rebellion", "suppress_rebellion"}:
+            return _json_response(await asyncio.to_thread(polywar_rebellion_action, int(current.get("user_id") or 0), action_type, int(data.get("x")), int(data.get("y")), str(data.get("idempotency_key") or "")))
         raise ValueError("bad_action_type")
     except ValueError as e:
         code = str(e)
         status = 429 if code == "rate_limited" else 402 if code == "insufficient_energy" else 409 if code in {"cell_conflict", "already_owned", "enemy_capture_unavailable"} else 400
         return _json_response({"ok": False, "error": code}, status=status)
 
+
+
+def _load_polywar_world_payload(user_id: int):
+    conn = get_connection()
+    try:
+        from services import polywar_service as _polywar
+        from services import polywar_finalization_service as _finalization
+        from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction, get_public_world_state
+        _polywar.init_polywar_schema(conn); _polywar.ensure_factions(conn); conn.commit()
+        _polywar.begin_serialized_transaction(conn)
+        season = _polywar.ensure_active_season_in_transaction(conn)
+        ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        ensure_world_caught_up_in_transaction(conn, int(season["id"]))
+        decision = _finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        if decision.get("should_finalize"):
+            _finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+        refreshed = _polywar._fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
+        if refreshed and refreshed.get("status") == "completed":
+            season = _polywar.ensure_active_season_in_transaction(conn)
+            ensure_world_initialized_in_transaction(conn, int(season["id"]))
+        elif refreshed:
+            season = refreshed
+        conn.commit()
+        world = get_public_world_state(conn, int(season["id"]))
+        public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
+        return {"ok": True, "world": world, "season": public_season}
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+        raise
+    finally:
+        conn.close()
+
+
+async def handle_polywar_world_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_world', int(current.get("user_id") or 0), 60)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    try:
+        return _json_response(await asyncio.to_thread(_load_polywar_world_payload, int(current.get("user_id") or 0)))
+    except Exception as e:
+        print(f"handle_polywar_world_api error: {e}")
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
+
+
+async def handle_polywar_results_latest_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_results_latest', int(current.get("user_id") or 0), 30)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    try:
+        return _json_response(await asyncio.to_thread(get_polywar_results, None, int(current.get("user_id") or 0)))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=404)
+
+
+async def handle_polywar_results_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_results', int(current.get("user_id") or 0), 30)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    try:
+        sid = int(request.query.get("season_id") or 0) or None
+        return _json_response(await asyncio.to_thread(get_polywar_results, sid, int(current.get("user_id") or 0)))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=404)
+
+
+async def handle_polywar_rewards_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try: _polywar_rate_limit('polywar_rewards', int(current.get("user_id") or 0), 30)
+    except ValueError: return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    conn = get_connection()
+    try:
+        from services import polywar_service as _polywar
+        uid = int(current.get("user_id") or 0)
+        rewards = _polywar._fetchall(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE user_id=%s ORDER BY calculated_at DESC", (uid,))
+        return _json_response({"ok": True, "rewards": rewards})
+    finally:
+        conn.close()
+
+
+async def handle_polywar_reward_claim_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        return _json_response(await asyncio.to_thread(claim_polywar_reward, int(current.get("user_id") or 0), int(data.get("season_id") or 0), str(data.get("idempotency_key") or "")))
+    except ValueError as e:
+        code = str(e)
+        return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 409)
 
 
 async def handle_polywar_capitals_api(request):
@@ -1629,6 +1761,11 @@ app.router.add_get("/api/polywar/state", handle_polywar_state_api)
 app.router.add_get("/api/polywar/factions", handle_polywar_factions_api)
 app.router.add_get("/api/polywar/player", handle_polywar_player_api)
 app.router.add_get("/api/polywar/events", handle_polywar_events_api)
+app.router.add_get("/api/polywar/world", handle_polywar_world_api)
+app.router.add_get("/api/polywar/results/latest", handle_polywar_results_latest_api)
+app.router.add_get("/api/polywar/results", handle_polywar_results_api)
+app.router.add_get("/api/polywar/rewards", handle_polywar_rewards_api)
+app.router.add_post("/api/polywar/rewards/claim", handle_polywar_reward_claim_api)
 app.router.add_post("/api/polywar/join", handle_polywar_join_api)
 app.router.add_get("/api/polywar/map/chunks", handle_polywar_chunks_api)
 app.router.add_get("/api/polywar/map/sectors", handle_polywar_sectors_api)

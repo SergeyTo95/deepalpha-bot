@@ -119,14 +119,22 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
         season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
+        from services import polywar_world_service as world
+        world.ensure_world_initialized_in_transaction(conn, sid)
+        conn.commit()
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:
             return dup
-        _rate(user_id)
         _begin(conn, c)
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
         if dup:
             conn.commit(); return dup
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        _rate(user_id)
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
         dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
@@ -143,6 +151,14 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         cap = capitals.get_capital_at(conn, sid, x, y)
         if cap:
             raise ValueError('capital_requires_repair' if action_type == 'reinforce' else 'capital_requires_siege')
+        try:
+            from services import polywar_world_service as world
+            if world.is_rift(conn, sid, x, y): raise ValueError('rift_requires_seal')
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("polywar_combat_rift_check_failed season_id=%s x=%s y=%s", sid, x, y)
+            raise
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         now = datetime.utcnow(); owner = _owner(conn, sid, x, y)

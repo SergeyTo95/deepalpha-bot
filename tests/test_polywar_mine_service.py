@@ -21,7 +21,7 @@ def polydb(monkeypatch):
     c=connect(); polywar.init_polywar_schema(c); c.close(); yield connect, settings; keeper.close()
 
 def season_secret(connect):
-    c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season(c); sec=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); return s, sec
+    c=connect(); polywar.ensure_factions(c); s=polywar.ensure_active_season_in_transaction(c); c.commit(); sec=c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close(); return s, sec
 
 def join(uid,fid): return polywar.join_faction(uid,fid)
 

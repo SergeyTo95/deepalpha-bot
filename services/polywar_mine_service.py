@@ -67,7 +67,7 @@ def init_polywar_mine_schema(conn=None):
             "CREATE INDEX IF NOT EXISTS idx_polywar_flags_chunk ON polywar_flags(season_id,faction_id,x,y)",
         ]:
             c.execute(sql)
-        conn.commit()
+        if own: conn.commit()
     finally:
         if own:
             conn.close()
@@ -123,7 +123,11 @@ def _bucket(secret_seed: str, season_id: int, x: int, y: int) -> int:
     return int.from_bytes(digest[:8], "big") % 10000
 
 
-def is_safe_zone(x: int, y: int) -> bool:
+def is_safe_zone(x: int, y: int, conn=None, season_id=None) -> bool:
+    if conn is not None and season_id is not None:
+        from services import polywar_world_service as world
+        if world.is_rift(conn, int(season_id), int(x), int(y)):
+            return True
     from services import polywar_map_service as m
     half = m.starting_area_size() // 2
     for bx, by in m.faction_base_positions().values():
@@ -159,6 +163,7 @@ def is_mine_triggered(conn, season_id, x, y):
 
 def active_mine_at(conn, season_id: int, secret_seed: str, x: int, y: int, terrain: str) -> bool:
     from services import polywar_map_service as m
+    if is_safe_zone(x, y, conn, season_id): return False
     if m._owner_at(conn, season_id, x, y) is not None:
         return False
     return deterministic_mine_exists(season_id, secret_seed, x, y, terrain) and not is_mine_triggered(conn, season_id, x, y)
@@ -225,7 +230,7 @@ def enrich_chunks(conn, season_id, faction_id, chunks):
 
 
 def _private_season(conn):
-    s = polywar.ensure_active_season(conn)
+    s = polywar.ensure_active_season_in_transaction(conn)
     row = polywar._fetchone(conn.cursor(), "SELECT secret_seed FROM polywar_seasons WHERE id=%s", (int(s["id"]),))
     s["secret_seed"] = row["secret_seed"]
     return s
@@ -270,13 +275,20 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
     conn = polywar.get_connection(); c = conn.cursor()
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
+        conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        conn.commit()
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
-        _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
         _begin_immediate_retry(conn, c)
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
+        _rate(_SCAN_RATE, user_id, SCAN_RATE_MAX)
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
@@ -317,8 +329,15 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
     conn = polywar.get_connection(); c = conn.cursor()
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
+        conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        conn.commit()
         _begin_immediate_retry(conn, c)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+        if not prepared.get('ok'):
+            if prepared.get('season_finalized'):
+                conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
+            raise ValueError(prepared.get('error') or 'season_ended')
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         fid = player.get("faction_id")
@@ -337,6 +356,8 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         if terr not in _CAPTURABLE: raise ValueError("not_capturable")
         owner = m._owner_at(conn, sid, x, y)
         if owner is not None: raise ValueError("not_neutral")
+        from services import polywar_world_service as world
+        if world.is_rift(conn, sid, x, y): raise ValueError("rift_requires_seal")
         n = polywar._fetchone(c, "SELECT COUNT(*) AS count FROM polywar_flags WHERE season_id=%s AND user_id=%s", (sid, user_id))["count"]
         if int(n) >= max_flags_per_player(): raise ValueError("flag_limit")
         in_scan = bool(polywar._fetchone(c, "SELECT id FROM polywar_scans WHERE season_id=%s AND faction_id=%s AND ABS(center_x-%s) <= scan_size/2 AND ABS(center_y-%s) <= scan_size/2 LIMIT 1", (sid, fid, x, y)))
