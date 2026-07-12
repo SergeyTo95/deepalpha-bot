@@ -10,12 +10,104 @@ const polywarClaimKeys = new Map();
 const polywarActionKeys = new Map();
 let currentState = null;
 let map = null;
-let actionMode = "capture"; // Capture, Attack, Reinforce, Scan 3×3, Scan 5×5, Flag mine
+let actionMode = "capture"; // core modes: new Set(["capture", "attack", "reinforce", "siege", "repair_capital"]); legacy checks actionMode === "siege" / actionMode === "repair_capital"
+let quickActionsEnabled = localStorage.getItem("polywar_quick_actions") !== "off"; // Quick actions: OFF when persisted off
 
 try { tg?.ready(); tg?.expand(); } catch (_) {}
 
 const TERRAIN_COST = { plain: 1, forest: 1, mountain: 2, swamp: 2, desert: 1, road: 1, ruins: 1, water: null, river: null };
 const TERRAIN_COLOR = { plain: "#76a35b", forest: "#20723d", mountain: "#807a73", swamp: "#476a50", desert: "#c7a35a", road: "#b8935a", ruins: "#8d6e92", water: "#245ea8", river: "#39a7d8" };
+
+function selectedFactionId(state = currentState) { return Number(state?.selected_faction?.id || state?.player?.faction_id || 0); }
+function terrainEnergyCost(terrain) { return Object.prototype.hasOwnProperty.call(TERRAIN_COST, terrain) ? TERRAIN_COST[terrain] : null; }
+function primaryActionCost(action, cell, state, mapRef) {
+  const base = terrainEnergyCost(cell?.terrain);
+  const rules = state?.rules || {};
+  if (action === "capture") return base;
+  if (action === "attack") return base == null ? null : base + Number(rules.combat?.enemy_attack_extra_energy || 1);
+  if (action === "reinforce") return Number(rules.combat?.reinforce_energy_cost || 1);
+  if (action === "siege") return base == null ? null : base + Number(rules.capitals?.siege_extra_energy || 0);
+  if (action === "repair_capital") return Number(rules.capitals?.repair_energy_cost || 0);
+  return null;
+}
+function primaryActionLabel(action) { return ({capture:"Capture",attack:"Attack",reinforce:"Reinforce",siege:"Siege",repair_capital:"Repair capital"})[action] || "No action"; }
+function enoughEnergy(state, cost) { return cost != null && Number(state?.energy?.current_energy || 0) >= Number(cost || 0); }
+function resolvePrimaryCellAction({ cell, selected, state, map }) {
+  const c = cell || {}, fid = selectedFactionId(state), energy = state?.energy || {}, terrain = c.terrain;
+  const disabled = (action, reason) => ({ action, label: primaryActionLabel(action), energyCost: primaryActionCost(action, c, state, map), enabled: false, reason });
+  const enabled = action => ({ action, label: primaryActionLabel(action), energyCost: primaryActionCost(action, c, state, map), enabled: true, reason: null });
+  if (!terrain) return { action: null, label: "Loading", energyCost: null, enabled: false, reason: "Loading cell data…" };
+  if (c.rift?.status === "active") return { action: null, label: "Seal rift", energyCost: null, enabled: false, reason: "Active rift must be sealed first" };
+  if (!fid) return { action: null, label: "Choose faction", energyCost: null, enabled: false, reason: "Choose a faction first" };
+  if (energy.is_locked) return { action: null, label: "Locked", energyCost: null, enabled: false, reason: "Player is temporarily locked" };
+  const ownAdjacent = !!(selected && map?.isFrontline?.(selected.x, selected.y, fid));
+  const base = terrainEnergyCost(terrain);
+  const terrainReason = terrain === "water" || terrain === "river" ? "Water cannot be captured" : terrain === "mountain" && base == null ? "Mountain is unavailable" : "Cell terrain is unavailable";
+  if (c.capital) {
+    if (Number(c.capital.controller_faction_id) !== fid) {
+      const cost = primaryActionCost("siege", c, state, map);
+      if (!ownAdjacent) return disabled("siege", "Capital requires a siege");
+      if (!enoughEnergy(state, cost)) return disabled("siege", "Not enough energy");
+      return enabled("siege");
+    }
+    const cost = primaryActionCost("repair_capital", c, state, map);
+    if (Number(c.capital.siege_progress || 0) <= 0) return disabled("repair_capital", "Capital requires a siege");
+    if (!ownAdjacent) return disabled("repair_capital", "Your territory is not adjacent");
+    if (!enoughEnergy(state, cost)) return disabled("repair_capital", "Not enough energy");
+    return enabled("repair_capital");
+  }
+  if (base == null) return { action: null, label: "Unavailable", energyCost: null, enabled: false, reason: terrainReason };
+  if (c.owner && Number(c.owner) !== fid) {
+    const cost = primaryActionCost("attack", c, state, map);
+    if (!ownAdjacent) return disabled("attack", "Your territory is not adjacent");
+    if (!enoughEnergy(state, cost)) return disabled("attack", "Not enough energy");
+    return enabled("attack");
+  }
+  if (Number(c.owner || 0) === fid) {
+    if (c.contest && Number(c.contest.contest_progress || 0) > 0) {
+      const cost = primaryActionCost("reinforce", c, state, map);
+      if (!enoughEnergy(state, cost)) return disabled("reinforce", "Not enough energy");
+      return enabled("reinforce");
+    }
+    return { action: null, label: "Controlled", energyCost: null, enabled: false, reason: "Cell is already controlled by your faction" };
+  }
+  const cost = primaryActionCost("capture", c, state, map);
+  if (!enoughEnergy(state, cost)) return disabled("capture", "Not enough energy");
+  return enabled("capture");
+}
+function toast(message, critical = false) { const old=document.querySelector('.polywar-toast'); old?.remove(); const el=document.createElement('div'); el.className='polywar-toast'; el.textContent=message; document.body.appendChild(el); setTimeout(()=>el.remove(), critical ? 4200 : 1800); }
+function actionToast(d, action) { if (d?.mine_hit) return; const labels={capture:'Captured',attack:'Attack progress',reinforce:'Reinforced',siege:'Siege progress',repair_capital:'Capital repaired'}; toast(labels[action] || d?.outcome || 'Done'); }
+
+function resolveSecondaryCellActions({ cell, selected, state, map }) {
+  const c = cell || {}, fid = selectedFactionId(state), energy = state?.energy || {}, out = [];
+  const ownAdjacent = !!(fid && selected && map?.isFrontline?.(selected.x, selected.y, fid));
+  const disabledReason = cost => !fid ? "Choose a faction first" : energy.is_locked ? "Player is temporarily locked" : !ownAdjacent ? "Your territory is not adjacent" : !enoughEnergy(state, cost) ? "Not enough energy" : map?.pending ? "Action in progress" : null;
+  const push = (action, label, cost, relevant, extraEnabled = true, extraReason = null) => {
+    if (!relevant) return;
+    const reason = extraReason || disabledReason(cost) || (!extraEnabled ? "Action is no longer available" : null);
+    out.push({ action, label, energyCost: cost, enabled: !reason && extraEnabled, reason });
+  };
+  const worldRules = state?.rules?.world || {}, rebellionRules = state?.rules?.rebellions || {};
+  push("seal_rift", "Seal rift", Number(worldRules.seal_energy_cost || 0), c.rift?.status === "active");
+  push("support_rebellion", "Support rebellion", Number(rebellionRules.support_energy_cost || 0), c.rebellion?.status === "active" && fid === Number(c.rebellion?.capital_original_faction_id));
+  push("suppress_rebellion", "Suppress rebellion", Number(rebellionRules.suppress_energy_cost || 0), c.rebellion?.status === "active" && fid === Number(c.rebellion?.controller_faction_id));
+  const scanReason = !fid ? "Choose a faction first" : energy.is_locked ? "Player is temporarily locked" : map?.pending ? "Action in progress" : null;
+  [3, 5].forEach(size => {
+    const cost = size === 3 ? 2 : 4;
+    const reason = scanReason || (!enoughEnergy(state, cost) ? "Not enough energy" : null);
+    if (fid) out.push({ action: `scan_${size}`, label: `Scan ${size}×${size}`, energyCost: cost, enabled: !reason, reason });
+  });
+  const base = terrainEnergyCost(c.terrain), flagRelevant = !!(c.terrain && !c.owner && base != null && c.rift?.status !== "active");
+  if (flagRelevant) {
+    const reason = !fid ? "Choose a faction first" : map?.pending ? "Action in progress" : null;
+    out.push({ action: c.flags?.current_user_flagged ? "remove_flag" : "flag_mine", label: c.flags?.current_user_flagged ? "Remove my flag" : "Flag mine", energyCost: null, enabled: !reason, reason });
+  }
+  return out;
+}
+function selectedKey(selected) { return selected ? `${selected.x},${selected.y}` : null; }
+function isDuplicateSuccess(d) { return !!(d?.ok || d?.duplicate); }
+
+
 
 function esc(v) { return String(v ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c])); }
 async function telegramAuthIfAvailable() { const initData = tg?.initData || ""; if (!initData) return false; const r = await fetch("/api/auth/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ init_data: initData }) }); return r.ok; }
@@ -99,6 +191,13 @@ class PolyWarMap {
     this.selected = null;
     this.cell = 10;
     this.pending = false;
+    this.pendingCellKey = null;
+    this.lastTap = null;
+    this.moreOpen = false;
+    this.lastSuccess = null;
+    this.pointerStarts = new Map();
+    this.hadMultiTouch = false;
+    this.tapSeq = 0;
     const b = baseFor(state.selected_faction?.id) || { x: Math.floor(state.map.width / 2), y: Math.floor(state.map.height / 2) };
     this.cx = b.x;
     this.cy = b.y;
@@ -112,14 +211,19 @@ class PolyWarMap {
     const signal = this.abort.signal;
     this.onResize = () => this.resize();
     window.addEventListener("resize", this.onResize, { signal });
-    this.canvas.addEventListener("pointerdown", e => { this.canvas.setPointerCapture(e.pointerId); this.drag = { x: e.clientX, y: e.clientY, cx: this.cx, cy: this.cy }; }, { signal });
-    this.canvas.addEventListener("pointermove", e => { if (!this.drag) return; this.cx = this.drag.cx - (e.clientX - this.drag.x) / this.cell; this.cy = this.drag.cy - (e.clientY - this.drag.y) / this.cell; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }, { signal });
-    this.canvas.addEventListener("pointerup", e => { if (this.drag && Math.hypot(e.clientX - this.drag.x, e.clientY - this.drag.y) < 5) { const p = this.screenToCell(e.offsetX, e.offsetY); this.select(p.x, p.y); } this.drag = null; }, { signal });
+    this.canvas.addEventListener("pointerdown", e => { this.canvas.setPointerCapture(e.pointerId); this.pointerStarts.set(e.pointerId, { x:e.clientX, y:e.clientY, cx:this.cx, cy:this.cy, pan:false }); if (this.pointerStarts.size > 1) this.hadMultiTouch = true; }, { signal });
+    this.canvas.addEventListener("pointermove", e => { const g=this.pointerStarts.get(e.pointerId); if (!g) return; const dist=Math.hypot(e.clientX-g.x, e.clientY-g.y); if (dist > 8) g.pan = true; if (this.hadMultiTouch || !g.pan) return; this.cx = g.cx - (e.clientX - g.x) / this.cell; this.cy = g.cy - (e.clientY - g.y) / this.cell; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }, { signal });
+    this.canvas.addEventListener("pointerup", e => { const g=this.pointerStarts.get(e.pointerId); this.pointerStarts.delete(e.pointerId); const wasMulti=this.hadMultiTouch; if (!this.pointerStarts.size) this.hadMultiTouch = false; if (g && !g.pan && !wasMulti && this.pointerStarts.size === 0) { const p = this.screenToCell(e.offsetX, e.offsetY); this.handleCellTap(p.x, p.y); } }, { signal });
+    this.canvas.addEventListener("pointercancel", e => { this.pointerStarts.delete(e.pointerId); if (!this.pointerStarts.size) this.hadMultiTouch = false; }, { signal });
     this.canvas.addEventListener("wheel", e => { e.preventDefault(); this.zoom(e.deltaY < 0 ? 1.25 : 0.8); }, { passive: false, signal });
     document.getElementById("zoomIn").addEventListener("click", () => this.zoom(1.25), { signal });
     document.getElementById("zoomOut").addEventListener("click", () => this.zoom(0.8), { signal });
     document.getElementById("goBase").addEventListener("click", () => { const b = baseFor(currentState?.selected_faction?.id); if (b) { this.cx = b.x; this.cy = b.y; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); } }, { signal });
-    document.getElementById("captureBtn").addEventListener("click", () => this.capture(), { signal });
+    document.getElementById("primaryActionBtn")?.addEventListener("click", () => this.executePrimaryCellAction(), { signal });
+    document.getElementById("quickActionsToggle")?.addEventListener("click", () => { quickActionsEnabled = !quickActionsEnabled; localStorage.setItem("polywar_quick_actions", quickActionsEnabled ? "on" : "off"); this.updatePanel(); }, { signal });
+    document.getElementById("moreActionsBtn")?.addEventListener("click", () => { this.moreOpen = !this.moreOpen; this.updatePanel(); }, { signal });
+    this.canvas.tabIndex = 0;
+    this.canvas.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && this.selected) { e.preventDefault(); this.executePrimaryCellAction(); } }, { signal });
     document.getElementById("scan3Btn")?.addEventListener("click", () => this.scan(3), { signal });
     document.getElementById("scan5Btn")?.addEventListener("click", () => this.scan(5), { signal });
     document.getElementById("flagAddBtn")?.addEventListener("click", () => this.flag(true), { signal });
@@ -138,6 +242,7 @@ class PolyWarMap {
   resize() { if (this.destroyed) return; this.dpr = Math.max(1, window.devicePixelRatio || 1); const r = this.canvas.getBoundingClientRect(); this.canvas.width = Math.floor(r.width * this.dpr); this.canvas.height = Math.floor(r.height * this.dpr); this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.w = r.width; this.h = r.height; this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
   zoom(f) { this.cell = Math.max(2, Math.min(36, this.cell * f)); this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
   clamp() { this.cx = Math.max(0, Math.min(this.state.map.width - 1, this.cx)); this.cy = Math.max(0, Math.min(this.state.map.height - 1, this.cy)); }
+  centerOnBase(zoom = 18) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.max(this.cell, zoom); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.requestDraw(); }
   screenToCell(px, py) { return { x: Math.floor(this.cx + (px - this.w / 2) / this.cell), y: Math.floor(this.cy + (py - this.h / 2) / this.cell) }; }
   cellToScreen(x, y) { return { x: this.w / 2 + (x - this.cx) * this.cell, y: this.h / 2 + (y - this.cy) * this.cell }; }
   rules() { return this.state.rules || {}; }
@@ -211,56 +316,142 @@ class PolyWarMap {
   refreshSelectedSector() { if (!this.selected) return; const ss=this.sectorSize(), key=`${Math.floor(this.selected.x/ss)},${Math.floor(this.selected.y/ss)}`; return this.ensureSectors(key); }
   pruneCache() { const keep = new Set(this.visibleChunks().map(c => c.join(","))); for (const k of this.cache.keys()) if (!keep.has(k) && this.cache.size > 80) this.cache.delete(k); }
   status(t) { const el = document.getElementById("chunkStatus"); if (el) el.textContent = t; }
-  select(x, y) { if (x < 0 || y < 0 || x >= this.state.map.width || y >= this.state.map.height) return; this.selected = { x, y }; this.ensureChunks(); this.updatePanel(); this.requestDraw(); }
+  select(x, y) { if (x < 0 || y < 0 || x >= this.state.map.width || y >= this.state.map.height) return; if (this.selected?.x !== x || this.selected?.y !== y) this.moreOpen = false; this.selected = { x, y }; this.ensureChunks(); this.updatePanel(); this.requestDraw(); }
   getCell(x, y) { const cs = this.state.map.chunk_size, cx = Math.floor(x / cs), cy = Math.floor(y / cs), ch = this.cache.get(`${cx},${cy}`); if (!ch) return {}; const lx = x - cx * cs, ly = y - cy * cs; const intel=(ch.intel||[]).find(i=>+i.x===+x&&+i.y===+y); const rift=(ch.rifts||[]).find(r=>+r.x===+x&&+r.y===+y); const rebellion=(ch.rebellions||[]).find(r=>+r.x===+x&&+r.y===+y); const flags=(ch.flags||[]).find(f=>+f.x===+x&&+f.y===+y); const contest=(ch.contested_cells||[]).find(q=>+q.x===+x&&+q.y===+y); const chunkCapital=(ch.capitals||[]).find(q=>+q.x===+x&&+q.y===+y); const cachedCapital=polywarCapitalUi?.cache?.get(`${x},${y}`); const capital=cachedCapital ? {...chunkCapital, ...cachedCapital} : chunkCapital; const orders=(ch.orders||[]).filter(o=>+o.x===+x&&+o.y===+y); return { terrain: ch.terrain?.[ly]?.[lx], owner: ch.owners?.[ly]?.[lx], intel, flags, contest, capital, orders, rift, rebellion }; }
   isFrontline(x, y, fid) { return [[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy]) => +this.getCell(x+dx,y+dy).owner === +fid); }
+  refreshTargetSector(target) { if (!target) return; const ss=this.sectorSize(), key=`${Math.floor(target.x/ss)},${Math.floor(target.y/ss)}`; return this.ensureSectors(key); }
+  secondaryActions(c, selected = this.selected) {
+    return resolveSecondaryCellActions({ cell: c, selected, state: currentState, map: this })
+      .map(a => `<button class="btn mini" data-polywar-secondary="${esc(a.action)}" ${a.enabled ? "" : "disabled"} title="${esc(a.reason || "")}">${esc(a.label)}${a.energyCost == null ? "" : ` · ${esc(a.energyCost)} ⚡`}</button>`)
+      .join("");
+  }
   updatePanel() {
-    const s = this.selected || {}, c = this.getCell(s.x, s.y), fid = currentState?.selected_faction?.id, base = TERRAIN_COST[c.terrain], locked=!!currentState?.energy?.is_locked;
-    const cr=this.combatRules(), attackCost = base == null ? null : base + Number(cr.enemy_attack_extra_energy || 1), reinforceCost = Number(cr.reinforce_energy_cost || 1);
-    document.getElementById("cellCoords").textContent = s.x == null ? "—" : `${s.x}, ${s.y}`;
-    document.getElementById("cellTerrain").textContent = c.terrain || "loading";
-    document.getElementById("cellOwner").textContent = c.owner ? `Faction ${c.owner}` : "Neutral";
-    document.getElementById("cellCost").textContent = base == null ? "Unavailable" : (c.owner && +c.owner !== +fid ? `Attack ${attackCost}` : c.contest && +c.owner === +fid ? `Reinforce ${reinforceCost}` : base);
-    if (document.getElementById("cellSector")) document.getElementById("cellSector").textContent = s.x == null ? "—" : `${Math.floor(s.x/this.sectorSize())},${Math.floor(s.y/this.sectorSize())}`;
-    document.getElementById("cellHint").textContent = c.intel?.intel_type === "safe_hint" ? c.intel.adjacent_mines : "—";
-    document.getElementById("cellMineIntel").textContent = c.contest ? `Contested by Faction ${c.contest.contesting_faction_id}: ${c.contest.contest_progress}/${c.contest.contest_required}` : (c.intel?.intel_type === "triggered_mine" ? "Triggered mine" : "—");
-    document.getElementById("cellFlags").textContent = c.flags ? `${c.flags.flag_count}${c.flags.current_user_flagged ? " (yours)" : ""}` : "0";
-    const capRules = this.rules().capitals || {};
-    const isCapital = !!c.capital;
-    const siegeCost = base == null ? null : base + Number(capRules.siege_extra_energy || 0);
-    const repairCost = Number(capRules.repair_energy_cost || 0);
-    const isActiveRift = !!(c.rift && c.rift.status === 'active');
-    const canCapture = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && !c.owner && !this.pending && +currentState.energy.current_energy >= base;
-    const canAttack = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && c.owner && +c.owner !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= attackCost;
-    const canReinforce = !isActiveRift && !isCapital && !locked && fid && c.terrain && base != null && +c.owner === +fid && c.contest && +c.contest.contest_progress > 0 && !this.pending && +currentState.energy.current_energy >= reinforceCost;
-    const canSiege = isCapital && !locked && fid && +c.capital.controller_faction_id !== +fid && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= siegeCost;
-    const canRepair = isCapital && !locked && fid && +c.capital.controller_faction_id === +fid && +c.capital.siege_progress > 0 && this.isFrontline(s.x,s.y,fid) && !this.pending && +currentState.energy.current_energy >= repairCost;
-    if (c.capital) { c.capital.canSiege = canSiege; c.capital.canRepair = canRepair; c.capital.frontline = this.isFrontline(s.x,s.y,fid); }
-    const capPanel = document.getElementById("capitalPanel");
-    if (capPanel) capPanel.innerHTML = c.capital ? polywarCapitalUi.panel(c.capital, currentState) : ""; const rp=document.getElementById("riftPanel"); if(rp) rp.innerHTML = c.rift ? polywarRiftPanel(c.rift,c,currentState) : ""; const rb=document.getElementById("rebellionPanel"); if(rb) rb.innerHTML = c.rebellion ? polywarRebellionPanel(c.rebellion,c,currentState) : "";
-    const combatModes = new Set(["capture", "attack", "reinforce", "siege", "repair_capital"]);
-    if (combatModes.has(actionMode)) { if (canSiege) actionMode = "siege"; else if (canRepair) actionMode = "repair_capital"; else if (canAttack) actionMode = "attack"; else if (canReinforce) actionMode = "reinforce"; else if (canCapture) actionMode = "capture"; }
-    document.getElementById("currentMode").textContent = actionMode;
-    const btn = document.getElementById("captureBtn");
-    const canMain = actionMode === "attack" ? canAttack : actionMode === "reinforce" ? canReinforce : actionMode === "siege" ? canSiege : actionMode === "repair_capital" ? canRepair : canCapture;
-    btn.disabled = !canMain; btn.textContent = this.pending ? "Working…" : (!fid ? "Choose faction" : actionMode === "attack" ? `Attack — ${attackCost} energy` : actionMode === "reinforce" ? `Reinforce — ${reinforceCost} energy` : actionMode === "siege" ? `Siege capital — ${siegeCost} energy` : actionMode === "repair_capital" ? `Repair capital — ${repairCost} energy` : "Capture");
-    document.getElementById("scan3Btn").disabled = locked || this.pending || +currentState.energy.current_energy < 2;
-    document.getElementById("scan5Btn").disabled = locked || this.pending || +currentState.energy.current_energy < 4;
-    document.getElementById("flagAddBtn").disabled = isActiveRift || !fid || !!c.owner || base == null || this.pending;
-    document.getElementById("flagRemoveBtn").disabled = !c.flags?.current_user_flagged || this.pending;
+    const s = this.selected || {}, c = this.getCell(s.x, s.y);
+    const primary = resolvePrimaryCellAction({ cell: c, selected: s, state: currentState, map: this });
+    actionMode = primary.action || "capture";
+    const owner = c.owner ? ((currentState?.factions || []).find(f => Number(f.id) === Number(c.owner))?.name || `Faction ${c.owner}`) : "Neutral";
+    const el = id => document.getElementById(id);
+    if (el("cellCoords")) el("cellCoords").textContent = s.x == null ? "—" : `${s.x}, ${s.y}`;
+    if (el("cellTerrain")) el("cellTerrain").textContent = c.terrain || "loading";
+    if (el("cellOwner")) el("cellOwner").textContent = owner;
+    if (el("cellCost")) el("cellCost").textContent = primary.energyCost == null ? "—" : `${primary.energyCost} ⚡`;
+    if (el("cellReason")) el("cellReason").textContent = this.pending ? "Working…" : (primary.reason || "Ready");
+    if (el("quickActionsToggle")) { el("quickActionsToggle").textContent = `Quick actions: ${quickActionsEnabled ? "ON" : "OFF"}`; el("quickActionsToggle").setAttribute("aria-pressed", String(quickActionsEnabled)); }
+    const sheet = document.querySelector(".compact-cell-sheet");
+    sheet?.classList.toggle("compact-cell-sheet--expanded", !!this.moreOpen);
+    const btn = el("primaryActionBtn");
+    if (btn) { btn.disabled = !primary.enabled || this.pending; btn.textContent = this.pending ? "Working…" : primary.label; btn.setAttribute("aria-label", `${primary.label} selected cell`); }
+    const more = el("moreActionsBtn");
+    if (more) more.setAttribute("aria-expanded", String(this.moreOpen));
+    const menu = el("secondaryActionsMenu");
+    if (menu) { menu.hidden = !this.moreOpen; menu.innerHTML = this.secondaryActions(c, s); }
+    const details = el("cellDetails");
+    if (details) details.innerHTML = `<b id="cellOwner">${esc(owner)}</b> · <b id="cellCost">${primary.energyCost == null ? "—" : `${esc(primary.energyCost)} ⚡`}</b>${c.capital ? ` <span class="sheet-extra-detail">· Capital siege ${esc(c.capital.siege_progress || 0)}/${esc(c.capital.siege_required || currentState?.rules?.capitals?.siege_required || 0)}</span>` : ""}${c.contest ? ` <span class="sheet-extra-detail">· Contested ${esc(c.contest.contest_progress)}/${esc(c.contest.contest_required)}</span>` : ""}`;
+  }
+  async handleCellTap(x, y) {
+    if (this.pending) return;
+    const targetKey = `${x},${y}`;
+    this.tapSeq = (this.tapSeq || 0) + 1;
+    const tapSeq = this.tapSeq;
+    this.select(x, y);
+    const now = Date.now();
+    if (this.lastTap?.key === targetKey && now - this.lastTap.t < 320) return;
+    this.lastTap = { key: targetKey, t: now };
+    let c = this.getCell(x, y);
+    if (!c.terrain) {
+      await this.ensureChunks(`${Math.floor(x / this.state.map.chunk_size)},${Math.floor(y / this.state.map.chunk_size)}`);
+      if (tapSeq !== this.tapSeq || this.pending || !this.selected || `${this.selected.x},${this.selected.y}` !== targetKey) return;
+      c = this.getCell(x, y); this.updatePanel();
+    }
+    const primary = resolvePrimaryCellAction({ cell: c, selected: this.selected, state: currentState, map: this });
+    if (quickActionsEnabled && primary.enabled) await this.executePrimaryCellAction(primary.action);
+    else if (primary.reason) toast(primary.reason);
+  }
+  async executePrimaryCellAction(action = null) {
+    if (!this.selected || this.pending) return;
+    const target = { x: this.selected.x, y: this.selected.y, key: `${this.selected.x},${this.selected.y}` };
+    const c = this.getCell(target.x, target.y);
+    const primary = resolvePrimaryCellAction({ cell: c, selected: target, state: currentState, map: this });
+    const actionType = action || primary.action;
+    if (!primary.enabled || !primary.action || actionType !== primary.action) { toast(primary.reason || "Action is no longer available"); return; }
+    const keyId=`${currentState?.season?.id}:${actionType}:${target.x}:${target.y}`;
+    const idem=polywarActionKeys.get(keyId)||`${keyId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    polywarActionKeys.set(keyId, idem);
+    this.moreOpen = false;
+    this.pending = true; this.pendingCellKey = target.key; this.updatePanel(); this.requestDraw();
+    const d = await api("/api/polywar/action", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ action_type: actionType, x:target.x, y:target.y, idempotency_key: idem }) });
+    this.pending = false; this.pendingCellKey = null;
+    if (!d.ok && !d.duplicate) { toast(d.httpStatus === 401 ? "Authentication required" : (d.error || "Action failed"), true); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d; }
+    polywarActionKeys.delete(keyId); currentState.energy = d.energy || currentState.energy;
+    if (d.mine_hit) { this.blast = {x:target.x,y:target.y,t:Date.now()}; alert(`Mine hit — actions locked until ${d.locked_until || d.energy?.locked_until || "server unlock"} (${fmtTime(d.energy?.lock_seconds_remaining || 0)} remaining)`); }
+    else { this.lastSuccess = { x:target.x, y:target.y, t:Date.now() }; actionToast(d, actionType); }
+    const cs = this.state.map.chunk_size;
+    await this.ensureChunks(`${Math.floor(target.x / cs)},${Math.floor(target.y / cs)}`);
+    await this.refreshCapitals(); await this.refreshTargetSector(target); await syncState(false, { soft: true }); await syncPolywarResults().catch(()=>{});
+    updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d;
   }
   async refreshCapitals() { const d = await polywarCapitalUi.refresh(this); this.requestDraw(); this.updatePanel(); return d; }
   async refreshGovernance() { const d = await polywarGovernanceUi.refresh(this); this.requestDraw(); return d; }
   async refreshWorld() { const seq = ++this.worldSeq, expectedSeason=currentState?.season?.id, expectedMap=this; const d = await api("/api/polywar/world"); if (seq !== this.worldSeq || this.destroyed || expectedMap!==map || (d.world?.season_id && expectedSeason && +d.world.season_id!==+expectedSeason)) return {ok:false, stale:true}; if (d.ok && d.world) { currentState.world = d.world; const hud=document.getElementById('polywarWorldHud'); if(hud) hud.innerHTML=`<h2>World HUD</h2>${renderWorldHud(currentState)}`; startWorldCountdownTimer(); this.requestDraw(); } return d; }
-  async sealRift() { return this.specialAction("seal_rift"); }
-  async supportRebellion() { return this.specialAction("support_rebellion"); }
-  async suppressRebellion() { return this.specialAction("suppress_rebellion"); }
-  async specialAction(action_type) { if (!this.selected || this.pending) return; const keyId=`${action_type}:${currentState?.season?.id}:${this.selected.x}:${this.selected.y}`; const idem=polywarActionKeys.get(keyId)||`${keyId}:${Date.now()}:${Math.random().toString(16).slice(2)}`; polywarActionKeys.set(keyId,idem); this.pending = true; this.updatePanel(); const d = await api("/api/polywar/action", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action_type, x:this.selected.x, y:this.selected.y, idempotency_key:idem})}); this.pending = false; if(!d.ok){ alert(d.error || "Action failed"); this.updatePanel(); return d; } polywarActionKeys.delete(keyId); currentState.energy=d.energy||currentState.energy; const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x/cs)},${Math.floor(this.selected.y/cs)}`); await this.refreshWorld(); await syncPolywarResults().catch(()=>{}); updateEnergyUI(); this.updatePanel(); this.requestDraw(); return d; }
-  async capture() { if (!this.selected || this.pending) return; this.pending = true; this.updatePanel(); const d = await api("/api/polywar/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action_type: (["attack","reinforce","siege","repair_capital"].includes(actionMode)) ? actionMode : "capture", x: this.selected.x, y: this.selected.y, idempotency_key: `cap-${Date.now()}-${Math.random().toString(16).slice(2)}` }) }); this.pending = false; if (!d.ok) { alert(d.error || "Action failed"); this.updatePanel(); return; } currentState.energy = d.energy; if (d.mine_hit) { this.blast = {x:this.selected.x,y:this.selected.y,t:Date.now()}; alert(`Mine hit — actions locked until ${d.locked_until || d.energy?.locked_until || "server unlock"} (${fmtTime(d.energy?.lock_seconds_remaining || 0)} remaining)`); } const cs = this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x / cs)},${Math.floor(this.selected.y / cs)}`); await this.refreshCapitals(); await this.refreshSelectedSector(); await syncState(false, { soft: true }); updateEnergyUI(); if (d.outcome) alert(d.outcome); this.updatePanel(); this.requestDraw(); }
-  async scan(size) { if (!this.selected || this.pending) return; if (!confirm(`Scan ${size}×${size} around ${this.selected.x},${this.selected.y}?`)) return; this.pending = true; this.updatePanel(); const d = await api("/api/polywar/scan", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({center_x:this.selected.x, center_y:this.selected.y, size, idempotency_key:`scan-${size}-${Date.now()}-${Math.random().toString(16).slice(2)}`})}); this.pending=false; if(!d.ok){ alert(d.error || "Scan failed"); this.updatePanel(); return; } currentState.energy=d.energy; alert(`Active mines detected: ${d.active_mine_count}`); const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x/cs)},${Math.floor(this.selected.y/cs)}`); updateEnergyUI(); this.updatePanel(); this.requestDraw(); }
-  async flag(active) { if (!this.selected || this.pending) return; this.pending=true; this.updatePanel(); const d=await api("/api/polywar/flag", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({x:this.selected.x,y:this.selected.y,active})}); this.pending=false; if(!d.ok){ alert(d.error || "Flag failed"); this.updatePanel(); return; } const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(this.selected.x/cs)},${Math.floor(this.selected.y/cs)}`); this.updatePanel(); this.requestDraw(); }
+  async sealRift() { return this.executeSecondaryCellAction("seal_rift"); }
+  async supportRebellion() { return this.executeSecondaryCellAction("support_rebellion"); }
+  async suppressRebellion() { return this.executeSecondaryCellAction("suppress_rebellion"); }
+  async executeSecondaryCellAction(action) {
+    if (!this.selected || this.pending) return;
+    const target = { x:this.selected.x, y:this.selected.y, key:`${this.selected.x},${this.selected.y}` };
+    const c = this.getCell(target.x, target.y);
+    const allowed = resolveSecondaryCellActions({ cell:c, selected:target, state:currentState, map:this }).find(a => a.action === action);
+    if (!allowed || !allowed.enabled) { toast(allowed?.reason || "Action is no longer available"); return; }
+    if (action === "scan_3") return this.scan(3, target);
+    if (action === "scan_5") return this.scan(5, target);
+    if (action === "flag_mine") return this.flag(true, target);
+    if (action === "remove_flag") return this.flag(false, target);
+    return this.specialAction(action, target);
+  }
+  async specialAction(action_type, target = null) {
+    if (!this.selected || this.pending) return;
+    target = target || { x:this.selected.x, y:this.selected.y, key:`${this.selected.x},${this.selected.y}` };
+    const keyId=`${currentState?.season?.id}:${action_type}:${target.x}:${target.y}`;
+    const idem=polywarActionKeys.get(keyId)||`${keyId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    polywarActionKeys.set(keyId,idem);
+    this.pending = true; this.pendingCellKey = target.key; this.moreOpen = false; this.updatePanel();
+    const d = await api("/api/polywar/action", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action_type, x:target.x, y:target.y, idempotency_key:idem})});
+    this.pending = false; this.pendingCellKey = null;
+    if(!d.ok && !d.duplicate){ toast(d.error || "Action failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return d; }
+    polywarActionKeys.delete(keyId); currentState.energy=d.energy||currentState.energy;
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); await this.refreshWorld(); await syncPolywarResults().catch(()=>{}); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d;
+  }
+  async capture() { return this.executePrimaryCellAction(actionMode); }
+  async scan(size, target = null) {
+    if (!this.selected || this.pending) return;
+    target = target || { x:this.selected.x, y:this.selected.y, key:`${this.selected.x},${this.selected.y}` };
+    const action = `scan_${size}`;
+    const c = this.getCell(target.x, target.y);
+    const allowed = resolveSecondaryCellActions({ cell:c, selected:target, state:currentState, map:this }).find(a => a.action === action);
+    if (!allowed || !allowed.enabled) { toast(allowed?.reason || "Action is no longer available"); return; }
+    if (!confirm(`Scan ${size}×${size} around ${target.x},${target.y}?`)) return;
+    this.pending = true; this.pendingCellKey = target.key; this.moreOpen = false; this.updatePanel();
+    const d = await api("/api/polywar/scan", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({center_x:target.x, center_y:target.y, size, idempotency_key:`scan-${size}-${Date.now()}-${Math.random().toString(16).slice(2)}`})});
+    this.pending=false; this.pendingCellKey = null;
+    if(!d.ok){ toast(d.error || "Scan failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return; }
+    currentState.energy=d.energy; toast(`Active mines detected: ${d.active_mine_count}`);
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
+  }
+  async flag(active, target = null) {
+    if (!this.selected || this.pending) return;
+    target = target || { x:this.selected.x, y:this.selected.y, key:`${this.selected.x},${this.selected.y}` };
+    const action = active ? "flag_mine" : "remove_flag";
+    const c = this.getCell(target.x, target.y);
+    const allowed = resolveSecondaryCellActions({ cell:c, selected:target, state:currentState, map:this }).find(a => a.action === action);
+    if (!allowed || !allowed.enabled) { toast(allowed?.reason || "Action is no longer available"); return; }
+    this.pending=true; this.pendingCellKey = target.key; this.moreOpen = false; this.updatePanel();
+    const d=await api("/api/polywar/flag", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({x:target.x,y:target.y,active})});
+    this.pending=false; this.pendingCellKey = null;
+    if(!d.ok){ toast(d.error || "Flag failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return; }
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
+  }
   requestDraw() { if (this.destroyed || this.drawFrame) return; this.drawFrame = requestAnimationFrame(() => { this.drawFrame = null; if (!this.destroyed) this.draw(); }); }
-  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; ctx.fillStyle = TERRAIN_COLOR[ch.terrain[yy][xx]] || "#555"; ctx.fillRect(p.x, p.y, this.cell + 0.5, this.cell + 0.5); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size); if(this.cell>3){ ctx.fillStyle="#fff"; ctx.font="11px sans-serif"; ctx.fillText(`${sx},${sy} ${sec?.dominance_percent??0}%`,p.x+4,p.y+14); } } } for (const b of this.state.map.bases || []) { const p = this.cellToScreen(b.x, b.y); ctx.fillStyle = b.color || "#fff"; ctx.beginPath(); ctx.arc(p.x + this.cell / 2, p.y + this.cell / 2, Math.max(5, this.cell * 0.9), 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.stroke(); } for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || []); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y)); if (this.selected) { const p = this.cellToScreen(this.selected.x, this.selected.y); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.strokeRect(p.x, p.y, this.cell, this.cell); ctx.lineWidth = 1; } }
+  draw() { const ctx = this.ctx; ctx.clearRect(0, 0, this.w, this.h); const visible = new Set(this.visibleChunks().map(c => c.join(","))); const cs = this.state.map.chunk_size; for (const [key, ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (let yy = 0; yy < ch.height; yy++) for (let xx = 0; xx < ch.width; xx++) { const x = ch.chunk_x * cs + xx, y = ch.chunk_y * cs + yy, p = this.cellToScreen(x, y); if (p.x + this.cell < 0 || p.y + this.cell < 0 || p.x > this.w || p.y > this.h) continue; ctx.fillStyle = TERRAIN_COLOR[ch.terrain[yy][xx]] || "#555"; ctx.fillRect(p.x, p.y, this.cell + 0.5, this.cell + 0.5); const own = ch.owners[yy][xx]; if (own) { ctx.fillStyle = (+own===8 ? "rgba(20,0,35,.85)" : (currentState.factions || []).find(f => f.id === own)?.color || "rgba(255,255,255,.5)"); ctx.globalAlpha = 0.45; ctx.fillRect(p.x, p.y, this.cell, this.cell); ctx.globalAlpha = 1; } if (+own===8) { ctx.strokeStyle="rgba(210,120,255,.75)"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+this.cell,p.y+this.cell); ctx.moveTo(p.x+this.cell,p.y); ctx.lineTo(p.x,p.y+this.cell); ctx.stroke(); } const rift=(ch.rifts||[]).find(q=>+q.x===x&&+q.y===y); if(rift){ ctx.fillStyle=rift.status==="sealed"?"#30d987":"#e879f9"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(4,this.cell*.35),0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2,Math.max(5,this.cell*.48),-Math.PI/2,-Math.PI/2+Math.PI*2*((rift.health_percent||0)/100)); ctx.stroke(); } const contest=(ch.contested_cells||[]).find(q=>+q.x===x&&+q.y===y); if(contest){ ctx.strokeStyle="#fff200"; ctx.lineWidth=2; ctx.strokeRect(p.x+1,p.y+1,this.cell-2,this.cell-2); ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+contest.contesting_faction_id)?.color||"#fff"; ctx.fillRect(p.x+2,p.y+this.cell-5,Math.max(2,(this.cell-4)*(contest.contest_progress/contest.contest_required)),3); ctx.fillText("⚔",p.x+2,p.y+12); ctx.lineWidth=1; } if (this.cell > 12) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.strokeRect(p.x, p.y, this.cell, this.cell); const intel=(ch.intel||[]).find(i=>+i.x===x&&+i.y===y); const fl=(ch.flags||[]).find(f=>+f.x===x&&+f.y===y); if(intel?.intel_type==="safe_hint"){ ctx.fillStyle="#fff"; ctx.font=`${Math.max(10,this.cell*.65)}px sans-serif`; ctx.fillText(String(intel.adjacent_mines), p.x+3, p.y+this.cell-3); } if(intel?.intel_type==="triggered_mine"){ ctx.fillStyle="#111"; ctx.fillText("✹", p.x+3, p.y+this.cell-3); } if(fl){ ctx.fillStyle="#ffeb3b"; ctx.fillText(`⚑${fl.flag_count}`, p.x+2, p.y+12); } } } } if (this.cell < 8) { const ss=this.sectorSize(), r=this.visibleSectorRange(); for(let sy=r.minY; sy<=r.maxY; sy++) for(let sx=r.minX; sx<=r.maxX; sx++){ const sec=this.sectorCache.get(`${sx},${sy}`), p=this.cellToScreen(sx*ss, sy*ss), size=ss*this.cell; if(sec?.controller_faction_id){ ctx.fillStyle=(currentState.factions||[]).find(f=>+f.id===+sec.controller_faction_id)?.color||"#fff"; ctx.globalAlpha=.16; ctx.fillRect(p.x,p.y,size,size); ctx.globalAlpha=1; } if(sec?.is_contested){ ctx.fillStyle="rgba(255,255,255,.16)"; for(let k=0;k<size;k+=8){ ctx.fillRect(p.x+k,p.y,3,size); } } ctx.strokeStyle="rgba(255,255,255,.25)"; ctx.strokeRect(p.x,p.y,size,size); if(this.cell>3){ ctx.fillStyle="#fff"; ctx.font="11px sans-serif"; ctx.fillText(`${sx},${sy} ${sec?.dominance_percent??0}%`,p.x+4,p.y+14); } } } for (const b of this.state.map.bases || []) { const p = this.cellToScreen(b.x, b.y); ctx.fillStyle = b.color || "#fff"; ctx.beginPath(); ctx.arc(p.x + this.cell / 2, p.y + this.cell / 2, Math.max(5, this.cell * 0.9), 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.stroke(); } for (const [key,ch] of this.cache.entries()) { if (!visible.has(key)) continue; for (const sc of ch.scans||[]) { const p=this.cellToScreen(sc.center_x-sc.size/2, sc.center_y-sc.size/2); ctx.strokeStyle="rgba(255,255,255,.9)"; ctx.strokeRect(p.x,p.y,sc.size*this.cell,sc.size*this.cell); const cp=this.cellToScreen(sc.center_x,sc.center_y); ctx.fillStyle="#fff"; ctx.fillText(String(sc.active_mine_count), cp.x+2, cp.y+12); } } if (actionMode.startsWith("scan") && this.selected) { const size=actionMode==="scan5"?5:3, p=this.cellToScreen(this.selected.x-size/2, this.selected.y-size/2); ctx.strokeStyle="#00e5ff"; ctx.setLineDash([4,3]); ctx.strokeRect(p.x,p.y,size*this.cell,size*this.cell); ctx.setLineDash([]); } if (this.blast && Date.now()-this.blast.t<1800) { const p=this.cellToScreen(this.blast.x,this.blast.y); ctx.fillStyle="rgba(255,80,0,.55)"; ctx.beginPath(); ctx.arc(p.x+this.cell/2,p.y+this.cell/2, this.cell*2,0,Math.PI*2); ctx.fill(); setTimeout(()=>this.requestDraw(),80); } polywarCapitalUi.draw(ctx, (x,y)=>this.cellToScreen(x,y), currentState.factions || []); polywarGovernanceUi.drawOrders(ctx, (x,y)=>this.cellToScreen(x,y)); if (this.pendingCellKey) { const [px,py]=this.pendingCellKey.split(",").map(Number), p=this.cellToScreen(px,py); ctx.strokeStyle="#35a6ff"; ctx.lineWidth=3; ctx.setLineDash([3,3]); ctx.strokeRect(p.x-2,p.y-2,this.cell+4,this.cell+4); ctx.setLineDash([]); setTimeout(()=>this.requestDraw(),120); } if (this.lastSuccess && Date.now()-this.lastSuccess.t<900) { const p=this.cellToScreen(this.lastSuccess.x,this.lastSuccess.y); ctx.fillStyle="rgba(48,217,135,.45)"; ctx.fillRect(p.x,p.y,this.cell,this.cell); setTimeout(()=>this.requestDraw(),80); } if (this.selected) { const p = this.cellToScreen(this.selected.x, this.selected.y); ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.strokeRect(p.x-1, p.y-1, this.cell+2, this.cell+2); ctx.strokeStyle="#111"; ctx.lineWidth=1; ctx.strokeRect(p.x+2,p.y+2,Math.max(2,this.cell-4),Math.max(2,this.cell-4)); ctx.lineWidth = 1; } }
 }
 
 function renderUnavailable(message) { clearTimers(); map?.destroy(); map = null; root.innerHTML = `<section class="glass card"><h2>PolyWar is temporarily unavailable</h2><p class="muted">${esc(message || "Please check back later.")}</p><a class="btn" href="/app">Back to DeepAlpha</a></section>`; }
@@ -279,13 +470,14 @@ function render(state) {
   if (state && state.enabled === false) { renderUnavailable(state.message); return; }
   const p = state.player || {}, e = state.energy || {}, season = state.season || {}, selected = state.selected_faction, needsJoin = !selected;
   map?.destroy();
-  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card polywar-world-hud" id="polywarWorldHud"><h2>World HUD</h2>${renderWorldHud(state)}</section><section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><canvas id="polywarCanvas"></canvas><div class="action-panel"><b>Cell <span id="cellCoords">—</span></b><span>Terrain: <b id="cellTerrain">—</b></span><span>Owner: <b id="cellOwner">—</b></span><span>Cost: <b id="cellCost">—</b></span><span>Sector: <b id="cellSector">—</b></span><span>Hint: <b id="cellHint">—</b></span><span>Mine intel: <b id="cellMineIntel">—</b></span><span>Flags: <b id="cellFlags">0</b></span><span>Mode: <b id="currentMode">capture</b></span><div class="mode-row"><button class="btn mini" data-mode="capture">Capture</button><button class="btn mini" data-mode="attack">Attack</button><button class="btn mini" data-mode="reinforce">Reinforce</button><button class="btn mini" data-mode="scan3">Scan 3×3</button><button class="btn mini" data-mode="scan5">Scan 5×5</button><button class="btn mini" data-mode="flag">Flag mine</button><button class="btn mini" data-mode="siege">Siege</button><button class="btn mini" data-mode="repair_capital">Repair capital</button></div><button class="btn" id="captureBtn" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn" id="scan3Btn">Scan 3×3</button><button class="btn" id="scan5Btn">Scan 5×5</button><button class="btn" id="flagAddBtn">Add mine flag</button><button class="btn" id="flagRemoveBtn">Remove my flag</button><div id="capitalPanel"></div><div id="riftPanel"></div><div id="rebellionPanel"></div></div></section><section class="glass card polywar-governance-panel" id="polywarGovernancePanel" data-polywar-governance><h2>Governance</h2></section><section class="grid" id="factionStats"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2><div id="factionRanking"></div></section><section class="glass card polywar-results-panel" id="polywarResultsPanel"><h2>Season Results</h2>${renderResultsPanel(state)}</section><section class="glass card"><h2>Latest events</h2><div id="latestEvents"></div></section>`;
+  root.innerHTML = `<section class="grid"><div class="glass card"><h2>Season</h2><p class="metric">${esc(season.name || "Active Season")}</p><p class="muted">${esc(season.starts_at)} → ${esc(season.ends_at)}</p></div><div class="glass card"><h2>Energy</h2><p class="metric" id="energyValue">${esc(e.current_energy)}/${esc(e.max_energy)}</p><p class="muted">Next charge: <span id="energyCountdown">${fmtTime(e.seconds_until_next_energy)}</span> · ${esc(e.recharge_minutes)} min/energy</p><p class="muted">Status: <b id="lockStatus">${e.is_locked ? "Mine locked" : "Active"}</b></p></div></section><section class="glass card ${selected ? "confirm" : ""}"><h2>Faction</h2>${selected ? `<p class="metric">${factionDot(selected)}${esc(selected.name)}</p><p class="muted">Faction locked for this season.</p>` : `<p class="muted">Choose your faction to capture cells. Preview map is available before selection.</p>`}</section>${needsJoin ? `<section class="glass card"><h2>Choose faction</h2><div class="factions">${(state.factions || []).map(f => `<button class="faction" data-faction="${esc(f.id)}">${factionDot(f)}${esc(f.name)}<small>${esc(f.description)}</small></button>`).join("")}</div></section>` : ""}<section class="glass card polywar-world-hud" id="polywarWorldHud"><h2>World HUD</h2>${renderWorldHud(state)}</section><section class="glass card map-card"><div class="map-head"><h2>Global War Map</h2><span id="chunkStatus" class="muted"></span><button class="btn mini" id="quickActionsToggle" aria-pressed="true">Quick actions: ON</button><button class="btn mini" id="goBase">Base</button><button class="btn mini" id="zoomOut">−</button><button class="btn mini" id="zoomIn">+</button></div><div class="map-wrap"><canvas id="polywarCanvas" aria-label="PolyWar map. Tap a cell, then press Enter or Space to perform the primary action."></canvas><div class="action-panel compact-cell-sheet" aria-live="polite"><div class="sheet-main"><b>Cell <span id="cellCoords">—</span> · <span id="cellTerrain">—</span></b><span id="cellDetails" class="muted"><b id="cellOwner">Neutral</b> · <b id="cellCost">—</b></span><span id="cellReason" class="muted">Select a cell</span></div><div class="sheet-actions"><button class="btn" id="primaryActionBtn" aria-label="Primary cell action" disabled>${needsJoin ? "Choose faction" : "Capture"}</button><button class="btn mini" id="moreActionsBtn" aria-expanded="false">More ···</button></div><div id="secondaryActionsMenu" class="secondary-actions" hidden></div></div></div></section><section class="glass card polywar-governance-panel" id="polywarGovernancePanel" data-polywar-governance><h2>Governance</h2></section><section class="grid" id="factionStats"><div class="glass card"><h3>Season Points</h3><p class="metric">${esc(p.season_spendable_points || 0)}</p></div><div class="glass card"><h3>Faction Contribution</h3><p class="metric">${esc(p.faction_contribution || 0)}</p></div></section><section class="glass card"><h2>Faction ranking</h2><div id="factionRanking"></div></section><section class="glass card polywar-results-panel" id="polywarResultsPanel"><h2>Season Results</h2>${renderResultsPanel(state)}</section><section class="glass card"><h2>Latest events</h2><div id="latestEvents"></div></section>`;
   document.querySelectorAll("[data-faction]").forEach(b => b.onclick = () => joinFaction(b.dataset.faction));
   root.onclick = handlePolywarUiClick;
   updateFactionStats();
   updateFactionRanking();
   updateLatestEvents();
   map = new PolyWarMap(state);
+  if (selected) map.centerOnBase(18);
   if (state.latest_completed_season) syncPolywarResults();
   startEnergyTimers();
   startWorldCountdownTimer();
@@ -421,8 +613,10 @@ async function handlePolywarUiClick(e) {
   const editOrder = e.target.closest('[data-polywar-edit-order]');
   const createOrder = e.target.closest('[data-polywar-create-order]');
   const updateOrder = e.target.closest('[data-polywar-update-order]');
+  const secondary = e.target.closest('[data-polywar-secondary]');
+  if (secondary) { await map?.executeSecondaryCellAction?.(secondary.dataset.polywarSecondary); return; }
   if (claim) { const sid=currentState?.current_user_pending_reward?.season_id || currentState?.latest_completed_season?.id || currentState?.results?.season?.id; const d=await claimPolywarReward(sid); if(!d.ok && !d.duplicate) alert(d.error || 'Claim failed'); return; }
-  if (action) { const a=action.dataset.polywarAction; if(a==='seal_rift'){ await map?.sealRift?.(); return; } if(a==='support_rebellion'){ await map?.supportRebellion?.(); return; } if(a==='suppress_rebellion'){ await map?.suppressRebellion?.(); return; } actionMode = a; map?.updatePanel(); await map?.capture(); return; }
+  if (action) { const a=action.dataset.polywarAction; if(['seal_rift','support_rebellion','suppress_rebellion'].includes(a)){ /* legacy source token: a==='seal_rift' */ await map?.executeSecondaryCellAction?.(a); return; } await map?.executePrimaryCellAction?.(a); return; }
   if (vote) { const d = await api('/api/polywar/governance/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({candidate_user_id:Number(vote.dataset.polywarVote)})}); if(!d.ok) alert(d.error || 'Vote failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (nom) { const active = nom.dataset.polywarNominate === 'true'; const statement = active ? (prompt('Candidate statement') || '') : ''; const d = await api('/api/polywar/governance/nominate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, statement})}); if(!d.ok) alert(d.error || 'Nomination failed'); else { polywarGovernanceUi.render(d); await map?.refreshGovernance?.(); } return; }
   if (editOrder) { polywarGovernanceUi.setEditingOrder(Number(editOrder.dataset.polywarEditOrder), editOrder.dataset.orderType || 'attack', editOrder.dataset.orderMessage || ''); return; }
@@ -435,3 +629,7 @@ async function handlePolywarUiClick(e) {
 init();
 
 window.addEventListener('pagehide', clearTimers);
+
+window.resolvePrimaryCellAction = resolvePrimaryCellAction;
+window.resolveSecondaryCellActions = resolveSecondaryCellActions;
+window.__polywarTapToAct = { resolvePrimaryCellAction, resolveSecondaryCellActions, primaryActionCost, primaryActionLabel };
