@@ -145,7 +145,7 @@ def _build_governance_response(conn, sid, player, faction_id, user_id):
     candidates = []; vote = None
     if e:
         rows = polywar._fetchall(conn.cursor(), '''SELECT c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at,COUNT(v.voter_user_id) vote_count FROM polywar_commander_candidates c LEFT JOIN polywar_commander_votes v ON v.election_id=c.election_id AND v.candidate_user_id=c.user_id WHERE c.election_id=%s GROUP BY c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at''', (e['id'],))
-        candidates = [dict(r) for r in rows]
+        candidates = [polywar._row_to_dict(None, r) for r in rows]
         vr = polywar._fetchone(conn.cursor(), 'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s', (e['id'], user_id))
         vote = vr and vr['candidate_user_id']
     return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= min_contribution()}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(), 'server_timestamp': int(time.time())}
