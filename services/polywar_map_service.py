@@ -334,7 +334,8 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         except ValueError:
             raise
         except Exception:
-            pass
+            logger.exception("polywar_capture_rift_check_failed season_id=%s x=%s y=%s", sid, x, y)
+            raise
         polywar._insert_player_if_missing(conn, int(user_id), sid)
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)

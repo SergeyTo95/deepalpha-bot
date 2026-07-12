@@ -152,7 +152,8 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         except ValueError:
             raise
         except Exception:
-            pass
+            logger.exception("polywar_combat_rift_check_failed season_id=%s x=%s y=%s", sid, x, y)
+            raise
         terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         now = datetime.utcnow(); owner = _owner(conn, sid, x, y)

@@ -460,6 +460,20 @@ def assert_gameplay_mutation_allowed(conn, season_id: int, now: Optional[datetim
     if ends and now >= ends:
         raise ValueError("season_ended")
 
+
+def prepare_gameplay_mutation_in_transaction(conn, season_id: int, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Run season lifecycle/finalization checks inside an owned mutation transaction."""
+    now = now or _now()
+    suffix = "" if _is_sqlite(conn) else " FOR UPDATE"
+    _fetchone(conn.cursor(), "SELECT * FROM polywar_seasons WHERE id=%s" + suffix, (int(season_id),))
+    from services import polywar_finalization_service as finalization
+    decision = finalization.maybe_finalize_in_transaction(conn, int(season_id), now)
+    if decision.get("should_finalize"):
+        finalization.finalize_season_in_transaction(conn, int(season_id), decision.get("victory_type", "time"), decision.get("winner_faction_id"), now)
+        return {"ok": False, "error": "season_ended"}
+    assert_gameplay_mutation_allowed(conn, int(season_id), now)
+    return {"ok": True}
+
 def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     if not is_enabled():
         raise ValueError("polywar_disabled")

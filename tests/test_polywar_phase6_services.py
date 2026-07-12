@@ -599,3 +599,28 @@ def test_rebellion_tick_success_transitions_before_transfer(db, monkeypatch):
     assert changed == ['rebellion_succeeded'] and seen == ['succeeded']
     assert c.execute('select controller_faction_id from polywar_capitals where season_id=? and original_faction_id=1',(sid,)).fetchone()[0] == 1
     c.close()
+
+
+def test_seal_uses_public_catchup_not_in_transaction_before_begin(db, monkeypatch):
+    connect, settings = db
+    settings['polywar_null_rift_seal_progress']='1'
+    sid = active(connect)
+    c = connect(); world.init_world_schema(c); world.ensure_world_initialized_in_transaction(c,sid); world.activate_if_due_in_transaction(c,sid)
+    r = c.execute("select * from polywar_null_rifts where season_id=? and status='active' limit 1",(sid,)).fetchone()
+    c.execute('insert or replace into polywar_cells (season_id,x,y,owner_faction_id) values (?,?,?,1)',(sid,r['x']+1,r['y']))
+    c.execute('update polywar_players set current_energy=50,max_energy=50 where user_id=100 and season_id=?',(sid,))
+    c.execute('update polywar_null_state set next_tick_at=? where season_id=?',(datetime.utcnow()+timedelta(days=1),sid)); c.commit(); c.close()
+    monkeypatch.setattr(world, 'ensure_world_caught_up', lambda season_id, now=None: [])
+    monkeypatch.setattr(world, 'ensure_world_caught_up_in_transaction', lambda *a, **k: (_ for _ in ()).throw(AssertionError('direct in-transaction catchup')))
+    out = world.seal_rift_action(100, r['x'], r['y'], 'seal-public-catchup')
+    assert out['ok'] and out['outcome'] in {'rift_damaged','rift_sealed'}
+
+
+def test_capture_rift_guard_fail_closed_on_db_error(db, monkeypatch):
+    connect, _ = db
+    sid = active(connect)
+    from services import polywar_map_service as mm
+    def boom(*args, **kwargs): raise RuntimeError('rift_lookup_failed')
+    monkeypatch.setattr(world, 'is_rift', boom)
+    with pytest.raises(RuntimeError):
+        mm.capture_cell(100, 5, 5, 'capture-rift-error')

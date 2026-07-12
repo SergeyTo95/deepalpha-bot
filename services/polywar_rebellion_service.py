@@ -122,7 +122,9 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
-        managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid); polywar.assert_gameplay_mutation_allowed(conn,sid,_now())
+        managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid)
+        prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid,_now())
+        if not prepared.get('ok'): raise ValueError(prepared.get('error') or 'season_ended')
         suffix='' if polywar._is_sqlite(conn) else ' FOR UPDATE'
         player=polywar.get_or_create_player(user_id,sid,conn)
         player=polywar._fetchone(c,'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s'+suffix,(user_id,sid)) or player
