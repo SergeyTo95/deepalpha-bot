@@ -168,7 +168,7 @@ def initialize_sector(conn, sid, sx, sy, now=None):
     c = conn.cursor()
     if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, sx, sy)):
         return False
-    size = sector_size(); x0, y0 = sx * size, sy * size; x1, y1 = min(m.map_width(), x0 + size), min(m.map_height(), y0 + size)
+    cfg = m.load_map_config(conn, season_id=sid); size = cfg.sector_size; x0, y0 = sx * size, sy * size; x1, y1 = min(cfg.width, x0 + size), min(cfg.height, y0 + size)
     rows = polywar._fetchall(c, 'SELECT x,y,owner_faction_id FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s', (sid, x0, x1, y0, y1))
     sparse = {(int(r['x']), int(r['y'])): int(r['owner_faction_id']) for r in rows}
     counts = {}
@@ -284,7 +284,7 @@ def ensure_starting_territories_bootstrap(conn, sid):
         if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, marker[0], marker[1])):
             if own_tx: conn.commit()
             return False
-        width = m.map_width(); height = m.map_height(); area = m.starting_area_size(); size = sector_size(); bases = m.faction_base_positions(width, height)
+        cfg = m.load_map_config(conn, season_id=sid); width = cfg.width; height = cfg.height; area = cfg.starting_area_size; size = cfg.sector_size; bases = cfg.bases
         rects = _starting_rects(width, height, area, bases)
         sectors_seen = _starting_sector_rects(rects, size)
         global_deltas = initialize_starting_sectors_in_transaction(conn, sid, rects, sectors_seen, now)
@@ -357,7 +357,11 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
     conn = polywar.get_connection()
     try:
         _set_read_timeouts(conn)
-        config = m.load_map_config(conn)
+        season = m.get_active_season_readonly(conn)
+        try:
+            config = m.load_map_config(conn, season=season)
+        except TypeError:
+            config = m.load_map_config(conn)
         max_x = math.ceil(config.width / config.sector_size) - 1
         max_y = math.ceil(config.height / config.sector_size) - 1
         if max_sx > max_x or max_sy > max_y:
@@ -366,7 +370,7 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
         if count > config.max_sectors_per_request:
             raise ValueError('too_many_sectors')
         _check_rate(user_id)
-        season = m.get_active_season_readonly(conn); sid = int(season['id'])
+        sid = int(season['id'])
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_sectors WHERE season_id=%s AND sector_x>=%s AND sector_x<=%s AND sector_y>=%s AND sector_y<=%s', (sid, min_sx, max_sx, min_sy, max_sy))
         by_key = {(int(r['sector_x']), int(r['sector_y'])): r for r in rows}
         sectors = []

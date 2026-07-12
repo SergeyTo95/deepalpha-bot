@@ -280,3 +280,11 @@ def test_road_detail_uses_bevel_not_fixed_diagonal():
     assert "cell*.62" not in road
     assert "cell*.38" not in road
     assert "p.y + c*.8" in road
+
+def test_world_view_minimap_static_hooks_present():
+    from pathlib import Path
+    js = Path('webapp/polywar.js').read_text()
+    css = Path('webapp/polywar.css').read_text()
+    assert 'id="openWorldView"' in js and 'World View' in js
+    assert 'polywarMinimapCanvas' in js and 'jumpToWorldPosition' in js
+    assert '.polywar-minimap' in css and '.polywar-world-view' in css

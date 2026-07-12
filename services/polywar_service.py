@@ -256,7 +256,7 @@ def init_polywar_schema(conn=None) -> None:
                 _add_col(conn, "polywar_factions", spec)
             except Exception:
                 pass
-        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1"]:
+        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1", "map_width INTEGER NULL", "map_height INTEGER NULL", "map_chunk_size INTEGER NULL", "map_sector_size INTEGER NULL", "map_starting_area_size INTEGER NULL", "map_base_layout_json TEXT NULL", "map_world_version INTEGER NOT NULL DEFAULT 1", "map_snapshot_at TIMESTAMP NULL"]:
             try:
                 from services.polywar_sector_service import _add_col
                 _add_col(conn, "polywar_seasons", spec)
@@ -385,7 +385,10 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
         raise RuntimeError("polywar_season_finalizing")
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
     if row:
+        from services import polywar_map_service as _map
+        _map.ensure_season_map_snapshot(conn, int(row["id"]))
         _ensure_faction_stats_for_season(conn, int(row["id"]))
+        row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
         return _public_season(row)
     start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
     _execute(c, """
@@ -395,7 +398,10 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
     if not row:
         raise RuntimeError("polywar_active_season_unavailable")
+    from services import polywar_map_service as _map
+    _map.ensure_season_map_snapshot(conn, int(row["id"]))
     _ensure_faction_stats_for_season(conn, int(row["id"]))
+    row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
     return _public_season(row)
 
 def ensure_active_season() -> Dict[str, Any]:

@@ -55,7 +55,8 @@ def load_map_config(conn) -> PolyWarMapConfig:
     except Exception as exc:
         if "settings" not in str(exc).lower():
             raise
-        polywar._safe_rollback(conn)
+        if not getattr(conn, "in_transaction", False):
+            polywar._safe_rollback(conn)
         if polywar._is_sqlite(conn):
             rows = [{"key": key, "value": polywar.get_setting(key, "")} for key in keys]
         else:
@@ -84,7 +85,7 @@ def load_map_config(conn) -> PolyWarMapConfig:
 
 
 def get_active_season_readonly(conn, include_secret_seed=False):
-    cols = "id,name,status,starts_at,ends_at,completed_at,victory_type,winner_faction_id,domination_faction_id,domination_started_at,finalization_started_at,created_at"
+    cols = "id,name,status,starts_at,ends_at,completed_at,victory_type,winner_faction_id,domination_faction_id,domination_started_at,finalization_started_at,created_at,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version,map_snapshot_at"
     if include_secret_seed:
         cols += ",secret_seed"
     row = polywar._fetchone(conn.cursor(), f"SELECT {cols} FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
@@ -355,11 +356,11 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
     conn = polywar.get_connection()
     try:
         _set_read_timeouts(conn)
-        t = time.monotonic(); config = load_map_config(conn); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=config duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+        t = time.monotonic(); season = get_active_season_readonly(conn, include_secret_seed=True); sid, seed = int(season["id"]), season["secret_seed"]; config = load_map_config(conn, season=season); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=config duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
         if len(chunks) > config.max_chunks_per_request:
             raise ValueError("too_many_chunks")
         _check_chunk_rate(user_id, max(1, len(chunks)))
-        t = time.monotonic(); season = get_active_season_readonly(conn, include_secret_seed=True); sid, seed = int(season["id"]), season["secret_seed"]; logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=season duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
+        logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=season duration_ms=%.2f", int(user_id), len(chunks), 0.0)
         for cx, cy in chunks:
             if cx < 0 or cy < 0 or cx * config.chunk_size >= config.width or cy * config.chunk_size >= config.height:
                 raise ValueError("out_of_bounds")
@@ -542,3 +543,132 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
 def _is_expected_unique_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "unique" in text or "duplicate" in text or "constraint" in text or "integrity" in text
+
+# --- Season map snapshot support -------------------------------------------------
+def _json_dumps(obj):
+    import json
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
+def _snapshot_columns_present(conn):
+    try:
+        if polywar._is_sqlite(conn):
+            rows = polywar._fetchall(conn.cursor(), "PRAGMA table_info(polywar_seasons)")
+            return {r.get('name') for r in rows}
+        rows = polywar._fetchall(conn.cursor(), "SELECT column_name AS name FROM information_schema.columns WHERE table_name='polywar_seasons'")
+        return {r.get('name') for r in rows}
+    except Exception:
+        return set()
+
+
+def ensure_map_snapshot_schema(conn):
+    from services import polywar_sector_service as sectors
+    for spec in [
+        "map_width INTEGER NULL", "map_height INTEGER NULL", "map_chunk_size INTEGER NULL",
+        "map_sector_size INTEGER NULL", "map_starting_area_size INTEGER NULL",
+        "map_base_layout_json TEXT NULL", "map_world_version INTEGER NOT NULL DEFAULT 1",
+        "map_snapshot_at TIMESTAMP NULL",
+    ]:
+        sectors._add_col(conn, "polywar_seasons", spec)
+
+
+def parse_base_layout_json(raw, width, height):
+    import json
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    out = {}
+    for k, v in data.items():
+        try:
+            fid = int(k)
+            if not isinstance(v, dict): return None
+            x, y = int(v.get('x')), int(v.get('y'))
+        except Exception:
+            return None
+        if x < 0 or y < 0 or x >= int(width) or y >= int(height):
+            return None
+        out[fid] = (x, y)
+    return out or None
+
+
+def _max_coordinate(conn, table, season_id, cols):
+    try:
+        parts = [f"MAX({c}) AS max_{c}" for c in cols]
+        row = polywar._fetchone(conn.cursor(), f"SELECT {','.join(parts)} FROM {table} WHERE season_id=%s", (int(season_id),)) or {}
+        vals = [int(row.get(f"max_{c}")) for c in cols if row.get(f"max_{c}") is not None]
+        return max(vals) if vals else None
+    except Exception as exc:
+        if 'no such table' in str(exc).lower() or 'does not exist' in str(exc).lower():
+            return None
+        return None
+
+
+def season_coordinate_diagnostics(conn, season_id, width=None, height=None):
+    tables = {
+        'polywar_cells': ('x','y'), 'polywar_actions': ('x','y'), 'polywar_capitals': ('x','y'),
+        'polywar_mines': ('x','y'), 'polywar_flags': ('x','y'), 'polywar_null_rifts': ('x','y'),
+        'polywar_commander_orders': ('x','y'), 'polywar_rebellions': ('x','y'), 'polywar_scans': ('center_x','center_y'),
+    }
+    max_x = max_y = None
+    by_table = {}
+    for t, cols in tables.items():
+        mx = _max_coordinate(conn, t, season_id, [cols[0]])
+        my = _max_coordinate(conn, t, season_id, [cols[1]])
+        by_table[t] = {'max_x': mx, 'max_y': my}
+        if mx is not None: max_x = mx if max_x is None else max(max_x, mx)
+        if my is not None: max_y = my if max_y is None else max(max_y, my)
+    return {'season_id': int(season_id), 'max_x': max_x, 'max_y': max_y, 'tables': by_table, 'width': width, 'height': height}
+
+
+def ensure_season_map_snapshot(conn, season_id):
+    ensure_map_snapshot_schema(conn)
+    c = conn.cursor()
+    suffix = '' if polywar._is_sqlite(conn) else ' FOR UPDATE'
+    season = polywar._fetchone(c, 'SELECT * FROM polywar_seasons WHERE id=%s' + suffix, (int(season_id),))
+    if not season:
+        raise RuntimeError('polywar_not_initialized')
+    existing = parse_base_layout_json(season.get('map_base_layout_json'), season.get('map_width') or 0, season.get('map_height') or 0)
+    if season.get('map_width') and season.get('map_height') and season.get('map_chunk_size') and season.get('map_sector_size') and season.get('map_starting_area_size') and existing:
+        return False
+    defaults = load_global_map_config(conn)
+    
+    try:
+        capitals = polywar._fetchall(c, 'SELECT original_faction_id,x,y FROM polywar_capitals WHERE season_id=%s', (int(season_id),))
+    except Exception as exc:
+        if 'no such table' in str(exc).lower() or 'does not exist' in str(exc).lower():
+            capitals = []
+        else:
+            raise
+    layout = {int(fid): (int(x), int(y)) for fid, (x, y) in defaults.bases.items()}
+    for r in capitals:
+        layout[int(r['original_faction_id'])] = (int(r['x']), int(r['y']))
+    diag = season_coordinate_diagnostics(conn, season_id)
+    max_hq_x = max(x for x, _ in layout.values()) if layout else -1
+    max_hq_y = max(y for _, y in layout.values()) if layout else -1
+    width = max(int(defaults.width), int(diag.get('max_x') if diag.get('max_x') is not None else -1) + 1, max_hq_x + 1)
+    height = max(int(defaults.height), int(diag.get('max_y') if diag.get('max_y') is not None else -1) + 1, max_hq_y + 1)
+    layout_json = _json_dumps({str(fid): {'x': int(x), 'y': int(y)} for fid, (x, y) in sorted(layout.items())})
+    now = datetime.utcnow()
+    polywar._execute(c, 'UPDATE polywar_seasons SET map_width=%s,map_height=%s,map_chunk_size=%s,map_sector_size=%s,map_starting_area_size=%s,map_base_layout_json=%s,map_world_version=COALESCE(map_world_version,1),map_snapshot_at=COALESCE(map_snapshot_at,%s) WHERE id=%s', (width, height, defaults.chunk_size, defaults.sector_size, defaults.starting_area_size, layout_json, now, int(season_id)))
+    logger.info('polywar_map_snapshot_backfilled season_id=%s settings_width=%s settings_height=%s max_x=%s max_y=%s snapshot_width=%s snapshot_height=%s base_layout_source=%s capitals_found=%s expansion_required=%s', season_id, defaults.width, defaults.height, diag.get('max_x'), diag.get('max_y'), width, height, 'capitals+settings' if capitals else 'settings', len(capitals), width > defaults.width or height > defaults.height)
+    return True
+
+
+load_global_map_config = load_map_config
+
+
+def load_map_config(conn, season_id=None, season=None) -> PolyWarMapConfig:  # noqa: F811
+    if season is None and season_id is not None:
+        season = polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_seasons WHERE id=%s', (int(season_id),))
+    if season is not None:
+        layout = parse_base_layout_json(season.get('map_base_layout_json'), season.get('map_width') or 0, season.get('map_height') or 0)
+        if season.get('map_width') and season.get('map_height') and season.get('map_chunk_size') and season.get('map_sector_size') and season.get('map_starting_area_size') and layout:
+            base = load_global_map_config(conn)
+            return PolyWarMapConfig(int(season['map_width']), int(season['map_height']), int(season['map_chunk_size']), int(season['map_starting_area_size']), layout, base.max_chunks_per_request, base.capture_progress_required, int(season['map_sector_size']), base.max_sectors_per_request, base.capital_siege_required, base.governance_rules)
+        raise RuntimeError('polywar_map_snapshot_missing')
+    return load_global_map_config(conn)

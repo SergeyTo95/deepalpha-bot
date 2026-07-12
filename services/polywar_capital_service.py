@@ -111,7 +111,8 @@ def ensure_capitals_initialized(conn, season_id: int, starting_bootstrap_ready: 
             polywar._fetchone(c, 'SELECT id FROM polywar_seasons WHERE id=%s FOR UPDATE', (season_id,))
             if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
                 return False
-        for fid, (x, y) in m.faction_base_positions().items():
+        config = m.load_map_config(conn, season_id=season_id)
+        for fid, (x, y) in config.bases.items():
             row = polywar._fetchone(c, 'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s', (season_id, x, y))
             owner = int(row['owner_faction_id']) if row else int(m._owner_at(conn, season_id, x, y) or fid)
             _upsert_capital(conn, season_id, fid, owner, x, y, now)
@@ -287,8 +288,12 @@ def get_capitals(user_id: int = None):
     try:
         if not polywar._is_sqlite(conn):
             m.begin_polywar_readonly(conn)
-        config = m.load_map_config(conn)
-        season = m.get_active_season_readonly(conn); sid = int(season['id'])
+        season = m.get_active_season_readonly(conn)
+        try:
+            config = m.load_map_config(conn, season=season)
+        except TypeError:
+            config = m.load_map_config(conn)
+        sid = int(season['id'])
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = config.capital_siege_required
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
     except Exception:

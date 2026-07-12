@@ -44,6 +44,7 @@ from services.polywar_mine_service import scan_area as scan_polywar_area, set_fl
 from services.polywar_world_service import get_public_world_state as get_polywar_world_state, seal_rift_action as polywar_seal_rift_action
 from services.polywar_rebellion_service import rebellion_action as polywar_rebellion_action
 from services.polywar_finalization_service import get_results as get_polywar_results, claim_reward as claim_polywar_reward
+from services.polywar_world_overview_service import build_world_overview as get_polywar_world_overview
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -836,6 +837,25 @@ def _polywar_read_error_response(exc):
     logger.exception("polywar_read_endpoint_failed")
     return _json_response({"ok": False, "error": "server_error"}, status=500)
 
+
+async def handle_polywar_world_overview_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        return _json_response(await asyncio.to_thread(get_polywar_world_overview, int(current.get("user_id") or 0)))
+    except RuntimeError as e:
+        code = str(e)
+        if code in {"polywar_not_initialized", "polywar_map_snapshot_missing"}:
+            return _json_response({"ok": False, "error": code}, status=503)
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
+    except Exception as e:
+        text = str(e).lower()
+        if "timeout" in text:
+            return _json_response({"ok": False, "error": "request_timeout"}, status=503)
+        if "locked" in text or "busy" in text:
+            return _json_response({"ok": False, "error": "database_busy"}, status=503)
+        return _polywar_read_error_response(e)
 
 async def handle_polywar_chunks_api(request):
     current = _current_web_user(request)
@@ -1797,6 +1817,7 @@ app.router.add_get("/api/polywar/factions", handle_polywar_factions_api)
 app.router.add_get("/api/polywar/player", handle_polywar_player_api)
 app.router.add_get("/api/polywar/events", handle_polywar_events_api)
 app.router.add_get("/api/polywar/world", handle_polywar_world_api)
+app.router.add_get("/api/polywar/world/overview", handle_polywar_world_overview_api)
 app.router.add_get("/api/polywar/results/latest", handle_polywar_results_latest_api)
 app.router.add_get("/api/polywar/results", handle_polywar_results_api)
 app.router.add_get("/api/polywar/rewards", handle_polywar_rewards_api)
