@@ -175,6 +175,7 @@ def nominate(user_id:int, statement:str='', active=True):
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if active and len(statement or '') > max_statement_length(): raise ValueError('invalid_statement')
         sid = _prepare_context_before_transaction(conn)
+        config = m.load_map_config(conn, season_id=sid)
         _begin(conn,c); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
@@ -205,6 +206,7 @@ def vote(user_id:int,candidate_user_id:int):
     conn=polywar.get_connection(); c=conn.cursor()
     try:
         sid = _prepare_context_before_transaction(conn)
+        config = m.load_map_config(conn, season_id=sid)
         _begin(conn,c); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
@@ -249,10 +251,10 @@ def enrich_chunks(conn,sid,fid,chunks):
     return chunks
 
 
-def _owner(conn,sid,x,y): return m._owner_at(conn,sid,x,y)
+def _owner(conn,sid,x,y,config=None): return m.owner_at_with_config(conn,sid,x,y,config) if config is not None else m._owner_at(conn,sid,x,y)
 
-def _valid_order_target(conn,sid,fid,order_type,x,y):
-    owner=_owner(conn,sid,x,y)
+def _valid_order_target(conn,sid,fid,order_type,x,y,config=None):
+    owner=_owner(conn,sid,x,y,config=config)
     cell=polywar._fetchone(conn.cursor(),'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s',(sid,x,y)) or {}
     contested=int(cell.get('contest_progress') or 0)>0
     if order_type=='attack': return (owner is not None and int(owner)!=int(fid)) or (contested and cell.get('contesting_faction_id')==fid)
@@ -261,7 +263,7 @@ def _valid_order_target(conn,sid,fid,order_type,x,y):
     if order_type=='recon':
         from services import polywar_mine_service as mines
         seed = polywar._fetchone(conn.cursor(),'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(sid,))['secret_seed']
-        return owner is None and m.TERRAIN_COSTS[m.terrain_at(seed,x,y)] is not None and (mines._area_has_own(conn,sid,fid,x,y,3) or mines._near_own_territory(conn,sid,fid,x,y,5))
+        return owner is None and m.TERRAIN_COSTS[m.terrain_at_with_config(seed,x,y,config) if config is not None else m.terrain_at(seed,x,y)] is not None and (mines._area_has_own(conn,sid,fid,x,y,3,config=config) or mines._near_own_territory(conn,sid,fid,x,y,5,config=config))
     if order_type=='siege':
         cap=capitals.get_capital_at(conn,sid,x,y); return bool(cap and int(cap['controller_faction_id'])!=int(fid))
     return False
@@ -273,6 +275,7 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
         if not isinstance(active,bool): raise ValueError('invalid_active')
         if len(message or '')>280: raise ValueError('invalid_statement')
         sid = _prepare_context_before_transaction(conn)
+        config = m.load_map_config(conn, season_id=sid)
         _begin(conn,c); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid);
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
@@ -290,10 +293,10 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
             dup = not bool(row.get('active')) or row.get('cancelled_at')
             if dup: conn.commit(); res=_build_governance_response(conn, sid, p, fid, user_id); res['duplicate']=True; return res
             _rate(user_id); polywar._execute(c,'UPDATE polywar_faction_orders SET active=0,cancelled_at=%s,updated_at=%s WHERE id=%s AND season_id=%s AND faction_id=%s',(now,now,order_id,sid,fid)); conn.commit(); return _build_governance_response(conn, sid, p, fid, user_id)
-        if order_type not in {'attack','defend','rally','recon','siege'} or not m.in_bounds(x,y): raise ValueError('invalid_order_target')
+        if order_type not in {'attack','defend','rally','recon','siege'} or not m.in_bounds_with_config(x,y,config): raise ValueError('invalid_order_target')
         capitals.ensure_capitals_initialized(conn,sid)
-        if not _valid_order_target(conn,sid,fid,order_type,x,y): raise ValueError('invalid_order_target')
-        _rate(user_id); sx,sy=sectors.sector_coords(x,y); exp=now+timedelta(hours=order_duration_hours()); msg=message or ''
+        if not _valid_order_target(conn,sid,fid,order_type,x,y,config=config): raise ValueError('invalid_order_target')
+        _rate(user_id); sx,sy=sectors.sector_coords(x,y,config=config); exp=now+timedelta(hours=order_duration_hours()); msg=message or ''
         if order_id:
             row=polywar._fetchone(c,'SELECT * FROM polywar_faction_orders WHERE id=%s AND season_id=%s AND faction_id=%s AND commander_user_id=%s AND active=1 AND cancelled_at IS NULL AND expires_at>%s',(order_id,sid,fid,user_id,now))
             if not row: raise ValueError('invalid_order_target')

@@ -300,3 +300,18 @@ def test_lod2_and_letterbox_runtime_hooks_are_wired():
     assert 'overviewTransform(canvas' in js and 'overviewPointerToWorld(canvas' in js
     assert 'nearestHqAt(canvas' in js and 'radiusPx*radiusPx' in js
     assert 'renderOpenWorldView()' in js and 'data-retry' in js
+
+
+def test_destroy_removes_open_world_view_modal_and_nulls_reference():
+    assert 'if (this.worldViewModal) { this.worldViewModal.remove(); this.worldViewModal = null; }' in JS
+    assert 'if (seq !== polywarOverviewSeq || this.destroyed) return' in JS
+
+
+def test_lod2_preserves_selected_and_pending_without_detailed_chunks():
+    draw = JS.split('if (lod === 2)', 1)[1].split('const visible', 1)[0]
+    assert 'drawCoarseWorld(ctx)' in draw
+    assert 'drawBaseMarkers(ctx)' in draw
+    assert 'polywarCapitalUi.draw' in draw
+    assert 'this.drawSelectedCell(ctx)' in draw
+    assert 'this.drawPendingPulse(ctx)' in draw
+    assert 'drawTerrainTile' not in draw

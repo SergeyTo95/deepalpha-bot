@@ -76,13 +76,13 @@ def _legacy_action_duplicate_response(conn, season_id, seed, user_id, action, co
     return {'ok': True, 'duplicate': True, 'outcome': action.get('outcome') or action.get('action_type'), 'cell': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at_with_config(seed, action['x'], action['y'], config) if config is not None else m.terrain_at(seed, action['x'], action['y']), 'energy_cost': action['energy_cost']}, 'energy': e}
 
 
-def _find_duplicate(conn, sid, seed, user_id, key):
+def _find_duplicate(conn, sid, seed, user_id, key, config=None):
     dup = _dup(conn, sid, user_id, key)
     if dup:
         return dup
     existing = polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s', (sid, user_id, key))
     if existing:
-        return _legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+        return _legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config=config)
     return None
 
 
@@ -91,7 +91,7 @@ def _lock_cell(conn, sid, x, y):
     return polywar._fetchone(conn.cursor(), sql, (sid, x, y))
 
 
-def _materialize(conn, sid, x, y, owner, now):
+def _materialize(conn, sid, x, y, owner, now, config=None):
     if owner is None:
         return None
     c = conn.cursor()
@@ -99,7 +99,7 @@ def _materialize(conn, sid, x, y, owner, now):
         polywar._execute(c, 'INSERT OR IGNORE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s)', (sid, x, y, owner, now))
     else:
         polywar._execute(c, 'INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO NOTHING', (sid, x, y, owner, now))
-    sectors.apply_materialized_starting_cell(conn, sid, x, y, owner, now)
+    sectors.apply_materialized_starting_cell(conn, sid, x, y, owner, now, config=config)
     return _lock_cell(conn, sid, x, y)
 
 
@@ -122,11 +122,11 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         from services import polywar_world_service as world
         world.ensure_world_initialized_in_transaction(conn, sid)
         conn.commit()
-        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
+        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup:
             return dup
         _begin(conn, c)
-        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
+        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup:
             conn.commit(); return dup
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
@@ -137,7 +137,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         _rate(user_id)
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
-        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
+        dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup:
             conn.commit(); return dup
         fid = player.get('faction_id')
@@ -162,7 +162,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         terr = m.terrain_at_with_config(seed, x, y, config); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
         now = datetime.utcnow(); owner = _owner(conn, sid, x, y, config)
-        row = _materialize(conn, sid, x, y, owner, now) if owner is not None else None
+        row = _materialize(conn, sid, x, y, owner, now, config=config) if owner is not None else None
         if row: owner = int(row['owner_faction_id'])
         before = int((row or {}).get('contest_progress') or 0); contesting = (row or {}).get('contesting_faction_id')
         if action_type == 'attack':
@@ -179,7 +179,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
             _, _, energy = mines.spend_player_energy(conn, player, cost, now)
             if outcome == 'territory_captured':
                 polywar._execute(c, 'UPDATE polywar_cells SET owner_faction_id=%s, contesting_faction_id=NULL, contest_progress=0, contested_at=NULL, last_attacked_at=%s,last_attacked_by_user_id=%s, updated_at=%s, updated_by_user_id=%s WHERE season_id=%s AND x=%s AND y=%s', (fid, now, user_id, now, user_id, sid, x, y))
-                sector_change = sectors.transfer_cell_ownership(conn, sid, x, y, owner, fid, user_id, now)
+                sector_change = sectors.transfer_cell_ownership(conn, sid, x, y, owner, fid, user_id, now, config=config)
             else:
                 contested_at = None if after == 0 else (now if new_contesting and before == 0 else (row or {}).get('contested_at'))
                 polywar._execute(c, 'UPDATE polywar_cells SET contesting_faction_id=%s, contest_progress=%s, contested_at=%s,last_attacked_at=%s,last_attacked_by_user_id=%s, updated_at=%s WHERE season_id=%s AND x=%s AND y=%s', (new_contesting, after, contested_at, now, user_id, now, sid, x, y))
@@ -205,7 +205,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         polywar._safe_rollback(conn)
         if sid is not None and _is_unique(exc):
             try:
-                dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key)
+                dup = _find_duplicate(conn, sid, seed, user_id, idempotency_key, config=config)
                 if dup:
                     return dup
             except Exception:

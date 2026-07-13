@@ -149,7 +149,7 @@ def _begin(conn, c):
     polywar._execute(c, 'BEGIN')
 
 
-def _duplicate_response(conn, sid, seed, uid, key):
+def _duplicate_response(conn, sid, seed, uid, key, config=None):
     if not key: return None
     dup = mines.duplicate_outcome_response(conn, sid, uid, key)
     if dup: return dup
@@ -157,7 +157,7 @@ def _duplicate_response(conn, sid, seed, uid, key):
     if not action: return None
     player = polywar.get_or_create_player(uid, sid, conn)
     energy = mines.public_energy_for_player(player)
-    payload = {'action_type': action['action_type'], 'capital': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at(seed, int(action['x']), int(action['y'])), 'energy_cost': action['energy_cost']}, 'energy': energy}
+    payload = {'action_type': action['action_type'], 'capital': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at_with_config(seed, int(action['x']), int(action['y']), config) if config is not None else m.terrain_at(seed, int(action['x']), int(action['y'])), 'energy_cost': action['energy_cost']}, 'energy': energy}
     return {'ok': True, 'duplicate': True, 'outcome': action.get('action_type'), **payload}
 
 
@@ -186,12 +186,12 @@ def _emit_event(conn, sid, uid, fid, event_type, x, y, now):
     return True
 
 
-def transfer_capital_control(conn, sid, cap, new_controller, user_id, now):
+def transfer_capital_control(conn, sid, cap, new_controller, user_id, now, config=None):
     old = int(cap['controller_faction_id']); x = int(cap['x']); y = int(cap['y']); c = conn.cursor()
     if old == int(new_controller): return None
     polywar._execute(c, 'UPDATE polywar_capitals SET controller_faction_id=%s, besieging_faction_id=NULL, siege_progress=0, siege_started_at=NULL, captured_at=%s, controlled_since=%s, updated_at=%s WHERE id=%s', (new_controller, now, now, now, cap['id']))
     polywar._execute(c, 'UPDATE polywar_cells SET owner_faction_id=%s, contesting_faction_id=NULL, contest_progress=0, updated_at=%s, updated_by_user_id=%s WHERE season_id=%s AND x=%s AND y=%s', (new_controller, now, user_id, sid, x, y))
-    change = sectors.transfer_cell_ownership(conn, sid, x, y, old, int(new_controller), user_id, now)
+    change = sectors.transfer_cell_ownership(conn, sid, x, y, old, int(new_controller), user_id, now, config=config)
     decr = sectors._decrement_expr(conn, 'controlled_capitals_count')
     polywar._execute(c, f'UPDATE polywar_faction_season_stats SET controlled_capitals_count={decr}, updated_at=%s WHERE season_id=%s AND faction_id=%s', (now, sid, old))
     polywar._execute(c, 'UPDATE polywar_faction_season_stats SET controlled_capitals_count=controlled_capitals_count+1, updated_at=%s WHERE season_id=%s AND faction_id=%s', (now, sid, new_controller))
@@ -213,10 +213,10 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         world.ensure_world_initialized_in_transaction(conn, sid)
         ensure_capitals_initialized(conn, sid)
         conn.commit()
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: return dup
         _begin(conn, c)
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
         if not prepared.get('ok'):
@@ -225,7 +225,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
             raise ValueError(prepared.get('error') or 'season_ended')
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         fid = player.get('faction_id')
         if not fid: raise ValueError('faction_required')
@@ -235,7 +235,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         cap = _lock_capital(conn, cap0['id'])
         cell = _lock_capital_cell(conn, sid, x, y)
         if not cell: raise ValueError('capital_required')
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         _rate_mut(user_id)
         terr = m.terrain_at_with_config(seed, x, y, config); base = m.TERRAIN_COSTS[terr]
@@ -252,7 +252,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
             else:
                 after = min(req, before + power); bes_after = int(fid); outcome = 'siege_started' if before == 0 else 'siege_progress'
                 if after >= req:
-                    outcome = 'capital_captured'; transfer = transfer_capital_control(conn, sid, cap, int(fid), user_id, now); after = 0; bes_after = None; current = int(fid)
+                    outcome = 'capital_captured'; transfer = transfer_capital_control(conn, sid, cap, int(fid), user_id, now, config=config); after = 0; bes_after = None; current = int(fid)
                 else:
                     polywar._execute(c, 'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=COALESCE(siege_started_at,%s), last_siege_at=%s,last_siege_by_user_id=%s, updated_at=%s WHERE id=%s', (after, int(fid), now, now, user_id, now, cap['id']))
         else:
@@ -273,7 +273,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         text = str(exc).lower()
         if sid is not None and any(s in text for s in ('unique', 'duplicate', 'constraint', 'integrity')):
             try:
-                dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+                dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
                 if dup: return dup
             except Exception:
                 logger.exception('failed duplicate recovery for capital action')

@@ -200,12 +200,12 @@ def try_trigger_mine(conn, season_id, x, y, user_id, faction_id, idempotency_key
     return polywar._rowcount(c) == 1
 
 
-def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None):
+def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None, config=None):
     now = now or datetime.utcnow()
     polywar._execute(conn.cursor(), "INSERT INTO polywar_cell_intel (season_id,faction_id,x,y,intel_type,adjacent_mines,discovered_by_user_id,discovered_at,updated_at) VALUES (%s,%s,%s,%s,%s,NULL,%s,%s,%s) ON CONFLICT (season_id,faction_id,x,y,intel_type) DO UPDATE SET updated_at=excluded.updated_at", (season_id, faction_id, x, y, "triggered_mine", user_id, now, now))
     rows = polywar._fetchall(conn.cursor(), "SELECT DISTINCT faction_id,x,y FROM polywar_cell_intel WHERE season_id=%s AND intel_type=%s AND x >= %s AND x <= %s AND y >= %s AND y <= %s", (season_id, "safe_hint", x - 1, x + 1, y - 1, y + 1))
     for row in rows:
-        upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now)
+        upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now, config=config)
 
 
 

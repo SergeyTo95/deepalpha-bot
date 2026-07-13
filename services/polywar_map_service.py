@@ -519,7 +519,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if mine and mines.try_trigger_mine(conn, sid, x, y, user_id, fid, idempotency_key, now):
             locked_until = now + timedelta(minutes=mines.mine_lock_minutes())
             polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
-            mines.record_triggered_mine(conn, sid, fid, user_id, x, y, idempotency_key, seed, now)
+            mines.record_triggered_mine(conn, sid, fid, user_id, x, y, idempotency_key, seed, now, config=config)
             new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now, locked_until)
             payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": None, "energy_cost": cost}, "mine_hit": True, "locked_until": polywar._iso(locked_until), "energy": energy}
             mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "mine_hit", cost, payload, now)
@@ -529,11 +529,11 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if owner is not None: raise ValueError("enemy_capture_unavailable")
         if not any(owner_at_with_config(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds_with_config(nx, ny, config)):
             raise ValueError("not_adjacent")
-        sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y, config=config), now)
+        sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y, config=config), now, config=config)
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
-        sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now)
+        sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now, config=config)
         hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now, config=config)
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}
         mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "captured", cost, payload, now)
@@ -670,18 +670,11 @@ def ensure_season_map_snapshot(conn, season_id):
     if season.get('map_width') and season.get('map_height') and season.get('map_chunk_size') and season.get('map_sector_size') and season.get('map_starting_area_size') and existing:
         return False
     defaults = load_global_map_config(conn)
-    
-    try:
-        capitals = polywar._fetchall(c, 'SELECT original_faction_id,x,y FROM polywar_capitals WHERE season_id=%s', (int(season_id),))
-    except Exception as exc:
-        if 'no such table' in str(exc).lower() or 'does not exist' in str(exc).lower():
-            capitals = []
-        else:
-            raise
+    sources = get_existing_coordinate_sources(conn)
+    capitals = polywar._fetchall(c, 'SELECT original_faction_id,x,y FROM polywar_capitals WHERE season_id=%s', (int(season_id),)) if 'polywar_capitals' in sources else []
     layout = {int(fid): (int(x), int(y)) for fid, (x, y) in defaults.bases.items()}
     for r in capitals:
         layout[int(r['original_faction_id'])] = (int(r['x']), int(r['y']))
-    sources = get_existing_coordinate_sources(conn)
     diag = season_coordinate_diagnostics(conn, season_id, sources=sources)
     max_hq_x = max(x for x, _ in layout.values()) if layout else -1
     max_hq_y = max(y for _, y in layout.values()) if layout else -1

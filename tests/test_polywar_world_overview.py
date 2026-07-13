@@ -52,3 +52,26 @@ def test_overview_sector_query_is_sql_aggregated_and_bounded(monkeypatch):
     out=ov.build_world_overview(1)
     assert len(out['overview_grid']['cells']) <= 128*128
     assert any('GROUP BY' in q and 'LIMIT' in q for q in seen)
+
+
+def test_postgresql_contested_sql_uses_integer_safe_comparison(monkeypatch):
+    c=make(monkeypatch); ov._CACHE.clear(); seen=[]; orig=p._fetchall
+    def wrapped(cur, sql, params=()):
+        if 'contested_count' in sql:
+            seen.append(sql)
+        return orig(cur, sql, params)
+    monkeypatch.setattr(p,'_fetchall',wrapped)
+    out=ov.build_world_overview(1)
+    assert out['ok']
+    assert seen
+    sql='\n'.join(seen)
+    assert 'CASE WHEN is_contested THEN' not in sql
+    assert 'COALESCE(is_contested, 0) <> 0' in sql
+
+
+def test_overview_stats_sum_aggregated_counts(monkeypatch):
+    c=make(monkeypatch); c.execute('delete from polywar_sectors')
+    c.executemany('insert into polywar_sectors(season_id,sector_x,sector_y,controller_faction_id,total_claimed_cells,leading_faction_id,leading_cells,dominance_percent,is_contested,updated_at) values(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)', [(1,0,0,1,5,1,5,100,1),(1,1,0,1,7,1,7,100,0)])
+    c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
+    assert out['stats']['controlled_sectors'] >= 2
+    assert out['stats']['contested_sectors'] >= 1

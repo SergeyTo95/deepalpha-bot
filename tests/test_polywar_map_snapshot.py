@@ -90,3 +90,81 @@ def test_state_response_uses_snapshot_after_global_settings_change(monkeypatch):
     assert state['map']['chunk_size']==32 and state['rules']['sectors']['sector_size']==25
     assert state['map']['bases'][0]['x'] == m.load_map_config(connect(), season_id=season['id']).bases[1][0]
     keeper.close()
+
+
+def test_sector_mutations_use_snapshot_sector_size_after_global_change():
+    from services import polywar_sector_service as sectors
+    c=setup(1000,1000); m.init_polywar_map_schema(c); sectors.init_polywar_sector_schema(c); m.ensure_season_map_snapshot(c,1)
+    c.execute("update polywar_seasons set map_sector_size=25 where id=1")
+    c.execute("update settings set value='100' where key='polywar_sector_size'"); c.commit()
+    cfg=m.load_map_config(c, season_id=1); now=datetime.utcnow()
+    sectors.transfer_cell_ownership(c,1,74,10,None,1,42,now,config=cfg)
+    row=c.execute('select sector_x,sector_y from polywar_sectors where season_id=1 and sector_x=2').fetchone()
+    assert row is not None and row['sector_x']==2
+    assert c.execute('select 1 from polywar_sectors where season_id=1 and sector_x=0 and sector_y=0').fetchone() is None
+
+
+def test_apply_materialized_starting_cell_uses_snapshot_sector_size_after_global_change():
+    from services import polywar_sector_service as sectors
+    c=setup(1000,1000); m.init_polywar_map_schema(c); sectors.init_polywar_sector_schema(c); m.ensure_season_map_snapshot(c,1)
+    c.execute("update polywar_seasons set map_sector_size=25 where id=1")
+    c.execute("update settings set value='100' where key='polywar_sector_size'"); c.commit()
+    cfg=m.load_map_config(c, season_id=1); sectors.apply_materialized_starting_cell(c,1,74,10,1,datetime.utcnow(),config=cfg)
+    assert c.execute('select 1 from polywar_sector_initializations where season_id=1 and sector_x=2 and sector_y=0').fetchone() is not None
+
+
+def test_postgresql_snapshot_skips_missing_capitals_metadata(monkeypatch):
+    class Cur:
+        def __init__(self): self.queries=[]; self.description=(('map_width',),); self.rowcount=1
+        def execute(self, sql, params=()): self.queries.append(sql)
+        def fetchone(self): return None
+        def fetchall(self): return []
+    class Conn:
+        def __init__(self): self.cur=Cur()
+        def cursor(self): return self.cur
+    fake=Conn(); monkeypatch.setattr(p, '_is_sqlite', lambda c: False)
+    def fake_fetchone(cur, sql, params=()):
+        assert 'FROM polywar_capitals' not in sql
+        if 'FROM polywar_seasons' in sql:
+            return {'id':1,'map_width':None,'map_height':None,'map_chunk_size':None,'map_sector_size':None,'map_starting_area_size':None,'map_base_layout_json':None,'map_world_version':1}
+        return None
+    def fake_fetchall(cur, sql, params=()):
+        assert 'FROM polywar_capitals' not in sql
+        if 'information_schema.columns' in sql:
+            return [{'table_name':'polywar_cells','column_name':'x'},{'table_name':'polywar_cells','column_name':'y'}]
+        return []
+    updates=[]
+    monkeypatch.setattr(p, '_fetchone', fake_fetchone); monkeypatch.setattr(p, '_fetchall', fake_fetchall)
+    monkeypatch.setattr(p, '_execute', lambda cur, sql, params=(): updates.append(sql))
+    monkeypatch.setattr(p, 'get_setting', lambda k,d='': {'polywar_map_width':'1000','polywar_map_height':'1000','polywar_chunk_size':'64','polywar_sector_size':'100','polywar_starting_area_size':'15'}.get(k,d))
+    assert m.ensure_season_map_snapshot(fake,1) is True
+    assert any('UPDATE polywar_seasons' in q for q in updates)
+
+
+def test_rebellion_and_null_state_source_are_config_aware_static():
+    from pathlib import Path
+    reb=Path('services/polywar_rebellion_service.py').read_text()
+    world=Path('services/polywar_world_service.py').read_text()
+    assert 'def _original_presence(conn,sid,orig,x,y,config=None)' in reb
+    assert 'sectors.sector_coords(x,y,config=config)' in reb
+    assert 'def _adjacent_owner(conn,sid,x,y,fid,config=None)' in reb
+    assert 'm.owner_at_with_config(conn,sid,nx,ny,config)' in reb
+    assert 'config = config or m.load_map_config(conn, season_id=season_id)' in reb
+    assert 'config.starting_area_size' in world and 'config.bases.values()' in world
+    assert 'def is_safe_zone(conn,season_id,x,y,config=None)' in world
+    assert 'process_rebellion_tick(conn,season_id,now,limit=10,config=config)' in world
+
+
+def test_mine_and_duplicate_responses_thread_config_static():
+    from pathlib import Path
+    mine=Path('services/polywar_mine_service.py').read_text()
+    combat=Path('services/polywar_combat_service.py').read_text()
+    capital=Path('services/polywar_capital_service.py').read_text()
+    map_s=Path('services/polywar_map_service.py').read_text()
+    assert 'def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None, config=None)' in mine
+    assert 'upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now, config=config)' in mine
+    assert 'record_triggered_mine(conn, sid, fid, user_id, x, y, idempotency_key, seed, now, config=config)' in map_s
+    assert 'def _find_duplicate(conn, sid, seed, user_id, key, config=None)' in combat
+    assert '_legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config=config)' in combat
+    assert 'def _duplicate_response(conn, sid, seed, uid, key, config=None)' in capital
+    assert "m.terrain_at_with_config(seed, int(action['x']), int(action['y']), config)" in capital

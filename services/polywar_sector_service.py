@@ -161,20 +161,20 @@ def recalc_sector(conn, sid, sx, sy, now):
     return {'sector_x': sx, 'sector_y': sy, 'old_controller_faction_id': old, 'controller_faction_id': controller}
 
 
-def initialize_sector(conn, sid, sx, sy, now=None):
+def initialize_sector(conn, sid, sx, sy, now=None, config=None):
     from services import polywar_map_service as m
     now = now or datetime.utcnow()
     _sector_lock(conn, sid, sx, sy, now)
     c = conn.cursor()
     if polywar._fetchone(c, 'SELECT 1 FROM polywar_sector_initializations WHERE season_id=%s AND sector_x=%s AND sector_y=%s', (sid, sx, sy)):
         return False
-    cfg = m.load_map_config(conn, season_id=sid); size = cfg.sector_size; x0, y0 = sx * size, sy * size; x1, y1 = min(cfg.width, x0 + size), min(cfg.height, y0 + size)
+    cfg = config or m.load_map_config(conn, season_id=sid); size = cfg.sector_size; x0, y0 = sx * size, sy * size; x1, y1 = min(cfg.width, x0 + size), min(cfg.height, y0 + size)
     rows = polywar._fetchall(c, 'SELECT x,y,owner_faction_id FROM polywar_cells WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s', (sid, x0, x1, y0, y1))
     sparse = {(int(r['x']), int(r['y'])): int(r['owner_faction_id']) for r in rows}
     counts = {}
     for y in range(y0, y1):
         for x in range(x0, x1):
-            fid = sparse.get((x, y)) or m._start_owner(x, y)
+            fid = sparse.get((x, y)) or (m.start_owner_with_config(x, y, cfg) if cfg is not None else m._start_owner(x, y))
             if fid:
                 counts[fid] = counts.get(fid, 0) + 1
     for fid, n in counts.items():
@@ -302,13 +302,13 @@ def ensure_starting_territories_bootstrap(conn, sid):
         if own_tx: polywar._safe_rollback(conn)
         raise
 
-def apply_materialized_starting_cell(conn, sid, x, y, owner, now):
-    initialize_sector(conn, sid, *sector_coords(x, y), now)
+def apply_materialized_starting_cell(conn, sid, x, y, owner, now, config=None):
+    initialize_sector(conn, sid, *sector_coords(x, y, config=config), now, config=config)
 
 
-def transfer_cell_ownership(conn, sid, x, y, old_owner, new_owner, user_id, now):
-    c = conn.cursor(); sx, sy = sector_coords(x, y)
-    initialize_sector(conn, sid, sx, sy, now)
+def transfer_cell_ownership(conn, sid, x, y, old_owner, new_owner, user_id, now, config=None):
+    c = conn.cursor(); sx, sy = sector_coords(x, y, config=config)
+    initialize_sector(conn, sid, sx, sy, now, config=config)
     _sector_lock(conn, sid, sx, sy, now)
     if old_owner:
         expr = _decrement_expr(conn, 'controlled_cells_count')
