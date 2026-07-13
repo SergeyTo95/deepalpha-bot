@@ -156,14 +156,21 @@ def _upsert_setting(conn, key, value):
     else:
         polywar._execute(c, "INSERT INTO settings(key,value) VALUES(%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, str(value)))
 
+def _active_snapshot_valid(active):
+    if not active:
+        return False
+    if not (active.get("map_width") and active.get("map_height") and active.get("map_chunk_size") and active.get("map_sector_size") and active.get("map_starting_area_size")):
+        return False
+    return parse_base_layout_json(active.get("map_base_layout_json"), active.get("map_width") or 0, active.get("map_height") or 0) is not None
+
+def _select_active_snapshot_for_update(conn):
+    suffix = "" if polywar._is_sqlite(conn) else " FOR UPDATE"
+    return polywar._fetchone(conn.cursor(), "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1" + suffix, ("active",))
+
 def apply_compact_next_season_profile(conn, *, force=False):
     c = conn.cursor()
-    try:
-        polywar._execute(c, "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT)")
-    except Exception:
-        pass
-    active = polywar._fetchone(c, "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
-    if active and not (active.get("map_width") and active.get("map_height") and active.get("map_base_layout_json")):
+    active = _select_active_snapshot_for_update(conn)
+    if active and not _active_snapshot_valid(active):
         ensure_season_map_snapshot(conn, int(active["id"]))
         active = polywar._fetchone(c, "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE id=%s", (int(active["id"]),))
     keys = tuple(COMPACT_WORLD_SETTINGS) + ("polywar_world_profile", "polywar_world_profile_version")
@@ -183,6 +190,21 @@ def apply_compact_next_season_profile(conn, *, force=False):
     new = {**old, **{k: str(v) for k, v in COMPACT_WORLD_SETTINGS.items()}, "polywar_world_profile": COMPACT_WORLD_PROFILE, "polywar_world_profile_version": str(COMPACT_WORLD_PROFILE_VERSION)}
     result={"applied":True,"skip_reason":None,"profile_version":COMPACT_WORLD_PROFILE_VERSION,"active_season_id":active.get('id') if active else None,"active_snapshot":dict(active) if active else None,"old_global_settings":old,"new_next_season_settings":new}
     logger.info("polywar_compact_profile_migration %s", result); return result
+
+
+def bootstrap_compact_next_season_profile(conn):
+    c = conn.cursor()
+    active_before = _select_active_snapshot_for_update(conn)
+    try:
+        if active_before and not _active_snapshot_valid(active_before):
+            ensure_season_map_snapshot(conn, int(active_before["id"]))
+            active_before = polywar._fetchone(c, "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE id=%s", (int(active_before["id"]),))
+        result = apply_compact_next_season_profile(conn, force=False)
+        logger.info("polywar_compact_profile_bootstrap active_season_id=%s active_snapshot_before=%s applied=%s skip_reason=%s old_globals=%s new_globals=%s profile_version=%s", active_before.get("id") if active_before else None, dict(active_before) if active_before else None, result.get("applied"), result.get("skip_reason"), result.get("old_global_settings"), result.get("new_next_season_settings"), result.get("profile_version"))
+        return result
+    except Exception as exc:
+        logger.exception("polywar_compact_profile_bootstrap_failed active_season_id=%s active_snapshot_before=%s error=%s", active_before.get("id") if active_before else None, dict(active_before) if active_before else None, type(exc).__name__)
+        raise
 
 def get_active_season_readonly(conn, include_secret_seed=False):
     cols = "id,name,status,starts_at,ends_at,completed_at,victory_type,winner_faction_id,domination_faction_id,domination_started_at,finalization_started_at,created_at,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version,map_snapshot_at"
@@ -312,7 +334,7 @@ def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> st
     if river_a < 5 or river_b < 4:
         return "river"
     lake = _smooth(seed + "lake", x, y, 1400) * 0.72 + _smooth(seed + "lake", x, y, 360) * 0.28
-    if lake < 0.205:
+    if lake < 0.18:
         return "water"
     ridge = abs(_smooth(seed + "ridge", x, y, 1800) - 0.5) + _smooth(seed + "ridge-detail", x, y, 240) * 0.35
     forest_mass = _smooth(seed + "forest-mass", x, y, 1150) * 0.75 + _smooth(seed + "forest-detail", x, y, 260) * 0.25

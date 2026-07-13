@@ -821,13 +821,16 @@ def _init_db_inner(conn, cursor):
             pass
 
 
-    # PolyWar: Battle for Consensus additive tables.
+    # PolyWar: Battle for Consensus additive tables and safe next-season profile bootstrap.
     try:
         from services.polywar_service import init_polywar_schema
+        from services.polywar_map_service import bootstrap_compact_next_season_profile
         init_polywar_schema(conn)
+        bootstrap_compact_next_season_profile(conn)
+        conn.commit()
     except Exception as e:
+        conn.rollback()
         print(f"init polywar schema error: {e}")
-    conn.commit()
 
     cursor.execute("SELECT COUNT(*) FROM token_packages")
     count = cursor.fetchone()[0]

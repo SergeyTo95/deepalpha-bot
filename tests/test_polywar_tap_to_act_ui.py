@@ -359,4 +359,35 @@ def test_minimap_redesign_layers_and_interactions_static():
 def test_world_view_selects_before_tactical_jump_static():
     assert 'Grid distance:' in JS
     assert 'data-open-tactical' in JS
-    assert 'this.jumpToWorldPosition(p.x,p.y,h?POLYWAR_VISUALS.baseZoom:10' in JS
+    assert 'this.jumpToWorldPosition(x,y,selection.hq?POLYWAR_VISUALS.baseZoom:10' in JS
+
+
+def test_world_view_target_runtime_no_reference_error_and_delayed_jump():
+    import subprocess, textwrap
+    script = textwrap.dedent("""
+        const assert = require('assert');
+        function esc(v){ return String(v).replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m])); }
+        const POLYWAR_VISUALS = { baseZoom: 34 };
+        let button = null;
+        class Target { constructor(){ this.innerHTML=''; } querySelector(){ button = { onclick:null }; return button; } }
+        class Harness {
+          constructor(){ this.cx=10; this.cy=20; this.overview={world:{sector_size:40}}; this.state={map:{sector_size:40}}; this.worldViewModal={remove(){ Harness.removed=(Harness.removed||0)+1; }}; this.jumps=0; }
+          jumpToWorldPosition(x,y,z,o){ this.jumps++; this.jump={x,y,z,o}; }
+          renderWorldTargetSelection(target, selection) { const x=Math.floor(selection.x), y=Math.floor(selection.y), dist=Math.abs(x-Math.floor(this.cx))+Math.abs(y-Math.floor(this.cy)), sectors=Math.ceil(dist/Math.max(1, this.overview?.world?.sector_size || this.state?.map?.sector_size || 40)); const title=selection.hq?esc(selection.hq.name||'HQ'):selection.capital?esc(selection.capital.name||'Capital'):esc(selection.controller||'Strategic target'); target.innerHTML=`<b>${title}</b><br>Coordinates: ${x},${y}<br>Grid distance: ${dist} cells<br>Approx. sectors: ${sectors}<br><button class="btn mini" data-open-tactical>Open Tactical Map</button>`; target.querySelector('[data-open-tactical]').onclick=()=>{ const modal=this.worldViewModal; if(modal) modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(x,y,selection.hq?POLYWAR_VISUALS.baseZoom:10,{select:true}); }; }
+          selectWorldTarget(target, data) { this.worldTargetSelection=data; this.renderWorldTargetSelection(target, data); }
+        }
+        const h = new Harness(); const target = new Target();
+        assert.doesNotThrow(() => h.selectWorldTarget(target, {x:50,y:80,hq:{name:'Blue <HQ>'}}));
+        assert(target.innerHTML.includes('Grid distance: 100 cells'));
+        assert(target.innerHTML.includes('Blue &lt;HQ&gt;'));
+        assert.strictEqual(h.jumps, 0);
+        button.onclick();
+        assert.strictEqual(h.jumps, 1);
+        assert.strictEqual(h.jump.x, 50);
+    """)
+    subprocess.run(['node', '-e', script], check=True)
+
+
+def test_wheel_zoom_uses_same_world_view_handoff():
+    assert 'if (e.deltaY < 0) this.zoom(1.25); else this.zoomOutOrOpenWorld();' in JS
+    assert 'this.zoom(e.deltaY < 0 ? 1.25 : 0.8)' not in JS

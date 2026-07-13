@@ -256,3 +256,36 @@ def test_compact_profile_idempotent_and_custom_requires_force():
     again=m.apply_compact_next_season_profile(c)
     assert again['applied'] is False and again['skip_reason']=='version_already_current'
     assert tuple(c.execute('select map_width,map_height from polywar_seasons where id=1').fetchone()) == (2400,1800)
+
+
+def test_bootstrap_path_applies_compact_profile_without_mutating_active_snapshot_or_coordinates():
+    from services import polywar_capital_service as caps
+    c=setup(10000,10000); m.init_polywar_map_schema(c); caps.init_polywar_capital_schema(c)
+    legacy_layout='{"1":{"x":1000,"y":1000},"2":{"x":8999,"y":5000}}'
+    c.execute('update polywar_seasons set map_width=10000,map_height=10000,map_chunk_size=64,map_sector_size=100,map_starting_area_size=15,map_base_layout_json=?,map_world_version=1 where id=1',(legacy_layout,))
+    c.execute('insert into polywar_cells(season_id,x,y,owner_faction_id) values(1,9000,5000,1)')
+    c.commit()
+    before_cell=tuple(c.execute('select x,y from polywar_cells where season_id=1').fetchone())
+    first=m.bootstrap_compact_next_season_profile(c); c.commit()
+    assert first['applied'] is True
+    active=c.execute('select map_width,map_height,map_base_layout_json from polywar_seasons where id=1').fetchone()
+    assert active['map_width']==10000 and active['map_height']==10000 and active['map_base_layout_json']==legacy_layout
+    settings={r['key']:r['value'] for r in c.execute('select key,value from settings')}
+    assert {k: settings[k] for k in ['polywar_map_width','polywar_map_height','polywar_chunk_size','polywar_sector_size','polywar_starting_area_size','polywar_world_profile','polywar_world_profile_version']} == {'polywar_map_width':'1600','polywar_map_height':'1600','polywar_chunk_size':'32','polywar_sector_size':'40','polywar_starting_area_size':'41','polywar_world_profile':'compact_v2','polywar_world_profile_version':'2'}
+    assert tuple(c.execute('select x,y from polywar_cells where season_id=1').fetchone()) == before_cell
+    second=m.bootstrap_compact_next_season_profile(c); c.commit()
+    assert second['applied'] is False and second['skip_reason']=='version_already_current'
+
+
+def test_compact_profile_migration_does_not_change_active_snapshot_terrain_algorithm():
+    from pathlib import Path
+    c=setup(10000,10000); m.ensure_season_map_snapshot(c,1)
+    season=dict(c.execute('select * from polywar_seasons where id=1').fetchone()); cfg=m.load_map_config(c, season=season)
+    coords=[(100,100),(777,888),(2400,1800),(9999,9999)]
+    before=[m.terrain_at_with_config('seed',x,y,cfg) for x,y in coords]
+    m.apply_compact_next_season_profile(c); c.commit()
+    after=[m.terrain_at_with_config('seed',x,y,cfg) for x,y in coords]
+    assert after == before
+    src=Path('services/polywar_map_service.py').read_text()
+    assert 'if lake < 0.18:' in src
+    assert 'if lake < 0.205:' not in src
