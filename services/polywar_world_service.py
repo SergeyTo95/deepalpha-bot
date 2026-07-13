@@ -101,25 +101,26 @@ def ensure_null_faction(conn,season_id:int):
 
 def _digest(seed,*parts): return hashlib.sha256((':'.join([str(seed),*map(str,parts)])).encode()).digest()
 def _too_close(x,y,coords,dist): return any((x-a)*(x-a)+(y-b)*(y-b)<dist*dist for a,b in coords)
-def _valid_rift(seed,x,y,coords):
-    if not m.in_bounds(x,y) or m.TERRAIN_COSTS.get(m.terrain_at(seed,x,y)) is None: return False
-    radius=m.starting_area_size()
-    for bx,by in m.faction_base_positions().values():
+def _valid_rift(seed,x,y,coords,config=None):
+    if not (m.in_bounds_with_config(x,y,config) if config is not None else m.in_bounds(x,y)) or m.TERRAIN_COSTS.get(m.terrain_at_with_config(seed,x,y,config) if config is not None else m.terrain_at(seed,x,y)) is None: return False
+    radius = (config.starting_area_size if config is not None else m.starting_area_size())
+    base_values = config.bases.values() if config is not None else m.faction_base_positions().values()
+    for bx,by in base_values:
         if (x,y)==(bx,by) or (abs(x-bx)<=radius and abs(y-by)<=radius): return False
     return not _too_close(x,y,coords,min_distance())
 
-def choose_rift_coordinates(seed,count=None):
-    count=count or rift_count(); w,h=m.map_width(),m.map_height(); coords=[]
+def choose_rift_coordinates(seed,count=None,config=None):
+    count=count or rift_count(); w,h=(config.width,config.height) if config is not None else (m.map_width(),m.map_height()); coords=[]
     for i in range(count):
         picked=None
         for retry in range(2048):
             d=_digest(seed,'rift',i,retry); rx=int.from_bytes(d[:4],'big')/2**32; ry=int.from_bytes(d[4:8],'big')/2**32
             margin=max(5,min(w,h)//8); x=margin+int(rx*max(1,w-2*margin)); y=margin+int(ry*max(1,h-2*margin))
-            if _valid_rift(seed,x,y,coords): picked=(x,y); break
+            if _valid_rift(seed,x,y,coords,config=config): picked=(x,y); break
         if not picked:
             for x in range(0,w,max(1,w//97)):
                 for y in range(0,h,max(1,h//89)):
-                    if _valid_rift(seed,x,y,coords): picked=(x,y); break
+                    if _valid_rift(seed,x,y,coords,config=config): picked=(x,y); break
                 if picked: break
         if picked: coords.append(picked)
     return coords
@@ -133,7 +134,8 @@ def ensure_world_initialized_in_transaction(conn,season_id:int):
     _execute(c,"""INSERT INTO polywar_null_state (season_id,status,activation_at,next_tick_at,tick_index,created_at,updated_at) VALUES (%s,'dormant',%s,%s,0,%s,%s) ON CONFLICT (season_id) DO NOTHING""",(season_id,activation,activation,now,now))
     existing=_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s',(season_id,)) or {'n':0}
     if int(existing.get('n') or 0)<rift_count():
-        for x,y in choose_rift_coordinates(season.get('secret_seed','seed'),rift_count()):
+        config = m.load_map_config(conn, season_id=season_id)
+        for x,y in choose_rift_coordinates(season.get('secret_seed','seed'),rift_count(),config=config):
             _execute(c,"""INSERT INTO polywar_null_rifts (season_id,x,y,status,health,max_health,spawned_at,created_at,updated_at) VALUES (%s,%s,%s,'dormant',%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y) DO NOTHING""",(season_id,x,y,rift_health(),rift_health(),activation,now,now))
     after_null = int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_state WHERE season_id=%s',(season_id,)) or {'n':0}).get('n') or 0)
     after_rifts = int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_null_rifts WHERE season_id=%s',(season_id,)) or {'n':0}).get('n') or 0)
@@ -158,17 +160,18 @@ def is_rift(conn,season_id,x,y,status=None):
     if status: sql+=' AND status=%s'; params.append(status)
     return _fetchone(conn.cursor(),sql,tuple(params))
 
-def is_safe_zone(conn,season_id,x,y):
+def is_safe_zone(conn,season_id,x,y,config=None):
     if is_rift(conn,season_id,x,y): return True
-    return (x,y) in set(m.faction_base_positions().values())
+    bases = config.bases.values() if config is not None else m.faction_base_positions().values()
+    return (x,y) in set(bases)
 
-def _upsert_frontier(conn,sid,x,y,source=None,priority=0):
-    if not m.in_bounds(x,y): return
+def _upsert_frontier(conn,sid,x,y,source=None,priority=0,config=None):
+    if not (m.in_bounds_with_config(x,y,config) if config is not None else m.in_bounds(x,y)): return
     _execute(conn.cursor(),"INSERT INTO polywar_null_frontier (season_id,x,y,source_rift_id,discovered_at,priority) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y) DO NOTHING",(sid,x,y,source,_now(),priority))
 
-def update_frontier_for_cell(conn,sid,x,y,source=None):
+def update_frontier_for_cell(conn,sid,x,y,source=None,config=None):
     for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
-        if m.in_bounds(nx,ny): _upsert_frontier(conn,sid,nx,ny,source,0)
+        if (m.in_bounds_with_config(nx,ny,config) if config is not None else m.in_bounds(nx,ny)): _upsert_frontier(conn,sid,nx,ny,source,0,config=config)
     _execute(conn.cursor(),'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,x,y))
 
 def activate_if_due_in_transaction(conn,season_id:int,now=None):
@@ -180,11 +183,12 @@ def activate_if_due_in_transaction(conn,season_id:int,now=None):
     _execute(c,"UPDATE polywar_null_state SET status='active',activated_at=%s,updated_at=%s WHERE season_id=%s AND status='dormant'",(now,now,season_id))
     if polywar._rowcount(c)!=1: return False
     seed=(_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)) or {}).get('secret_seed','seed')
+    config = m.load_map_config(conn, season_id=season_id)
     for r in _fetchall(c,"SELECT * FROM polywar_null_rifts WHERE season_id=%s AND status='dormant'"+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,)):
-        old_owner=m._owner_at(conn,season_id,r['x'],r['y'])
+        old_owner=m.owner_at_with_config(conn,season_id,r['x'],r['y'],config)
         _execute(c,"UPDATE polywar_null_rifts SET status='active',updated_at=%s WHERE id=%s",(now,r['id']))
         _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,capture_progress=100,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,r['x'],r['y'],NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
-        sectors.transfer_cell_ownership(conn,season_id,r['x'],r['y'],old_owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,r['x'],r['y'],r['id'])
+        sectors.transfer_cell_ownership(conn,season_id,r['x'],r['y'],old_owner,NULL_STATE_FACTION_ID,None,now,config=config); update_frontier_for_cell(conn,season_id,r['x'],r['y'],r['id'],config=config)
         _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'rift_opened',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'Null rift opened at {r["x"]},{r["y"]}',now))
     _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_state_activated','The Null State has activated.',%s)",(season_id,NULL_STATE_FACTION_ID,now))
     _recount(conn,season_id); logger.info('polywar_null_state_activated season_id=%s',season_id); return True
@@ -204,7 +208,7 @@ def _ordered_frontier(conn,sid,seed,tick,limit):
     rows=_fetchall(conn.cursor(),'SELECT * FROM polywar_null_frontier WHERE season_id=%s ORDER BY priority DESC,x,y LIMIT %s',(sid,max(limit*20,limit)))
     return sorted(rows,key=lambda r: hashlib.sha256(f'{seed}:{tick}:{r["x"]}:{r["y"]}'.encode()).hexdigest())[:limit]
 
-def _apply_null_capital_pressure(conn, sid, cap, now):
+def _apply_null_capital_pressure(conn, sid, cap, now, config=None):
     from services import polywar_capital_service as caps
     c=conn.cursor(); cap=_fetchone(c,'SELECT * FROM polywar_capitals WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(cap['id'],)) or cap
     before=int(cap.get('siege_progress') or 0); bes=cap.get('besieging_faction_id'); req=caps.siege_required(); power=capital_siege_per_tick()
@@ -212,7 +216,7 @@ def _apply_null_capital_pressure(conn, sid, cap, now):
         if before or bes:
             _execute(c,'UPDATE polywar_capitals SET siege_progress=0, besieging_faction_id=NULL, siege_started_at=NULL, last_siege_at=NULL, updated_at=%s WHERE id=%s',(now,cap['id']))
         _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,cap['x'],cap['y']))
-        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None)
+        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None,config=config)
         return {'type':'null_capital_already_controlled','x':cap['x'],'y':cap['y']}
     if bes and int(bes)!=NULL_STATE_FACTION_ID:
         after=max(0,before-power); new_bes=bes if after>0 else None
@@ -221,9 +225,9 @@ def _apply_null_capital_pressure(conn, sid, cap, now):
         return {'type':'null_capital_siege','x':cap['x'],'y':cap['y'],'progress_after':after,'rival_reduced':True}
     after=min(req,before+power)
     if after>=req:
-        caps.transfer_capital_control(conn,sid,cap,NULL_STATE_FACTION_ID,None,now)
+        caps.transfer_capital_control(conn,sid,cap,NULL_STATE_FACTION_ID,None,now,config=config)
         _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(sid,cap['x'],cap['y']))
-        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None)
+        update_frontier_for_cell(conn,sid,cap['x'],cap['y'],None,config=config)
         _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_capital_captured',%s,%s)",(sid,NULL_STATE_FACTION_ID,f'The Null State captured capital {cap["x"]},{cap["y"]}',now))
         return {'type':'null_capital_captured','x':cap['x'],'y':cap['y']}
     _execute(c,'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=COALESCE(siege_started_at,%s), last_siege_at=%s, updated_at=%s WHERE id=%s',(after,NULL_STATE_FACTION_ID,now,now,now,cap['id']))
@@ -261,24 +265,25 @@ def process_due_tick_in_transaction(conn,season_id:int,now=None):
     if polywar._rowcount(c)!=1 and not (old and old.get('status')=='processing'):
         return {'processed':False,'reason':'world_tick_conflict'}
     season=_fetchone(c,'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(season_id,)); actions=[]
+    config = m.load_map_config(conn, season_id=season_id)
     for cand in _ordered_frontier(conn,season_id,season.get('secret_seed','seed'),tick,expansions_per_tick()):
         x,y=int(cand['x']),int(cand['y'])
-        if m.TERRAIN_COSTS.get(m.terrain_at(season.get('secret_seed','seed'),x,y)) is None: continue
+        if m.TERRAIN_COSTS.get(m.terrain_at_with_config(season.get('secret_seed','seed'),x,y,config)) is None: continue
         if is_rift(conn,season_id,x,y,'sealed'): continue
-        if not any(m._owner_at(conn,season_id,nx,ny)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)):
+        if not any(m.owner_at_with_config(conn,season_id,nx,ny,config)==NULL_STATE_FACTION_ID for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds_with_config(nx,ny,config)):
             _execute(c,'DELETE FROM polywar_null_frontier WHERE season_id=%s AND x=%s AND y=%s',(season_id,x,y)); continue
         from services import polywar_capital_service as caps
         cap=caps.get_capital_at(conn,season_id,x,y)
         if cap:
-            actions.append(_apply_null_capital_pressure(conn,season_id,cap,now)); update_frontier_for_cell(conn,season_id,x,y,None); continue
-        owner=m._owner_at(conn,season_id,x,y)
+            actions.append(_apply_null_capital_pressure(conn,season_id,cap,now,config=config)); update_frontier_for_cell(conn,season_id,x,y,None,config=config); continue
+        owner=m.owner_at_with_config(conn,season_id,x,y,config)
         if owner==NULL_STATE_FACTION_ID: continue
         _execute(c,"INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (%s,%s,%s,%s,100,%s) ON CONFLICT (season_id,x,y) DO UPDATE SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,updated_at=%s",(season_id,x,y,NULL_STATE_FACTION_ID,now,NULL_STATE_FACTION_ID,now))
-        sectors.transfer_cell_ownership(conn,season_id,x,y,owner,NULL_STATE_FACTION_ID,None,now); update_frontier_for_cell(conn,season_id,x,y,cand.get('source_rift_id')); actions.append({'type':'null_cell_captured','x':x,'y':y,'old_owner':owner})
+        sectors.transfer_cell_ownership(conn,season_id,x,y,owner,NULL_STATE_FACTION_ID,None,now,config=config); update_frontier_for_cell(conn,season_id,x,y,cand.get('source_rift_id'),config=config); actions.append({'type':'null_cell_captured','x':x,'y':y,'old_owner':owner})
         _execute(c,"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'null_cell_captured',%s,%s)",(season_id,NULL_STATE_FACTION_ID,f'The Null State captured {x},{y}',now))
     
     from services import polywar_rebellion_service as rebellion
-    for ev in rebellion.process_rebellion_tick(conn,season_id,now,limit=10): actions.append({'type':ev})
+    for ev in rebellion.process_rebellion_tick(conn,season_id,now,limit=10,config=config): actions.append({'type':ev})
     prev=st.get('next_tick_at')
     if isinstance(prev,str): prev=datetime.fromisoformat(prev)
     nxt=prev+timedelta(minutes=tick_minutes()); _execute(c,"UPDATE polywar_world_ticks SET status='completed',processed_at=%s,actions_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,len(actions),json.dumps(actions),season_id,tick))
@@ -421,7 +426,8 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
         if dup: ok=True; return dup
         if r['status']=='sealed': raise ValueError('rift_already_sealed')
         if r['status']!='active': raise ValueError('rift_inactive')
-        if not any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny)): raise ValueError('rift_not_frontline')
+        config = m.load_map_config(conn, season_id=sid)
+        if not any(m.owner_at_with_config(conn,sid,nx,ny,config)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds_with_config(nx,ny,config)): raise ValueError('rift_not_frontline')
         e=polywar._energy(player)
         if e.get('is_locked'): raise ValueError('player_locked')
         cost=seal_cost()
@@ -432,8 +438,8 @@ def seal_rift_action(user_id:int,x:int,y:int,idempotency_key:str):
         if polywar._rowcount(c)!=1: raise ValueError('rift_inactive')
         _execute(c,"INSERT INTO polywar_rift_contributions (season_id,rift_id,user_id,faction_id,contribution,first_contributed_at,last_contributed_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rift_id,user_id) DO UPDATE SET contribution=contribution+%s,last_contributed_at=%s",(sid,r['id'],user_id,fid,before-after,now,now,before-after,now))
         if sealed:
-            old_owner=m._owner_at(conn,sid,x,y)
-            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,old_owner,fid,user_id,now); update_frontier_for_cell(conn,sid,x,y,None)
+            old_owner=m.owner_at_with_config(conn,sid,x,y,config)
+            _execute(c,"UPDATE polywar_cells SET owner_faction_id=%s,updated_at=%s WHERE season_id=%s AND x=%s AND y=%s",(fid,now,sid,x,y)); sectors.transfer_cell_ownership(conn,sid,x,y,old_owner,fid,user_id,now,config=config); update_frontier_for_cell(conn,sid,x,y,None,config=config)
         payload={'coordinate':{'x':x,'y':y},'rift_status':status,'health_before':before,'health_after':after,'progress':before-after,'energy_cost':cost,'sealed':sealed,'sealing_faction_id':fid if sealed else None,'energy':energy}
         _execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now)); _recount(conn,sid); check_defeat(conn,sid,now)
         mines.insert_outcome(conn,sid,user_id,idempotency_key,'seal_rift',x,y,outcome,cost,payload,now)

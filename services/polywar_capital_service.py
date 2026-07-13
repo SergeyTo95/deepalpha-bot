@@ -111,9 +111,10 @@ def ensure_capitals_initialized(conn, season_id: int, starting_bootstrap_ready: 
             polywar._fetchone(c, 'SELECT id FROM polywar_seasons WHERE id=%s FOR UPDATE', (season_id,))
             if polywar._fetchone(c, 'SELECT 1 FROM polywar_capital_initializations WHERE season_id=%s', (season_id,)):
                 return False
-        for fid, (x, y) in m.faction_base_positions().items():
+        config = m.load_map_config(conn, season_id=season_id)
+        for fid, (x, y) in config.bases.items():
             row = polywar._fetchone(c, 'SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s', (season_id, x, y))
-            owner = int(row['owner_faction_id']) if row else int(m._owner_at(conn, season_id, x, y) or fid)
+            owner = int(row['owner_faction_id']) if row else int(m.owner_at_with_config(conn, season_id, x, y, config) or fid)
             _upsert_capital(conn, season_id, fid, owner, x, y, now)
         _recount_capitals(conn, season_id, now)
         if polywar._is_sqlite(conn):
@@ -131,8 +132,8 @@ def get_capital_at(conn, sid, x, y):
     return polywar._fetchone(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s AND x=%s AND y=%s', (sid, x, y))
 
 
-def _has_adjacent(conn, sid, x, y, fid):
-    return any(m.in_bounds(nx, ny) and m._owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y), (x-1,y), (x,y+1), (x,y-1)))
+def _has_adjacent(conn, sid, x, y, fid, config=None):
+    return any((m.in_bounds_with_config(nx, ny, config) if config is not None else m.in_bounds(nx, ny)) and (m.owner_at_with_config(conn, sid, nx, ny, config) if config is not None else m._owner_at(conn, sid, nx, ny)) == fid for nx, ny in ((x+1,y), (x-1,y), (x,y+1), (x,y-1)))
 
 
 def _begin(conn, c):
@@ -148,7 +149,7 @@ def _begin(conn, c):
     polywar._execute(c, 'BEGIN')
 
 
-def _duplicate_response(conn, sid, seed, uid, key):
+def _duplicate_response(conn, sid, seed, uid, key, config=None):
     if not key: return None
     dup = mines.duplicate_outcome_response(conn, sid, uid, key)
     if dup: return dup
@@ -156,7 +157,7 @@ def _duplicate_response(conn, sid, seed, uid, key):
     if not action: return None
     player = polywar.get_or_create_player(uid, sid, conn)
     energy = mines.public_energy_for_player(player)
-    payload = {'action_type': action['action_type'], 'capital': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at(seed, int(action['x']), int(action['y'])), 'energy_cost': action['energy_cost']}, 'energy': energy}
+    payload = {'action_type': action['action_type'], 'capital': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at_with_config(seed, int(action['x']), int(action['y']), config) if config is not None else m.terrain_at(seed, int(action['x']), int(action['y'])), 'energy_cost': action['energy_cost']}, 'energy': energy}
     return {'ok': True, 'duplicate': True, 'outcome': action.get('action_type'), **payload}
 
 
@@ -185,12 +186,12 @@ def _emit_event(conn, sid, uid, fid, event_type, x, y, now):
     return True
 
 
-def transfer_capital_control(conn, sid, cap, new_controller, user_id, now):
+def transfer_capital_control(conn, sid, cap, new_controller, user_id, now, config=None):
     old = int(cap['controller_faction_id']); x = int(cap['x']); y = int(cap['y']); c = conn.cursor()
     if old == int(new_controller): return None
     polywar._execute(c, 'UPDATE polywar_capitals SET controller_faction_id=%s, besieging_faction_id=NULL, siege_progress=0, siege_started_at=NULL, captured_at=%s, controlled_since=%s, updated_at=%s WHERE id=%s', (new_controller, now, now, now, cap['id']))
     polywar._execute(c, 'UPDATE polywar_cells SET owner_faction_id=%s, contesting_faction_id=NULL, contest_progress=0, updated_at=%s, updated_by_user_id=%s WHERE season_id=%s AND x=%s AND y=%s', (new_controller, now, user_id, sid, x, y))
-    change = sectors.transfer_cell_ownership(conn, sid, x, y, old, int(new_controller), user_id, now)
+    change = sectors.transfer_cell_ownership(conn, sid, x, y, old, int(new_controller), user_id, now, config=config)
     decr = sectors._decrement_expr(conn, 'controlled_capitals_count')
     polywar._execute(c, f'UPDATE polywar_faction_season_stats SET controlled_capitals_count={decr}, updated_at=%s WHERE season_id=%s AND faction_id=%s', (now, sid, old))
     polywar._execute(c, 'UPDATE polywar_faction_season_stats SET controlled_capitals_count=controlled_capitals_count+1, updated_at=%s WHERE season_id=%s AND faction_id=%s', (now, sid, new_controller))
@@ -207,15 +208,15 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
     conn = polywar.get_connection(); c = conn.cursor(); sid = None; seed = None
     try:
         polywar.init_polywar_schema(conn); init_polywar_capital_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
-        season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
+        season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']; config = m.load_map_config(conn, season_id=sid)
         from services import polywar_world_service as world
         world.ensure_world_initialized_in_transaction(conn, sid)
         ensure_capitals_initialized(conn, sid)
         conn.commit()
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: return dup
         _begin(conn, c)
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
         if not prepared.get('ok'):
@@ -224,7 +225,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
             raise ValueError(prepared.get('error') or 'season_ended')
         polywar._insert_player_if_missing(conn, user_id, sid)
         player = polywar._fetchone(c, 'SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s' + ('' if polywar._is_sqlite(conn) else ' FOR UPDATE'), (user_id, sid))
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         fid = player.get('faction_id')
         if not fid: raise ValueError('faction_required')
@@ -234,12 +235,12 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         cap = _lock_capital(conn, cap0['id'])
         cell = _lock_capital_cell(conn, sid, x, y)
         if not cell: raise ValueError('capital_required')
-        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+        dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
         if dup: conn.commit(); return dup
         _rate_mut(user_id)
-        terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
+        terr = m.terrain_at_with_config(seed, x, y, config); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
-        if not _has_adjacent(conn, sid, x, y, fid): raise ValueError('capital_not_frontline')
+        if not _has_adjacent(conn, sid, x, y, fid, config=config): raise ValueError('capital_not_frontline')
         now = datetime.utcnow(); before = int(cap.get('siege_progress') or 0); previous = int(cap['controller_faction_id']); bes_before = cap.get('besieging_faction_id'); transfer = None
         after = before; bes_after = bes_before; current = previous
         if action_type == 'siege':
@@ -251,7 +252,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
             else:
                 after = min(req, before + power); bes_after = int(fid); outcome = 'siege_started' if before == 0 else 'siege_progress'
                 if after >= req:
-                    outcome = 'capital_captured'; transfer = transfer_capital_control(conn, sid, cap, int(fid), user_id, now); after = 0; bes_after = None; current = int(fid)
+                    outcome = 'capital_captured'; transfer = transfer_capital_control(conn, sid, cap, int(fid), user_id, now, config=config); after = 0; bes_after = None; current = int(fid)
                 else:
                     polywar._execute(c, 'UPDATE polywar_capitals SET siege_progress=%s, besieging_faction_id=%s, siege_started_at=COALESCE(siege_started_at,%s), last_siege_at=%s,last_siege_by_user_id=%s, updated_at=%s WHERE id=%s', (after, int(fid), now, now, user_id, now, cap['id']))
         else:
@@ -272,7 +273,7 @@ def capital_action(user_id: int, action_type: str, x: int, y: int, idempotency_k
         text = str(exc).lower()
         if sid is not None and any(s in text for s in ('unique', 'duplicate', 'constraint', 'integrity')):
             try:
-                dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key)
+                dup = _duplicate_response(conn, sid, seed, user_id, idempotency_key, config=config)
                 if dup: return dup
             except Exception:
                 logger.exception('failed duplicate recovery for capital action')
@@ -287,8 +288,9 @@ def get_capitals(user_id: int = None):
     try:
         if not polywar._is_sqlite(conn):
             m.begin_polywar_readonly(conn)
-        config = m.load_map_config(conn)
-        season = m.get_active_season_readonly(conn); sid = int(season['id'])
+        season = m.get_active_season_readonly(conn)
+        config = m.load_map_config(conn, season=season)
+        sid = int(season['id'])
         rows = polywar._fetchall(conn.cursor(), 'SELECT * FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,)); req = config.capital_siege_required
         return {'ok': True, 'season_id': sid, 'siege_required': req, 'capitals': [{'original_faction_id': r['original_faction_id'], 'controller_faction_id': r['controller_faction_id'], 'x': r['x'], 'y': r['y'], 'besieging_faction_id': r.get('besieging_faction_id'), 'siege_progress': int(r.get('siege_progress') or 0), 'siege_required': req, 'siege_percent': min(100, int((int(r.get('siege_progress') or 0) * 100) / req)), 'siege_started_at': polywar._iso(r.get('siege_started_at')), 'controlled_since': polywar._iso(r.get('controlled_since')), 'captured_at': polywar._iso(r.get('captured_at')), 'is_under_siege': int(r.get('siege_progress') or 0) > 0} for r in rows], 'server_timestamp': int(time.time())}
     except Exception:

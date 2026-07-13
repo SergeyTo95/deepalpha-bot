@@ -280,3 +280,58 @@ def test_road_detail_uses_bevel_not_fixed_diagonal():
     assert "cell*.62" not in road
     assert "cell*.38" not in road
     assert "p.y + c*.8" in road
+
+def test_world_view_minimap_static_hooks_present():
+    from pathlib import Path
+    js = Path('webapp/polywar.js').read_text()
+    css = Path('webapp/polywar.css').read_text()
+    assert 'id="openWorldView"' in js and 'World View' in js
+    assert 'polywarMinimapCanvas' in js and 'jumpToWorldPosition' in js
+    assert '.polywar-minimap' in css and '.polywar-world-view' in css
+
+
+def test_lod2_and_letterbox_runtime_hooks_are_wired():
+    from pathlib import Path
+    js = Path('webapp/polywar.js').read_text()
+    draw = js.split('  draw() {', 1)[1].split('  drawCellGrid', 1)[0]
+    assert 'const ctx = this.ctx, lod = this.lodLevel()' in js
+    assert 'if (lod === 2)' in draw and 'drawCoarseWorld(ctx)' in draw
+    assert 'this.drawTerrainTile' not in draw.split('if (lod === 2)',1)[1].split('const visible',1)[0]
+    assert 'overviewTransform(canvas' in js and 'overviewPointerToWorld(canvas' in js
+    assert 'nearestHqAt(canvas' in js and 'radiusPx*radiusPx' in js
+    assert 'renderOpenWorldView()' in js and 'data-retry' in js
+
+
+def test_destroy_removes_open_world_view_modal_and_nulls_reference():
+    assert 'if (this.worldViewModal) { this.worldViewModal.remove(); this.worldViewModal = null; }' in JS
+    assert 'if (seq !== polywarOverviewSeq || this.destroyed) return' in JS
+
+
+def test_lod2_preserves_selected_and_pending_without_detailed_chunks():
+    draw = JS.split('if (lod === 2)', 1)[1].split('const visible', 1)[0]
+    assert 'drawCoarseWorld(ctx)' in draw
+    assert 'drawBaseMarkers(ctx)' in draw
+    assert 'polywarCapitalUi.draw' in draw
+    assert 'this.drawSelectedCell(ctx)' in draw
+    assert 'this.drawPendingPulse(ctx)' in draw
+    assert 'drawTerrainTile' not in draw
+
+
+def test_world_view_load_overview_handles_api_ok_false_and_stale_state():
+    load = JS[JS.index('async loadOverview()'):JS.index('overviewTransform(canvas', JS.index('async loadOverview()'))]
+    assert "if (!data?.ok)" in load
+    assert "this.overviewError = data?.error || 'overview_failed'" in load
+    assert "this.overviewError = 'stale_overview'" in load
+    assert load.count('this.renderOpenWorldView()') >= 4
+    assert "if (seq !== polywarOverviewSeq || this.destroyed) return" in load
+
+
+def test_world_view_retry_and_single_modal_lifecycle_hooks():
+    render = JS[JS.index('renderOpenWorldView()'):JS.index('openWorldView()', JS.index('renderOpenWorldView()'))]
+    open_view = JS[JS.index('openWorldView()'):JS.index('drawSelectedCell', JS.index('openWorldView()'))]
+    assert 'data-retry' in render
+    assert "this.overviewError=null" in render
+    assert "target.textContent='Loading World View…'; this.loadOverview();" in render
+    assert 'this.worldViewModal && document.body.contains(this.worldViewModal)' in open_view
+    assert 'this.renderOpenWorldView(); return;' in open_view
+    assert 'this.worldViewModal.remove(); this.worldViewModal = null;' in open_view

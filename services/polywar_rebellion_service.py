@@ -1,4 +1,4 @@
-import logging, json
+import inspect, logging, json
 from datetime import datetime, timedelta
 from services import polywar_service as polywar
 from services import polywar_map_service as m
@@ -20,9 +20,9 @@ def init_rebellion_schema(conn=None):
     finally:
         if own: conn.close()
 
-def _original_presence(conn,sid,orig,x,y):
-    if _adjacent_owner(conn,sid,x,y,orig): return True
-    size=sectors.sector_size(); sx,sy=sectors.sector_coords(x,y); checks=[(sx,sy),(sx-1,sy),(sx+1,sy),(sx,sy-1),(sx,sy+1)]
+def _original_presence(conn,sid,orig,x,y,config=None):
+    if _adjacent_owner(conn,sid,x,y,orig,config=config): return True
+    size=(config.sector_size if config is not None else sectors.sector_size()); sx,sy=sectors.sector_coords(x,y,config=config); checks=[(sx,sy),(sx-1,sy),(sx+1,sy),(sx,sy-1),(sx,sy+1)]
     c=conn.cursor()
     for cx,cy in checks:
         if cx<0 or cy<0: continue
@@ -30,7 +30,8 @@ def _original_presence(conn,sid,orig,x,y):
         if rows: return True
     return False
 
-def ensure_rebellions_in_transaction(conn,season_id:int):
+def ensure_rebellions_in_transaction(conn,season_id:int,config=None):
+    config = config or m.load_map_config(conn, season_id=season_id)
     c=conn.cursor(); now=_now(); rules=public_rules()
     if str(polywar.get_setting('polywar_rebellion_enabled','true')).lower() in {'0','false','off','no'}: return []
     season=polywar._fetchone(c,'SELECT status FROM polywar_seasons WHERE id=%s',(season_id,))
@@ -49,7 +50,7 @@ def ensure_rebellions_in_transaction(conn,season_id:int):
         if int(occ.get('is_playable') or 0)!=1 or int(occ.get('is_system') or 0)==1: continue
         active_members=(polywar._fetchone(c,'SELECT COUNT(*) AS n FROM polywar_players WHERE season_id=%s AND faction_id=%s',(season_id,orig)) or {}).get('n') or 0
         if int(active_members)<=0: continue
-        if not _original_presence(conn,season_id,orig,int(cap['x']),int(cap['y'])): continue
+        if not _original_presence(conn,season_id,orig,int(cap['x']),int(cap['y']),config=config): continue
         started=cap.get('captured_at') or cap.get('controlled_since') or now
         if isinstance(started,str): started=datetime.fromisoformat(started)
         eligible=started+timedelta(hours=rules['grace_hours'])
@@ -83,11 +84,12 @@ def get_public_rebellions_readonly(conn,season_id:int,bounds=None):
 def get_public_rebellions(conn,season_id:int):
     return get_public_rebellions_readonly(conn,season_id)
 
-def _adjacent_owner(conn,sid,x,y,fid):
-    return any(m._owner_at(conn,sid,nx,ny)==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx,ny))
+def _adjacent_owner(conn,sid,x,y,fid,config=None):
+    return any((m.owner_at_with_config(conn,sid,nx,ny,config) if config is not None else m._owner_at(conn,sid,nx,ny))==fid for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if (m.in_bounds_with_config(nx,ny,config) if config is not None else m.in_bounds(nx,ny)))
 
-def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10):
-    now=now or _now(); ensure_rebellions_in_transaction(conn,season_id); c=conn.cursor(); changed=[]
+def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10,config=None):
+    config = config or m.load_map_config(conn, season_id=season_id)
+    now=now or _now(); ensure_rebellions_in_transaction(conn,season_id,config=config); c=conn.cursor(); changed=[]
     suffix='' if polywar._is_sqlite(conn) else ' FOR UPDATE'
     rows=polywar._fetchall(c,"SELECT id FROM polywar_rebellions WHERE season_id=%s AND status='active' ORDER BY id LIMIT %s",(season_id,limit))
     for row in rows:
@@ -96,13 +98,17 @@ def process_rebellion_tick(conn,season_id:int,now=None,limit:int=10):
         cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND original_faction_id=%s'+suffix,(season_id,reb['capital_original_faction_id']))
         if not cap or int(cap['controller_faction_id'])!=int(reb['controller_faction_id']): continue
         _=polywar._fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(season_id,cap['x'],cap['y']))
-        if not _original_presence(conn,season_id,int(reb['capital_original_faction_id']),int(cap['x']),int(cap['y'])): continue
+        if not _original_presence(conn,season_id,int(reb['capital_original_faction_id']),int(cap['x']),int(cap['y']),config=config): continue
         req=int(reb['required_progress']); after=min(req,int(reb['progress'] or 0)+_setting_int('polywar_rebellion_tick_progress',25,0,100000))
         if after>=req:
             polywar._execute(c,"UPDATE polywar_rebellions SET progress=%s,status='succeeded',last_tick_at=%s,resolved_at=%s,updated_at=%s WHERE id=%s AND status='active'",(after,now,now,now,reb['id']))
             if polywar._rowcount(c)!=1: continue
             from services import polywar_capital_service as caps
-            caps.transfer_capital_control(conn,season_id,cap,int(reb['capital_original_faction_id']),None,now)
+            
+            if 'config' in inspect.signature(caps.transfer_capital_control).parameters:
+                caps.transfer_capital_control(conn,season_id,cap,int(reb['capital_original_faction_id']),None,now,config=config)
+            else:
+                caps.transfer_capital_control(conn,season_id,cap,int(reb['capital_original_faction_id']),None,now)
             polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(int(reb['capital_original_faction_id']),season_id,cap['x'],cap['y']))
             outcome='rebellion_succeeded'; did_update=True
         else:
@@ -119,7 +125,7 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
     conn=polywar.get_connection(); c=conn.cursor(); managed=False; ok=False
     try:
         polywar.init_polywar_schema(conn); init_rebellion_schema(conn); world.init_world_schema(conn)
-        season=m._private_active_season(conn); sid=int(season['id']); world.ensure_world_initialized_in_transaction(conn,sid); conn.commit()
+        season=m._private_active_season(conn); sid=int(season['id']); config=m.load_map_config(conn, season_id=sid); world.ensure_world_initialized_in_transaction(conn,sid); conn.commit()
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
         if dup: return dup
         managed=world._start_world_transaction(conn); world.lock_world_rows(conn,sid)
@@ -139,7 +145,7 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         cap=polywar._fetchone(c,'SELECT * FROM polywar_capitals WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
         if not cap: raise ValueError('rebellion_required')
         _=polywar._fetchone(c,'SELECT * FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s'+suffix,(sid,x,y))
-        ensure_rebellions_in_transaction(conn,sid)
+        ensure_rebellions_in_transaction(conn,sid,config=config)
         reb=polywar._fetchone(c,"SELECT * FROM polywar_rebellions WHERE season_id=%s AND capital_original_faction_id=%s AND controller_faction_id=%s AND status='active'"+suffix,(sid,cap['original_faction_id'],cap['controller_faction_id']))
         if not reb: raise ValueError('rebellion_inactive')
         dup=mines.duplicate_outcome_response(conn,sid,user_id,idempotency_key)
@@ -147,11 +153,11 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         orig=int(reb['capital_original_faction_id']); ctrl=int(reb['controller_faction_id']); before=int(reb['progress']); req=int(reb['required_progress']); now=_now()
         if action_type=='support_rebellion':
             if int(fid)!=orig: raise ValueError('rebellion_support_forbidden')
-            if not _adjacent_owner(conn,sid,x,y,orig): raise ValueError('rebellion_not_eligible')
+            if not _adjacent_owner(conn,sid,x,y,orig,config=config): raise ValueError('rebellion_not_eligible')
             cost=public_rules()['support_energy_cost']; delta=public_rules()['support_progress']; after=min(req,before+delta); outcome='rebellion_supported'
         else:
             if int(fid)!=ctrl: raise ValueError('rebellion_suppress_forbidden')
-            if not _adjacent_owner(conn,sid,x,y,ctrl): raise ValueError('rebellion_not_eligible')
+            if not _adjacent_owner(conn,sid,x,y,ctrl,config=config): raise ValueError('rebellion_not_eligible')
             cost=public_rules()['suppress_energy_cost']; delta=-public_rules()['suppress_progress']; after=max(0,before+delta); outcome='rebellion_suppressed_progress' if after>0 else 'rebellion_fully_suppressed'
         e=polywar._energy(player)
         if e.get('is_locked'): raise ValueError('player_locked')
@@ -165,7 +171,7 @@ def rebellion_action(user_id:int,action_type:str,x:int,y:int,idempotency_key:str
         polywar._execute(c,"INSERT INTO polywar_rebellion_contributions (rebellion_id,user_id,faction_id,support_contribution,suppress_contribution,first_action_at,last_action_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (rebellion_id,user_id) DO UPDATE SET support_contribution=support_contribution+%s,suppress_contribution=suppress_contribution+%s,last_action_at=%s",(reb['id'],user_id,fid,delta if delta>0 else 0,-delta if delta<0 else 0,now,now,delta if delta>0 else 0,-delta if delta<0 else 0,now))
         if transfer:
             from services import polywar_capital_service as caps
-            caps.transfer_capital_control(conn,sid,cap,orig,user_id,now)
+            caps.transfer_capital_control(conn,sid,cap,orig,user_id,now,config=config)
             polywar._execute(c,'UPDATE polywar_cells SET owner_faction_id=%s WHERE season_id=%s AND x=%s AND y=%s',(orig,sid,x,y))
         payload={'capital':{'x':x,'y':y},'original_faction_id':orig,'controller_faction_id':ctrl,'progress_before':before,'progress_after':after,'required':req,'energy_cost':cost,'resolved_status':status,'capital_transfer':transfer,'energy':energy}
         mines.insert_outcome(conn,sid,user_id,idempotency_key,action_type,x,y,outcome,cost,payload,now); polywar._execute(c,'INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)',(sid,user_id,fid,outcome,outcome,now))

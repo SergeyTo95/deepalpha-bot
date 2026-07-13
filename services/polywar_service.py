@@ -256,7 +256,7 @@ def init_polywar_schema(conn=None) -> None:
                 _add_col(conn, "polywar_factions", spec)
             except Exception:
                 pass
-        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1"]:
+        for spec in ["winner_faction_id INTEGER NULL", "victory_type TEXT NULL", "finalization_started_at TIMESTAMP NULL", "finalized_at TIMESTAMP NULL", "domination_faction_id INTEGER NULL", "domination_started_at TIMESTAMP NULL", "results_hash TEXT NULL", "finalization_version INTEGER NOT NULL DEFAULT 1", "map_width INTEGER NULL", "map_height INTEGER NULL", "map_chunk_size INTEGER NULL", "map_sector_size INTEGER NULL", "map_starting_area_size INTEGER NULL", "map_base_layout_json TEXT NULL", "map_world_version INTEGER NOT NULL DEFAULT 1", "map_snapshot_at TIMESTAMP NULL"]:
             try:
                 from services.polywar_sector_service import _add_col
                 _add_col(conn, "polywar_seasons", spec)
@@ -385,7 +385,10 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
         raise RuntimeError("polywar_season_finalizing")
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
     if row:
+        from services import polywar_map_service as _map
+        _map.ensure_season_map_snapshot(conn, int(row["id"]))
         _ensure_faction_stats_for_season(conn, int(row["id"]))
+        row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
         return _public_season(row)
     start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
     _execute(c, """
@@ -395,7 +398,10 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE status = %s ORDER BY starts_at DESC LIMIT 1", ("active",))
     if not row:
         raise RuntimeError("polywar_active_season_unavailable")
+    from services import polywar_map_service as _map
+    _map.ensure_season_map_snapshot(conn, int(row["id"]))
     _ensure_faction_stats_for_season(conn, int(row["id"]))
+    row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
     return _public_season(row)
 
 def ensure_active_season() -> Dict[str, Any]:
@@ -639,12 +645,13 @@ def get_state(user_id: int) -> Dict[str, Any]:
         public_player = {k: _iso(v) if k.endswith("_at") or k == "locked_until" else v for k, v in player.items() if k != "lifetime_earned_points"}
         public_player["lifetime_airdrop_points"] = _lifetime_airdrop_points(int(user_id))
         ranking = sorted(factions, key=lambda f: (-int(f.get("influence_score") or 0), -int(f.get("active_members_count") or 0), f["id"]))
-        from services.polywar_map_service import map_width, map_height, chunk_size, max_chunks_per_request, get_starting_bases
+        from services.polywar_map_service import load_map_config, get_starting_bases_with_config
         from services import polywar_combat_service as combat_rules
         from services import polywar_sector_service as sector_rules
         from services import polywar_capital_service as capital_rules
         from services import polywar_governance_service as governance_rules
-        rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
+        config = load_map_config(conn, season=season)
+        rules = {"combat": combat_rules.public_rules(), "sectors": sector_rules.public_rules(config), "capitals": capital_rules.public_rules(), "governance": governance_rules.public_rules()}
         from services.polywar_world_service import get_public_world_state, public_rules as world_rules
         from services.polywar_rebellion_service import public_rules as rebellion_rules
         from services.polywar_finalization_service import public_rules as reward_rules
@@ -654,7 +661,7 @@ def get_state(user_id: int) -> Dict[str, Any]:
         current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
         public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
         _stage("response_build", t)
-        payload = {"ok": True, "enabled": True, "map": {"width": map_width(), "height": map_height(), "chunk_size": chunk_size(), "max_chunks_per_request": max_chunks_per_request(), "bases": get_starting_bases()}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        payload = {"ok": True, "enabled": True, "map": {"width": config.width, "height": config.height, "chunk_size": config.chunk_size, "max_chunks_per_request": config.max_chunks_per_request, "bases": get_starting_bases_with_config(config)}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
         logger.info("polywar_state_stage user_id=%s stage=total duration_ms=%.2f", int(user_id), (time.monotonic() - total_t0) * 1000)
         return _normalize_public_temporal(payload)
     except Exception:

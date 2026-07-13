@@ -123,14 +123,15 @@ def _bucket(secret_seed: str, season_id: int, x: int, y: int) -> int:
     return int.from_bytes(digest[:8], "big") % 10000
 
 
-def is_safe_zone(x: int, y: int, conn=None, season_id=None) -> bool:
+def is_safe_zone(x: int, y: int, conn=None, season_id=None, config=None) -> bool:
     if conn is not None and season_id is not None:
         from services import polywar_world_service as world
         if world.is_rift(conn, int(season_id), int(x), int(y)):
             return True
     from services import polywar_map_service as m
-    half = m.starting_area_size() // 2
-    for bx, by in m.faction_base_positions().values():
+    half = (config.starting_area_size if config is not None else m.starting_area_size()) // 2
+    bases = config.bases.values() if config is not None else m.faction_base_positions().values()
+    for bx, by in bases:
         dx = max(0, abs(int(x) - bx) - half)
         dy = max(0, abs(int(y) - by) - half)
         if max(dx, dy) <= 5:
@@ -138,8 +139,8 @@ def is_safe_zone(x: int, y: int, conn=None, season_id=None) -> bool:
     return False
 
 
-def deterministic_mine_exists(season_id: int, secret_seed: str, x: int, y: int, terrain: str) -> bool:
-    if terrain not in _CAPTURABLE or is_safe_zone(x, y):
+def deterministic_mine_exists(season_id: int, secret_seed: str, x: int, y: int, terrain: str, config=None) -> bool:
+    if terrain not in _CAPTURABLE or is_safe_zone(x, y, config=config):
         return False
     bp = density_bp(terrain)
     if bp <= 0:
@@ -161,29 +162,30 @@ def is_mine_triggered(conn, season_id, x, y):
     return bool(polywar._fetchone(conn.cursor(), "SELECT id FROM polywar_mine_events WHERE season_id=%s AND x=%s AND y=%s AND event_type=%s", (season_id, x, y, "triggered")))
 
 
-def active_mine_at(conn, season_id: int, secret_seed: str, x: int, y: int, terrain: str) -> bool:
+def active_mine_at(conn, season_id: int, secret_seed: str, x: int, y: int, terrain: str, config=None) -> bool:
     from services import polywar_map_service as m
-    if is_safe_zone(x, y, conn, season_id): return False
-    if m._owner_at(conn, season_id, x, y) is not None:
+    if is_safe_zone(x, y, conn, season_id, config=config): return False
+    if (m.owner_at_with_config(conn, season_id, x, y, config) if config is not None else m._owner_at(conn, season_id, x, y)) is not None:
         return False
-    return deterministic_mine_exists(season_id, secret_seed, x, y, terrain) and not is_mine_triggered(conn, season_id, x, y)
+    return deterministic_mine_exists(season_id, secret_seed, x, y, terrain, config=config) and not is_mine_triggered(conn, season_id, x, y)
 
 
-def adjacent_mine_count(conn, season_id: int, secret_seed: str, x: int, y: int) -> int:
+def adjacent_mine_count(conn, season_id: int, secret_seed: str, x: int, y: int, config=None) -> int:
     from services import polywar_map_service as m
     count = 0
     for yy in range(y - 1, y + 2):
         for xx in range(x - 1, x + 2):
-            if xx == x and yy == y or not m.in_bounds(xx, yy):
+            if xx == x and yy == y or not (m.in_bounds_with_config(xx, yy, config) if config is not None else m.in_bounds(xx, yy)):
                 continue
-            if active_mine_at(conn, season_id, secret_seed, xx, yy, m.terrain_at(secret_seed, xx, yy)):
+            terr = m.terrain_at_with_config(secret_seed, xx, yy, config) if config is not None else m.terrain_at(secret_seed, xx, yy)
+            if active_mine_at(conn, season_id, secret_seed, xx, yy, terr, config=config):
                 count += 1
     return count
 
 
-def upsert_safe_hint(conn, season_id, faction_id, x, y, user_id, secret_seed, now=None):
+def upsert_safe_hint(conn, season_id, faction_id, x, y, user_id, secret_seed, now=None, config=None):
     now = now or datetime.utcnow()
-    n = adjacent_mine_count(conn, season_id, secret_seed, x, y)
+    n = adjacent_mine_count(conn, season_id, secret_seed, x, y, config=config)
     polywar._execute(conn.cursor(), """INSERT INTO polywar_cell_intel (season_id,faction_id,x,y,intel_type,adjacent_mines,discovered_by_user_id,discovered_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,faction_id,x,y,intel_type) DO UPDATE SET adjacent_mines=excluded.adjacent_mines, updated_at=excluded.updated_at""", (season_id, faction_id, x, y, "safe_hint", n, user_id, now, now))
     return n
 
@@ -198,12 +200,12 @@ def try_trigger_mine(conn, season_id, x, y, user_id, faction_id, idempotency_key
     return polywar._rowcount(c) == 1
 
 
-def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None):
+def record_triggered_mine(conn, season_id, faction_id, user_id, x, y, idempotency_key, secret_seed, now=None, config=None):
     now = now or datetime.utcnow()
     polywar._execute(conn.cursor(), "INSERT INTO polywar_cell_intel (season_id,faction_id,x,y,intel_type,adjacent_mines,discovered_by_user_id,discovered_at,updated_at) VALUES (%s,%s,%s,%s,%s,NULL,%s,%s,%s) ON CONFLICT (season_id,faction_id,x,y,intel_type) DO UPDATE SET updated_at=excluded.updated_at", (season_id, faction_id, x, y, "triggered_mine", user_id, now, now))
     rows = polywar._fetchall(conn.cursor(), "SELECT DISTINCT faction_id,x,y FROM polywar_cell_intel WHERE season_id=%s AND intel_type=%s AND x >= %s AND x <= %s AND y >= %s AND y <= %s", (season_id, "safe_hint", x - 1, x + 1, y - 1, y + 1))
     for row in rows:
-        upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now)
+        upsert_safe_hint(conn, season_id, int(row["faction_id"]), int(row["x"]), int(row["y"]), user_id, secret_seed, now, config=config)
 
 
 
@@ -236,19 +238,19 @@ def _private_season(conn):
     return s
 
 
-def _near_own_territory(conn, season_id, faction_id, x, y, radius=5):
+def _near_own_territory(conn, season_id, faction_id, x, y, radius=5, config=None):
     from services import polywar_map_service as m
     for yy in range(y-radius, y+radius+1):
         for xx in range(x-radius, x+radius+1):
-            if m.in_bounds(xx, yy) and max(abs(xx-x), abs(yy-y)) <= radius and m._owner_at(conn, season_id, xx, yy) == faction_id:
+            if (m.in_bounds_with_config(xx, yy, config) if config is not None else m.in_bounds(xx, yy)) and max(abs(xx-x), abs(yy-y)) <= radius and (m.owner_at_with_config(conn, season_id, xx, yy, config) if config is not None else m._owner_at(conn, season_id, xx, yy)) == faction_id:
                 return True
     return False
 
 
-def _area_has_own(conn, season_id, faction_id, cx, cy, size):
+def _area_has_own(conn, season_id, faction_id, cx, cy, size, config=None):
     from services import polywar_map_service as m
     half = size // 2
-    return any(m.in_bounds(x,y) and m._owner_at(conn, season_id, x, y) == faction_id for y in range(cy-half, cy+half+1) for x in range(cx-half, cx+half+1))
+    return any((m.in_bounds_with_config(x,y,config) if config is not None else m.in_bounds(x,y)) and (m.owner_at_with_config(conn, season_id, x, y, config) if config is not None else m._owner_at(conn, season_id, x, y)) == faction_id for y in range(cy-half, cy+half+1) for x in range(cx-half, cx+half+1))
 
 
 def _begin_immediate_retry(conn, cursor):
@@ -277,6 +279,7 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        config = m.load_map_config(conn, season_id=sid)
         conn.commit()
         dup = duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
@@ -297,15 +300,15 @@ def scan_area(user_id: int, center_x: int, center_y: int, size: int, idempotency
         if not fid: raise ValueError("faction_required")
         e = polywar._energy(player)
         if e.get("is_locked"): raise ValueError("player_locked")
-        if not m.in_bounds(center_x, center_y): raise ValueError("out_of_bounds")
+        if not m.in_bounds_with_config(center_x, center_y, config): raise ValueError("out_of_bounds")
         cost = scan_energy_cost(size)
         if int(e["current_energy"]) < cost: raise ValueError("insufficient_energy")
-        if not (_area_has_own(conn, sid, fid, center_x, center_y, size) or _near_own_territory(conn, sid, fid, center_x, center_y, 5)):
+        if not (_area_has_own(conn, sid, fid, center_x, center_y, size, config=config) or _near_own_territory(conn, sid, fid, center_x, center_y, 5, config=config)):
             raise ValueError("scan_too_far")
         half = size // 2; count = 0
         for yy in range(center_y-half, center_y+half+1):
             for xx in range(center_x-half, center_x+half+1):
-                if m.in_bounds(xx, yy) and active_mine_at(conn, sid, seed, xx, yy, m.terrain_at(seed, xx, yy)):
+                if m.in_bounds_with_config(xx, yy, config) and active_mine_at(conn, sid, seed, xx, yy, m.terrain_at_with_config(seed, xx, yy, config), config=config):
                     count += 1
         now = datetime.utcnow(); new_energy, _, energy = spend_player_energy(conn, player, cost, now)
         polywar._execute(c, "INSERT INTO polywar_scans (season_id,user_id,faction_id,center_x,center_y,scan_size,active_mine_count,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,center_x,center_y,size,count,cost,idempotency_key,now))
@@ -331,6 +334,7 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); init_polywar_mine_schema(conn)
         conn.commit()
         season = _private_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        config = m.load_map_config(conn, season_id=sid)
         conn.commit()
         _begin_immediate_retry(conn, c)
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
@@ -342,7 +346,7 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         player = polywar._fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if polywar._is_sqlite(conn) else " FOR UPDATE"), (user_id, sid))
         fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
-        if not m.in_bounds(x, y): raise ValueError("out_of_bounds")
+        if not m.in_bounds_with_config(x, y, config): raise ValueError("out_of_bounds")
         existing = polywar._fetchone(c, "SELECT id FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid, user_id, x, y))
         if active and existing:
             conn.commit(); return {"ok": True, "x": x, "y": y, "active": True, "duplicate": True}
@@ -352,16 +356,16 @@ def set_flag(user_id: int, x: int, y: int, active: bool):
         if not active:
             polywar._execute(c, "DELETE FROM polywar_flags WHERE season_id=%s AND user_id=%s AND x=%s AND y=%s", (sid,user_id,x,y))
             conn.commit(); return {"ok": True, "x": x, "y": y, "active": False}
-        terr = m.terrain_at(seed, x, y)
+        terr = m.terrain_at_with_config(seed, x, y, config)
         if terr not in _CAPTURABLE: raise ValueError("not_capturable")
-        owner = m._owner_at(conn, sid, x, y)
+        owner = m.owner_at_with_config(conn, sid, x, y, config)
         if owner is not None: raise ValueError("not_neutral")
         from services import polywar_world_service as world
         if world.is_rift(conn, sid, x, y): raise ValueError("rift_requires_seal")
         n = polywar._fetchone(c, "SELECT COUNT(*) AS count FROM polywar_flags WHERE season_id=%s AND user_id=%s", (sid, user_id))["count"]
         if int(n) >= max_flags_per_player(): raise ValueError("flag_limit")
         in_scan = bool(polywar._fetchone(c, "SELECT id FROM polywar_scans WHERE season_id=%s AND faction_id=%s AND ABS(center_x-%s) <= scan_size/2 AND ABS(center_y-%s) <= scan_size/2 LIMIT 1", (sid, fid, x, y)))
-        if not (in_scan or _near_own_territory(conn, sid, fid, x, y, 5)): raise ValueError("flag_too_far")
+        if not (in_scan or _near_own_territory(conn, sid, fid, x, y, 5, config=config)): raise ValueError("flag_too_far")
         now = datetime.utcnow()
         polywar._execute(c, "INSERT INTO polywar_flags (season_id,faction_id,user_id,x,y,flag_type,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", (sid,fid,user_id,x,y,"suspected_mine",now,now))
         conn.commit(); return {"ok": True, "x": x, "y": y, "active": True}
