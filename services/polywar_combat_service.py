@@ -68,12 +68,12 @@ def _begin(conn, c):
 
 
 def _dup(conn, sid, uid, key): return mines.duplicate_outcome_response(conn, sid, uid, key)
-def _owner(conn, sid, x, y): return m._owner_at(conn, sid, x, y)
+def _owner(conn, sid, x, y, config=None): return m.owner_at_with_config(conn, sid, x, y, config) if config is not None else m._owner_at(conn, sid, x, y)
 
-def _legacy_action_duplicate_response(conn, season_id, seed, user_id, action):
+def _legacy_action_duplicate_response(conn, season_id, seed, user_id, action, config=None):
     player = polywar.get_or_create_player(user_id, season_id, conn)
     e = {k: v for k, v in polywar._energy(player).items() if k != 'energy_updated_at'}
-    return {'ok': True, 'duplicate': True, 'outcome': action.get('outcome') or action.get('action_type'), 'cell': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at(seed, action['x'], action['y']), 'energy_cost': action['energy_cost']}, 'energy': e}
+    return {'ok': True, 'duplicate': True, 'outcome': action.get('outcome') or action.get('action_type'), 'cell': {'x': action['x'], 'y': action['y'], 'terrain': m.terrain_at_with_config(seed, action['x'], action['y'], config) if config is not None else m.terrain_at(seed, action['x'], action['y']), 'energy_cost': action['energy_cost']}, 'energy': e}
 
 
 def _find_duplicate(conn, sid, seed, user_id, key):
@@ -118,7 +118,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
     conn = polywar.get_connection(); c = conn.cursor(); sid = None; seed = None
     try:
         polywar.init_polywar_schema(conn); m.init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn); sectors.init_polywar_sector_schema(conn)
-        season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']
+        season = m._private_active_season(conn); sid = int(season['id']); seed = season['secret_seed']; config = m.load_map_config(conn, season_id=sid)
         from services import polywar_world_service as world
         world.ensure_world_initialized_in_transaction(conn, sid)
         conn.commit()
@@ -147,7 +147,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         sectors.ensure_starting_territories_bootstrap(conn, sid)
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
-        if not m.in_bounds(x, y): raise ValueError('out_of_bounds')
+        if not m.in_bounds_with_config(x, y, config): raise ValueError('out_of_bounds')
         cap = capitals.get_capital_at(conn, sid, x, y)
         if cap:
             raise ValueError('capital_requires_repair' if action_type == 'reinforce' else 'capital_requires_siege')
@@ -159,16 +159,16 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         except Exception:
             logger.exception("polywar_combat_rift_check_failed season_id=%s x=%s y=%s", sid, x, y)
             raise
-        terr = m.terrain_at(seed, x, y); base = m.TERRAIN_COSTS[terr]
+        terr = m.terrain_at_with_config(seed, x, y, config); base = m.TERRAIN_COSTS[terr]
         if base is None: raise ValueError('not_capturable')
-        now = datetime.utcnow(); owner = _owner(conn, sid, x, y)
+        now = datetime.utcnow(); owner = _owner(conn, sid, x, y, config)
         row = _materialize(conn, sid, x, y, owner, now) if owner is not None else None
         if row: owner = int(row['owner_faction_id'])
         before = int((row or {}).get('contest_progress') or 0); contesting = (row or {}).get('contesting_faction_id')
         if action_type == 'attack':
             if owner is None: raise ValueError('neutral_cell_requires_capture')
             if owner == fid: raise ValueError('own_cell_cannot_be_attacked')
-            if not any(_owner(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx, ny)): raise ValueError('not_frontline')
+            if not any(_owner(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds_with_config(nx, ny, config)): raise ValueError('not_frontline')
             cost = int(base) + attack_extra()
             if int(e['current_energy']) < cost: raise ValueError('insufficient_energy')
             power = attack_power(); outcome = 'attack_progress'; new_owner = owner; after = min(required(), before + power); new_contesting = fid; sector_change = None
@@ -188,7 +188,7 @@ def combat_action(user_id: int, action_type: str, x: int, y: int, idempotency_ke
         else:
             if owner != fid: raise ValueError('not_cell_owner')
             if before <= 0: raise ValueError('cell_not_contested')
-            if not any(_owner(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds(nx, ny)): raise ValueError('not_frontline')
+            if not any(_owner(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if m.in_bounds_with_config(nx, ny, config)): raise ValueError('not_frontline')
             cost = reinforce_cost()
             if int(e['current_energy']) < cost: raise ValueError('insufficient_energy')
             after = max(0, before - reinforce_power()); outcome = 'reinforced' if after > 0 else 'contest_cleared'; new_owner = owner; new_contesting = contesting if after > 0 else None; sector_change = None

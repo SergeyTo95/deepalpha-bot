@@ -50,3 +50,43 @@ def test_existing_coordinate_expands_snapshot_and_never_shrinks_or_updates_coord
 def test_repeated_backfill_idempotent_and_malformed_layout_safe():
     c=setup(); assert m.ensure_season_map_snapshot(c,1) is True; first=c.execute('select map_base_layout_json from polywar_seasons').fetchone()[0]; assert m.ensure_season_map_snapshot(c,1) is False
     c.execute("update polywar_seasons set map_base_layout_json='bad'"); c.commit(); assert m.parse_base_layout_json('bad',1000,1000) is None; assert m.ensure_season_map_snapshot(c,1) is True; assert c.execute('select map_base_layout_json from polywar_seasons').fetchone()[0] == first
+
+
+def test_postgresql_coordinate_sources_use_metadata_and_skip_rebellions(monkeypatch):
+    class Conn:
+        pass
+    conn = Conn()
+    monkeypatch.setattr(p, '_is_sqlite', lambda c: False)
+    def fake_fetchall(cur, sql, params=()):
+        assert 'polywar_rebellions' not in sql
+        if 'information_schema.columns' in sql:
+            return [
+                {'table_name':'polywar_cells','column_name':'x'}, {'table_name':'polywar_cells','column_name':'y'},
+                {'table_name':'polywar_mine_events','column_name':'x'}, {'table_name':'polywar_mine_events','column_name':'y'},
+                {'table_name':'polywar_rebellions','column_name':'capital_id'},
+            ]
+        return []
+    conn.cursor = lambda: object()
+    monkeypatch.setattr(p, '_fetchall', fake_fetchall)
+    sources = m.get_existing_coordinate_sources(conn)
+    assert sources['polywar_mine_events'] == ('x','y')
+    assert 'polywar_rebellions' not in sources
+
+
+def test_state_response_uses_snapshot_after_global_settings_change(monkeypatch):
+    import uuid
+    uri=f"file:state_snapshot_{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper=sqlite3.connect(uri, uri=True, check_same_thread=False); keeper.row_factory=sqlite3.Row
+    settings={'polywar_map_width':'1000','polywar_map_height':'1000','polywar_chunk_size':'32','polywar_sector_size':'25','polywar_starting_area_size':'15'}
+    def connect():
+        c=sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=10); c.row_factory=sqlite3.Row; return c
+    monkeypatch.setattr(p,'get_connection',connect)
+    monkeypatch.setattr(p,'get_setting',lambda k,d='': settings.get(k,d))
+    monkeypatch.setattr(p,'get_airdrop_points_balance',lambda uid:{'total':0,'balance':0})
+    c=connect(); p.init_polywar_schema(c); p.ensure_factions(c); c.commit(); p.begin_serialized_transaction(c); season=p.ensure_active_season_in_transaction(c); c.commit(); c.close()
+    settings.update({'polywar_map_width':'32000','polywar_map_height':'32000','polywar_chunk_size':'64','polywar_sector_size':'100'})
+    state=p.get_state(10001)
+    assert state['map']['width']==1000 and state['map']['height']==1000
+    assert state['map']['chunk_size']==32 and state['rules']['sectors']['sector_size']==25
+    assert state['map']['bases'][0]['x'] == m.load_map_config(connect(), season_id=season['id']).bases[1][0]
+    keeper.close()

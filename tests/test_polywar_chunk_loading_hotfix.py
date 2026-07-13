@@ -75,7 +75,7 @@ def test_postgresql_get_capitals_uses_module_map_import(monkeypatch):
     monkeypatch.setattr(caps.polywar, '_is_sqlite', lambda c: False)
     monkeypatch.setattr(caps.polywar, 'get_connection', lambda: conn)
     monkeypatch.setattr(caps.m, 'begin_polywar_readonly', lambda c: calls.append('begin_readonly'))
-    monkeypatch.setattr(caps.m, 'load_map_config', lambda c: SimpleNamespace(capital_siege_required=777))
+    monkeypatch.setattr(caps.m, 'load_map_config', lambda c, season=None, season_id=None: SimpleNamespace(capital_siege_required=777))
     monkeypatch.setattr(caps.m, 'get_active_season_readonly', lambda c: {'id': 9})
     out = caps.get_capitals(123)
     assert out['ok'] and out['siege_required'] == 777
@@ -144,7 +144,7 @@ def test_get_sectors_uses_config_sector_size_without_get_setting(monkeypatch):
     monkeypatch.setattr(sectors.polywar, 'get_connection', get_conn)
     monkeypatch.setattr(sectors.polywar, 'get_setting', lambda *a, **k: (_ for _ in ()).throw(AssertionError('get_setting called')))
     from services import polywar_map_service as map_service
-    monkeypatch.setattr(map_service, 'load_map_config', lambda c: cfg)
+    monkeypatch.setattr(map_service, 'load_map_config', lambda c, season=None, season_id=None: cfg)
     monkeypatch.setattr(map_service, 'get_active_season_readonly', lambda c: {'id': 3})
     monkeypatch.setattr(sectors, '_set_read_timeouts', lambda c: None)
     out = sectors.get_sectors(1, 0, 0, 0, 0)

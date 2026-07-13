@@ -34,3 +34,21 @@ def test_overview_uses_single_connection(monkeypatch):
 def test_postgresql_tuple_dict_row_mapping():
     class Cur: description=(('a',),('b',))
     assert p._row_to_dict(Cur(), (1,2)) == {'a':1,'b':2}
+
+
+def test_overview_sector_query_is_sql_aggregated_and_bounded(monkeypatch):
+    c=make(monkeypatch)
+    rows=[]
+    for i in range(50000):
+        rows.append((1, i % 200, i // 200, (i % 7)+1, 10, (i % 7)+1, 10, 80, 0, '2026-01-01'))
+    c.executemany('insert into polywar_sectors(season_id,sector_x,sector_y,controller_faction_id,total_claimed_cells,leading_faction_id,leading_cells,dominance_percent,is_contested,updated_at) values(?,?,?,?,?,?,?,?,?,?)', rows)
+    c.commit(); ov._CACHE.clear()
+    seen=[]; orig=p._fetchall
+    def wrapped(cur, sql, params=()):
+        if 'FROM polywar_sectors' in sql:
+            seen.append(sql)
+        return orig(cur, sql, params)
+    monkeypatch.setattr(p,'_fetchall',wrapped)
+    out=ov.build_world_overview(1)
+    assert len(out['overview_grid']['cells']) <= 128*128
+    assert any('GROUP BY' in q and 'LIMIT' in q for q in seen)

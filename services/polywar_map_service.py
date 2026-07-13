@@ -197,6 +197,9 @@ def _smooth(seed, x, y, scale):
 def in_bounds(x, y):
     return 0 <= int(x) < map_width() and 0 <= int(y) < map_height()
 
+def in_bounds_with_config(x, y, config: PolyWarMapConfig):
+    return 0 <= int(x) < int(config.width) and 0 <= int(y) < int(config.height)
+
 
 def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> str:
     if not (0 <= int(x) < config.width and 0 <= int(y) < config.height):
@@ -284,6 +287,10 @@ def get_starting_bases():
     colors = {fid: color for fid, _, _, color, _ in polywar.FACTIONS}
     return [{"faction_id": fid, "x": x, "y": y, "size": starting_area_size(), "color": colors.get(fid)} for fid, (x, y) in faction_base_positions().items()]
 
+def get_starting_bases_with_config(config: PolyWarMapConfig):
+    colors = {fid: color for fid, _, _, color, _ in polywar.FACTIONS}
+    return [{"faction_id": fid, "x": x, "y": y, "size": config.starting_area_size, "color": colors.get(fid)} for fid, (x, y) in sorted(config.bases.items())]
+
 
 def start_owner_with_config(x, y, config: PolyWarMapConfig):
     half = config.starting_area_size // 2
@@ -303,6 +310,12 @@ def _private_active_season(conn):
     s["secret_seed"] = row["secret_seed"]
     return s
 
+
+def owner_at_with_config(conn, season_id, x, y, config: PolyWarMapConfig):
+    row = polywar._fetchone(conn.cursor(), "SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s", (season_id, x, y))
+    if row:
+        return int(row["owner_faction_id"])
+    return start_owner_with_config(x, y, config)
 
 def _owner_at(conn, season_id, x, y):
     row = polywar._fetchone(conn.cursor(), "SELECT owner_faction_id FROM polywar_cells WHERE season_id=%s AND x=%s AND y=%s", (season_id, x, y))
@@ -427,10 +440,11 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
 
 
 
-def legacy_action_duplicate_response(conn, season_id: int, seed: str, user_id: int, action: Dict[str, Any]):
+def legacy_action_duplicate_response(conn, season_id: int, seed: str, user_id: int, action: Dict[str, Any], config=None):
     player = polywar.get_or_create_player(user_id, season_id, conn)
     e = {k: v for k, v in polywar._energy(player).items() if k != "energy_updated_at"}
-    return {"ok": True, "duplicate": True, "outcome": "captured", "cell": {"x": action["x"], "y": action["y"], "terrain": terrain_at(seed, action["x"], action["y"]), "owner_faction_id": action.get("faction_id"), "energy_cost": action["energy_cost"]}, "energy": e}
+    terr = terrain_at_with_config(seed, action["x"], action["y"], config) if config else terrain_at(seed, action["x"], action["y"])
+    return {"ok": True, "duplicate": True, "outcome": "captured", "cell": {"x": action["x"], "y": action["y"], "terrain": terr, "owner_faction_id": action.get("faction_id"), "energy_cost": action["energy_cost"]}, "energy": e}
 
 def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     if not idempotency_key or len(str(idempotency_key)) > 120:
@@ -440,13 +454,14 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     try:
         polywar.init_polywar_schema(conn); init_polywar_map_schema(conn); mines.init_polywar_mine_schema(conn)
         season = _private_active_season(conn); sid, seed = int(season["id"]), season["secret_seed"]
+        config = load_map_config(conn, season_id=sid)
         from services import polywar_world_service as world
         world.ensure_world_initialized_in_transaction(conn, sid)
         conn.commit()
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
-        if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+        if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config)
         if polywar._is_sqlite(conn):
             began = False; last_lock_error = None
             for attempt in range(20):
@@ -459,13 +474,13 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
         if dup: conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
-        if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+        if existing: conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config)
         prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
         if not prepared.get('ok'):
             if prepared.get('season_finalized'):
                 conn.commit(); return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': True}
             raise ValueError(prepared.get('error') or 'season_ended')
-        if not in_bounds(x, y): raise ValueError("out_of_bounds")
+        if not in_bounds_with_config(x, y, config): raise ValueError("out_of_bounds")
         from services import polywar_capital_service as capitals
         capitals.ensure_capitals_initialized(conn, sid)
         if capitals.get_capital_at(conn, sid, x, y): raise ValueError("capital_requires_siege")
@@ -491,16 +506,16 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         if e.get("is_locked"): raise ValueError("player_locked")
         from services import polywar_sector_service as sectors
         sectors.ensure_starting_territories_bootstrap(conn, sid)
-        terr = terrain_at(seed, x, y); cost = TERRAIN_COSTS[terr]
+        terr = terrain_at_with_config(seed, x, y, config); cost = TERRAIN_COSTS[terr]
         if cost is None: raise ValueError(f"{terr}_not_capturable")
-        owner = _owner_at(conn, sid, x, y)
+        owner = owner_at_with_config(conn, sid, x, y, config)
         if owner == fid: raise ValueError("already_owned")
         if owner is not None: raise ValueError("enemy_capture_unavailable")
-        if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
+        if not any(owner_at_with_config(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds_with_config(nx, ny, config)):
             raise ValueError("not_adjacent")
         if int(e["current_energy"]) < cost: raise ValueError("insufficient_energy")
         now = datetime.utcnow()
-        mine = mines.active_mine_at(conn, sid, seed, x, y, terr)
+        mine = mines.active_mine_at(conn, sid, seed, x, y, terr, config=config)
         if mine and mines.try_trigger_mine(conn, sid, x, y, user_id, fid, idempotency_key, now):
             locked_until = now + timedelta(minutes=mines.mine_lock_minutes())
             polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
@@ -509,17 +524,17 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
             payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": None, "energy_cost": cost}, "mine_hit": True, "locked_until": polywar._iso(locked_until), "energy": energy}
             mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "mine_hit", cost, payload, now)
             conn.commit(); payload.update({"ok": True, "outcome": "mine_hit"}); return payload
-        owner = _owner_at(conn, sid, x, y)
+        owner = owner_at_with_config(conn, sid, x, y, config)
         if owner == fid: raise ValueError("already_owned")
         if owner is not None: raise ValueError("enemy_capture_unavailable")
-        if not any(_owner_at(conn, sid, nx, ny) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds(nx, ny)):
+        if not any(owner_at_with_config(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds_with_config(nx, ny, config)):
             raise ValueError("not_adjacent")
-        sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y), now)
+        sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y, config=config), now)
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
         sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now)
-        hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now)
+        hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now, config=config)
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}
         mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "captured", cost, payload, now)
         conn.commit(); payload.update({"ok": True, "outcome": "captured"}); return payload
@@ -532,7 +547,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
                 dup = mines.duplicate_outcome_response(conn, sid, user_id, idempotency_key)
                 if dup: return dup
                 existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid,user_id,idempotency_key))
-                if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+                if existing: return legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config)
             except Exception:
                 logger.exception("Failed to load duplicate PolyWar action after unique conflict")
             raise ValueError("cell_conflict") from exc
@@ -596,37 +611,56 @@ def parse_base_layout_json(raw, width, height):
     return out or None
 
 
+def get_existing_coordinate_sources(conn):
+    wanted = {
+        'polywar_cells': ('x','y'), 'polywar_actions': ('x','y'), 'polywar_capitals': ('x','y'),
+        'polywar_mine_events': ('x','y'), 'polywar_action_outcomes': ('x','y'), 'polywar_cell_intel': ('x','y'),
+        'polywar_scans': ('center_x','center_y'), 'polywar_flags': ('x','y'), 'polywar_null_rifts': ('x','y'),
+        'polywar_null_frontier': ('x','y'), 'polywar_commander_orders': ('x','y'),
+    }
+    found = {}
+    try:
+        if polywar._is_sqlite(conn):
+            tables = {r.get('name') for r in polywar._fetchall(conn.cursor(), "SELECT name FROM sqlite_master WHERE type='table'")}
+            for t, cols in wanted.items():
+                if t not in tables:
+                    continue
+                have = {r.get('name') for r in polywar._fetchall(conn.cursor(), f"PRAGMA table_info({t})")}
+                if cols[0] in have and cols[1] in have:
+                    found[t] = cols
+        else:
+            rows = polywar._fetchall(conn.cursor(), "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema = current_schema()")
+            by_table = {}
+            for r in rows:
+                by_table.setdefault(r.get('table_name'), set()).add(r.get('column_name'))
+            for t, cols in wanted.items():
+                if cols[0] in by_table.get(t, set()) and cols[1] in by_table.get(t, set()):
+                    found[t] = cols
+    except Exception:
+        logger.exception('polywar_coordinate_source_introspection_failed')
+        raise
+    return found
+
 def _max_coordinate(conn, table, season_id, cols):
     try:
-        parts = [f"MAX({c}) AS max_{c}" for c in cols]
-        row = polywar._fetchone(conn.cursor(), f"SELECT {','.join(parts)} FROM {table} WHERE season_id=%s", (int(season_id),)) or {}
-        vals = [int(row.get(f"max_{c}")) for c in cols if row.get(f"max_{c}") is not None]
-        return max(vals) if vals else None
-    except Exception as exc:
-        if 'no such table' in str(exc).lower() or 'does not exist' in str(exc).lower():
-            return None
-        return None
+        row = polywar._fetchone(conn.cursor(), f"SELECT MAX({cols[0]}) AS max_x, MAX({cols[1]}) AS max_y FROM {table} WHERE season_id=%s", (int(season_id),)) or {}
+        return row.get('max_x'), row.get('max_y')
+    except Exception:
+        logger.exception('polywar_coordinate_source_query_failed table=%s season_id=%s', table, season_id)
+        raise
 
-
-def season_coordinate_diagnostics(conn, season_id, width=None, height=None):
-    tables = {
-        'polywar_cells': ('x','y'), 'polywar_actions': ('x','y'), 'polywar_capitals': ('x','y'),
-        'polywar_mines': ('x','y'), 'polywar_flags': ('x','y'), 'polywar_null_rifts': ('x','y'),
-        'polywar_commander_orders': ('x','y'), 'polywar_rebellions': ('x','y'), 'polywar_scans': ('center_x','center_y'),
-    }
-    max_x = max_y = None
-    by_table = {}
-    for t, cols in tables.items():
-        mx = _max_coordinate(conn, t, season_id, [cols[0]])
-        my = _max_coordinate(conn, t, season_id, [cols[1]])
-        by_table[t] = {'max_x': mx, 'max_y': my}
+def season_coordinate_diagnostics(conn, season_id, width=None, height=None, sources=None):
+    sources = sources if sources is not None else get_existing_coordinate_sources(conn)
+    max_x = max_y = None; by_table = {}
+    for t, cols in sources.items():
+        mx, my = _max_coordinate(conn, t, season_id, cols)
+        mx = int(mx) if mx is not None else None; my = int(my) if my is not None else None
+        by_table[t] = {'max_x': mx, 'max_y': my, 'columns': cols}
         if mx is not None: max_x = mx if max_x is None else max(max_x, mx)
         if my is not None: max_y = my if max_y is None else max(max_y, my)
     return {'season_id': int(season_id), 'max_x': max_x, 'max_y': max_y, 'tables': by_table, 'width': width, 'height': height}
 
-
 def ensure_season_map_snapshot(conn, season_id):
-    ensure_map_snapshot_schema(conn)
     c = conn.cursor()
     suffix = '' if polywar._is_sqlite(conn) else ' FOR UPDATE'
     season = polywar._fetchone(c, 'SELECT * FROM polywar_seasons WHERE id=%s' + suffix, (int(season_id),))
@@ -647,7 +681,8 @@ def ensure_season_map_snapshot(conn, season_id):
     layout = {int(fid): (int(x), int(y)) for fid, (x, y) in defaults.bases.items()}
     for r in capitals:
         layout[int(r['original_faction_id'])] = (int(r['x']), int(r['y']))
-    diag = season_coordinate_diagnostics(conn, season_id)
+    sources = get_existing_coordinate_sources(conn)
+    diag = season_coordinate_diagnostics(conn, season_id, sources=sources)
     max_hq_x = max(x for x, _ in layout.values()) if layout else -1
     max_hq_y = max(y for _, y in layout.values()) if layout else -1
     width = max(int(defaults.width), int(diag.get('max_x') if diag.get('max_x') is not None else -1) + 1, max_hq_x + 1)

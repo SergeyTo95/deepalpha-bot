@@ -288,3 +288,15 @@ def test_world_view_minimap_static_hooks_present():
     assert 'id="openWorldView"' in js and 'World View' in js
     assert 'polywarMinimapCanvas' in js and 'jumpToWorldPosition' in js
     assert '.polywar-minimap' in css and '.polywar-world-view' in css
+
+
+def test_lod2_and_letterbox_runtime_hooks_are_wired():
+    from pathlib import Path
+    js = Path('webapp/polywar.js').read_text()
+    draw = js.split('  draw() {', 1)[1].split('  drawCellGrid', 1)[0]
+    assert 'const ctx = this.ctx, lod = this.lodLevel()' in js
+    assert 'if (lod === 2)' in draw and 'drawCoarseWorld(ctx)' in draw
+    assert 'this.drawTerrainTile' not in draw.split('if (lod === 2)',1)[1].split('const visible',1)[0]
+    assert 'overviewTransform(canvas' in js and 'overviewPointerToWorld(canvas' in js
+    assert 'nearestHqAt(canvas' in js and 'radiusPx*radiusPx' in js
+    assert 'renderOpenWorldView()' in js and 'data-retry' in js

@@ -25,9 +25,9 @@ def influence_value(): return _setting_int('polywar_sector_influence_value', 100
 def max_sectors_per_request(): return _setting_int('polywar_max_sectors_per_request', 100, 1, 500)
 
 
-def public_rules():
+def public_rules(config=None):
     return {
-        'sector_size': sector_size(),
+        'sector_size': int(config.sector_size) if config is not None else sector_size(),
         'min_claimed_cells': min_claimed(),
         'control_percent': control_percent(),
         'influence_value': influence_value(),
@@ -35,8 +35,8 @@ def public_rules():
     }
 
 
-def sector_coords(x: int, y: int) -> Tuple[int, int]:
-    s = sector_size()
+def sector_coords(x: int, y: int, config=None, sector_size_override=None) -> Tuple[int, int]:
+    s = int(sector_size_override or (config.sector_size if config is not None else sector_size()))
     return int(x) // s, int(y) // s
 
 
@@ -358,10 +358,7 @@ def get_sectors(user_id, min_sx, max_sx, min_sy, max_sy):
     try:
         _set_read_timeouts(conn)
         season = m.get_active_season_readonly(conn)
-        try:
-            config = m.load_map_config(conn, season=season)
-        except TypeError:
-            config = m.load_map_config(conn)
+        config = m.load_map_config(conn, season=season)
         max_x = math.ceil(config.width / config.sector_size) - 1
         max_y = math.ceil(config.height / config.sector_size) - 1
         if max_sx > max_x or max_sy > max_y:

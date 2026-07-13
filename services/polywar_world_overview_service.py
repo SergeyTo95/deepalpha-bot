@@ -37,12 +37,22 @@ def _cache_set(key, value):
             _CACHE.popitem(last=False)
 
 
-def _latest(conn, table, season_id):
+def _table_columns(conn, table):
     try:
-        row = polywar._fetchone(conn.cursor(), f"SELECT MAX(updated_at) AS v FROM {table} WHERE season_id=%s", (int(season_id),)) or {}
-        return row.get('v') or ''
+        if polywar._is_sqlite(conn):
+            rows = polywar._fetchall(conn.cursor(), f"PRAGMA table_info({table})")
+            return {r.get("name") for r in rows}
+        rows = polywar._fetchall(conn.cursor(), "SELECT column_name AS name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=%s", (table,))
+        return {r.get("name") for r in rows}
     except Exception:
-        return ''
+        return set()
+
+def _latest(conn, table, season_id):
+    cols = _table_columns(conn, table)
+    if "updated_at" not in cols:
+        return ""
+    row = polywar._fetchone(conn.cursor(), f"SELECT MAX(updated_at) AS v FROM {table} WHERE season_id=%s", (int(season_id),)) or {}
+    return row.get("v") or ""
 
 
 def _grid(config):
@@ -89,15 +99,18 @@ def build_world_overview(user_id=None):
         if cached:
             return cached
         cells_by_key = _implicit_bins(config, cols, rows)
-        rows_db = polywar._fetchall(conn.cursor(), 'SELECT sector_x,sector_y,controller_faction_id,leading_faction_id,dominance_percent,is_contested,total_claimed_cells FROM polywar_sectors WHERE season_id=%s AND (controller_faction_id IS NOT NULL OR leading_faction_id IS NOT NULL OR total_claimed_cells>0)', (sid,))
+        expr_x = f"CAST(sector_x / {int(sx_bin)} AS INTEGER)"
+        expr_y = f"CAST(sector_y / {int(sy_bin)} AS INTEGER)"
+        faction_expr = "COALESCE(controller_faction_id, leading_faction_id, 0)"
+        rows_db = polywar._fetchall(conn.cursor(), f'''SELECT {expr_x} AS grid_x,{expr_y} AS grid_y,{faction_expr} AS faction_id,COUNT(*) AS controlled_sector_count,SUM(total_claimed_cells) AS total_claimed_cells,SUM(CASE WHEN is_contested THEN 1 ELSE 0 END) AS contested_count FROM polywar_sectors WHERE season_id=%s AND (controller_faction_id IS NOT NULL OR leading_faction_id IS NOT NULL OR total_claimed_cells>0) GROUP BY grid_x,grid_y,faction_id LIMIT %s''', (sid, int(cols * rows * 8)))
         accum: Dict[Tuple[int,int], Dict[int,int]] = {}
         meta = {}
         for r in rows_db:
-            gx = min(cols - 1, int(r['sector_x']) // sx_bin); gy = min(rows - 1, int(r['sector_y']) // sy_bin)
-            k=(gx,gy); fid = int(r.get('controller_faction_id') or r.get('leading_faction_id') or 0)
-            accum.setdefault(k, {})[fid] = accum.setdefault(k, {}).get(fid, 0) + 1
+            gx = min(cols - 1, int(r['grid_x'])); gy = min(rows - 1, int(r['grid_y']))
+            k=(gx,gy); fid = int(r.get('faction_id') or 0); n = int(r.get('controlled_sector_count') or 0)
+            accum.setdefault(k, {})[fid] = accum.setdefault(k, {}).get(fid, 0) + n
             mm = meta.setdefault(k, {'claimed':0,'contested':False})
-            mm['claimed'] += int(r.get('total_claimed_cells') or 0); mm['contested'] = mm['contested'] or bool(r.get('is_contested'))
+            mm['claimed'] += int(r.get('total_claimed_cells') or 0); mm['contested'] = mm['contested'] or int(r.get('contested_count') or 0) > 0
         for k, counts in accum.items():
             best = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
             total = max(1, sum(counts.values()))
@@ -107,9 +120,8 @@ def build_world_overview(user_id=None):
         hq = [{'faction_id': fid, 'x': x, 'y': y, 'name': f"{fmap.get(fid,{}).get('name','Faction')} HQ", 'color': fmap.get(fid,{}).get('color'), 'is_player_faction': False} for fid,(x,y) in sorted(config.bases.items())]
         caps = polywar._fetchall(conn.cursor(), 'SELECT original_faction_id,controller_faction_id,x,y,besieging_faction_id,siege_progress,captured_at FROM polywar_capitals WHERE season_id=%s ORDER BY original_faction_id', (sid,))
         rifts = []
-        try:
+        if {'x','y','status'}.issubset(_table_columns(conn, 'polywar_null_rifts')):
             rifts = polywar._fetchall(conn.cursor(), "SELECT x,y,status FROM polywar_null_rifts WHERE season_id=%s AND status IN ('active','sealed') LIMIT 200", (sid,))
-        except Exception: pass
         revision = _rev(*key)
         out = {'ok': True, 'season_id': sid, 'revision': revision, 'world': {'width': config.width, 'height': config.height, 'chunk_size': config.chunk_size, 'sector_size': config.sector_size, 'world_version': int(season.get('map_world_version') or 1), 'sector_columns': sector_cols, 'sector_rows': sector_rows}, 'overview_grid': {'columns': cols, 'rows': rows, 'world_per_column': config.width / cols, 'world_per_row': config.height / rows, 'cells': list(cells_by_key.values())}, 'factions': factions, 'hq': hq, 'capitals': [{**c, 'is_under_siege': int(c.get('siege_progress') or 0)>0, 'is_captured': int(c.get('original_faction_id')) != int(c.get('controller_faction_id'))} for c in caps], 'major_objects': [{'type':'rift','x':int(r['x']),'y':int(r['y']),'status':r.get('status'),'importance':2} for r in rifts], 'stats': {'controlled_sectors': len(rows_db), 'contested_sectors': sum(1 for c in cells_by_key.values() if c.get('is_contested'))}, 'server_timestamp': int(time.time())}
         _cache_set(key, out)
