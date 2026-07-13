@@ -75,3 +75,11 @@ def test_overview_stats_sum_aggregated_counts(monkeypatch):
     c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
     assert out['stats']['controlled_sectors'] >= 2
     assert out['stats']['contested_sectors'] >= 1
+
+
+def test_overview_includes_bounded_starting_zones(monkeypatch):
+    c=make(monkeypatch); ov._CACHE.clear(); out=ov.build_world_overview(1)
+    assert len(out['starting_zones']) == 7
+    z=out['starting_zones'][0]
+    assert {'faction_id','min_x','min_y','max_x','max_y'} <= set(z)
+    assert z['min_x'] >= 0 and z['max_x'] < out['world']['width']
