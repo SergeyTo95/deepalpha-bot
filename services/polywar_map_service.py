@@ -499,7 +499,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
             conn.commit(); return dup
         existing = polywar._fetchone(c, "SELECT * FROM polywar_actions WHERE season_id=%s AND user_id=%s AND idempotency_key=%s", (sid, user_id, idempotency_key))
         if existing:
-            conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing)
+            conn.commit(); return legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config)
         fid = player.get("faction_id")
         if not fid: raise ValueError("faction_required")
         e = polywar._energy(player)
@@ -616,7 +616,7 @@ def get_existing_coordinate_sources(conn):
         'polywar_cells': ('x','y'), 'polywar_actions': ('x','y'), 'polywar_capitals': ('x','y'),
         'polywar_mine_events': ('x','y'), 'polywar_action_outcomes': ('x','y'), 'polywar_cell_intel': ('x','y'),
         'polywar_scans': ('center_x','center_y'), 'polywar_flags': ('x','y'), 'polywar_null_rifts': ('x','y'),
-        'polywar_null_frontier': ('x','y'), 'polywar_commander_orders': ('x','y'),
+        'polywar_null_frontier': ('x','y'), 'polywar_faction_orders': ('x','y'),
     }
     found = {}
     try:

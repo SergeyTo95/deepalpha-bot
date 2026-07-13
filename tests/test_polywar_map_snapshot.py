@@ -168,3 +168,48 @@ def test_mine_and_duplicate_responses_thread_config_static():
     assert '_legacy_action_duplicate_response(conn, sid, seed, user_id, existing, config=config)' in combat
     assert 'def _duplicate_response(conn, sid, seed, uid, key, config=None)' in capital
     assert "m.terrain_at_with_config(seed, int(action['x']), int(action['y']), config)" in capital
+
+
+def test_snapshot_diagnostics_use_polywar_faction_orders_and_preserve_order_coordinates(monkeypatch):
+    from services import polywar_governance_service as gov
+    c=setup(1000,1000); gov.init_polywar_governance_schema(c)
+    now=datetime.utcnow()
+    c.execute('insert into polywar_faction_orders (season_id,faction_id,commander_user_id,order_type,x,y,sector_x,sector_y,message,active,created_at,expires_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)', (1,1,11,'attack',1700,1300,0,0,'',1,now,now+timedelta(hours=1),now))
+    c.commit()
+    seen=[]; orig=p._fetchall
+    def wrapped(cur, sql, params=()):
+        seen.append(sql)
+        assert 'polywar_commander_orders' not in sql
+        return orig(cur, sql, params)
+    monkeypatch.setattr(p, '_fetchall', wrapped)
+    assert m.ensure_season_map_snapshot(c,1) is True
+    cfg=m.load_map_config(c, season_id=1)
+    assert cfg.width >= 1701 and cfg.height >= 1301
+    row=c.execute('select x,y from polywar_faction_orders where season_id=1').fetchone()
+    assert (row['x'], row['y']) == (1700, 1300)
+    assert any('polywar_faction_orders' in q or 'sqlite_master' in q for q in seen)
+
+
+def test_capture_legacy_duplicate_response_uses_snapshot_config_and_not_global_terrain(monkeypatch):
+    import uuid
+    from services import polywar_world_service as world
+    uri=f"file:capture_duplicate_snapshot_{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper=sqlite3.connect(uri, uri=True, check_same_thread=False); keeper.row_factory=sqlite3.Row
+    settings={'polywar_map_width':'1000','polywar_map_height':'1000','polywar_chunk_size':'64','polywar_sector_size':'25','polywar_starting_area_size':'15'}
+    def connect():
+        c=sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=10); c.row_factory=sqlite3.Row; return c
+    monkeypatch.setattr(p,'get_connection',connect)
+    monkeypatch.setattr(p,'get_setting',lambda k,d='': settings.get(k,d))
+    c=connect(); p.init_polywar_schema(c); m.init_polywar_map_schema(c); world.init_world_schema(c); p.ensure_factions(c)
+    now=datetime.utcnow(); c.execute('insert into polywar_seasons(name,status,starts_at,ends_at,secret_seed,created_at) values(?,?,?,?,?,?)',('S','active',now,now+timedelta(days=1),'snapshot-seed',now)); m.ensure_season_map_snapshot(c,1)
+    cfg=m.load_map_config(c, season_id=1); x,y=cfg.bases[1][0]+8,cfg.bases[1][1]
+    c.execute('insert into polywar_players(user_id,season_id,faction_id,joined_at,last_active_at,current_energy,max_energy,energy_updated_at) values(?,?,?,?,?,?,?,?)',(777,1,1,now,now,10,10,now))
+    c.execute('insert into polywar_actions(season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) values(?,?,?,?,?,?,?,?,?)',(1,777,1,'capture',x,y,1,'legacy-dupe',now))
+    c.commit(); c.close()
+    settings.update({'polywar_map_width':'32000','polywar_map_height':'32000','polywar_sector_size':'100'})
+    expected=m.terrain_at_with_config('snapshot-seed',x,y,cfg)
+    monkeypatch.setattr(m,'terrain_at',lambda *a, **k: (_ for _ in ()).throw(AssertionError('global terrain_at called')))
+    out=m.capture_cell(777,x,y,'legacy-dupe')
+    assert out['duplicate'] is True
+    assert out['cell']['terrain'] == expected
+    keeper.close()

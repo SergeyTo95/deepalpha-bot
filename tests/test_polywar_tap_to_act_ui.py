@@ -315,3 +315,23 @@ def test_lod2_preserves_selected_and_pending_without_detailed_chunks():
     assert 'this.drawSelectedCell(ctx)' in draw
     assert 'this.drawPendingPulse(ctx)' in draw
     assert 'drawTerrainTile' not in draw
+
+
+def test_world_view_load_overview_handles_api_ok_false_and_stale_state():
+    load = JS[JS.index('async loadOverview()'):JS.index('overviewTransform(canvas', JS.index('async loadOverview()'))]
+    assert "if (!data?.ok)" in load
+    assert "this.overviewError = data?.error || 'overview_failed'" in load
+    assert "this.overviewError = 'stale_overview'" in load
+    assert load.count('this.renderOpenWorldView()') >= 4
+    assert "if (seq !== polywarOverviewSeq || this.destroyed) return" in load
+
+
+def test_world_view_retry_and_single_modal_lifecycle_hooks():
+    render = JS[JS.index('renderOpenWorldView()'):JS.index('openWorldView()', JS.index('renderOpenWorldView()'))]
+    open_view = JS[JS.index('openWorldView()'):JS.index('drawSelectedCell', JS.index('openWorldView()'))]
+    assert 'data-retry' in render
+    assert "this.overviewError=null" in render
+    assert "target.textContent='Loading World View…'; this.loadOverview();" in render
+    assert 'this.worldViewModal && document.body.contains(this.worldViewModal)' in open_view
+    assert 'this.renderOpenWorldView(); return;' in open_view
+    assert 'this.worldViewModal.remove(); this.worldViewModal = null;' in open_view

@@ -537,7 +537,37 @@ class PolyWarMap {
     const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
   }
   lodLevel() { if (this.cell >= 14) return 0; if (this.cell >= 6) return 1; if (this.cell >= 3) return 2; return 3; }
-  async loadOverview() { const seq = ++polywarOverviewSeq; try { const data = await api('/api/polywar/world/overview'); if (seq !== polywarOverviewSeq || this.destroyed) return; if (!data?.ok || Number(data.season_id) !== Number(currentState?.season?.id)) return; this.overview = data; this.overviewError = null; this.drawMinimap(); this.renderOpenWorldView(); } catch (e) { this.overviewError = e?.message || 'overview_failed'; this.drawMinimap(); this.renderOpenWorldView(); } }
+  async loadOverview() {
+    const seq = ++polywarOverviewSeq;
+    try {
+      const data = await api('/api/polywar/world/overview');
+      if (seq !== polywarOverviewSeq || this.destroyed) return;
+      if (!data?.ok) {
+        this.overview = null;
+        this.overviewError = data?.error || 'overview_failed';
+        this.drawMinimap();
+        this.renderOpenWorldView();
+        return;
+      }
+      if (Number(data.season_id) !== Number(currentState?.season?.id)) {
+        this.overview = null;
+        this.overviewError = 'stale_overview';
+        this.drawMinimap();
+        this.renderOpenWorldView();
+        return;
+      }
+      this.overview = data;
+      this.overviewError = null;
+      this.drawMinimap();
+      this.renderOpenWorldView();
+    } catch (e) {
+      if (seq !== polywarOverviewSeq || this.destroyed) return;
+      this.overview = null;
+      this.overviewError = e?.message || 'overview_failed';
+      this.drawMinimap();
+      this.renderOpenWorldView();
+    }
+  }
   overviewTransform(canvas, overview=this.overview) { const r=canvas.getBoundingClientRect(), pad=10, scale=Math.min((r.width-pad*2)/overview.world.width,(r.height-pad*2)/overview.world.height), renderedWidth=overview.world.width*scale, renderedHeight=overview.world.height*scale, ox=(r.width-renderedWidth)/2, oy=(r.height-renderedHeight)/2; return {cssWidth:r.width,cssHeight:r.height,padding:pad,scale,ox,oy,renderedWidth,renderedHeight}; }
   overviewPointerToWorld(canvas, clientX, clientY, clamp=false) { const ov=this.overview; if(!ov||!canvas) return null; const t=this.overviewTransform(canvas, ov), r=canvas.getBoundingClientRect(), px=clientX-r.left, py=clientY-r.top; if(!clamp && (px<t.ox || py<t.oy || px>t.ox+t.renderedWidth || py>t.oy+t.renderedHeight)) return null; const x=(Math.max(t.ox,Math.min(t.ox+t.renderedWidth,px))-t.ox)/t.scale, y=(Math.max(t.oy,Math.min(t.oy+t.renderedHeight,py))-t.oy)/t.scale; return {x:Math.max(0,Math.min(ov.world.width-1,x)), y:Math.max(0,Math.min(ov.world.height-1,y)), transform:t}; }
   nearestHqAt(canvas, clientX, clientY, radiusPx) { const ov=this.overview; if(!ov) return null; const t=this.overviewTransform(canvas, ov), r=canvas.getBoundingClientRect(), px=clientX-r.left, py=clientY-r.top; let best=null, bd=radiusPx*radiusPx; for(const h of ov.hq||[]){ const sx=t.ox+h.x*t.scale, sy=t.oy+h.y*t.scale, d=(sx-px)**2+(sy-py)**2; if(d<=bd){bd=d; best=h;} } return best; }
@@ -545,7 +575,7 @@ class PolyWarMap {
   drawMinimap() { if(!this.minimapCanvas) return; this.drawOverviewCanvas(this.minimapCanvas); }
   handleMinimapPointer(e) { e.preventDefault(); e.stopPropagation(); this.minimapCanvas.setPointerCapture?.(e.pointerId); if(!this.overview) { this.loadOverview(); return; } const h=this.nearestHqAt(this.minimapCanvas,e.clientX,e.clientY,16); if(h) return this.jumpToWorldPosition(h.x,h.y,POLYWAR_VISUALS.baseZoom,{select:true}); const p=this.overviewPointerToWorld(this.minimapCanvas,e.clientX,e.clientY,false); if(p) this.jumpToWorldPosition(p.x,p.y,10,{select:true}); }
   renderOpenWorldView() { const modal=this.worldViewModal; if(!modal || !document.body.contains(modal)) return; const canvas=modal.querySelector('canvas'), target=modal.querySelector('.world-target'); if(this.overview){ target.textContent='Tap a HQ, capital, object or territory to open tactical view.'; this.drawOverviewCanvas(canvas); } else if(this.overviewError){ target.innerHTML='<b>Overview failed.</b> <button class="btn mini" data-retry>Retry</button>'; target.querySelector('[data-retry]').onclick=()=>{ this.overviewError=null; target.textContent='Loading World View…'; this.loadOverview(); }; } else { target.textContent='Loading World View…'; } }
-  openWorldView() { if(!this.overview&&!this.overviewError) this.loadOverview(); const modal=document.createElement('div'); this.worldViewModal=modal; modal.className='polywar-world-view'; modal.innerHTML='<div class="world-view-panel"><header><b>World View</b><button class="btn mini" data-myhq>My HQ</button><button class="btn mini" data-close>Close</button></header><canvas class="polywar-world-canvas"></canvas><div class="world-target muted">Loading World View…</div></div>'; document.body.appendChild(modal); const canvas=modal.querySelector('canvas'); modal.querySelector('[data-close]').onclick=()=>{ modal.remove(); if(this.worldViewModal===modal) this.worldViewModal=null; }; modal.querySelector('[data-myhq]').onclick=()=>{ const b=baseFor(currentState?.selected_faction?.id); if(b){ modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(b.x,b.y,POLYWAR_VISUALS.baseZoom,{select:true}); }}; canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); if(!this.overview) return; const h=this.nearestHqAt(canvas,e.clientX,e.clientY,22); if(h){ modal.remove(); this.worldViewModal=null; return this.jumpToWorldPosition(h.x,h.y,POLYWAR_VISUALS.baseZoom,{select:true}); } const p=this.overviewPointerToWorld(canvas,e.clientX,e.clientY,false); if(!p) return; modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(p.x,p.y,10,{select:true}); }); requestAnimationFrame(()=>this.renderOpenWorldView()); }
+  openWorldView() { if (this.worldViewModal && document.body.contains(this.worldViewModal)) { this.renderOpenWorldView(); return; } if (this.worldViewModal) { this.worldViewModal.remove(); this.worldViewModal = null; } if(!this.overview&&!this.overviewError) this.loadOverview(); const modal=document.createElement('div'); this.worldViewModal=modal; modal.className='polywar-world-view'; modal.innerHTML='<div class="world-view-panel"><header><b>World View</b><button class="btn mini" data-myhq>My HQ</button><button class="btn mini" data-close>Close</button></header><canvas class="polywar-world-canvas"></canvas><div class="world-target muted">Loading World View…</div></div>'; document.body.appendChild(modal); const canvas=modal.querySelector('canvas'); modal.querySelector('[data-close]').onclick=()=>{ modal.remove(); if(this.worldViewModal===modal) this.worldViewModal=null; }; modal.querySelector('[data-myhq]').onclick=()=>{ const b=baseFor(currentState?.selected_faction?.id); if(b){ modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(b.x,b.y,POLYWAR_VISUALS.baseZoom,{select:true}); }}; canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); if(!this.overview) return; const h=this.nearestHqAt(canvas,e.clientX,e.clientY,22); if(h){ modal.remove(); this.worldViewModal=null; return this.jumpToWorldPosition(h.x,h.y,POLYWAR_VISUALS.baseZoom,{select:true}); } const p=this.overviewPointerToWorld(canvas,e.clientX,e.clientY,false); if(!p) return; modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(p.x,p.y,10,{select:true}); }); requestAnimationFrame(()=>this.renderOpenWorldView()); }
 
   visibleCellBounds() { const a=this.screenToCell(0,0), b=this.screenToCell(this.w,this.h); return {minX:Math.max(0,Math.floor(Math.min(a.x,b.x))-1), maxX:Math.min(this.state.map.width-1,Math.ceil(Math.max(a.x,b.x))+1), minY:Math.max(0,Math.floor(Math.min(a.y,b.y))-1), maxY:Math.min(this.state.map.height-1,Math.ceil(Math.max(a.y,b.y))+1)}; }
   drawTerrainTile(ctx, terrain, p, x, y) {
