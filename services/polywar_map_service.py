@@ -12,6 +12,22 @@ from typing import Any, Dict, List, Tuple
 from services import polywar_service as polywar
 
 logger = logging.getLogger(__name__)
+COMPACT_WORLD_PROFILE_VERSION = 2
+COMPACT_WORLD_PROFILE = "compact_v2"
+COMPACT_WORLD_SETTINGS = {
+    "polywar_map_width": 1600,
+    "polywar_map_height": 1600,
+    "polywar_chunk_size": 32,
+    "polywar_sector_size": 40,
+    "polywar_starting_area_size": 41,
+}
+LEGACY_WORLD_DEFAULTS = {
+    "polywar_map_width": {10000, 32000},
+    "polywar_map_height": {10000, 32000},
+    "polywar_chunk_size": {64},
+    "polywar_sector_size": {100},
+}
+
 TERRAIN_COSTS = {"plain": 1, "forest": 1, "mountain": 2, "swamp": 2, "desert": 1, "road": 1, "ruins": 1, "water": None, "river": None}
 _TERRAIN_CACHE: "OrderedDict[Tuple[Any, ...], List[List[str]]]" = OrderedDict()
 _NOISE_CACHE: "OrderedDict[Tuple[str, int, int, int], float]" = OrderedDict()
@@ -48,7 +64,7 @@ def _clamp_int(value, default, lo, hi):
 
 
 def load_map_config(conn) -> PolyWarMapConfig:
-    keys = ("polywar_map_width", "polywar_map_height", "polywar_chunk_size", "polywar_starting_area_size", "polywar_max_chunks_per_request", "polywar_capture_progress_required", "polywar_sector_size", "polywar_max_sectors_per_request", "polywar_capital_siege_required", "polywar_commander_election_hours", "polywar_commander_term_hours", "polywar_commander_min_contribution", "polywar_commander_min_members_for_election", "polywar_commander_max_statement_length", "polywar_commander_order_limit", "polywar_capital_order_duration_hours")
+    keys = ("polywar_map_width", "polywar_map_height", "polywar_chunk_size", "polywar_starting_area_size", "polywar_max_chunks_per_request", "polywar_capture_progress_required", "polywar_sector_size", "polywar_max_sectors_per_request", "polywar_capital_siege_required", "polywar_commander_election_hours", "polywar_commander_term_hours", "polywar_commander_min_contribution", "polywar_commander_min_members_for_election", "polywar_commander_max_statement_length", "polywar_commander_order_limit", "polywar_capital_order_duration_hours", "polywar_world_profile", "polywar_world_profile_version")
     placeholders = ",".join(["%s"] * len(keys))
     try:
         rows = polywar._fetchall(conn.cursor(), f"SELECT key, value FROM settings WHERE key IN ({placeholders})", keys)
@@ -80,9 +96,93 @@ def load_map_config(conn) -> PolyWarMapConfig:
         "max_orders": _clamp_int(values.get("polywar_commander_order_limit"), 5, 0, 100),
         "order_duration_hours": _clamp_int(values.get("polywar_capital_order_duration_hours"), 24, 1, 168),
     }
-    bases = faction_base_positions(width, height)
+    profile = str(values.get("polywar_world_profile") or "").strip()
+    if profile == COMPACT_WORLD_PROFILE or _clamp_int(values.get("polywar_world_profile_version"), 1, 0, 999) >= COMPACT_WORLD_PROFILE_VERSION:
+        bases = compact_faction_base_positions(width, height, area)
+    else:
+        bases = faction_base_positions(width, height)
     return PolyWarMapConfig(width, height, cs, area, bases, max_chunks, capture_required, sec_size, max_sectors, siege_required_value, governance_rules)
 
+
+
+def _settings_starting_area(conn, default=41):
+    try:
+        return _clamp_int(polywar.get_setting("polywar_starting_area_size", str(default)), default, 3, 1000)
+    except Exception:
+        return default
+
+def _clamp_base_position(x, y, width, height, starting_area):
+    half = max(0, int(starting_area) // 2)
+    max_x = max(0, int(width) - 1 - half)
+    max_y = max(0, int(height) - 1 - half)
+    return (max(half, min(max_x, int(round(x)))), max(half, min(max_y, int(round(y)))))
+
+def compact_faction_base_positions(width, height, starting_area_size=41) -> Dict[int, Tuple[int, int]]:
+    w, h = int(width), int(height)
+    pts = {
+        1: (w * 0.125, h * 0.125),
+        2: (w * 0.875, h * 0.125),
+        3: (w * 0.125, h * 0.875),
+        4: (w * 0.875, h * 0.875),
+        5: (w * 0.500, h * 0.125),
+        6: (w * 0.125, h * 0.500),
+        7: (w * 0.875, h * 0.500),
+    }
+    out = {fid: _clamp_base_position(x, y, w, h, starting_area_size) for fid, (x, y) in pts.items()}
+    half = int(starting_area_size) // 2
+    vals = list(out.items())
+    for i, (fid, (x, y)) in enumerate(vals):
+        if x - half < 0 or y - half < 0 or x + half >= w or y + half >= h:
+            raise ValueError("compact_base_out_of_bounds")
+        for ofid, (ox, oy) in vals[i + 1:]:
+            if abs(x - ox) <= int(starting_area_size) and abs(y - oy) <= int(starting_area_size):
+                raise ValueError(f"compact_base_overlap:{fid}:{ofid}")
+    return out
+
+def _is_legacy_world_settings(values):
+    try:
+        width = int(values.get("polywar_map_width") or 0)
+        height = int(values.get("polywar_map_height") or 0)
+        chunk = int(values.get("polywar_chunk_size") or 0)
+        sector = int(values.get("polywar_sector_size") or 0)
+    except Exception:
+        return False
+    return (width in LEGACY_WORLD_DEFAULTS["polywar_map_width"] or width >= 10000) and (height in LEGACY_WORLD_DEFAULTS["polywar_map_height"] or height >= 10000) and chunk in LEGACY_WORLD_DEFAULTS["polywar_chunk_size"] and sector in LEGACY_WORLD_DEFAULTS["polywar_sector_size"]
+
+def _upsert_setting(conn, key, value):
+    c = conn.cursor()
+    if polywar._is_sqlite(conn):
+        polywar._execute(c, "INSERT OR REPLACE INTO settings(key,value) VALUES(%s,%s)", (key, str(value)))
+    else:
+        polywar._execute(c, "INSERT INTO settings(key,value) VALUES(%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, str(value)))
+
+def apply_compact_next_season_profile(conn, *, force=False):
+    c = conn.cursor()
+    try:
+        polywar._execute(c, "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT)")
+    except Exception:
+        pass
+    active = polywar._fetchone(c, "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+    if active and not (active.get("map_width") and active.get("map_height") and active.get("map_base_layout_json")):
+        ensure_season_map_snapshot(conn, int(active["id"]))
+        active = polywar._fetchone(c, "SELECT id,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version FROM polywar_seasons WHERE id=%s", (int(active["id"]),))
+    keys = tuple(COMPACT_WORLD_SETTINGS) + ("polywar_world_profile", "polywar_world_profile_version")
+    rows = polywar._fetchall(c, f"SELECT key,value FROM settings WHERE key IN ({','.join(['%s']*len(keys))})", keys)
+    old = {str(r.get('key')): str(r.get('value')) for r in rows}
+    version = _clamp_int(old.get("polywar_world_profile_version"), 1, 0, 999)
+    if version >= COMPACT_WORLD_PROFILE_VERSION and not force:
+        result={"applied":False,"skip_reason":"version_already_current","profile_version":version,"active_season_id":active.get('id') if active else None,"active_snapshot":dict(active) if active else None,"old_global_settings":old,"new_next_season_settings":old}
+        logger.info("polywar_compact_profile_migration %s", result); return result
+    legacy = _is_legacy_world_settings(old)
+    if not force and not legacy:
+        result={"applied":False,"skip_reason":"custom_global_settings","profile_version":version,"active_season_id":active.get('id') if active else None,"active_snapshot":dict(active) if active else None,"old_global_settings":old,"new_next_season_settings":old}
+        logger.warning("polywar_compact_profile_migration %s", result); return result
+    for k, v in COMPACT_WORLD_SETTINGS.items(): _upsert_setting(conn, k, v)
+    _upsert_setting(conn, "polywar_world_profile", COMPACT_WORLD_PROFILE)
+    _upsert_setting(conn, "polywar_world_profile_version", COMPACT_WORLD_PROFILE_VERSION)
+    new = {**old, **{k: str(v) for k, v in COMPACT_WORLD_SETTINGS.items()}, "polywar_world_profile": COMPACT_WORLD_PROFILE, "polywar_world_profile_version": str(COMPACT_WORLD_PROFILE_VERSION)}
+    result={"applied":True,"skip_reason":None,"profile_version":COMPACT_WORLD_PROFILE_VERSION,"active_season_id":active.get('id') if active else None,"active_snapshot":dict(active) if active else None,"old_global_settings":old,"new_next_season_settings":new}
+    logger.info("polywar_compact_profile_migration %s", result); return result
 
 def get_active_season_readonly(conn, include_secret_seed=False):
     cols = "id,name,status,starts_at,ends_at,completed_at,victory_type,winner_faction_id,domination_faction_id,domination_started_at,finalization_started_at,created_at,map_width,map_height,map_chunk_size,map_sector_size,map_starting_area_size,map_base_layout_json,map_world_version,map_snapshot_at"
@@ -212,7 +312,7 @@ def terrain_at_with_config(seed, x: int, y: int, config: PolyWarMapConfig) -> st
     if river_a < 5 or river_b < 4:
         return "river"
     lake = _smooth(seed + "lake", x, y, 1400) * 0.72 + _smooth(seed + "lake", x, y, 360) * 0.28
-    if lake < 0.18:
+    if lake < 0.205:
         return "water"
     ridge = abs(_smooth(seed + "ridge", x, y, 1800) - 0.5) + _smooth(seed + "ridge-detail", x, y, 240) * 0.35
     forest_mass = _smooth(seed + "forest-mass", x, y, 1150) * 0.75 + _smooth(seed + "forest-detail", x, y, 260) * 0.25
@@ -682,7 +782,14 @@ def ensure_season_map_snapshot(conn, season_id):
     height = max(int(defaults.height), int(diag.get('max_y') if diag.get('max_y') is not None else -1) + 1, max_hq_y + 1)
     layout_json = _json_dumps({str(fid): {'x': int(x), 'y': int(y)} for fid, (x, y) in sorted(layout.items())})
     now = datetime.utcnow()
-    polywar._execute(c, 'UPDATE polywar_seasons SET map_width=%s,map_height=%s,map_chunk_size=%s,map_sector_size=%s,map_starting_area_size=%s,map_base_layout_json=%s,map_world_version=COALESCE(map_world_version,1),map_snapshot_at=COALESCE(map_snapshot_at,%s) WHERE id=%s', (width, height, defaults.chunk_size, defaults.sector_size, defaults.starting_area_size, layout_json, now, int(season_id)))
+    try:
+        profile_row = polywar._fetchone(c, "SELECT value FROM settings WHERE key=%s", ("polywar_world_profile",)) or {}
+    except Exception as exc:
+        if "settings" not in str(exc).lower():
+            raise
+        profile_row = {}
+    world_version = COMPACT_WORLD_PROFILE_VERSION if str(profile_row.get("value") or "").strip() == COMPACT_WORLD_PROFILE else 1
+    polywar._execute(c, 'UPDATE polywar_seasons SET map_width=%s,map_height=%s,map_chunk_size=%s,map_sector_size=%s,map_starting_area_size=%s,map_base_layout_json=%s,map_world_version=%s,map_snapshot_at=COALESCE(map_snapshot_at,%s) WHERE id=%s', (width, height, defaults.chunk_size, defaults.sector_size, defaults.starting_area_size, layout_json, world_version, now, int(season_id)))
     logger.info('polywar_map_snapshot_backfilled season_id=%s settings_width=%s settings_height=%s max_x=%s max_y=%s snapshot_width=%s snapshot_height=%s base_layout_source=%s capitals_found=%s expansion_required=%s', season_id, defaults.width, defaults.height, diag.get('max_x'), diag.get('max_y'), width, height, 'capitals+settings' if capitals else 'settings', len(capitals), width > defaults.width or height > defaults.height)
     return True
 

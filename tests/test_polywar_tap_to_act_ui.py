@@ -335,3 +335,28 @@ def test_world_view_retry_and_single_modal_lifecycle_hooks():
     assert 'this.worldViewModal && document.body.contains(this.worldViewModal)' in open_view
     assert 'this.renderOpenWorldView(); return;' in open_view
     assert 'this.worldViewModal.remove(); this.worldViewModal = null;' in open_view
+
+
+def test_zoom_out_handoff_to_world_view_and_lod2_fallback_kept():
+    assert 'const TACTICAL_MIN_CELL = 6' in JS
+    assert 'zoomOutOrOpenWorld' in JS
+    assert 'const nextCell' in JS and 'this.openWorldView({ source: "zoom-out" })' in JS
+    assert 'if (this.cell >= TACTICAL_MIN_CELL) this.ensureChunks()' in JS
+    assert 'POLYWAR_VISUALS.minCell' in JS
+
+
+def test_minimap_redesign_layers_and_interactions_static():
+    assert 'starting_zones' in JS
+    assert 'drawStrategicMarker' in JS
+    assert 'drawViewportRect' in JS
+    assert 'Math.max(5' in JS
+    assert 'nearestHqAt(this.minimapCanvas' in JS
+    assert 'localStorage.setItem("polywar_minimap_collapsed"' in JS
+    assert '.polywar-minimap:before' in CSS
+    assert 'pointer-events:none' in CSS
+
+
+def test_world_view_selects_before_tactical_jump_static():
+    assert 'Grid distance:' in JS
+    assert 'data-open-tactical' in JS
+    assert 'this.jumpToWorldPosition(p.x,p.y,h?POLYWAR_VISUALS.baseZoom:10' in JS
