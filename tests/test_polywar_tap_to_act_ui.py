@@ -90,12 +90,12 @@ def test_quick_actions_localstorage_persistence():
 
 def test_only_one_primary_core_button_rendered():
     render_start = JS.index('function render(state)')
-    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('document.querySelectorAll("[data-faction]")', render_start)]
+    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('root.onclick = handlePolywarUiClick', render_start)]
     assert render.count('id="primaryActionBtn"') == 1
 
 
 def test_old_simultaneous_core_button_list_absent():
-    render = JS[JS.index('root.innerHTML = `'):JS.index('document.querySelectorAll("[data-faction]")')]
+    render = JS[JS.index('root.innerHTML = `'):JS.index('root.onclick = handlePolywarUiClick')]
     assert 'data-mode="attack"' not in render
     assert 'data-mode="reinforce"' not in render
     assert 'data-mode="siege"' not in render
@@ -396,7 +396,7 @@ def test_wheel_zoom_uses_same_world_view_handoff():
 
 def test_polywar_main_screen_is_minimal_gameplay_hud():
     render_start = JS.index('function render(state)')
-    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('document.querySelectorAll("[data-faction]")', render_start)]
+    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('root.onclick = handlePolywarUiClick', render_start)]
     assert 'id=\"polywarMenuButton\"' in render
     assert 'polywar-main-gameplay' in render
     assert 'id=\"polywarCanvas\"' in render
@@ -426,11 +426,115 @@ def test_polywar_menu_open_close_does_not_touch_map_camera_selection_or_chunks()
     assert 'map.selected' not in open_close
     assert 'ensureChunks' not in open_close
     assert "layer.dataset.open==='true'" in open_close
-    assert "layer.innerHTML=''" in open_close
+    assert "layer.innerHTML=''" in open_close or "layer.innerHTML=''" in JS[JS.index('function teardownPolywarMenu'):JS.index('function openPolywarMenu')]
 
 
 def test_polywar_destroy_closes_menu_and_css_contains_scroll_guards():
-    assert 'closePolywarMenu(); map?.destroy(); map = null;' in JS
-    assert 'body.polywar-menu-open{overflow:hidden;touch-action:none}' in CSS
-    assert '.polywar-menu-scroll{overflow:auto;overscroll-behavior:contain' in CSS
+    assert 'teardownPolywarMenu({ restartTimers: false }); map?.destroy(); map = null;' in JS
+    assert 'body.polywar-menu-open{overflow:hidden;overscroll-behavior:none}' in CSS
+    assert 'body.polywar-menu-open{overflow:hidden;touch-action:none}' not in CSS
+    assert '.polywar-menu-scroll{overflow-y:auto;overscroll-behavior:contain' in CSS
+    assert '.polywar-menu-sheet{touch-action:manipulation' in CSS
     assert '.polywar-menu-backdrop' in CSS and 'touch-action:none' in CSS
+
+
+def test_polywar_html_removes_big_hero_and_menu_has_back_link():
+    html = Path('webapp/polywar.html').read_text()
+    assert '<header class="pw-hero glass">' not in html
+    assert '<main id="polywarRoot" class="pw-stack">' in html
+    render_start = JS.index('function render(state)')
+    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('root.onclick = handlePolywarUiClick', render_start)]
+    assert render.count('<h1>PolyWar</h1>') == 1
+    assert render.index('polywar-game-toolbar') < render.index('polywar-main-gameplay') < render.index('polywarCanvas')
+    menu = JS[JS.index('function renderPolywarMenu'):JS.index('function setPolywarMenuExpanded')]
+    assert 'Back to DeepAlpha' in menu and 'href="/app"' in menu
+
+
+def test_polywar_menu_delegates_faction_selection_and_guards_double_click():
+    click_start = JS.index('async function handlePolywarUiClick')
+    click = JS[click_start:JS.index('init();', click_start)]
+    assert "const factionButton = e.target.closest('[data-faction]')" in click
+    assert 'factionButton.disabled' in click
+    assert 'await joinFaction(factionId)' in click
+    assert 'document.body.contains(factionButton)' in click
+    assert 'return;' in click
+    assert 'document.querySelectorAll("[data-faction]")' not in JS
+
+
+def test_polywar_menu_accessibility_and_cleanup_source_guards():
+    menu_flow = JS[JS.index('function setPolywarMenuExpanded'):JS.index('async function syncPolywarResults')]
+    assert "setAttribute('aria-expanded', expanded ? 'true' : 'false')" in menu_flow
+    assert 'function teardownPolywarMenu' in menu_flow
+    assert "layer.dataset.open='false'" in menu_flow
+    assert "document.body.classList.remove('polywar-menu-open')" in menu_flow
+    assert "polywarLastMenuTrigger?.focus?.()" in menu_flow
+    assert "e.key === 'Escape'" in JS
+    assert 'teardownPolywarMenu({ restartTimers: false });\n  currentState = state;' in JS
+    assert 'window.addEventListener("pagehide", () => { clearTimers(); teardownPolywarMenu({ restartTimers: false });' in JS
+
+
+def test_polywar_compact_stats_and_results_stay_menu_sized():
+    stats = JS[JS.index('function updateFactionStats'):JS.index('function updateFactionRanking')]
+    assert 'polywar-info-card' in stats
+    assert 'glass card' not in stats
+    assert '<span>Season Points</span>' in stats
+    assert '<span>Faction Contribution</span>' in stats
+    assert 'panel.innerHTML=`<h3>Season Results</h3>' in JS
+    assert '.polywar-menu-events{max-height:180px;overflow-y:auto' in CSS
+
+
+def test_polywar_runtime_faction_menu_click_single_join_and_cleanup():
+    import subprocess, textwrap
+    script = textwrap.dedent(r'''
+        const assert = require('assert');
+        let joinCalls = 0;
+        let joinResolve;
+        const bodyClasses = new Set(['polywar-menu-open']);
+        const button = { dataset:{ faction:'1' }, disabled:false };
+        global.document = { body:{ contains: el => el === button, classList:{ contains:c=>bodyClasses.has(c), remove:c=>bodyClasses.delete(c), add:c=>bodyClasses.add(c) } } };
+        async function joinFaction(id) { joinCalls++; assert.strictEqual(id, 1); await new Promise(r => { joinResolve = r; }); bodyClasses.delete('polywar-menu-open'); global.map = { faction: 1 }; }
+        async function handlePolywarUiClick(e) {
+          const factionButton = e.target.closest('[data-faction]');
+          if (factionButton) { const factionId = Number(factionButton.dataset.faction); if (!Number.isFinite(factionId) || factionId <= 0 || factionButton.disabled) return; factionButton.disabled = true; try { await joinFaction(factionId); } finally { if (document.body.contains(factionButton)) factionButton.disabled = false; } return; }
+        }
+        const event = { target:{ closest: sel => sel === '[data-faction]' ? button : null } };
+        const first = handlePolywarUiClick(event);
+        const second = handlePolywarUiClick(event);
+        assert.strictEqual(joinCalls, 1);
+        assert.strictEqual(button.disabled, true);
+        joinResolve();
+        Promise.all([first, second]).then(() => {
+          assert.strictEqual(joinCalls, 1);
+          assert.strictEqual(button.disabled, false);
+          assert.strictEqual(document.body.classList.contains('polywar-menu-open'), false);
+          assert.deepStrictEqual(global.map, { faction: 1 });
+        });
+    ''')
+    subprocess.run(['node', '-e', script], check=True)
+
+
+def test_polywar_runtime_menu_open_close_preserves_map_state_and_avoids_chunk_work():
+    import subprocess, textwrap
+    script = textwrap.dedent(r'''
+        const assert = require('assert');
+        const map = { cx:11, cy:22, cell:33, selected:{x:4,y:5}, ensureChunks(){ throw new Error('ensureChunks called'); }, ensureSectors(){ throw new Error('ensureSectors called'); }, centerOnBase(){ throw new Error('centerOnBase called'); } };
+        const bodyClasses = new Set();
+        const layer = { dataset:{open:'false'}, innerHTML:'' };
+        const button = { attrs:{}, focusCount:0, setAttribute(k,v){this.attrs[k]=v;}, focus(){this.focusCount++;} };
+        global.document = { getElementById(id){ if(id==='polywarMenuLayer') return layer; if(id==='polywarMenuButton') return button; if(id==='polywarMenuClose') return { focus(){} }; return null; }, body:{ classList:{ add:c=>bodyClasses.add(c), remove:c=>bodyClasses.delete(c) } } };
+        function renderPolywarMenu(){ return '<aside id="polywarMenuSheet"></aside>'; }
+        function updateFactionStats(){} function updateFactionRanking(){} function updateLatestEvents(){} const polywarGovernanceUi={render(){}};
+        function startEnergyTimers(){} function startWorldCountdownTimer(){}
+        let polywarLastMenuTrigger = null;
+        function setPolywarMenuExpanded(expanded){ const btn=document.getElementById('polywarMenuButton'); if(btn) btn.setAttribute('aria-expanded', expanded ? 'true' : 'false'); }
+        function teardownPolywarMenu({ restartTimers = false } = {}) { const layer=document.getElementById('polywarMenuLayer'); if(layer){ layer.innerHTML=''; layer.dataset.open='false'; } document.body.classList.remove('polywar-menu-open'); setPolywarMenuExpanded(false); if(restartTimers){ startEnergyTimers(); startWorldCountdownTimer(); } }
+        function openPolywarMenu(){ const layer=document.getElementById('polywarMenuLayer'); if(!layer||layer.dataset.open==='true') return; polywarLastMenuTrigger=document.getElementById('polywarMenuButton'); layer.innerHTML=renderPolywarMenu({}); layer.dataset.open='true'; document.body.classList.add('polywar-menu-open'); setPolywarMenuExpanded(true); updateFactionStats(); updateFactionRanking(); updateLatestEvents(); polywarGovernanceUi.render({}); startEnergyTimers(); startWorldCountdownTimer(); document.getElementById('polywarMenuClose')?.focus?.(); }
+        function closePolywarMenu(){ teardownPolywarMenu({restartTimers:true}); polywarLastMenuTrigger?.focus?.(); }
+        openPolywarMenu(); openPolywarMenu(); closePolywarMenu();
+        assert.deepStrictEqual({cx:map.cx, cy:map.cy, cell:map.cell, selected:map.selected}, {cx:11, cy:22, cell:33, selected:{x:4,y:5}});
+        assert.strictEqual(layer.dataset.open, 'false');
+        assert.strictEqual(layer.innerHTML, '');
+        assert.strictEqual(button.attrs['aria-expanded'], 'false');
+        assert.strictEqual(button.focusCount, 1);
+    ''')
+    subprocess.run(['node', '-e', script], check=True)

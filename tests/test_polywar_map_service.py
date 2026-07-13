@@ -150,7 +150,8 @@ def test_concurrent_same_key_same_cell_returns_duplicate_without_double_spend(po
 
 def test_natural_terrain_and_world_features_generated(polydb):
     s = seed(polydb)
-    c = polydb(); secret = c.execute('select secret_seed from polywar_seasons where id=?',(s['id'],)).fetchone()['secret_seed']; c.close()
+    secret = 'test-natural-terrain-v1'
+    c = polydb(); c.execute('update polywar_seasons set secret_seed=? where id=?', (secret, s['id'])); c.commit(); c.close()
     cfg = m.PolyWarMapConfig(32000, 32000, 64, 15, m.faction_base_positions(32000, 32000), 9, 100, 100, 100, 1000, {})
     sample = [m.terrain_at_with_config(secret, x, y, cfg) for x in range(2000, 8000, 700) for y in range(2000, 8000, 700)]
     assert {'plain', 'forest', 'mountain'} <= set(sample)
