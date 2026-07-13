@@ -1,0 +1,73 @@
+import sqlite3, uuid
+from datetime import datetime, timedelta
+
+import services.polywar_service as polywar
+import services.polywar_map_service as maps
+import services.polywar_squad_service as squads
+
+
+def db(monkeypatch):
+    uri=f"file:squads_{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper=sqlite3.connect(uri, uri=True, check_same_thread=False); keeper.row_factory=sqlite3.Row
+    def connect():
+        c=sqlite3.connect(uri, uri=True, check_same_thread=False, detect_types=sqlite3.PARSE_DECLTYPES); c.row_factory=sqlite3.Row; return c
+    settings={"polywar_world_profile":"compact_v2","polywar_world_profile_version":"2","polywar_map_width":"512","polywar_map_height":"512","polywar_chunk_size":"32","polywar_sector_size":"40","polywar_starting_area_size":"21"}
+    monkeypatch.setattr(polywar,'get_connection',connect)
+    monkeypatch.setattr(polywar,'get_setting',lambda k,d='': settings.get(k,d))
+    monkeypatch.setattr(polywar,'get_airdrop_points_balance',lambda uid:{'total':0,'balance':0})
+    c=connect(); polywar.init_polywar_schema(c); polywar.ensure_factions(c); c.commit(); return connect, keeper, settings
+
+
+def make_season(connect, existing=False):
+    c=connect(); polywar.begin_serialized_transaction(c); s=polywar.ensure_active_season_in_transaction(c); sid=s['id']; squads.ensure_squad_season_config(c,sid,existing_active=existing); c.commit(); c.close(); return sid
+
+
+def join(connect, sid, uid=1, fid=1):
+    c=connect(); polywar._insert_player_if_missing(c,uid,sid); c.execute('UPDATE polywar_players SET faction_id=? WHERE user_id=? AND season_id=?',(fid,uid,sid)); c.commit(); c.close()
+
+
+def test_squad_schema_idempotent_sqlite(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    c=connect(); squads.init_squad_schema(c); squads.init_squad_schema(c); c.commit()
+    tables={r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {'polywar_squad_season_config','polywar_faction_squads','polywar_squad_pressure','polywar_squad_ticks'} <= tables
+    keeper.close()
+
+
+def test_existing_active_disabled_new_season_enabled_and_snapshot_stable(monkeypatch):
+    connect, keeper, settings = db(monkeypatch)
+    c=connect(); now=datetime.utcnow(); c.execute("INSERT INTO polywar_seasons (name,status,starts_at,ends_at,secret_seed,created_at) VALUES (?,?,?,?,?,?)", ("Existing", "active", now, now+timedelta(days=1), "seed", now)); sid=c.execute("SELECT id FROM polywar_seasons").fetchone()["id"]; squads.ensure_squad_season_config(c,sid,existing_active=True); c.commit(); c.close()
+    c=connect(); row=c.execute('SELECT enabled,move_interval_minutes FROM polywar_squad_season_config WHERE season_id=?',(sid,)).fetchone(); assert row['enabled']==0
+    settings['polywar_squad_move_interval_minutes']='99'; squads.ensure_squad_season_config(c,sid); row2=c.execute('SELECT move_interval_minutes FROM polywar_squad_season_config WHERE season_id=?',(sid,)).fetchone(); assert row2['move_interval_minutes']==row['move_interval_minutes']; c.close()
+    keeper.close()
+
+
+def test_spawn_move_pressure_and_no_permanent_capture(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1)
+    c=connect(); cfg=squads.ensure_squad_season_config(c,sid); squads.enable_squads_for_season(c,sid); maps.ensure_season_map_snapshot(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]
+    c.execute('INSERT OR IGNORE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,bx,by,1,datetime.utcnow()))
+    c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,datetime.utcnow()+timedelta(hours=4)); c.commit()
+    sq=c.execute('SELECT * FROM polywar_faction_squads WHERE season_id=?',(sid,)).fetchone(); assert sq and out['spawned_count']>=1
+    old=(sq['x'],sq['y']); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,datetime.utcnow()+timedelta(hours=4,minutes=11)); c.commit()
+    sq2=c.execute('SELECT * FROM polywar_faction_squads WHERE id=?',(sq['id'],)).fetchone(); assert abs(sq2['x']-old[0])+abs(sq2['y']-old[1]) <= 1
+    assert c.execute('SELECT COUNT(*) FROM polywar_cells WHERE season_id=? AND owner_faction_id=1',(sid,)).fetchone()[0] == 1
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_pressure WHERE season_id=?',(sid,)).fetchone()[0] >= 0
+    c.close(); keeper.close()
+
+
+def test_supply_limit_and_cardinal_step(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1)
+    c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; now=datetime.utcnow()
+    c.execute("UPDATE polywar_squad_season_config SET supply_distance=1 WHERE season_id=?",(sid,))
+    c.execute("INSERT INTO polywar_faction_squads (season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(sid,1,1,'marching',bx,by,bx,by,bx+5,by,bx,by,100,100,0,0,now,now,now+timedelta(hours=1),now,now))
+    c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now+timedelta(minutes=10)); c.commit()
+    sq=c.execute('SELECT * FROM polywar_faction_squads WHERE season_id=?',(sid,)).fetchone(); assert sq['status'] in {'waiting_for_supply','marching'}; assert abs(sq['x']-bx)+abs(sq['y']-by) <= 1
+    keeper.close()
+
+
+def test_service_source_no_auto_win_imports():
+    src=open('services/polywar_squad_service.py',encoding='utf-8').read()
+    forbidden=['transfer_capital_control','finalize_season_in_transaction','maybe_finalize_in_transaction','capture_cell(','faction_contribution=faction_contribution']
+    assert not any(tok in src for tok in forbidden)

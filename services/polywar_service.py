@@ -291,6 +291,8 @@ def init_polywar_schema(conn=None) -> None:
             init_polywar_capital_schema(conn)
             from services.polywar_governance_service import init_polywar_governance_schema
             init_polywar_governance_schema(conn)
+            from services.polywar_squad_service import init_squad_schema
+            init_squad_schema(conn)
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar state lifecycle sync failed")
@@ -388,6 +390,11 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
         from services import polywar_map_service as _map
         _map.ensure_season_map_snapshot(conn, int(row["id"]))
         _ensure_faction_stats_for_season(conn, int(row["id"]))
+        try:
+            from services.polywar_squad_service import ensure_squad_season_config
+            ensure_squad_season_config(conn, int(row["id"]), existing_active=True)
+        except Exception:
+            logger.exception("polywar_squad_config_existing_active_failed")
         row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
         return _public_season(row)
     start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
@@ -401,6 +408,11 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
     from services import polywar_map_service as _map
     _map.ensure_season_map_snapshot(conn, int(row["id"]))
     _ensure_faction_stats_for_season(conn, int(row["id"]))
+    try:
+        from services.polywar_squad_service import ensure_squad_season_config
+        ensure_squad_season_config(conn, int(row["id"]), existing_active=False)
+    except Exception:
+        logger.exception("polywar_squad_config_new_season_failed")
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
     return _public_season(row)
 
@@ -615,7 +627,9 @@ def get_state(user_id: int) -> Dict[str, Any]:
             _execute(conn.cursor(), "SET LOCAL statement_timeout = '20s'")
         t = time.monotonic(); season = ensure_active_season_in_transaction(conn); _stage("season", t)
         from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction
-        t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); ensure_world_caught_up_in_transaction(conn, int(season["id"])); _stage("world", t)
+        t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); ensure_world_caught_up_in_transaction(conn, int(season["id"]));
+        from services.polywar_squad_service import ensure_squad_season_config, ensure_squads_caught_up_in_transaction
+        ensure_squad_season_config(conn, int(season["id"])); ensure_squads_caught_up_in_transaction(conn, int(season["id"])); _stage("world", t)
         from services import polywar_finalization_service as finalization
         decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
         if decision.get("should_finalize"):

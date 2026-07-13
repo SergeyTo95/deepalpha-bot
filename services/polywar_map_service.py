@@ -656,6 +656,12 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         polywar._execute(c, "INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (sid,user_id,fid,"capture",x,y,cost,idempotency_key,now))
         new_energy, _, energy = mines.spend_player_energy(conn, player, cost, now)
         sectors.transfer_cell_ownership(conn, sid, x, y, None, fid, user_id, now, config=config)
+        try:
+            from services.polywar_squad_service import refresh_supply_after_capture_in_transaction
+            refresh_supply_after_capture_in_transaction(conn, sid, int(fid), x, y)
+            polywar._execute(c, 'DELETE FROM polywar_squad_pressure WHERE season_id=%s AND x=%s AND y=%s AND faction_id=%s', (sid, x, y, fid))
+        except Exception:
+            logger.exception('polywar_squad_supply_refresh_failed season_id=%s x=%s y=%s', sid, x, y)
         hint = mines.upsert_safe_hint(conn, sid, fid, x, y, user_id, seed, now, config=config)
         payload = {"cell": {"x": x, "y": y, "terrain": terr, "owner_faction_id": fid, "energy_cost": cost, "adjacent_mines": hint}, "adjacent_mines": hint, "energy": energy}
         mines.insert_outcome(conn, sid, user_id, idempotency_key, "capture", x, y, "captured", cost, payload, now)
