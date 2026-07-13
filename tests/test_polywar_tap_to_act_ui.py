@@ -89,7 +89,8 @@ def test_quick_actions_localstorage_persistence():
 
 
 def test_only_one_primary_core_button_rendered():
-    render = JS[JS.index('root.innerHTML = `'):JS.index('document.querySelectorAll("[data-faction]")')]
+    render_start = JS.index('function render(state)')
+    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('document.querySelectorAll("[data-faction]")', render_start)]
     assert render.count('id="primaryActionBtn"') == 1
 
 
@@ -391,3 +392,45 @@ def test_world_view_target_runtime_no_reference_error_and_delayed_jump():
 def test_wheel_zoom_uses_same_world_view_handoff():
     assert 'if (e.deltaY < 0) this.zoom(1.25); else this.zoomOutOrOpenWorld();' in JS
     assert 'this.zoom(e.deltaY < 0 ? 1.25 : 0.8)' not in JS
+
+
+def test_polywar_main_screen_is_minimal_gameplay_hud():
+    render_start = JS.index('function render(state)')
+    render = JS[JS.index('root.innerHTML = `', render_start):JS.index('document.querySelectorAll("[data-faction]")', render_start)]
+    assert 'id=\"polywarMenuButton\"' in render
+    assert 'polywar-main-gameplay' in render
+    assert 'id=\"polywarCanvas\"' in render
+    assert 'polywarMinimapCanvas' in render
+    assert 'compact-cell-sheet' in render
+    assert 'id=\"goBase\"' in render and 'id=\"openWorldView\"' in render
+    assert 'id=\"zoomOut\"' in render and 'id=\"zoomIn\"' in render
+    assert 'id=\"quickActionsToggle\"' in render
+    assert 'polywarWorldHud' not in render
+    assert 'polywarGovernancePanel' not in render
+    assert 'factionRanking' not in render
+    assert 'polywarResultsPanel' not in render
+
+
+def test_polywar_menu_contains_moved_status_sections_and_controls():
+    menu = JS[JS.index('function renderPolywarMenu'):JS.index('function openPolywarMenu')]
+    for token in ['Overview', 'Season', 'Energy', 'Faction', 'World', 'World HUD', 'Governance', 'Ranking', 'Season Points', 'Faction Contribution', 'Season Results']:
+        assert token in menu
+    assert 'polywarMenuBackdrop' in menu
+    assert 'polywarMenuClose' in menu
+    assert 'data-polywar-menu-close' in menu
+
+
+def test_polywar_menu_open_close_does_not_touch_map_camera_selection_or_chunks():
+    open_close = JS[JS.index('function openPolywarMenu'):JS.index('function render(state)')]
+    assert 'map.cx' not in open_close and 'map.cy' not in open_close
+    assert 'map.selected' not in open_close
+    assert 'ensureChunks' not in open_close
+    assert "layer.dataset.open==='true'" in open_close
+    assert "layer.innerHTML=''" in open_close
+
+
+def test_polywar_destroy_closes_menu_and_css_contains_scroll_guards():
+    assert 'closePolywarMenu(); map?.destroy(); map = null;' in JS
+    assert 'body.polywar-menu-open{overflow:hidden;touch-action:none}' in CSS
+    assert '.polywar-menu-scroll{overflow:auto;overscroll-behavior:contain' in CSS
+    assert '.polywar-menu-backdrop' in CSS and 'touch-action:none' in CSS
