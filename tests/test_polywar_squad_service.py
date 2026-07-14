@@ -132,3 +132,47 @@ def test_squad_source_uses_postgres_safe_claims_and_locks():
     assert 'ON CONFLICT (season_id,tick_index) DO NOTHING RETURNING id' in src
     assert 'FOR UPDATE SKIP LOCKED' in src
     assert 'INSERT OR IGNORE INTO polywar_squad_ticks' in src
+
+def test_new_engagement_does_not_resolve_combat_until_next_due_tick(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0 WHERE season_id=?',(sid,))
+    for i,(fid,x,tx) in enumerate([(1,10,11),(2,11,10)], start=1):
+        c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(i,sid,fid,i,'marching',x,10,x,10,tx,10,x,10,100,100,0,0,now,now,now+timedelta(hours=1),now,now))
+    c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,now+timedelta(minutes=10)); c.commit()
+    rows=c.execute('SELECT id,hp,status,engaged_squad_id FROM polywar_faction_squads ORDER BY id').fetchall()
+    assert out['combat_count']==0
+    assert [r['hp'] for r in rows] == [100,100]
+    assert [r['status'] for r in rows] == ['engaged','engaged']
+    keeper.close()
+
+
+def test_support_success_enemy_reject_and_idempotency_deducts_once(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1); join(connect,sid,2,2)
+    c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); c.execute('UPDATE polywar_squad_season_config SET support_energy_cost=2,support_hp=25 WHERE season_id=?',(sid,))
+    c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(1,sid,1,1,'marching',10,10,10,10,11,10,10,10,50,100,0,0,now,now,now+timedelta(hours=1),now,now))
+    c.commit(); c.close()
+    first=squads.support_squad(1,1,'support-once'); dup=squads.support_squad(1,1,'support-once')
+    c=connect(); player=c.execute('SELECT current_energy FROM polywar_players WHERE user_id=1 AND season_id=?',(sid,)).fetchone(); sq=c.execute('SELECT hp FROM polywar_faction_squads WHERE id=1').fetchone()
+    assert first['ok'] is True and dup.get('duplicate') is True
+    assert player['current_energy'] == 8
+    assert sq['hp'] == 75
+    try:
+        squads.support_squad(2,1,'enemy')
+        assert False
+    except ValueError as e:
+        assert str(e)=='squad_not_allied'
+    keeper.close()
+
+
+def test_stale_processing_tick_recovered_once(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); cfg=squads.ensure_squad_season_config(c,sid); tick=squads._tick_index_for(cfg, now)
+    stale=now-timedelta(minutes=squads.SQUAD_TICK_STALE_MINUTES+1); scheduled=squads._tick_time_for(cfg,tick)
+    c.execute("INSERT INTO polywar_squad_ticks (season_id,tick_index,scheduled_at,started_at,status,created_at,outcome_json) VALUES (?,?,?,?,?,?,?)",(sid,tick,scheduled,stale,'processing',stale,'{}'))
+    c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=scheduled); c.commit()
+    row=c.execute('SELECT status,outcome_json FROM polywar_squad_ticks WHERE season_id=? AND tick_index=?',(sid,tick)).fetchone()
+    assert out['processed'] is True
+    assert row['status']=='completed'
+    assert 'recovered_from_status' in row['outcome_json']
+    keeper.close()

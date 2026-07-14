@@ -222,7 +222,7 @@ def _claim_tick(conn, season_id:int, tick:int, scheduled_at, now, cfg):
         prior=json.loads(existing.get('outcome_json') or '{}') if existing.get('outcome_json') else {}
         prior.setdefault('recovered_from_status', status)
         _execute(c,"UPDATE polywar_squad_ticks SET status='processing',started_at=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,json.dumps(prior),season_id,tick))
-        return {'claimed':True,'recovered':True}
+        return {'claimed':True,'recovered':True,'prior_outcome':prior}
     return {'claimed':False,'duplicate':True,'reason':'tick_unavailable'}
 
 def _lock_due_squads(conn, season_id:int, now):
@@ -273,6 +273,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
     for snap in due:
         s=_fetchone(c,'SELECT * FROM polywar_faction_squads WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(snap['id'],))
         if not s or s.get('status') not in ACTIVE_STATUSES: continue
+        if s.get('next_move_at') and _as_dt(s.get('next_move_at')) > now: continue
         processed.append(int(s['id']))
         if _as_dt(s['expires_at']) <= now: _execute(c,"UPDATE polywar_faction_squads SET status='expired',updated_at=%s WHERE id=%s AND status<>'destroyed'",(now,s['id'])); continue
         if int(s['hp'])<=0: _execute(c,"UPDATE polywar_faction_squads SET status='destroyed',updated_at=%s WHERE id=%s",(now,s['id'])); continue
@@ -296,7 +297,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
         else:
             _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_players',blocked_ticks=blocked_ticks+1,next_move_at=%s,updated_at=%s WHERE id=%s",(now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,s['id']))
     cleaned=cleanup_expired_pressure_in_transaction(conn,season_id,now)
-    outcome={'processed_squad_ids':processed,'processed_pairs':[list(p) for p in processed_pairs],'expired_pressure':cleaned,'recovered':bool(claim.get('recovered'))}
+    outcome={**(claim.get('prior_outcome') or {}),'processed_squad_ids':processed,'processed_pairs':[list(p) for p in processed_pairs],'expired_pressure':cleaned,'recovered':bool(claim.get('recovered'))}
     _execute(c,"UPDATE polywar_squad_ticks SET status='completed',processed_at=%s,spawned_count=%s,moved_count=%s,combat_count=%s,pressure_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,spawned,moved,combat,pressure,json.dumps(outcome),season_id,tick))
     logger.info('polywar_squad_tick_completed season_id=%s tick_index=%s spawned=%s moved=%s combat=%s pressure=%s',season_id,tick,spawned,moved,combat,pressure)
     return {'processed':True,'spawned_count':spawned,'moved_count':moved,'combat_count':combat,'pressure_count':pressure,'tick_index':tick}
@@ -369,6 +370,7 @@ def support_squad(user_id:int, squad_id:int, idempotency_key:str):
         if not sq: raise ValueError('squad_not_found')
         if int(sq['faction_id'])!=int(fid): raise ValueError('squad_not_allied')
         if sq['status'] in {'destroyed','expired'}: raise ValueError('squad_'+sq['status'])
+        if sq['status'] not in ACTIVE_STATUSES: raise ValueError('squad_inactive')
         if _as_dt(sq['expires_at']) <= now: raise ValueError('squad_expired')
         cost=int(cfg['support_energy_cost']); _,_,energy=mines.spend_player_energy(conn,player,cost,now); hp=min(int(sq['max_hp']), int(sq['hp'])+int(cfg['support_hp']))
         _execute(c,'UPDATE polywar_faction_squads SET hp=%s,updated_at=%s WHERE id=%s',(hp,now,squad_id))
