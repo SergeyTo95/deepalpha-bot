@@ -538,3 +538,21 @@ def test_polywar_runtime_menu_open_close_preserves_map_state_and_avoids_chunk_wo
         assert.strictEqual(button.focusCount, 1);
     ''')
     subprocess.run(['node', '-e', script], check=True)
+
+def test_squad_pan_debounce_and_support_cost_source_guards():
+    js = Path('webapp/polywar.js').read_text()
+    pointermove = js[js.index('pointermove'):js.index('pointerup')]
+    assert 'refreshSquads(true)' not in pointermove
+    assert 'scheduleSquadRefreshAfterCameraMove' in pointermove
+    assert 'squadSupportEnergyCost=Number(d.support_energy_cost ?? 1)' in js
+    assert 'Support · ${esc(this.squadSupportEnergyCost ?? 1)} ⚡' in js
+    assert 'if (lod === 2) { this.drawCoarseWorld(ctx); this.drawSquadPressure(ctx);' in js
+    assert 'if (this.squadDebounceTimer) clearTimeout(this.squadDebounceTimer)' in js
+
+    assert 'refreshSquadOverviewIfDue(false)' in js
+    assert 'now-this.lastSquadOverviewRefresh<60000' in js
+    assert 'if (this.squadOverviewTimer) clearTimeout(this.squadOverviewTimer)' in js
+    assert 'd.squads_enabled===false' in js
+    assert 'this.overview.squads=[]' in js
+    assert 'this.overview.squad_pressure_bins=[]' in js
+    assert 'this.renderOpenWorldView()' in js

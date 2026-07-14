@@ -291,6 +291,8 @@ def init_polywar_schema(conn=None) -> None:
             init_polywar_capital_schema(conn)
             from services.polywar_governance_service import init_polywar_governance_schema
             init_polywar_governance_schema(conn)
+            from services.polywar_squad_service import init_squad_schema
+            init_squad_schema(conn)
         except Exception:
             import logging
             logging.getLogger(__name__).exception("PolyWar state lifecycle sync failed")
@@ -388,6 +390,15 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
         from services import polywar_map_service as _map
         _map.ensure_season_map_snapshot(conn, int(row["id"]))
         _ensure_faction_stats_for_season(conn, int(row["id"]))
+        _execute(c, 'SAVEPOINT squad_config_bootstrap')
+        try:
+            from services.polywar_squad_service import ensure_squad_season_config
+            ensure_squad_season_config(conn, int(row["id"]), existing_active=True)
+            _execute(c, 'RELEASE SAVEPOINT squad_config_bootstrap')
+        except Exception:
+            _execute(c, 'ROLLBACK TO SAVEPOINT squad_config_bootstrap')
+            _execute(c, 'RELEASE SAVEPOINT squad_config_bootstrap')
+            logger.exception("polywar_squad_config_existing_active_failed")
         row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
         return _public_season(row)
     start = now; end = start + timedelta(days=_setting_int("polywar_season_days", 30, 1, 365))
@@ -401,6 +412,15 @@ def ensure_active_season_in_transaction(conn) -> Dict[str, Any]:
     from services import polywar_map_service as _map
     _map.ensure_season_map_snapshot(conn, int(row["id"]))
     _ensure_faction_stats_for_season(conn, int(row["id"]))
+    _execute(c, 'SAVEPOINT squad_config_bootstrap')
+    try:
+        from services.polywar_squad_service import ensure_squad_season_config
+        ensure_squad_season_config(conn, int(row["id"]), existing_active=False)
+        _execute(c, 'RELEASE SAVEPOINT squad_config_bootstrap')
+    except Exception:
+        _execute(c, 'ROLLBACK TO SAVEPOINT squad_config_bootstrap')
+        _execute(c, 'RELEASE SAVEPOINT squad_config_bootstrap')
+        logger.exception("polywar_squad_config_new_season_failed")
     row = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(row["id"]),)) or row
     return _public_season(row)
 

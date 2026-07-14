@@ -45,6 +45,7 @@ from services.polywar_world_service import get_public_world_state as get_polywar
 from services.polywar_rebellion_service import rebellion_action as polywar_rebellion_action
 from services.polywar_finalization_service import get_results as get_polywar_results, claim_reward as claim_polywar_reward
 from services.polywar_world_overview_service import build_world_overview as get_polywar_world_overview
+from services.polywar_squad_service import visible_squads as get_polywar_visible_squads, support_squad as support_polywar_squad
 from services.ton_purchase_service import (
     get_ton_token_price_per_internal_token_nano,
     is_ton_wallet_token_purchase_enabled,
@@ -895,6 +896,37 @@ async def handle_polywar_sectors_api(request):
         return _json_response({"ok": False, "error": code}, status=429 if code == "rate_limited" else 400)
     except Exception as e:
         return _polywar_read_error_response(e)
+
+async def handle_polywar_squads_visible_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        q = request.query
+        return _json_response(await asyncio.to_thread(get_polywar_visible_squads, int(current.get("user_id") or 0), int(q.get("min_x", 0)), int(q.get("min_y", 0)), int(q.get("max_x", 0)), int(q.get("max_y", 0))))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=400)
+    except Exception as e:
+        return _polywar_read_error_response(e)
+
+async def handle_polywar_squad_support_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        squad_id = int(request.match_info.get("id") or 0)
+        return _json_response(await asyncio.to_thread(support_polywar_squad, int(current.get("user_id") or 0), squad_id, str(data.get("idempotency_key") or "")))
+    except ValueError as e:
+        code = str(e)
+        status = 402 if code == "insufficient_energy" else 404 if code == "squad_not_found" else 409 if code in {"squad_not_allied", "squad_destroyed", "squad_expired"} else 400
+        return _json_response({"ok": False, "error": code}, status=status)
+    except Exception:
+        logger.exception("PolyWar squad support API unexpected error")
+        return _json_response({"ok": False, "error": "server_error"}, status=500)
 
 async def handle_polywar_action_api(request):
     current = _current_web_user(request)
@@ -1775,7 +1807,31 @@ async def handle_google_callback(request):
     raise response
 
 
+async def polywar_squad_maintenance_ctx(app):
+    stop = asyncio.Event()
+    async def runner():
+        from services.polywar_squad_service import run_squad_maintenance_once, SQUAD_MAINTENANCE_INTERVAL_SECONDS
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(run_squad_maintenance_once)
+            except Exception:
+                logger.exception("polywar_squad_background_maintenance_failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=SQUAD_MAINTENANCE_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+    task = asyncio.create_task(runner())
+    try:
+        yield
+    finally:
+        stop.set(); task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 app = web.Application()
+app.cleanup_ctx.append(polywar_squad_maintenance_ctx)
 
 app.router.add_get("/", handle_index)
 app.router.add_get("/pay", handle_index)
@@ -1818,6 +1874,8 @@ app.router.add_get("/api/polywar/player", handle_polywar_player_api)
 app.router.add_get("/api/polywar/events", handle_polywar_events_api)
 app.router.add_get("/api/polywar/world", handle_polywar_world_api)
 app.router.add_get("/api/polywar/world/overview", handle_polywar_world_overview_api)
+app.router.add_get("/api/polywar/squads/visible", handle_polywar_squads_visible_api)
+app.router.add_post("/api/polywar/squads/{id}/support", handle_polywar_squad_support_api)
 app.router.add_get("/api/polywar/results/latest", handle_polywar_results_latest_api)
 app.router.add_get("/api/polywar/results", handle_polywar_results_api)
 app.router.add_get("/api/polywar/rewards", handle_polywar_rewards_api)
@@ -1834,6 +1892,7 @@ app.router.add_post("/api/polywar/orders", handle_polywar_orders_api)
 app.router.add_post("/api/polywar/scan", handle_polywar_scan_api)
 app.router.add_post("/api/polywar/flag", handle_polywar_flag_api)
 app.router.add_route("OPTIONS", "/api/polywar/action", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/squads/{id}/support", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/governance/nominate", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/governance/vote", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/orders", handle_options)
