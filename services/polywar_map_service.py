@@ -534,17 +534,23 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
                         features.append({"x": x0 + xx, "y": y0 + yy, **feat})
             out.append({"chunk_x": cx, "chunk_y": cy, "chunk_size": config.chunk_size, "width": w, "height": h, "terrain": terrain, "owners": owners, "bases": bases, "features": features, "contested_cells": contested, "user_id": user_id})
         t = time.monotonic()
+        has_rifts = True
+        if polywar._is_sqlite(conn):
+            has_rifts = bool(polywar._fetchone(conn.cursor(), "SELECT name FROM sqlite_master WHERE type='table' AND name='polywar_null_rifts'"))
         for ch in out:
             x0, y0 = ch["chunk_x"] * config.chunk_size, ch["chunk_y"] * config.chunk_size
-            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"]))
+            rows = polywar._fetchall(conn.cursor(), "SELECT x,y,status,health,max_health FROM polywar_null_rifts WHERE season_id=%s AND x >= %s AND x < %s AND y >= %s AND y < %s", (sid, x0, x0 + ch["width"], y0, y0 + ch["height"])) if has_rifts else []
             ch["rifts"] = [{"x": int(r["x"]), "y": int(r["y"]), "status": r["status"], "health": int(r["health"]), "max_health": int(r["max_health"]), "health_percent": round(100*int(r["health"])/max(1,int(r["max_health"])),2)} for r in rows]
         from services import polywar_capital_service as capitals, polywar_governance_service as governance, polywar_mine_service as mines, polywar_rebellion_service as reb
         capitals.enrich_chunks(conn, sid, out, siege_required_value=config.capital_siege_required)
         player = polywar._fetchone(conn.cursor(), "SELECT faction_id FROM polywar_players WHERE season_id=%s AND user_id=%s", (sid, int(user_id))) or {}
         fid = player.get("faction_id")
+        has_rebellions = True
+        if polywar._is_sqlite(conn):
+            has_rebellions = bool(polywar._fetchone(conn.cursor(), "SELECT name FROM sqlite_master WHERE type='table' AND name='polywar_rebellions'"))
         for ch in out:
             x0, y0 = ch["chunk_x"] * config.chunk_size, ch["chunk_y"] * config.chunk_size
-            ch["rebellions"] = reb.get_public_rebellions_readonly(conn, sid, (x0, y0, x0 + ch["width"], y0 + ch["height"]))
+            ch["rebellions"] = reb.get_public_rebellions_readonly(conn, sid, (x0, y0, x0 + ch["width"], y0 + ch["height"])) if has_rebellions else []
         mines.enrich_chunks(conn, sid, fid, out)
         governance.enrich_chunks(conn, sid, fid, out)
         logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=enrichment duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)

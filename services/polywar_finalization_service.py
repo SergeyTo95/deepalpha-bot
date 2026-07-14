@@ -105,6 +105,10 @@ def _mark_finalization_failed(season_id:int, exc:Exception):
         except Exception: pass
 
 def finalize_season_in_transaction(conn,season_id:int,victory_type='time',winner_faction_id=None,now=None):
+    init_finalization_schema(conn)
+    from services.polywar_world_service import init_world_schema
+    from services.polywar_rebellion_service import init_rebellion_schema
+    init_world_schema(conn); init_rebellion_schema(conn)
     now=now or _now(); c=conn.cursor()
     season=polywar._fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if polywar._is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
     if not season: return False
