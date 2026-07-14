@@ -919,10 +919,10 @@ async def handle_polywar_squad_support_api(request):
         data = {}
     try:
         squad_id = int(request.match_info.get("id") or 0)
-        return _json_response(await asyncio.to_thread(support_polywar_squad, int(current.get("user_id") or 0), squad_id, str(data.get("idempotency_key") or "")))
+        return _json_response(await asyncio.to_thread(support_polywar_squad, int(current.get("user_id") or 0), squad_id, str(data.get("idempotency_key") or ""), str(data.get("support_type") or "auto")))
     except ValueError as e:
         code = str(e)
-        status = 402 if code == "insufficient_energy" else 404 if code == "squad_not_found" else 409 if code in {"squad_not_allied", "squad_destroyed", "squad_expired"} else 400
+        status = 402 if code == "insufficient_energy" else 404 if code == "squad_not_found" else 409 if code in {"squad_not_allied", "squad_destroyed", "squad_expired", "squad_state_changed", "player_locked", "squads_disabled", "reinforcement_boost_disabled"} else 400
         return _json_response({"ok": False, "error": code}, status=status)
     except Exception:
         logger.exception("PolyWar squad support API unexpected error")

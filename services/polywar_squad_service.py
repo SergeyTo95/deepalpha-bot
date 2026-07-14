@@ -7,6 +7,9 @@ from services import polywar_map_service as m
 
 logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = ("spawning","marching","engaged","waiting_for_supply","waiting_for_players","retreating")
+NON_COMBAT_VISIBLE_STATUSES = ("awaiting_reinforcement",)
+VISIBLE_STATUSES = ACTIVE_STATUSES + NON_COMBAT_VISIBLE_STATUSES
+TERMINAL_STATUSES = ("destroyed", "expired")
 DEFAULTS = {
     "enabled": True, "spawn_interval_minutes": 180, "move_interval_minutes": 10,
     "max_active_per_faction": 1, "ttl_minutes": 720, "max_hp": 100,
@@ -15,6 +18,10 @@ DEFAULTS = {
     "enemy_pressure_cap": 60, "capital_pressure_cap": 20,
     "combat_damage_per_tick": 20, "support_energy_cost": 1,
     "support_hp": 25, "max_catchup_ticks": 6,
+    "reinforcement_cooldown_minutes": 60, "reinforcement_hp": 50,
+    "reinforcement_boost_minutes": 15, "reinforcement_min_remaining_minutes": 5,
+    "reinforcement_energy_cost": 1, "reinforcement_return_radius": 6,
+    "reinforcement_retry_minutes": 10, "reinforcement_batch_limit": 14,
 }
 HARD_ACTIVE_CAP = 14
 PRESSURE_CLEANUP_BATCH = 500
@@ -59,14 +66,37 @@ def init_squad_schema(conn=None):
             "CREATE INDEX IF NOT EXISTS idx_polywar_pressure_faction ON polywar_squad_pressure(season_id,faction_id)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_squad_ticks ON polywar_squad_ticks(season_id,tick_index,status)",
         ]: c.execute(sql)
+        for spec in [
+            "reinforcement_cooldown_minutes INTEGER NOT NULL DEFAULT 60",
+            "reinforcement_hp INTEGER NOT NULL DEFAULT 50",
+            "reinforcement_boost_minutes INTEGER NOT NULL DEFAULT 15",
+            "reinforcement_min_remaining_minutes INTEGER NOT NULL DEFAULT 5",
+            "reinforcement_energy_cost INTEGER NOT NULL DEFAULT 1",
+            "reinforcement_return_radius INTEGER NOT NULL DEFAULT 6",
+            "reinforcement_retry_minutes INTEGER NOT NULL DEFAULT 10",
+            "reinforcement_batch_limit INTEGER NOT NULL DEFAULT 14",
+        ]: _add_col(conn, "polywar_squad_season_config", spec)
+        for spec in [
+            "defeated_at TIMESTAMP NULL", "reinforcement_at TIMESTAMP NULL",
+            "reinforcement_delay_notified_at TIMESTAMP NULL",
+            "last_reinforced_at TIMESTAMP NULL", "reinforcement_count INTEGER NOT NULL DEFAULT 0",
+            "reinforcement_boost_count INTEGER NOT NULL DEFAULT 0", "defeated_by_squad_id INTEGER NULL",
+        ]: _add_col(conn, "polywar_faction_squads", spec)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_squad_reinforcement_due ON polywar_faction_squads(season_id,status,reinforcement_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_squad_faction_status ON polywar_faction_squads(season_id,faction_id,status)")
+        _execute(c, "UPDATE polywar_squad_season_config SET config_version=2 WHERE config_version < 2")
         logger.info("polywar_squad_schema_initialized")
         if own: conn.commit()
     finally:
         if own: conn.close()
 
 def _snapshot_values(enabled: bool):
+    max_hp=_setting_int('polywar_squad_max_hp',100,1,100000)
+    cooldown=_setting_int('polywar_squad_reinforcement_cooldown_minutes',60,1,10080)
+    boost=min(_setting_int('polywar_squad_reinforcement_boost_minutes',15,0,10080), cooldown)
+    min_remaining=min(_setting_int('polywar_squad_reinforcement_min_remaining_minutes',5,0,10080), cooldown)
     return dict(enabled=1 if enabled else 0,
-        spawn_interval_minutes=_setting_int('polywar_squad_spawn_interval_minutes',180,1,10080), move_interval_minutes=_setting_int('polywar_squad_move_interval_minutes',10,1,1440), max_active_per_faction=min(_setting_int('polywar_squad_max_active_per_faction',1,0,14),14), ttl_minutes=_setting_int('polywar_squad_ttl_minutes',720,1,43200), max_hp=_setting_int('polywar_squad_max_hp',100,1,100000), supply_distance=_setting_int('polywar_squad_supply_distance',24,1,10000), pressure_ttl_minutes=_setting_int('polywar_squad_pressure_ttl_minutes',360,1,43200), neutral_pressure_per_step=_setting_int('polywar_squad_neutral_pressure_per_step',100,0,1000), enemy_pressure_per_step=_setting_int('polywar_squad_enemy_pressure_per_step',15,0,1000), enemy_pressure_cap=_setting_int('polywar_squad_enemy_pressure_cap',60,0,100), capital_pressure_cap=_setting_int('polywar_squad_capital_pressure_cap',20,0,100), combat_damage_per_tick=_setting_int('polywar_squad_combat_damage_per_tick',20,0,100000), support_energy_cost=_setting_int('polywar_squad_support_energy_cost',1,0,1000), support_hp=_setting_int('polywar_squad_support_hp',25,0,100000), max_catchup_ticks=_setting_int('polywar_squad_max_catchup_ticks',6,1,100))
+        spawn_interval_minutes=_setting_int('polywar_squad_spawn_interval_minutes',180,1,10080), move_interval_minutes=_setting_int('polywar_squad_move_interval_minutes',10,1,1440), max_active_per_faction=min(_setting_int('polywar_squad_max_active_per_faction',1,0,14),14), ttl_minutes=_setting_int('polywar_squad_ttl_minutes',720,1,43200), max_hp=max_hp, supply_distance=_setting_int('polywar_squad_supply_distance',24,1,10000), pressure_ttl_minutes=_setting_int('polywar_squad_pressure_ttl_minutes',360,1,43200), neutral_pressure_per_step=_setting_int('polywar_squad_neutral_pressure_per_step',100,0,1000), enemy_pressure_per_step=_setting_int('polywar_squad_enemy_pressure_per_step',15,0,1000), enemy_pressure_cap=_setting_int('polywar_squad_enemy_pressure_cap',60,0,100), capital_pressure_cap=_setting_int('polywar_squad_capital_pressure_cap',20,0,100), combat_damage_per_tick=_setting_int('polywar_squad_combat_damage_per_tick',20,0,100000), support_energy_cost=_setting_int('polywar_squad_support_energy_cost',1,0,1000), support_hp=_setting_int('polywar_squad_support_hp',25,0,100000), max_catchup_ticks=_setting_int('polywar_squad_max_catchup_ticks',6,1,100), reinforcement_cooldown_minutes=cooldown, reinforcement_hp=min(_setting_int('polywar_squad_reinforcement_hp',50,1,max_hp), max_hp), reinforcement_boost_minutes=boost, reinforcement_min_remaining_minutes=min_remaining, reinforcement_energy_cost=_setting_int('polywar_squad_reinforcement_energy_cost',1,0,1000000), reinforcement_return_radius=_setting_int('polywar_squad_reinforcement_return_radius',6,0,32), reinforcement_retry_minutes=_setting_int('polywar_squad_reinforcement_retry_minutes',10,1,1440), reinforcement_batch_limit=_setting_int('polywar_squad_reinforcement_batch_limit',14,1,HARD_ACTIVE_CAP))
 
 def ensure_squad_season_config(conn, season_id:int, *, existing_active:Optional[bool]=None):
     c=conn.cursor(); row=_fetchone(c,'SELECT * FROM polywar_squad_season_config WHERE season_id=%s',(season_id,))
@@ -77,11 +107,11 @@ def ensure_squad_season_config(conn, season_id:int, *, existing_active:Optional[
         existing_active = season.get('status') == 'active' and season.get('created_at')
     if existing_active: enabled = False
     vals=_snapshot_values(enabled); now=_now()
-    params=(season_id, vals['enabled'], vals['spawn_interval_minutes'], vals['move_interval_minutes'], vals['max_active_per_faction'], vals['ttl_minutes'], vals['max_hp'], vals['supply_distance'], vals['pressure_ttl_minutes'], vals['neutral_pressure_per_step'], vals['enemy_pressure_per_step'], vals['enemy_pressure_cap'], vals['capital_pressure_cap'], vals['combat_damage_per_tick'], vals['support_energy_cost'], vals['support_hp'], vals['max_catchup_ticks'], now, now)
+    params=(season_id, vals['enabled'], vals['spawn_interval_minutes'], vals['move_interval_minutes'], vals['max_active_per_faction'], vals['ttl_minutes'], vals['max_hp'], vals['supply_distance'], vals['pressure_ttl_minutes'], vals['neutral_pressure_per_step'], vals['enemy_pressure_per_step'], vals['enemy_pressure_cap'], vals['capital_pressure_cap'], vals['combat_damage_per_tick'], vals['support_energy_cost'], vals['support_hp'], vals['max_catchup_ticks'], vals['reinforcement_cooldown_minutes'], vals['reinforcement_hp'], vals['reinforcement_boost_minutes'], vals['reinforcement_min_remaining_minutes'], vals['reinforcement_energy_cost'], vals['reinforcement_return_radius'], vals['reinforcement_retry_minutes'], vals['reinforcement_batch_limit'], now, now)
     if _is_sqlite(conn):
-        _execute(c,"""INSERT OR IGNORE INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,created_at,updated_at) VALUES (%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", params)
+        _execute(c,"""INSERT OR IGNORE INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,reinforcement_cooldown_minutes,reinforcement_hp,reinforcement_boost_minutes,reinforcement_min_remaining_minutes,reinforcement_energy_cost,reinforcement_return_radius,reinforcement_retry_minutes,reinforcement_batch_limit,created_at,updated_at) VALUES (%s,%s,2,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", params)
     else:
-        _execute(c,"""INSERT INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,created_at,updated_at) VALUES (%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id) DO NOTHING""", params)
+        _execute(c,"""INSERT INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,reinforcement_cooldown_minutes,reinforcement_hp,reinforcement_boost_minutes,reinforcement_min_remaining_minutes,reinforcement_energy_cost,reinforcement_return_radius,reinforcement_retry_minutes,reinforcement_batch_limit,created_at,updated_at) VALUES (%s,%s,2,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id) DO NOTHING""", params)
     row=_fetchone(c,'SELECT * FROM polywar_squad_season_config WHERE season_id=%s',(season_id,))
     if row:
         logger.info('polywar_squad_season_config_created season_id=%s enabled=%s', season_id, row.get('enabled'))
@@ -136,7 +166,7 @@ def _insert_squad_row(conn, params):
 def spawn_due_squads_in_transaction(conn, season_id:int, now=None, cfg=None, season=None, config=None):
     now=now or _now(); cfg=cfg or ensure_squad_season_config(conn, season_id)
     if not int(cfg['enabled']): return 0
-    c=conn.cursor(); total=int((_fetchone(c,"SELECT COUNT(*) AS n FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating')",(season_id,)) or {}).get('n') or 0)
+    c=conn.cursor(); total=int((_fetchone(c,"SELECT COUNT(*) AS n FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')",(season_id,)) or {}).get('n') or 0)
     if total>=HARD_ACTIVE_CAP: return 0
     season=season or _fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)); seed=season.get('secret_seed','seed'); config=config or m.load_map_config(conn, season_id=season_id); spawned=0
     factions=_fetchall(c,"SELECT f.* FROM polywar_factions f WHERE COALESCE(f.is_playable,1)=1 AND COALESCE(f.is_system,0)=0 ORDER BY f.id")
@@ -145,7 +175,7 @@ def spawn_due_squads_in_transaction(conn, season_id:int, now=None, cfg=None, sea
         fid=int(f['id']); _lock_spawn_scope(conn, season_id, fid)
         members=int((_fetchone(c,'SELECT COUNT(*) AS n FROM polywar_players WHERE season_id=%s AND faction_id=%s',(season_id,fid)) or {}).get('n') or 0)
         if members<=0: continue
-        active=int((_fetchone(c,"SELECT COUNT(*) AS n FROM polywar_faction_squads WHERE season_id=%s AND faction_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating')",(season_id,fid)) or {}).get('n') or 0)
+        active=int((_fetchone(c,"SELECT COUNT(*) AS n FROM polywar_faction_squads WHERE season_id=%s AND faction_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')",(season_id,fid)) or {}).get('n') or 0)
         if active>=int(cfg['max_active_per_faction']): continue
         last=_fetchone(c,'SELECT MAX(spawned_at) AS t, MAX(spawn_index) AS i FROM polywar_faction_squads WHERE season_id=%s AND faction_id=%s',(season_id,fid)) or {}
         if last.get('t') and _as_dt(last.get('t')) > now - timedelta(minutes=int(cfg['spawn_interval_minutes'])): continue
@@ -228,7 +258,7 @@ def _claim_tick(conn, season_id:int, tick:int, scheduled_at, now, cfg):
 
 def _lock_due_squads(conn, season_id:int, now):
     suffix='' if _is_sqlite(conn) else ' FOR UPDATE SKIP LOCKED'
-    return _fetchall(conn.cursor(),"SELECT * FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating') AND next_move_at<=%s ORDER BY id LIMIT %s"+suffix,(season_id,now,HARD_ACTIVE_CAP))
+    return _fetchall(conn.cursor(),"SELECT * FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND next_move_at<=%s ORDER BY id LIMIT %s"+suffix,(season_id,now,HARD_ACTIVE_CAP))
 
 def _locked_squads_by_ids(conn, ids):
     if not ids: return {}
@@ -236,6 +266,75 @@ def _locked_squads_by_ids(conn, ids):
     ph=','.join(['%s']*len(ids)); suffix='' if _is_sqlite(conn) else ' FOR UPDATE'
     rows=_fetchall(conn.cursor(),f'SELECT * FROM polywar_faction_squads WHERE id IN ({ph}) ORDER BY id'+suffix,tuple(ids))
     return {int(r['id']):r for r in rows}
+
+def mark_squad_awaiting_reinforcement_in_transaction(conn, squad, defeated_by_squad_id, cfg, now, scheduled_at=None):
+    cur=_fetchone(conn.cursor(),'SELECT * FROM polywar_faction_squads WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(int(squad['id']),))
+    if not cur or cur.get('status') in {'awaiting_reinforcement','destroyed','expired'}:
+        return False
+    reinf=now+timedelta(minutes=int(cfg.get('reinforcement_cooldown_minutes') or DEFAULTS['reinforcement_cooldown_minutes']))
+    c=conn.cursor()
+    _execute(c,"""UPDATE polywar_faction_squads SET hp=0,status='awaiting_reinforcement',engaged_squad_id=NULL,defeated_at=%s,reinforcement_at=%s,next_move_at=%s,defeated_by_squad_id=%s,reinforcement_boost_count=0,reinforcement_delay_notified_at=NULL,updated_at=%s WHERE id=%s AND status NOT IN ('awaiting_reinforcement','destroyed','expired')""",(now,reinf,reinf,defeated_by_squad_id,now,cur['id']))
+    if polywar._rowcount(c) != 1:
+        return False
+    _execute(conn.cursor(),"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'squad_defeated',%s,%s)",(cur['season_id'],cur['faction_id'],'Faction squad defeated',now))
+    logger.info('polywar_squad_defeated season_id=%s squad_id=%s faction_id=%s enemy_squad_id=%s reinforcement_at=%s',cur['season_id'],cur['id'],cur['faction_id'],defeated_by_squad_id,reinf)
+    return True
+
+def _safe_return_cell(conn, squad, cfg, seed, config):
+    sid=int(squad['season_id']); fid=int(squad['faction_id']); radius=int(cfg.get('reinforcement_return_radius') or 0)
+    sx = squad.get('supply_x') if squad.get('supply_x') is not None else squad['x']
+    sy = squad.get('supply_y') if squad.get('supply_y') is not None else squad['y']
+    anchors=[(int(sx), int(sy))]
+    if fid in config.bases: anchors.append(tuple(map(int, config.bases[fid])))
+    seen=set()
+    for ax,ay in anchors:
+        candidates=[]
+        for r in range(0, radius+1):
+            for dx in range(-r,r+1):
+                dy=r-abs(dx)
+                for sy in ({dy,-dy} if dy else {0}):
+                    x,y=ax+dx,ay+sy
+                    if (x,y) in seen: continue
+                    seen.add((x,y))
+                    if not _passable(seed,x,y,config): continue
+                    if m.owner_at_with_config(conn,sid,x,y,config)!=fid: continue
+                    cap=_capital_at(conn,sid,x,y)
+                    if cap and int(cap.get('controller_faction_id') or 0)!=fid: continue
+                    occ=_fetchone(conn.cursor(),"SELECT id FROM polywar_faction_squads WHERE season_id=%s AND x=%s AND y=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating') AND id<>%s",(sid,x,y,squad['id']))
+                    if occ: continue
+                    candidates.append((abs(x-ax)+abs(y-ay),x,y))
+            if candidates:
+                candidates.sort(key=lambda t:(t[0],t[1],t[2])); return candidates[0][1],candidates[0][2]
+    return None
+
+def process_due_reinforcements_in_transaction(conn, season_id, cfg, now, scheduled_at, season=None, config=None):
+    suffix='' if _is_sqlite(conn) else ' FOR UPDATE SKIP LOCKED'
+    rows=_fetchall(conn.cursor(),"SELECT * FROM polywar_faction_squads WHERE season_id=%s AND status='awaiting_reinforcement' AND (expires_at<=%s OR reinforcement_at<=%s) ORDER BY next_move_at,id LIMIT %s"+suffix,(season_id,now,scheduled_at,int(cfg.get('reinforcement_batch_limit') if cfg.get('reinforcement_batch_limit') is not None else HARD_ACTIVE_CAP)))
+    if not rows: return 0
+    season=season or _fetchone(conn.cursor(),'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)) or {}
+    seed=season.get('secret_seed','seed'); config=config or m.load_map_config(conn, season_id=season_id); done=0
+    for sq in rows:
+        if _as_dt(sq['expires_at']) <= now:
+            _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='expired',engaged_squad_id=NULL,reinforcement_at=NULL,defeated_by_squad_id=NULL,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(now,sq['id'])); continue
+        cell=_safe_return_cell(conn,sq,cfg,seed,config)
+        if not cell:
+            retry=scheduled_at+timedelta(minutes=int(cfg.get('reinforcement_retry_minutes') if cfg.get('reinforcement_retry_minutes') is not None else 10))
+            notify_at=sq.get('reinforcement_delay_notified_at')
+            should_notify=not notify_at or _as_dt(notify_at) <= now-timedelta(minutes=60)
+            if should_notify:
+                _execute(conn.cursor(),"UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,reinforcement_delay_notified_at=%s,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(retry,retry,now,now,sq['id']))
+                _execute(conn.cursor(),"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'squad_reinforcement_delayed','Reinforcement delayed: no safe return cell',%s)",(season_id,sq['faction_id'],now))
+            else:
+                _execute(conn.cursor(),"UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(retry,retry,now,sq['id']))
+            logger.info('polywar_squad_reinforcement_delayed season_id=%s squad_id=%s faction_id=%s',season_id,sq['id'],sq['faction_id']); continue
+        x,y=cell; hp=min(int(sq['max_hp']), int(cfg.get('reinforcement_hp') if cfg.get('reinforcement_hp') is not None else 50)); next_at=scheduled_at+timedelta(minutes=int(cfg['move_interval_minutes']))
+        c2=conn.cursor()
+        _execute(c2,"""UPDATE polywar_faction_squads SET x=%s,y=%s,previous_x=%s,previous_y=%s,hp=%s,status='marching',engaged_squad_id=NULL,defeated_by_squad_id=NULL,last_reinforced_at=%s,reinforcement_at=NULL,reinforcement_count=reinforcement_count+1,reinforcement_boost_count=0,next_move_at=%s,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'""",(x,y,x,y,hp,now,next_at,now,sq['id']))
+        if polywar._rowcount(c2) != 1:
+            continue
+        _execute(conn.cursor(),"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'squad_reinforced','Faction squad reinforced',%s)",(season_id,sq['faction_id'],now))
+        logger.info('polywar_squad_reinforced season_id=%s squad_id=%s faction_id=%s x=%s y=%s hp=%s reinforcement_count=%s',season_id,sq['id'],sq['faction_id'],x,y,hp,int(sq.get('reinforcement_count') or 0)+1); done+=1
+    return done
 
 def _resolve_engaged_pair(conn, a, cfg, now, step_base=None):
     b_id=a.get('engaged_squad_id')
@@ -246,13 +345,10 @@ def _resolve_engaged_pair(conn, a, cfg, now, step_base=None):
     if int(a2.get('engaged_squad_id') or 0)!=int(b2['id']) or int(b2.get('engaged_squad_id') or 0)!=int(a2['id']): return False
     if int(a2['hp'])<=0 or int(b2['hp'])<=0: return False
     dmg=int(cfg['combat_damage_per_tick']); ahp=max(0,int(a2['hp'])-dmg); bhp=max(0,int(b2['hp'])-dmg); next_at=(step_base or now)+timedelta(minutes=int(cfg['move_interval_minutes']))
-    a_status='destroyed' if ahp<=0 else ('marching' if bhp<=0 else 'engaged')
-    b_status='destroyed' if bhp<=0 else ('marching' if ahp<=0 else 'engaged')
-    a_eng=None if a_status!='engaged' else int(b2['id']); b_eng=None if b_status!='engaged' else int(a2['id'])
-    _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=%s,status=%s,engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(ahp,a_status,a_eng,next_at,now,a2['id']))
-    _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=%s,status=%s,engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(bhp,b_status,b_eng,next_at,now,b2['id']))
-    if ahp<=0: logger.info('polywar_squad_destroyed squad_id=%s',a2['id'])
-    if bhp<=0: logger.info('polywar_squad_destroyed squad_id=%s',b2['id'])
+    if ahp<=0: mark_squad_awaiting_reinforcement_in_transaction(conn,a2,b2['id'],cfg,now,step_base)
+    else: _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=%s,status=%s,engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(ahp,'marching' if bhp<=0 else 'engaged',None if bhp<=0 else int(b2['id']),next_at,now,a2['id']))
+    if bhp<=0: mark_squad_awaiting_reinforcement_in_transaction(conn,b2,a2['id'],cfg,now,step_base)
+    else: _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=%s,status=%s,engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(bhp,'marching' if ahp<=0 else 'engaged',None if ahp<=0 else int(a2['id']),next_at,now,b2['id']))
     return True
 
 
@@ -262,16 +358,15 @@ def _repair_broken_engagement(conn, squad, cfg, now, step_base=None):
     if not cur:
         return False
     if int(cur.get('hp') or 0)<=0:
-        _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=0,status='destroyed',engaged_squad_id=NULL,updated_at=%s WHERE id=%s",(now,cur['id']))
-        return True
+        return mark_squad_awaiting_reinforcement_in_transaction(conn, cur, None, cfg, now, step_base)
     enemy=locked.get(int(cur.get('engaged_squad_id') or -1))
     valid=bool(enemy and enemy.get('status')=='engaged' and int(enemy.get('hp') or 0)>0 and int(enemy.get('engaged_squad_id') or 0)==int(cur['id']) and cur.get('status')=='engaged')
     if valid:
         return False
     next_at=(step_base or now)+timedelta(minutes=int(cfg['move_interval_minutes']))
     _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='marching',engaged_squad_id=NULL,next_move_at=%s,updated_at=%s WHERE id=%s AND status='engaged'",(next_at,now,cur['id']))
-    if enemy and int(enemy.get('hp') or 0)<=0 and enemy.get('status') not in {'destroyed','expired'}:
-        _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=0,status='destroyed',engaged_squad_id=NULL,updated_at=%s WHERE id=%s",(now,enemy['id']))
+    if enemy and int(enemy.get('hp') or 0)<=0 and enemy.get('status') not in {'destroyed','expired','awaiting_reinforcement'}:
+        mark_squad_awaiting_reinforcement_in_transaction(conn, enemy, cur['id'], cfg, now, step_base)
     return True
 
 def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_at=None):
@@ -289,6 +384,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
     spawned=moved=combat=pressure=0; processed=[]; processed_pairs=set()
     seed=season.get('secret_seed','seed'); config=m.load_map_config(conn, season_id=season_id)
     spawned=spawn_due_squads_in_transaction(conn,season_id,now,cfg=cfg,season=season,config=config)
+    reinforced=process_due_reinforcements_in_transaction(conn,season_id,cfg,now,scheduled_at,season=season,config=config)
     due=_lock_due_squads(conn,season_id,scheduled_at)
     for snap in due:
         s=_fetchone(c,'SELECT * FROM polywar_faction_squads WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(snap['id'],))
@@ -296,7 +392,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
         if s.get('next_move_at') and _as_dt(s.get('next_move_at')) > scheduled_at: continue
         processed.append(int(s['id']))
         if _as_dt(s['expires_at']) <= now: _execute(c,"UPDATE polywar_faction_squads SET status='expired',updated_at=%s WHERE id=%s AND status<>'destroyed'",(now,s['id'])); continue
-        if int(s['hp'])<=0: _execute(c,"UPDATE polywar_faction_squads SET status='destroyed',updated_at=%s WHERE id=%s",(now,s['id'])); continue
+        if int(s['hp'])<=0: mark_squad_awaiting_reinforcement_in_transaction(conn,s,None,cfg,now,scheduled_at); continue
         if s['status']=='engaged':
             if not s.get('engaged_squad_id'):
                 _repair_broken_engagement(conn,s,cfg,now,scheduled_at); continue
@@ -320,7 +416,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
         else:
             _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_players',blocked_ticks=blocked_ticks+1,next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,s['id']))
     cleaned=cleanup_expired_pressure_in_transaction(conn,season_id,now)
-    outcome={**(claim.get('prior_outcome') or {}),'processed_squad_ids':processed,'processed_pairs':[list(p) for p in processed_pairs],'expired_pressure':cleaned,'recovered':bool(claim.get('recovered'))}
+    outcome={**(claim.get('prior_outcome') or {}),'processed_squad_ids':processed,'processed_pairs':[list(p) for p in processed_pairs],'expired_pressure':cleaned,'reinforced_count':reinforced,'recovered':bool(claim.get('recovered'))}
     _execute(c,"UPDATE polywar_squad_ticks SET status='completed',processed_at=%s,spawned_count=%s,moved_count=%s,combat_count=%s,pressure_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,spawned,moved,combat,pressure,json.dumps(outcome),season_id,tick))
     logger.info('polywar_squad_tick_completed season_id=%s tick_index=%s spawned=%s moved=%s combat=%s pressure=%s',season_id,tick,spawned,moved,combat,pressure)
     return {'processed':True,'spawned_count':spawned,'moved_count':moved,'combat_count':combat,'pressure_count':pressure,'tick_index':tick}
@@ -331,7 +427,7 @@ def ensure_squads_caught_up_in_transaction(conn, season_id:int, now=None):
         cleanup_expired_pressure_in_transaction(conn,season_id,now)
         total.update({'processed':False,'reason':'squads_disabled'}); return total
     for _ in range(int(cfg['max_catchup_ticks'])):
-        earliest=_fetchone(conn.cursor(),"SELECT MIN(next_move_at) AS due_at FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating')",(season_id,)) or {}
+        earliest=_fetchone(conn.cursor(),"SELECT MIN(next_move_at) AS due_at FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')",(season_id,)) or {}
         due_at=_as_dt(earliest['due_at']) if earliest.get('due_at') else None
         if due_at and due_at>now:
             if total['processed_count']==0: total.update({'processed':False,'reason':'nothing_due'})
@@ -368,17 +464,19 @@ def visible_squads(user_id:int, min_x:int, min_y:int, max_x:int, max_y:int):
         if max_x<min_x: min_x,max_x=max_x,min_x
         if max_y<min_y: min_y,max_y=max_y,min_y
         if (max_x-min_x+1)*(max_y-min_y+1)>20000: raise ValueError('bounds_too_large')
-        c=conn.cursor(); cfg=_fetchone(c,'SELECT enabled,support_energy_cost FROM polywar_squad_season_config WHERE season_id=%s',(sid,)) or {'enabled':0,'support_energy_cost':1}
+        c=conn.cursor(); cfg=_fetchone(c,'SELECT enabled,support_energy_cost,support_hp,reinforcement_energy_cost,reinforcement_boost_minutes,reinforcement_min_remaining_minutes,reinforcement_hp FROM polywar_squad_season_config WHERE season_id=%s',(sid,)) or {'enabled':0,'support_energy_cost':1,'support_hp':25,'reinforcement_energy_cost':1,'reinforcement_boost_minutes':15,'reinforcement_min_remaining_minutes':5,'reinforcement_hp':50}
         cost = cfg.get('support_energy_cost') if cfg.get('support_energy_cost') is not None else 1
         if not int(cfg.get('enabled') or 0):
-            return {'ok':True,'season_id':sid,'server_timestamp':int(time.time()),'squads_enabled':False,'support_energy_cost':int(cost),'squads':[],'pressure':[]}
-        squads=_fetchall(c,"SELECT id,faction_id,x,y,previous_x,previous_y,hp,max_hp,status,target_x,target_y,next_move_at,expires_at FROM polywar_faction_squads WHERE season_id=%s AND x BETWEEN %s AND %s AND y BETWEEN %s AND %s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating') ORDER BY id LIMIT 200",(sid,min_x,max_x,min_y,max_y))
+            return {'ok':True,'season_id':sid,'server_timestamp':int(time.time()),'squads_enabled':False,'squad_rules':{'support_energy_cost':int(cost),'support_hp':int(cfg.get('support_hp') if cfg.get('support_hp') is not None else 25),'reinforcement_energy_cost':int(cfg.get('reinforcement_energy_cost') if cfg.get('reinforcement_energy_cost') is not None else 1),'reinforcement_boost_minutes':int(cfg.get('reinforcement_boost_minutes') if cfg.get('reinforcement_boost_minutes') is not None else 15),'reinforcement_min_remaining_minutes':int(cfg.get('reinforcement_min_remaining_minutes') if cfg.get('reinforcement_min_remaining_minutes') is not None else 5),'reinforcement_hp':int(cfg.get('reinforcement_hp') if cfg.get('reinforcement_hp') is not None else 50)},'support_energy_cost':int(cost),'squads':[],'pressure':[]}
+        squads=_fetchall(c,"SELECT id,faction_id,x,y,previous_x,previous_y,supply_x,supply_y,hp,max_hp,status,target_x,target_y,next_move_at,defeated_at,reinforcement_at,reinforcement_count,reinforcement_boost_count,expires_at FROM polywar_faction_squads WHERE season_id=%s AND x BETWEEN %s AND %s AND y BETWEEN %s AND %s AND expires_at>%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') ORDER BY id LIMIT 200",(sid,min_x,max_x,min_y,max_y,_now()))
         pressure=_fetchall(c,'SELECT x,y,faction_id,pressure,expires_at FROM polywar_squad_pressure WHERE season_id=%s AND x BETWEEN %s AND %s AND y BETWEEN %s AND %s AND expires_at>%s ORDER BY x,y,faction_id LIMIT 1000',(sid,min_x,max_x,min_y,max_y,_now()))
-        return {'ok':True,'season_id':sid,'server_timestamp':int(time.time()),'squads_enabled':True,'support_energy_cost':int(cost),'squads':[{**dict(r),'next_move_at':_iso(r.get('next_move_at')),'expires_at':_iso(r.get('expires_at'))} for r in squads],'pressure':[{**dict(r),'expires_at':_iso(r.get('expires_at'))} for r in pressure]}
+        return {'ok':True,'season_id':sid,'server_timestamp':int(time.time()),'squads_enabled':True,'squad_rules':{'support_energy_cost':int(cost),'support_hp':int(cfg.get('support_hp') if cfg.get('support_hp') is not None else 25),'reinforcement_energy_cost':int(cfg.get('reinforcement_energy_cost') if cfg.get('reinforcement_energy_cost') is not None else 1),'reinforcement_boost_minutes':int(cfg.get('reinforcement_boost_minutes') if cfg.get('reinforcement_boost_minutes') is not None else 15),'reinforcement_min_remaining_minutes':int(cfg.get('reinforcement_min_remaining_minutes') if cfg.get('reinforcement_min_remaining_minutes') is not None else 5),'reinforcement_hp':int(cfg.get('reinforcement_hp') if cfg.get('reinforcement_hp') is not None else 50)},'support_energy_cost':int(cost),'squads':[{**dict(r),'next_move_at':_iso(r.get('next_move_at')),'defeated_at':_iso(r.get('defeated_at')),'reinforcement_at':_iso(r.get('reinforcement_at')),'reinforcement_seconds_remaining':(max(0,int((_as_dt(r.get('reinforcement_at'))-_now()).total_seconds())) if r.get('reinforcement_at') else None),'expires_at':_iso(r.get('expires_at'))} for r in squads],'pressure':[{**dict(r),'expires_at':_iso(r.get('expires_at'))} for r in pressure]}
     finally: conn.close()
 
-def support_squad(user_id:int, squad_id:int, idempotency_key:str):
+def support_squad(user_id:int, squad_id:int, idempotency_key:str, support_type:str="auto"):
     if not idempotency_key or len(str(idempotency_key))>120: raise ValueError('bad_idempotency_key')
+    support_type=(support_type or 'auto').strip().lower()
+    if support_type not in {'auto','heal','reinforcement'}: raise ValueError('bad_support_type')
     from services import polywar_mine_service as mines
     conn=polywar.get_connection(); c=conn.cursor()
     try:
@@ -400,15 +498,30 @@ def support_squad(user_id:int, squad_id:int, idempotency_key:str):
         sq=_fetchone(c,"SELECT * FROM polywar_faction_squads WHERE id=%s AND season_id=%s" + ('' if _is_sqlite(conn) else ' FOR UPDATE'),(squad_id,sid))
         if not sq: raise ValueError('squad_not_found')
         if int(sq['faction_id'])!=int(fid): raise ValueError('squad_not_allied')
-        if sq['status'] in {'destroyed','expired'}: raise ValueError('squad_'+sq['status'])
-        if sq['status'] not in ACTIVE_STATUSES: raise ValueError('squad_inactive')
+        if sq['status'] in {'destroyed','expired'}: raise ValueError('squad_state_changed')
         if _as_dt(sq['expires_at']) <= now: raise ValueError('squad_expired')
-        cost=int(cfg.get('support_energy_cost') if cfg.get('support_energy_cost') is not None else 1); _,_,energy=mines.spend_player_energy(conn,player,cost,now); hp=min(int(sq['max_hp']), int(sq['hp'])+int(cfg['support_hp']))
-        _execute(c,'UPDATE polywar_faction_squads SET hp=%s,updated_at=%s WHERE id=%s',(hp,now,squad_id))
+        mode = 'reinforcement' if sq['status']=='awaiting_reinforcement' else 'heal' if sq['status'] in ACTIVE_STATUSES and int(sq.get('hp') or 0)>0 else None
+        if support_type!='auto' and support_type!=mode: raise ValueError('squad_state_changed')
+        if not mode: raise ValueError('squad_state_changed')
+        if mode=='heal':
+            cost=int(cfg.get('support_energy_cost') if cfg.get('support_energy_cost') is not None else 1); _,_,energy=mines.spend_player_energy(conn,player,cost,now); hp=min(int(sq['max_hp']), int(sq['hp'])+int(cfg.get('support_hp') if cfg.get('support_hp') is not None else 25))
+            _execute(c,'UPDATE polywar_faction_squads SET hp=%s,updated_at=%s WHERE id=%s',(hp,now,squad_id))
+            event_type='squad_supported'; message=f'Squad supported at {sq["x"]},{sq["y"]}'
+            payload={'ok':True,'duplicate':False,'support_type':'heal','energy_cost':cost,'healed_hp':min(int(cfg.get('support_hp') if cfg.get('support_hp') is not None else 25), hp-int(sq['hp'])),'squad':{'id':squad_id,'status':sq['status'],'hp':hp,'max_hp':int(sq['max_hp'])},'energy':energy}
+        else:
+            if not sq.get('reinforcement_at'): raise ValueError('reinforcement_not_available')
+            previous=_as_dt(sq['reinforcement_at']); boost=int(cfg.get('reinforcement_boost_minutes') if cfg.get('reinforcement_boost_minutes') is not None else 15)
+            if boost <= 0: raise ValueError('reinforcement_boost_disabled')
+            minimum=now+timedelta(minutes=int(cfg.get('reinforcement_min_remaining_minutes') if cfg.get('reinforcement_min_remaining_minutes') is not None else 5)); new_at=max(previous-timedelta(minutes=boost), minimum)
+            if new_at >= previous: raise ValueError('reinforcement_already_due')
+            cost=int(cfg.get('reinforcement_energy_cost') if cfg.get('reinforcement_energy_cost') is not None else 1); _,_,energy=mines.spend_player_energy(conn,player,cost,now)
+            _execute(c,'UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,reinforcement_boost_count=reinforcement_boost_count+1,updated_at=%s WHERE id=%s',(new_at,new_at,now,squad_id))
+            event_type='squad_reinforcement_boosted'; message='Reinforcement accelerated'
+            payload={'ok':True,'duplicate':False,'support_type':'reinforcement','energy_cost':cost,'boost_minutes':boost,'previous_reinforcement_at':_iso(previous),'reinforcement_at':_iso(new_at),'reinforcement_seconds_remaining':max(0,int((new_at-now).total_seconds())),'squad':{'id':squad_id,'status':'awaiting_reinforcement','hp':0,'max_hp':int(sq['max_hp'])},'energy':energy}
+            logger.info('polywar_squad_reinforcement_boosted season_id=%s squad_id=%s faction_id=%s reinforcement_at=%s energy_cost=%s',sid,squad_id,fid,new_at,cost)
         _execute(c,"INSERT INTO polywar_actions (season_id,user_id,faction_id,action_type,x,y,energy_cost,idempotency_key,created_at) VALUES (%s,%s,%s,'support_squad',%s,%s,%s,%s,%s)",(sid,user_id,fid,sq['x'],sq['y'],cost,idempotency_key,now))
-        _execute(c,"INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,'squad_supported',%s,%s)",(sid,user_id,fid,f'Squad supported at {sq["x"]},{sq["y"]}',now))
-        payload={'ok':True,'outcome':'squad_supported','squad':{'id':squad_id,'hp':hp,'max_hp':int(sq['max_hp'])},'energy':energy}
-        mines.insert_outcome(conn,sid,user_id,idempotency_key,'support_squad',int(sq['x']),int(sq['y']),'squad_supported',cost,payload,now)
+        _execute(c,"INSERT INTO polywar_events (season_id,user_id,faction_id,event_type,message,created_at) VALUES (%s,%s,%s,%s,%s,%s)",(sid,user_id,fid,event_type,message,now))
+        mines.insert_outcome(conn,sid,user_id,idempotency_key,'support_squad',int(sq['x']),int(sq['y']),event_type,cost,payload,now)
         conn.commit(); return payload
     except ValueError:
         polywar._safe_rollback(conn); raise
