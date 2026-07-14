@@ -5,10 +5,10 @@ from services import polywar_map_service as m
 from services import polywar_sector_service as sectors
 from services import polywar_world_overview_service as ov
 
-
 def make(monkeypatch):
     c=sqlite3.connect(':memory:'); c.row_factory=sqlite3.Row
     monkeypatch.setattr(p,'get_connection',lambda: c)
+    monkeypatch.setattr(p,'get_setting',lambda k,d='': d)
     p.init_polywar_schema(c); sectors.init_polywar_sector_schema(c); p.ensure_factions(c)
     c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT)')
     for k,v in {'polywar_map_width':10000,'polywar_map_height':10000,'polywar_chunk_size':64,'polywar_sector_size':50,'polywar_starting_area_size':15}.items(): c.execute('insert or replace into settings values(?,?)',(k,str(v)))
@@ -87,10 +87,42 @@ def test_overview_includes_bounded_starting_zones(monkeypatch):
 def test_squad_pressure_two_factions_same_bin_contested(monkeypatch):
     c=make(monkeypatch)
     from services import polywar_squad_service as squads
-    squads.init_squad_schema(c)
+    squads.init_squad_schema(c); squads.ensure_squad_season_config(c,1,existing_active=False); squads.enable_squads_for_season(c,1)
     future=datetime.utcnow()+timedelta(hours=1)
     c.execute('insert or replace into polywar_squad_pressure(season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)',(1,10,10,1,40,None,future,future,future))
     c.execute('insert or replace into polywar_squad_pressure(season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)',(1,11,10,2,80,None,future,future,future))
     c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
     bins=[b for b in out.get('squad_pressure_bins',[]) if b['grid_x']==0 and b['grid_y']==0]
     assert bins and bins[0]['is_contested'] is True and bins[0]['faction_id']==2
+
+
+def test_disabled_squad_overview_hides_and_invalidates_cache(monkeypatch):
+    from services import polywar_squad_service as squads
+    uri='file:polywar_overview_squads_disabled?mode=memory&cache=shared'
+    keeper=sqlite3.connect(uri, uri=True); keeper.row_factory=sqlite3.Row
+    def connect():
+        conn=sqlite3.connect(uri, uri=True); conn.row_factory=sqlite3.Row; return conn
+    monkeypatch.setattr(p,'get_connection',connect)
+    monkeypatch.setattr(p,'get_setting',lambda k,d='': d)
+    c=connect()
+    p.init_polywar_schema(c); sectors.init_polywar_sector_schema(c); p.ensure_factions(c)
+    c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT)')
+    for k,v in {'polywar_map_width':10000,'polywar_map_height':10000,'polywar_chunk_size':64,'polywar_sector_size':50,'polywar_starting_area_size':15}.items():
+        c.execute('insert or replace into settings values(?,?)',(k,str(v)))
+    now=datetime.utcnow()
+    c.execute('insert into polywar_seasons(id,name,status,starts_at,ends_at,secret_seed,created_at) values(?,?,?,?,?,?,?)',(1,'S','active',now,now+timedelta(days=1),'seed',now))
+    m.ensure_season_map_snapshot(c,1)
+    squads.init_squad_schema(c); squads.ensure_squad_season_config(c,1,existing_active=False); squads.enable_squads_for_season(c,1)
+    future=datetime.utcnow()+timedelta(hours=1)
+    c.execute("insert into polywar_faction_squads(id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(1,1,1,1,'marching',10,10,10,10,11,10,10,10,100,100,0,0,future,future,future,future,future))
+    c.execute('insert or replace into polywar_squad_pressure(season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)',(1,10,10,1,80,1,future,future,future))
+    c.commit(); c.close(); ov._CACHE.clear(); enabled=ov.build_world_overview(1)
+    assert enabled['squads_enabled'] is True and enabled['squads'] and enabled['squad_pressure_bins']
+    c=connect()
+    squads.disable_squads_for_season(c,1); c.commit()
+    c.close()
+    disabled=ov.build_world_overview(1)
+    assert disabled['squads_enabled'] is False
+    assert disabled['squads']==[] and disabled['squad_pressure_bins']==[]
+    assert disabled['hq'] and disabled['capitals'] is not None and disabled['overview_grid']['cells']
+    keeper.close()

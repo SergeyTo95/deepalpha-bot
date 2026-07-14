@@ -197,10 +197,11 @@ def _apply_pressure(conn,squad,cfg,now,config):
     return 1
 
 def _tick_index_for(cfg, dt):
-    return int(dt.timestamp() // max(60, int(cfg['move_interval_minutes'])*60))
+    # Exact due-time key: distinct next_move_at values inside one move interval must not collide.
+    return int(_as_dt(dt).timestamp())
 
 def _tick_time_for(cfg, tick_index):
-    return datetime.utcfromtimestamp(int(tick_index) * max(60, int(cfg['move_interval_minutes'])*60))
+    return datetime.utcfromtimestamp(int(tick_index))
 
 def _claim_tick(conn, season_id:int, tick:int, scheduled_at, now, cfg):
     c=conn.cursor(); stale_before=now-timedelta(minutes=SQUAD_TICK_STALE_MINUTES)
@@ -236,7 +237,7 @@ def _locked_squads_by_ids(conn, ids):
     rows=_fetchall(conn.cursor(),f'SELECT * FROM polywar_faction_squads WHERE id IN ({ph}) ORDER BY id'+suffix,tuple(ids))
     return {int(r['id']):r for r in rows}
 
-def _resolve_engaged_pair(conn, a, cfg, now):
+def _resolve_engaged_pair(conn, a, cfg, now, step_base=None):
     b_id=a.get('engaged_squad_id')
     if not b_id: return False
     locked=_locked_squads_by_ids(conn,[a['id'],b_id]); a2=locked.get(int(a['id'])); b2=locked.get(int(b_id))
@@ -244,7 +245,7 @@ def _resolve_engaged_pair(conn, a, cfg, now):
     if a2.get('status')!='engaged' or b2.get('status')!='engaged': return False
     if int(a2.get('engaged_squad_id') or 0)!=int(b2['id']) or int(b2.get('engaged_squad_id') or 0)!=int(a2['id']): return False
     if int(a2['hp'])<=0 or int(b2['hp'])<=0: return False
-    dmg=int(cfg['combat_damage_per_tick']); ahp=max(0,int(a2['hp'])-dmg); bhp=max(0,int(b2['hp'])-dmg); next_at=now+timedelta(minutes=int(cfg['move_interval_minutes']))
+    dmg=int(cfg['combat_damage_per_tick']); ahp=max(0,int(a2['hp'])-dmg); bhp=max(0,int(b2['hp'])-dmg); next_at=(step_base or now)+timedelta(minutes=int(cfg['move_interval_minutes']))
     a_status='destroyed' if ahp<=0 else ('marching' if bhp<=0 else 'engaged')
     b_status='destroyed' if bhp<=0 else ('marching' if ahp<=0 else 'engaged')
     a_eng=None if a_status!='engaged' else int(b2['id']); b_eng=None if b_status!='engaged' else int(a2['id'])
@@ -255,7 +256,7 @@ def _resolve_engaged_pair(conn, a, cfg, now):
     return True
 
 
-def _repair_broken_engagement(conn, squad, cfg, now):
+def _repair_broken_engagement(conn, squad, cfg, now, step_base=None):
     locked=_locked_squads_by_ids(conn,[squad['id'], squad.get('engaged_squad_id') or -1])
     cur=locked.get(int(squad['id']))
     if not cur:
@@ -267,7 +268,7 @@ def _repair_broken_engagement(conn, squad, cfg, now):
     valid=bool(enemy and enemy.get('status')=='engaged' and int(enemy.get('hp') or 0)>0 and int(enemy.get('engaged_squad_id') or 0)==int(cur['id']) and cur.get('status')=='engaged')
     if valid:
         return False
-    next_at=now+timedelta(minutes=int(cfg['move_interval_minutes']))
+    next_at=(step_base or now)+timedelta(minutes=int(cfg['move_interval_minutes']))
     _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='marching',engaged_squad_id=NULL,next_move_at=%s,updated_at=%s WHERE id=%s AND status='engaged'",(next_at,now,cur['id']))
     if enemy and int(enemy.get('hp') or 0)<=0 and enemy.get('status') not in {'destroyed','expired'}:
         _execute(conn.cursor(),"UPDATE polywar_faction_squads SET hp=0,status='destroyed',engaged_squad_id=NULL,updated_at=%s WHERE id=%s",(now,enemy['id']))
@@ -280,7 +281,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
     season=_fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(season_id,))
     if not season or season.get('status')!='active': return {'processed':False,'reason':'season_inactive','spawned_count':0,'moved_count':0,'combat_count':0,'pressure_count':0}
     if season.get('ends_at') and _as_dt(season.get('ends_at')) <= now: return {'processed':False,'reason':'season_ended','spawned_count':0,'moved_count':0,'combat_count':0,'pressure_count':0}
-    tick=_tick_index_for(cfg, scheduled_at or now); scheduled_at=scheduled_at or _tick_time_for(cfg,tick)
+    scheduled_at=scheduled_at or now; tick=_tick_index_for(cfg, scheduled_at); next_due_at=scheduled_at+timedelta(minutes=int(cfg['move_interval_minutes']))
     claim=_claim_tick(conn,season_id,tick,scheduled_at,now,cfg)
     if not claim.get('claimed'):
         return {'processed':False,'duplicate':claim.get('duplicate',True),'reason':claim.get('reason','duplicate_tick'),'spawned_count':0,'moved_count':0,'combat_count':0,'pressure_count':0}
@@ -288,36 +289,36 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
     spawned=moved=combat=pressure=0; processed=[]; processed_pairs=set()
     seed=season.get('secret_seed','seed'); config=m.load_map_config(conn, season_id=season_id)
     spawned=spawn_due_squads_in_transaction(conn,season_id,now,cfg=cfg,season=season,config=config)
-    due=_lock_due_squads(conn,season_id,now)
+    due=_lock_due_squads(conn,season_id,scheduled_at)
     for snap in due:
         s=_fetchone(c,'SELECT * FROM polywar_faction_squads WHERE id=%s'+('' if _is_sqlite(conn) else ' FOR UPDATE'),(snap['id'],))
         if not s or s.get('status') not in ACTIVE_STATUSES: continue
-        if s.get('next_move_at') and _as_dt(s.get('next_move_at')) > now: continue
+        if s.get('next_move_at') and _as_dt(s.get('next_move_at')) > scheduled_at: continue
         processed.append(int(s['id']))
         if _as_dt(s['expires_at']) <= now: _execute(c,"UPDATE polywar_faction_squads SET status='expired',updated_at=%s WHERE id=%s AND status<>'destroyed'",(now,s['id'])); continue
         if int(s['hp'])<=0: _execute(c,"UPDATE polywar_faction_squads SET status='destroyed',updated_at=%s WHERE id=%s",(now,s['id'])); continue
         if s['status']=='engaged':
             if not s.get('engaged_squad_id'):
-                _repair_broken_engagement(conn,s,cfg,now); continue
+                _repair_broken_engagement(conn,s,cfg,now,scheduled_at); continue
             pair=tuple(sorted((int(s['id']),int(s['engaged_squad_id']))))
             if pair in processed_pairs: continue
             processed_pairs.add(pair)
-            if _resolve_engaged_pair(conn,s,cfg,now): combat+=1
-            else: _repair_broken_engagement(conn,s,cfg,now)
+            if _resolve_engaged_pair(conn,s,cfg,now,scheduled_at): combat+=1
+            else: _repair_broken_engagement(conn,s,cfg,now,scheduled_at)
             continue
         if abs(int(s['x'])-int(s['supply_x']))+abs(int(s['y'])-int(s['supply_y']))>=int(cfg['supply_distance']):
-            _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_supply',next_move_at=%s,updated_at=%s WHERE id=%s",(now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,s['id'])); logger.info('polywar_squad_waiting_for_supply season_id=%s squad_id=%s',season_id,s['id']); continue
+            _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_supply',next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,s['id'])); logger.info('polywar_squad_waiting_for_supply season_id=%s squad_id=%s',season_id,s['id']); continue
         kind,val=_choose_step(conn,s,cfg,seed,config)
         if kind=='engage':
             o=val; locked=_locked_squads_by_ids(conn,[s['id'],o['id']]); s2=locked.get(int(s['id'])); o2=locked.get(int(o['id']))
             if not s2 or not o2 or s2.get('status') not in ACTIVE_STATUSES or o2.get('status') not in ACTIVE_STATUSES: continue
-            _execute(c,"UPDATE polywar_faction_squads SET status='engaged',engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(o2['id'],now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,s2['id']))
-            _execute(c,"UPDATE polywar_faction_squads SET status='engaged',engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(s2['id'],now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,o2['id']))
+            _execute(c,"UPDATE polywar_faction_squads SET status='engaged',engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(o2['id'],next_due_at,now,s2['id']))
+            _execute(c,"UPDATE polywar_faction_squads SET status='engaged',engaged_squad_id=%s,next_move_at=%s,updated_at=%s WHERE id=%s",(s2['id'],next_due_at,now,o2['id']))
             logger.info('polywar_squad_engaged season_id=%s squad_id=%s enemy_squad_id=%s',season_id,s2['id'],o2['id']); continue
         if kind=='move':
-            nx,ny=val; _execute(c,"UPDATE polywar_faction_squads SET previous_x=x,previous_y=y,x=%s,y=%s,status='marching',move_index=move_index+1,blocked_ticks=0,last_moved_at=%s,next_move_at=%s,updated_at=%s WHERE id=%s AND status<>'destroyed'",(nx,ny,now,now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,s['id'])); ns=dict(s); ns.update({'x':nx,'y':ny}); pressure+=_apply_pressure(conn,ns,cfg,now,config); moved+=1; logger.info('polywar_squad_moved season_id=%s squad_id=%s x=%s y=%s',season_id,s['id'],nx,ny)
+            nx,ny=val; _execute(c,"UPDATE polywar_faction_squads SET previous_x=x,previous_y=y,x=%s,y=%s,status='marching',move_index=move_index+1,blocked_ticks=0,last_moved_at=%s,next_move_at=%s,updated_at=%s WHERE id=%s AND status<>'destroyed'",(nx,ny,now,next_due_at,now,s['id'])); ns=dict(s); ns.update({'x':nx,'y':ny}); pressure+=_apply_pressure(conn,ns,cfg,now,config); moved+=1; logger.info('polywar_squad_moved season_id=%s squad_id=%s x=%s y=%s',season_id,s['id'],nx,ny)
         else:
-            _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_players',blocked_ticks=blocked_ticks+1,next_move_at=%s,updated_at=%s WHERE id=%s",(now+timedelta(minutes=int(cfg['move_interval_minutes'])),now,s['id']))
+            _execute(c,"UPDATE polywar_faction_squads SET status='waiting_for_players',blocked_ticks=blocked_ticks+1,next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,s['id']))
     cleaned=cleanup_expired_pressure_in_transaction(conn,season_id,now)
     outcome={**(claim.get('prior_outcome') or {}),'processed_squad_ids':processed,'processed_pairs':[list(p) for p in processed_pairs],'expired_pressure':cleaned,'recovered':bool(claim.get('recovered'))}
     _execute(c,"UPDATE polywar_squad_ticks SET status='completed',processed_at=%s,spawned_count=%s,moved_count=%s,combat_count=%s,pressure_count=%s,outcome_json=%s WHERE season_id=%s AND tick_index=%s",(now,spawned,moved,combat,pressure,json.dumps(outcome),season_id,tick))

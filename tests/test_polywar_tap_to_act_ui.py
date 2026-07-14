@@ -553,3 +553,6 @@ def test_squad_pan_debounce_and_support_cost_source_guards():
     assert 'now-this.lastSquadOverviewRefresh<60000' in js
     assert 'if (this.squadOverviewTimer) clearTimeout(this.squadOverviewTimer)' in js
     assert 'd.squads_enabled===false' in js
+    assert 'this.overview.squads=[]' in js
+    assert 'this.overview.squad_pressure_bins=[]' in js
+    assert 'this.renderOpenWorldView()' in js

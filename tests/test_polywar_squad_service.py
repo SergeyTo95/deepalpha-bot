@@ -240,3 +240,50 @@ def test_support_duplicate_survives_later_destroyed_disabled_and_zero_cost(monke
     assert dup['squad']['hp'] == 75
     assert player['current_energy'] == 10
     keeper.close()
+
+
+def test_due_times_same_bucket_get_distinct_tick_keys_and_no_starvation(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,move_interval_minutes=10 WHERE season_id=?',(sid,))
+    t0=datetime(2026,1,1,12,10,0); a_due=datetime(2026,1,1,12,13,0); b_due=datetime(2026,1,1,12,19,0)
+    c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(1,sid,1,1,'marching',bx,by,bx,by,bx+1,by,bx,by,100,100,0,0,t0,a_due,t0+timedelta(hours=2),t0,t0))
+    c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(2,sid,2,1,'marching',bx+5,by,bx+5,by,bx+6,by,bx+5,by,100,100,0,0,t0,b_due,t0+timedelta(hours=2),t0,t0))
+    c.commit(); polywar.begin_serialized_transaction(c); early=squads.ensure_squads_caught_up_in_transaction(c,sid,t0); c.commit()
+    assert early['reason']=='nothing_due'
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks WHERE season_id=?',(sid,)).fetchone()[0] == 0
+    before_b=c.execute('SELECT x,y,move_index FROM polywar_faction_squads WHERE id=2').fetchone()
+    polywar.begin_serialized_transaction(c); at_a=squads.ensure_squads_caught_up_in_transaction(c,sid,a_due); c.commit()
+    assert at_a['processed_count']==1 and at_a['results'][0]['tick_index']==int(a_due.timestamp())
+    mid_b=c.execute('SELECT x,y,move_index FROM polywar_faction_squads WHERE id=2').fetchone()
+    assert tuple(mid_b)==tuple(before_b)
+    polywar.begin_serialized_transaction(c); at_b=squads.ensure_squads_caught_up_in_transaction(c,sid,b_due); c.commit()
+    assert at_b['processed_count']==1 and at_b['results'][0]['tick_index']==int(b_due.timestamp())
+    assert c.execute("SELECT COUNT(*) FROM polywar_squad_ticks WHERE season_id=? AND status='completed'",(sid,)).fetchone()[0] == 2
+    after_b=c.execute('SELECT x,y,move_index FROM polywar_faction_squads WHERE id=2').fetchone()
+    assert after_b['move_index'] == before_b['move_index'] + 1
+    polywar.begin_serialized_transaction(c); again=squads.ensure_squads_caught_up_in_transaction(c,sid,b_due); c.commit()
+    assert again['processed'] is False and again['reason'] in {'nothing_due','tick_completed','tick_processing'}
+    assert c.execute('SELECT move_index FROM polywar_faction_squads WHERE id=2').fetchone()[0] == after_b['move_index']
+    keeper.close()
+
+
+def test_exact_scheduled_tick_key_is_epoch_seconds(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); cfg=squads.ensure_squad_season_config(c,sid)
+    a=datetime(2026,1,1,12,13,0); b=datetime(2026,1,1,12,19,0)
+    assert squads._tick_index_for(cfg,a)==int(a.timestamp())
+    assert squads._tick_index_for(cfg,b)==int(b.timestamp())
+    assert squads._tick_index_for(cfg,a) != squads._tick_index_for(cfg,b)
+    keeper.close()
+
+
+def test_squad_config_bootstrap_savepoint_keeps_transaction_usable(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    import services.polywar_squad_service as squad_mod
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError('simulated squad config failure')
+    monkeypatch.setattr(squad_mod, 'ensure_squad_season_config', boom)
+    c=connect(); polywar.begin_serialized_transaction(c); season=polywar.ensure_active_season_in_transaction(c); usable=c.execute('SELECT COUNT(*) FROM polywar_seasons').fetchone()[0]; c.commit()
+    assert season['id'] and usable >= 1
+    keeper.close()
