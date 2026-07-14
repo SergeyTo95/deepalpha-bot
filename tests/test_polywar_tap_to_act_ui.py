@@ -556,3 +556,11 @@ def test_squad_pan_debounce_and_support_cost_source_guards():
     assert 'this.overview.squads=[]' in js
     assert 'this.overview.squad_pressure_bins=[]' in js
     assert 'this.renderOpenWorldView()' in js
+
+def test_reinforcement_ui_runtime_contracts():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'hollow=false' in js and 'if(hollow)' in js and 'setLineDash([3,2])' in js
+    assert 'nearestOverviewSquadAt' in js and 'selection.squad' in js and 'Open Tactical Map' in js
+    assert 'data-polywar-support-type="reinforcement"' in js and 'Send reinforcement' in js
+    assert 'data-squad-countdown' in js and 'serverTimeOffsetMs' in js
+    assert 'document.hidden' in js

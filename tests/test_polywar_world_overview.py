@@ -126,3 +126,14 @@ def test_disabled_squad_overview_hides_and_invalidates_cache(monkeypatch):
     assert disabled['squads']==[] and disabled['squad_pressure_bins']==[]
     assert disabled['hq'] and disabled['capitals'] is not None and disabled['overview_grid']['cells']
     keeper.close()
+
+def test_awaiting_squad_visible_and_expired_hidden_in_overview(monkeypatch):
+    from services import polywar_squad_service as squads
+    c=make(monkeypatch)
+    squads.init_squad_schema(c); squads.ensure_squad_season_config(c,1,existing_active=False); squads.enable_squads_for_season(c,1)
+    now=datetime.utcnow(); future=now+timedelta(hours=1); past=now-timedelta(seconds=1)
+    c.execute("insert into polywar_faction_squads(id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,reinforcement_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(11,1,1,1,'awaiting_reinforcement',10,10,10,10,11,10,10,10,0,100,0,0,now,now,future,future,now,now))
+    c.execute("insert into polywar_faction_squads(id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,reinforcement_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(12,1,1,2,'awaiting_reinforcement',12,10,12,10,13,10,12,10,0,100,0,0,now,now,past,past,now,now))
+    c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
+    ids={s['id'] for s in out['squads']}
+    assert 11 in ids and 12 not in ids

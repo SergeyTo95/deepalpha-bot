@@ -11,3 +11,9 @@ def test_visible_endpoint_is_readonly_no_schema_init_in_handler():
     block=src[src.index('async def handle_polywar_squads_visible_api'):src.index('async def handle_polywar_squad_support_api')]
     assert 'init_squad_schema' not in block
     assert 'process_squad_tick' not in block
+
+def test_support_endpoint_accepts_support_type_and_errors_are_controlled():
+    src = Path('web.py').read_text()
+    assert 'support_type' in src
+    assert 'reinforcement_boost_disabled' in src
+    assert 'server_error' in src

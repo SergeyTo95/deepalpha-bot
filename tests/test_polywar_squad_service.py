@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import services.polywar_service as polywar
 import services.polywar_map_service as maps
 import services.polywar_squad_service as squads
+import services.polywar_capital_service as capitals
 
 
 def db(monkeypatch):
@@ -286,4 +287,136 @@ def test_squad_config_bootstrap_savepoint_keeps_transaction_usable(monkeypatch):
     monkeypatch.setattr(squad_mod, 'ensure_squad_season_config', boom)
     c=connect(); polywar.begin_serialized_transaction(c); season=polywar.ensure_active_season_in_transaction(c); usable=c.execute('SELECT COUNT(*) FROM polywar_seasons').fetchone()[0]; c.commit()
     assert season['id'] and usable >= 1
+    keeper.close()
+
+
+def _insert_squad(c, sid, *, id=1, fid=1, status='marching', x=10, y=10, hp=100, next_at=None, expires_at=None, engaged=None, supply=None, target=None, spawn_index=None):
+    now = next_at or datetime.utcnow()
+    sx, sy = supply or (x, y)
+    tx, ty = target or (x + 1, y)
+    c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,engaged_squad_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id, sid, fid, spawn_index or id, status, x, y, x, y, tx, ty, sx, sy, hp, 100, 0, 0, now, next_at or now, expires_at or now + timedelta(hours=2), engaged, now, now))
+
+
+def test_reinforcement_additive_schema_and_zero_defaults(monkeypatch):
+    connect, keeper, settings = db(monkeypatch)
+    settings['polywar_squad_support_hp'] = '0'
+    settings['polywar_squad_reinforcement_boost_minutes'] = '0'
+    settings['polywar_squad_reinforcement_min_remaining_minutes'] = '0'
+    settings['polywar_squad_reinforcement_energy_cost'] = '0'
+    sid = make_season(connect, existing=False)
+    c = connect(); row = c.execute('SELECT config_version,support_hp,reinforcement_boost_minutes,reinforcement_min_remaining_minutes,reinforcement_energy_cost,reinforcement_delay_notified_at FROM polywar_squad_season_config sc LEFT JOIN polywar_faction_squads fs ON 1=0 WHERE sc.season_id=?', (sid,)).fetchone()
+    assert row['config_version'] == 2
+    assert row['support_hp'] == 0 and row['reinforcement_boost_minutes'] == 0 and row['reinforcement_min_remaining_minutes'] == 0 and row['reinforcement_energy_cost'] == 0
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(polywar_faction_squads)')}
+    assert {'defeated_at','reinforcement_at','reinforcement_delay_notified_at','last_reinforced_at','reinforcement_count','reinforcement_boost_count','defeated_by_squad_id'} <= cols
+    keeper.close()
+
+
+def test_combat_defeat_examples_event_once_and_idempotent_helper(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    # 100 vs 100 -> 80/80 engaged
+    sid = make_season(connect, existing=False); c = connect(); squads.enable_squads_for_season(c, sid); now = datetime(2026,1,1,12,0); c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,combat_damage_per_tick=20 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,status='engaged',x=10,y=10,hp=100,next_at=now,engaged=2)
+    _insert_squad(c,sid,id=2,fid=2,status='engaged',x=11,y=10,hp=100,next_at=now,engaged=1)
+    c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=now); c.commit()
+    assert [(r['hp'],r['status']) for r in c.execute('SELECT hp,status FROM polywar_faction_squads ORDER BY id')] == [(80,'engaged'),(80,'engaged')]
+    # 20 vs 100 -> awaiting / 80 marching
+    sid = make_season(connect, existing=False); c = connect(); squads.enable_squads_for_season(c, sid); now += timedelta(hours=1); c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,combat_damage_per_tick=20 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=11,fid=1,status='engaged',x=20,y=10,hp=20,next_at=now,engaged=12)
+    _insert_squad(c,sid,id=12,fid=2,status='engaged',x=21,y=10,hp=100,next_at=now,engaged=11)
+    c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=now); c.commit()
+    rows=c.execute('SELECT id,hp,status,engaged_squad_id,defeated_by_squad_id,reinforcement_at FROM polywar_faction_squads WHERE id IN (11,12) ORDER BY id').fetchall()
+    assert (rows[0]['hp'], rows[0]['status'], rows[0]['engaged_squad_id'], rows[0]['defeated_by_squad_id']) == (0,'awaiting_reinforcement',None,12)
+    assert rows[0]['reinforcement_at'] is not None and (rows[1]['hp'], rows[1]['status'], rows[1]['engaged_squad_id']) == (80,'marching',None)
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_defeated'",(sid,)).fetchone()[0] == 1
+    cfg=squads.ensure_squad_season_config(c,sid); polywar.begin_serialized_transaction(c); assert squads.mark_squad_awaiting_reinforcement_in_transaction(c, dict(rows[0]), 12, cfg, now) is False; assert c.execute('SELECT 1').fetchone()[0] == 1; c.commit()
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_defeated'",(sid,)).fetchone()[0] == 1
+    # 20 vs 20 -> both awaiting
+    sid = make_season(connect, existing=False); c = connect(); squads.enable_squads_for_season(c, sid); now += timedelta(hours=1); c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,combat_damage_per_tick=20 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=21,fid=1,status='engaged',x=30,y=10,hp=20,next_at=now,engaged=22)
+    _insert_squad(c,sid,id=22,fid=2,status='engaged',x=31,y=10,hp=20,next_at=now,engaged=21)
+    c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=now); c.commit()
+    assert [r['status'] for r in c.execute('SELECT status FROM polywar_faction_squads WHERE id IN (21,22) ORDER BY id')] == ['awaiting_reinforcement','awaiting_reinforcement']
+    keeper.close()
+
+
+def test_awaiting_inert_slot_and_occupancy(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; now=datetime(2026,1,1,12,0)
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=1 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,status='awaiting_reinforcement',x=bx,y=by,hp=0,next_at=now,expires_at=now+timedelta(hours=2),supply=(bx,by))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=1',(now+timedelta(hours=1),))
+    c.execute('INSERT OR IGNORE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,bx,by,1,now))
+    c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=now); c.commit()
+    sq=c.execute('SELECT status,hp,x,y FROM polywar_faction_squads WHERE id=1').fetchone()
+    assert out['moved_count']==0 and out['combat_count']==0 and sq['status']=='awaiting_reinforcement' and (sq['x'],sq['y'])==(bx,by)
+    polywar.begin_serialized_transaction(c); spawned=squads.spawn_due_squads_in_transaction(c,sid,now+timedelta(hours=4)); c.commit()
+    assert spawned == 0
+    # awaiting does not block active movement into same cell
+    _insert_squad(c,sid,id=2,fid=2,status='marching',x=bx+1,y=by,hp=100,next_at=now,target=(bx,by),supply=(bx+1,by))
+    c.commit(); kind,val=squads._choose_step(c, dict(c.execute('SELECT * FROM polywar_faction_squads WHERE id=2').fetchone()), squads.ensure_squad_season_config(c,sid), 'seed', config)
+    assert kind in {'move','wait'}
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_pressure WHERE season_id=?',(sid,)).fetchone()[0] == 0
+    keeper.close()
+
+
+def test_expired_awaiting_does_not_starve_later_due_and_hides(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; t0=datetime(2026,1,1,12,0); later=t0+timedelta(minutes=5)
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,status='awaiting_reinforcement',x=bx,y=by,hp=0,next_at=t0,expires_at=t0-timedelta(seconds=1),supply=(bx,by))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=1',(t0,))
+    _insert_squad(c,sid,id=2,fid=2,status='marching',x=bx+5,y=by,hp=100,next_at=later,expires_at=t0+timedelta(hours=2),supply=(bx+5,by),target=(bx+6,by))
+    c.commit(); polywar.begin_serialized_transaction(c); first=squads.ensure_squads_caught_up_in_transaction(c,sid,t0); c.commit()
+    assert c.execute('SELECT status,reinforcement_at FROM polywar_faction_squads WHERE id=1').fetchone()['status']=='expired'
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_reinforced'",(sid,)).fetchone()[0] == 0
+    polywar.begin_serialized_transaction(c); second=squads.ensure_squads_caught_up_in_transaction(c,sid,later); usable=c.execute('SELECT 1').fetchone()[0]; c.commit()
+    assert second['processed_count'] >= 1 and usable == 1
+    assert c.execute('SELECT move_index FROM polywar_faction_squads WHERE id=2').fetchone()[0] >= 1
+    out=squads.visible_squads(1,bx-1,by-1,bx+1,by+1)
+    assert all(s['id'] != 1 for s in out['squads'])
+    keeper.close()
+
+
+def test_reinforcement_return_once_no_safe_cell_rate_limit_and_safe_capital_controller(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; now=datetime(2026,1,1,12,0)
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,reinforcement_return_radius=0,reinforcement_hp=50 WHERE season_id=?',(sid,))
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,bx,by,1,now))
+    _insert_squad(c,sid,id=1,fid=1,status='awaiting_reinforcement',x=bx+2,y=by,hp=0,next_at=now,expires_at=now+timedelta(hours=2),supply=(bx,by))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=1',(now,))
+    c.commit(); polywar.begin_serialized_transaction(c); assert squads.process_due_reinforcements_in_transaction(c,sid,squads.ensure_squad_season_config(c,sid),now,now,config=config)==1; assert squads.process_due_reinforcements_in_transaction(c,sid,squads.ensure_squad_season_config(c,sid),now,now,config=config)==0; c.commit()
+    sq=c.execute('SELECT status,hp,reinforcement_count,next_move_at FROM polywar_faction_squads WHERE id=1').fetchone(); assert (sq['status'],sq['hp'],sq['reinforcement_count']) == ('marching',50,1)
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_reinforced'",(sid,)).fetchone()[0] == 1
+    # no safe cell: retry updates but event is rate-limited
+    _insert_squad(c,sid,id=2,fid=1,status='awaiting_reinforcement',x=bx+3,y=by,hp=0,next_at=now,expires_at=now+timedelta(hours=2),supply=(bx+9,by+9))
+    _insert_squad(c,sid,id=3,fid=1,status='marching',x=bx+9,y=by+9,hp=100,next_at=now+timedelta(hours=1),expires_at=now+timedelta(hours=2),supply=(bx+9,by+9))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=2',(now,)); c.commit()
+    polywar.begin_serialized_transaction(c); squads.process_due_reinforcements_in_transaction(c,sid,squads.ensure_squad_season_config(c,sid),now,now,config=config); c.commit()
+    polywar.begin_serialized_transaction(c); squads.process_due_reinforcements_in_transaction(c,sid,squads.ensure_squad_season_config(c,sid),now+timedelta(minutes=10),now+timedelta(minutes=10),config=config); c.commit()
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_reinforcement_delayed'",(sid,)).fetchone()[0] == 1
+    assert c.execute('SELECT status,hp FROM polywar_faction_squads WHERE id=2').fetchone()['status']=='awaiting_reinforcement'
+    # current capital controller decides eligibility, not original owner; no mutation occurs
+    capitals.ensure_capitals_initialized(c,sid)
+    cap=c.execute('SELECT * FROM polywar_capitals WHERE season_id=? AND original_faction_id=?',(sid,1)).fetchone(); c.execute('UPDATE polywar_capitals SET controller_faction_id=2 WHERE season_id=? AND original_faction_id=?',(sid,1)); c.commit()
+    fake={'id':99,'season_id':sid,'faction_id':1,'x':cap['x'],'y':cap['y'],'supply_x':cap['x'],'supply_y':cap['y']}
+    assert squads._safe_return_cell(c,fake,{'reinforcement_return_radius':0},'seed',config) is None
+    assert c.execute('SELECT controller_faction_id,siege_progress FROM polywar_capitals WHERE season_id=? AND original_faction_id=?',(sid,1)).fetchone()['controller_faction_id']==2
+    keeper.close()
+
+
+def test_reinforcement_support_zero_values_and_duplicates(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); c.execute('UPDATE polywar_squad_season_config SET reinforcement_energy_cost=0,reinforcement_boost_minutes=15,reinforcement_min_remaining_minutes=0,support_hp=0 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,status='awaiting_reinforcement',x=10,y=10,hp=0,next_at=now,expires_at=now+timedelta(hours=2))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=1',(now+timedelta(hours=1),)); c.commit(); c.close()
+    out=squads.support_squad(1,1,'boost-zero-energy','reinforcement'); dup=squads.support_squad(1,1,'boost-zero-energy','reinforcement')
+    c=connect(); assert out['support_type']=='reinforcement' and out['energy_cost']==0 and dup.get('duplicate') is True
+    assert c.execute('SELECT current_energy FROM polywar_players WHERE user_id=1 AND season_id=?',(sid,)).fetchone()[0] == 10
+    c.execute('UPDATE polywar_squad_season_config SET reinforcement_boost_minutes=0 WHERE season_id=?',(sid,)); c.commit(); c.close()
+    try:
+        squads.support_squad(1,1,'boost-disabled','reinforcement')
+        assert False
+    except ValueError as e:
+        assert str(e) == 'reinforcement_boost_disabled'
     keeper.close()
