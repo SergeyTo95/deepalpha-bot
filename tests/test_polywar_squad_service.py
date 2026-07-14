@@ -1,4 +1,5 @@
 import sqlite3, uuid
+from pathlib import Path
 from datetime import datetime, timedelta
 
 import services.polywar_service as polywar
@@ -419,4 +420,41 @@ def test_reinforcement_support_zero_values_and_duplicates(monkeypatch):
         assert False
     except ValueError as e:
         assert str(e) == 'reinforcement_boost_disabled'
+    keeper.close()
+
+
+def test_no_safe_cell_retry_sql_is_postgresql_safe_and_transaction_usable(monkeypatch):
+    assert 'CASE WHEN %s THEN' not in Path('services/polywar_squad_service.py').read_text()
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime(2026,1,1,12,0); bx,by=config.bases[1]
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,reinforcement_return_radius=0 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=77,fid=1,status='awaiting_reinforcement',x=bx+8,y=by+8,hp=0,next_at=now,expires_at=now+timedelta(hours=2),supply=(bx+9,by+9))
+    c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=77',(now,)); c.commit()
+    monkeypatch.setattr(squads, '_safe_return_cell', lambda *a, **k: None)
+    polywar.begin_serialized_transaction(c); squads.process_due_reinforcements_in_transaction(c,sid,squads.ensure_squad_season_config(c,sid),now,now,config=config); usable=c.execute('SELECT 1').fetchone()[0]; c.commit()
+    row=c.execute('SELECT status,hp,expires_at,reinforcement_at FROM polywar_faction_squads WHERE id=77').fetchone()
+    assert usable == 1 and row['status']=='awaiting_reinforcement' and row['hp']==0 and row['reinforcement_at'] is not None
+    keeper.close()
+
+
+def test_supply_zero_coordinates_are_preserved_for_safe_return(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime(2026,1,1,12,0)
+    c.execute('UPDATE polywar_squad_season_config SET reinforcement_return_radius=0 WHERE season_id=?',(sid,))
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,0,0,1,now))
+    monkeypatch.setattr(squads, '_passable', lambda seed,x,y,config: 0 <= x < config.width and 0 <= y < config.height)
+    monkeypatch.setattr(squads.m, 'owner_at_with_config', lambda conn,sid,x,y,config: 1 if (x,y)==(0,0) else None)
+    monkeypatch.setattr(squads, '_capital_at', lambda conn,sid,x,y: None)
+    fake={'id':501,'season_id':sid,'faction_id':1,'x':25,'y':25,'supply_x':0,'supply_y':0}
+    assert squads._safe_return_cell(c,fake,{'reinforcement_return_radius':0},'seed',config) == (0,0)
+    keeper.close()
+
+
+def test_existing_config_version_migrates_to_two_without_rollout_changes(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    c=connect(); squads.init_squad_schema(c)
+    now=datetime(2026,1,1,12,0)
+    c.execute("INSERT INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(99,0,1,111,12,3,700,90,20,300,80,10,50,20,15,2,30,5,now,now))
+    c.commit(); squads.init_squad_schema(c); row=c.execute('SELECT enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_hp,reinforcement_cooldown_minutes,reinforcement_hp FROM polywar_squad_season_config WHERE season_id=99').fetchone()
+    assert dict(row) == {'enabled':0,'config_version':2,'spawn_interval_minutes':111,'move_interval_minutes':12,'max_hp':90,'reinforcement_cooldown_minutes':60,'reinforcement_hp':50}
     keeper.close()

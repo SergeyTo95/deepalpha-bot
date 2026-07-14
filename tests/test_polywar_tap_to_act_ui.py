@@ -564,3 +564,47 @@ def test_reinforcement_ui_runtime_contracts():
     assert 'data-polywar-support-type="reinforcement"' in js and 'Send reinforcement' in js
     assert 'data-squad-countdown' in js and 'serverTimeOffsetMs' in js
     assert 'document.hidden' in js
+
+
+def test_shared_squad_countdown_runtime_updates_and_respects_hidden():
+    import subprocess, textwrap
+    js = Path('webapp/polywar.js').read_text()
+    fn = js[js.index('function updateSharedCountdowns'):js.index('function startWorldCountdownTimer')]
+    script = textwrap.dedent(f'''
+        const assert = require('assert');
+        let now = Date.parse('2026-01-01T12:00:00Z');
+        Date.now = () => now;
+        function fmtTime(sec){{ sec=Math.max(0,sec|0); const m=Math.floor(sec/60), s=sec%60; return `${{m}}m ${{s}}s`; }}
+        const elems = [
+          {{ dataset:{{reinforcementAt:'2026-01-01T12:01:00Z'}}, textContent:'' }},
+          {{ dataset:{{expiresAt:'2026-01-01T12:02:00Z'}}, textContent:'' }},
+        ];
+        global.map={{serverTimeOffsetMs:0}}; global.currentState={{world:{{server_timestamp:0}}}};
+        global.document={{ hidden:false, querySelectorAll(sel){{ return sel==='[data-squad-countdown]' ? elems : []; }} }};
+        {fn}
+        updateSharedCountdowns();
+        assert.deepStrictEqual(elems.map(e=>e.textContent), ['1m 0s','2m 0s']);
+        now += 1000; updateSharedCountdowns();
+        assert.deepStrictEqual(elems.map(e=>e.textContent), ['0m 59s','1m 59s']);
+        document.hidden = true; now += 1000; updateSharedCountdowns();
+        assert.deepStrictEqual(elems.map(e=>e.textContent), ['0m 59s','1m 59s']);
+    ''')
+    subprocess.run(['node','-e',script], check=True)
+
+
+def test_support_success_refreshes_open_menu_runtime_contract():
+    import subprocess, textwrap
+    script = textwrap.dedent(r'''
+        const assert = require('assert');
+        let refreshed=false, menuRefreshed=false, countdownUpdated=false, energyUpdated=false;
+        const polywarActionKeys = new Map();
+        let currentState={season:{id:1},energy:{current_energy:4}};
+        global.document={ querySelector(){return {dataset:{polywarSupportType:'reinforcement'}};} };
+        function toast(){} function updateEnergyUI(){ energyUpdated=true; }
+        function refreshOpenPolywarMenu(){ menuRefreshed=true; }
+        function updateSharedCountdowns(){ countdownUpdated=true; }
+        async function api(){ return {ok:true,support_type:'reinforcement',energy:{current_energy:3},squad:{reinforcement_at:'2026-01-01T12:30:00Z'}}; }
+        const map={ selected:{x:7,y:8}, refreshSquadOverviewIfDue(){}, updatePanel(){}, async refreshSquads(force){ refreshed=force; this.selected={x:99,y:99}; }, async supportSelectedSquad(id){ const key=`${currentState?.season?.id}:support_squad:${id}`; const idem=polywarActionKeys.get(key)||`${key}:${Date.now()}`; polywarActionKeys.set(key, idem); const d=await api(`/api/polywar/squads/${id}/support`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idempotency_key:idem,support_type:(document.querySelector(`[data-polywar-support-squad="${id}"]`)?.dataset?.polywarSupportType)||'auto'})}); if(!d.ok) return d; polywarActionKeys.delete(key); currentState.energy=d.energy||currentState.energy; const selectedBefore=this.selected?{...this.selected}:null; await this.refreshSquads(true); if(selectedBefore) this.selected=selectedBefore; this.refreshSquadOverviewIfDue(true); updateEnergyUI(); this.updatePanel(); refreshOpenPolywarMenu(); updateSharedCountdowns(); return d; } };
+        map.supportSelectedSquad(5).then(()=>{ assert.strictEqual(refreshed,true); assert.deepStrictEqual(map.selected,{x:7,y:8}); assert.strictEqual(currentState.energy.current_energy,3); assert(menuRefreshed && countdownUpdated && energyUpdated); });
+    ''')
+    subprocess.run(['node','-e',script], check=True)

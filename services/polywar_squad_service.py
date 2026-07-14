@@ -84,6 +84,7 @@ def init_squad_schema(conn=None):
         ]: _add_col(conn, "polywar_faction_squads", spec)
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_squad_reinforcement_due ON polywar_faction_squads(season_id,status,reinforcement_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_polywar_squad_faction_status ON polywar_faction_squads(season_id,faction_id,status)")
+        _execute(c, "UPDATE polywar_squad_season_config SET config_version=2 WHERE config_version < 2")
         logger.info("polywar_squad_schema_initialized")
         if own: conn.commit()
     finally:
@@ -281,7 +282,9 @@ def mark_squad_awaiting_reinforcement_in_transaction(conn, squad, defeated_by_sq
 
 def _safe_return_cell(conn, squad, cfg, seed, config):
     sid=int(squad['season_id']); fid=int(squad['faction_id']); radius=int(cfg.get('reinforcement_return_radius') or 0)
-    anchors=[(int(squad.get('supply_x') or squad['x']), int(squad.get('supply_y') or squad['y']))]
+    sx = squad.get('supply_x') if squad.get('supply_x') is not None else squad['x']
+    sy = squad.get('supply_y') if squad.get('supply_y') is not None else squad['y']
+    anchors=[(int(sx), int(sy))]
     if fid in config.bases: anchors.append(tuple(map(int, config.bases[fid])))
     seen=set()
     for ax,ay in anchors:
@@ -318,9 +321,11 @@ def process_due_reinforcements_in_transaction(conn, season_id, cfg, now, schedul
             retry=scheduled_at+timedelta(minutes=int(cfg.get('reinforcement_retry_minutes') if cfg.get('reinforcement_retry_minutes') is not None else 10))
             notify_at=sq.get('reinforcement_delay_notified_at')
             should_notify=not notify_at or _as_dt(notify_at) <= now-timedelta(minutes=60)
-            _execute(conn.cursor(),"UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,reinforcement_delay_notified_at=CASE WHEN %s THEN %s ELSE reinforcement_delay_notified_at END,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(retry,retry,1 if should_notify else 0,now,now,sq['id']))
             if should_notify:
+                _execute(conn.cursor(),"UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,reinforcement_delay_notified_at=%s,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(retry,retry,now,now,sq['id']))
                 _execute(conn.cursor(),"INSERT INTO polywar_events (season_id,faction_id,event_type,message,created_at) VALUES (%s,%s,'squad_reinforcement_delayed','Reinforcement delayed: no safe return cell',%s)",(season_id,sq['faction_id'],now))
+            else:
+                _execute(conn.cursor(),"UPDATE polywar_faction_squads SET reinforcement_at=%s,next_move_at=%s,updated_at=%s WHERE id=%s AND status='awaiting_reinforcement'",(retry,retry,now,sq['id']))
             logger.info('polywar_squad_reinforcement_delayed season_id=%s squad_id=%s faction_id=%s',season_id,sq['id'],sq['faction_id']); continue
         x,y=cell; hp=min(int(sq['max_hp']), int(cfg.get('reinforcement_hp') if cfg.get('reinforcement_hp') is not None else 50)); next_at=scheduled_at+timedelta(minutes=int(cfg['move_interval_minutes']))
         c2=conn.cursor()
