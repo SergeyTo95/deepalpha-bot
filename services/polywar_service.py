@@ -627,9 +627,7 @@ def get_state(user_id: int) -> Dict[str, Any]:
             _execute(conn.cursor(), "SET LOCAL statement_timeout = '20s'")
         t = time.monotonic(); season = ensure_active_season_in_transaction(conn); _stage("season", t)
         from services.polywar_world_service import ensure_world_initialized_in_transaction, ensure_world_caught_up_in_transaction
-        t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); ensure_world_caught_up_in_transaction(conn, int(season["id"]));
-        from services.polywar_squad_service import ensure_squad_season_config, ensure_squads_caught_up_in_transaction
-        ensure_squad_season_config(conn, int(season["id"])); ensure_squads_caught_up_in_transaction(conn, int(season["id"])); _stage("world", t)
+        t = time.monotonic(); ensure_world_initialized_in_transaction(conn, int(season["id"])); ensure_world_caught_up_in_transaction(conn, int(season["id"])); _stage("world", t)
         from services import polywar_finalization_service as finalization
         decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
         if decision.get("should_finalize"):

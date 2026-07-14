@@ -135,8 +135,13 @@ def build_world_overview(user_id=None):
         active_squads = []
         if 'polywar_squad_pressure' in _tables(conn):
             px = f"CAST(x / {max(1, int(config.width / cols))} AS INTEGER)"; py = f"CAST(y / {max(1, int(config.height / rows))} AS INTEGER)"
-            prs = polywar._fetchall(conn.cursor(), f"SELECT {px} AS grid_x,{py} AS grid_y,faction_id,MAX(pressure) AS pressure,COUNT(DISTINCT faction_id) AS factions FROM polywar_squad_pressure WHERE season_id=%s AND expires_at>CURRENT_TIMESTAMP GROUP BY grid_x,grid_y,faction_id LIMIT %s", (sid, int(cols*rows*4)))
-            squad_pressure_bins = [{'grid_x': min(cols-1,int(r['grid_x'])), 'grid_y': min(rows-1,int(r['grid_y'])), 'faction_id': int(r['faction_id']), 'pressure': int(r.get('pressure') or 0), 'is_contested': int(r.get('factions') or 0) > 1} for r in prs]
+            prs = polywar._fetchall(conn.cursor(), f"SELECT {px} AS grid_x,{py} AS grid_y,faction_id,MAX(pressure) AS pressure FROM polywar_squad_pressure WHERE season_id=%s AND expires_at>CURRENT_TIMESTAMP GROUP BY grid_x,grid_y,faction_id LIMIT %s", (sid, int(cols*rows*4)))
+            by_bin = {}
+            for r in prs:
+                gx=min(cols-1,int(r['grid_x'])); gy=min(rows-1,int(r['grid_y'])); by_bin.setdefault((gx,gy), []).append({'grid_x':gx,'grid_y':gy,'faction_id':int(r['faction_id']),'pressure':int(r.get('pressure') or 0)})
+            for (gx,gy), vals in by_bin.items():
+                leader=sorted(vals, key=lambda q: (-q['pressure'], q['faction_id']))[0]
+                squad_pressure_bins.append({**leader, 'is_contested': len({v['faction_id'] for v in vals}) > 1})
         if 'polywar_faction_squads' in _tables(conn):
             active_squads = [dict(r) for r in polywar._fetchall(conn.cursor(), "SELECT id,faction_id,x,y,hp,max_hp,status,target_x,target_y FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating') LIMIT 14", (sid,))]
         rifts = []

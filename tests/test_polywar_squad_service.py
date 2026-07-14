@@ -71,3 +71,64 @@ def test_service_source_no_auto_win_imports():
     src=open('services/polywar_squad_service.py',encoding='utf-8').read()
     forbidden=['transfer_capital_control','finalize_season_in_transaction','maybe_finalize_in_transaction','capture_cell(','faction_contribution=faction_contribution']
     assert not any(tok in src for tok in forbidden)
+
+
+def test_disabled_config_does_not_create_tick(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.disable_squads_for_season(c,sid); c.commit(); c.close()
+    c=connect(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,datetime.utcnow()); c.commit()
+    assert out['reason']=='squads_disabled'
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks WHERE season_id=?',(sid,)).fetchone()[0] == 0
+    keeper.close()
+
+
+def test_duplicate_tick_keeps_transaction_usable(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1)
+    c=connect(); squads.enable_squads_for_season(c,sid); c.commit(); now=datetime.utcnow()+timedelta(hours=2); polywar.begin_serialized_transaction(c); first=squads.process_squad_tick_in_transaction(c,sid,now); second=squads.process_squad_tick_in_transaction(c,sid,now); usable=c.execute('SELECT 1').fetchone()[0]; c.commit()
+    assert first['processed'] is True and second['duplicate'] is True and usable == 1
+    keeper.close()
+
+
+def test_engaged_pair_damage_once_and_survivor_waits(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); cfg=squads.ensure_squad_season_config(c,sid); c.execute('UPDATE polywar_squad_season_config SET combat_damage_per_tick=20 WHERE season_id=?',(sid,))
+    for i,(hp,eng) in enumerate([(100,2),(100,1)], start=1):
+        c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,engaged_squad_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(i,sid,i,i,'engaged',10+i,10,10+i,10,20,10,10+i,10,hp,100,0,0,now,now,now+timedelta(hours=1),eng,now,now))
+    c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,now+timedelta(minutes=10)); c.commit()
+    rows=c.execute('SELECT id,hp,status,engaged_squad_id FROM polywar_faction_squads ORDER BY id').fetchall()
+    assert out['combat_count']==1
+    assert [r['hp'] for r in rows] == [80,80]
+    keeper.close()
+
+
+def test_support_rejects_mine_locked_player_and_disabled_season(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); join(connect,sid,1,1)
+    c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(1,sid,1,1,'marching',10,10,10,10,11,10,10,10,50,100,0,0,now,now,now+timedelta(hours=1),now,now)); c.execute('UPDATE polywar_players SET locked_until=? WHERE user_id=1 AND season_id=?',(now+timedelta(minutes=5),sid)); c.commit(); c.close()
+    try:
+        squads.support_squad(1,1,'lock')
+        assert False
+    except ValueError as e:
+        assert str(e)=='player_locked'
+    c=connect(); c.execute('UPDATE polywar_players SET locked_until=NULL WHERE user_id=1 AND season_id=?',(sid,)); squads.disable_squads_for_season(c,sid); c.commit(); c.close()
+    try:
+        squads.support_squad(1,1,'disabled')
+        assert False
+    except ValueError as e:
+        assert str(e)=='squads_disabled'
+    keeper.close()
+
+
+def test_get_state_source_does_not_run_squad_catchup():
+    src=open('services/polywar_service.py',encoding='utf-8').read()
+    block=src[src.index('def get_state'):]
+    assert 'ensure_squads_caught_up_in_transaction' not in block
+    assert 'polywar_squad_ticks' not in block
+
+
+def test_squad_source_uses_postgres_safe_claims_and_locks():
+    src=open('services/polywar_squad_service.py',encoding='utf-8').read()
+    assert 'ON CONFLICT (season_id,tick_index) DO NOTHING RETURNING id' in src
+    assert 'FOR UPDATE SKIP LOCKED' in src
+    assert 'INSERT OR IGNORE INTO polywar_squad_ticks' in src

@@ -83,3 +83,14 @@ def test_overview_includes_bounded_starting_zones(monkeypatch):
     z=out['starting_zones'][0]
     assert {'faction_id','min_x','min_y','max_x','max_y'} <= set(z)
     assert z['min_x'] >= 0 and z['max_x'] < out['world']['width']
+
+def test_squad_pressure_two_factions_same_bin_contested(monkeypatch):
+    c=make(monkeypatch)
+    from services import polywar_squad_service as squads
+    squads.init_squad_schema(c)
+    future=datetime.utcnow()+timedelta(hours=1)
+    c.execute('insert or replace into polywar_squad_pressure(season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)',(1,10,10,1,40,None,future,future,future))
+    c.execute('insert or replace into polywar_squad_pressure(season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)',(1,11,10,2,80,None,future,future,future))
+    c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
+    bins=[b for b in out.get('squad_pressure_bins',[]) if b['grid_x']==0 and b['grid_y']==0]
+    assert bins and bins[0]['is_contested'] is True and bins[0]['faction_id']==2

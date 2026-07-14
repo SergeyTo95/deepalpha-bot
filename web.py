@@ -1807,7 +1807,31 @@ async def handle_google_callback(request):
     raise response
 
 
+async def polywar_squad_maintenance_ctx(app):
+    stop = asyncio.Event()
+    async def runner():
+        from services.polywar_squad_service import run_squad_maintenance_once, SQUAD_MAINTENANCE_INTERVAL_SECONDS
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(run_squad_maintenance_once)
+            except Exception:
+                logger.exception("polywar_squad_background_maintenance_failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=SQUAD_MAINTENANCE_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+    task = asyncio.create_task(runner())
+    try:
+        yield
+    finally:
+        stop.set(); task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 app = web.Application()
+app.cleanup_ctx.append(polywar_squad_maintenance_ctx)
 
 app.router.add_get("/", handle_index)
 app.router.add_get("/pay", handle_index)
