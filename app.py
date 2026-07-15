@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import random
+import uuid
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -251,15 +252,20 @@ async def channel_worker():
 # SIGNAL CACHE
 # ═══════════════════════════════════════════
 
-async def update_signal_cache():
-    print("🔄 Starting signal cache update...")
+async def update_signal_cache(cycle_id: str = None):
+    if os.getenv("SIGNAL_CACHE_GEMINI_ENABLED", "false").lower() not in {"1","true","yes","on"}:
+        print("🔄 Signal cache Gemini disabled by env")
+        return
+    cycle_id = cycle_id or uuid.uuid4().hex
+    print(f"🔄 Starting signal cache update cycle={cycle_id}...")
     from agents.opportunity_agent import OpportunityAgent
 
     for category in CATEGORIES:
         try:
             print(f"🔄 Updating cache for {category}...")
             agent = OpportunityAgent()
-            result = agent.run(lang="ru", limit=2, category_filter=category)
+            job_id = f"signal_cache:{cycle_id}:{category}"
+            result = agent.run(lang="ru", limit=1, category_filter=category, is_background=True, request_id=job_id, cycle_id=cycle_id, job_id=job_id)
 
             if result and result.get("question") != "No strong opportunity found":
                 import time
@@ -280,13 +286,24 @@ async def update_signal_cache():
 
 
 async def cache_worker():
-    await asyncio.sleep(21600)
-    await update_signal_cache()
+    if os.getenv("SIGNAL_CACHE_WORKER_ENABLED", "false").lower() not in {"1","true","yes","on"}:
+        print("🔄 Signal cache worker disabled by env")
+        return
+    await asyncio.sleep(int(os.getenv("SIGNAL_CACHE_INITIAL_DELAY_SECONDS", "300")))
 
     while True:
         try:
+            from services.gemini_gateway import acquire_background_lock, WORKER_ID
+            cycle_id = uuid.uuid4().hex
+            try:
+                with acquire_background_lock("signal_cache_worker", WORKER_ID, int(os.getenv("BACKGROUND_LOCK_TTL_SECONDS", "900"))) as lock:
+                    if lock.acquired:
+                        await update_signal_cache(cycle_id=cycle_id)
+                    else:
+                        print("🔄 Signal cache lock held by another replica")
+            except Exception as lock_error:
+                print(f"🔄 Signal cache lock unavailable, skipping: {lock_error}")
             await asyncio.sleep(21600)
-            await update_signal_cache()
         except Exception as e:
             print(f"CACHE WORKER ERROR: {e}")
             await asyncio.sleep(60)
@@ -596,10 +613,10 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
 
 async def watchlist_worker():
     """Проверяет watchlist каждые N часов."""
+    if os.getenv("WATCHLIST_WORKER_ENABLED", "false").lower() not in {"1","true","yes","on"}:
+        print("⭐ Watchlist worker disabled by env")
+        return
     await asyncio.sleep(900)
-    watchlist_enabled = get_setting("watchlist_enabled", "on")
-    if watchlist_enabled == "on":
-        await check_watchlist()
 
     while True:
         try:
@@ -608,7 +625,15 @@ async def watchlist_worker():
 
             watchlist_enabled = get_setting("watchlist_enabled", "on")
             if watchlist_enabled == "on":
-                await check_watchlist()
+                from services.gemini_gateway import acquire_background_lock, WORKER_ID
+                try:
+                    with acquire_background_lock("watchlist_worker", WORKER_ID, int(os.getenv("BACKGROUND_LOCK_TTL_SECONDS", "900"))) as lock:
+                        if lock.acquired:
+                            await check_watchlist()
+                        else:
+                            print("⭐ Watchlist lock held by another replica")
+                except Exception as lock_error:
+                    print(f"⭐ Watchlist lock unavailable, skipping: {lock_error}")
             else:
                 print("⭐ Watchlist disabled in settings")
         except Exception as e:

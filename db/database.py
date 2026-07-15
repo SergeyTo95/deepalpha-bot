@@ -4,8 +4,11 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-import psycopg2
-import psycopg2.extras
+try:
+    import psycopg2
+    import psycopg2.extras
+except ModuleNotFoundError:
+    psycopg2 = None
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -13,6 +16,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 def get_connection():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is missing")
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 dependency is not installed")
     conn = psycopg2.connect(DATABASE_URL)
     return conn
 
@@ -2740,3 +2745,122 @@ def get_watchlist_by_id(watchlist_id: int) -> Optional[Dict[str, Any]]:
         return None
     finally:
         conn.close()
+
+# ═══════════════════════════════════════════
+# GEMINI ACCOUNTING + BACKGROUND LOCKS
+# ═══════════════════════════════════════════
+
+def init_gemini_accounting_tables() -> None:
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS gemini_call_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        cycle_id TEXT,
+        job_id TEXT,
+        feature TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        user_id BIGINT,
+        chat_id BIGINT,
+        is_background INTEGER NOT NULL DEFAULT 0,
+        worker_id TEXT,
+        replica_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL,
+        status_code INTEGER,
+        reason TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        duration_ms INTEGER,
+        estimated_cost_usd REAL DEFAULT 0,
+        provider_request_id TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_attempts_started ON gemini_call_attempts(started_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_attempts_request ON gemini_call_attempts(request_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_attempts_cycle ON gemini_call_attempts(cycle_id)")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS background_locks (
+        lock_name TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+    conn.commit(); cursor.close(); conn.close()
+
+
+def create_gemini_attempt(**kw) -> str:
+    init_gemini_accounting_tables()
+    attempt_id = kw.get("attempt_id") or __import__("uuid").uuid4().hex
+    now = datetime.utcnow().isoformat()
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO gemini_call_attempts (
+            attempt_id, request_id, cycle_id, job_id, feature, origin, user_id, chat_id,
+            is_background, worker_id, replica_id, model, status, reason, started_at
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (
+        attempt_id, kw.get("request_id"), kw.get("cycle_id"), kw.get("job_id"),
+        kw.get("feature"), kw.get("origin"), kw.get("user_id"), kw.get("chat_id"),
+        1 if kw.get("is_background") else 0, kw.get("worker_id"), kw.get("replica_id"),
+        kw.get("model"), kw.get("status", "reserved"), kw.get("reason"), now,
+    ))
+    conn.commit(); cursor.close(); conn.close(); return attempt_id
+
+
+def complete_gemini_attempt(attempt_id: str, status: str, status_code=None, reason=None, duration_ms=None, estimated_cost_usd=0, provider_request_id=None) -> None:
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE gemini_call_attempts SET status=%s, status_code=%s, reason=COALESCE(%s, reason),
+        completed_at=%s, duration_ms=%s, estimated_cost_usd=%s, provider_request_id=%s WHERE attempt_id=%s
+    """, (status, status_code, reason, datetime.utcnow().isoformat(), duration_ms, estimated_cost_usd, provider_request_id, attempt_id))
+    conn.commit(); cursor.close(); conn.close()
+
+
+def count_gemini_attempts(request_id=None, cycle_id=None, today=False, is_background=None) -> int:
+    init_gemini_accounting_tables()
+    clauses = ["status != 'blocked'"]; params = []
+    if request_id: clauses.append("request_id=%s"); params.append(request_id)
+    if cycle_id: clauses.append("cycle_id=%s"); params.append(cycle_id)
+    if today: clauses.append("started_at >= %s"); params.append(datetime.utcnow().date().isoformat())
+    if is_background is not None: clauses.append("is_background=%s"); params.append(1 if is_background else 0)
+    conn = get_connection(); cursor = conn.cursor(); cursor.execute(f"SELECT COUNT(*) FROM gemini_call_attempts WHERE {' AND '.join(clauses)}", params)
+    n = int(cursor.fetchone()[0]); cursor.close(); conn.close(); return n
+
+
+def get_gemini_attempt_diagnostics() -> Dict[str, Any]:
+    init_gemini_accounting_tables()
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 dependency is not installed")
+    conn = get_connection(); cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    today = datetime.utcnow().date().isoformat()
+    out: Dict[str, Any] = {}
+    cursor.execute("SELECT COUNT(*) total, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) successful, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) failed, SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) blocked, SUM(CASE WHEN is_background=1 THEN 1 ELSE 0 END) background, SUM(CASE WHEN is_background=0 THEN 1 ELSE 0 END) foreground, COALESCE(SUM(estimated_cost_usd),0) estimated_cost FROM gemini_call_attempts WHERE started_at >= %s", (today,))
+    out["totals"] = dict(cursor.fetchone() or {})
+    for name, col in [("by_feature","feature"),("by_origin","origin"),("by_model","model"),("by_replica","replica_id")]:
+        cursor.execute(f"SELECT {col} AS key, COUNT(*) AS attempts FROM gemini_call_attempts WHERE started_at >= %s GROUP BY {col} ORDER BY attempts DESC", (today,))
+        out[name] = [dict(r) for r in cursor.fetchall()]
+    cursor.close(); conn.close(); return out
+
+
+def acquire_background_lock(lock_name: str, owner_id: str, ttl_seconds: int):
+    class Lease:
+        acquired = False
+        def __enter__(self_inner):
+            init_gemini_accounting_tables()
+            now = datetime.utcnow(); exp = (now + timedelta(seconds=ttl_seconds)).isoformat()
+            conn = get_connection(); cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO background_locks(lock_name, owner_id, expires_at, updated_at)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (lock_name) DO UPDATE SET owner_id=EXCLUDED.owner_id, expires_at=EXCLUDED.expires_at, updated_at=EXCLUDED.updated_at
+                WHERE background_locks.expires_at < %s OR background_locks.owner_id = %s
+                RETURNING owner_id
+            """, (lock_name, owner_id, exp, now.isoformat(), now.isoformat(), owner_id))
+            self_inner.acquired = cur.fetchone() is not None
+            conn.commit(); cur.close(); conn.close(); return self_inner
+        def __exit__(self_inner, exc_type, exc, tb):
+            if not self_inner.acquired: return
+            conn = get_connection(); cur = conn.cursor(); cur.execute("DELETE FROM background_locks WHERE lock_name=%s AND owner_id=%s", (lock_name, owner_id)); conn.commit(); cur.close(); conn.close()
+    return Lease()

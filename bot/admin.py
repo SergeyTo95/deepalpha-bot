@@ -20,6 +20,7 @@ from db.database import (
     get_top_authors_by_donations, get_donation_stats,
     get_pending_withdrawals, approve_withdrawal, reject_withdrawal,
     get_author_posts,
+    get_gemini_attempt_diagnostics,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -457,6 +458,39 @@ def get_db_stats() -> dict:
     }
 
 
+
+def gemini_diagnostics_text() -> str:
+    try:
+        diag = get_gemini_attempt_diagnostics()
+    except Exception as exc:
+        return f"💸 Gemini diagnostics unavailable: {exc}"
+    totals = diag.get("totals", {})
+    def lines(name):
+        return ", ".join(f"{r.get('key')}: {r.get('attempts')}" for r in diag.get(name, [])[:8]) or "none"
+    switches = [
+        "GEMINI_ENABLED", "GEMINI_BACKGROUND_ENABLED", "GEMINI_BACKGROUND_DAILY_HTTP_ATTEMPT_LIMIT",
+        "SIGNAL_CACHE_WORKER_ENABLED", "SIGNAL_CACHE_GEMINI_ENABLED",
+        "WATCHLIST_WORKER_ENABLED", "WATCHLIST_AI_SUMMARY_GEMINI_ENABLED",
+        "NEWS_AGENT_GEMINI_ENABLED", "DECISION_AGENT_GEMINI_ENABLED", "SUMMARY_AGENT_GEMINI_ENABLED",
+        "LIVE_ANALYST_GEMINI_ENABLED", "LIVE_ANALYST_VISION_GEMINI_ENABLED",
+    ]
+    switch_text = "\n".join(f"{k}={os.getenv(k, 'false')}" for k in switches)
+    return (
+        "💸 Gemini HTTP attempts today\n\n"
+        f"Physical: {totals.get('total') or 0}\n"
+        f"Successful: {totals.get('successful') or 0}\n"
+        f"Failed: {totals.get('failed') or 0}\n"
+        f"Blocked: {totals.get('blocked') or 0}\n"
+        f"Background: {totals.get('background') or 0}\n"
+        f"Foreground: {totals.get('foreground') or 0}\n"
+        f"Estimated cost: ${float(totals.get('estimated_cost') or 0):.6f}\n\n"
+        f"By feature: {lines('by_feature')}\n"
+        f"By origin: {lines('by_origin')}\n"
+        f"By model: {lines('by_model')}\n"
+        f"By replica: {lines('by_replica')}\n\n"
+        f"Switches and limits:\n{switch_text}"
+    )
+
 def system_kb() -> InlineKeyboardMarkup:
     news_agent = get_setting("agent_news_enabled", "on")
     decision_agent = get_setting("agent_decision_enabled", "on")
@@ -474,6 +508,7 @@ def system_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton("📝 Edit System Prompt", callback_data="system_edit_prompt"),
         InlineKeyboardButton("📢 Broadcast", callback_data="system_broadcast"),
         InlineKeyboardButton("🗄️ DB Stats", callback_data="system_db_stats"),
+        InlineKeyboardButton("💸 Gemini diagnostics", callback_data="system_gemini_diag"),
         InlineKeyboardButton(
             f"{'✅' if news_agent == 'on' else '❌'} News Agent",
             callback_data="system_toggle_news"
@@ -2447,6 +2482,13 @@ def register_admin(dp: Dispatcher):
         kb.add(InlineKeyboardButton("🔄", callback_data="system_db_stats"))
         kb.add(InlineKeyboardButton("⬅️", callback_data="admin_system"))
         await callback.message.edit_text(text, reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "system_gemini_diag")
+    async def system_gemini_diag(callback: types.CallbackQuery):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔄", callback_data="system_gemini_diag"))
+        kb.add(InlineKeyboardButton("⬅️", callback_data="admin_system"))
+        await callback.message.edit_text(gemini_diagnostics_text(), reply_markup=kb)
 
     @dp.callback_query_handler(lambda c: c.data == "system_toggle_news")
     async def toggle_news_agent(callback: types.CallbackQuery):
