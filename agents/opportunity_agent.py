@@ -20,6 +20,9 @@ class OpportunityAgent:
         min_score: int = 45,
         lang: str = "en",
         exclude_questions: list = None,
+        is_background: bool = False,
+        cycle_id: str = None,
+        job_id: str = None,
     ) -> Dict[str, Any]:
         raw_markets = self._get_candidate_markets(
             limit=limit,
@@ -48,8 +51,8 @@ class OpportunityAgent:
                 if category_filter != "All" and market_data.get("category") != category_filter:
                     continue
 
-                news_data = self.news_agent.run(market_data, lang=lang)
-                decision_data = self.decision_agent.run(market_data, news_data, lang=lang)
+                news_data = self.news_agent.run(market_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id)
+                decision_data = self.decision_agent.run(market_data, news_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id)
                 score = self._score_opportunity(market_data, decision_data)
 
                 if strong_only and score < min_score:
@@ -99,6 +102,9 @@ class OpportunityAgent:
         limit: int = 3,
         category_filter: str = "All",
         exclude_questions: list = None,
+        is_background: bool = False,
+        cycle_id: str = None,
+        job_id: str = None,
     ) -> List[Dict[str, Any]]:
         exclude = set(q.lower() for q in (exclude_questions or []))
 

@@ -131,14 +131,21 @@ class TopAnalysisProviderRouter:
 
     def _call_gemini(self, provider_key: str, model: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         prompt = payload.get("prompt", "")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        raw = self._http_json(url, {"Content-Type": "application/json"}, {"contents": [{"parts": [{"text": prompt}]}]})
-        if raw["status_code"] >= 300:
-            return self._safe_response(provider_key, "gemini", model, "error", error=f"http_{raw['status_code']}")
-        data = json.loads(raw["text"] or "{}")
-        text = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text", "")
-        if not (text or "").strip():
-            return self._safe_response(provider_key, "gemini", model, "error", error="empty_provider_response")
+        from services.gemini_gateway import generate_content
+        result = generate_content(
+            feature="signal_generation",
+            origin=f"top_analysis:{provider_key}",
+            is_background=bool(payload.get("is_background", False)),
+            request_id=payload.get("request_id"),
+            cycle_id=payload.get("cycle_id"),
+            job_id=payload.get("job_id"),
+            model=model,
+            payload={"contents": [{"parts": [{"text": prompt}]}]},
+            max_attempts=1,
+        )
+        if not result.get("ok"):
+            return self._safe_response(provider_key, "gemini", model, "error", error=str(result.get("reason") or "provider_error"))
+        text = result.get("text", "")
         return self._safe_response(provider_key, "gemini", model, "ok", content=text, parsed=self._extract_and_parse(text))
 
     def _call_openai(self, provider_key: str, model: str, api_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:

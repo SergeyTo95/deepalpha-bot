@@ -7,9 +7,18 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import psycopg2
-import psycopg2.extras
-from psycopg2 import errors
+try:
+    import psycopg2
+    import psycopg2.extras
+    from psycopg2 import errors
+except ModuleNotFoundError:  # pragma: no cover - minimal test env
+    class _MissingPsycopg2:
+        def connect(self, *args, **kwargs):
+            raise RuntimeError("psycopg2 is not installed")
+    class _Errors:
+        pass
+    psycopg2 = _MissingPsycopg2()
+    errors = _Errors()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -327,6 +336,7 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
 
     _init_live_analyst_tables(cursor)
+    ensure_gemini_lockdown_tables(cursor)
     _live_analyst_tables_ready = True
 
     cursor.execute("""
@@ -4820,6 +4830,7 @@ def init_live_analyst_tables() -> None:
     cursor = conn.cursor()
     try:
         _init_live_analyst_tables(cursor)
+        ensure_gemini_lockdown_tables(cursor)
         conn.commit()
         _live_analyst_tables_ready = True
     except Exception as e:
@@ -4905,6 +4916,7 @@ def _ensure_live_analyst_tables(conn, cursor) -> None:
         return
     try:
         _init_live_analyst_tables(cursor)
+        ensure_gemini_lockdown_tables(cursor)
         conn.commit()
         _live_analyst_tables_ready = True
     except Exception:
@@ -5292,3 +5304,118 @@ def record_gemini_usage(feature, user_id=None, chat_id=None, is_background=False
         raise
     finally:
         conn.close()
+
+# GEMINI LOCKDOWN
+
+def ensure_gemini_lockdown_tables(cursor):
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS gemini_call_attempts (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        cycle_id TEXT,
+        job_id TEXT,
+        feature TEXT NOT NULL,
+        origin TEXT,
+        user_id BIGINT,
+        chat_id BIGINT,
+        is_background BOOLEAN DEFAULT FALSE,
+        worker_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        http_status INTEGER,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ,
+        duration_ms INTEGER,
+        provider_request_id TEXT,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost NUMERIC DEFAULT 0
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_call_attempts_created ON gemini_call_attempts(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_call_attempts_request ON gemini_call_attempts(request_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_call_attempts_cycle ON gemini_call_attempts(cycle_id)")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS distributed_locks (
+        lock_name TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """)
+
+
+def reserve_gemini_attempt(request_id, cycle_id=None, job_id=None, feature='', origin='', user_id=None, chat_id=None, is_background=False, worker_id='', model=''):
+    from services.gemini_gateway import env_int
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        ensure_gemini_lockdown_tables(cur)
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("gemini_attempts",))
+        daily_limit = env_int("GEMINI_DAILY_HTTP_ATTEMPT_LIMIT", env_int("GEMINI_DAILY_CALL_LIMIT", 0))
+        bg_limit = env_int("GEMINI_BACKGROUND_DAILY_HTTP_ATTEMPT_LIMIT", 0)
+        req_limit = env_int("GEMINI_MAX_ATTEMPTS_PER_REQUEST", 0)
+        cycle_limit = env_int("GEMINI_MAX_ATTEMPTS_PER_CYCLE", 0)
+        cur.execute("SELECT COUNT(*) FROM gemini_call_attempts WHERE created_at >= date_trunc('day', NOW()) AND status <> 'blocked'")
+        if daily_limit <= 0 or int(cur.fetchone()[0] or 0) >= daily_limit: raise RuntimeError("daily_limit_exceeded")
+        if is_background:
+            cur.execute("SELECT COUNT(*) FROM gemini_call_attempts WHERE created_at >= date_trunc('day', NOW()) AND is_background = TRUE AND status <> 'blocked'")
+            if bg_limit <= 0 or int(cur.fetchone()[0] or 0) >= bg_limit: raise RuntimeError("background_limit_exceeded")
+        if req_limit > 0:
+            cur.execute("SELECT COUNT(*) FROM gemini_call_attempts WHERE request_id=%s AND status <> 'blocked'", (request_id,))
+            if int(cur.fetchone()[0] or 0) >= req_limit: raise RuntimeError("request_limit_exceeded")
+        if cycle_id and cycle_limit > 0:
+            cur.execute("SELECT COUNT(*) FROM gemini_call_attempts WHERE cycle_id=%s AND status <> 'blocked'", (cycle_id,))
+            if int(cur.fetchone()[0] or 0) >= cycle_limit: raise RuntimeError("cycle_limit_exceeded")
+        cur.execute("""
+          INSERT INTO gemini_call_attempts (request_id, cycle_id, job_id, feature, origin, user_id, chat_id, is_background, worker_id, model, status)
+          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved') RETURNING id
+        """, (request_id, cycle_id, job_id, feature, origin, user_id, chat_id, bool(is_background), worker_id, model))
+        attempt_id = cur.fetchone()[0]; conn.commit(); return attempt_id
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        cur.close(); conn.close()
+
+
+def finalize_gemini_attempt(attempt_id, status, http_status=None, reason='', duration_ms=None, provider_request_id=None, prompt_tokens=None, completion_tokens=None, total_tokens=None, estimated_cost=0):
+    conn=get_connection(); cur=conn.cursor()
+    try:
+        cur.execute("""UPDATE gemini_call_attempts SET status=%s,http_status=%s,reason=%s,finished_at=NOW(),duration_ms=%s,provider_request_id=%s,prompt_tokens=%s,completion_tokens=%s,total_tokens=%s,estimated_cost=%s WHERE id=%s""", (status,http_status,reason,duration_ms,provider_request_id,prompt_tokens,completion_tokens,total_tokens,estimated_cost,attempt_id))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+
+
+def record_gemini_blocked_request(**kwargs):
+    return None
+
+
+def acquire_distributed_lock(lock_name: str, owner: str, ttl_seconds: int = 600) -> bool:
+    conn=get_connection(); cur=conn.cursor()
+    try:
+        ensure_gemini_lockdown_tables(cur)
+        cur.execute("""
+        INSERT INTO distributed_locks(lock_name, owner, expires_at) VALUES(%s,%s,NOW() + (%s || ' seconds')::interval)
+        ON CONFLICT(lock_name) DO UPDATE SET owner=EXCLUDED.owner, expires_at=EXCLUDED.expires_at, updated_at=NOW()
+        WHERE distributed_locks.expires_at < NOW() OR distributed_locks.owner = EXCLUDED.owner
+        RETURNING owner
+        """, (lock_name, owner, int(ttl_seconds)))
+        ok = cur.fetchone() is not None; conn.commit(); return ok
+    except Exception:
+        conn.rollback(); return False
+    finally:
+        cur.close(); conn.close()
+
+
+def release_distributed_lock(lock_name: str, owner: str) -> bool:
+    conn=get_connection(); cur=conn.cursor()
+    try:
+        cur.execute("DELETE FROM distributed_locks WHERE lock_name=%s AND owner=%s", (lock_name, owner))
+        ok = cur.rowcount > 0; conn.commit(); return ok
+    except Exception:
+        conn.rollback(); return False
+    finally:
+        cur.close(); conn.close()

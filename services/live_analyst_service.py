@@ -2933,7 +2933,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
 
     mode = evidence_pack.get("mode") or understanding.get("mode") or router_result.get("mode") or "unknown"
     try:
-        answer = (generate_live_analyst_text(prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
+        answer = (generate_live_analyst_text(prompt, feature="live_analyst", user_id=user_id, is_background=False) or "").strip()
     except Exception:
         answer = ""
     first_answer = answer.strip()
@@ -2975,7 +2975,7 @@ def process_live_text(user_id: int, text: str, router_result: Dict[str, Any] = N
             repair_prompt = _build_live_repair_prompt(text, evidence_pack, ai_control_context, validation=None, ui_language=ui_language)
             logger.info("live_answer_repair_retry_started user_id=%s mode=%s prompt_chars=%s", user_id, mode, len(repair_prompt))
             try:
-                repaired = (generate_live_analyst_text(repair_prompt, feature="live_analyst", user_id=user_id, is_background=False, budget_checked=True) or "").strip()
+                repaired = (generate_live_analyst_text(repair_prompt, feature="live_analyst", user_id=user_id, is_background=False) or "").strip()
             except Exception:
                 repaired = ""
         else:
