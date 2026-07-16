@@ -5389,7 +5389,22 @@ def finalize_gemini_attempt(attempt_id, status, http_status=None, reason='', dur
 
 
 def record_gemini_blocked_request(**kwargs):
-    return None
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+          INSERT INTO gemini_call_attempts (request_id, cycle_id, job_id, feature, origin, user_id, chat_id, is_background, worker_id, model, status, reason, estimated_cost)
+          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'blocked',%s,0)
+        """, (
+            kwargs.get("request_id"), kwargs.get("cycle_id"), kwargs.get("job_id"), kwargs.get("feature") or "",
+            kwargs.get("origin") or "", kwargs.get("user_id"), kwargs.get("chat_id"), bool(kwargs.get("is_background")),
+            kwargs.get("worker_id") or "", kwargs.get("model") or "", kwargs.get("reason") or "blocked",
+        ))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close(); conn.close()
 
 
 def acquire_distributed_lock(lock_name: str, owner: str, ttl_seconds: int = 600) -> bool:

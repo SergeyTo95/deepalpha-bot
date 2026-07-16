@@ -29,7 +29,7 @@ FEATURE_FLAGS = {
     "dynamic_driver_agent": "DYNAMIC_DRIVERS_GEMINI_ENABLED",
     "signal_generation": "SIGNAL_GENERATION_GEMINI_ENABLED",
     "signal_cache": "SIGNAL_CACHE_GEMINI_ENABLED",
-    "live_analyst": "GEMINI_ENABLED",
+    "live_analyst": "LIVE_ANALYST_GEMINI_ENABLED",
     "live_analyst_vision": "LIVE_ANALYST_VISION_GEMINI_ENABLED",
     "watchlist_ai_summary": "WATCHLIST_AI_SUMMARY_GEMINI_ENABLED",
 }
@@ -81,15 +81,15 @@ def _block(reason: str, **kw: Any) -> Dict[str, Any]:
 
 
 def _precheck(feature: str, is_background: bool) -> Optional[str]:
-    if not env_bool("GEMINI_ENABLED", True):
-        return "gemini_disabled"
+    if not env_bool("GEMINI_ENABLED", False):
+        return "blocked_global"
     flag = FEATURE_FLAGS.get(feature or "")
     if not flag:
         return "invalid_feature"
     if flag != "GEMINI_ENABLED" and not env_bool(flag, False):
-        return "feature_disabled"
+        return "blocked_feature"
     if is_background and not env_bool("GEMINI_BACKGROUND_ENABLED", False):
-        return "background_disabled"
+        return "blocked_background"
     if not _api_key():
         return "api_key_missing"
     return None
@@ -130,7 +130,10 @@ def call_gemini(*, feature: str, origin: str = "", is_background: bool = False,
                 from db.database import reserve_gemini_attempt, finalize_gemini_attempt
                 attempt_id = reserve_gemini_attempt(**{**common, "model": request_model})
             except Exception as exc:
-                return _block("db_error", **common)
+                reason = str(exc) or "db_error"
+                if reason not in {"daily_limit_exceeded", "background_limit_exceeded", "request_limit_exceeded", "cycle_limit_exceeded"}:
+                    reason = "db_error"
+                return _block(reason, **common)
             start = time.monotonic(); status = None; reason = ""; data: Any = {}; provider_id = None
             try:
                 resp = requests.post(f"{GEMINI_URL.format(model=request_model)}?key={_api_key()}", headers={"Content-Type":"application/json"}, json=payload, timeout=timeout)

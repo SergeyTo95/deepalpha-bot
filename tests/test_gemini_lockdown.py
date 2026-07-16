@@ -146,7 +146,7 @@ def test_two_lock_owners_do_not_get_same_active_lease():
 
 
 @pytest.mark.parametrize("feature,flag", [
-    ("live_analyst", "GEMINI_ENABLED"),
+    ("live_analyst", "LIVE_ANALYST_GEMINI_ENABLED"),
     ("live_analyst_vision", "LIVE_ANALYST_VISION_GEMINI_ENABLED"),
     ("news_agent", "NEWS_AGENT_GEMINI_ENABLED"),
     ("decision_agent", "DECISION_AGENT_GEMINI_ENABLED"),
@@ -218,3 +218,225 @@ def test_concurrent_fake_reservation_limit_one_allows_only_one():
     assert results.count("ok") == 1
     assert results.count("blocked") == 1
     assert len(attempts) == 1
+
+
+def test_gemini_enabled_missing_fails_closed_no_http(monkeypatch):
+    from services.gemini_gateway import call_gemini
+    monkeypatch.delenv("GEMINI_ENABLED", raising=False)
+    monkeypatch.setenv("NEWS_AGENT_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    called = []
+    blocked = []
+    monkeypatch.setattr("db.database.record_gemini_blocked_request", lambda **kw: blocked.append(kw), raising=False)
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    res = call_gemini(feature="news_agent", origin="test", model="m", payload={})
+    assert res["reason"] == "blocked_global"
+    assert called == []
+    assert blocked[0]["reason"] == "blocked_global"
+
+
+def test_live_analyst_requires_own_feature_flag(monkeypatch):
+    from services.gemini_gateway import call_gemini
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("LIVE_ANALYST_GEMINI_ENABLED", "false")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("db.database.record_gemini_blocked_request", lambda **kw: None, raising=False)
+    called = []
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    assert call_gemini(feature="live_analyst", origin="test", model="m", payload={})["reason"] == "blocked_feature"
+    assert called == []
+
+
+def test_live_analyst_and_vision_enabled_reach_reservation(monkeypatch):
+    from services.gemini_gateway import call_gemini
+    for key in ("GEMINI_ENABLED", "LIVE_ANALYST_GEMINI_ENABLED", "LIVE_ANALYST_VISION_GEMINI_ENABLED"):
+        monkeypatch.setenv(key, "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    reserved = []
+    monkeypatch.setattr("db.database.reserve_gemini_attempt", lambda **kw: reserved.append(kw) or len(reserved), raising=False)
+    monkeypatch.setattr("db.database.finalize_gemini_attempt", lambda *a, **kw: None, raising=False)
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: FakeResp(200, {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}))
+    assert call_gemini(feature="live_analyst", origin="test", model="m", payload={})["text"] == "ok"
+    assert call_gemini(feature="live_analyst_vision", origin="test", model="m", payload={})["text"] == "ok"
+    assert [r["feature"] for r in reserved] == ["live_analyst", "live_analyst_vision"]
+
+
+@pytest.mark.parametrize("reservation_reason", [
+    "daily_limit_exceeded",
+    "background_limit_exceeded",
+    "request_limit_exceeded",
+    "cycle_limit_exceeded",
+])
+def test_reservation_block_reason_preserved_and_no_http(monkeypatch, reservation_reason):
+    from services.gemini_gateway import call_gemini
+    _enable(monkeypatch)
+    blocked=[]; called=[]
+    monkeypatch.setattr("db.database.reserve_gemini_attempt", lambda **kw: (_ for _ in ()).throw(RuntimeError(reservation_reason)), raising=False)
+    monkeypatch.setattr("db.database.record_gemini_blocked_request", lambda **kw: blocked.append(kw), raising=False)
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    res = call_gemini(feature="news_agent", origin="test", is_background=True, model="m", payload={})
+    assert res["reason"] == reservation_reason
+    assert blocked[0]["reason"] == reservation_reason
+    assert called == []
+
+
+@pytest.mark.parametrize("setup,reason", [
+    (lambda m: m.setenv("GEMINI_ENABLED", "false"), "blocked_global"),
+    (lambda m: (m.setenv("GEMINI_ENABLED", "true"), m.setenv("NEWS_AGENT_GEMINI_ENABLED", "false")), "blocked_feature"),
+    (lambda m: (m.setenv("GEMINI_ENABLED", "true"), m.setenv("NEWS_AGENT_GEMINI_ENABLED", "true"), m.setenv("GEMINI_BACKGROUND_ENABLED", "false")), "blocked_background"),
+    (lambda m: (m.setenv("GEMINI_ENABLED", "true"), m.setenv("NEWS_AGENT_GEMINI_ENABLED", "true"), m.setenv("GEMINI_BACKGROUND_ENABLED", "true"), m.delenv("GEMINI_API_KEY", raising=False)), "api_key_missing"),
+])
+def test_blocked_logical_request_accounting_reasons(monkeypatch, setup, reason):
+    from services.gemini_gateway import call_gemini
+    setup(monkeypatch)
+    blocked=[]; called=[]
+    monkeypatch.setattr("db.database.record_gemini_blocked_request", lambda **kw: blocked.append(kw), raising=False)
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    res = call_gemini(feature="news_agent", origin="test", is_background=True, model="m", payload={}, request_id="r")
+    assert res["reason"] == reason
+    assert blocked[0]["request_id"] == "r"
+    assert blocked[0]["reason"] == reason
+    assert called == []
+
+
+class _FakeCursor:
+    def __init__(self, state, fail=False):
+        self.state = state; self.fail = fail; self.last = None; self.rowcount = 0
+    def execute(self, sql, params=()):
+        if self.fail:
+            raise RuntimeError("db exploded")
+        self.state["sql"].append(sql)
+        if "pg_advisory_xact_lock" in sql:
+            self.last = (None,)
+        elif "COUNT(*) FROM gemini_call_attempts" in sql:
+            if "request_id=%s" in sql:
+                self.last = (sum(1 for row in self.state["attempts"] if row["request_id"] == params[0] and row["status"] != "blocked"),)
+            elif "cycle_id=%s" in sql:
+                self.last = (sum(1 for row in self.state["attempts"] if row.get("cycle_id") == params[0] and row["status"] != "blocked"),)
+            else:
+                self.last = (len([row for row in self.state["attempts"] if row["status"] != "blocked"]),)
+        elif "INSERT INTO gemini_call_attempts" in sql:
+            row = {"request_id": params[0], "cycle_id": params[1], "status": "reserved"}
+            self.state["attempts"].append(row); self.last = (len(self.state["attempts"]),)
+        elif "INSERT INTO distributed_locks" in sql:
+            name, owner, ttl = params
+            current = self.state["locks"].get(name)
+            if current is None or current["expired"] or current["owner"] == owner:
+                self.state["locks"][name] = {"owner": owner, "expired": False}
+                self.last = (owner,)
+            else:
+                self.last = None
+        elif "DELETE FROM distributed_locks" in sql:
+            name, owner = params
+            if self.state["locks"].get(name, {}).get("owner") == owner:
+                del self.state["locks"][name]; self.rowcount = 1
+            else:
+                self.rowcount = 0
+    def fetchone(self):
+        return self.last
+    def close(self): pass
+
+
+class _FakeConn:
+    def __init__(self, state, fail=False):
+        self.state = state; self.fail = fail; self.commits = 0; self.rollbacks = 0
+    def cursor(self): return _FakeCursor(self.state, fail=self.fail)
+    def commit(self): self.commits += 1; self.state["commits"] += 1
+    def rollback(self): self.rollbacks += 1; self.state["rollbacks"] += 1
+    def close(self): pass
+
+
+def test_production_reservation_uses_one_connection_lock_counts_reserved_and_rolls_back(monkeypatch):
+    from db.database import reserve_gemini_attempt
+    state = {"attempts": [], "locks": {}, "sql": [], "commits": 0, "rollbacks": 0}
+    monkeypatch.setenv("GEMINI_DAILY_HTTP_ATTEMPT_LIMIT", "10")
+    monkeypatch.setenv("GEMINI_BACKGROUND_DAILY_HTTP_ATTEMPT_LIMIT", "10")
+    monkeypatch.setenv("GEMINI_MAX_ATTEMPTS_PER_REQUEST", "1")
+    monkeypatch.setattr("db.database.get_connection", lambda: _FakeConn(state), raising=False)
+    assert reserve_gemini_attempt(request_id="r", feature="news_agent") == 1
+    with pytest.raises(RuntimeError, match="request_limit_exceeded"):
+        reserve_gemini_attempt(request_id="r", feature="news_agent")
+    assert any("pg_advisory_xact_lock" in sql for sql in state["sql"])
+    assert len(state["attempts"]) == 1
+    assert state["rollbacks"] == 1
+
+
+def test_production_distributed_lock_owner_ttl_release_and_errors(monkeypatch):
+    from db.database import acquire_distributed_lock, release_distributed_lock
+    state = {"attempts": [], "locks": {}, "sql": [], "commits": 0, "rollbacks": 0}
+    monkeypatch.setattr("db.database.get_connection", lambda: _FakeConn(state), raising=False)
+    assert acquire_distributed_lock("signal", "A", 60) is True
+    assert acquire_distributed_lock("signal", "B", 60) is False
+    assert release_distributed_lock("signal", "B") is False
+    state["locks"]["signal"]["expired"] = True
+    assert acquire_distributed_lock("signal", "B", 60) is True
+    monkeypatch.setattr("db.database.get_connection", lambda: _FakeConn(state, fail=True), raising=False)
+    assert acquire_distributed_lock("signal", "C", 60) is False
+
+
+def test_live_analyst_primary_and_repair_share_request_id(monkeypatch):
+    import sys, types
+    if "psycopg2" not in sys.modules:
+        psy = types.ModuleType("psycopg2")
+        psy.extras = types.ModuleType("psycopg2.extras")
+        psy.errors = types.ModuleType("psycopg2.errors")
+        monkeypatch.setitem(sys.modules, "psycopg2", psy)
+        monkeypatch.setitem(sys.modules, "psycopg2.extras", psy.extras)
+        monkeypatch.setitem(sys.modules, "psycopg2.errors", psy.errors)
+    if "requests" not in sys.modules:
+        req = types.ModuleType("requests")
+        req.post = lambda *a, **k: None
+        req.get = lambda *a, **k: None
+        req.exceptions = types.SimpleNamespace(Timeout=TimeoutError)
+        monkeypatch.setitem(sys.modules, "requests", req)
+    import services.live_analyst_service as svc
+    calls = []
+    monkeypatch.setattr(svc, "can_user_access_live", lambda user_id: {"allowed": True, "mode": "test"})
+    monkeypatch.setattr(svc, "is_live_enabled", lambda: True)
+    monkeypatch.setattr(svc, "get_live_request_cost", lambda kind: 1)
+    monkeypatch.setattr(svc, "can_user_afford_live_request", lambda user_id, cost: True)
+    monkeypatch.setattr(svc, "get_max_daily_live_messages", lambda: 0)
+    monkeypatch.setattr(svc, "count_live_analyst_messages_today", lambda *a, **k: 0)
+    monkeypatch.setattr(svc, "get_or_create_active_session", lambda user_id: {"id": 1})
+    monkeypatch.setattr(svc, "extract_polymarket_url", lambda text: "")
+    monkeypatch.setattr(svc, "get_memory_message_limit", lambda: 0)
+    monkeypatch.setattr(svc, "is_live_followup", lambda text: False)
+    monkeypatch.setattr(svc, "get_recent_context", lambda *a, **k: [])
+    monkeypatch.setattr(svc, "get_pending_clarification", lambda user_id: None)
+    monkeypatch.setattr(svc, "get_live_context", lambda user_id: {})
+    monkeypatch.setattr(svc, "resolve_live_conversation_intent", lambda *a, **k: {})
+    monkeypatch.setattr(svc, "resolve_live_followup", lambda *a, **k: {})
+    monkeypatch.setattr(svc, "understand_live_request", lambda *a, **k: {"mode": "general", "intent": "question", "needs": {}})
+    monkeypatch.setattr(svc, "resolve_live_market_context", lambda *a, **k: {"domain": "unknown"})
+    monkeypatch.setattr(svc, "plan_live_research_queries", lambda *a, **k: [])
+    monkeypatch.setattr(svc, "_should_use_planned_research", lambda *a, **k: False)
+    monkeypatch.setattr(svc, "build_live_evidence_pack", lambda *a, **k: {"mode": "general", "intent": "question"})
+    monkeypatch.setattr(svc, "merge_market_resolution_into_pack", lambda *a, **k: None)
+    monkeypatch.setattr(svc, "build_ai_control_context", lambda *a, **k: {"mode": "general", "intent": "question", "economics": {}})
+    monkeypatch.setattr(svc, "choose_ai_provider", lambda *a, **k: {"provider": "gemini", "model": "m", "reason": "test"})
+    monkeypatch.setattr(svc, "compose_live_answer", lambda *a, **k: {})
+    monkeypatch.setattr(svc, "get_user_analyst_profile", lambda user_id: {})
+    monkeypatch.setattr(svc, "build_user_analyst_profile_prompt_block", lambda user_id: "")
+    monkeypatch.setattr(svc, "_build_live_deepalpha_score", lambda *a, **k: {})
+    monkeypatch.setattr(svc, "build_score_prompt_block", lambda score: "")
+    monkeypatch.setattr(svc, "_build_live_prompt", lambda *a, **k: "prompt")
+    monkeypatch.setattr(svc, "_build_live_repair_prompt", lambda *a, **k: "repair")
+    monkeypatch.setattr(svc, "generate_live_analyst_text", lambda prompt, **kw: calls.append(kw) or ("incomplete" if len(calls) == 1 else "complete answer"))
+    monkeypatch.setattr(svc, "_is_incomplete_live_answer", lambda answer, *a, **k: answer == "incomplete")
+    monkeypatch.setattr(svc, "is_strict_non_market_composer", lambda *a, **k: False)
+    monkeypatch.setattr(svc, "validate_live_answer_against_evidence", lambda *a, **k: {"severity": "none"})
+    monkeypatch.setattr(svc, "format_live_final_answer", lambda answer, *a, **k: answer)
+    monkeypatch.setattr(svc, "append_live_followup_suggestions", lambda answer, *a, **k: answer)
+    monkeypatch.setattr(svc, "cleanup_final_politics_election_answer", lambda answer, *a, **k: answer)
+    monkeypatch.setattr(svc, "score_ai_response_quality", lambda *a, **k: {"quality_score": 1, "penalties": [], "bonuses": [], "should_refund": False})
+    monkeypatch.setattr(svc, "record_ai_control_event", lambda **kw: None)
+    monkeypatch.setattr(svc, "charge_live_request", lambda *a, **k: True)
+    monkeypatch.setattr(svc, "_store_successful_live_context", lambda *a, **k: None)
+    monkeypatch.setattr(svc, "clear_pending_clarification", lambda *a, **k: None)
+    monkeypatch.setattr(svc, "update_context_from_user_text", lambda session, text: session)
+    monkeypatch.setattr(svc, "save_message", lambda *a, **k: None)
+
+    res = svc.process_live_text(1, "hello", router_result={"mode": "general"}, ui_language="en")
+    assert res["ok"] is True
+    assert len(calls) == 2
+    assert calls[0]["request_id"] == calls[1]["request_id"]

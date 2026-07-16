@@ -23,6 +23,7 @@ class OpportunityAgent:
         is_background: bool = False,
         cycle_id: str = None,
         job_id: str = None,
+        request_id: str = None,
     ) -> Dict[str, Any]:
         raw_markets = self._get_candidate_markets(
             limit=limit,
@@ -51,8 +52,8 @@ class OpportunityAgent:
                 if category_filter != "All" and market_data.get("category") != category_filter:
                     continue
 
-                news_data = self.news_agent.run(market_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id)
-                decision_data = self.decision_agent.run(market_data, news_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id)
+                news_data = self.news_agent.run(market_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
+                decision_data = self.decision_agent.run(market_data, news_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
                 score = self._score_opportunity(market_data, decision_data)
 
                 if strong_only and score < min_score:

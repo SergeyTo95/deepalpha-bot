@@ -804,7 +804,7 @@ class NewsAgent:
                 source_filter_reasons=filter_reasons,
         )
 
-        llm_result = generate_news_text(prompt, feature="news_agent", is_background=is_background, cycle_id=cycle_id, job_id=job_id)
+        llm_result = generate_news_text(prompt, feature="news_agent", is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
         if not llm_result:
             print("news_agent_gemini_skipped reason=blocked_or_empty")
         has_twitter = bool(unique_twitter)

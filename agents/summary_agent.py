@@ -20,6 +20,7 @@ class SummaryAgent:
         is_background: bool = False,
         cycle_id: str = None,
         job_id: str = None,
+        request_id: str = None,
     ) -> Dict[str, Any]:
         if not reasoning:
             reasoning = f"Вероятность системы: {probability}. Уверенность: {confidence}."
@@ -34,7 +35,7 @@ class SummaryAgent:
             lang=lang,
         )
 
-        raw_response = generate_text(prompt, feature="summary_agent" if is_background else "signal_generation", is_background=is_background, cycle_id=cycle_id, job_id=job_id)
+        raw_response = generate_text(prompt, feature="summary_agent" if is_background else "signal_generation", is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
         print(f"SummaryAgent: response length={len(raw_response)}, lines={len(raw_response.splitlines())}")
 
         if raw_response:

@@ -392,7 +392,8 @@ async def update_signal_cache(cycle_id=None):
         try:
             print(f"🔄 Updating cache for {category}...")
             agent = OpportunityAgent()
-            result = agent.run(lang="ru", limit=2, category_filter=category, is_background=True, cycle_id=cycle_id, job_id=f"signal:{category}")
+            request_id = __import__("uuid").uuid4().hex
+            result = agent.run(lang="ru", limit=2, category_filter=category, is_background=True, cycle_id=cycle_id, job_id=f"signal:{category}", request_id=request_id)
 
             if result and result.get("question") != "No strong opportunity found":
                 import time
