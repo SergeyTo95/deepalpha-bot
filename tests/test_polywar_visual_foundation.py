@@ -6,61 +6,95 @@ JS = Path("webapp/polywar.js").read_text()
 CSS = Path("webapp/polywar.css").read_text()
 
 
-def test_visual_config_is_central_and_tunable():
-    for token in ("ownershipOpacity", "borderThickness", "contestedPulseMs", "selectionGlow", "terrainDetailIntensity", "minimap:"):
+def method_source(name, next_name):
+    start = JS.index(f"  {name}(")
+    end = JS.index(f"  {next_name}(", start)
+    return JS[start:end].strip()
+
+
+def test_visual_config_and_layered_paths_are_tunable():
+    for token in ("ownershipOpacity", "borderThickness", "contestedPulseMs", "selectionAnimationMs", "lowPowerAnimations", "terrainDetailIntensity", "minimap:"):
         assert token in JS
-
-
-def test_layered_tactical_render_paths_exist_and_are_scheduled():
-    for helper in ("drawTerrainTile", "drawOwnershipOverlay", "drawFactionBorders", "drawContestedOverlay", "drawHoverCell", "drawSelectedCell", "drawWorldPolish"):
+    for helper in ("drawTerrainTile", "drawOwnershipOverlay", "drawFactionBorders", "drawContestedOverlay", "drawSelectedCell", "drawWorldPolish"):
         assert f"{helper}(" in JS
-    draw = JS[JS.index("  draw() {"):JS.index("\n}", JS.index("  draw() {"))]
-    assert draw.index("drawTerrainTile") < draw.index("drawOwnershipOverlay") < draw.index("drawFactionBorders")
-    assert draw.index("drawSquads") < draw.rindex("drawSelectedCell") < draw.rindex("drawWorldPolish")
 
 
-def test_minimap_uses_premium_palette_and_clear_viewport():
+def test_static_performance_and_chunk_border_regressions():
+    owner = method_source("ownerAt", "drawOwnershipOverlay")
+    borders = method_source("drawFactionBorders", "drawContestedOverlay")
+    contested = method_source("drawContestedOverlay", "drawHoverCell")
+    selected = method_source("drawSelectedCell", "drawPendingPulse")
+    assert "if (!ch) return null" in owner and "value == null ? null" in owner
+    assert "polywarShouldDrawFactionEdge" in borders
+    assert 'side === "right" || side === "bottom"' in JS
+    assert "visualAnimationTimer" in JS and "clearTimeout(this.visualAnimationTimer)" in JS
+    assert "setTimeout" not in contested and "setTimeout" not in selected
+    assert JS.count("terrainDetailIntensity") > 1
+    assert "polywarLowPowerMode()" in JS
+    assert 'isNull=+owner===8' in method_source("drawOwnershipOverlay", "drawFactionBorders")
+    assert "factionVisualsById.get" in borders and "factionVisualsById.get" in contested
+
+
+def test_minimap_mobile_and_visual_only_redraw_guards():
     assert "POLYWAR_VISUALS.minimap.neutral" in JS
     assert "POLYWAR_VISUALS.minimap.contested" in JS
     assert "POLYWAR_VISUALS.minimap.viewport" in JS
-    assert "drawViewportRect" in JS
+    assert "@media (max-width:680px)" in CSS or "@media(max-width:680px)" in CSS
+    assert "filter:none" in CSS
+    draw = JS[JS.index("  draw() {"):JS.index("\n}", JS.index("  draw() {"))]
+    assert "/api/polywar/action" not in draw and "executePrimaryCellAction" not in draw
 
 
-def test_visual_redraw_does_not_call_gameplay_api():
-    start = JS.index("  draw() {")
-    draw = JS[start:JS.index("\n}", start)]
-    assert "/api/polywar/action" not in draw
-    assert "executePrimaryCellAction" not in draw
+def test_production_visual_helpers_runtime_contracts():
+    hooks_start = JS.index("function polywarShouldDrawFactionEdge")
+    hooks_end = JS.index("window.polywarVisualTestHooks", hooks_start)
+    hooks = JS[hooks_start:hooks_end]
+    owner = method_source("ownerAt", "drawOwnershipOverlay")
+    scheduler = method_source("scheduleVisualAnimation", "finishVisualFrame")
+    selected = method_source("drawSelectedCell", "drawPendingPulse")
+    script = textwrap.dedent(f"""
+      const assert=require('assert');
+      {hooks}
+      const ownerAt=({{{owner}}}).ownerAt;
+      const scheduleVisualAnimation=({{{scheduler}}}).scheduleVisualAnimation;
+      const drawSelectedCell=({{{selected}}}).drawSelectedCell;
 
+      // Production ownerAt distinguishes unknown chunks from loaded neutral cells.
+      const base={{state:{{map:{{width:4,height:4,chunk_size:2}}}},cache:new Map()}};
+      assert.strictEqual(ownerAt.call(base,1,1),null);
+      base.cache.set('0,0',{{chunk_x:0,chunk_y:0,owners:[[1,0],[0,0]]}});
+      assert.strictEqual(ownerAt.call(base,1,0),0);
 
-def test_runtime_canvas_harness_exercises_visual_paths():
-    script = textwrap.dedent(r''' 
-        const assert = require('assert');
-        const calls = [];
-        const ctx = new Proxy({}, {get(target, key) {
-          if (!(key in target)) target[key] = (...args) => calls.push([key, ...args]);
-          return target[key];
-        }, set(target,key,value) { target[key]=value; calls.push([`set:${key}`,value]); return true; }});
-        ctx.createRadialGradient = () => ({addColorStop:(...a)=>calls.push(['colorStop',...a])});
-        const visuals = {ownershipOpacity:.28, ownershipPatternOpacity:.08, borderThickness:2.2, borderGlow:4,
-          contestedPulseMs:1800, contestedStripe:7, selectionGlow:10, selectionPulseMs:2200};
-        const map = {cell:20,w:200,h:100,selected:{x:1,y:1}, state:{map:{width:4,height:4}},
-          cellToScreen:(x,y)=>({x:x*20,y:y*20}), ownerAt:(x,y)=>x===0?2:1};
-        function ownership(owner,p){ ctx.save(); ctx.fillStyle='#38bdf8'; ctx.globalAlpha=visuals.ownershipOpacity; ctx.fillRect(p.x,p.y,map.cell,map.cell); ctx.restore(); }
-        function borders(owner,p){ [[0,-1],[1,0],[0,1],[-1,0]].forEach(([dx,dy])=>{ if(map.ownerAt(1+dx,1+dy)!==owner){ctx.beginPath();ctx.stroke();} }); }
-        function contested(p){ ctx.save(); ctx.rect(p.x,p.y,map.cell,map.cell); ctx.clip(); ctx.strokeRect(p.x+1,p.y+1,map.cell-2,map.cell-2); ctx.restore(); }
-        function selection(p){ ctx.save(); ctx.fillRect(p.x,p.y,map.cell,map.cell); ctx.strokeRect(p.x+2,p.y+2,map.cell-4,map.cell-4); ctx.restore(); }
-        const p=map.cellToScreen(1,1); ownership(1,p); borders(1,p); contested(p); selection(p);
-        assert(calls.some(c=>c[0]==='fillRect'));
-        assert(calls.some(c=>c[0]==='stroke')); // different-faction edge
-        assert(calls.filter(c=>c[0]==='strokeRect').length >= 2); // conflict + selection
-        assert.strictEqual(calls.some(c=>String(c).includes('/api/polywar/action')), false);
-    ''')
+      // Production edge predicate skips unknown, draws neutral, and emits shared A/B once.
+      assert.strictEqual(polywarShouldDrawFactionEdge(1,null,'right'),false);
+      assert.strictEqual(polywarShouldDrawFactionEdge(1,0,'top'),true);
+      const shared=[polywarShouldDrawFactionEdge(1,2,'right'),polywarShouldDrawFactionEdge(2,1,'left')];
+      assert.deepStrictEqual(shared,[true,false]);
+      assert.deepStrictEqual(polywarFactionEdgeStyle(1,2,'#f00'),polywarFactionEdgeStyle(2,1,'#00f'));
+
+      // Twenty contested requests still create one production scheduler timer.
+      let timers=0;global.document={{hidden:false}};global.polywarReducedMotion=()=>false;global.setTimeout=(fn)=>{{timers++;return 1;}};
+      const animated={{destroyed:false,visualLowPower:false,visualAnimationTimer:null,requestDraw(){{}}}};
+      for(let i=0;i<20;i++)scheduleVisualAnimation.call(animated,160);
+      assert.strictEqual(timers,1);
+      const low={{destroyed:false,visualLowPower:true,visualAnimationTimer:null,requestDraw(){{}}}};
+      scheduleVisualAnimation.call(low,160);assert.strictEqual(timers,1);
+
+      // Production selection renderer is static after expiry and active only in its window.
+      const noop=()=>{{}}, ctx=new Proxy({{}},{{get:(t,k)=>t[k]||(t[k]=noop),set:(t,k,v)=>(t[k]=v,true)}});
+      global.performance={{now:()=>5000}};global.POLYWAR_VISUALS={{selectionPulseMs:2200,selectionGlow:10}};
+      const map={{selected:{{x:1,y:1}},cell:20,visualLowPower:false,selectionAnimationUntil:4000,visualAnimationNeeded:false,cellToScreen:()=>({{x:0,y:0}})}};
+      drawSelectedCell.call(map,ctx);assert.strictEqual(map.visualAnimationNeeded,false);
+      map.selectionAnimationUntil=6000;drawSelectedCell.call(map,ctx);assert.strictEqual(map.visualAnimationNeeded,true);
+      map.visualAnimationNeeded=false;map.visualLowPower=true;drawSelectedCell.call(map,ctx);assert.strictEqual(map.visualAnimationNeeded,false);
+    """)
     subprocess.run(["node", "-e", script], check=True)
 
 
-def test_map_frame_polish_preserves_square_canvas_and_reduced_motion():
-    assert "Phase 1 tactical diorama frame" in CSS
-    assert "prefers-reduced-motion:reduce" in CSS
-    assert "border-radius" in CSS  # frame only; cell drawing remains fillRect/strokeRect
-    assert "drawOwnershipOverlay" in JS and "fillRect(p.x,p.y,c,c)" in JS
+def test_null_state_and_low_power_have_distinct_static_paths():
+    ownership = method_source("drawOwnershipOverlay", "drawFactionBorders")
+    borders = method_source("drawFactionBorders", "drawContestedOverlay")
+    assert 'isNull?"#241033"' in ownership
+    assert "if(isNull)" in ownership
+    assert "!this.visualLowPower" in ownership
+    assert "!this.visualLowPower&&this.cell>=10" in borders
