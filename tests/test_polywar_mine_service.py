@@ -200,3 +200,11 @@ def test_real_flag_mutations_are_rate_limited_and_concurrent_limit_holds(polydb,
     [t.start() for t in ts]; [t.join() for t in ts]
     c=connect(); count=c.execute('select count(*) from polywar_flags where user_id=126').fetchone()[0]; c.close()
     assert count <= 1 and (err or len(out)==1)
+
+
+def test_capture_keeps_two_cardinal_adjacency_checks_around_mine_resolution():
+    source=open('services/polywar_map_service.py',encoding='utf-8').read()
+    block=source[source.index('def capture_cell'):source.index('def _is_expected_unique_error')]
+    calls=[i for i in range(len(block)) if block.startswith('has_owned_orthogonal_neighbor(',i)]
+    assert len(calls)==2
+    assert calls[0] < block.index('active_mine_at(') < calls[1] < block.index('INSERT INTO polywar_cells')

@@ -515,6 +515,23 @@ def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, A
     finally:
         if own: conn.close()
 
+def record_presence(user_id: int) -> Dict[str, Any]:
+    """Touch presence without energy regeneration or world/squad catch-up."""
+    conn = get_connection(); now = _now()
+    try:
+        init_polywar_schema(conn)
+        season = _fetchone(conn.cursor(), "SELECT id FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
+        if not season: raise ValueError("no_active_season")
+        sid = int(season["id"]); _insert_player_if_missing(conn, int(user_id), sid)
+        row = _fetchone(conn.cursor(), "SELECT last_active_at FROM polywar_players WHERE user_id=%s AND season_id=%s", (int(user_id), sid)) or {}
+        last = row.get("last_active_at")
+        if not last or now - (datetime.fromisoformat(last) if isinstance(last, str) else last) >= timedelta(seconds=45):
+            _execute(conn.cursor(), "UPDATE polywar_players SET last_active_at=%s WHERE user_id=%s AND season_id=%s", (now, int(user_id), sid))
+        conn.commit()
+        return {"ok": True, "season_id": sid, "server_timestamp": int(now.timestamp())}
+    finally:
+        conn.close()
+
 
 
 def assert_gameplay_mutation_allowed(conn, season_id: int, now: Optional[datetime] = None) -> None:

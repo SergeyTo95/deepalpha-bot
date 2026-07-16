@@ -568,6 +568,14 @@ def legacy_action_duplicate_response(conn, season_id: int, seed: str, user_id: i
     terr = terrain_at_with_config(seed, action["x"], action["y"], config) if config else terrain_at(seed, action["x"], action["y"])
     return {"ok": True, "duplicate": True, "outcome": "captured", "cell": {"x": action["x"], "y": action["y"], "terrain": terr, "owner_faction_id": action.get("faction_id"), "energy_cost": action["energy_cost"]}, "energy": e}
 
+def has_owned_orthogonal_neighbor(conn, season_id: int, faction_id: int, x: int, y: int, config) -> bool:
+    """Return whether a cell touches faction territory on a cardinal edge."""
+    return any(
+        owner_at_with_config(conn, season_id, nx, ny, config) == faction_id
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+        if in_bounds_with_config(nx, ny, config)
+    )
+
 def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
     if not idempotency_key or len(str(idempotency_key)) > 120:
         raise ValueError("bad_idempotency_key")
@@ -633,7 +641,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         owner = owner_at_with_config(conn, sid, x, y, config)
         if owner == fid: raise ValueError("already_owned")
         if owner is not None: raise ValueError("enemy_capture_unavailable")
-        if not any(owner_at_with_config(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds_with_config(nx, ny, config)):
+        if not has_owned_orthogonal_neighbor(conn, sid, fid, x, y, config):
             raise ValueError("not_adjacent")
         if int(e["current_energy"]) < cost: raise ValueError("insufficient_energy")
         now = datetime.utcnow()
@@ -649,7 +657,7 @@ def capture_cell(user_id: int, x: int, y: int, idempotency_key: str):
         owner = owner_at_with_config(conn, sid, x, y, config)
         if owner == fid: raise ValueError("already_owned")
         if owner is not None: raise ValueError("enemy_capture_unavailable")
-        if not any(owner_at_with_config(conn, sid, nx, ny, config) == fid for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)) if in_bounds_with_config(nx, ny, config)):
+        if not has_owned_orthogonal_neighbor(conn, sid, fid, x, y, config):
             raise ValueError("not_adjacent")
         sectors.initialize_sector(conn, sid, *sectors.sector_coords(x, y, config=config), now, config=config)
         polywar._execute(c, "INSERT INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at,updated_by_user_id) VALUES (%s,%s,%s,%s,100,%s,%s)", (sid,x,y,fid,now,user_id))

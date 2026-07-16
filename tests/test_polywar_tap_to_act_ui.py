@@ -676,3 +676,12 @@ def test_minimap_jump_chunk_loading_runtime_harness():
         })();
     """)
     subprocess.run(['node', '-e', script], check=True)
+
+
+def test_capture_adjacency_unknown_and_frontier_contracts_present():
+    assert 'ownedOrthogonalAdjacencyState(x, y, fid)' in JS
+    assert 'return unknown ? null : false' in JS
+    assert 'Loading adjacent territory…' in JS
+    assert 'Capture requires an adjacent faction cell' in JS
+    assert 'drawCaptureFrontierHint' in JS and 'this.cell<10' in JS
+    assert 'setInterval(sendPresenceHeartbeat, 60000)' in JS
