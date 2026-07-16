@@ -237,6 +237,7 @@ class PolyWarMap {
     this.sectorSeq = 0;
     this.loading = new Set();
     this.pendingRequests = new Map();
+    this.chunkRequestsByKey = new Map();
     this.failedChunks = new Set();
     this.initialChunksReady = false;
     this.abort = new AbortController();
@@ -302,6 +303,7 @@ class PolyWarMap {
     this.drawFrame = null;
     this.loading.clear();
     this.pendingRequests.clear();
+    this.chunkRequestsByKey.clear();
     this.sectorLoading.clear();
   }
   updateState(state) { this.state = state; this.updatePanel(); }
@@ -321,13 +323,15 @@ class PolyWarMap {
     this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, Number(zoom) || 12));
     this.clamp();
     if (options.select !== false) this.selected = { x: targetX, y: targetY };
+    this.removeRetryMap();
     this.status("Loading map…");
     this.updatePanel();
     this.requestDraw();
     this.drawMinimap();
     if (this.cell >= TACTICAL_MIN_CELL) {
-      await this.ensureChunks(centerChunkKey, { generation: seq, forceRefresh: false, includeVisible: false });
+      const centerResult = await this.ensureChunks(centerChunkKey, { generation: seq, forceRefresh: false, includeVisible: false });
       if (this.destroyed || seq !== this.loadSeq) return { ok: false, stale: true };
+      if (!this.cache.has(centerChunkKey)) { this.updateChunkStatus({ generation: seq }); this.updatePanel(); this.requestDraw(); return { ok: false, error: centerResult?.error || "center_chunk_unavailable" }; }
       this.updatePanel();
       this.requestDraw();
       this.drawMinimap();
@@ -357,7 +361,7 @@ class PolyWarMap {
     for (let cy = Math.floor(min.y / cs); cy <= Math.floor(max.y / cs); cy++) for (let cx = Math.floor(min.x / cs); cx <= Math.floor(max.x / cs); cx++) if (cx >= 0 && cy >= 0 && cx * cs < this.state.map.width && cy * cs < this.state.map.height) out.push([cx, cy]);
     return out;
   }
-  visibleFailedChunkKeys() { const visible = new Set(this.visibleChunks().map(([x,y]) => `${x},${y}`)); return [...this.failedChunks].filter(k => visible.has(k)); }
+  visibleFailedChunkKeys() { const visible = new Set(this.visibleChunks().map(([x,y]) => `${x},${y}`)); return [...this.failedChunks].filter(k => visible.has(k) && !this.cache.has(k)); }
   async ensureChunks(forceKey = null, options = {}) {
     if (this.destroyed) return { ok: false, destroyed: true };
     if (forceKey && typeof forceKey === "object" && !Array.isArray(forceKey)) { options = forceKey; forceKey = null; }
@@ -369,59 +373,82 @@ class PolyWarMap {
     const explicitKeys = options.keys ? options.keys.map(([x,y]) => [Number(x), Number(y), true]) : (forceKey ? [[...String(forceKey).split(",").map(Number), true]] : []);
     const retryKeys = (!forceKey && includeVisible ? this.visibleFailedChunkKeys().map(k => k.split(",").map(Number)) : []).map(([x,y]) => [x,y,false]);
     const visibleKeys = includeVisible ? visible.map(([x,y]) => [x,y,false]) : [];
-    const wanted = explicitKeys.concat(visibleKeys, retryKeys);
-    const missing = [];
+    const wanted = [...new Map(explicitKeys.concat(visibleKeys, retryKeys).map(([x,y,forced]) => [`${x},${y}`, [x,y,forced]])).values()];
+    const requestedKeys = wanted.map(([x,y]) => `${x},${y}`);
+    const chunksToRequest = [], inFlightPromisesToAwait = new Set(), forceAfterInFlight = [];
     for (const [x, y, forced] of wanted) {
       const key = `${x},${y}`;
-      if ((forceRefresh && forced) || (!this.cache.has(key) && !this.loading.has(key))) missing.push([x,y]);
+      const forceRefreshForThisKey = !!(forceRefresh && forced);
+      if (this.cache.has(key) && !forceRefreshForThisKey) continue;
+      const inFlight = this.chunkRequestsByKey.get(key);
+      if (inFlight) {
+        inFlightPromisesToAwait.add(inFlight);
+        if (forceRefreshForThisKey && !options._skipPostInFlightForceRefresh) forceAfterInFlight.push([x,y]);
+      } else {
+        chunksToRequest.push([x,y]);
+      }
     }
-    const unique = [...new Map(missing.map(c => [c.join(","), c])).values()];
-    if (!unique.length) { if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.requestDraw(); this.updatePanel(); } return { ok: true, cached: true }; }
-    if (isCurrentGeneration()) this.status("Loading chunks…");
+    if (isCurrentGeneration() && (chunksToRequest.length || inFlightPromisesToAwait.size)) this.status("Loading chunks…");
     const limit = Math.max(1, Number(this.state.map.max_chunks_per_request || 9));
     const retryable = new Set(["server_error", "request_timeout", "network_error", "deadlock_retryable"]);
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const loadBatch = async (batch, batchKey) => {
+    const createBatchRequest = (batch, batchKey) => {
       const batchKeys = batch.map(c => c.join(","));
-      batchKeys.forEach(k => this.loading.add(k));
-      try {
-        let data = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          data = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
+      let promiseForThisBatch = null;
+      promiseForThisBatch = (async () => {
+        batchKeys.forEach(k => this.loading.add(k));
+        try {
+          let data = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            data = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
+            if (this.destroyed) return data;
+            if (options.generation != null && options.generation !== this.loadSeq) { /* stale camera generation may still cache valid chunks below */ }
+            if (data?.ok || !retryable.has(data?.error)) break;
+            if (attempt < 2) await sleep(attempt === 0 ? 300 : 1000);
+          }
           if (this.destroyed) return data;
-          if (options.generation != null && options.generation !== this.loadSeq) { /* stale camera generation may still cache valid chunks below */ }
-          if (data?.ok || !retryable.has(data?.error)) break;
-          if (attempt < 2) await sleep(attempt === 0 ? 300 : 1000);
+          if (data?.ok) {
+            const returned = new Set();
+            data.chunks.forEach(ch => { const key = `${ch.chunk_x},${ch.chunk_y}`; returned.add(key); this.cache.set(key, ch); this.failedChunks.delete(key); });
+            batchKeys.forEach(k => { if (!returned.has(k)) this.failedChunks.add(k); });
+            this.pruneCache();
+          } else {
+            batchKeys.forEach(k => this.failedChunks.add(k));
+          }
+          if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.requestDraw(); this.updatePanel(); }
+          return data;
+        } finally {
+          batchKeys.forEach(k => {
+            this.loading.delete(k);
+            if (this.chunkRequestsByKey.get(k) === promiseForThisBatch) this.chunkRequestsByKey.delete(k);
+          });
+          if (this.pendingRequests.get(batchKey) === promiseForThisBatch) this.pendingRequests.delete(batchKey);
+          if (isCurrentGeneration()) this.updateChunkStatus({ generation: options.generation });
         }
-        if (this.destroyed) return data;
-        if (data?.ok) {
-          const returned = new Set();
-          data.chunks.forEach(ch => { const key = `${ch.chunk_x},${ch.chunk_y}`; returned.add(key); this.cache.set(key, ch); this.failedChunks.delete(key); });
-          batchKeys.forEach(k => { if (!returned.has(k)) this.failedChunks.add(k); });
-          this.pruneCache();
-        } else {
-          batchKeys.forEach(k => this.failedChunks.add(k));
-        }
-        if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.requestDraw(); this.updatePanel(); }
-        return data;
-      } finally {
-        batchKeys.forEach(k => this.loading.delete(k));
-        if (this.pendingRequests.has(batchKey)) this.pendingRequests.delete(batchKey);
-        if (isCurrentGeneration()) this.updateChunkStatus({ generation: options.generation });
-      }
+      })();
+      batchKeys.forEach(key => this.chunkRequestsByKey.set(key, promiseForThisBatch));
+      return promiseForThisBatch;
     };
     const tasks = [];
-    for (let i = 0; i < unique.length && !this.destroyed; i += limit) {
-      const batch = unique.slice(i, i + limit);
+    for (let i = 0; i < chunksToRequest.length && !this.destroyed; i += limit) {
+      const batch = chunksToRequest.slice(i, i + limit);
       const key = batch.map(c => c.join(",")).join(";");
-      if (!this.pendingRequests.has(key)) { const promise = loadBatch(batch, key); this.pendingRequests.set(key, promise); }
-      tasks.push(this.pendingRequests.get(key));
+      let promise = this.pendingRequests.get(key);
+      if (!promise) { promise = createBatchRequest(batch, key); this.pendingRequests.set(key, promise); }
+      tasks.push(promise);
     }
-    const results = await Promise.allSettled(tasks);
-    return { ok: results.every(r => r.status === "fulfilled" && r.value?.ok !== false), results };
+    const awaitedInFlight = !!inFlightPromisesToAwait.size;
+    const results = await Promise.allSettled([...tasks, ...inFlightPromisesToAwait]);
+    if (forceAfterInFlight.length && !this.destroyed) await this.ensureChunks({ keys: forceAfterInFlight, includeVisible: false, forceRefresh: true, generation: options.generation, _skipPostInFlightForceRefresh: true });
+    requestedKeys.forEach(key => { if (!this.cache.has(key) && !this.loading.has(key)) this.failedChunks.add(key); });
+    if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.updatePanel(); this.requestDraw(); }
+    const allAvailable = requestedKeys.every(key => this.cache.has(key));
+    return { ok: allAvailable && results.every(r => r.status === "fulfilled" && r.value?.ok !== false), results, awaitedInFlight, cached: allAvailable && !tasks.length && !awaitedInFlight };
   }
 
-  updateChunkStatus(options = {}) { if (options.generation != null && options.generation !== this.loadSeq) return; const visibleFailed = this.visibleFailedChunkKeys(); const visibleLoading = this.visibleChunks().some(([x,y]) => this.loading.has(`${x},${y}`)); if (visibleLoading) this.status("Loading chunks…"); else if (visibleFailed.length) { this.status("Map data unavailable"); this.showRetryMap(); } else this.status(""); }
+  updateChunkStatus(options = {}) { if (options.generation != null && options.generation !== this.loadSeq) return; const visibleFailed = this.visibleFailedChunkKeys(); const visibleLoading = this.visibleChunks().some(([x,y]) => this.loading.has(`${x},${y}`)); if (visibleLoading) this.status("Loading chunks…"); else if (visibleFailed.length) { this.status("Map data unavailable"); this.showRetryMap(); } else { this.status(""); this.removeRetryMap(); } }
+
+  removeRetryMap() { document.getElementById("retryMapBtn")?.remove(); }
 
   showRetryMap() {
     let btn = document.getElementById("retryMapBtn");
@@ -429,7 +456,7 @@ class PolyWarMap {
     const status = document.getElementById("chunkStatus");
     btn = document.createElement("button");
     btn.className = "btn mini"; btn.id = "retryMapBtn"; btn.textContent = "Retry map";
-    btn.onclick = () => { btn.remove(); this.ensureChunks(null, { forceRefresh: false }); };
+    btn.onclick = async () => { btn.disabled = true; try { await this.ensureChunks(null, { forceRefresh: false, generation: this.loadSeq }); } finally { btn.disabled = false; this.updateChunkStatus({ generation: this.loadSeq }); } };
     status?.after(btn);
   }
 
