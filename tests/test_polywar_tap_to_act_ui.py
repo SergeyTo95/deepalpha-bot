@@ -676,3 +676,44 @@ def test_minimap_jump_chunk_loading_runtime_harness():
         })();
     """)
     subprocess.run(['node', '-e', script], check=True)
+
+
+def test_capture_adjacency_unknown_and_frontier_contracts_present():
+    assert 'ownedOrthogonalAdjacencyState(x, y, fid)' in JS
+    assert 'return unknown ? null : false' in JS
+    assert 'Loading adjacent territory…' in JS
+    assert 'Capture requires an adjacent faction cell' in JS
+    assert 'drawCaptureFrontierHint' in JS and 'this.cell<10' in JS
+    assert 'setInterval(sendPresenceHeartbeat, 60000)' in JS
+
+
+def test_node_runtime_capture_resolver_and_tristate_adjacency():
+    import subprocess, textwrap
+    script=textwrap.dedent(r'''
+      const fs=require('fs'), vm=require('vm'), js=fs.readFileSync('webapp/polywar.js','utf8');
+      const start=js.indexOf('const TERRAIN_COST ='), end=js.indexOf('function toast(');
+      const context={console,window:{}}; vm.createContext(context); vm.runInContext(js.slice(start,end)+';this.resolve=resolvePrimaryCellAction;this.cost=primaryActionCost;',context);
+      const state={selected_faction:{id:7},player:{faction_id:7},energy:{current_energy:10},rules:{}};
+      const cell={terrain:'plain',owner:0};
+      for(const [adj,enabled,reason] of [[true,true,null],[false,false,'Capture requires an adjacent faction cell'],[null,false,'Loading adjacent territory…']]){
+        const out=context.resolve({cell,selected:{x:4,y:4},state,map:{ownedOrthogonalAdjacencyState:()=>adj}});
+        if(out.enabled!==enabled||out.reason!==reason)throw new Error(JSON.stringify(out));
+      }
+      const marker='  ownedOrthogonalAdjacencyState(x, y, fid) {';
+      const a=js.indexOf(marker)+2, b=js.indexOf('\n  captureAdjacencyState',a);
+      const method=js.slice(a,b);
+      const make=(owners)=>({state:{map:{width:20,height:20}},ownerAt:(x,y)=>Object.prototype.hasOwnProperty.call(owners,`${x},${y}`)?owners[`${x},${y}`]:0});
+      const helper=vm.runInNewContext('({'+method+'})').ownedOrthogonalAdjacencyState;
+      let m=make({'3,3':7}); if(helper.call(m,4,4,7)!==false)throw new Error('diagonal counted');
+      m=make({'5,4':null}); if(helper.call(m,4,4,7)!==null)throw new Error('missing not unknown');
+      m=make({'5,4':null,'3,4':7}); if(helper.call(m,4,4,7)!==true)throw new Error('own must win');
+      let apiCalls=0; const disabled=context.resolve({cell,selected:{x:4,y:4},state,map:{ownedOrthogonalAdjacencyState:()=>false}}); if(disabled.enabled)apiCalls++; if(apiCalls!==0)throw new Error('disabled dispatched');
+    ''')
+    subprocess.run(['node','-e',script],check=True)
+
+
+def test_presence_lifecycle_has_deduped_request_and_visibility_refresh():
+    assert 'if(presenceRequest)return presenceRequest' in JS
+    assert 'presenceRequest=null' in JS
+    assert 'removeEventListener("visibilitychange",handlePolywarVisibilityChange)' in JS
+    assert 'map?.refreshSquads?.(true)' in JS

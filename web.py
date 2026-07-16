@@ -34,7 +34,7 @@ from services.ton_wallet_service import (
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
-from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction
+from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction, record_presence as record_polywar_presence
 from services.polywar_map_service import build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
 from services.polywar_combat_service import combat_action as polywar_combat_action
 from services.polywar_sector_service import get_sectors as get_polywar_sectors
@@ -827,6 +827,22 @@ async def handle_polywar_join_api(request):
         code = str(e)
         status = 404 if code == "unknown_faction" else 409 if code == "faction_already_selected" else 400
         return _json_response({"ok": False, "error": code}, status=status)
+
+async def handle_polywar_presence_api(request):
+    current = _current_web_user(request)
+    if not current:
+        return _polywar_unauthorized()
+    user_id = int(current.get("user_id") or 0)
+    if user_id <= 0:
+        return _polywar_unauthorized()
+    try:
+        _polywar_rate_limit("polywar_presence", user_id, 6)
+    except ValueError:
+        return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    try:
+        return _json_response(await asyncio.to_thread(record_polywar_presence, user_id))
+    except ValueError as e:
+        return _json_response({"ok": False, "error": str(e)}, status=404)
 
 
 def _polywar_read_error_response(exc):
@@ -1881,6 +1897,7 @@ app.router.add_get("/api/polywar/results", handle_polywar_results_api)
 app.router.add_get("/api/polywar/rewards", handle_polywar_rewards_api)
 app.router.add_post("/api/polywar/rewards/claim", handle_polywar_reward_claim_api)
 app.router.add_post("/api/polywar/join", handle_polywar_join_api)
+app.router.add_post("/api/polywar/presence", handle_polywar_presence_api)
 app.router.add_get("/api/polywar/map/chunks", handle_polywar_chunks_api)
 app.router.add_get("/api/polywar/map/sectors", handle_polywar_sectors_api)
 app.router.add_post("/api/polywar/action", handle_polywar_action_api)
@@ -1900,6 +1917,7 @@ app.router.add_route("OPTIONS", "/api/polywar/map/sectors", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/scan", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/flag", handle_options)
 app.router.add_route("OPTIONS", "/api/polywar/join", handle_options)
+app.router.add_route("OPTIONS", "/api/polywar/presence", handle_options)
 app.router.add_get("/api/webapp/summary", handle_webapp_summary)
 app.router.add_post("/api/webapp/analyze", handle_webapp_analyze)
 app.router.add_post("/api/webapp/analyze/start", handle_webapp_analyze_start)
