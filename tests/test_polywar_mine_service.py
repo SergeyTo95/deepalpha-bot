@@ -208,3 +208,31 @@ def test_capture_keeps_two_cardinal_adjacency_checks_around_mine_resolution():
     calls=[i for i in range(len(block)) if block.startswith('has_owned_orthogonal_neighbor(',i)]
     assert len(calls)==2
     assert calls[0] < block.index('active_mine_at(') < calls[1] < block.index('INSERT INTO polywar_cells')
+
+
+def _isolated_capturable(connect, sid, secret, fid=1):
+    bx,by=m.faction_base_positions()[fid]
+    for x in range(bx+30,bx+100):
+        y=by+30
+        if m.in_bounds(x,y) and m.TERRAIN_COSTS[m.terrain_at(secret,x,y)] is not None:
+            return x,y
+    raise AssertionError('capturable cell unavailable')
+
+
+def test_runtime_capture_cardinal_diagonal_enemy_and_mine_short_circuit(polydb, monkeypatch):
+    connect,_=polydb; st=join(201,1); sid=st['season']['id']; c=connect(); secret=c.execute('SELECT secret_seed FROM polywar_seasons WHERE id=?',(sid,)).fetchone()[0]; x,y=_isolated_capturable(connect,sid,secret)
+    energy=c.execute('SELECT current_energy FROM polywar_players WHERE user_id=201 AND season_id=?',(sid,)).fetchone()[0]; c.close()
+    monkeypatch.setattr(mines,'active_mine_at',lambda *a,**k: (_ for _ in ()).throw(AssertionError('mine lookup must follow adjacency')))
+    with pytest.raises(ValueError,match='not_adjacent'): m.capture_cell(201,x,y,'isolated')
+    c=connect(); assert c.execute('SELECT current_energy FROM polywar_players WHERE user_id=201 AND season_id=?',(sid,)).fetchone()[0]==energy
+    assert c.execute('SELECT COUNT(*) FROM polywar_actions WHERE user_id=201 AND idempotency_key=?',('isolated',)).fetchone()[0]==0
+    assert c.execute('SELECT COUNT(*) FROM polywar_action_outcomes WHERE user_id=201 AND idempotency_key=?',('isolated',)).fetchone()[0]==0
+    assert c.execute('SELECT COUNT(*) FROM polywar_mine_events WHERE triggered_by_user_id=201').fetchone()[0]==0
+    assert c.execute('SELECT COUNT(*) FROM polywar_cells WHERE season_id=? AND x=? AND y=?',(sid,x,y)).fetchone()[0]==0
+    c.execute('INSERT OR REPLACE INTO polywar_cells(season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES(?,?,?,?,100,?)',(sid,x-1,y-1,1,datetime.utcnow())); c.commit(); c.close()
+    with pytest.raises(ValueError,match='not_adjacent'): m.capture_cell(201,x,y,'diagonal')
+    c=connect(); c.execute('DELETE FROM polywar_cells WHERE season_id=? AND x=? AND y=?',(sid,x-1,y-1)); c.execute('INSERT OR REPLACE INTO polywar_cells(season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES(?,?,?,?,100,?)',(sid,x-1,y,2,datetime.utcnow())); c.commit(); c.close()
+    with pytest.raises(ValueError,match='not_adjacent'): m.capture_cell(201,x,y,'enemy-neighbor')
+    c=connect(); c.execute('UPDATE polywar_cells SET owner_faction_id=1 WHERE season_id=? AND x=? AND y=?',(sid,x-1,y)); c.commit(); c.close()
+    monkeypatch.setattr(mines,'active_mine_at',lambda *a,**k: None)
+    result=m.capture_cell(201,x,y,'orthogonal'); assert result['ok'] and result['cell']['owner_faction_id']==1

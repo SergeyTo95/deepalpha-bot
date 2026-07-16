@@ -832,8 +832,15 @@ async def handle_polywar_presence_api(request):
     current = _current_web_user(request)
     if not current:
         return _polywar_unauthorized()
+    user_id = int(current.get("user_id") or 0)
+    if user_id <= 0:
+        return _polywar_unauthorized()
     try:
-        return _json_response(await asyncio.to_thread(record_polywar_presence, int(current.get("user_id") or 0)))
+        _polywar_rate_limit("polywar_presence", user_id, 6)
+    except ValueError:
+        return _json_response({"ok": False, "error": "rate_limited"}, status=429)
+    try:
+        return _json_response(await asyncio.to_thread(record_polywar_presence, user_id))
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=404)
 

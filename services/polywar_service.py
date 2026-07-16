@@ -493,22 +493,45 @@ def _energy(player: Dict[str, Any]) -> Dict[str, Any]:
     return {"current_energy": cur, "max_energy": max_energy, "recharge_minutes": recharge, "seconds_until_next_energy": seconds_next, "locked_until": _iso(locked_until), "is_locked": is_locked, "lock_seconds_remaining": max(0, int((locked_until - _now()).total_seconds())) if is_locked and not isinstance(locked_until, str) else (max(0, int((datetime.fromisoformat(locked_until) - _now()).total_seconds())) if is_locked else 0), "lock_reason": "mine_hit" if is_locked else None, "energy_updated_at": updated}
 
 
-def _insert_player_if_missing(conn, user_id: int, season_id: int) -> None:
+def _insert_player_if_missing(conn, user_id: int, season_id: int) -> bool:
     c = conn.cursor(); now = _now(); maxe = _setting_int("polywar_energy_max", 10, 1, 1000)
-    _execute(c, """
+    result = _execute(c, """
     INSERT INTO polywar_players (user_id, season_id, current_energy, max_energy, energy_updated_at, joined_at, last_active_at)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (user_id, season_id) DO NOTHING
     """, (user_id, season_id, maxe, maxe, now, now, now))
+    return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
+def touch_player_presence_in_transaction(conn, season_id: int, user_id: int, now: datetime, *, prepare_resume: bool = True) -> Dict[str, Any]:
+    """Conditionally touch presence, preparing a dormant-world resume first."""
+    inserted = _insert_player_if_missing(conn, int(user_id), int(season_id))
+    resume = {'was_dormant':False,'rescheduled_count':0,'next_due_at':None}
+    if prepare_resume:
+        from services import polywar_squad_service as squads
+        cfg = squads.ensure_squad_season_config(conn, int(season_id))
+        resume = squads.prepare_squad_simulation_resume_in_transaction(conn, int(season_id), now, cfg=cfg)
+    threshold = now - timedelta(seconds=45)
+    result = _execute(conn.cursor(), """UPDATE polywar_players SET last_active_at=%s
+        WHERE user_id=%s AND season_id=%s AND (last_active_at IS NULL OR last_active_at<%s)""",
+        (now, int(user_id), int(season_id), threshold))
+    updated = inserted or int(getattr(result, 'rowcount', 0) or 0) > 0
+    if updated:
+        logger.info('polywar_presence_recorded season_id=%s user_id=%s was_dormant=%s rescheduled_count=%s', season_id, user_id, resume['was_dormant'], resume['rescheduled_count'])
+    else:
+        logger.debug('polywar_presence_throttled season_id=%s user_id=%s', season_id, user_id)
+    return {'presence_updated':updated,'simulation_resume_prepared':bool(resume['was_dormant']),
+        'rescheduled_squad_count':int(resume['rescheduled_count']),'next_due_at':resume.get('next_due_at')}
 
 
 def get_or_create_player(user_id: int, season_id: int, conn=None) -> Dict[str, Any]:
     own = conn is None; conn = conn or get_connection(); c = conn.cursor()
     try:
-        _insert_player_if_missing(conn, int(user_id), int(season_id))
+        if own: begin_serialized_transaction(conn)
+        touch_player_presence_in_transaction(conn, int(season_id), int(user_id), _now())
         row = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id = %s AND season_id = %s", (user_id, season_id))
         e = _energy(row)
-        _execute(c, "UPDATE polywar_players SET current_energy = %s, energy_updated_at = %s, last_active_at = %s WHERE user_id = %s AND season_id = %s", (e["current_energy"], e["energy_updated_at"], _now(), user_id, season_id))
+        _execute(c, "UPDATE polywar_players SET current_energy = %s, energy_updated_at = %s WHERE user_id = %s AND season_id = %s", (e["current_energy"], e["energy_updated_at"], user_id, season_id))
         if own: conn.commit()
         row.update({"current_energy": e["current_energy"], "max_energy": e["max_energy"], "energy_updated_at": e["energy_updated_at"]})
         return row
@@ -519,16 +542,16 @@ def record_presence(user_id: int) -> Dict[str, Any]:
     """Touch presence without energy regeneration or world/squad catch-up."""
     conn = get_connection(); now = _now()
     try:
-        init_polywar_schema(conn)
+        begin_serialized_transaction(conn)
         season = _fetchone(conn.cursor(), "SELECT id FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1", ("active",))
         if not season: raise ValueError("no_active_season")
-        sid = int(season["id"]); _insert_player_if_missing(conn, int(user_id), sid)
-        row = _fetchone(conn.cursor(), "SELECT last_active_at FROM polywar_players WHERE user_id=%s AND season_id=%s", (int(user_id), sid)) or {}
-        last = row.get("last_active_at")
-        if not last or now - (datetime.fromisoformat(last) if isinstance(last, str) else last) >= timedelta(seconds=45):
-            _execute(conn.cursor(), "UPDATE polywar_players SET last_active_at=%s WHERE user_id=%s AND season_id=%s", (now, int(user_id), sid))
+        sid = int(season["id"])
+        result = touch_player_presence_in_transaction(conn, sid, int(user_id), now)
         conn.commit()
-        return {"ok": True, "season_id": sid, "server_timestamp": int(now.timestamp())}
+        return {"ok": True, "season_id": sid, "server_timestamp": int(now.timestamp()), **result}
+    except Exception:
+        _safe_rollback(conn)
+        raise
     finally:
         conn.close()
 

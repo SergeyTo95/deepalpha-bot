@@ -585,6 +585,21 @@ def active_player_count(conn, season_id: int, now: datetime, cfg) -> int:
 def squad_simulation_is_active(conn, season_id: int, now: datetime, cfg) -> bool:
     return not int(cfg.get('pause_without_active_players', 1)) or active_player_count(conn, season_id, now, cfg) > 0
 
+def prepare_squad_simulation_resume_in_transaction(conn, season_id: int, now: datetime, cfg=None) -> dict:
+    """Move stale timers forward before the first returning player becomes active."""
+    cfg = cfg or ensure_squad_season_config(conn, season_id)
+    if not _is_sqlite(conn):
+        # Serialize the zero-to-one active-player transition between heartbeats.
+        cfg = _fetchone(conn.cursor(), 'SELECT * FROM polywar_squad_season_config WHERE season_id=%s FOR UPDATE', (season_id,)) or cfg
+    players = active_player_count(conn, season_id, now, cfg)
+    if not int(cfg.get('pause_without_active_players', 1)) or players > 0:
+        return {'was_dormant':False,'rescheduled_count':0,'next_due_at':None}
+    next_due = now + timedelta(minutes=int(cfg['move_interval_minutes']))
+    result = _execute(conn.cursor(), "UPDATE polywar_faction_squads SET next_move_at=%s,updated_at=%s WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND (next_move_at IS NULL OR next_move_at<=%s)", (next_due, now, season_id, now))
+    count = max(0, int(getattr(result, 'rowcount', 0) or 0))
+    logger.info('polywar_squad_resume_prepared season_id=%s was_dormant=true rescheduled_count=%s', season_id, count)
+    return {'was_dormant':True,'rescheduled_count':count,'next_due_at':_iso(next_due)}
+
 def _dormant_result(players=0, **extra):
     return {'processed':False,'reason':'waiting_for_active_players','simulation_mode':'dormant','active_player_count':players,
         'spawned_count':0,'moved_count':0,'combat_count':0,'pressure_count':0,'cell_attack_count':0,
@@ -599,7 +614,7 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
     if season.get('ends_at') and _as_dt(season.get('ends_at')) <= now: return {'processed':False,'reason':'season_ended','spawned_count':0,'moved_count':0,'combat_count':0,'pressure_count':0}
     players=active_player_count(conn, season_id, now, cfg)
     if int(cfg.get('pause_without_active_players', 1)) and players == 0:
-        return _dormant_result()
+        return _dormant_result(players=players)
     scheduled_at=scheduled_at or now; tick=_tick_index_for(cfg, scheduled_at); next_due_at=scheduled_at+timedelta(minutes=int(cfg['move_interval_minutes']))
     claim=_claim_tick(conn,season_id,tick,scheduled_at,now,cfg)
     if not claim.get('claimed'):
@@ -672,10 +687,10 @@ def ensure_squads_caught_up_in_transaction(conn, season_id:int, now=None):
         expired=cleanup_expired_pressure_in_transaction(conn,season_id,now)
         next_at=now+timedelta(minutes=int(cfg['move_interval_minutes']))
         c=conn.cursor()
-        row=_fetchone(c,"SELECT COUNT(*) AS count FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND next_move_at<=%s",(season_id,now)) or {}
+        row=_fetchone(c,"SELECT COUNT(*) AS count FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND (next_move_at IS NULL OR next_move_at<=%s)",(season_id,now)) or {}
         rescheduled=int(row.get('count') or 0)
-        _execute(c,"UPDATE polywar_faction_squads SET next_move_at=%s,updated_at=%s WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND next_move_at<=%s",(next_at,now,season_id,now))
-        return {**total, **_dormant_result(rescheduled_count=rescheduled, expired_pressure=expired)}
+        _execute(c,"UPDATE polywar_faction_squads SET next_move_at=%s,updated_at=%s WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') AND (next_move_at IS NULL OR next_move_at<=%s)",(next_at,now,season_id,now))
+        return {**total, **_dormant_result(players=players, rescheduled_count=rescheduled, expired_pressure=expired)}
     for _ in range(int(cfg['max_catchup_ticks'])):
         earliest=_fetchone(conn.cursor(),"SELECT MIN(next_move_at) AS due_at FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')",(season_id,)) or {}
         due_at=_as_dt(earliest['due_at']) if earliest.get('due_at') else None

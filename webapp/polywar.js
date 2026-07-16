@@ -7,6 +7,8 @@ let energyTimer = null;
 let syncTimer = null;
 let worldCountdownTimer = null;
 let presenceTimer = null;
+let presenceRequest = null;
+let presenceVisibilityListening = false;
 const polywarClaimKeys = new Map();
 const polywarActionKeys = new Map();
 let currentState = null;
@@ -216,8 +218,9 @@ function contrastBorderForFaction(color) {
   const n = parseInt(c, 16); const lum = (((n>>16)&255)*299 + ((n>>8)&255)*587 + (n&255)*114) / 1000;
   return lum < 90 ? "#e5e7eb" : "#0f172a";
 }
-function clearTimers() { if (energyTimer) clearInterval(energyTimer); if (syncTimer) clearInterval(syncTimer); if (worldCountdownTimer) clearInterval(worldCountdownTimer); if (presenceTimer) clearInterval(presenceTimer); energyTimer = syncTimer = worldCountdownTimer = presenceTimer = null; }
-async function sendPresenceHeartbeat() { if (document.hidden || !document.getElementById("polywarRoot")) return; try { await api("/api/polywar/presence", {method:"POST"}); } catch (e) { console.debug("PolyWar presence heartbeat failed", e); } }
+function clearTimers() { if (energyTimer) clearInterval(energyTimer); if (syncTimer) clearInterval(syncTimer); if (worldCountdownTimer) clearInterval(worldCountdownTimer); if (presenceTimer) clearInterval(presenceTimer); if(presenceVisibilityListening){document.removeEventListener("visibilitychange",handlePolywarVisibilityChange);presenceVisibilityListening=false;} energyTimer = syncTimer = worldCountdownTimer = presenceTimer = null; }
+async function sendPresenceHeartbeat() { if (document.hidden || !document.getElementById("polywarRoot")) return; if(presenceRequest)return presenceRequest; presenceRequest=api("/api/polywar/presence", {method:"POST"}); try { return await presenceRequest; } catch (e) { console.debug("PolyWar presence heartbeat failed", e); return null; } finally { presenceRequest=null; } }
+async function handlePolywarVisibilityChange(){ if(document.hidden||!document.getElementById("polywarRoot"))return; const result=await sendPresenceHeartbeat(); if(result?.ok)map?.refreshSquads?.(true); }
 function baseFor(fid) { return (currentState?.map?.bases || []).find(b => +b.faction_id === +fid); }
 
 function updateEnergyUI() {
@@ -249,6 +252,7 @@ function startEnergyTimers() {
   syncTimer = setInterval(() => syncState(false, { soft: true }), 60000);
   sendPresenceHeartbeat();
   presenceTimer = setInterval(sendPresenceHeartbeat, 60000);
+  if(!presenceVisibilityListening){document.addEventListener("visibilitychange",handlePolywarVisibilityChange);presenceVisibilityListening=true;}
 }
 
 class PolyWarMap {
@@ -927,7 +931,6 @@ async function syncState(showErrors = true, opts = {}) {
 }
 async function joinFaction(id) { const d = await api("/api/polywar/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ faction_id: Number(id) }) }); if (!d.ok) { alert(d.error || "Join failed"); await syncState(false, { soft: true }); return; } render(d); }
 async function init() { await telegramAuthIfAvailable(); await syncState(true); }
-document.addEventListener("visibilitychange", () => { if (!document.hidden && map) sendPresenceHeartbeat(); });
 window.addEventListener("pagehide", () => { clearTimers(); teardownPolywarMenu({ restartTimers: false }); map?.destroy(); map = null; });
 
 // Phase 5 PolyWar capitals/governance integration hooks.

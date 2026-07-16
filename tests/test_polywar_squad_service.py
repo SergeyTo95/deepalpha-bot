@@ -672,3 +672,59 @@ def test_recent_presence_activates_and_stale_presence_does_not(monkeypatch):
     c.execute('UPDATE polywar_players SET last_active_at=? WHERE season_id=?',(now-timedelta(minutes=1),sid)); c.commit()
     polywar.begin_serialized_transaction(c); active=squads.process_squad_tick_in_transaction(c,sid,now); c.commit(); assert active['processed'] is True
     keeper.close()
+
+
+def test_presence_prepares_resume_before_touch_and_prevents_first_burst(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); join(connect,sid,91,1)
+    c=connect(); now=datetime.utcnow(); stale=now-timedelta(hours=8)
+    c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=1,active_player_window_minutes=5,move_interval_minutes=5,max_active_per_faction=0 WHERE season_id=?',(sid,))
+    c.execute('UPDATE polywar_players SET last_active_at=? WHERE season_id=?',(stale,sid))
+    _insert_squad(c,sid,id=901,fid=1,status='attacking_cell',x=10,y=10,next_at=stale)
+    c.execute('UPDATE polywar_faction_squads SET hp=73,attack_progress=40,attack_target_x=11,attack_target_y=10 WHERE id=901')
+    c.commit(); before=dict(c.execute('SELECT x,y,hp,status,attack_progress,attack_target_x,target_x FROM polywar_faction_squads WHERE id=901').fetchone()); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now)
+    response=polywar.record_presence(91)
+    assert response['simulation_resume_prepared'] is True and response['rescheduled_squad_count']==1
+    c=connect(); after=dict(c.execute('SELECT x,y,hp,status,attack_progress,attack_target_x,target_x,next_move_at FROM polywar_faction_squads WHERE id=901').fetchone())
+    assert {k:after[k] for k in before}==before and after['next_move_at']>=now+timedelta(minutes=5)
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0
+    polywar.begin_serialized_transaction(c); caught=squads.ensure_squads_caught_up_in_transaction(c,sid,now); c.commit()
+    assert caught['processed_count']==0 and caught['reason']=='nothing_due'
+    c.close(); keeper.close()
+
+
+def test_presence_does_not_reschedule_when_world_active_or_pause_disabled(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); join(connect,sid,1,1); join(connect,sid,2,1)
+    c=connect(); now=datetime.utcnow(); stale=now-timedelta(hours=8); _insert_squad(c,sid,id=902,fid=1,status='marching',next_at=stale)
+    c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=1,active_player_window_minutes=5 WHERE season_id=?',(sid,))
+    c.execute('UPDATE polywar_players SET last_active_at=? WHERE user_id=1 AND season_id=?',(now-timedelta(minutes=1),sid)); c.execute('UPDATE polywar_players SET last_active_at=? WHERE user_id=2 AND season_id=?',(stale,sid)); c.commit(); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now); active=polywar.record_presence(2)
+    assert active['simulation_resume_prepared'] is False and active['rescheduled_squad_count']==0
+    c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=902').fetchone()[0]==stale
+    c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=0 WHERE season_id=?',(sid,)); c.execute('UPDATE polywar_players SET last_active_at=?',(stale,)); c.commit(); c.close()
+    disabled=polywar.record_presence(2); assert disabled['simulation_resume_prepared'] is False
+    c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=902').fetchone()[0]==stale; c.close(); keeper.close()
+
+
+def test_presence_is_conditional_and_does_not_touch_energy_or_bootstrap(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); join(connect,sid,44,1); c=connect(); now=datetime.utcnow(); old=now-timedelta(hours=2)
+    c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=0 WHERE season_id=?',(sid,)); c.execute('UPDATE polywar_players SET current_energy=3,energy_updated_at=?,last_active_at=? WHERE user_id=44 AND season_id=?',(old,old,sid)); c.commit(); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now); monkeypatch.setattr(polywar,'init_polywar_schema',lambda *a,**k: (_ for _ in ()).throw(AssertionError('schema bootstrap')))
+    first=polywar.record_presence(44); second=polywar.record_presence(44)
+    assert first['presence_updated'] is True and second['presence_updated'] is False
+    c=connect(); row=c.execute('SELECT current_energy,energy_updated_at,last_active_at FROM polywar_players WHERE user_id=44 AND season_id=?',(sid,)).fetchone()
+    assert row['current_energy']==3 and row['energy_updated_at']==old and row['last_active_at']==now
+    assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0; c.close(); keeper.close()
+
+
+def test_two_returning_heartbeats_prepare_resume_once_without_ticks(monkeypatch):
+    import threading
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); join(connect,sid,71,1); join(connect,sid,72,2)
+    now=datetime.utcnow(); stale=now-timedelta(hours=8); c=connect(); c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=1,move_interval_minutes=5 WHERE season_id=?',(sid,)); c.execute('UPDATE polywar_players SET last_active_at=? WHERE season_id=?',(stale,sid)); _insert_squad(c,sid,id=903,fid=1,status='engaged',next_at=stale); c.commit(); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now); results=[]; errors=[]
+    def ping(uid):
+        try: results.append(polywar.record_presence(uid))
+        except Exception as exc: errors.append(exc)
+    threads=[threading.Thread(target=ping,args=(uid,)) for uid in (71,72)]; [t.start() for t in threads]; [t.join() for t in threads]
+    assert not errors and len(results)==2 and sum(r['rescheduled_squad_count'] for r in results)==1
+    c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=903').fetchone()[0]>=now+timedelta(minutes=5); assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0; c.close(); keeper.close()
