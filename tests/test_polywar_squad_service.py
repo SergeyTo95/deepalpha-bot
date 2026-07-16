@@ -62,7 +62,7 @@ def test_supply_limit_and_cardinal_step(monkeypatch):
     connect, keeper, _ = db(monkeypatch)
     sid=make_season(connect, existing=False); join(connect,sid,1,1)
     c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; now=datetime.utcnow()
-    c.execute("UPDATE polywar_squad_season_config SET supply_distance=1 WHERE season_id=?",(sid,))
+    c.execute("UPDATE polywar_squad_season_config SET supply_distance=1, require_faction_members=1 WHERE season_id=?",(sid,))
     c.execute("INSERT INTO polywar_faction_squads (season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(sid,1,1,'marching',bx,by,bx,by,bx+5,by,bx,by,100,100,0,0,now,now,now+timedelta(hours=1),now,now))
     c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now+timedelta(minutes=10)); c.commit()
     sq=c.execute('SELECT * FROM polywar_faction_squads WHERE season_id=?',(sid,)).fetchone(); assert sq['status'] in {'waiting_for_supply','marching'}; assert abs(sq['x']-bx)+abs(sq['y']-by) <= 1
@@ -94,7 +94,7 @@ def test_duplicate_tick_keeps_transaction_usable(monkeypatch):
 
 def test_engaged_pair_damage_once_and_survivor_waits(monkeypatch):
     connect, keeper, _ = db(monkeypatch)
-    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); cfg=squads.ensure_squad_season_config(c,sid); c.execute('UPDATE polywar_squad_season_config SET combat_damage_per_tick=20 WHERE season_id=?',(sid,))
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime.utcnow(); cfg=squads.ensure_squad_season_config(c,sid); c.execute('UPDATE polywar_squad_season_config SET combat_damage_per_tick=20,max_active_per_faction=0 WHERE season_id=?',(sid,))
     for i,(hp,eng) in enumerate([(100,2),(100,1)], start=1):
         c.execute("INSERT INTO polywar_faction_squads (id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,engaged_squad_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(i,sid,i,i,'engaged',10+i,10,10+i,10,20,10,10+i,10,hp,100,0,0,now,now,now+timedelta(hours=1),eng,now,now))
     c.commit(); polywar.begin_serialized_transaction(c); out=squads.process_squad_tick_in_transaction(c,sid,now+timedelta(minutes=10)); c.commit()
@@ -263,7 +263,7 @@ def test_due_times_same_bucket_get_distinct_tick_keys_and_no_starvation(monkeypa
     assert at_b['processed_count']==1 and at_b['results'][0]['tick_index']==int(b_due.timestamp())
     assert c.execute("SELECT COUNT(*) FROM polywar_squad_ticks WHERE season_id=? AND status='completed'",(sid,)).fetchone()[0] == 2
     after_b=c.execute('SELECT x,y,move_index FROM polywar_faction_squads WHERE id=2').fetchone()
-    assert after_b['move_index'] == before_b['move_index'] + 1
+    assert after_b['move_index'] == before_b['move_index'] + 1 or c.execute('SELECT status FROM polywar_faction_squads WHERE id=2').fetchone()[0] == 'attacking_cell'
     polywar.begin_serialized_transaction(c); again=squads.ensure_squads_caught_up_in_transaction(c,sid,b_due); c.commit()
     assert again['processed'] is False and again['reason'] in {'nothing_due','tick_completed','tick_processing'}
     assert c.execute('SELECT move_index FROM polywar_faction_squads WHERE id=2').fetchone()[0] == after_b['move_index']
@@ -344,7 +344,7 @@ def test_combat_defeat_examples_event_once_and_idempotent_helper(monkeypatch):
 def test_awaiting_inert_slot_and_occupancy(monkeypatch):
     connect, keeper, _ = db(monkeypatch)
     sid=make_season(connect, existing=False); join(connect,sid,1,1); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); bx,by=config.bases[1]; now=datetime(2026,1,1,12,0)
-    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=1 WHERE season_id=?',(sid,))
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=1,require_faction_members=1 WHERE season_id=?',(sid,))
     _insert_squad(c,sid,id=1,fid=1,status='awaiting_reinforcement',x=bx,y=by,hp=0,next_at=now,expires_at=now+timedelta(hours=2),supply=(bx,by))
     c.execute('UPDATE polywar_faction_squads SET reinforcement_at=? WHERE id=1',(now+timedelta(hours=1),))
     c.execute('INSERT OR IGNORE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,bx,by,1,now))
@@ -356,7 +356,7 @@ def test_awaiting_inert_slot_and_occupancy(monkeypatch):
     # awaiting does not block active movement into same cell
     _insert_squad(c,sid,id=2,fid=2,status='marching',x=bx+1,y=by,hp=100,next_at=now,target=(bx,by),supply=(bx+1,by))
     c.commit(); kind,val=squads._choose_step(c, dict(c.execute('SELECT * FROM polywar_faction_squads WHERE id=2').fetchone()), squads.ensure_squad_season_config(c,sid), 'seed', config)
-    assert kind in {'move','wait'}
+    assert kind in {'move','wait','attack_cell'}
     assert c.execute('SELECT COUNT(*) FROM polywar_squad_pressure WHERE season_id=?',(sid,)).fetchone()[0] == 0
     keeper.close()
 
@@ -373,7 +373,7 @@ def test_expired_awaiting_does_not_starve_later_due_and_hides(monkeypatch):
     assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND event_type='squad_reinforced'",(sid,)).fetchone()[0] == 0
     polywar.begin_serialized_transaction(c); second=squads.ensure_squads_caught_up_in_transaction(c,sid,later); usable=c.execute('SELECT 1').fetchone()[0]; c.commit()
     assert second['processed_count'] >= 1 and usable == 1
-    assert c.execute('SELECT move_index FROM polywar_faction_squads WHERE id=2').fetchone()[0] >= 1
+    row2=c.execute('SELECT move_index,status FROM polywar_faction_squads WHERE id=2').fetchone(); assert row2['move_index'] >= 1 or row2['status']=='attacking_cell'
     out=squads.visible_squads(1,bx-1,by-1,bx+1,by+1)
     assert all(s['id'] != 1 for s in out['squads'])
     keeper.close()
@@ -457,4 +457,91 @@ def test_existing_config_version_migrates_to_two_without_rollout_changes(monkeyp
     c.execute("INSERT INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(99,0,1,111,12,3,700,90,20,300,80,10,50,20,15,2,30,5,now,now))
     c.commit(); squads.init_squad_schema(c); row=c.execute('SELECT enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_hp,reinforcement_cooldown_minutes,reinforcement_hp FROM polywar_squad_season_config WHERE season_id=99').fetchone()
     assert dict(row) == {'enabled':0,'config_version':2,'spawn_interval_minutes':111,'move_interval_minutes':12,'max_hp':90,'reinforcement_cooldown_minutes':60,'reinforcement_hp':50}
+    keeper.close()
+
+def test_new_season_squad_snapshot_uses_new_defaults(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); row=squads.ensure_squad_season_config(c,sid)
+    assert row['move_interval_minutes']==squads.DEFAULTS['move_interval_minutes']
+    assert row['max_active_per_faction']==squads.DEFAULTS['max_active_per_faction']
+    assert row['ttl_minutes']==squads.DEFAULTS['ttl_minutes']
+    assert row['supply_distance']==squads.DEFAULTS['supply_distance']
+    assert row['require_faction_members']==0 and row['enemy_cell_capture_enabled']==1
+    c.close(); keeper.close()
+
+
+def test_existing_config_legacy_safe_then_explicit_update(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    c=connect(); squads.init_squad_schema(c); now=datetime.utcnow()
+    c.execute("INSERT INTO polywar_squad_season_config (season_id,enabled,config_version,spawn_interval_minutes,move_interval_minutes,max_active_per_faction,ttl_minutes,max_hp,supply_distance,pressure_ttl_minutes,neutral_pressure_per_step,enemy_pressure_per_step,enemy_pressure_cap,capital_pressure_cap,combat_damage_per_tick,support_energy_cost,support_hp,max_catchup_ticks,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(50,1,1,180,10,1,720,100,24,360,100,15,60,20,20,1,25,6,now,now))
+    c.commit(); squads.init_squad_schema(c)
+    row=c.execute('SELECT require_faction_members,enemy_cell_capture_enabled FROM polywar_squad_season_config WHERE season_id=50').fetchone()
+    assert (row['require_faction_members'],row['enemy_cell_capture_enabled'])==(1,0)
+    squads.update_squad_season_config(c,50,require_faction_members=False,enemy_cell_capture_enabled=True,enemy_cell_attack_progress_per_tick=7)
+    row=c.execute('SELECT require_faction_members,enemy_cell_capture_enabled,enemy_cell_attack_progress_per_tick FROM polywar_squad_season_config WHERE season_id=50').fetchone()
+    assert (row['require_faction_members'],row['enemy_cell_capture_enabled'],row['enemy_cell_attack_progress_per_tick'])==(0,1,7)
+    keeper.close()
+
+
+def test_all_playable_spawn_without_members_and_null_skipped(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); maps.ensure_season_map_snapshot(c,sid)
+    c.execute('UPDATE polywar_squad_season_config SET require_faction_members=0,max_active_per_faction=1 WHERE season_id=?',(sid,)); c.commit()
+    polywar.begin_serialized_transaction(c); spawned=squads.spawn_due_squads_in_transaction(c,sid,datetime.utcnow()+timedelta(hours=4)); c.commit()
+    fids=[r['faction_id'] for r in c.execute('SELECT faction_id FROM polywar_faction_squads WHERE season_id=? ORDER BY faction_id',(sid,))]
+    assert spawned>=7 and set(range(1,8)) <= set(fids) and 8 not in fids
+    keeper.close()
+
+
+def test_enemy_squad_on_enemy_cell_engages_before_cell_attack(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime.utcnow()
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0 WHERE season_id=?',(sid,))
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,11,10,2,now))
+    _insert_squad(c,sid,id=1,fid=1,x=10,y=10,target=(12,10),next_at=now); _insert_squad(c,sid,id=2,fid=2,x=11,y=10,target=(10,10),next_at=now)
+    c.commit(); monkeypatch.setattr(squads, '_passable', lambda seed,x,y,config: True); kind,val=squads._choose_step(c,dict(c.execute('SELECT * FROM polywar_faction_squads WHERE id=1').fetchone()),squads.ensure_squad_season_config(c,sid),'seed',config)
+    assert kind=='engage' and val['id']==2
+    keeper.close()
+
+
+def test_squad_attack_rival_progress_reduced_not_stolen(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime.utcnow()
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,enemy_cell_attack_progress_per_tick=10 WHERE season_id=?',(sid,))
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,contesting_faction_id,contest_progress,contested_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',(sid,11,10,3,100,2,25,now,now))
+    _insert_squad(c,sid,id=1,fid=1,status='attacking_cell',x=10,y=10,target=(11,10),supply=(10,10),next_at=now); c.execute('UPDATE polywar_faction_squads SET attack_target_x=11,attack_target_y=10 WHERE id=1')
+    c.commit(); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,now,scheduled_at=now); c.commit()
+    row=c.execute('SELECT contesting_faction_id,contest_progress FROM polywar_cells WHERE season_id=? AND x=11 AND y=10',(sid,)).fetchone()
+    assert (row['contesting_faction_id'],row['contest_progress'])==(2,15)
+    keeper.close()
+
+
+def test_squad_capture_threshold_and_event_source(monkeypatch):
+    connect, keeper, settings = db(monkeypatch); settings['polywar_capture_progress_required']='30'
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime(2026,1,1,12,0)
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,enemy_cell_attack_progress_per_tick=10,enemy_cell_capture_enabled=1 WHERE season_id=?',(sid,))
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,11,10,2,now))
+    _insert_squad(c,sid,id=1,fid=1,status='attacking_cell',x=10,y=10,next_at=now); c.execute('UPDATE polywar_faction_squads SET attack_target_x=11,attack_target_y=10 WHERE id=1'); c.commit()
+    for i in range(3):
+        t=now+timedelta(minutes=5*i); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,t,scheduled_at=t); c.commit()
+    cell=c.execute('SELECT owner_faction_id FROM polywar_cells WHERE season_id=? AND x=11 AND y=10',(sid,)).fetchone()
+    sq=c.execute('SELECT status,attack_target_x,attack_progress FROM polywar_faction_squads WHERE id=1').fetchone()
+    ev=c.execute("SELECT user_id,source_squad_id FROM polywar_events WHERE season_id=? AND event_type='squad_cell_captured'",(sid,)).fetchone()
+    assert cell['owner_faction_id']==1 and sq['status']=='marching' and sq['attack_target_x'] is None and sq['attack_progress']==0
+    assert ev['user_id'] is None and ev['source_squad_id']==1
+    keeper.close()
+
+
+def test_capital_pressure_capped_and_cancelled(monkeypatch):
+    connect, keeper, _ = db(monkeypatch)
+    sid=make_season(connect, existing=False); c=connect(); squads.enable_squads_for_season(c,sid); config=maps.load_map_config(c,season_id=sid); now=datetime(2026,1,1,12,0)
+    capitals.ensure_capitals_initialized(c,sid); cap=c.execute('SELECT * FROM polywar_capitals WHERE season_id=? AND original_faction_id=2',(sid,)).fetchone(); x,y=cap['x'],cap['y']
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0,enemy_cell_attack_progress_per_tick=10,capital_pressure_cap=20 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,status='pressuring_capital',x=x-1,y=y,next_at=now); c.execute('UPDATE polywar_faction_squads SET attack_target_x=?,attack_target_y=? WHERE id=1',(x,y)); c.commit()
+    for i in range(3):
+        t=now+timedelta(minutes=5*i); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,t,scheduled_at=t); c.commit()
+    row=c.execute('SELECT status,attack_progress FROM polywar_faction_squads WHERE id=1').fetchone(); cap2=c.execute('SELECT controller_faction_id FROM polywar_capitals WHERE id=?',(cap['id'],)).fetchone()
+    assert row['status']=='pressuring_capital' and row['attack_progress']==20 and cap2['controller_faction_id']==2
+    c.execute('UPDATE polywar_capitals SET controller_faction_id=1 WHERE id=?',(cap['id'],)); c.commit(); t=now+timedelta(minutes=20); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,t,scheduled_at=t); c.commit()
+    assert c.execute('SELECT status,attack_target_x,attack_progress FROM polywar_faction_squads WHERE id=1').fetchone()['status']=='marching'
     keeper.close()

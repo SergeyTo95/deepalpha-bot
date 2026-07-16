@@ -608,3 +608,11 @@ def test_support_success_refreshes_open_menu_runtime_contract():
         map.supportSelectedSquad(5).then(()=>{ assert.strictEqual(refreshed,true); assert.deepStrictEqual(map.selected,{x:7,y:8}); assert.strictEqual(currentState.energy.current_energy,3); assert(menuRefreshed && countdownUpdated && energyUpdated); });
     ''')
     subprocess.run(['node','-e',script], check=True)
+
+def test_squad_attack_animation_progress_uses_required_and_existing_redraw_loop():
+    js = Path('webapp/polywar.js').read_text()
+    assert 'sq.status==="attacking_cell"' in js
+    assert 'attack_progress_required' in js
+    assert 'anim=true; ctx.globalAlpha=.35+.25*Math.sin(now/120)' in js
+    assert 'if(anim) this.requestDraw();' in js
+    assert 'document.hidden' in js
