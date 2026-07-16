@@ -8,7 +8,13 @@ import re
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    class _RequestsFallback:
+        def post(self, *args, **kwargs):
+            raise RuntimeError("requests is not installed")
+    requests = _RequestsFallback()
 
 if importlib.util.find_spec("PIL"):
     from PIL import Image, ImageOps
@@ -956,165 +962,43 @@ def _build_nested_screenshot_crops(image_bytes: bytes, mime_type: str) -> List[T
 
 def _post_gemini_generate_content(
     api_key: str, model: str, timeout: int, payload: Dict[str, Any], max_tokens: int, allow_json_mode: bool = True,
-    user_id: Optional[int] = None, access_checked: bool = False
+    user_id: Optional[int] = None, access_checked: bool = False, request_id: Optional[str] = None
 ) -> Tuple[str, str]:
     if not access_checked:
         logger.warning("gemini_call_blocked_access_not_checked user_id=%s", user_id)
         return "", "access_not_checked"
-    compact_prompt = "Extract visible text from this screenshot. Return compact JSON only with screen_type, market, visible, takeaway."
+    if os.getenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return "", "vision_disabled"
+    from services.gemini_gateway import generate_content
 
-    def _post(request_model: str, request_payload: Dict[str, Any]) -> requests.Response:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{request_model}:generateContent?key={api_key}"
-        return requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json=request_payload,
-            timeout=timeout,
-        )
-
-    def _build_request(base_payload: Dict[str, Any], json_mode: bool, thinking_off: bool) -> Dict[str, Any]:
-        request_payload = copy.deepcopy(base_payload)
-        generation_config = dict(request_payload.get("generationConfig") or {})
-        generation_config.setdefault("maxOutputTokens", max_tokens)
-        generation_config.setdefault("temperature", 0.1)
-        if json_mode:
-            generation_config["responseMimeType"] = "application/json"
-        else:
-            generation_config.pop("responseMimeType", None)
-        if thinking_off:
-            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
-        else:
-            generation_config.pop("thinkingConfig", None)
-        request_payload["generationConfig"] = generation_config
-        return request_payload
-
-    def _request_part_count(request_payload: Dict[str, Any]) -> int:
-        contents = request_payload.get("contents") if isinstance(request_payload.get("contents"), list) else []
-        return sum(len(content.get("parts") or []) for content in contents if isinstance(content, dict))
-
-    def _parse_response(response: requests.Response, request_model: str, json_mode: bool, thinking_off: bool) -> Tuple[str, str, bool]:
-        if response.status_code != 200:
-            logger.info(
-                "live_image_gemini_non_200 status=%s body_preview=%s",
-                response.status_code,
-                _safe_gemini_preview(response.text, 300, api_key),
-            )
-            return "", "", False
-        try:
-            data = response.json()
-        except Exception:
-            logger.info(
-                "live_image_gemini_result model=%s json_mode=%s thinking_off=%s candidates=%s finish=%s parts=%s text_len=%s block_reason=%s",
-                request_model,
-                json_mode,
-                thinking_off,
-                0,
-                "",
-                0,
-                0,
-                "json_parse_error",
-            )
-            if LIVE_IMAGE_DEBUG_LOGS:
-                logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(response.text, 300, api_key))
-            return "", "", True
-
-        candidates = data.get("candidates", []) if isinstance(data, dict) else []
-        prompt_feedback = data.get("promptFeedback", {}) if isinstance(data, dict) else {}
-        candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else (data if isinstance(data, dict) else {})
-        finish_reason = str(candidate.get("finishReason", ""))
-        block_reason = ""
-        if isinstance(prompt_feedback, dict):
-            block_reason = str(prompt_feedback.get("blockReason") or "")
-        safety_meta = candidate.get("safetyRatings") or (prompt_feedback.get("safetyRatings") if isinstance(prompt_feedback, dict) else None)
-        if safety_meta and not block_reason:
-            block_reason = "safety_metadata_present"
-        candidate_keys = sorted(candidate.keys()) if isinstance(candidate, dict) else []
-        content = candidate.get("content") if isinstance(candidate, dict) else {}
-        content_keys = sorted(content.keys()) if isinstance(content, dict) else []
-        parts = content.get("parts") if isinstance(content, dict) else []
-        parts_count = len(parts) if isinstance(parts, list) else 0
-        text = _extract_text_from_gemini_candidate(candidate) if candidate else ""
-        logger.info("live_image_gemini_candidate_metadata model=%s candidate_keys=%s content_keys=%s", request_model, candidate_keys, content_keys)
-        logger.info(
-            "live_image_gemini_result model=%s json_mode=%s thinking_off=%s candidates=%s finish=%s parts=%s text_len=%s block_reason=%s",
-            request_model,
-            json_mode,
-            thinking_off,
-            len(candidates) if isinstance(candidates, list) else 0,
-            finish_reason,
-            parts_count,
-            len(text),
-            block_reason,
-        )
-        if candidate and not text:
-            logger.info("live_image_gemini_empty_text finish=%s content_keys=%s", finish_reason, content_keys)
-        if LIVE_IMAGE_DEBUG_LOGS and text:
-            logger.info("live_image_gemini_text_preview=%s", _safe_gemini_preview(text, 300, api_key))
-        return text, finish_reason, True
-
-    best_text = ""
-    best_finish = ""
-    models = _get_live_image_vision_models(model)
-    for index, request_model in enumerate(models):
-        thinking_off = _is_gemini_25_model(request_model)
-        if thinking_off:
-            logger.info("live_image_gemini_thinking_disabled enabled=%s", True)
-        request_payload = _build_request(payload, allow_json_mode, thinking_off)
-        logger.info(
-            "live_image_gemini_request model=%s parts=%s max_tokens=%s json_mode=%s thinking_off=%s",
-            request_model,
-            _request_part_count(request_payload),
-            max_tokens,
-            allow_json_mode,
-            thinking_off,
-        )
-        logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
-        response = _post(request_model, request_payload)
-        logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
-        logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
-        if thinking_off and _is_unsupported_thinking_config_response(response.status_code, response.text):
-            logger.info("live_image_gemini_retry_without_thinking_config")
-            thinking_off = False
-            request_payload = _build_request(payload, allow_json_mode, thinking_off)
-            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
-            response = _post(request_model, request_payload)
-            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
-            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
-
-        if response.status_code != 200 and allow_json_mode:
-            logger.info("live_image_gemini_json_mode_fallback status=%s", response.status_code)
-            no_json_payload = _build_request(payload, False, thinking_off)
-            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
-            response = _post(request_model, no_json_payload)
-            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
-            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
-
-        text, finish_reason, parsed = _parse_response(response, request_model, allow_json_mode, thinking_off)
-        if parsed:
-            best_text, best_finish = text, finish_reason
-
-        if allow_json_mode and _is_retryable_empty_max_tokens(finish_reason, text):
-            logger.info("live_image_gemini_retry_without_json_mode reason=max_tokens_empty")
-            no_json_base = _replace_first_prompt_text(payload, compact_prompt)
-            no_json_payload = _build_request(no_json_base, False, thinking_off)
-            logger.info("gemini_call_started user_id=%s model=%s", user_id, request_model)
-            response = _post(request_model, no_json_payload)
-            logger.info("gemini_call_completed user_id=%s model=%s status=%s", user_id, request_model, response.status_code)
-            logger.info("live_image_gemini_status status=%s response_len=%s", response.status_code, len(response.text or ""))
-            text, finish_reason, parsed = _parse_response(response, request_model, False, thinking_off)
-            if parsed:
-                best_text, best_finish = text, finish_reason
-
-        if _is_retryable_empty_max_tokens(best_finish, best_text) and index + 1 < len(models):
-            logger.info(
-                "live_image_gemini_model_retry from_model=%s to_model=%s reason=max_tokens_empty",
-                request_model,
-                models[index + 1],
-            )
-            continue
-        return best_text, best_finish
-
-    return best_text, best_finish
+    request_payload = copy.deepcopy(payload)
+    generation_config = dict(request_payload.get("generationConfig") or {})
+    generation_config.setdefault("maxOutputTokens", max_tokens)
+    generation_config.setdefault("temperature", 0.1)
+    if allow_json_mode:
+        generation_config["responseMimeType"] = "application/json"
+    else:
+        generation_config.pop("responseMimeType", None)
+    if _is_gemini_25_model(model):
+        generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+    request_payload["generationConfig"] = generation_config
+    result = generate_content(
+        feature="live_analyst_vision",
+        origin="live_analyst_image_service",
+        is_background=False,
+        request_id=request_id,
+        model=model,
+        payload=request_payload,
+        max_attempts=int(os.getenv("LIVE_ANALYST_VISION_MAX_ATTEMPTS_PER_REQUEST", "2")),
+        timeout=timeout,
+        user_id=user_id,
+        fallback_models=[m for m in _get_live_image_vision_models(model) if m != model],
+        allow_fallback_model=os.getenv("GEMINI_ALLOW_FALLBACK_MODEL", "false").lower() in {"1","true","yes","on"},
+    )
+    data = result.get("data") if isinstance(result, dict) else {}
+    candidate = ((data or {}).get("candidates") or [{}])[0] if isinstance(data, dict) else {}
+    finish_reason = str(candidate.get("finishReason", "")) if isinstance(candidate, dict) else ""
+    return (result.get("text") or "", finish_reason or result.get("reason") or "")
 
 
 def _call_gemini_vision_parts(api_key: str, model: str, timeout: int, parts: List[Dict[str, Any]], max_tokens: int, user_id: Optional[int] = None, access_checked: bool = False) -> Tuple[str, str]:

@@ -26,14 +26,16 @@ class _FakeResponse:
         }
 
 
-def test_call_model_once_joins_multiple_gemini_text_parts(monkeypatch):
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
-    monkeypatch.setattr(llm.requests, "post", lambda *args, **kwargs: _FakeResponse())
+def test_llm_service_routes_text_through_gateway(monkeypatch):
+    calls = []
+    monkeypatch.setattr("services.gemini_gateway.generate_content", lambda **kw: calls.append(kw) or {"text": "Hello\n world"})
 
-    text, status = llm._call_model_once("prompt", "gemini-test", 123)
+    assert llm.generate_text("prompt", feature="signal_generation", request_id="req-1") == "Hello\n world"
 
-    assert status == 200
-    assert text == "Hello\n world"
+    assert calls[0]["feature"] == "signal_generation"
+    assert calls[0]["origin"] == "llm_service"
+    assert calls[0]["request_id"] == "req-1"
+    assert calls[0]["payload"]["contents"][0]["parts"][0]["text"] == "prompt"
 
 
 def test_generate_live_analyst_text_uses_default_env_max_tokens(monkeypatch):
@@ -92,106 +94,41 @@ def test_fallback_list_parses_comma_separated_env():
     ]
 
 
-def test_404_on_live_analyst_primary_falls_back_to_flash(monkeypatch):
-    models = []
 
-    def fake_call_model_once(prompt, model, max_tokens):
-        models.append(model)
-        if model == "gemini-3.5-flash":
-            return "", 404
-        return "fallback ok", 200
+def _gateway_sequence(monkeypatch, sequence):
+    calls = []
+    seq = list(sequence)
+    def fake_gateway(**kwargs):
+        calls.append(kwargs)
+        return seq.pop(0)
+    monkeypatch.setattr("services.gemini_gateway.generate_content", fake_gateway)
+    return calls
 
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+
+def test_live_analyst_uses_gateway_fallback_models(monkeypatch):
     monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
     monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash", "gemini-2.5-flash-lite"])
-    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
-    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+    calls = _gateway_sequence(monkeypatch, [{"text": "fallback ok"}])
 
     assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
-    assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
+    assert calls[0]["model"] == "gemini-3.5-flash"
+    assert calls[0]["fallback_models"] == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    assert calls[0]["max_attempts"] == 2
 
 
-def test_live_analyst_primary_timeout_falls_back_after_one_attempt_by_default(monkeypatch):
-    models = []
-
-    def fake_call_model_once(prompt, model, max_tokens):
-        models.append(model)
-        if model == "gemini-3.5-flash":
-            return "", 0
-        return "fallback ok", 200
-
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
-    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
-    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 1)
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [])
-    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
-    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
-    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
-
-    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
-    assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
+def test_live_analyst_gateway_receives_timeout_retry_disabled_by_default(monkeypatch):
+    calls = _gateway_sequence(monkeypatch, [{"text": ""}])
+    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == ""
+    assert calls[0]["feature"] == "live_analyst"
+    assert calls[0]["is_background"] is False
 
 
-def test_live_analyst_primary_503_falls_back_after_one_attempt_by_default(monkeypatch):
-    models = []
-
-    def fake_call_model_once(prompt, model, max_tokens):
-        models.append(model)
-        if model == "gemini-3.5-flash":
-            return "", 503
-        return "fallback ok", 200
-
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
-    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
-    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 1)
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [])
-    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
-    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
-    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
-
-    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
-    assert models == ["gemini-3.5-flash", "gemini-2.5-flash"]
-
-
-def test_non_live_generate_text_still_uses_normal_retry_behavior(monkeypatch):
-    models = []
-
-    def fake_call_model_once(prompt, model, max_tokens):
-        models.append(model)
-        if len(models) < 3:
-            return "", 503
-        return "ok", 200
-
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
+def test_non_live_generate_text_uses_gateway_single_attempt_default(monkeypatch):
     monkeypatch.setattr(llm, "DEFAULT_GEMINI_MODEL", "gemini-default")
     monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-fallback"])
-    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
-    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
-    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
+    calls = _gateway_sequence(monkeypatch, [{"text": "ok"}])
 
     assert llm.generate_text("prompt", budget_checked=True) == "ok"
-    assert models == ["gemini-default", "gemini-default", "gemini-default"]
-
-
-def test_live_analyst_primary_max_attempts_two_retries_primary_before_fallback(monkeypatch):
-    models = []
-
-    def fake_call_model_once(prompt, model, max_tokens):
-        models.append(model)
-        if model == "gemini-3.5-flash":
-            return "", 503
-        return "fallback ok", 200
-
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "key")
-    monkeypatch.setattr(llm, "LIVE_ANALYST_GEMINI_MODEL", "gemini-3.5-flash")
-    monkeypatch.setattr(llm, "GEMINI_FALLBACK_MODELS", ["gemini-2.5-flash"])
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(llm, "LIVE_ANALYST_PRIMARY_RETRY_DELAYS", [0])
-    monkeypatch.setattr(llm, "RETRY_DELAYS", [0, 0, 0])
-    monkeypatch.setattr(llm, "_call_model_once", fake_call_model_once)
-    monkeypatch.setattr(llm, "record_gemini_call", lambda **kwargs: None)
-
-    assert llm.generate_live_analyst_text("prompt", budget_checked=True) == "fallback ok"
-    assert models == ["gemini-3.5-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+    assert calls[0]["model"] == "gemini-default"
+    assert calls[0]["max_attempts"] == 1
+    assert calls[0]["fallback_models"] == ["gemini-fallback"]

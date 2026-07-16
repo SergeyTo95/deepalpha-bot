@@ -384,7 +384,7 @@ async def channel_worker():
 # SIGNAL CACHE
 # ═══════════════════════════════════════════
 
-async def update_signal_cache():
+async def update_signal_cache(cycle_id=None):
     print("🔄 Starting signal cache update...")
     from agents.opportunity_agent import OpportunityAgent
 
@@ -392,7 +392,8 @@ async def update_signal_cache():
         try:
             print(f"🔄 Updating cache for {category}...")
             agent = OpportunityAgent()
-            result = agent.run(lang="ru", limit=2, category_filter=category)
+            request_id = __import__("uuid").uuid4().hex
+            result = agent.run(lang="ru", limit=2, category_filter=category, is_background=True, cycle_id=cycle_id, job_id=f"signal:{category}", request_id=request_id)
 
             if result and result.get("question") != "No strong opportunity found":
                 import time
@@ -413,13 +414,29 @@ async def update_signal_cache():
 
 
 async def cache_worker():
-    await asyncio.sleep(21600)
-    await update_signal_cache()
+    import os, uuid
+    if os.getenv("SIGNAL_CACHE_WORKER_ENABLED", "false").lower() not in {"1","true","yes","on"}:
+        print("SIGNAL_CACHE_WORKER disabled by env")
+        return
+    await asyncio.sleep(int(os.getenv("SIGNAL_CACHE_INITIAL_DELAY_SECONDS", "300")))
+    from db.database import acquire_distributed_lock, release_distributed_lock
+    owner = os.getenv("RAILWAY_REPLICA_ID") or os.getenv("HOSTNAME") or str(uuid.uuid4())
+    cycle_id = str(uuid.uuid4())
+    if acquire_distributed_lock("signal_cache_worker", owner, 3600):
+        try:
+            await update_signal_cache(cycle_id=cycle_id)
+        finally:
+            release_distributed_lock("signal_cache_worker", owner)
 
     while True:
         try:
             await asyncio.sleep(21600)
-            await update_signal_cache()
+            cycle_id = str(uuid.uuid4())
+            if acquire_distributed_lock("signal_cache_worker", owner, 3600):
+                try:
+                    await update_signal_cache(cycle_id=cycle_id)
+                finally:
+                    release_distributed_lock("signal_cache_worker", owner)
         except Exception as e:
             print(f"CACHE WORKER ERROR: {e}")
             await asyncio.sleep(60)
@@ -798,19 +815,30 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
 
 async def watchlist_worker():
     """Проверяет watchlist каждые N часов."""
+    import os, uuid
+    if os.getenv("WATCHLIST_WORKER_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+        print("WATCHLIST_WORKER disabled by env")
+        return
+    from db.database import acquire_distributed_lock, release_distributed_lock
+    owner = os.getenv("RAILWAY_REPLICA_ID") or os.getenv("HOSTNAME") or str(uuid.uuid4())
+
+    async def _run_locked_once():
+        if acquire_distributed_lock("watchlist_worker", owner, 3600):
+            try:
+                await check_watchlist()
+            finally:
+                release_distributed_lock("watchlist_worker", owner)
+
     await asyncio.sleep(900)
-    watchlist_enabled = get_setting("watchlist_enabled", "on")
-    if watchlist_enabled == "on":
-        await check_watchlist()
+    if get_setting("watchlist_enabled", "on") == "on":
+        await _run_locked_once()
 
     while True:
         try:
             interval_hours = int(get_setting("watchlist_check_interval_hours", "3"))
             await asyncio.sleep(interval_hours * 3600)
-
-            watchlist_enabled = get_setting("watchlist_enabled", "on")
-            if watchlist_enabled == "on":
-                await check_watchlist()
+            if get_setting("watchlist_enabled", "on") == "on":
+                await _run_locked_once()
             else:
                 print("⭐ Watchlist disabled in settings")
         except Exception as e:

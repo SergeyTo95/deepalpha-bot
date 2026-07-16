@@ -88,12 +88,8 @@ def test_news_agent_disabled_no_http(monkeypatch):
 
 
 def test_usage_recording_increments(monkeypatch):
-    _allow_env(monkeypatch)
     counts = {"total": 0}
-    monkeypatch.setattr("db.database.count_gemini_usage_today", lambda *a, **k: counts["total"])
     monkeypatch.setattr("db.database.record_gemini_usage", lambda *a, **k: counts.__setitem__("total", counts["total"] + 1) or counts["total"])
-    import services.llm_service as llm
-    monkeypatch.setattr(llm, "GEMINI_API_KEY", "k")
-    monkeypatch.setattr(llm, "_call_model_once", lambda *a, **k: ("ok", 200))
-    assert llm.generate_news_text("p", feature="news_agent", is_background=True) == "ok"
+    from services.gemini_budget_guard import record_gemini_call
+    assert record_gemini_call("news_agent", is_background=True) == 1
     assert counts["total"] == 1

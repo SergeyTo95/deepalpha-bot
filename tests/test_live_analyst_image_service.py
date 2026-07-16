@@ -235,68 +235,62 @@ def test_retryable_empty_max_tokens_response_detection():
 
 def test_json_mode_fallback_selected_for_max_tokens_empty(monkeypatch):
     calls = []
-    responses = [
-        _GeminiResponse(200, _max_tokens_candidate("")),
-        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"polymarket","market":"M","visible":"Tariff 51%","takeaway":"T"}'}]}}]}),
-    ]
-
-    def fake_post(url, headers, json, timeout):
-        calls.append(json)
-        return responses.pop(0)
-
-    monkeypatch.setattr(svc.requests, "post", fake_post)
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setattr(
+        "services.gemini_gateway.generate_content",
+        lambda **kw: calls.append(kw) or {
+            "text": '{"screen_type":"polymarket","market":"M","visible":"Tariff 51%","takeaway":"T"}',
+            "data": {"candidates": [{"finishReason": "STOP"}]},
+        },
+    )
 
     text, finish = svc._call_gemini_vision("key", "gemini-2.0-flash", 10, "long prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "Tariff 51%" in text
-    assert calls[0]["generationConfig"].get("responseMimeType") == "application/json"
-    assert "responseMimeType" not in calls[1]["generationConfig"]
-    assert calls[1]["contents"][0]["parts"][0]["text"].startswith("Extract visible text")
+    assert calls[0]["feature"] == "live_analyst_vision"
+    assert calls[0]["payload"]["generationConfig"].get("responseMimeType") == "application/json"
+    assert calls[0]["payload"]["contents"][0]["parts"][1]["inline_data"]["mime_type"] == "image/png"
 
 
 def test_thinking_config_retry_path_unsupported(monkeypatch):
     calls = []
-    responses = [
-        _GeminiResponse(400, {"error": "unsupported thinkingConfig"}, "unsupported thinkingConfig"),
-        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"generic","summary":"ok"}'}]}}]}),
-    ]
-
-    def fake_post(url, headers, json, timeout):
-        calls.append(json)
-        return responses.pop(0)
-
-    monkeypatch.setattr(svc.requests, "post", fake_post)
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setattr(
+        "services.gemini_gateway.generate_content",
+        lambda **kw: calls.append(kw) or {
+            "text": '{"screen_type":"generic","summary":"ok"}',
+            "data": {"candidates": [{"finishReason": "STOP"}]},
+        },
+    )
 
     text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "generic" in text
-    assert "thinkingConfig" in calls[0]["generationConfig"]
-    assert "thinkingConfig" not in calls[1]["generationConfig"]
+    assert "thinkingConfig" in calls[0]["payload"]["generationConfig"]
+    assert calls[0]["model"] == "gemini-2.5-flash"
 
 
 def test_model_fallback_retries_after_max_tokens_empty(monkeypatch):
-    urls = []
-    responses = [
-        _GeminiResponse(200, _max_tokens_candidate("")),
-        _GeminiResponse(200, _max_tokens_candidate("")),
-        _GeminiResponse(200, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"screen_type":"polymarket","market":"M","visible":"Health 54%","takeaway":"T"}'}]}}]}),
-    ]
-
-    def fake_post(url, headers, json, timeout):
-        urls.append(url)
-        return responses.pop(0)
-
-    monkeypatch.setattr(svc.requests, "post", fake_post)
+    calls = []
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_ALLOW_FALLBACK_MODEL", "true")
+    monkeypatch.setattr(
+        "services.gemini_gateway.generate_content",
+        lambda **kw: calls.append(kw) or {
+            "text": '{"screen_type":"polymarket","market":"M","visible":"Health 54%","takeaway":"T"}',
+            "data": {"candidates": [{"finishReason": "STOP"}]},
+        },
+    )
 
     text, finish = svc._call_gemini_vision("key", "gemini-2.5-flash", 10, "prompt", b"abc", "image/png", 1024, user_id=1, access_checked=True)
 
     assert finish == "STOP"
     assert "Health 54%" in text
-    assert "models/gemini-2.5-flash:generateContent" in urls[0]
-    assert "models/gemini-2.5-flash-lite:generateContent" in urls[-1]
-
+    assert calls[0]["model"] == "gemini-2.5-flash"
+    assert "gemini-2.5-flash-lite" in calls[0]["fallback_models"]
+    assert calls[0]["allow_fallback_model"] is True
 
 def test_live_image_metadata_for_polymarket_payload():
     payload = {

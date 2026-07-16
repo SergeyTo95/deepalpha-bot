@@ -14,6 +14,10 @@ class DecisionAgent:
         news_data: Dict[str, Any],
         lang: str = "en",
         user_context: str = "",
+        is_background: bool = False,
+        cycle_id: str = None,
+        job_id: str = None,
+        request_id: str = None,
     ) -> Dict[str, Any]:
         print(f"DecisionAgent.run: called, lang={lang}")
         question = market_data.get("question", "Unknown market")
@@ -65,7 +69,7 @@ class DecisionAgent:
             )
 
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
-        raw_response = generate_decision_text(prompt)
+        raw_response = generate_decision_text(prompt, feature="decision_agent" if is_background else "signal_generation", is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
         print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
 
         if raw_response:
@@ -90,8 +94,16 @@ class DecisionAgent:
             )
 
             if not wrapped.get("main_scenario") or not wrapped.get("conclusion"):
-                from agents.summary_agent import SummaryAgent
-                summary = SummaryAgent().run(
+                import os
+                if is_background and os.getenv("SIGNAL_CACHE_SUMMARY_GEMINI_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+                    summary = {
+                        "main_scenario": wrapped.get("main_scenario") or wrapped.get("reasoning", ""),
+                        "alt_scenario": wrapped.get("alt_scenario") or "",
+                        "conclusion": wrapped.get("conclusion") or wrapped.get("reasoning", ""),
+                    }
+                else:
+                    from agents.summary_agent import SummaryAgent
+                    summary = SummaryAgent().run(
                     question=question,
                     category=category,
                     market_probability=str(market_probability),
@@ -99,6 +111,10 @@ class DecisionAgent:
                     confidence=wrapped.get("confidence", ""),
                     reasoning=wrapped.get("reasoning", ""),
                     lang=lang,
+                    is_background=is_background,
+                    cycle_id=cycle_id,
+                    job_id=job_id,
+                    request_id=request_id,
                 )
                 wrapped["main_scenario"] = summary.get("main_scenario") or wrapped.get("main_scenario", "")
                 wrapped["alt_scenario"] = summary.get("alt_scenario") or wrapped.get("alt_scenario", "")
