@@ -1,4 +1,5 @@
 import sqlite3, uuid
+import pytest
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -728,3 +729,44 @@ def test_two_returning_heartbeats_prepare_resume_once_without_ticks(monkeypatch)
     threads=[threading.Thread(target=ping,args=(uid,)) for uid in (71,72)]; [t.start() for t in threads]; [t.join() for t in threads]
     assert not errors and len(results)==2 and sum(r['rescheduled_squad_count'] for r in results)==1
     c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=903').fetchone()[0]>=now+timedelta(minutes=5); assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0; c.close(); keeper.close()
+
+
+def test_unfactioned_presence_never_prepares_resume_or_loads_squad_config(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); now=datetime.utcnow(); stale=now-timedelta(hours=8)
+    c=connect(); polywar._insert_player_if_missing(c,801,sid); c.execute('UPDATE polywar_players SET faction_id=NULL,last_active_at=? WHERE user_id=801 AND season_id=?',(stale,sid)); c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=1 WHERE season_id=?',(sid,)); _insert_squad(c,sid,id=9801,fid=1,status='marching',next_at=stale); c.commit(); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now)
+    monkeypatch.setattr(squads,'ensure_squad_season_config',lambda *a,**k:(_ for _ in ()).throw(AssertionError('spectator config hot path')))
+    monkeypatch.setattr(squads,'prepare_squad_simulation_resume_in_transaction',lambda *a,**k:(_ for _ in ()).throw(AssertionError('spectator resume')))
+    first=polywar.record_presence(801); second=polywar.record_presence(801)
+    assert first['ok'] and first['presence_updated'] is True and second['presence_updated'] is False
+    assert all(not r['simulation_resume_prepared'] and r['rescheduled_squad_count']==0 for r in (first,second))
+    c=connect(); player=c.execute('SELECT faction_id,last_active_at FROM polywar_players WHERE user_id=801 AND season_id=?',(sid,)).fetchone(); assert player['faction_id'] is None and player['last_active_at']==now
+    assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=9801').fetchone()[0]==stale; assert c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0; c.close(); keeper.close()
+
+
+def test_first_faction_join_atomically_prepares_dormant_resume(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); now=datetime.utcnow(); stale=now-timedelta(hours=8)
+    c=connect(); polywar._insert_player_if_missing(c,802,sid); c.execute('UPDATE polywar_players SET faction_id=NULL,last_active_at=? WHERE user_id=802 AND season_id=?',(stale,sid)); c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=1,active_player_window_minutes=5,move_interval_minutes=5,max_active_per_faction=0 WHERE season_id=?',(sid,)); _insert_squad(c,sid,id=9802,fid=1,status='attacking_cell',x=10,y=10,next_at=stale); c.execute('UPDATE polywar_faction_squads SET hp=61,attack_progress=30,attack_target_x=11,attack_target_y=10,target_x=15,target_y=10 WHERE id=9802'); c.commit(); before=dict(c.execute('SELECT x,y,hp,status,attack_progress,attack_target_x,target_x FROM polywar_faction_squads WHERE id=9802').fetchone()); c.close()
+    monkeypatch.setattr(polywar,'_now',lambda:now); result=polywar.join_faction(802,1); assert result['selected_faction']['id']==1
+    c=connect(); player=c.execute('SELECT faction_id,last_active_at FROM polywar_players WHERE user_id=802 AND season_id=?',(sid,)).fetchone(); after=dict(c.execute('SELECT x,y,hp,status,attack_progress,attack_target_x,target_x,next_move_at FROM polywar_faction_squads WHERE id=9802').fetchone())
+    assert player['faction_id']==1 and player['last_active_at']==now and {k:after[k] for k in before}==before and after['next_move_at']>=now+timedelta(minutes=5)
+    assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id=? AND user_id=802 AND event_type='join'",(sid,)).fetchone()[0]==1 and c.execute('SELECT COUNT(*) FROM polywar_squad_ticks').fetchone()[0]==0
+    polywar.begin_serialized_transaction(c); caught=squads.ensure_squads_caught_up_in_transaction(c,sid,now); c.commit(); assert caught['processed_count']==0 and caught['reason']=='nothing_due'; c.close(); keeper.close()
+
+
+def test_failed_or_duplicate_join_does_not_prepare_or_reschedule(monkeypatch):
+    connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); now=datetime.utcnow(); stale=now-timedelta(hours=8)
+    c=connect(); polywar._insert_player_if_missing(c,803,sid); c.execute('UPDATE polywar_players SET last_active_at=? WHERE user_id=803 AND season_id=?',(stale,sid)); _insert_squad(c,sid,id=9803,fid=1,status='marching',next_at=stale); c.commit(); c.close(); monkeypatch.setattr(polywar,'_now',lambda:now)
+    with pytest.raises(ValueError,match='unknown_faction'): polywar.join_faction(803,999999)
+    c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=9803').fetchone()[0]==stale and c.execute('SELECT faction_id FROM polywar_players WHERE user_id=803 AND season_id=?',(sid,)).fetchone()[0] is None; c.execute('UPDATE polywar_players SET faction_id=1 WHERE user_id=803 AND season_id=?',(sid,)); c.commit(); c.close()
+    monkeypatch.setattr(squads,'prepare_squad_simulation_resume_in_transaction',lambda *a,**k:(_ for _ in ()).throw(AssertionError('duplicate resume')))
+    with pytest.raises(ValueError,match='faction_already_selected'): polywar.join_faction(803,1)
+    c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=9803').fetchone()[0]==stale and c.execute("SELECT COUNT(*) FROM polywar_events WHERE user_id=803 AND event_type='join'").fetchone()[0]==0; c.close(); keeper.close()
+
+
+def test_join_does_not_reset_active_world_or_pause_disabled(monkeypatch):
+    for pause,active in ((1,True),(0,False)):
+        connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); now=datetime.utcnow(); stale=now-timedelta(hours=8)
+        c=connect(); polywar._insert_player_if_missing(c,810+pause,sid); polywar._insert_player_if_missing(c,820+pause,sid); c.execute('UPDATE polywar_players SET faction_id=NULL,last_active_at=? WHERE user_id=? AND season_id=?',(stale,810+pause,sid)); c.execute('UPDATE polywar_players SET faction_id=?,last_active_at=? WHERE user_id=? AND season_id=?',(1,now-timedelta(minutes=1) if active else stale,820+pause,sid)); c.execute('UPDATE polywar_squad_season_config SET pause_without_active_players=? WHERE season_id=?',(pause,sid)); _insert_squad(c,sid,id=9900+pause,fid=1,status='marching',next_at=stale); c.commit(); c.close()
+        monkeypatch.setattr(polywar,'_now',lambda:now); polywar.join_faction(810+pause,2)
+        c=connect(); assert c.execute('SELECT next_move_at FROM polywar_faction_squads WHERE id=?',(9900+pause,)).fetchone()[0]==stale; c.close(); keeper.close()

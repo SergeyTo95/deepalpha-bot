@@ -493,8 +493,8 @@ def _energy(player: Dict[str, Any]) -> Dict[str, Any]:
     return {"current_energy": cur, "max_energy": max_energy, "recharge_minutes": recharge, "seconds_until_next_energy": seconds_next, "locked_until": _iso(locked_until), "is_locked": is_locked, "lock_seconds_remaining": max(0, int((locked_until - _now()).total_seconds())) if is_locked and not isinstance(locked_until, str) else (max(0, int((datetime.fromisoformat(locked_until) - _now()).total_seconds())) if is_locked else 0), "lock_reason": "mine_hit" if is_locked else None, "energy_updated_at": updated}
 
 
-def _insert_player_if_missing(conn, user_id: int, season_id: int) -> bool:
-    c = conn.cursor(); now = _now(); maxe = _setting_int("polywar_energy_max", 10, 1, 1000)
+def _insert_player_if_missing(conn, user_id: int, season_id: int, now: Optional[datetime] = None) -> bool:
+    c = conn.cursor(); now = now or _now(); maxe = _setting_int("polywar_energy_max", 10, 1, 1000)
     result = _execute(c, """
     INSERT INTO polywar_players (user_id, season_id, current_energy, max_energy, energy_updated_at, joined_at, last_active_at)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -507,7 +507,8 @@ def touch_player_presence_in_transaction(conn, season_id: int, user_id: int, now
     """Conditionally touch presence, preparing a dormant-world resume first."""
     inserted = _insert_player_if_missing(conn, int(user_id), int(season_id))
     resume = {'was_dormant':False,'rescheduled_count':0,'next_due_at':None}
-    if prepare_resume:
+    player = _fetchone(conn.cursor(), "SELECT faction_id,last_active_at FROM polywar_players WHERE user_id=%s AND season_id=%s", (int(user_id), int(season_id)))
+    if prepare_resume and player and player.get('faction_id') is not None:
         from services import polywar_squad_service as squads
         cfg = squads.ensure_squad_season_config(conn, int(season_id))
         resume = squads.prepare_squad_simulation_resume_in_transaction(conn, int(season_id), now, cfg=cfg)
@@ -599,38 +600,47 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
     try:
         init_polywar_schema(conn); ensure_factions(conn); conn.commit()
         begin_serialized_transaction(conn)
+        now = _now()
         season = ensure_active_season_in_transaction(conn)
         from services import polywar_finalization_service as finalization
-        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]))
+        decision = finalization.maybe_finalize_in_transaction(conn, int(season["id"]), now)
         if decision.get("should_finalize"):
-            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"))
+            finalization.finalize_season_in_transaction(conn, int(season["id"]), decision.get("victory_type", "time"), decision.get("winner_faction_id"), now)
         refreshed = _fetchone(c, "SELECT * FROM polywar_seasons WHERE id=%s", (int(season["id"]),))
         if refreshed and refreshed.get("status") == "completed":
             season = ensure_active_season_in_transaction(conn)
-        assert_gameplay_mutation_allowed(conn, int(season["id"]))
+        assert_gameplay_mutation_allowed(conn, int(season["id"]), now)
         faction_id = int(faction_id)
         faction = _fetchone(c, "SELECT * FROM polywar_factions WHERE id = %s", (faction_id,))
         if not faction:
             raise ValueError("unknown_faction")
         if not int(faction.get("is_playable", 1) or 0) or int(faction.get("is_system", 0) or 0):
             raise ValueError("unknown_faction")
-        _insert_player_if_missing(conn, int(user_id), int(season["id"]))
+        sid = int(season["id"])
+        _insert_player_if_missing(conn, int(user_id), sid, now)
+        player = _fetchone(c, "SELECT * FROM polywar_players WHERE user_id=%s AND season_id=%s" + ("" if _is_sqlite(conn) else " FOR UPDATE"), (int(user_id), sid))
+        if not player or player.get("faction_id") is not None:
+            raise ValueError("faction_already_selected")
+        from services import polywar_squad_service as squads
+        cfg = squads.ensure_squad_season_config(conn, sid)
+        resume = squads.prepare_squad_simulation_resume_in_transaction(conn, sid, now, cfg=cfg)
         _execute(c, """
         UPDATE polywar_players
         SET faction_id = %s, last_active_at = %s
         WHERE user_id = %s AND season_id = %s AND faction_id IS NULL
-        """, (faction_id, _now(), int(user_id), int(season["id"])))
+        """, (faction_id, now, int(user_id), sid))
         if _rowcount(c) != 1:
             raise ValueError("faction_already_selected")
         _execute(c, """
         UPDATE polywar_faction_season_stats
         SET active_members_count = active_members_count + 1, updated_at = %s
         WHERE season_id = %s AND faction_id = %s
-        """, (_now(), int(season["id"]), faction_id))
+        """, (now, sid, faction_id))
         _execute(c, """
         INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
         VALUES (%s, %s, %s, %s, %s, %s)
-        """, (int(season["id"]), int(user_id), faction_id, "join", f"Player joined {faction['name']}", _now()))
+        """, (sid, int(user_id), faction_id, "join", f"Player joined {faction['name']}", now))
+        logger.info('polywar_faction_joined season_id=%s user_id=%s faction_id=%s simulation_resume_prepared=%s rescheduled_count=%s', sid, user_id, faction_id, resume['was_dormant'], resume['rescheduled_count'])
         conn.commit()
     except Exception:
         _safe_rollback(conn)
