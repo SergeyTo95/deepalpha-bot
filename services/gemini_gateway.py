@@ -28,6 +28,7 @@ FEATURE_FLAGS = {
     "summary_agent": "SUMMARY_AGENT_GEMINI_ENABLED",
     "dynamic_driver_agent": "DYNAMIC_DRIVERS_GEMINI_ENABLED",
     "signal_generation": "SIGNAL_GENERATION_GEMINI_ENABLED",
+    "signal_cache": "SIGNAL_CACHE_GEMINI_ENABLED",
     "live_analyst": "GEMINI_ENABLED",
     "live_analyst_vision": "LIVE_ANALYST_VISION_GEMINI_ENABLED",
     "watchlist_ai_summary": "WATCHLIST_AI_SUMMARY_GEMINI_ENABLED",
@@ -94,7 +95,7 @@ def _precheck(feature: str, is_background: bool) -> Optional[str]:
     return None
 
 
-def generate_content(*, feature: str, origin: str = "", is_background: bool = False,
+def call_gemini(*, feature: str, origin: str = "", is_background: bool = False,
                      request_id: Optional[str] = None, cycle_id: Optional[str] = None,
                      job_id: Optional[str] = None, model: str, payload: Dict[str, Any],
                      max_attempts: Optional[int] = None, timeout: Optional[int] = None,
@@ -145,10 +146,10 @@ def generate_content(*, feature: str, origin: str = "", is_background: bool = Fa
                 elif status == 429: reason = "rate_limit"
                 elif status >= 500: reason = "server_error"
                 else: reason = f"http_{status}"
-            except requests.exceptions.Timeout:
+            except TimeoutError:
                 reason = "timeout"; status = 0
             except Exception as exc:
-                reason = "exception"; status = 0
+                reason = "timeout" if "Timeout" in exc.__class__.__name__ else "exception"; status = 0
             try:
                 finalize_gemini_attempt(attempt_id, status="failed", http_status=status, reason=reason, duration_ms=int((time.monotonic()-start)*1000), provider_request_id=provider_id, **_usage(data))
             except Exception:
@@ -157,3 +158,7 @@ def generate_content(*, feature: str, origin: str = "", is_background: bool = Fa
             if not ((reason == "empty_200") or (reason == "timeout" and retry_timeout) or (status == 429 and retry_429) or (status and status >= 500 and retry_5xx)):
                 break
     return last
+
+
+# Backwards-compatible gateway name used by existing call sites/tests.
+generate_content = call_gemini

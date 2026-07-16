@@ -5352,7 +5352,6 @@ def reserve_gemini_attempt(request_id, cycle_id=None, job_id=None, feature='', o
     from services.gemini_gateway import env_int
     conn = get_connection(); cur = conn.cursor()
     try:
-        ensure_gemini_lockdown_tables(cur)
         cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("gemini_attempts",))
         daily_limit = env_int("GEMINI_DAILY_HTTP_ATTEMPT_LIMIT", env_int("GEMINI_DAILY_CALL_LIMIT", 0))
         bg_limit = env_int("GEMINI_BACKGROUND_DAILY_HTTP_ATTEMPT_LIMIT", 0)
@@ -5396,7 +5395,6 @@ def record_gemini_blocked_request(**kwargs):
 def acquire_distributed_lock(lock_name: str, owner: str, ttl_seconds: int = 600) -> bool:
     conn=get_connection(); cur=conn.cursor()
     try:
-        ensure_gemini_lockdown_tables(cur)
         cur.execute("""
         INSERT INTO distributed_locks(lock_name, owner, expires_at) VALUES(%s,%s,NOW() + (%s || ' seconds')::interval)
         ON CONFLICT(lock_name) DO UPDATE SET owner=EXCLUDED.owner, expires_at=EXCLUDED.expires_at, updated_at=NOW()

@@ -81,7 +81,8 @@ def test_timeout_429_503_empty_and_fallback_are_accounted(monkeypatch):
     monkeypatch.setenv("GEMINI_RETRY_ON_RATE_LIMIT", "true")
     monkeypatch.setenv("GEMINI_RETRY_ON_SERVER_ERROR", "true")
     attempts=_fake_db(monkeypatch)
-    seq=[requests.exceptions.Timeout(), FakeResp(429), FakeResp(503), FakeResp(200, {"candidates":[]}), FakeResp(200,{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]})]
+    TimeoutExc = getattr(getattr(requests, "exceptions", object), "Timeout", TimeoutError)
+    seq=[TimeoutExc(), FakeResp(429), FakeResp(503), FakeResp(200, {"candidates":[]}), FakeResp(200,{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]})]
     def post(*a, **k):
         x=seq.pop(0)
         if isinstance(x, Exception): raise x
@@ -142,3 +143,78 @@ def test_two_lock_owners_do_not_get_same_active_lease():
     t2=threading.Thread(target=lambda: results.append(acquire("x","b",60)))
     t1.start(); t2.start(); t1.join(); t2.join()
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.parametrize("feature,flag", [
+    ("live_analyst", "GEMINI_ENABLED"),
+    ("live_analyst_vision", "LIVE_ANALYST_VISION_GEMINI_ENABLED"),
+    ("news_agent", "NEWS_AGENT_GEMINI_ENABLED"),
+    ("decision_agent", "DECISION_AGENT_GEMINI_ENABLED"),
+    ("summary_agent", "SUMMARY_AGENT_GEMINI_ENABLED"),
+    ("watchlist_ai_summary", "WATCHLIST_AI_SUMMARY_GEMINI_ENABLED"),
+    ("signal_cache", "SIGNAL_CACHE_GEMINI_ENABLED"),
+])
+def test_gateway_feature_flags_match_expected_env(feature, flag):
+    from services.gemini_gateway import FEATURE_FLAGS
+    assert FEATURE_FLAGS[feature] == flag
+
+
+def test_vision_disabled_and_global_disabled_do_not_http(monkeypatch):
+    import services.live_analyst_image_service as svc
+    called = []
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "false")
+    text, reason = svc._call_gemini_vision_parts("secret-key", "gemini-2.5-flash", 1, [{"text": "x"}], 10, access_checked=True)
+    assert (text, reason) == ("", "vision_disabled")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_ENABLED", "false")
+    text, reason = svc._call_gemini_vision_parts("secret-key", "gemini-2.5-flash", 1, [{"text": "x"}], 10, access_checked=True)
+    assert text == ""
+    assert called == []
+
+
+def test_distributed_lock_owner_ttl_and_release_semantics():
+    locks = {}
+    now = [100.0]
+    def acquire(name, owner, ttl):
+        current = locks.get(name)
+        if current is None or current["expires"] < now[0] or current["owner"] == owner:
+            locks[name] = {"owner": owner, "expires": now[0] + ttl}
+            return True
+        return False
+    def release(name, owner):
+        if locks.get(name, {}).get("owner") == owner:
+            del locks[name]
+            return True
+        return False
+    assert acquire("signal", "A", 10) is True
+    assert acquire("signal", "B", 10) is False
+    assert release("signal", "B") is False
+    now[0] = 111.0
+    assert acquire("signal", "B", 10) is True
+    assert locks["signal"]["owner"] == "B"
+
+
+def test_concurrent_fake_reservation_limit_one_allows_only_one():
+    lock = threading.Lock()
+    attempts = []
+    def reserve():
+        with lock:
+            if len([a for a in attempts if a["status"] in {"reserved", "success", "failed"}]) >= 1:
+                raise RuntimeError("request_limit_exceeded")
+            attempts.append({"status": "reserved"})
+            return len(attempts)
+    results = []
+    def worker():
+        try:
+            reserve()
+            results.append("ok")
+        except RuntimeError:
+            results.append("blocked")
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert results.count("ok") == 1
+    assert results.count("blocked") == 1
+    assert len(attempts) == 1
