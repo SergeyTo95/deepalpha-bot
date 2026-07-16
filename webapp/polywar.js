@@ -310,8 +310,38 @@ class PolyWarMap {
   zoom(f) { this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, this.cell * f)); if (this.cell >= TACTICAL_MIN_CELL) this.ensureChunks(); this.ensureSectors(); this.updatePanel(); this.requestDraw(); }
   zoomOutOrOpenWorld() { const nextCell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, this.cell * 0.8)); if (nextCell >= TACTICAL_MIN_CELL) return this.zoom(0.8); this.openWorldView({ source: "zoom-out" }); this.updatePanel(); this.requestDraw(); }
   clamp() { this.cx = Math.max(0, Math.min(this.state.map.width - 1, this.cx)); this.cy = Math.max(0, Math.min(this.state.map.height - 1, this.cy)); }
-  centerOnBase(zoom = POLYWAR_VISUALS.baseZoom) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; this.cx = b.x; this.cy = b.y - 3; this.cell = Math.min(POLYWAR_VISUALS.maxCell, zoom); this.clamp(); this.ensureChunks(); this.ensureSectors(); this.refreshSquads(true); this.requestDraw(); this.drawMinimap(); }
-  jumpToWorldPosition(x, y, zoom = 12, options = {}) { x = Math.max(0, Math.min(this.state.map.width - 1, Math.floor(Number(x) || 0))); y = Math.max(0, Math.min(this.state.map.height - 1, Math.floor(Number(y) || 0))); this.cx = x; this.cy = y; this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, Number(zoom) || 12)); this.clamp(); if (options.select !== false) this.selected = { x, y }; this.ensureSectors(); this.refreshSquads(true); if (this.cell >= TACTICAL_MIN_CELL) { this.ensureChunks(`${Math.floor(x / this.state.map.chunk_size)},${Math.floor(y / this.state.map.chunk_size)}`); this.ensureChunks(); } this.updatePanel(); this.requestDraw(); this.drawMinimap(); }
+  centerOnBase(zoom = POLYWAR_VISUALS.baseZoom) { const b = baseFor(currentState?.selected_faction?.id); if (!b) return; return this.jumpToWorldPosition(b.x, b.y - 3, zoom, { select: true }); }
+  async jumpToWorldPosition(x, y, zoom = 12, options = {}) {
+    const seq = ++this.loadSeq;
+    x = Math.max(0, Math.min(this.state.map.width - 1, Math.floor(Number(x) || 0)));
+    y = Math.max(0, Math.min(this.state.map.height - 1, Math.floor(Number(y) || 0)));
+    const targetX = x, targetY = y, chunkSize = this.state.map.chunk_size;
+    const centerChunkKey = `${Math.floor(targetX / chunkSize)},${Math.floor(targetY / chunkSize)}`;
+    this.cx = targetX; this.cy = targetY;
+    this.cell = Math.max(POLYWAR_VISUALS.minCell, Math.min(POLYWAR_VISUALS.maxCell, Number(zoom) || 12));
+    this.clamp();
+    if (options.select !== false) this.selected = { x: targetX, y: targetY };
+    this.status("Loading map…");
+    this.updatePanel();
+    this.requestDraw();
+    this.drawMinimap();
+    if (this.cell >= TACTICAL_MIN_CELL) {
+      await this.ensureChunks(centerChunkKey, { generation: seq, forceRefresh: false, includeVisible: false });
+      if (this.destroyed || seq !== this.loadSeq) return { ok: false, stale: true };
+      this.updatePanel();
+      this.requestDraw();
+      this.drawMinimap();
+      await Promise.allSettled([this.ensureChunks(null, { generation: seq }), this.ensureSectors(), this.refreshSquads(true)]);
+    } else {
+      await Promise.allSettled([this.ensureSectors(), this.refreshSquads(true)]);
+    }
+    if (this.destroyed || seq !== this.loadSeq) return { ok: false, stale: true };
+    this.updatePanel();
+    this.requestDraw();
+    this.drawMinimap();
+    this.updateChunkStatus({ generation: seq });
+    return { ok: true };
+  }
   screenToCell(px, py) { return { x: Math.floor(this.cx + (px - this.w / 2) / this.cell), y: Math.floor(this.cy + (py - this.h / 2) / this.cell) }; }
   cellToScreen(x, y) { return { x: this.w / 2 + (x - this.cx) * this.cell, y: this.h / 2 + (y - this.cy) * this.cell }; }
   rules() { return this.state.rules || {}; }
@@ -327,32 +357,39 @@ class PolyWarMap {
     for (let cy = Math.floor(min.y / cs); cy <= Math.floor(max.y / cs); cy++) for (let cx = Math.floor(min.x / cs); cx <= Math.floor(max.x / cs); cx++) if (cx >= 0 && cy >= 0 && cx * cs < this.state.map.width && cy * cs < this.state.map.height) out.push([cx, cy]);
     return out;
   }
-  async ensureChunks(forceKey) {
-    if (this.destroyed) return;
+  visibleFailedChunkKeys() { const visible = new Set(this.visibleChunks().map(([x,y]) => `${x},${y}`)); return [...this.failedChunks].filter(k => visible.has(k)); }
+  async ensureChunks(forceKey = null, options = {}) {
+    if (this.destroyed) return { ok: false, destroyed: true };
+    if (forceKey && typeof forceKey === "object" && !Array.isArray(forceKey)) { options = forceKey; forceKey = null; }
+    const isCurrentGeneration = () => options.generation == null || options.generation === this.loadSeq;
     const visible = this.visibleChunks();
-    if (!forceKey && this.cell < 6) { this.ensureSectors(); return; }
-    const retryKeys = !forceKey ? [...this.failedChunks].map(k => k.split(",").map(Number)) : [];
-    const wanted = forceKey ? [[...forceKey.split(",").map(Number), true]] : visible.concat(retryKeys).map(([x,y]) => [x,y,false]);
+    const includeVisible = options.includeVisible !== false;
+    const forceRefresh = options.forceRefresh ?? !!forceKey;
+    if (!forceKey && includeVisible && this.cell < 6) { this.ensureSectors(); return { ok: true, skipped: true }; }
+    const explicitKeys = options.keys ? options.keys.map(([x,y]) => [Number(x), Number(y), true]) : (forceKey ? [[...String(forceKey).split(",").map(Number), true]] : []);
+    const retryKeys = (!forceKey && includeVisible ? this.visibleFailedChunkKeys().map(k => k.split(",").map(Number)) : []).map(([x,y]) => [x,y,false]);
+    const visibleKeys = includeVisible ? visible.map(([x,y]) => [x,y,false]) : [];
+    const wanted = explicitKeys.concat(visibleKeys, retryKeys);
     const missing = [];
     for (const [x, y, forced] of wanted) {
       const key = `${x},${y}`;
-      if (forced) this.cache.delete(key);
-      if (!this.cache.has(key) && !this.loading.has(key)) missing.push([x,y]);
+      if ((forceRefresh && forced) || (!this.cache.has(key) && !this.loading.has(key))) missing.push([x,y]);
     }
     const unique = [...new Map(missing.map(c => [c.join(","), c])).values()];
-    if (!unique.length) return;
-    this.status("Loading chunks…");
+    if (!unique.length) { if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.requestDraw(); this.updatePanel(); } return { ok: true, cached: true }; }
+    if (isCurrentGeneration()) this.status("Loading chunks…");
     const limit = Math.max(1, Number(this.state.map.max_chunks_per_request || 9));
     const retryable = new Set(["server_error", "request_timeout", "network_error", "deadlock_retryable"]);
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const loadBatch = async (batch, batchKey) => {
       const batchKeys = batch.map(c => c.join(","));
-      let promiseForThisBatch = null;
       batchKeys.forEach(k => this.loading.add(k));
       try {
         let data = null;
         for (let attempt = 0; attempt < 3; attempt++) {
           data = await api("/api/polywar/map/chunks?chunks=" + batch.map(c => c.join(",")).join(";"));
+          if (this.destroyed) return data;
+          if (options.generation != null && options.generation !== this.loadSeq) { /* stale camera generation may still cache valid chunks below */ }
           if (data?.ok || !retryable.has(data?.error)) break;
           if (attempt < 2) await sleep(attempt === 0 ? 300 : 1000);
         }
@@ -365,13 +402,12 @@ class PolyWarMap {
         } else {
           batchKeys.forEach(k => this.failedChunks.add(k));
         }
-        this.updateChunkStatus();
-        this.requestDraw(); this.updatePanel();
+        if (isCurrentGeneration()) { this.updateChunkStatus({ generation: options.generation }); this.requestDraw(); this.updatePanel(); }
         return data;
       } finally {
         batchKeys.forEach(k => this.loading.delete(k));
         if (this.pendingRequests.has(batchKey)) this.pendingRequests.delete(batchKey);
-        this.updateChunkStatus();
+        if (isCurrentGeneration()) this.updateChunkStatus({ generation: options.generation });
       }
     };
     const tasks = [];
@@ -381,10 +417,11 @@ class PolyWarMap {
       if (!this.pendingRequests.has(key)) { const promise = loadBatch(batch, key); this.pendingRequests.set(key, promise); }
       tasks.push(this.pendingRequests.get(key));
     }
-    await Promise.allSettled(tasks);
+    const results = await Promise.allSettled(tasks);
+    return { ok: results.every(r => r.status === "fulfilled" && r.value?.ok !== false), results };
   }
 
-  updateChunkStatus() { if (this.loading.size) this.status("Loading chunks…"); else if (this.failedChunks.size) { this.status("Map data unavailable"); this.showRetryMap(); } else this.status(""); }
+  updateChunkStatus(options = {}) { if (options.generation != null && options.generation !== this.loadSeq) return; const visibleFailed = this.visibleFailedChunkKeys(); const visibleLoading = this.visibleChunks().some(([x,y]) => this.loading.has(`${x},${y}`)); if (visibleLoading) this.status("Loading chunks…"); else if (visibleFailed.length) { this.status("Map data unavailable"); this.showRetryMap(); } else this.status(""); }
 
   showRetryMap() {
     let btn = document.getElementById("retryMapBtn");
@@ -392,7 +429,7 @@ class PolyWarMap {
     const status = document.getElementById("chunkStatus");
     btn = document.createElement("button");
     btn.className = "btn mini"; btn.id = "retryMapBtn"; btn.textContent = "Retry map";
-    btn.onclick = () => { btn.remove(); this.ensureChunks(); };
+    btn.onclick = () => { btn.remove(); this.ensureChunks(null, { forceRefresh: false }); };
     status?.after(btn);
   }
 
@@ -441,8 +478,9 @@ class PolyWarMap {
     const s = this.selected || {}, c = this.getCell(s.x, s.y);
     const primary = resolvePrimaryCellAction({ cell: c, selected: s, state: currentState, map: this });
     actionMode = primary.action || "capture";
-    const owner = c.owner ? ((currentState?.factions || []).find(f => Number(f.id) === Number(c.owner))?.name || `Faction ${c.owner}`) : "Neutral";
-    const reason = this.pending ? "Working…" : shortCellReason(primary.reason || "Ready");
+    const loadingCell = !!s && s.x != null && !c.terrain;
+    const owner = loadingCell ? "loading" : (c.owner ? ((currentState?.factions || []).find(f => Number(f.id) === Number(c.owner))?.name || `Faction ${c.owner}`) : "Neutral");
+    const reason = loadingCell ? "Map data loading" : (this.pending ? "Working…" : shortCellReason(primary.reason || "Ready"));
     const el = id => document.getElementById(id);
     if (el("cellCoords")) el("cellCoords").textContent = s.x == null ? "—" : `${s.x}, ${s.y}`;
     if (el("cellTerrain")) el("cellTerrain").textContent = c.terrain || "loading";
@@ -475,7 +513,7 @@ class PolyWarMap {
     this.lastTap = { key: targetKey, t: now };
     let c = this.getCell(x, y);
     if (!c.terrain) {
-      await this.ensureChunks(`${Math.floor(x / this.state.map.chunk_size)},${Math.floor(y / this.state.map.chunk_size)}`);
+      await this.ensureChunks(`${Math.floor(x / this.state.map.chunk_size)},${Math.floor(y / this.state.map.chunk_size)}`, { forceRefresh: false });
       if (tapSeq !== this.tapSeq || this.pending || !this.selected || `${this.selected.x},${this.selected.y}` !== targetKey) return;
       c = this.getCell(x, y); this.updatePanel();
     }
@@ -502,7 +540,7 @@ class PolyWarMap {
     if (d.mine_hit) { this.blast = {x:target.x,y:target.y,t:Date.now()}; alert(`Mine hit — actions locked until ${d.locked_until || d.energy?.locked_until || "server unlock"} (${fmtTime(d.energy?.lock_seconds_remaining || 0)} remaining)`); }
     else { this.lastSuccess = { x:target.x, y:target.y, t:Date.now() }; actionToast(d, actionType); }
     const cs = this.state.map.chunk_size;
-    await this.ensureChunks(`${Math.floor(target.x / cs)},${Math.floor(target.y / cs)}`);
+    await this.ensureChunks(`${Math.floor(target.x / cs)},${Math.floor(target.y / cs)}`, { forceRefresh: true });
     await this.refreshCapitals(); await this.refreshTargetSector(target); await syncState(false, { soft: true }); await syncPolywarResults().catch(()=>{});
     updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d;
   }
@@ -547,7 +585,7 @@ class PolyWarMap {
     this.pending = false; this.pendingCellKey = null;
     if(!d.ok && !d.duplicate){ toast(d.error || "Action failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return d; }
     polywarActionKeys.delete(keyId); currentState.energy=d.energy||currentState.energy;
-    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); await this.refreshWorld(); await syncPolywarResults().catch(()=>{}); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d;
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`, { forceRefresh: true }); await this.refreshWorld(); await syncPolywarResults().catch(()=>{}); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw(); return d;
   }
   async capture() { return this.executePrimaryCellAction(actionMode); }
   async scan(size, target = null) {
@@ -563,7 +601,7 @@ class PolyWarMap {
     this.pending=false; this.pendingCellKey = null;
     if(!d.ok){ toast(d.error || "Scan failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return; }
     currentState.energy=d.energy; toast(`Active mines detected: ${d.active_mine_count}`);
-    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`, { forceRefresh: true }); updateEnergyUI(); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
   }
   async flag(active, target = null) {
     if (!this.selected || this.pending) return;
@@ -576,7 +614,7 @@ class PolyWarMap {
     const d=await api("/api/polywar/flag", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({x:target.x,y:target.y,active})});
     this.pending=false; this.pendingCellKey = null;
     if(!d.ok){ toast(d.error || "Flag failed", true); if (selectedKey(this.selected) === target.key) this.updatePanel(); return; }
-    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
+    const cs=this.state.map.chunk_size; await this.ensureChunks(`${Math.floor(target.x/cs)},${Math.floor(target.y/cs)}`, { forceRefresh: true }); if (selectedKey(this.selected) === target.key) this.updatePanel(); this.requestDraw();
   }
   lodLevel() { if (this.cell >= 14) return 0; if (this.cell >= 6) return 1; if (this.cell >= 3) return 2; return 3; }
   async loadOverview() {
@@ -622,7 +660,7 @@ class PolyWarMap {
   drawOverviewCanvas(canvas) { const ov=this.overview, ctx=canvas?.getContext('2d'); if(!ov||!ctx) return; const dpr=Math.min(2,window.devicePixelRatio||1), t=this.overviewTransform(canvas, ov); canvas.width=Math.max(1,Math.floor(t.cssWidth*dpr)); canvas.height=Math.max(1,Math.floor(t.cssHeight*dpr)); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,t.cssWidth,t.cssHeight); const {scale,ox,oy}=t, factions=ov.factions||[]; const grad=ctx.createLinearGradient(0,0,t.cssWidth,t.cssHeight); grad.addColorStop(0,'rgba(20,34,56,.96)'); grad.addColorStop(1,'rgba(7,16,31,.96)'); ctx.fillStyle=grad; ctx.fillRect(0,0,t.cssWidth,t.cssHeight); ctx.fillStyle='rgba(148,163,184,.08)'; ctx.fillRect(ox,oy,t.renderedWidth,t.renderedHeight); const wpcol=ov.overview_grid.world_per_column, wprow=ov.overview_grid.world_per_row; for(const cell of ov.overview_grid.cells||[]){ const f=factions.find(q=>+q.id===+cell.controller_faction_id); if(!f) continue; const x=ox+cell.grid_x*wpcol*scale,y=oy+cell.grid_y*wprow*scale,w=Math.ceil(wpcol*scale)+1,h=Math.ceil(wprow*scale)+1; ctx.globalAlpha=Math.max(.22,Math.min(.82,(cell.dominance_percent||35)/100)); ctx.fillStyle=f.color; ctx.fillRect(x,y,w,h); ctx.globalAlpha=1; if(cell.is_contested){ ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,Math.max(1,w-1),Math.max(1,h-1)); ctx.beginPath(); ctx.strokeStyle='rgba(15,23,42,.55)'; for(let hx=x-w; hx<x+w; hx+=6){ ctx.moveTo(hx,y+h); ctx.lineTo(hx+h,y); } ctx.stroke(); }} ctx.strokeStyle='rgba(148,163,184,.10)'; ctx.lineWidth=1; const step=Math.max(8, ov.world.sector_size*scale*4); for(let gx=ox;gx<=ox+t.renderedWidth;gx+=step){ctx.beginPath();ctx.moveTo(gx,oy);ctx.lineTo(gx,oy+t.renderedHeight);ctx.stroke();} for(let gy=oy;gy<=oy+t.renderedHeight;gy+=step){ctx.beginPath();ctx.moveTo(ox,gy);ctx.lineTo(ox+t.renderedWidth,gy);ctx.stroke();} for(const z of ov.starting_zones||[]){ const f=this.factionById(z.faction_id); ctx.strokeStyle=f.color||'rgba(255,255,255,.5)'; ctx.globalAlpha=.8; ctx.setLineDash([3,2]); ctx.strokeRect(ox+z.min_x*scale,oy+z.min_y*scale,Math.max(2,(z.max_x-z.min_x)*scale),Math.max(2,(z.max_y-z.min_y)*scale)); ctx.setLineDash([]); ctx.globalAlpha=1; } for(const p of ov.squad_pressure_bins||[]){ const f=this.factionById(p.faction_id); const x=ox+p.grid_x*wpcol*scale,y=oy+p.grid_y*wprow*scale,w=Math.ceil(wpcol*scale)+1,h=Math.ceil(wprow*scale)+1; ctx.globalAlpha=Math.max(.25,Math.min(.65,(p.pressure||0)/100*.65)); ctx.fillStyle=darkenFactionColor(f.color,.24); ctx.fillRect(x,y,w,h); ctx.globalAlpha=1; if(p.is_contested){ ctx.strokeStyle=contrastBorderForFaction(f.color); ctx.strokeRect(x,y,w,h); }} for(const sq of ov.squads||[]){ const f=this.factionById(sq.faction_id); this.drawStrategicMarker(ctx,ox+sq.x*scale,oy+sq.y*scale,darkenFactionColor(f.color,sq.status==="awaiting_reinforcement"?.62:.38),this.factionLabel(f),{border:contrastBorderForFaction(f.color),hollow:sq.status==="awaiting_reinforcement",dimmed:sq.status==="awaiting_reinforcement"}); } for(const c of ov.capitals||[]){ const orig=this.factionById(c.original_faction_id), ctrl=this.factionById(c.controller_faction_id); this.drawStrategicMarker(ctx,ox+c.x*scale,oy+c.y*scale,ctrl.color||orig.color||'#fff',this.factionLabel(orig),{capital:true,border:orig.color||'#fff',siege:(c.siege_progress||0)/1000}); } for(const h of ov.hq||[]){ const f=this.factionById(h.faction_id); this.drawStrategicMarker(ctx,ox+h.x*scale,oy+h.y*scale,h.color||f.color||'#fff',this.factionLabel(f),{player:+h.faction_id===+(currentState?.selected_faction?.id||0),border:'#f8fafc'}); } for(const o of ov.major_objects||[]){ const x=ox+o.x*scale,y=oy+o.y*scale; ctx.fillStyle=o.status==='active'?'#f43f5e':'#94a3b8'; ctx.beginPath(); ctx.moveTo(x,y-5); ctx.lineTo(x+5,y); ctx.lineTo(x,y+5); ctx.lineTo(x-5,y); ctx.closePath(); ctx.fill(); } this.drawViewportRect(ctx,t,scale,ox,oy); }
   drawMinimap() { if(!this.minimapCanvas) return; this.drawOverviewCanvas(this.minimapCanvas); }
   toggleMinimapCollapse() { const el=document.querySelector(".polywar-minimap"); if(!el) return; el.classList.toggle("is-collapsed"); localStorage.setItem("polywar_minimap_collapsed", el.classList.contains("is-collapsed") ? "1" : "0"); }
-  handleMinimapPointer(e) { e.preventDefault(); e.stopPropagation(); this.minimapCanvas.setPointerCapture?.(e.pointerId); if(!this.overview) { this.loadOverview(); return; } const h=this.nearestHqAt(this.minimapCanvas,e.clientX,e.clientY,16); if(h) return this.jumpToWorldPosition(h.x,h.y,POLYWAR_VISUALS.baseZoom,{select:true}); const p=this.overviewPointerToWorld(this.minimapCanvas,e.clientX,e.clientY,false); if(p) this.jumpToWorldPosition(p.x,p.y,10,{select:true}); }
+  async handleMinimapPointer(e) { e.preventDefault(); e.stopPropagation(); this.minimapCanvas.setPointerCapture?.(e.pointerId); if(!this.overview) { this.loadOverview(); return; } const h=this.nearestHqAt(this.minimapCanvas,e.clientX,e.clientY,16); if(h) return await this.jumpToWorldPosition(h.x,h.y,POLYWAR_VISUALS.baseZoom,{select:true}); const p=this.overviewPointerToWorld(this.minimapCanvas,e.clientX,e.clientY,false); if(p) return await this.jumpToWorldPosition(p.x,p.y,10,{select:true}); }
   renderWorldTargetSelection(target, selection) { if(!target || !selection) return; const x=Math.floor(selection.x), y=Math.floor(selection.y), dist=Math.abs(x-Math.floor(this.cx))+Math.abs(y-Math.floor(this.cy)), sectors=Math.ceil(dist/Math.max(1, this.overview?.world?.sector_size || this.state?.map?.sector_size || 40)); if(selection.squad){ const sq=selection.squad, awaiting=sq.status==="awaiting_reinforcement", f=this.factionById(sq.faction_id); const detail=awaiting?`Reinforcement in: ${esc(this.reinforcementRemaining(sq))}<br>Return anchor: ${esc(sq.supply_x??"—")}, ${esc(sq.supply_y??"—")}<br>Expires in: ${esc(this.expirationRemaining(sq))}`:`${sq.status==="attacking_cell"?`Attacking: ${esc(sq.attack_target_x??"—")},${esc(sq.attack_target_y??"—")} / ${esc(sq.attack_progress_required??100)} (${esc(sq.attack_progress??0)})`:sq.status==="pressuring_capital"?`Capital pressure: ${esc(sq.attack_progress??0)}`:`Target: ${esc(sq.target_x??"—")},${esc(sq.target_y??"—")}`}`; target.innerHTML=`<b>${esc(f.name||"Faction")} Vanguard</b><br>HP: ${esc(sq.hp)} / ${esc(sq.max_hp)}<br>Status: ${esc(awaiting?"Awaiting reinforcement":sq.status)}<br>${detail}<br><button class="btn mini" data-open-tactical>Open Tactical Map</button>`; target.querySelector('[data-open-tactical]').onclick=()=>{ const modal=this.worldViewModal; if(modal) modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(+sq.x,+sq.y,10,{select:true}); this.refreshSquads(true); }; return; } const title=selection.hq?esc(selection.hq.name||'HQ'):selection.capital?esc(selection.capital.name||'Capital'):esc(selection.controller||'Strategic target'); const status=selection.capitalStatus?`<br>Capital: ${esc(selection.capitalStatus)}`:''; const controlled=Number.isFinite(selection.controlledSectors)?`<br>Controlled sectors: ${selection.controlledSectors}`:''; const contested=Number.isFinite(selection.contestedSectors)?`<br>Contested sectors: ${selection.contestedSectors}`:''; target.innerHTML=`<b>${title}</b><br>Coordinates: ${x},${y}<br>Grid distance: ${dist} cells<br>Approx. sectors: ${sectors}${status}${controlled}${contested}<br><button class="btn mini" data-open-tactical>Open Tactical Map</button>`; target.querySelector('[data-open-tactical]').onclick=()=>{ const modal=this.worldViewModal; if(modal) modal.remove(); this.worldViewModal=null; this.jumpToWorldPosition(x,y,selection.hq?POLYWAR_VISUALS.baseZoom:10,{select:true}); }; }
   selectWorldTarget(target, data) { this.worldTargetSelection=data; this.renderWorldTargetSelection(target, data); }
   renderOpenWorldView() { const modal=this.worldViewModal; if(!modal || !document.body.contains(modal)) return; const canvas=modal.querySelector('canvas'), target=modal.querySelector('.world-target'); if(this.overview){ if(!this.worldTargetSelection) target.textContent='Tap a HQ, capital, object or territory to inspect it.'; this.drawOverviewCanvas(canvas); } else if(this.overviewError){ target.innerHTML='<b>Overview failed.</b> <button class="btn mini" data-retry>Retry</button>'; target.querySelector('[data-retry]').onclick=()=>{ this.overviewError=null; target.textContent='Loading World View…'; this.loadOverview(); }; } else { target.textContent='Loading World View…'; } }

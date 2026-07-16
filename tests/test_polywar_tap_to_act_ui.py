@@ -254,7 +254,7 @@ def test_sector_overview_zoom_is_reachable_and_sector_modes_preserved():
     assert "defaultCell: 28" in JS
     assert "baseZoom: 34" in JS
     assert "if (this.cell < 8)" in JS
-    assert "if (!forceKey && this.cell < 6)" in JS
+    assert "this.cell < 6" in JS and "includeVisible" in JS
 
 
 def test_base_button_uses_center_on_base_close_zoom_helper():
@@ -262,7 +262,7 @@ def test_base_button_uses_center_on_base_close_zoom_helper():
     assert "this.centerOnBase()" in bind
     assert "this.cx = b.x" not in bind
     assert "this.cy = b.y" not in bind
-    assert "this.cell = Math.min(POLYWAR_VISUALS.maxCell, zoom)" in JS
+    assert "jumpToWorldPosition(b.x, b.y - 3, zoom" in JS
 
 
 def test_living_world_features_use_main_render_pass():
@@ -616,3 +616,44 @@ def test_squad_attack_animation_progress_uses_required_and_existing_redraw_loop(
     assert 'anim=true; ctx.globalAlpha=.35+.25*Math.sin(now/120)' in js
     assert 'if(anim) this.requestDraw();' in js
     assert 'document.hidden' in js
+
+def test_minimap_jump_generation_static_regressions():
+    jump = JS[JS.index('async jumpToWorldPosition'):JS.index('screenToCell', JS.index('async jumpToWorldPosition'))]
+    ensure = JS[JS.index('async ensureChunks'):JS.index('  updateChunkStatus', JS.index('async ensureChunks'))]
+    assert 'async jumpToWorldPosition' in JS
+    assert 'const seq = ++this.loadSeq' in jump
+    assert 'await this.ensureChunks(centerChunkKey' in jump
+    assert 'generation: seq' in jump
+    assert 'this.updatePanel();\n      this.requestDraw();' in jump
+    assert 'options.generation' in ensure and 'options.generation !== this.loadSeq' in ensure
+    assert 'this.cache.delete(key)' not in ensure
+    assert 'forceRefresh: false' in jump
+
+
+def test_minimap_jump_chunk_loading_runtime_harness():
+    import subprocess, textwrap
+    script = textwrap.dedent("""
+        const assert = require('assert');
+        class Harness {
+          constructor(){ this.destroyed=false; this.loadSeq=0; this.cx=0; this.cy=0; this.cell=12; this.w=64; this.h=64; this.state={map:{width:1000,height:1000,chunk_size:10,max_chunks_per_request:99}}; this.cache=new Map(); this.loading=new Set(); this.failedChunks=new Set(); this.pendingRequests=new Map(); this.calls=[]; this.apiQueue=[]; this.selected=null; }
+          status(t){ this.statusText=t; this.calls.push('status:'+t); } requestDraw(){ this.calls.push('draw'); } drawMinimap(){ this.calls.push('minimap'); } updatePanel(){ this.calls.push('panel:'+`${this.selected?.x},${this.selected?.y}`); } ensureSectors(){ this.calls.push('sectors'); return Promise.resolve({ok:true}); } refreshSquads(){ this.calls.push('squads'); return Promise.resolve({ok:true}); } clamp(){}
+          screenToCell(px,py){ return {x:Math.floor(this.cx+(px-this.w/2)/this.cell), y:Math.floor(this.cy+(py-this.h/2)/this.cell)}; }
+          visibleChunks(){ const cs=this.state.map.chunk_size, min=this.screenToCell(-16,-16), max=this.screenToCell(80,80), out=[]; for(let cy=Math.floor(min.y/cs);cy<=Math.floor(max.y/cs);cy++) for(let cx=Math.floor(min.x/cs);cx<=Math.floor(max.x/cs);cx++) if(cx>=0&&cy>=0) out.push([cx,cy]); return out; }
+          visibleFailedChunkKeys(){ const v=new Set(this.visibleChunks().map(([x,y])=>`${x},${y}`)); return [...this.failedChunks].filter(k=>v.has(k)); }
+          updateChunkStatus(options={}){ if(options.generation!=null&&options.generation!==this.loadSeq) return; const failed=this.visibleFailedChunkKeys(); const loading=this.visibleChunks().some(([x,y])=>this.loading.has(`${x},${y}`)); if(loading) this.status('Loading chunks…'); else if(failed.length) this.status('Map data unavailable'); else this.status(''); }
+          async api(batch){ this.calls.push('request:'+batch.map(c=>c.join(',')).join(';')); const item=this.apiQueue.shift(); if(item?.then) return await item; return item || {ok:true,chunks:batch.map(([x,y])=>({chunk_x:x,chunk_y:y}))}; }
+          async ensureChunks(forceKey=null, options={}){ if(forceKey&&typeof forceKey==='object'){options=forceKey;forceKey=null;} const current=()=>options.generation==null||options.generation===this.loadSeq; const includeVisible=options.includeVisible!==false; const forceRefresh=options.forceRefresh??!!forceKey; const explicit=forceKey?[[...String(forceKey).split(',').map(Number),true]]:[]; const retry=(!forceKey&&includeVisible?this.visibleFailedChunkKeys().map(k=>k.split(',').map(Number)):[]).map(([x,y])=>[x,y,false]); const visible=includeVisible?this.visibleChunks().map(([x,y])=>[x,y,false]):[]; const unique=[]; const seen=new Set(); for(const [x,y,forced] of explicit.concat(visible,retry)){ const k=`${x},${y}`; if(!seen.has(k)&&((forceRefresh&&forced)||(!this.cache.has(k)&&!this.loading.has(k)))){ seen.add(k); unique.push([x,y]); } } if(!unique.length){ if(current()){ this.updateChunkStatus({generation:options.generation}); this.requestDraw(); this.updatePanel(); } return {ok:true,cached:true}; } if(current()) this.status('Loading chunks…'); const data=await this.api(unique); if(data?.ok){ const returned=new Set(); for(const ch of data.chunks){ const k=`${ch.chunk_x},${ch.chunk_y}`; returned.add(k); this.cache.set(k,ch); this.failedChunks.delete(k); } unique.map(c=>c.join(',')).forEach(k=>{if(!returned.has(k)) this.failedChunks.add(k);}); } else unique.map(c=>c.join(',')).forEach(k=>this.failedChunks.add(k)); if(current()){ this.updateChunkStatus({generation:options.generation}); this.requestDraw(); this.updatePanel(); } return data; }
+          async jumpToWorldPosition(x,y,zoom=12,options={}){ const seq=++this.loadSeq; x=Math.floor(x); y=Math.floor(y); const cs=this.state.map.chunk_size; const center=`${Math.floor(x/cs)},${Math.floor(y/cs)}`; this.cx=x; this.cy=y; this.cell=zoom; if(options.select!==false) this.selected={x,y}; this.status('Loading map…'); this.updatePanel(); this.requestDraw(); this.drawMinimap(); await this.ensureChunks(center,{generation:seq,forceRefresh:false,includeVisible:false}); if(this.destroyed||seq!==this.loadSeq) return {ok:false,stale:true}; this.updatePanel(); this.requestDraw(); this.drawMinimap(); await Promise.allSettled([this.ensureChunks(null,{generation:seq}),this.ensureSectors(),this.refreshSquads(true)]); if(this.destroyed||seq!==this.loadSeq) return {ok:false,stale:true}; this.updatePanel(); this.requestDraw(); this.drawMinimap(); this.updateChunkStatus({generation:seq}); return {ok:true}; }
+          async handleMinimapPointer(e){ e.preventDefault(); e.stopPropagation(); return await this.jumpToWorldPosition(e.x,e.y,10,{select:true}); }
+        }
+        (async()=>{
+          let h=new Harness(); await h.jumpToWorldPosition(105,125,12,{select:true}); assert(h.cache.has('10,12')); assert(h.calls.lastIndexOf('draw') > h.calls.findIndex(c=>c==='request:10,12')); assert(h.calls.some(c=>c==='panel:105,125'));
+          h=new Harness(); await h.jumpToWorldPosition(105,125,6,{select:true}); let centerReq=h.calls.indexOf('request:10,12'), centerDraw=h.calls.indexOf('draw', centerReq), visibleReq=h.calls.findIndex((c,i)=>i>centerReq && c.startsWith('request:')); assert(centerReq>=0 && centerDraw>centerReq && visibleReq>centerDraw);
+          h=new Harness(); let resolveA; const promiseA=new Promise(r=>resolveA=r); h.apiQueue.push(promiseA); const ja=h.jumpToWorldPosition(105,125,12,{select:true}); const jb=h.jumpToWorldPosition(205,225,12,{select:true}); resolveA({ok:true,chunks:[{chunk_x:10,chunk_y:12}]}); const ar=await ja; await jb; assert.strictEqual(h.cx,205); assert.strictEqual(h.cy,225); assert.strictEqual(ar.stale,true);
+          h=new Harness(); h.cache.set('10,12',{chunk_x:10,chunk_y:12,old:true}); h.apiQueue.push({ok:false,error:'network_error'}); await h.jumpToWorldPosition(105,125,12,{select:true}); assert(h.cache.get('10,12').old);
+          h=new Harness(); h.cache.set('1,1',{chunk_x:1,chunk_y:1,old:true}); h.apiQueue.push({ok:false,error:'network_error'}); await h.ensureChunks('1,1',{forceRefresh:true}); assert(h.cache.get('1,1').old); assert(h.failedChunks.has('1,1'));
+          h=new Harness(); await h.handleMinimapPointer({x:105,y:125,preventDefault(){},stopPropagation(){}}); assert.deepStrictEqual(h.selected,{x:105,y:125}); assert(!h.calls.some(c=>String(c).includes('/api/polywar/action')));
+          h=new Harness(); h.failedChunks.add('99,99'); h.failedChunks.add('10,12'); h.cx=105; h.cy=125; await h.ensureChunks(null,{forceRefresh:false}); assert(h.calls.some(c=>c.startsWith('request:') && c.includes('10,12'))); assert(!h.calls.some(c=>c.startsWith('request:') && c.includes('99,99')));
+        })();
+    """)
+    subprocess.run(['node', '-e', script], check=True)
