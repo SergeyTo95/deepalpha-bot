@@ -140,6 +140,37 @@ def _insert_squad_event(conn, season_id, faction_id, event_type, message, now, s
 
 def _passable(seed,x,y,config): return m.in_bounds_with_config(x,y,config) and m.TERRAIN_COSTS.get(m.terrain_at_with_config(seed,x,y,config)) is not None
 
+def _orthogonal_step(x, y, nx, ny):
+    return abs(int(nx)-int(x)) + abs(int(ny)-int(y)) == 1
+
+def _owner(conn, sid, x, y, config, cache=None):
+    key=(int(x),int(y))
+    if cache is not None and key in cache: return cache[key]
+    value=m.owner_at_with_config(conn,sid,int(x),int(y),config)
+    if cache is not None: cache[key]=value
+    return value
+
+def _owned_by_faction(conn,sid,fid,x,y,config,cache=None):
+    owner=_owner(conn,sid,x,y,config,cache)
+    return owner is not None and int(owner)==int(fid)
+
+def _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache=None):
+    return any(m.in_bounds_with_config(nx,ny,config) and _owned_by_faction(conn,sid,fid,nx,ny,config,cache)
+               for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)))
+
+def _is_legal_frontier_cell(conn,sid,fid,x,y,seed,config,cache=None):
+    if not _passable(seed,x,y,config) or _owned_by_faction(conn,sid,fid,x,y,config,cache): return False
+    return _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache)
+
+def _is_legal_squad_step(conn,squad,nx,ny,seed,config,cache=None):
+    x,y=int(squad['x']),int(squad['y']); sid=int(squad['season_id']); fid=int(squad['faction_id'])
+    if not _orthogonal_step(x,y,nx,ny) or not _passable(seed,nx,ny,config): return False
+    if _owned_by_faction(conn,sid,fid,nx,ny,config,cache): return True
+    if squad.get('status') == 'retreating': return False
+    # A squad may enter one connected frontier cell, but never leapfrog from it.
+    return (_owned_by_faction(conn,sid,fid,x,y,config,cache) and
+            _is_legal_frontier_cell(conn,sid,fid,nx,ny,seed,config,cache))
+
 def _spawn_cell(conn,sid,fid,seed,config):
     bx,by=config.bases.get(int(fid),(None,None))
     if bx is None: return None
@@ -259,7 +290,7 @@ def spawn_due_squads_in_transaction(conn, season_id:int, now=None, cfg=None, sea
     c=conn.cursor(); total=int((_fetchone(c,"SELECT COUNT(*) AS n FROM polywar_faction_squads WHERE season_id=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')",(season_id,)) or {}).get('n') or 0)
     if total>=HARD_ACTIVE_CAP: return 0
     season=season or _fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)); seed=season.get('secret_seed','seed'); config=config or m.load_map_config(conn, season_id=season_id); spawned=0
-    factions=_fetchall(c,"SELECT f.* FROM polywar_factions f WHERE COALESCE(f.is_playable,1)=1 AND COALESCE(f.is_system,0)=0 ORDER BY f.id")
+    factions=_fetchall(c,"""SELECT f.*,(SELECT COUNT(*) FROM polywar_faction_squads s WHERE s.season_id=%s AND s.faction_id=f.id AND s.status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement')) AS active_squads FROM polywar_factions f WHERE COALESCE(f.is_playable,1)=1 AND COALESCE(f.is_system,0)=0 ORDER BY active_squads,f.id""",(season_id,))
     for f in factions:
         if total+spawned>=HARD_ACTIVE_CAP: break
         fid=int(f['id']); _lock_spawn_scope(conn, season_id, fid)
@@ -285,24 +316,26 @@ def _capital_at(conn,sid,x,y):
 
 def _choose_step(conn,squad,cfg,seed,config):
     x,y=int(squad['x']),int(squad['y']); tx,ty=int(squad.get('target_x') or x),int(squad.get('target_y') or y); fid=int(squad['faction_id'])
-    rows=[]
+    rows=[]; owners={}; sid=int(squad['season_id'])
     for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
-        if not _passable(seed,nx,ny,config): continue
+        if not _is_legal_squad_step(conn,squad,nx,ny,seed,config,owners): continue
         other=_fetchone(conn.cursor(),"SELECT * FROM polywar_faction_squads WHERE season_id=%s AND x=%s AND y=%s AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating') AND id<>%s",(squad['season_id'],nx,ny,squad['id']))
         if other and int(other['faction_id'])==fid: continue
         if other and int(other['faction_id'])!=fid: return ('engage',other)
         cap=_capital_at(conn,int(squad['season_id']),nx,ny)
         if cap and int(cap.get('controller_faction_id') or 0)!=fid: return ('capital', (nx,ny))
-        owner=m.owner_at_with_config(conn,int(squad['season_id']),nx,ny,config)
-        if owner is not None and int(owner)!=fid and _playable_enemy(conn,int(owner)): return ('attack_cell',(nx,ny))
+        owner=_owner(conn,sid,nx,ny,config,owners)
+        action='move'
+        if owner is None: action='attack_cell'
+        elif int(owner)!=fid and _playable_enemy(conn,int(owner)): action='attack_cell'
         dist=abs(tx-nx)+abs(ty-ny); cur=abs(tx-x)+abs(ty-y); terr=m.terrain_at_with_config(seed,nx,ny,config)
         score=(cur-dist)*100 + (8 if terr=='road' else 0) + (5 if owner==fid else 0) - (4 if terr=='mountain' else 0) - (3 if terr=='swamp' else 0)
         if int(squad.get('previous_x') or x)==nx and int(squad.get('previous_y') or y)==ny: score-=12
         if abs(nx-int(squad['supply_x']))+abs(ny-int(squad['supply_y']))>=int(cfg['supply_distance']): score-=1000
         tie=_hash(seed,squad['id'],squad['move_index'],nx,ny)
-        rows.append((score,tie,nx,ny))
+        rows.append((score,tie,action,nx,ny))
     if not rows: return ('wait',None)
-    rows.sort(key=lambda r:(-r[0],r[1])); return ('move',rows[0][2:])
+    rows.sort(key=lambda r:(-r[0],r[1])); return (rows[0][2],rows[0][3:])
 
 def _materialize_cell(conn,sid,x,y,owner,now):
     c=conn.cursor()
@@ -328,7 +361,7 @@ def _attackable_normal_cell(conn,sid,fid,x,y,config):
     owner=m.owner_at_with_config(conn,sid,x,y,config)
     if owner is not None and int(owner)==int(fid): return False
     if owner is not None and not _playable_enemy(conn,int(owner)): return False
-    return owner is not None
+    return owner is None or _playable_enemy(conn,int(owner))
 
 def _cancel_attack_state(conn,squad,now,next_due_at):
     _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='marching',attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,target_x=NULL,target_y=NULL,next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,squad['id']))
@@ -338,6 +371,11 @@ def _capital_pressure_applicable(conn,squad,tx,ty):
     if not cap or not cap.get('controller_faction_id'): return None
     if int(cap.get('controller_faction_id'))==int(squad['faction_id']): return None
     if abs(int(squad['x'])-tx)+abs(int(squad['y'])-ty)!=1: return None
+    config=m.load_map_config(conn,season_id=int(squad['season_id']))
+    cache={}
+    if not _owned_by_faction(conn,int(squad['season_id']),int(squad['faction_id']),int(squad['x']),int(squad['y']),config,cache): return None
+    if not _has_owned_orthogonal_neighbor(conn,int(squad['season_id']),int(squad['faction_id']),tx,ty,config,cache): return None
+    if not _playable_enemy(conn,int(cap.get('controller_faction_id'))): return None
     if str(cap.get('status') or 'active') not in {'active','contested',''}: return None
     return cap
 
@@ -362,7 +400,12 @@ def _process_cell_attack(conn,squad,cfg,now,next_due_at,config):
     row=_materialize_cell(conn,sid,tx,ty,pre_owner,now)
     owner=row.get('owner_faction_id')
     owner=int(owner) if owner is not None else None
-    if owner is None or owner==fid or not _attackable_normal_cell(conn,sid,fid,tx,ty,config):
+    if owner==fid or not _attackable_normal_cell(conn,sid,fid,tx,ty,config):
+        _cancel_attack_state(conn,squad,now,next_due_at); return False, False
+    cache={(tx,ty):owner}
+    if (not _orthogonal_step(squad['x'],squad['y'],tx,ty) or
+        not _owned_by_faction(conn,sid,fid,squad['x'],squad['y'],config,cache) or
+        not _has_owned_orthogonal_neighbor(conn,sid,fid,tx,ty,config,cache)):
         _cancel_attack_state(conn,squad,now,next_due_at); return False, False
     before=int(row.get('contest_progress') or 0); contesting=row.get('contesting_faction_id'); contesting=int(contesting) if contesting is not None else None
     inc=int(cfg.get('enemy_cell_attack_progress_per_tick') or 0); req=int(getattr(config,'capture_progress_required',100) or 100); capture_enabled=int(cfg.get('enemy_cell_capture_enabled') if cfg.get('enemy_cell_capture_enabled') is not None else 1)
@@ -381,7 +424,10 @@ def _process_cell_attack(conn,squad,cfg,now,next_due_at,config):
     if after>=req and new_contesting==fid and capture_enabled:
         if not _attackable_normal_cell(conn,sid,fid,tx,ty,config):
             _cancel_attack_state(conn,squad,now,next_due_at); return False, False
-        c=conn.cursor(); _execute(c,'UPDATE polywar_cells SET owner_faction_id=%s,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,last_attacked_at=%s,last_attacked_by_user_id=NULL,updated_at=%s,updated_by_user_id=NULL WHERE season_id=%s AND x=%s AND y=%s AND owner_faction_id=%s',(fid,now,now,sid,tx,ty,owner))
+        c=conn.cursor()
+        owner_clause='owner_faction_id IS NULL' if owner is None else 'owner_faction_id=%s'
+        params=(fid,now,now,sid,tx,ty) if owner is None else (fid,now,now,sid,tx,ty,owner)
+        _execute(c,f'UPDATE polywar_cells SET owner_faction_id=%s,capture_progress=100,contesting_faction_id=NULL,contest_progress=0,contested_at=NULL,last_attacked_at=%s,last_attacked_by_user_id=NULL,updated_at=%s,updated_by_user_id=NULL WHERE season_id=%s AND x=%s AND y=%s AND {owner_clause}',params)
         if polywar._rowcount(c) == 0:
             _cancel_attack_state(conn,squad,now,next_due_at); return False, False
         sectors.transfer_cell_ownership(conn,sid,tx,ty,owner,fid,None,now,config=config)

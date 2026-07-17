@@ -147,7 +147,7 @@ def build_world_overview(user_id=None):
                 leader=sorted(vals, key=lambda q: (-q['pressure'], q['faction_id']))[0]
                 squad_pressure_bins.append({**leader, 'is_contested': len({v['faction_id'] for v in vals}) > 1})
         if squads_enabled and 'polywar_faction_squads' in tables:
-            active_squads = [dict(r) for r in polywar._fetchall(conn.cursor(), "SELECT id,faction_id,x,y,supply_x,supply_y,hp,max_hp,status,target_x,target_y,reinforcement_at,expires_at FROM polywar_faction_squads WHERE season_id=%s AND expires_at>CURRENT_TIMESTAMP AND status IN ('spawning','marching','engaged','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') LIMIT 14", (sid,))]
+            active_squads = [dict(r) for r in polywar._fetchall(conn.cursor(), "SELECT id,faction_id,x,y,supply_x,supply_y,hp,max_hp,status,target_x,target_y,reinforcement_at,expires_at FROM polywar_faction_squads WHERE season_id=%s AND expires_at>CURRENT_TIMESTAMP AND status IN ('spawning','marching','engaged','attacking_cell','pressuring_capital','waiting_for_supply','waiting_for_players','retreating','awaiting_reinforcement') LIMIT 14", (sid,))]
         rifts = []
         if {'x','y','status'}.issubset(_table_columns(conn, 'polywar_null_rifts')):
             rifts = polywar._fetchall(conn.cursor(), "SELECT x,y,status FROM polywar_null_rifts WHERE season_id=%s AND status IN ('active','sealed') LIMIT 200", (sid,))
