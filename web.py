@@ -35,7 +35,7 @@ from services.ton_wallet_service import (
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
 from services.polywar_service import get_state as get_polywar_state, join_faction as join_polywar_faction, record_presence as record_polywar_presence
-from services.polywar_map_service import build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
+from services.polywar_map_service import PolyWarChunkRateLimited, build_chunks as get_polywar_chunks, capture_cell as capture_polywar_cell
 from services.polywar_combat_service import combat_action as polywar_combat_action
 from services.polywar_sector_service import get_sectors as get_polywar_sectors
 from services.polywar_capital_service import get_capitals as get_polywar_capitals, capital_action as polywar_capital_action
@@ -887,6 +887,8 @@ async def handle_polywar_chunks_api(request):
         else:
             chunks.append((int(request.query.get("chunk_x", "0")), int(request.query.get("chunk_y", "0"))))
         return _json_response(await asyncio.to_thread(get_polywar_chunks, int(current.get("user_id") or 0), chunks))
+    except PolyWarChunkRateLimited as e:
+        return _json_response({"ok": False, "error": "rate_limited", "retry_after_seconds": e.retry_after_seconds}, status=429)
     except ValueError as e:
         return _json_response({"ok": False, "error": str(e)}, status=400)
     except Exception as e:

@@ -40,6 +40,14 @@ CHUNK_RATE_WINDOW = 10
 CHUNK_RATE_MAX = 60
 
 
+class PolyWarChunkRateLimited(ValueError):
+    """Temporary per-user chunk budget exhaustion."""
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__("rate_limited")
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 @dataclass(frozen=True)
 class PolyWarMapConfig:
     width: int
@@ -470,13 +478,23 @@ def _terrain_chunk(season_id, seed, cx, cy, cs):
 
 
 def _check_chunk_rate(user_id: int, amount: int):
+    amount = int(amount)
+    if amount <= 0:
+        return
     now = time.monotonic()
     with _RATE_LOCK:
         q = _CHUNK_RATE[int(user_id)]
         while q and now - q[0] > CHUNK_RATE_WINDOW:
             q.popleft()
-        if len(q) + amount > CHUNK_RATE_MAX:
-            raise ValueError("rate_limited")
+        overflow = len(q) + amount - CHUNK_RATE_MAX
+        if overflow > 0:
+            if q:
+                release_index = min(len(q) - 1, overflow - 1)
+                release_at = q[release_index] + CHUNK_RATE_WINDOW
+                retry_after = math.ceil(max(0.0, release_at - now))
+            else:
+                retry_after = CHUNK_RATE_WINDOW
+            raise PolyWarChunkRateLimited(max(1, min(CHUNK_RATE_WINDOW, retry_after)))
         for _ in range(amount):
             q.append(now)
 
@@ -486,6 +504,7 @@ def _set_read_timeouts(conn):
 
 
 def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
+    chunks = list(dict.fromkeys((int(cx), int(cy)) for cx, cy in chunks))
     started = time.monotonic()
     logger.info("polywar_chunks_request_started user_id=%s chunk_count=%s", int(user_id), len(chunks))
     conn = polywar.get_connection()
@@ -553,6 +572,15 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
         logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=total duration_ms=%.2f", int(user_id), len(chunks), duration)
         logger.info("polywar_chunks_request_finished user_id=%s chunk_count=%s duration_ms=%.2f", int(user_id), len(chunks), duration)
         return {"ok": True, "season_id": sid, "chunks": out, "chunk_size": config.chunk_size, "map_width": config.width, "map_height": config.height, "server_timestamp": int(time.time())}
+    except PolyWarChunkRateLimited as exc:
+        polywar._safe_rollback(conn)
+        logger.info(
+            "polywar_chunks_rate_limited user_id=%s chunk_count=%s "
+            "retry_after_seconds=%s limit=%s window=%s",
+            int(user_id), len(chunks), exc.retry_after_seconds,
+            CHUNK_RATE_MAX, CHUNK_RATE_WINDOW,
+        )
+        raise
     except Exception as exc:
         polywar._safe_rollback(conn)
         logger.exception("polywar_chunks_request_failed error_type=%s duration_ms=%.2f", type(exc).__name__, (time.monotonic()-started)*1000)
