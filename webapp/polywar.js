@@ -280,6 +280,8 @@ class PolyWarMap {
     this.chunkLoadDebounceTimer = null;
     this.chunkRecoveryPromise = null;
     this.chunkManualRetryPromise = null;
+    this.chunkScheduledLoadPromise = null;
+    this.chunkScheduledLoadResolve = null;
     this.chunkLoadQueuedDuringCooldown = false;
     this.queuedPriorityChunkKey = null;
     this.queuedVisibleChunkLoad = false;
@@ -358,8 +360,10 @@ class PolyWarMap {
     if (this.squadOverviewTimer) clearTimeout(this.squadOverviewTimer);
     if (this.chunkRecoveryTimer) clearTimeout(this.chunkRecoveryTimer);
     if (this.chunkLoadDebounceTimer) clearTimeout(this.chunkLoadDebounceTimer);
+    this.chunkScheduledLoadResolve?.({ok:false,destroyed:true});
     this.chunkRecoveryTimer = null; this.chunkLoadDebounceTimer = null;
     this.chunkRecoveryPromise = null; this.chunkManualRetryPromise = null;
+    this.chunkScheduledLoadPromise = null; this.chunkScheduledLoadResolve = null;
     this.chunkLoadQueuedDuringCooldown = false; this.queuedPriorityChunkKey = null; this.queuedVisibleChunkLoad = false;
     this.drawFrame = null;
     this.loading.clear();
@@ -428,12 +432,29 @@ class PolyWarMap {
   chunkKeyForCell(x, y) { const cs=this.state.map.chunk_size; return `${Math.floor(x/cs)},${Math.floor(y/cs)}`; }
   scheduleChunkLoad(options = {}) {
     if (typeof options === "number") options = { delay: options };
-    if (this.destroyed) return;
+    if (this.destroyed) return Promise.resolve({ok:false,destroyed:true});
     if (options.priorityKey) this.queuedPriorityChunkKey = options.priorityKey;
     if (options.includeVisible !== false) this.queuedVisibleChunkLoad = true;
-    if (this.isChunkCooldownActive()) { this.chunkLoadQueuedDuringCooldown = true; this.scheduleChunkCooldownRecovery(); return; }
+    if (this.isChunkCooldownActive()) { this.chunkLoadQueuedDuringCooldown = true; this.scheduleChunkCooldownRecovery(); return Promise.resolve({ok:false,deferred:true,error:"rate_limited"}); }
+    if (!this.chunkScheduledLoadPromise) this.chunkScheduledLoadPromise = new Promise(resolve => { this.chunkScheduledLoadResolve=resolve; });
+    const scheduledPromise=this.chunkScheduledLoadPromise;
     if (this.chunkLoadDebounceTimer) clearTimeout(this.chunkLoadDebounceTimer);
-    this.chunkLoadDebounceTimer = setTimeout(() => { this.chunkLoadDebounceTimer = null; this.flushScheduledChunkLoad(); }, Number(options.delay ?? 160));
+    this.chunkLoadDebounceTimer = setTimeout(async () => {
+      this.chunkLoadDebounceTimer=null; let result;
+      try { result=await this.flushScheduledChunkLoad(); }
+      catch (error) { result={ok:false,error:"chunk_load_failed",exception:error}; }
+      finally { const resolve=this.chunkScheduledLoadResolve; this.chunkScheduledLoadPromise=null; this.chunkScheduledLoadResolve=null; resolve?.(result); }
+    }, Number(options.delay ?? 160));
+    return scheduledPromise;
+  }
+  requestChunkForTap(chunkKey) {
+    if(this.destroyed)return Promise.resolve({ok:false,destroyed:true});
+    if(this.cache.has(chunkKey))return Promise.resolve({ok:true,cached:true});
+    if(this.failedChunks.has(chunkKey))return Promise.resolve({ok:false,error:"map_data_unavailable"});
+    if(this.isChunkCooldownActive())return Promise.resolve({ok:false,deferred:true,error:"rate_limited"});
+    const inFlight=this.chunkRequestsByKey.get(chunkKey); if(inFlight)return inFlight;
+    if(this.chunkScheduledLoadPromise)return this.chunkScheduledLoadPromise;
+    return this.scheduleChunkLoad({delay:80,priorityKey:chunkKey,includeVisible:true});
   }
   flushScheduledChunkLoad() {
     if (this.destroyed) return Promise.resolve({ok:false,destroyed:true});
@@ -666,9 +687,13 @@ class PolyWarMap {
     this.lastTap = { key: targetKey, t: now };
     let c = this.getCell(x, y);
     if (!c.terrain) {
-      await this.ensureChunks(`${Math.floor(x / this.state.map.chunk_size)},${Math.floor(y / this.state.map.chunk_size)}`, { forceRefresh: false });
-      if (tapSeq !== this.tapSeq || this.pending || !this.selected || `${this.selected.x},${this.selected.y}` !== targetKey) return;
+      const chunkKey=this.chunkKeyForCell(x,y);
+      if(this.failedChunks.has(chunkKey)){this.updateChunkStatus();this.updatePanel();return {ok:false,error:"map_data_unavailable"};}
+      if(this.isChunkCooldownActive()){this.updateChunkStatus();this.updatePanel();return {ok:false,deferred:true,error:"rate_limited"};}
+      const loadResult=await this.requestChunkForTap(chunkKey);
+      if (tapSeq !== this.tapSeq || this.destroyed || this.pending || !this.selected || `${this.selected.x},${this.selected.y}` !== targetKey) return {ok:false,stale:true};
       c = this.getCell(x, y); this.updatePanel();
+      if(!c.terrain){this.updateChunkStatus();return loadResult?.ok===false?loadResult:{ok:false,error:"map_data_unavailable"};}
     }
     const primary = resolvePrimaryCellAction({ cell: c, selected: this.selected, state: currentState, map: this });
     if (quickActionsEnabled && primary.enabled) await this.executePrimaryCellAction(primary.action);

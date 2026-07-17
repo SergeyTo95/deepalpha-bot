@@ -170,6 +170,35 @@ x=h();x.scheduleChunkLoad({{priorityKey:"4,4"}});x.chunkCooldownUntil=6000;x.sch
     subprocess.run(['node', str(path)], check=True)
 
 
+def test_handle_cell_tap_uses_coordinator_guards_before_scheduling():
+    js = Path('webapp/polywar.js').read_text()
+    body = js.split('async handleCellTap', 1)[1].split('async executePrimaryCellAction', 1)[0]
+    assert 'this.ensureChunks(' not in body
+    assert 'this.failedChunks.has(chunkKey)' in body
+    assert 'this.isChunkCooldownActive()' in body
+    assert body.index('this.failedChunks.has(chunkKey)') < body.index('this.requestChunkForTap(chunkKey)')
+    assert body.index('this.isChunkCooldownActive()') < body.index('this.requestChunkForTap(chunkKey)')
+    assert 'await this.requestChunkForTap(chunkKey)' in body
+
+
+def test_production_handle_cell_tap_runtime_coalesces_and_guards(tmp_path):
+    js = Path('webapp/polywar.js').read_text(); start=js.index('class PolyWarMap')
+    end=js.index('\nif (typeof window !== "undefined") window.polywarChunkTestHooks', start)
+    source=js[start:end]
+    script=f'''const assert=require("assert"),vm=require("vm");let now=1000,next=1,timers=new Map();
+const sandbox={{Map,Set,Promise,Math,Number,String,Array,Object,Date:{{now:()=>now}},performance:{{now:()=>now}},setTimeout:(fn,ms)=>{{let id=next++;timers.set(id,fn);return id}},clearTimeout:id=>timers.delete(id),polywarReducedMotion:()=>true,polywarLowPowerMode:()=>false,POLYWAR_VISUALS:{{selectionAnimationMs:1}},TACTICAL_MIN_CELL:6,document:{{getElementById:()=>null}},window:{{}},currentState:{{factions:[]}},actionMode:"capture",quickActionsEnabled:true,resolvePrimaryCellAction:()=>({{enabled:true,action:"capture"}}),toast(){{}},shortCellReason:x=>x,polywarCapitalUi:{{cache:new Map()}}}};vm.createContext(sandbox);vm.runInContext({source!r}+";this.C=PolyWarMap",sandbox);const C=sandbox.C;
+function make(){{let m=Object.create(C.prototype);Object.assign(m,{{destroyed:false,state:{{map:{{width:1000,height:1000,chunk_size:10,max_chunks_per_request:9}}}},cache:new Map(),loading:new Set(),pendingRequests:new Map(),chunkRequestsByKey:new Map(),failedChunks:new Set(),initialLoadStarted:true,selected:null,pending:false,tapSeq:0,lastTap:null,moreOpen:false,visualLowPower:true,chunkCooldownUntil:0,chunkLoadDebounceTimer:null,chunkScheduledLoadPromise:null,chunkScheduledLoadResolve:null,chunkRecoveryTimer:null,chunkRecoveryPromise:null,chunkManualRetryPromise:null,chunkLoadQueuedDuringCooldown:false,queuedPriorityChunkKey:null,queuedVisibleChunkLoad:false,loadSeq:0,calls:0,actions:0,visibleChunks(){{return []}},getCell(x,y){{return this.cache.has(this.chunkKeyForCell(x,y))?{{terrain:"plain"}}:{{}}}},ensureChunks(o){{this.calls++;let k=o.keys[0].join(",");this.cache.set(k,{{}});return Promise.resolve({{ok:true}})}},updatePanel(){{}},updateChunkStatus(){{}},requestDraw(){{}},drawMinimap(){{}},executePrimaryCellAction(){{this.actions++;return Promise.resolve({{ok:true}})}}}});return m;}}
+async function flush(){{let jobs=[...timers.entries()];timers.clear();for(const [,fn] of jobs)await fn();await Promise.resolve();await Promise.resolve();}}
+(async()=>{{let m=make(),ps=[];for(let i=0;i<20;i++)ps.push(m.handleCellTap(i*10,0));assert.equal(m.calls,0);assert.equal(timers.size,1);await flush();await Promise.all(ps);assert.equal(m.calls,1);assert.equal(m.actions,1);assert(m.cache.has("19,0"));
+timers.clear();m=make();m.cache.set("0,0",{{}});await m.handleCellTap(1,1);assert.equal(m.calls,0);assert.equal(timers.size,0);assert.equal(m.actions,1);
+m=make();m.failedChunks.add("0,0");let r=await m.handleCellTap(1,1);assert.equal(r.error,"map_data_unavailable");assert.equal(m.calls,0);assert.equal(m.actions,0);assert(m.failedChunks.has("0,0"));
+m=make();m.chunkCooldownUntil=6000;r=await m.handleCellTap(1,1);assert.equal(r.error,"rate_limited");assert.equal(m.calls,0);assert.equal(m.actions,0);assert.equal(timers.size,1);timers.clear();
+m=make();let p=m.handleCellTap(1,1);assert.equal(timers.size,1);m.abort={{abort(){{}}}};m.sectorLoading=new Set();C.prototype.destroy.call(m);r=await p;assert(r.destroyed||r.stale);assert.equal(m.calls,0);assert.equal(m.chunkScheduledLoadPromise,null);assert.equal(m.chunkScheduledLoadResolve,null);
+}})().catch(e=>{{console.error(e);process.exit(1)}});'''
+    path=tmp_path/'tap-runtime.js';path.write_text(script)
+    subprocess.run(['node',str(path)],check=True)
+
+
 def test_mobile_compact_sheet_buttons_stay_on_one_row():
     css = Path('webapp/polywar.css').read_text()
     assert '.compact-cell-sheet .sheet-actions .btn{grid-column:auto;width:auto}' in css

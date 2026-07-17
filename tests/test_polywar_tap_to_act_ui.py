@@ -111,7 +111,8 @@ def test_secondary_more_menu_contextual_actions():
 def test_loading_cell_no_request_and_recompute_after_chunk_load():
     assert "Loading cell data…" in JS
     tap = JS[JS.index("async handleCellTap"):JS.index("async executePrimaryCellAction")]
-    assert "await this.ensureChunks" in tap
+    assert "await this.requestChunkForTap(chunkKey)" in tap
+    assert "this.ensureChunks(" not in tap
     assert "resolvePrimaryCellAction" in tap
 
 
