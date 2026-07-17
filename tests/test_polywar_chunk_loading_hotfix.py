@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 def test_chunk_backend_uses_request_scoped_config_and_readonly_flow():
     src = Path('services/polywar_map_service.py').read_text()
@@ -48,6 +50,43 @@ def test_frontend_chunk_loader_grid_retry_and_initial_order():
     assert 'Retry map' in js
     assert 'drawCellGrid' in js and 'drawSkeleton' in js
     assert 'this.drawCellGrid(ctx)' in js
+
+
+def test_chunk_rate_limit_exposes_retry_delay_without_changing_limit(monkeypatch):
+    from services import polywar_map_service as maps
+
+    maps._CHUNK_RATE.clear()
+    monkeypatch.setattr(maps.time, 'monotonic', lambda: 100.0)
+    maps._check_chunk_rate(42, maps.CHUNK_RATE_MAX)
+    monkeypatch.setattr(maps.time, 'monotonic', lambda: 102.2)
+    with pytest.raises(maps.PolyWarChunkRateLimited) as caught:
+        maps._check_chunk_rate(42, 1)
+    assert str(caught.value) == 'rate_limited'
+    assert caught.value.retry_after_seconds == 8
+    assert maps.CHUNK_RATE_MAX == 60
+    assert maps.CHUNK_RATE_WINDOW == 10
+
+
+def test_chunk_hotfix_coalesces_camera_and_selection_loads_and_handles_429():
+    js = Path('webapp/polywar.js').read_text()
+    pointer = js.split('this.canvas.addEventListener("pointermove"', 1)[1].split('}, { signal });', 1)[0]
+    select = js.split('select(x, y)', 1)[1].split('getCell(x, y)', 1)[0]
+    ensure = js.split('async ensureChunks', 1)[1].split('async ensureSectors', 1)[0]
+    assert 'this.scheduleChunkLoad()' in pointer
+    assert 'this.ensureChunks()' not in pointer
+    assert 'if (!this.cache.has(key) && !this.loading.has(key)) this.scheduleChunkLoad()' in select
+    assert 'Date.now() < this.chunkCooldownUntil' in ensure
+    assert 'data?.error === "rate_limited" || data?.httpStatus === 429' in ensure
+    assert 'if (!rateLimited) requestedKeys.forEach' in ensure
+    assert 'this.chunkRecoveryTimer' in js
+
+
+def test_chunk_handler_returns_429_contract():
+    src = Path('web.py').read_text()
+    handler = src.split('async def handle_polywar_chunks_api', 1)[1].split('async def handle_polywar_sectors_api', 1)[0]
+    assert 'except PolyWarChunkRateLimited as e:' in handler
+    assert '"retry_after_seconds": e.retry_after_seconds' in handler
+    assert 'status=429' in handler
 
 
 def test_mobile_compact_sheet_buttons_stay_on_one_row():

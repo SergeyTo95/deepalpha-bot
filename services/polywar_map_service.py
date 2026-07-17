@@ -40,6 +40,14 @@ CHUNK_RATE_WINDOW = 10
 CHUNK_RATE_MAX = 60
 
 
+class PolyWarChunkRateLimited(ValueError):
+    """Temporary per-user chunk budget exhaustion."""
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__("rate_limited")
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 @dataclass(frozen=True)
 class PolyWarMapConfig:
     width: int
@@ -476,7 +484,8 @@ def _check_chunk_rate(user_id: int, amount: int):
         while q and now - q[0] > CHUNK_RATE_WINDOW:
             q.popleft()
         if len(q) + amount > CHUNK_RATE_MAX:
-            raise ValueError("rate_limited")
+            retry_after = math.ceil(CHUNK_RATE_WINDOW - (now - q[0])) if q else CHUNK_RATE_WINDOW
+            raise PolyWarChunkRateLimited(retry_after)
         for _ in range(amount):
             q.append(now)
 
