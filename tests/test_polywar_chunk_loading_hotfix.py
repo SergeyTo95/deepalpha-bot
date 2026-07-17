@@ -1,4 +1,8 @@
 from pathlib import Path
+import asyncio
+import json
+import types
+import subprocess
 
 import pytest
 
@@ -74,10 +78,12 @@ def test_chunk_hotfix_coalesces_camera_and_selection_loads_and_handles_429():
     ensure = js.split('async ensureChunks', 1)[1].split('async ensureSectors', 1)[0]
     assert 'this.scheduleChunkLoad()' in pointer
     assert 'this.ensureChunks()' not in pointer
-    assert 'if (!this.cache.has(key) && !this.loading.has(key)) this.scheduleChunkLoad()' in select
-    assert 'Date.now() < this.chunkCooldownUntil' in ensure
+    assert 'this.scheduleChunkLoad({delay:80,priorityKey:key,includeVisible:true})' in select
+    assert 'this.isChunkCooldownActive()' in ensure
     assert 'data?.error === "rate_limited" || data?.httpStatus === 429' in ensure
-    assert 'if (!rateLimited) requestedKeys.forEach' in ensure
+    assert 'const successfulKeys=new Set(), rateLimitedKeys=new Set(), terminalFailedKeys=new Set()' in ensure
+    assert 'const retryKeys' not in ensure
+    assert '!this.failedChunks.has(`${x},${y}`)' in ensure
     assert 'this.chunkRecoveryTimer' in js
 
 
@@ -87,6 +93,81 @@ def test_chunk_handler_returns_429_contract():
     assert 'except PolyWarChunkRateLimited as e:' in handler
     assert '"retry_after_seconds": e.retry_after_seconds' in handler
     assert 'status=429' in handler
+
+
+def test_chunk_handler_runtime_429_and_validation_contract():
+    from services.polywar_map_service import PolyWarChunkRateLimited
+    source = Path('web.py').read_text()
+    handler = 'async def handle_polywar_chunks_api' + source.split('async def handle_polywar_chunks_api', 1)[1].split('async def handle_polywar_sectors_api', 1)[0]
+    class Response:
+        def __init__(self, payload, status=200): self.body=json.dumps(payload); self.status=status
+    ns = {'asyncio': asyncio, 'PolyWarChunkRateLimited': PolyWarChunkRateLimited,
+          '_json_response': lambda payload, status=200: Response(payload, status),
+          '_polywar_unauthorized': lambda: Response({}, 401), '_polywar_read_error_response': lambda e: Response({}, 500)}
+    exec(handler, ns)
+    request = types.SimpleNamespace(query={'chunks': '0,0'})
+    ns['_current_web_user'] = lambda _request: {'user_id': 7}
+    ns['get_polywar_chunks'] = lambda *_args: (_ for _ in ()).throw(PolyWarChunkRateLimited(7))
+    response = asyncio.run(ns['handle_polywar_chunks_api'](request)); body = json.loads(response.body)
+    assert response.status == 429 and body == {'ok': False, 'error': 'rate_limited', 'retry_after_seconds': 7}
+    ns['get_polywar_chunks'] = lambda *_args: (_ for _ in ()).throw(ValueError('out_of_bounds'))
+    response = asyncio.run(ns['handle_polywar_chunks_api'](request))
+    assert response.status == 400 and json.loads(response.body)['error'] == 'out_of_bounds'
+
+
+def test_chunk_rate_limit_uses_required_release_slot_and_expires_old_entries(monkeypatch):
+    from collections import deque
+    from services import polywar_map_service as maps
+    maps._CHUNK_RATE.clear()
+    maps._CHUNK_RATE[9] = deque([90.5] * 3 + [96.5] * 56)
+    monkeypatch.setattr(maps.time, 'monotonic', lambda: 100.0)
+    with pytest.raises(maps.PolyWarChunkRateLimited) as caught:
+        maps._check_chunk_rate(9, 5)
+    assert caught.value.retry_after_seconds == 7
+    assert 1 <= caught.value.retry_after_seconds <= maps.CHUNK_RATE_WINDOW
+    monkeypatch.setattr(maps.time, 'monotonic', lambda: 107.0)
+    maps._check_chunk_rate(9, 5)
+    assert len(maps._CHUNK_RATE[9]) == 5
+
+
+def test_chunk_rate_nonpositive_and_oversized_amounts(monkeypatch):
+    from services import polywar_map_service as maps
+    maps._CHUNK_RATE.clear(); monkeypatch.setattr(maps.time, 'monotonic', lambda: 10.25)
+    maps._check_chunk_rate(1, 0); assert not maps._CHUNK_RATE[1]
+    with pytest.raises(maps.PolyWarChunkRateLimited) as caught:
+        maps._check_chunk_rate(1, maps.CHUNK_RATE_MAX + 1)
+    assert caught.value.retry_after_seconds == maps.CHUNK_RATE_WINDOW
+
+
+def test_build_chunks_deduplicates_before_limits_and_expected_logging():
+    src = Path('services/polywar_map_service.py').read_text()
+    build = src.split('def build_chunks', 1)[1].split('def legacy_action_duplicate_response', 1)[0]
+    dedupe = 'chunks = list(dict.fromkeys((int(cx), int(cy)) for cx, cy in chunks))'
+    assert dedupe in build and build.index(dedupe) < build.index('_check_chunk_rate')
+    expected = build.split('except PolyWarChunkRateLimited as exc:', 1)[1].split('except Exception as exc:', 1)[0]
+    assert 'logger.info(' in expected and 'logger.exception(' not in expected and 'raise' in expected
+
+
+def test_production_chunk_coordinator_node_runtime(tmp_path):
+    js = Path('webapp/polywar.js').read_text()
+    start = js.index('class PolyWarMap')
+    end = js.index('\nif (typeof window !== "undefined") window.polywarChunkTestHooks', start)
+    class_source = js[start:end]
+    script = f'''const assert=require("assert"), vm=require("vm");
+let now=1000,next=1,timers=new Map();
+const sandbox={{Map,Set,Promise,Math,Number,String,Array,Object,Date:{{now:()=>now}},performance:{{now:()=>now}},
+ setTimeout:(fn,ms)=>{{const id=next++;timers.set(id,{{fn,at:now+ms}});return id;}},clearTimeout:id=>timers.delete(id),
+ polywarReducedMotion:()=>true,polywarLowPowerMode:()=>false,POLYWAR_VISUALS:{{defaultCell:12,minCell:3,maxCell:58,selectionAnimationMs:1}},
+ TACTICAL_MIN_CELL:6,document:{{getElementById:()=>null}},window:{{}},currentState:{{factions:[]}},actionMode:"capture",
+ resolvePrimaryCellAction:()=>({{enabled:true,label:"Capture"}}),shortCellReason:x=>x,polywarCapitalUi:{{cache:new Map()}},quickActionsEnabled:true}};
+vm.createContext(sandbox);vm.runInContext({class_source!r}+";this.C=PolyWarMap",sandbox);const C=sandbox.C;
+function h(){{const x=Object.create(C.prototype);Object.assign(x,{{destroyed:false,state:{{map:{{width:1000,height:1000,chunk_size:10}}}},cache:new Map(),loading:new Set(),chunkRequestsByKey:new Map(),failedChunks:new Set(),initialLoadStarted:true,selected:null,moreOpen:false,visualLowPower:true,chunkCooldownUntil:0,chunkLoadDebounceTimer:null,queuedPriorityChunkKey:null,queuedVisibleChunkLoad:false,chunkRecoveryTimer:null,chunkRecoveryPromise:null,chunkManualRetryPromise:null,chunkLoadQueuedDuringCooldown:false,loadSeq:0,updatePanel(){{}},requestDraw(){{}},visibleChunks(){{return [[0,0],[1,0]]}},ensureChunks(o){{this.calls.push(o);return Promise.resolve({{ok:true}})}},calls:[]}});return x;}}
+let x=h();for(let i=0;i<20;i++)x.select(i,0);assert.equal(x.calls.length,0);assert.equal(timers.size,1);[...timers.values()][0].fn();assert.equal(x.calls.length,1);assert.equal(x.calls[0].keys[0].join(","),"1,0");
+timers.clear();x=h();x.cache.set("0,0",{{}});for(let i=0;i<9;i++)x.select(i,0);assert.equal(timers.size,0);assert.equal(x.calls.length,0);
+x=h();for(let i=0;i<50;i++)x.scheduleChunkLoad();assert.equal(timers.size,1);[...timers.values()][0].fn();assert.equal(x.calls.length,1);timers.clear();
+x=h();x.scheduleChunkLoad({{priorityKey:"4,4"}});x.chunkCooldownUntil=6000;x.scheduleChunkLoad();assert.equal(timers.size,2);C.prototype.destroy.call(Object.assign(x,{{abort:{{abort(){{}}}},loading:new Set(),pendingRequests:new Map(),sectorLoading:new Set()}}));[...timers.values()].forEach(t=>t.fn());assert(x.destroyed);assert.equal(x.queuedPriorityChunkKey,null);assert.equal(x.queuedVisibleChunkLoad,false);'''
+    path = tmp_path / 'chunk-runtime.js'; path.write_text(script)
+    subprocess.run(['node', str(path)], check=True)
 
 
 def test_mobile_compact_sheet_buttons_stay_on_one_row():
