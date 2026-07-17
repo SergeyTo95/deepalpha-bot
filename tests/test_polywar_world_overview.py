@@ -137,3 +137,12 @@ def test_awaiting_squad_visible_and_expired_hidden_in_overview(monkeypatch):
     c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
     ids={s['id'] for s in out['squads']}
     assert 11 in ids and 12 not in ids
+
+def test_attacking_squad_overview_includes_real_attack_fields(monkeypatch):
+    from services import polywar_squad_service as squads
+    c=make(monkeypatch); squads.init_squad_schema(c); squads.ensure_squad_season_config(c,1,existing_active=False); squads.enable_squads_for_season(c,1)
+    now=datetime.utcnow(); future=now+timedelta(hours=1)
+    c.execute("insert into polywar_faction_squads(id,season_id,faction_id,spawn_index,status,x,y,previous_x,previous_y,target_x,target_y,supply_x,supply_y,hp,max_hp,move_index,blocked_ticks,spawned_at,next_move_at,expires_at,attack_target_x,attack_target_y,attack_progress,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(21,1,1,1,'attacking_cell',10,10,10,10,11,10,10,10,75,100,0,0,now,now,future,11,10,40,now,now))
+    c.commit(); ov._CACHE.clear(); out=ov.build_world_overview(1)
+    item=next(s for s in out['squads'] if s['id']==21)
+    assert (item['attack_target_x'],item['attack_target_y'],item['attack_progress'])==(11,10,40)

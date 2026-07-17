@@ -160,6 +160,8 @@ def _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache=None):
 
 def _is_legal_frontier_cell(conn,sid,fid,x,y,seed,config,cache=None):
     if not _passable(seed,x,y,config) or _owned_by_faction(conn,sid,fid,x,y,config,cache): return False
+    owner=_owner(conn,sid,x,y,config,cache)
+    if owner is not None and not _playable_enemy(conn,int(owner)): return False
     return _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache)
 
 def _is_legal_squad_step(conn,squad,nx,ny,seed,config,cache=None):
@@ -174,7 +176,7 @@ def _is_legal_squad_step(conn,squad,nx,ny,seed,config,cache=None):
 def _spawn_cell(conn,sid,fid,seed,config):
     bx,by=config.bases.get(int(fid),(None,None))
     if bx is None: return None
-    if _passable(seed,bx,by,config): return bx,by
+    if _passable(seed,bx,by,config) and m.owner_at_with_config(conn,sid,bx,by,config)==fid: return bx,by
     for nx,ny in ((bx+1,by),(bx-1,by),(bx,by+1),(bx,by-1)):
         if _passable(seed,nx,ny,config) and m.owner_at_with_config(conn,sid,nx,ny,config)==fid: return nx,ny
     for r in range(2,7):
@@ -323,7 +325,9 @@ def _choose_step(conn,squad,cfg,seed,config):
         if other and int(other['faction_id'])==fid: continue
         if other and int(other['faction_id'])!=fid: return ('engage',other)
         cap=_capital_at(conn,int(squad['season_id']),nx,ny)
-        if cap and int(cap.get('controller_faction_id') or 0)!=fid: return ('capital', (nx,ny))
+        if cap:
+            if _capital_pressure_applicable(conn,squad,nx,ny,config=config): return ('capital', (nx,ny))
+            continue
         owner=_owner(conn,sid,nx,ny,config,owners)
         action='move'
         if owner is None: action='attack_cell'
@@ -349,6 +353,9 @@ def _materialize_cell(conn,sid,x,y,owner,now):
     return row
 
 def _attackable_normal_cell(conn,sid,fid,x,y,config):
+    if not m.in_bounds_with_config(x,y,config): return False
+    season=_fetchone(conn.cursor(),'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(sid,)) or {}
+    if not _passable(season.get('secret_seed') or 'seed',x,y,config): return False
     if _capital_at(conn,sid,x,y): return False
     try:
         from services import polywar_world_service as world
@@ -366,12 +373,12 @@ def _attackable_normal_cell(conn,sid,fid,x,y,config):
 def _cancel_attack_state(conn,squad,now,next_due_at):
     _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='marching',attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,target_x=NULL,target_y=NULL,next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,squad['id']))
 
-def _capital_pressure_applicable(conn,squad,tx,ty):
+def _capital_pressure_applicable(conn,squad,tx,ty,config=None):
     cap=_capital_at(conn,int(squad['season_id']),tx,ty)
     if not cap or not cap.get('controller_faction_id'): return None
     if int(cap.get('controller_faction_id'))==int(squad['faction_id']): return None
     if abs(int(squad['x'])-tx)+abs(int(squad['y'])-ty)!=1: return None
-    config=m.load_map_config(conn,season_id=int(squad['season_id']))
+    config=config or m.load_map_config(conn,season_id=int(squad['season_id']))
     cache={}
     if not _owned_by_faction(conn,int(squad['season_id']),int(squad['faction_id']),int(squad['x']),int(squad['y']),config,cache): return None
     if not _has_owned_orthogonal_neighbor(conn,int(squad['season_id']),int(squad['faction_id']),tx,ty,config,cache): return None
@@ -457,6 +464,29 @@ def _apply_pressure(conn,squad,cfg,now,config):
     else:
         _execute(c,'INSERT INTO polywar_squad_pressure (season_id,x,y,faction_id,pressure,source_squad_id,expires_at,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (season_id,x,y,faction_id) DO UPDATE SET pressure=EXCLUDED.pressure,source_squad_id=EXCLUDED.source_squad_id,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at',(sid,x,y,fid,new,squad['id'],expires,now,now))
     return 1
+
+def _recover_stranded_squad(conn,squad,now,next_due_at,seed,config):
+    """Recover a legacy disconnected squad without teleporting or applying pressure."""
+    sid=int(squad['season_id']); fid=int(squad['faction_id']); x=int(squad['x']); y=int(squad['y'])
+    cache={}
+    if _owned_by_faction(conn,sid,fid,x,y,config,cache): return False
+    owned=[]
+    supply=(int(squad.get('supply_x') or x),int(squad.get('supply_y') or y))
+    for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+        if _passable(seed,nx,ny,config) and _owned_by_faction(conn,sid,fid,nx,ny,config,cache):
+            owned.append((abs(nx-supply[0])+abs(ny-supply[1]),nx,ny))
+    c=conn.cursor()
+    if owned:
+        _,nx,ny=min(owned)
+        _execute(c,"""UPDATE polywar_faction_squads SET previous_x=x,previous_y=y,x=%s,y=%s,status='retreating',move_index=move_index+1,blocked_ticks=0,attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,engaged_squad_id=NULL,last_moved_at=%s,next_move_at=%s,updated_at=%s WHERE id=%s""",(nx,ny,now,next_due_at,now,squad['id']))
+        return True
+    blocked=int(squad.get('blocked_ticks') or 0)+1
+    if blocked>=3:
+        _execute(c,"""UPDATE polywar_faction_squads SET status='expired',blocked_ticks=%s,attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,engaged_squad_id=NULL,next_move_at=%s,updated_at=%s WHERE id=%s""",(blocked,next_due_at,now,squad['id']))
+        _insert_squad_event(conn,sid,fid,'squad_stranded_expired',f'Stranded squad expired at {x},{y}',now,squad['id'])
+    else:
+        _execute(c,"""UPDATE polywar_faction_squads SET status='retreating',blocked_ticks=%s,attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,engaged_squad_id=NULL,next_move_at=%s,updated_at=%s WHERE id=%s""",(blocked,next_due_at,now,squad['id']))
+    return True
 
 def _tick_index_for(cfg, dt):
     # Exact due-time key: distinct next_move_at values inside one move interval must not collide.
@@ -686,6 +716,8 @@ def process_squad_tick_in_transaction(conn, season_id:int, now=None, scheduled_a
             processed_pairs.add(pair)
             if _resolve_engaged_pair(conn,s,cfg,now,scheduled_at): combat+=1
             else: _repair_broken_engagement(conn,s,cfg,now,scheduled_at)
+            continue
+        if _recover_stranded_squad(conn,s,now,next_due_at,seed,config):
             continue
         owner_here=m.owner_at_with_config(conn,season_id,int(s['x']),int(s['y']),config)
         if owner_here==int(s['faction_id']) and (int(s.get('supply_x') or 0)!=int(s['x']) or int(s.get('supply_y') or 0)!=int(s['y'])):
