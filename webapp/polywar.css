@@ -31,3 +31,4 @@
 #polywarCanvas{image-rendering:auto;filter:saturate(1.06) contrast(1.025)}
 @media(prefers-reduced-motion:reduce){#polywarCanvas{scroll-behavior:auto}.polywar-minimap{transition:none}}
 @media(max-width:680px){#polywarCanvas,.map-wrap{filter:none}}
+.world-view-legend{display:flex;flex-wrap:wrap;gap:5px 12px;max-width:100%;overflow:hidden;font-size:11px;line-height:1.3;color:#cbd5e1}.world-view-legend span{white-space:nowrap}.world-view-legend span:nth-child(4){color:#f43f5e}.world-view-legend span:nth-child(5){color:#22d3ee}@media(max-width:680px){.world-view-legend{font-size:10px;gap:3px 8px}}
