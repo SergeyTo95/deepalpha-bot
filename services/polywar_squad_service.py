@@ -159,16 +159,15 @@ def _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache=None):
                for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)))
 
 def _is_legal_frontier_cell(conn,sid,fid,x,y,seed,config,cache=None):
-    if not _passable(seed,x,y,config) or _owned_by_faction(conn,sid,fid,x,y,config,cache): return False
-    owner=_owner(conn,sid,x,y,config,cache)
-    if owner is not None and not _playable_enemy(conn,int(owner)): return False
-    return _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,cache)
+    return _is_legal_normal_attack_target(conn,sid,fid,x,y,seed,config,cache)
 
 def _is_legal_squad_step(conn,squad,nx,ny,seed,config,cache=None):
     x,y=int(squad['x']),int(squad['y']); sid=int(squad['season_id']); fid=int(squad['faction_id'])
     if not _orthogonal_step(x,y,nx,ny) or not _passable(seed,nx,ny,config): return False
     if _owned_by_faction(conn,sid,fid,nx,ny,config,cache): return True
     if squad.get('status') == 'retreating': return False
+    if _capital_at(conn,sid,nx,ny):
+        return bool(_capital_pressure_applicable(conn,squad,nx,ny,config=config))
     # A squad may enter one connected frontier cell, but never leapfrog from it.
     return (_owned_by_faction(conn,sid,fid,x,y,config,cache) and
             _is_legal_frontier_cell(conn,sid,fid,nx,ny,seed,config,cache))
@@ -193,6 +192,28 @@ def _playable_enemy(conn, fid):
 def _is_missing_optional_world_table_error(exc):
     msg=str(exc).lower()
     return any(t in msg for t in ('polywar_null_rifts','polywar_null_state')) and any(p in msg for p in ('no such table','does not exist','undefinedtable'))
+
+def _is_forbidden_special_cell(conn,sid,fid,x,y,config):
+    if _capital_at(conn,sid,x,y): return True
+    try:
+        from services import polywar_world_service as world
+        try:
+            if world.is_rift(conn,sid,x,y): return True
+        except Exception as exc:
+            if not _is_missing_optional_world_table_error(exc): raise
+        if world.is_safe_zone(conn,sid,x,y,config=config): return True
+    except Exception:
+        logger.exception('polywar_squad_special_cell_check_failed', extra={'season_id':sid,'faction_id':fid,'x':x,'y':y})
+        return True
+    return False
+
+def _is_legal_normal_attack_target(conn,sid,fid,x,y,seed,config,owner_cache=None):
+    if not m.in_bounds_with_config(x,y,config) or not _passable(seed,x,y,config): return False
+    owner=_owner(conn,sid,x,y,config,owner_cache)
+    if owner is not None and int(owner)==int(fid): return False
+    if owner is not None and not _playable_enemy(conn,int(owner)): return False
+    if not _has_owned_orthogonal_neighbor(conn,sid,fid,x,y,config,owner_cache): return False
+    return not _is_forbidden_special_cell(conn,sid,fid,x,y,config)
 
 def _is_frontier_cell(conn,sid,fid,x,y,config):
     owner=m.owner_at_with_config(conn,sid,x,y,config)
@@ -353,22 +374,8 @@ def _materialize_cell(conn,sid,x,y,owner,now):
     return row
 
 def _attackable_normal_cell(conn,sid,fid,x,y,config):
-    if not m.in_bounds_with_config(x,y,config): return False
     season=_fetchone(conn.cursor(),'SELECT secret_seed FROM polywar_seasons WHERE id=%s',(sid,)) or {}
-    if not _passable(season.get('secret_seed') or 'seed',x,y,config): return False
-    if _capital_at(conn,sid,x,y): return False
-    try:
-        from services import polywar_world_service as world
-        if world.is_rift(conn,sid,x,y): return False
-        if world.is_safe_zone(conn,sid,x,y,config=config): return False
-    except Exception as exc:
-        if not _is_missing_optional_world_table_error(exc):
-            logger.exception('polywar_squad_special_cell_check_failed', extra={'season_id':sid,'faction_id':fid,'x':x,'y':y})
-            return False
-    owner=m.owner_at_with_config(conn,sid,x,y,config)
-    if owner is not None and int(owner)==int(fid): return False
-    if owner is not None and not _playable_enemy(conn,int(owner)): return False
-    return owner is None or _playable_enemy(conn,int(owner))
+    return _is_legal_normal_attack_target(conn,sid,fid,x,y,season.get('secret_seed') or 'seed',config,{})
 
 def _cancel_attack_state(conn,squad,now,next_due_at):
     _execute(conn.cursor(),"UPDATE polywar_faction_squads SET status='marching',attack_target_x=NULL,attack_target_y=NULL,attack_progress=0,target_x=NULL,target_y=NULL,next_move_at=%s,updated_at=%s WHERE id=%s",(next_due_at,now,squad['id']))

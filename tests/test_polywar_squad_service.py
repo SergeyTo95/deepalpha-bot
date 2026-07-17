@@ -552,13 +552,39 @@ def test_capital_pressure_capped_and_cancelled(monkeypatch):
 
 def test_special_cell_errors_fail_closed(monkeypatch):
     connect, keeper, _ = db(monkeypatch); sid=make_season(connect, existing=False); c=connect(); config=maps.load_map_config(c,season_id=sid); now=datetime.utcnow()
-    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,11,10,2,now)); c.commit()
+    c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,11,10,2,now)); c.execute('INSERT OR REPLACE INTO polywar_cells (season_id,x,y,owner_faction_id,capture_progress,updated_at) VALUES (?,?,?,?,100,?)',(sid,10,10,1,now)); c.commit()
     import services.polywar_world_service as world
     monkeypatch.setattr(squads,'_passable',lambda *a,**k: True)
     monkeypatch.setattr(world,'is_rift',lambda *a, **k: True); assert squads._attackable_normal_cell(c,sid,1,11,10,config) is False
     monkeypatch.setattr(world,'is_rift',lambda *a, **k: False); monkeypatch.setattr(world,'is_safe_zone',lambda *a, **k: True); assert squads._attackable_normal_cell(c,sid,1,11,10,config) is False
     monkeypatch.setattr(world,'is_safe_zone',lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom'))); assert squads._attackable_normal_cell(c,sid,1,11,10,config) is False
     monkeypatch.setattr(world,'is_rift',lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError('no such table: polywar_null_rifts'))); monkeypatch.setattr(world,'is_safe_zone',lambda *a, **k: False); assert squads._attackable_normal_cell(c,sid,1,11,10,config) is True
+    keeper.close()
+
+
+@pytest.mark.parametrize('special', ['rift','safe'])
+def test_forbidden_special_target_never_starts_or_repeats_attack(monkeypatch,special):
+    connect,keeper,_=db(monkeypatch); sid=make_season(connect,existing=False); c=connect(); squads.enable_squads_for_season(c,sid); now=datetime(2026,1,1,12,0)
+    import services.polywar_world_service as world
+    world.init_world_schema(c); target=(11,10)
+    neighbours={(11,10),(9,10),(10,11),(10,9)}
+    c.execute('UPDATE polywar_squad_season_config SET max_active_per_faction=0 WHERE season_id=?',(sid,))
+    _insert_squad(c,sid,id=1,fid=1,x=10,y=10,target=target,next_at=now)
+    if special=='rift':
+        c.execute("INSERT INTO polywar_null_rifts(season_id,x,y,status,health,max_health,spawned_at,created_at,updated_at) VALUES(?,?,?,'active',100,100,?,?,?)",(sid,*target,now,now,now))
+        monkeypatch.setattr(world,'is_rift',lambda conn,season_id,x,y,status=None:(x,y) in neighbours)
+        monkeypatch.setattr(world,'is_safe_zone',lambda *a,**k: False)
+    else:
+        monkeypatch.setattr(world,'is_rift',lambda *a,**k: False)
+        monkeypatch.setattr(world,'is_safe_zone',lambda conn,season_id,x,y,config=None:(x,y) in neighbours)
+    monkeypatch.setattr(squads,'_passable',lambda *a,**k: True); monkeypatch.setattr(squads.m,'terrain_at_with_config',lambda *a:'plain')
+    c.commit()
+    assert squads._is_legal_normal_attack_target(c,sid,1,*target,'seed',maps.load_map_config(c,season_id=sid),{}) is False
+    for i in range(2):
+        t=now+timedelta(minutes=5*i); polywar.begin_serialized_transaction(c); squads.process_squad_tick_in_transaction(c,sid,t,scheduled_at=t); c.commit()
+        row=c.execute('SELECT status,attack_target_x,attack_target_y FROM polywar_faction_squads WHERE id=1').fetchone()
+        assert (row['attack_target_x'],row['attack_target_y'])!=target
+        assert c.execute("SELECT COUNT(*) FROM polywar_events WHERE event_type='squad_cell_attack_started' AND message LIKE ?",(f'%{target[0]},{target[1]}%',)).fetchone()[0]==0
     keeper.close()
 
 
