@@ -721,7 +721,9 @@ async def handle_auth_telegram(request):
     first_name = tg_user.get("first_name", "") or ""
 
     ensure_user(user_id, username, first_name)
-    link_web_account(user_id, "telegram", str(user_id), name=first_name)
+    from services.polywar_leader_service import sanitize_telegram_avatar_url
+    photo_url = sanitize_telegram_avatar_url(tg_user.get("photo_url") or "")
+    link_web_account(user_id, "telegram", str(user_id), name=first_name or username, avatar_url=photo_url)
     session_token = create_web_session(
         user_id=user_id,
         provider="telegram",
