@@ -440,3 +440,79 @@ def test_live_analyst_primary_and_repair_share_request_id(monkeypatch):
     assert res["ok"] is True
     assert len(calls) == 2
     assert calls[0]["request_id"] == calls[1]["request_id"]
+
+
+def test_background_disabled_by_default(monkeypatch):
+    from services.gemini_gateway import call_gemini
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("NEWS_AGENT_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.delenv("GEMINI_BACKGROUND_ENABLED", raising=False)
+    called=[]
+    monkeypatch.setattr("db.database.record_gemini_blocked_request", lambda **kw: None, raising=False)
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    res = call_gemini(feature="news_agent", origin="test", is_background=True, model="m", payload={})
+    assert res["reason"] == "blocked_background"
+    assert called == []
+
+
+def test_no_direct_gemini_http_outside_gateway():
+    from pathlib import Path
+    offenders=[]
+    for path in Path('.').rglob('*.py'):
+        if any(part in {'.git','venv','__pycache__'} for part in path.parts) or path.parts[0] == 'tests':
+            continue
+        if str(path) == 'services/gemini_gateway.py':
+            continue
+        text = path.read_text(errors='ignore')
+        if 'generativelanguage.googleapis.com' in text:
+            offenders.append(str(path))
+    assert offenders == []
+
+
+def test_retry_and_fallback_attempts_are_opt_in_and_capped(monkeypatch):
+    from services.gemini_gateway import generate_content
+    _enable(monkeypatch)
+    monkeypatch.delenv("GEMINI_RETRY_ON_SERVER_ERROR", raising=False)
+    monkeypatch.delenv("GEMINI_ALLOW_FALLBACK_MODEL", raising=False)
+    attempts=_fake_db(monkeypatch)
+    calls=[]
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: calls.append(a) or FakeResp(503))
+    res=generate_content(feature="news_agent", origin="test", model="m", payload={}, max_attempts=3, fallback_models=["fallback"])
+    assert res["reason"] == "server_error"
+    assert len(calls) == 1
+    assert len(attempts) == 1
+
+
+def test_vision_total_attempt_budget_caps_crops(monkeypatch):
+    import services.live_analyst_image_service as svc
+    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "2")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    calls=[]
+    def fake_generate(**kw):
+        calls.append(kw)
+        return {"text":"{}", "data":{"candidates":[{"finishReason":"STOP"}]}, "attempts_used":1}
+    monkeypatch.setattr("services.gemini_gateway.generate_content", fake_generate)
+    budget = svc._VisionAttemptBudget()
+    for _ in range(4):
+        svc._call_gemini_vision_parts("secret", "gemini-2.5-flash", 1, [{"text":"x"}], 10, access_checked=True, attempt_budget=budget)
+    assert len(calls) == 2
+    assert budget.remaining == 0
+
+
+def test_gemini_key_not_in_frontend_or_logs():
+    from pathlib import Path
+    forbidden=[]
+    frontend_paths = list(Path('webapp').rglob('*'))
+    if Path('templates').exists():
+        frontend_paths.extend(Path('templates').rglob('*'))
+    for path in frontend_paths:
+        if path.is_file() and 'GEMINI_API_KEY' in path.read_text(errors='ignore'):
+            forbidden.append(str(path))
+    assert forbidden == []
+    for path in Path('.').rglob('*.py'):
+        if any(part in {'.git','venv','__pycache__'} for part in path.parts) or path.parts[0] == 'tests':
+            continue
+        text = path.read_text(errors='ignore')
+        assert 'print(os.getenv(\"GEMINI_API_KEY\"' not in text
+        assert "logger.info(os.getenv('GEMINI_API_KEY'" not in text

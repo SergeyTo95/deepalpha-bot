@@ -16,7 +16,7 @@ def _env_enabled(name: str, default: bool) -> bool:
 
 
 def get_provider_status() -> Dict[str, Any]:
-    gemini_enabled = _env_enabled("GEMINI_ENABLED", True)
+    gemini_enabled = _env_enabled("GEMINI_ENABLED", False)
     return {
         "gemini": {
             "enabled": gemini_enabled,

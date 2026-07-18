@@ -56,7 +56,7 @@ def can_call_gemini(feature: str, user_id: Optional[int] = None, chat_id: Option
         res = _result(True, "admin", feature, user_id, chat_id, is_background, _env_int("GEMINI_DAILY_CALL_LIMIT", 0))
         print(f"gemini_budget_guard_allowed feature={feature} reason=admin")
         return res
-    if not _env_bool("GEMINI_ENABLED", True):
+    if not _env_bool("GEMINI_ENABLED", False):
         res = _result(False, "gemini_disabled", feature, user_id, chat_id, is_background, 0)
         print(f"gemini_budget_guard_denied feature={feature} reason=gemini_disabled")
         return res

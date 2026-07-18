@@ -124,6 +124,8 @@ def call_gemini(*, feature: str, origin: str = "", is_background: bool = False,
     for request_model in models:
         for _ in range(max_attempts):
             if attempts_used >= max_attempts:
+                if isinstance(last, dict):
+                    last["attempts_used"] = attempts_used
                 return last
             attempts_used += 1
             try:
@@ -144,7 +146,7 @@ def call_gemini(*, feature: str, origin: str = "", is_background: bool = False,
                     text = _extract_text(data) if isinstance(data, dict) else ""
                     if text:
                         finalize_gemini_attempt(attempt_id, status="success", http_status=status, reason="ok", duration_ms=int((time.monotonic()-start)*1000), provider_request_id=provider_id, **_usage(data))
-                        return {"ok": True, "text": text, "data": data, "status_code": status, "attempt_id": attempt_id, "model": request_model}
+                        return {"ok": True, "text": text, "data": data, "status_code": status, "attempt_id": attempt_id, "model": request_model, "attempts_used": attempts_used}
                     reason = reason or "empty_200"
                 elif status == 429: reason = "rate_limit"
                 elif status >= 500: reason = "server_error"
@@ -160,6 +162,8 @@ def call_gemini(*, feature: str, origin: str = "", is_background: bool = False,
             last = {"ok": False, "text": "", "data": data, "status_code": status, "reason": reason, "model": request_model}
             if not ((reason == "empty_200") or (reason == "timeout" and retry_timeout) or (status == 429 and retry_429) or (status and status >= 500 and retry_5xx)):
                 break
+    if isinstance(last, dict):
+        last["attempts_used"] = attempts_used
     return last
 
 
