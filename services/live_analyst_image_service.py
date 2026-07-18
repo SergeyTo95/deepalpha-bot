@@ -54,6 +54,10 @@ VISION_BLOCK_REASONS = {
     "request_limit_exceeded",
     "db_error",
     "vision_disabled",
+    "attempt_budget_exhausted",
+    "background_limit_exceeded",
+    "cycle_limit_exceeded",
+    "access_not_checked",
 }
 
 LIVE_IMAGE_POLYMARKET_CTA = "Для EDGE / NO TRADE отправь ссылку или попробуй поиск по скрину ещё раз."

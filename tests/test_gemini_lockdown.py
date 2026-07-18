@@ -548,22 +548,34 @@ def test_analyze_image_bytes_total_attempt_budget_across_full_second_crop_nested
     monkeypatch.setenv("GEMINI_ENABLED", "true")
     monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
-    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "4")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "5")
     monkeypatch.setenv("LIVE_ANALYST_VISION_MAX_ATTEMPTS_PER_CALL", "1")
-    paths = {"crop": 0, "nested": 0}
+    paths = {"full": 0, "second": 0, "crop": 0, "nested": 0}
     calls=[]
     monkeypatch.setattr(svc, "get_max_image_size_bytes", lambda: 1024 * 1024)
     monkeypatch.setattr(svc, "get_live_screenshot_skill_context", lambda: "")
     monkeypatch.setattr(svc, "_prepare_image_for_vision", lambda b, m: (b, m))
-    monkeypatch.setattr(svc, "_build_polymarket_vision_crops", lambda *a, **k: paths.__setitem__("crop", paths["crop"] + 1) or [])
+    monkeypatch.setattr(svc, "_build_polymarket_vision_crops", lambda *a, **k: paths.__setitem__("crop", paths["crop"] + 1) or [("market_title_focus", b"fake-crop", "image/png")])
     monkeypatch.setattr(svc, "_build_nested_screenshot_crops", lambda *a, **k: paths.__setitem__("nested", paths["nested"] + 1) or [("embedded", b"nested", "image/png")])
     def fake_generate(**kw):
         calls.append(kw)
+        payload = kw.get("payload") or {}
+        parts = ((payload.get("contents") or [{}])[0].get("parts") or [])
+        text_parts = "\n".join(str(part.get("text") or "") for part in parts if isinstance(part, dict))
+        if "Task: This image may be a screenshot" in text_parts:
+            paths["nested"] += 1
+        elif "Crop:" in text_parts or "Read this crop" in text_parts:
+            paths["crop"] += 1
+        elif "Extract readable text and screen type" in text_parts or "Carefully extract readable text" in text_parts:
+            paths["second"] += 1
+        else:
+            paths["full"] += 1
         return {"text": "", "data":{"candidates":[{"finishReason":"STOP"}]}, "attempts_used":1}
     monkeypatch.setattr("services.gemini_gateway.generate_content", fake_generate)
     out = svc.analyze_image_bytes(b"image", "image/png", context_text="polymarket screenshot", user_id=1, access_checked=True)
     assert out["ok"] is True
-    assert len(calls) <= 4
-    assert len(calls) >= 3
-    assert paths["crop"] >= 1
-    assert paths["nested"] >= 1
+    assert len(calls) <= 5
+    assert paths["full"] >= 1
+    assert paths["second"] >= 1
+    assert paths["crop"] >= 2
+    assert paths["nested"] >= 2
