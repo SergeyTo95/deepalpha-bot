@@ -465,7 +465,17 @@ def test_no_direct_gemini_http_outside_gateway():
         if str(path) == 'services/gemini_gateway.py':
             continue
         text = path.read_text(errors='ignore')
-        if 'generativelanguage.googleapis.com' in text:
+        patterns = (
+            'generativelanguage.googleapis.com',
+            'aiplatform.googleapis.com',
+            'import google.generativeai',
+            'from google import generativeai',
+            'import vertexai',
+            'from vertexai',
+            'from google.cloud import aiplatform',
+            'import google.cloud.aiplatform',
+        )
+        if any(pattern in text for pattern in patterns):
             offenders.append(str(path))
     assert offenders == []
 
@@ -516,3 +526,44 @@ def test_gemini_key_not_in_frontend_or_logs():
         text = path.read_text(errors='ignore')
         assert 'print(os.getenv(\"GEMINI_API_KEY\"' not in text
         assert "logger.info(os.getenv('GEMINI_API_KEY'" not in text
+
+
+def test_analyze_image_bytes_stops_after_first_blocked_provider(monkeypatch):
+    import services.live_analyst_image_service as svc
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_ENABLED", "false")
+    called=[]
+    monkeypatch.setattr("services.gemini_gateway.requests.post", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(svc, "get_max_image_size_bytes", lambda: 1024 * 1024)
+    monkeypatch.setattr(svc, "_prepare_image_for_vision", lambda b, m: (b, m))
+    monkeypatch.setattr(svc, "_build_polymarket_vision_crops", lambda *a, **k: (_ for _ in ()).throw(AssertionError("crop should not run")))
+    out = svc.analyze_image_bytes(b"not-real-image", "image/png", user_id=1, access_checked=True)
+    assert out == {"ok": False, "error": "blocked_global"}
+    assert called == []
+
+
+def test_analyze_image_bytes_total_attempt_budget_across_full_second_crop_nested(monkeypatch):
+    import services.live_analyst_image_service as svc
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "4")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_MAX_ATTEMPTS_PER_CALL", "1")
+    paths = {"crop": 0, "nested": 0}
+    calls=[]
+    monkeypatch.setattr(svc, "get_max_image_size_bytes", lambda: 1024 * 1024)
+    monkeypatch.setattr(svc, "get_live_screenshot_skill_context", lambda: "")
+    monkeypatch.setattr(svc, "_prepare_image_for_vision", lambda b, m: (b, m))
+    monkeypatch.setattr(svc, "_build_polymarket_vision_crops", lambda *a, **k: paths.__setitem__("crop", paths["crop"] + 1) or [])
+    monkeypatch.setattr(svc, "_build_nested_screenshot_crops", lambda *a, **k: paths.__setitem__("nested", paths["nested"] + 1) or [("embedded", b"nested", "image/png")])
+    def fake_generate(**kw):
+        calls.append(kw)
+        return {"text": "", "data":{"candidates":[{"finishReason":"STOP"}]}, "attempts_used":1}
+    monkeypatch.setattr("services.gemini_gateway.generate_content", fake_generate)
+    out = svc.analyze_image_bytes(b"image", "image/png", context_text="polymarket screenshot", user_id=1, access_checked=True)
+    assert out["ok"] is True
+    assert len(calls) <= 4
+    assert len(calls) >= 3
+    assert paths["crop"] >= 1
+    assert paths["nested"] >= 1

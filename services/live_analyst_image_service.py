@@ -45,6 +45,17 @@ class _VisionAttemptBudget:
         self.used += max(1, int(attempts or 1))
 
 
+VISION_BLOCK_REASONS = {
+    "blocked_global",
+    "blocked_feature",
+    "blocked_background",
+    "api_key_missing",
+    "daily_limit_exceeded",
+    "request_limit_exceeded",
+    "db_error",
+    "vision_disabled",
+}
+
 LIVE_IMAGE_POLYMARKET_CTA = "Для EDGE / NO TRADE отправь ссылку или попробуй поиск по скрину ещё раз."
 LIVE_IMAGE_GENERIC_CTA = "Отправь оригинальный скрин Polymarket без интерфейса Telegram или ссылку на рынок."
 LIVE_IMAGE_SUMMARY_LIMIT = 700
@@ -1195,9 +1206,6 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
     api_key = os.getenv("GEMINI_API_KEY", "")
     model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     timeout = int(os.getenv("LLM_TIMEOUT", "30"))
-    if not api_key:
-        return {"ok": False, "error": "vision_unavailable"}
-
     prepared_bytes, prepared_mime_type = _prepare_image_for_vision(image_bytes, mime_type)
     logger.info(
         "live_image_prepare original_bytes=%s prepared_bytes=%s prepared_mime=%s",
@@ -1237,6 +1245,8 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
     attempt_budget = _VisionAttemptBudget()
     try:
         text, finish_reason = _call_gemini_vision(api_key, model, timeout, prompt, prepared_bytes, prepared_mime_type, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+        if finish_reason in VISION_BLOCK_REASONS:
+            return {"ok": False, "error": finish_reason}
         full_finish_reason = finish_reason
         full_raw_len = len(text or "")
 

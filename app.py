@@ -41,7 +41,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "DeepAlphaAI_bot")
 
 
 def _watchlist_ai_summary_enabled() -> bool:
-    return str(get_setting("watchlist_ai_summary_enabled", "on") or "on").strip().lower() == "on"
+    return str(get_setting("watchlist_ai_summary_enabled", "off") or "off").strip().lower() == "on"
 
 
 

@@ -58,7 +58,7 @@ def test_probability_change_insufficient_tokens_keeps_generic_pause_resume_messa
 
 
 def test_watchlist_ai_settings_defaults_exist():
-    assert '("watchlist_ai_summary_enabled", "on")' in DB_SOURCE
+    assert '("watchlist_ai_summary_enabled", "off")' in DB_SOURCE
     assert '("watchlist_ai_summary_max_bullets", "3")' in DB_SOURCE
 
 
