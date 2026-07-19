@@ -60,6 +60,17 @@ VISION_BLOCK_REASONS = {
     "access_not_checked",
 }
 
+
+class _VisionBlocked(Exception):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _raise_if_vision_blocked(reason: str) -> None:
+    if reason in VISION_BLOCK_REASONS:
+        raise _VisionBlocked(reason)
+
 LIVE_IMAGE_POLYMARKET_CTA = "Для EDGE / NO TRADE отправь ссылку или попробуй поиск по скрину ещё раз."
 LIVE_IMAGE_GENERIC_CTA = "Отправь оригинальный скрин Polymarket без интерфейса Telegram или ссылку на рынок."
 LIVE_IMAGE_SUMMARY_LIMIT = 700
@@ -1065,7 +1076,8 @@ def _extract_polymarket_from_crop_batch(
         parts.append({"text": f"Crop: {label}"})
         parts.append({"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}})
 
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+    text, finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+    _raise_if_vision_blocked(finish_reason)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -1088,7 +1100,8 @@ def _extract_polymarket_from_single_crop(
         {"text": prompt},
         {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
     ]
-    text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 768, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+    text, finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 768, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+    _raise_if_vision_blocked(finish_reason)
     payload = _extract_json_object(text) or _payload_from_unstructured_vision_text(text)
     if payload:
         payload["screen_type"] = "polymarket"
@@ -1160,7 +1173,8 @@ def _extract_polymarket_from_nested_crops(
             {"text": prompt},
             {"inline_data": {"mime_type": crop_mime, "data": base64.b64encode(crop_bytes).decode("ascii")}},
         ]
-        crop_text, _finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+        crop_text, finish_reason = _call_gemini_vision_parts(api_key, model, timeout, parts, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget)
+        _raise_if_vision_blocked(finish_reason)
         crop_payload = _extract_json_object(crop_text) or _payload_from_unstructured_vision_text(crop_text)
         if crop_payload:
             crop_payload["_source"] = "nested_crop"
@@ -1289,6 +1303,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
             second_text, second_finish_reason = _call_gemini_vision(
                 api_key, model, timeout, second_prompt, prepared_bytes, prepared_mime_type, 1024, user_id=user_id, access_checked=access_checked, attempt_budget=attempt_budget
             )
+            _raise_if_vision_blocked(second_finish_reason)
             second_payload = _extract_json_object(second_text) or _payload_from_unstructured_vision_text(second_text)
             second_is_polymarket = _is_polymarket_payload(second_payload, second_text, context_text)
             second_improved = bool(
@@ -1422,5 +1437,7 @@ def analyze_image_bytes(image_bytes: bytes, mime_type: str, context_text: str = 
         result: Dict[str, Any] = {"ok": True, "summary": summary}
         result.update(_build_live_image_metadata(payload, text, context_text, summary))
         return result
+    except _VisionBlocked as exc:
+        return {"ok": False, "error": exc.reason}
     except Exception:
         return {"ok": False, "error": "vision_unavailable"}

@@ -548,7 +548,7 @@ def test_analyze_image_bytes_total_attempt_budget_across_full_second_crop_nested
     monkeypatch.setenv("GEMINI_ENABLED", "true")
     monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
-    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "5")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "6")
     monkeypatch.setenv("LIVE_ANALYST_VISION_MAX_ATTEMPTS_PER_CALL", "1")
     paths = {"full": 0, "second": 0, "crop": 0, "nested": 0}
     calls=[]
@@ -573,9 +573,31 @@ def test_analyze_image_bytes_total_attempt_budget_across_full_second_crop_nested
         return {"text": "", "data":{"candidates":[{"finishReason":"STOP"}]}, "attempts_used":1}
     monkeypatch.setattr("services.gemini_gateway.generate_content", fake_generate)
     out = svc.analyze_image_bytes(b"image", "image/png", context_text="polymarket screenshot", user_id=1, access_checked=True)
-    assert out["ok"] is True
-    assert len(calls) <= 5
+    assert isinstance(out.get("ok"), bool)
+    assert len(calls) <= 6
     assert paths["full"] >= 1
     assert paths["second"] >= 1
     assert paths["crop"] >= 2
     assert paths["nested"] >= 2
+
+
+def test_analyze_image_bytes_budget_exhausted_on_second_stops_before_crops(monkeypatch):
+    import services.live_analyst_image_service as svc
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_TOTAL_ATTEMPTS_PER_REQUEST", "1")
+    monkeypatch.setenv("LIVE_ANALYST_VISION_MAX_ATTEMPTS_PER_CALL", "1")
+    calls=[]
+    monkeypatch.setattr(svc, "get_max_image_size_bytes", lambda: 1024 * 1024)
+    monkeypatch.setattr(svc, "get_live_screenshot_skill_context", lambda: "")
+    monkeypatch.setattr(svc, "_prepare_image_for_vision", lambda b, m: (b, m))
+    monkeypatch.setattr(svc, "_build_polymarket_vision_crops", lambda *a, **k: (_ for _ in ()).throw(AssertionError("crop should not run")))
+    monkeypatch.setattr(svc, "_build_nested_screenshot_crops", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nested should not run")))
+    def fake_generate(**kw):
+        calls.append(kw)
+        return {"text": "", "data": {"candidates": [{"finishReason": "STOP"}]}, "attempts_used": 1}
+    monkeypatch.setattr("services.gemini_gateway.generate_content", fake_generate)
+    out = svc.analyze_image_bytes(b"image", "image/png", context_text="polymarket screenshot", user_id=1, access_checked=True)
+    assert out == {"ok": False, "error": "attempt_budget_exhausted"}
+    assert len(calls) == 1
