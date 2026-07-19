@@ -48,6 +48,23 @@ def _base_url() -> str:
     return "https://toncenter.com/api/v2" if _network() == "mainnet" else "https://testnet.toncenter.com/api/v2"
 
 
+def get_toncenter_configuration_status() -> Dict[str, Any]:
+    network = _network()
+    override = (os.getenv("TONCENTER_BASE_URL") or "").strip()
+    base_url = _base_url()
+    params = _params()
+    network_valid = network in {"mainnet", "testnet"}
+    return {
+        "configured": bool(override),
+        "endpoint_available": bool(base_url) and network_valid,
+        "using_default_endpoint": not bool(override),
+        "api_key_configured": bool(params.get("api_key")),
+        "network_valid": network_valid,
+        "network": network,
+        "base_url": base_url,
+    }
+
+
 def _params() -> Dict[str, Any]:
     network = _network()
     if network == "mainnet":
