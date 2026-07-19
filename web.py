@@ -31,6 +31,7 @@ from services.ton_wallet_service import (
     get_user_jetton_balances,
     get_user_ton_transactions,
     calculate_ton_withdraw_platform_fee,
+    get_ton_wallet_runtime_status,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
@@ -1253,9 +1254,9 @@ async def handle_webapp_summary(request):
             "app": "/app",
         },
         "ton_wallet": {
-            "enabled": str(get_setting("web_ton_enabled", "off")).lower() == "on",
-            "network": get_ton_runtime_network(),
+            **get_ton_wallet_runtime_status(),
             "token_purchase_enabled": is_ton_wallet_token_purchase_enabled(),
+            "cashier_purchase_wallet": resolve_ton_purchase_project_wallet(),
             "ton_purchase_wallet": resolve_ton_purchase_project_wallet(),
             "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
         },
@@ -1286,22 +1287,30 @@ async def handle_wallet_ton(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
-    get_or_create_user_ton_wallet(user_id)
+    runtime_status = get_ton_wallet_runtime_status()
+    if not runtime_status.get("effective_enabled"):
+        return _json_response({"ok": False, "error": runtime_status.get("reason") or "disabled", "wallet_status": runtime_status}, status=400)
+    wallet = get_or_create_user_ton_wallet(user_id)
+    if not wallet.get("ok"):
+        return _json_response(wallet, status=400)
     balance = get_user_ton_balance(user_id, refresh=False)
     if not balance.get("ok"):
         return _json_response(balance, status=400)
-    wallet = get_or_create_user_ton_wallet(user_id)
     fee = calculate_ton_withdraw_platform_fee(int(balance.get("balance_nano") or 0))
     max_send_nano = int(balance.get("balance_nano") or 0) - int(get_ton_send_fee_reserve_nano()) - int(fee.get("platform_fee_nano") or 0)
     if max_send_nano < 0:
         max_send_nano = 0
     return _json_response({
         "ok": True,
+        "wallet_status": runtime_status,
         "network": get_ton_runtime_network(),
         "wallet_address": balance.get("wallet_address", ""),
+        "user_custodial_wallet_address": balance.get("wallet_address", ""),
         "balance_nano": str(balance.get("balance_nano", "0")),
         "balance_display": str(balance.get("balance_display", "0")),
         "last_balance_checked_at": balance.get("last_balance_checked_at"),
+        "balance_stale": bool(balance.get("balance_stale")),
+        "refresh_error": balance.get("refresh_error", ""),
         "seed_reveal_used": bool(wallet.get("seed_reveal_used")),
         "fee_reserve_nano": str(get_ton_send_fee_reserve_nano()),
         "fee_reserve_display": nano_to_ton_display(get_ton_send_fee_reserve_nano()),
@@ -1321,9 +1330,14 @@ async def handle_wallet_ton_refresh(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
+    runtime_status = get_ton_wallet_runtime_status()
+    if not runtime_status.get("effective_enabled"):
+        return _json_response({"ok": False, "error": runtime_status.get("reason") or "disabled", "wallet_status": runtime_status}, status=400)
     balance = get_user_ton_balance(user_id, refresh=True)
     if not balance.get("ok"):
         return _json_response(balance, status=400)
+    if balance.get("balance_stale"):
+        return _json_response({**balance, "wallet_status": runtime_status}, status=502)
     return await handle_wallet_ton(request)
 
 

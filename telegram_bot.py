@@ -66,6 +66,7 @@ from services.ton_wallet_service import (
     get_or_create_user_ton_wallet, get_user_ton_balance, send_ton_from_user_wallet, reveal_user_ton_seed_once,
     get_ton_send_fee_reserve_nano,
     get_user_ton_transactions,
+    get_ton_wallet_runtime_status,
     create_referral_payout_wallet, reveal_referral_payout_wallet_seed_once, send_referral_payout_from_wallet, finalize_referral_payout_reconciliation,
 )
 from services.ton_chain_service import ton_to_nano, nano_to_ton_display
@@ -11986,15 +11987,18 @@ def _ton_network_label(raw_network: Optional[str] = None) -> str:
 
 async def _send_ton_wallet_screen(message: types.Message):
     uid = message.from_user.id
+    lang = get_user_lang(uid)
+    status = get_ton_wallet_runtime_status()
+    if not status.get("effective_enabled"):
+        await message.answer(_ton_send_error(uid, str(status.get("reason") or "disabled")))
+        return
     w = get_or_create_user_ton_wallet(uid)
     if not w.get("ok"):
-        await message.answer(_ton_unavailable(uid))
+        await message.answer(_ton_send_error(uid, str(w.get("error") or "disabled")))
         return
     b = get_user_ton_balance(uid, refresh=True)
-    lang = get_user_lang(uid)
     network_label = _ton_network_label(b.get("network"))
-    if lang == "ru":
-        address_html = html.escape(str(b.get("wallet_address", "")))
+    address_html = html.escape(str(b.get("wallet_address", "")))
     balance_html = html.escape(str(b.get("balance_display", "0")))
     network_html = html.escape(str(network_label))
     if lang == "ru":

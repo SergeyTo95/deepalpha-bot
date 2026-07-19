@@ -12,6 +12,7 @@ from db.database import (
 )
 from services.ton_chain_service import (
     get_ton_balance,
+    get_toncenter_configuration_status,
     get_wallet_seqno,
     nano_to_ton_display,
     normalize_ton_address,
@@ -38,6 +39,33 @@ except Exception:
 
 def _enabled() -> bool:
     return (os.getenv("TON_WALLET_ENABLED") or "false").lower() == "true"
+
+
+def get_ton_wallet_runtime_status() -> Dict[str, Any]:
+    encryption_ready = _get_fernet() is not None
+    tonsdk_ready = _wallet_ready()
+    toncenter = get_toncenter_configuration_status()
+    enabled = _enabled()
+    setup_ready = bool(tonsdk_ready and encryption_ready)
+    effective_enabled = bool(enabled and setup_ready and toncenter.get("configured"))
+    if not enabled:
+        reason = "disabled"
+    elif not setup_ready:
+        reason = "setup_required"
+    elif not toncenter.get("configured"):
+        reason = "toncenter_not_configured"
+    else:
+        reason = "ok"
+    return {
+        "enabled": enabled,
+        "effective_enabled": effective_enabled,
+        "network": get_ton_runtime_network(),
+        "tonsdk_ready": tonsdk_ready,
+        "master_encryption_key_ready": encryption_ready,
+        "toncenter": toncenter,
+        "setup_ready": setup_ready,
+        "reason": reason,
+    }
 
 
 TON_SEND_FEE_RESERVE_NANO = 50_000_000
@@ -465,10 +493,9 @@ def get_user_ton_wallet(user_id: int) -> Optional[dict]:
 
 
 def get_or_create_user_ton_wallet(user_id: int) -> dict:
-    if not _enabled():
-        return {"ok": False, "disabled": True, "error": "disabled"}
-    if not _wallet_ready():
-        return {"ok": False, "error": "setup_required"}
+    status = get_ton_wallet_runtime_status()
+    if not status.get("effective_enabled"):
+        return {"ok": False, "disabled": not status.get("enabled"), "error": status.get("reason") or "disabled", "wallet_status": status}
     existing = get_user_ton_wallet(user_id)
     if existing:
         return {"ok": True, **existing}
@@ -499,9 +526,9 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
             conn = get_connection(); cur = conn.cursor()
             cur.execute("UPDATE user_ton_wallets SET last_balance_nano=%s,last_balance_checked_at=%s,updated_at=%s WHERE id=%s", (str(balance_nano), checked_at, _now(), w.get("id")))
             conn.commit(); conn.close()
-        except Exception:
-            pass
-    return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at}
+        except Exception as exc:
+            return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at, "balance_stale": True, "refresh_error": str(exc) or "balance_unavailable"}
+    return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at, "balance_stale": False, "refresh_error": ""}
 
 
 def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str], tx_hash_source: str = "missing") -> None:

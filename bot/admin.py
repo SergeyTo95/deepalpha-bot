@@ -25,7 +25,9 @@ from db.database import (
     get_referral_reward_settings, update_referral_reward_settings,
     get_referral_rewards_admin_stats, get_referral_reward_withdrawal_requests,
     mark_referral_withdrawal_request_paid, reject_referral_withdrawal_request,
+    get_active_referral_payout_wallet, get_active_cashier_payment_wallet,
 )
+from services.ton_wallet_service import get_ton_wallet_runtime_status, get_user_ton_wallet
 from services.moderation_service import (
     get_moderation_tester_ids, set_moderation_tester_ids, get_user_lang_or_default,
 )
@@ -94,6 +96,7 @@ class UserStates(StatesGroup):
 
 
 class SystemStates(StatesGroup):
+    waiting_gram_wallet_user_id = State()
     waiting_system_prompt = State()
     waiting_broadcast = State()
     waiting_notify_hour = State()
@@ -183,6 +186,7 @@ def admin_main_kb():
         InlineKeyboardButton("⭐ Watchlist", callback_data="admin_watchlist"),
         InlineKeyboardButton("📢 Авторы", callback_data="admin_authors"),
         InlineKeyboardButton("💸 Referral Rewards", callback_data="admin_referral_rewards"),
+        InlineKeyboardButton("💎 Gram Wallets", callback_data="admin_gram_wallets"),
         InlineKeyboardButton("🪙 Crypto", callback_data="admin_crypto"),
         InlineKeyboardButton("🧠 Live Admin", callback_data="live_admin_panel"),
         InlineKeyboardButton("⚙️ System", callback_data="admin_system"),
@@ -190,6 +194,59 @@ def admin_main_kb():
     )
     return kb
 
+
+
+def _mask_ton_admin(value: str) -> str:
+    raw = str(value or "").strip()
+    if len(raw) <= 18:
+        return raw or "—"
+    return raw[:10] + "…" + raw[-8:]
+
+
+def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
+    status = get_ton_wallet_runtime_status()
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) FROM user_ton_wallets")
+    counts = cur.fetchone() or (0, 0)
+    found = None
+    if search_user_id:
+        found = get_user_ton_wallet(int(search_user_id))
+    conn.close()
+    cashier = get_active_cashier_payment_wallet() or {}
+    referral = get_active_referral_payout_wallet() or {}
+    lines = [
+        "💎 Gram Wallets", "",
+        f"Enabled: {'ON' if status.get('enabled') else 'OFF'}",
+        f"Effective: {'READY' if status.get('effective_enabled') else 'NOT READY'} ({status.get('reason')})",
+        f"Network: {status.get('network')}",
+        f"tonsdk: {'ready' if status.get('tonsdk_ready') else 'missing'}",
+        f"MASTER_ENCRYPTION_KEY: {'ready' if status.get('master_encryption_key_ready') else 'missing'}",
+        f"Toncenter: {('configured' if (status.get('toncenter') or {}).get('configured') else 'missing')} / API key: {('set' if (status.get('toncenter') or {}).get('api_key_configured') else 'not set')}",
+        "",
+        f"User custodial wallets: {int(counts[0] or 0)} total / {int(counts[1] or 0)} active",
+        f"Cashier purchase wallet: {_mask_ton_admin(cashier.get('wallet_address'))} [{cashier.get('status') or 'not configured'}]",
+        f"Referral payout wallet: {_mask_ton_admin(referral.get('wallet_address'))} [{referral.get('status') or 'not configured'}]",
+    ]
+    if search_user_id:
+        lines += ["", f"Search user_id: {search_user_id}"]
+        if found:
+            lines += [
+                f"Address: {_mask_ton_admin(found.get('wallet_address'))}",
+                f"Cached balance: {found.get('last_balance_nano') or 0} nano",
+                f"Last checked: {found.get('last_balance_checked_at') or '—'}",
+                f"Status: active",
+            ]
+        else:
+            lines.append("Wallet: not found")
+    return "\n".join(lines)
+
+
+def admin_gram_wallets_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🔍 Search by user_id", callback_data="admin_gram_wallets_search"))
+    kb.add(InlineKeyboardButton("🔄 Refresh", callback_data="admin_gram_wallets"))
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
+    return kb
 
 def _admin_lang(user_id: int) -> str:
     return get_user_lang_or_default(user_id)
@@ -1287,6 +1344,26 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data == "admin_back")
     async def back(callback: types.CallbackQuery):
         await callback.message.edit_text("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets")
+    async def admin_gram_wallets(callback: types.CallbackQuery):
+        await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_search")
+    async def admin_gram_wallets_search(callback: types.CallbackQuery):
+        await SystemStates.waiting_gram_wallet_user_id.set()
+        await callback.message.answer("Send user_id to search Gram custodial wallet.")
+
+    @dp.message_handler(state=SystemStates.waiting_gram_wallet_user_id)
+    async def admin_gram_wallets_search_result(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish(); return
+        try:
+            user_id = int((message.text or "").strip())
+        except Exception:
+            await message.answer("Invalid user_id", reply_markup=admin_gram_wallets_kb()); await state.finish(); return
+        await message.answer(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
+        await state.finish()
 
     @dp.callback_query_handler(lambda c: c.data == "admin_bot_moderation")
     async def admin_bot_moderation(callback: types.CallbackQuery):

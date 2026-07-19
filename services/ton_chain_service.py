@@ -48,6 +48,13 @@ def _base_url() -> str:
     return "https://toncenter.com/api/v2" if _network() == "mainnet" else "https://testnet.toncenter.com/api/v2"
 
 
+def get_toncenter_configuration_status() -> Dict[str, Any]:
+    network = _network()
+    base_url = _base_url()
+    params = _params()
+    return {"configured": bool(base_url), "network": network, "base_url": base_url, "api_key_configured": bool(params.get("api_key"))}
+
+
 def _params() -> Dict[str, Any]:
     network = _network()
     if network == "mainnet":
