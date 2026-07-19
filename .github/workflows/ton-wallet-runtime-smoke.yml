@@ -23,6 +23,10 @@ jobs:
           pip install -r requirements.txt
 
 
+      - name: Focused TON wallet runtime tests
+        run: pytest tests/test_ton_wallet_e2e_status.py -q
+
+
       - name: tonsdk API introspection
         run: |
           python - <<'PY'

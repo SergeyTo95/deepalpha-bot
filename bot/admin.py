@@ -1357,10 +1357,16 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets")
     async def admin_gram_wallets(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
         await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_toggle_web")
     async def admin_gram_wallets_toggle_web(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
         current = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
         set_setting("web_ton_enabled", "off" if current else "on")
         await callback.answer("✅ web_ton_enabled updated")
@@ -1368,6 +1374,9 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_search")
     async def admin_gram_wallets_search(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
         await SystemStates.waiting_gram_wallet_user_id.set()
         await callback.message.answer("Send user_id to search Gram custodial wallet.")
 
