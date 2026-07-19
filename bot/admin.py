@@ -215,14 +215,21 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
         conn.close()
     cashier = get_active_cashier_payment_wallet() or {}
     referral = get_active_referral_payout_wallet() or {}
+    web_enabled = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
     lines = [
         "💎 Gram Wallets", "",
-        f"Enabled: {'ON' if status.get('enabled') else 'OFF'}",
-        f"Effective: {'READY' if status.get('can_read_existing') else 'NOT READY'} ({status.get('reason')})",
+        f"TON_WALLET_ENABLED: {'ON' if status.get('enabled') else 'OFF'}",
+        f"web_ton_enabled: {'ON' if web_enabled else 'OFF'}",
+        f"Effective read: {'READY' if status.get('can_read_existing') else 'NOT READY'} ({status.get('reason')})",
         f"Network: {status.get('network')}",
+        f"can_read_existing: {'yes' if status.get('can_read_existing') else 'no'}",
+        f"can_create: {'yes' if status.get('can_create') else 'no'}",
+        f"can_refresh_balance: {'yes' if status.get('can_refresh_balance') else 'no'}",
+        f"can_send: {'yes' if status.get('can_send') else 'no'}",
+        f"can_export_seed: {'yes' if status.get('can_export_seed') else 'no'}",
         f"tonsdk: {'ready' if status.get('tonsdk_ready') else 'missing'}",
         f"MASTER_ENCRYPTION_KEY: {'ready' if status.get('master_encryption_key_ready') else 'missing'}",
-        f"Toncenter: {('configured' if (status.get('toncenter') or {}).get('endpoint_available') else 'missing')} / API key: {('set' if (status.get('toncenter') or {}).get('api_key_configured') else 'not set')}",
+        f"Toncenter: {('available' if (status.get('toncenter') or {}).get('endpoint_available') else 'missing')} / API key: {('set' if (status.get('toncenter') or {}).get('api_key_configured') else 'not set')}",
         "",
         f"User custodial wallets: {int(counts[0] or 0)} total / {int(counts[1] or 0)} active",
         f"Cashier purchase wallet: {_mask_ton_admin(cashier.get('wallet_address'))} [{cashier.get('status') or 'not configured'}]",
@@ -244,7 +251,9 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
 
 def admin_gram_wallets_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
+    web_enabled = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
     kb.add(InlineKeyboardButton("🔍 Search by user_id", callback_data="admin_gram_wallets_search"))
+    kb.add(InlineKeyboardButton(("🛑 Disable WebApp wallets" if web_enabled else "✅ Enable WebApp wallets"), callback_data="admin_gram_wallets_toggle_web"))
     kb.add(InlineKeyboardButton("🔄 Refresh", callback_data="admin_gram_wallets"))
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
     return kb
@@ -1348,6 +1357,13 @@ def register_admin(dp: Dispatcher):
 
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets")
     async def admin_gram_wallets(callback: types.CallbackQuery):
+        await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_toggle_web")
+    async def admin_gram_wallets_toggle_web(callback: types.CallbackQuery):
+        current = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
+        set_setting("web_ton_enabled", "off" if current else "on")
+        await callback.answer("✅ web_ton_enabled updated")
         await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_search")

@@ -11989,34 +11989,42 @@ async def _send_ton_wallet_screen(message: types.Message):
     uid = message.from_user.id
     lang = get_user_lang(uid)
     status = get_ton_wallet_runtime_status()
-    if not status.get("effective_enabled"):
+    if not status.get("can_read_existing"):
         await message.answer(_ton_send_error(uid, str(status.get("reason") or "disabled")))
         return
     w = get_or_create_user_ton_wallet(uid)
     if not w.get("ok"):
         await message.answer(_ton_send_error(uid, str(w.get("error") or "disabled")))
         return
-    b = get_user_ton_balance(uid, refresh=True)
+    can_refresh = bool(status.get("can_refresh_balance"))
+    can_send = bool(status.get("can_send"))
+    can_export_seed = bool(status.get("can_export_seed"))
+    b = get_user_ton_balance(uid, refresh=can_refresh)
     network_label = _ton_network_label(b.get("network"))
     address_html = html.escape(str(b.get("wallet_address", "")))
     balance_html = html.escape(str(b.get("balance_display", "0")))
     network_html = html.escape(str(network_label))
+    stale = bool(b.get("balance_stale"))
+    warning = ""
+    if stale:
+        warning = "\n\n⚠️ Показан cached balance: не удалось обновить баланс из сети." if lang == "ru" else "\n\n⚠️ Showing cached balance: network refresh is currently unavailable."
+    if (not can_send) and status.get("enabled"):
+        warning += "\n\nℹ️ Режим read-only: адрес и история доступны, отправка временно отключена." if lang == "ru" else "\n\nℹ️ Read-only mode: address and history are available, sending is temporarily disabled."
+    kb = InlineKeyboardMarkup(row_width=2)
+    if can_refresh:
+        kb.add(InlineKeyboardButton("🔄 Обновить баланс" if lang == "ru" else "🔄 Refresh balance", callback_data="ton_refresh"))
+    kb.add(InlineKeyboardButton("📥 Получить Gram" if lang == "ru" else "📥 Receive Gram", callback_data="ton_receive"))
+    if can_send:
+        kb.add(InlineKeyboardButton("📤 Отправить Gram" if lang == "ru" else "📤 Send Gram", callback_data="ton_send"))
+    kb.add(InlineKeyboardButton("📜 Gram Транзакции" if lang == "ru" else "📜 Gram Transactions", callback_data="ton_transactions"))
+    if can_send:
+        kb.add(InlineKeyboardButton("💎 Купить токены" if lang == "ru" else "💎 Buy tokens", callback_data="buy_tokens_ton_wallet"))
+    if can_export_seed:
+        kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase" if lang == "ru" else "🔐 Export seed phrase", callback_data="ton_seed_export"))
     if lang == "ru":
-        text = f"💎 Ваш Gram кошелёк\n\nСеть: {network_html}\n\nАдрес для пополнения:\n<code>{address_html}</code>\n\nБаланс: {balance_html} Gram\n\nОтправляйте только Gram в сети {network_html}."
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(InlineKeyboardButton("🔄 Обновить баланс", callback_data="ton_refresh"))
-        kb.add(InlineKeyboardButton("📥 Получить Gram", callback_data="ton_receive"), InlineKeyboardButton("📤 Отправить Gram", callback_data="ton_send"))
-        kb.add(InlineKeyboardButton("📜 Gram Транзакции", callback_data="ton_transactions"))
-        kb.add(InlineKeyboardButton("💎 Купить токены", callback_data="buy_tokens_ton_wallet"))
-        kb.add(InlineKeyboardButton("🔐 Экспортировать seed phrase", callback_data="ton_seed_export"))
+        text = f"💎 Ваш Gram кошелёк\n\nСеть: {network_html}\n\nАдрес для пополнения:\n<code>{address_html}</code>\n\nБаланс: {balance_html} Gram\n\nОтправляйте только Gram в сети {network_html}.{warning}"
     else:
-        text = f"💎 Your Gram Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} Gram\n\nSend only Gram on {network_html}."
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
-        kb.add(InlineKeyboardButton("📥 Receive Gram", callback_data="ton_receive"), InlineKeyboardButton("📤 Send Gram", callback_data="ton_send"))
-        kb.add(InlineKeyboardButton("📜 Gram Transactions", callback_data="ton_transactions"))
-        kb.add(InlineKeyboardButton("💎 Buy tokens", callback_data="buy_tokens_ton_wallet"))
-        kb.add(InlineKeyboardButton("🔐 Export seed phrase", callback_data="ton_seed_export"))
+        text = f"💎 Your Gram Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} Gram\n\nSend only Gram on {network_html}.{warning}"
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 

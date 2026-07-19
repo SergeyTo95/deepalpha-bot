@@ -5,8 +5,25 @@ import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if "psycopg2" not in sys.modules:
+    psycopg2 = types.ModuleType("psycopg2")
+    psycopg2.connect = lambda *a, **k: None
+    psycopg2.errors = types.SimpleNamespace(UniqueViolation=Exception)
+    psycopg2.extras = types.SimpleNamespace(RealDictCursor=object)
+    monkey_errors = types.ModuleType("psycopg2.errors")
+    monkey_errors.UniqueViolation = Exception
+    monkey_extras = types.ModuleType("psycopg2.extras")
+    monkey_extras.RealDictCursor = object
+    sys.modules["psycopg2"] = psycopg2
+    sys.modules["psycopg2.errors"] = monkey_errors
+    sys.modules["psycopg2.extras"] = monkey_extras
+
 if "requests" not in sys.modules:
-    sys.modules["requests"] = types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None)
+    class _FakeRequestsSession:
+        def __init__(self): self.headers = {}
+        def get(self, *args, **kwargs): return None
+        def post(self, *args, **kwargs): return None
+    sys.modules["requests"] = types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None, Session=lambda *a, **k: _FakeRequestsSession())
 
 
 def _install_fake_aiogram(monkeypatch):
@@ -27,17 +44,24 @@ def _install_fake_aiogram(monkeypatch):
             return None
     class StatesGroup: pass
     class Dispatcher:
-        def __init__(self, *args, **kwargs): pass
+        def __init__(self, *args, **kwargs): self.middleware = types.SimpleNamespace(setup=lambda *a, **k: None)
         def message_handler(self, *args, **kwargs): return lambda f: f
         def callback_query_handler(self, *args, **kwargs): return lambda f: f
+        def inline_handler(self, *args, **kwargs): return lambda f: f
+        def errors_handler(self, *args, **kwargs): return lambda f: f
+        def setup_middleware(self, *args, **kwargs): return None
     class Bot:
         def __init__(self, *args, **kwargs): pass
-    aiogram = types.ModuleType("aiogram"); aiogram.Bot = Bot; aiogram.Dispatcher = Dispatcher; aiogram.types = types.SimpleNamespace()
+    aiogram = types.ModuleType("aiogram"); aiogram.Bot = Bot; aiogram.Dispatcher = Dispatcher; aiogram.types = types.SimpleNamespace(Message=object, CallbackQuery=object, ContentType=types.SimpleNamespace(PHOTO="photo", TEXT="text"), WebAppInfo=lambda *a, **k: object())
     types_mod = types.ModuleType("aiogram.types")
     for name in ("ReplyKeyboardMarkup", "InlineKeyboardMarkup"):
         setattr(types_mod, name, Markup)
     for name in ("KeyboardButton", "InlineKeyboardButton"):
         setattr(types_mod, name, Button)
+    for name in ("Message", "CallbackQuery"):
+        setattr(types_mod, name, object)
+    types_mod.ContentType = types.SimpleNamespace(PHOTO="photo", TEXT="text")
+    types_mod.WebAppInfo = lambda *a, **k: object()
     dispatcher_mod = types.ModuleType("aiogram.dispatcher"); dispatcher_mod.Dispatcher = Dispatcher; dispatcher_mod.FSMContext = object
     state_mod = types.ModuleType("aiogram.dispatcher.filters.state"); state_mod.State = State; state_mod.StatesGroup = StatesGroup
     handler_mod = types.ModuleType("aiogram.dispatcher.handler"); handler_mod.CancelHandler = Exception
@@ -194,47 +218,91 @@ def test_web_ton_disabled_blocks_wallet_endpoints(monkeypatch):
     assert all(p["wallet_status"]["web_enabled"] is False for p in payloads)
 
 
-def test_telegram_wallet_ignores_web_ton_enabled_when_existing_wallet_is_readable(monkeypatch):
-    _install_fake_aiogram(monkeypatch)
-    import html
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+def _callback_data_from_markup(markup):
+    return [getattr(button, "callback_data", "") for button in getattr(markup, "buttons", [])]
 
+
+def _import_telegram_bot_for_wallet_test(monkeypatch):
+    _install_fake_aiogram(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    sys.modules.pop("telegram_bot", None)
+    import telegram_bot
+    return telegram_bot
+
+
+def test_production_telegram_wallet_read_only_keyboard_hides_send_and_export(monkeypatch):
+    telegram_bot = _import_telegram_bot_for_wallet_test(monkeypatch)
     answers = []
 
     class User:
         id = 42
-
     class Message:
         from_user = User()
         async def answer(self, text, **kwargs):
             answers.append((text, kwargs))
 
-    async def send_screen(message):
-        uid = message.from_user.id
-        lang = "en"
-        status = {"enabled": True, "effective_enabled": True, "can_read_existing": True, "can_send": False, "reason": "setup_required"}
-        if not status.get("effective_enabled"):
-            await message.answer("unavailable")
-            return
-        w = _wallet_row()
-        if not w.get("ok"):
-            await message.answer("unavailable")
-            return
-        b = {"ok": True, "wallet_address": _wallet_row()["wallet_address"], "balance_display": "123", "network": "mainnet"}
-        address_html = html.escape(str(b.get("wallet_address", "")))
-        balance_html = html.escape(str(b.get("balance_display", "0")))
-        network_html = "MAINNET"
-        text = f"💎 Your Gram Wallet\n\nNetwork: {network_html}\n\nDeposit address:\n<code>{address_html}</code>\n\nBalance: {balance_html} Gram\n\nSend only Gram on {network_html}."
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.add(InlineKeyboardButton("🔄 Refresh balance", callback_data="ton_refresh"))
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    monkeypatch.setattr(telegram_bot, "get_user_lang", lambda user_id: "en")
+    monkeypatch.setattr(telegram_bot, "get_ton_wallet_runtime_status", lambda: {"enabled": True, "effective_enabled": True, "can_read_existing": True, "can_refresh_balance": True, "can_send": False, "can_export_seed": False, "reason": "setup_required"})
+    monkeypatch.setattr(telegram_bot, "get_or_create_user_ton_wallet", lambda user_id: _wallet_row())
+    monkeypatch.setattr(telegram_bot, "get_user_ton_balance", lambda user_id, refresh=True: {"ok": True, "wallet_address": _wallet_row()["wallet_address"], "balance_display": "123", "network": "mainnet", "balance_stale": False})
 
-    # web_ton_enabled is deliberately irrelevant for the Telegram behavior under test.
-    asyncio.run(send_screen(Message()))
+    asyncio.run(telegram_bot._send_ton_wallet_screen(Message()))
 
-    assert answers
+    callbacks = _callback_data_from_markup(answers[0][1]["reply_markup"])
+    assert "ton_send" not in callbacks
+    assert "ton_seed_export" not in callbacks
+    assert "ton_refresh" in callbacks
+    assert "ton_transactions" in callbacks
+    assert "Read-only mode" in answers[0][0]
+
+
+def test_production_telegram_wallet_no_refresh_capability_hides_refresh_and_shows_stale(monkeypatch):
+    telegram_bot = _import_telegram_bot_for_wallet_test(monkeypatch)
+    answers = []
+
+    class User:
+        id = 42
+    class Message:
+        from_user = User()
+        async def answer(self, text, **kwargs):
+            answers.append((text, kwargs))
+
+    monkeypatch.setattr(telegram_bot, "get_user_lang", lambda user_id: "ru")
+    monkeypatch.setattr(telegram_bot, "get_ton_wallet_runtime_status", lambda: {"enabled": True, "effective_enabled": True, "can_read_existing": True, "can_refresh_balance": False, "can_send": False, "can_export_seed": True, "reason": "toncenter_unavailable"})
+    monkeypatch.setattr(telegram_bot, "get_or_create_user_ton_wallet", lambda user_id: _wallet_row())
+    monkeypatch.setattr(telegram_bot, "get_user_ton_balance", lambda user_id, refresh=True: {"ok": True, "wallet_address": _wallet_row()["wallet_address"], "balance_display": "123", "network": "mainnet", "balance_stale": True})
+
+    asyncio.run(telegram_bot._send_ton_wallet_screen(Message()))
+
+    callbacks = _callback_data_from_markup(answers[0][1]["reply_markup"])
+    assert "ton_refresh" not in callbacks
+    assert "ton_send" not in callbacks
+    assert "ton_seed_export" in callbacks
+    assert "cached balance" in answers[0][0]
+    assert "Ваш Gram кошелёк" in answers[0][0]
+
+
+def test_production_telegram_wallet_full_capabilities_has_action_buttons_en(monkeypatch):
+    telegram_bot = _import_telegram_bot_for_wallet_test(monkeypatch)
+    answers = []
+
+    class User:
+        id = 42
+    class Message:
+        from_user = User()
+        async def answer(self, text, **kwargs):
+            answers.append((text, kwargs))
+
+    monkeypatch.setattr(telegram_bot, "get_user_lang", lambda user_id: "en")
+    monkeypatch.setattr(telegram_bot, "get_ton_wallet_runtime_status", lambda: {"enabled": True, "effective_enabled": True, "can_read_existing": True, "can_refresh_balance": True, "can_send": True, "can_export_seed": True, "reason": "ok"})
+    monkeypatch.setattr(telegram_bot, "get_or_create_user_ton_wallet", lambda user_id: _wallet_row())
+    monkeypatch.setattr(telegram_bot, "get_user_ton_balance", lambda user_id, refresh=True: {"ok": True, "wallet_address": _wallet_row()["wallet_address"], "balance_display": "123", "network": "mainnet", "balance_stale": False})
+
+    asyncio.run(telegram_bot._send_ton_wallet_screen(Message()))
+
+    callbacks = _callback_data_from_markup(answers[0][1]["reply_markup"])
+    assert {"ton_refresh", "ton_send", "ton_seed_export", "ton_transactions", "buy_tokens_ton_wallet"}.issubset(set(callbacks))
     assert "Your Gram Wallet" in answers[0][0]
-    assert "UQexisting" in answers[0][0]
 
 
 def test_admin_displays_actual_wallet_status(monkeypatch):
@@ -258,12 +326,14 @@ def test_admin_displays_actual_wallet_status(monkeypatch):
     monkeypatch.setattr(admin, "get_user_ton_wallet", lambda user_id: _wallet_row(status="inactive"))
     monkeypatch.setattr(admin, "get_active_cashier_payment_wallet", lambda: {"wallet_address": "UQcashierwallet0000000000000000000000000000000000", "status": "active"})
     monkeypatch.setattr(admin, "get_active_referral_payout_wallet", lambda: {"wallet_address": "UQreferralwallet000000000000000000000000000000000", "status": "active"})
-    monkeypatch.setattr(admin, "get_ton_wallet_runtime_status", lambda: {"enabled": True, "can_read_existing": True, "reason": "ok", "network": "mainnet", "tonsdk_ready": True, "master_encryption_key_ready": True, "toncenter": {"endpoint_available": True, "api_key_configured": False}})
+    monkeypatch.setattr(admin, "get_ton_wallet_runtime_status", lambda: {"enabled": True, "can_read_existing": True, "can_create": True, "can_refresh_balance": True, "can_send": True, "can_export_seed": True, "reason": "ok", "network": "mainnet", "tonsdk_ready": True, "master_encryption_key_ready": True, "toncenter": {"endpoint_available": True, "api_key_configured": False}})
+    monkeypatch.setattr(admin, "get_setting", lambda key, default="": "on" if key == "web_ton_enabled" else default)
 
     text = admin.admin_gram_wallets_text(42)
 
     assert "Status: inactive" in text
-    assert "seed" not in text.lower()
+    assert "seed_encrypted" not in text.lower()
+    assert "private" not in text.lower()
     assert conn.closed is True
 
 
