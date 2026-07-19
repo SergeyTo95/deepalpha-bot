@@ -26,7 +26,7 @@ def test_provider_gateway_defaults_to_gemini_only(monkeypatch):
     monkeypatch.delenv("OPENAI_ENABLED", raising=False)
     monkeypatch.delenv("ANTHROPIC_ENABLED", raising=False)
     status = get_provider_status()
-    assert status["gemini"]["enabled"] is True
+    assert status["gemini"]["enabled"] is False
     assert status["openai"]["enabled"] is False
     assert status["anthropic"]["enabled"] is False
     assert choose_ai_provider("live_analyst", "crypto")["provider"] == "gemini"
