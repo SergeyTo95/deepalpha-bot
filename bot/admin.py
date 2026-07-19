@@ -97,6 +97,7 @@ class UserStates(StatesGroup):
 
 class SystemStates(StatesGroup):
     waiting_gram_wallet_user_id = State()
+    waiting_gram_wallet_address = State()
     waiting_system_prompt = State()
     waiting_broadcast = State()
     waiting_notify_hour = State()
@@ -220,6 +221,48 @@ def _fetch_ton_wallet_incident_rows(user_id: int):
         conn.close()
 
 
+
+def _fetch_ton_wallet_address_incident_rows(wallet_address: str):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT id,user_id,wallet_address,status,last_balance_nano,created_at,seed_reveal_used
+                       FROM user_ton_wallets
+                       WHERE wallet_address=%s
+                       ORDER BY id""", (str(wallet_address or "").strip(),))
+        return cur.fetchall() if hasattr(cur, "fetchall") else []
+    finally:
+        conn.close()
+
+
+def _admin_gram_wallets_address_incident_text(wallet_address: str, rows) -> str:
+    lines = ["💎 Gram Wallet Address Incident", "", f"Address: {_mask_ton_admin(wallet_address)}"]
+    if rows:
+        lines.append("Rows (safe incident view; secret fields omitted):")
+        for r in rows:
+            lines.append(f"wallet_id={r[0]} user_id={r[1]} address={_mask_ton_admin(r[2])} status={r[3] or 'unknown'} balance={r[4] or 0} created_at={r[5] or '—'} seed_reveal_used={bool(r[6])}")
+        if len(rows) > 1:
+            lines.append("⚠️ wallet_address_conflict: choose canonical owner only after explicit confirmation.")
+    else:
+        lines.append("Wallet address: not found")
+    return "\n".join(lines)
+
+
+def _admin_gram_wallets_address_incident_kb(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    for r in rows or []:
+        kb.add(InlineKeyboardButton(f"Choose wallet #{int(r[0])} user {int(r[1])} as owner", callback_data=f"admin_gram_wallets_addr_select:{int(r[0])}"))
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="admin_gram_wallets_cancel"))
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_gram_wallets"))
+    return kb
+
+
+def _admin_gram_wallets_address_confirm_kb(wallet_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Confirm canonical owner", callback_data=f"admin_gram_wallets_addr_canonical_confirm:{int(wallet_id)}"))
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="admin_gram_wallets_cancel"))
+    return kb
+
 def _admin_gram_wallets_incident_kb(user_id: int, rows) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     for r in rows or []:
@@ -323,11 +366,16 @@ def _admin_choose_canonical_wallet_tx(user_id: int, wallet_id: int, admin_user_i
         conn.close()
 
 
-def _admin_choose_wallet_address_owner_tx(wallet_address: str, canonical_wallet_id: int, admin_user_id: int) -> int:
+def _admin_choose_wallet_address_owner_tx(canonical_wallet_id: int, admin_user_id: int) -> int:
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute("BEGIN")
+        cur.execute("SELECT wallet_address FROM user_ton_wallets WHERE id=%s FOR UPDATE", (int(canonical_wallet_id),))
+        selected = cur.fetchone()
+        if not selected:
+            conn.rollback(); return 0
+        wallet_address = selected[0]
         cur.execute("""SELECT id,user_id,wallet_address,network,wallet_version,public_key,seed_encrypted,seed_revealed_at,seed_reveal_used,status,created_at,updated_at,last_balance_nano,last_balance_checked_at
                        FROM user_ton_wallets WHERE wallet_address=%s ORDER BY id ASC FOR UPDATE""", (str(wallet_address),))
         rows = cur.fetchall()
@@ -342,6 +390,7 @@ def _admin_choose_wallet_address_owner_tx(wallet_address: str, canonical_wallet_
             if int(getattr(cur, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("wallet_delete_failed")
             archived += 1
+        cur.execute("UPDATE user_ton_wallets SET status='active',updated_at=%s WHERE id=%s", (datetime.utcnow().isoformat(), int(canonical_wallet_id)))
         _refresh_ton_wallet_duplicate_marker_and_uniques(cur)
         conn.commit(); return archived
     except Exception:
@@ -404,6 +453,7 @@ def admin_gram_wallets_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     web_enabled = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
     kb.add(InlineKeyboardButton("🔍 Search by user_id", callback_data="admin_gram_wallets_search"))
+    kb.add(InlineKeyboardButton("🔎 Search by wallet address", callback_data="admin_gram_wallets_search_address"))
     kb.add(InlineKeyboardButton(("🛑 Disable WebApp wallets" if web_enabled else "✅ Enable WebApp wallets"), callback_data="admin_gram_wallets_toggle_web"))
     kb.add(InlineKeyboardButton("🔄 Refresh", callback_data="admin_gram_wallets"))
     kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_back"))
@@ -1544,6 +1594,26 @@ def register_admin(dp: Dispatcher):
         await state.finish()
 
 
+    @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_search_address")
+    async def admin_gram_wallets_search_address(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+        await SystemStates.waiting_gram_wallet_address.set()
+        await callback.message.answer("Send exact wallet_address to search Gram custodial wallet conflicts.")
+
+    @dp.message_handler(state=SystemStates.waiting_gram_wallet_address)
+    async def admin_gram_wallets_search_address_result(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish(); return
+        wallet_address = str(message.text or "").strip()
+        if not wallet_address:
+            await message.answer("Invalid wallet_address", reply_markup=admin_gram_wallets_kb()); await state.finish(); return
+        rows = _fetch_ton_wallet_address_incident_rows(wallet_address)
+        await message.answer(_admin_gram_wallets_address_incident_text(wallet_address, rows), reply_markup=_admin_gram_wallets_address_incident_kb(rows) if rows else admin_gram_wallets_kb())
+        await state.finish()
+
+
     @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_cancel")
     async def admin_gram_wallets_cancel(callback: types.CallbackQuery):
         if not is_admin(callback.from_user.id):
@@ -1590,6 +1660,38 @@ def register_admin(dp: Dispatcher):
         await callback.answer(f"✅ Canonical selected; archived {archived} duplicate rows")
         rows = _fetch_ton_wallet_incident_rows(user_id)
         await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=_admin_gram_wallets_incident_kb(user_id, rows) if rows else admin_gram_wallets_kb())
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_addr_select:"))
+    async def admin_gram_wallets_addr_select(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        parts = str(callback.data or "").split(":")
+        if len(parts) != 2 or not parts[1].isdigit():
+            await callback.answer("Invalid wallet action", show_alert=True); return
+        wallet_id = int(parts[1])
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id,user_id,wallet_address,status FROM user_ton_wallets WHERE id=%s", (wallet_id,))
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            await callback.answer("Wallet row not found", show_alert=True); return
+        text = f"Confirm canonical owner for wallet_address conflict\nwallet_id={row[0]}\nuser_id={row[1]}\naddress={_mask_ton_admin(row[2])}\nstatus={row[3] or 'unknown'}\n\nSeed fields are never displayed."
+        await callback.message.edit_text(text, reply_markup=_admin_gram_wallets_address_confirm_kb(wallet_id))
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_addr_canonical_confirm:"))
+    async def admin_gram_wallets_addr_canonical_confirm(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        parts = str(callback.data or "").split(":")
+        if len(parts) != 2 or not parts[1].isdigit():
+            await callback.answer("Invalid wallet action", show_alert=True); return
+        wallet_id = int(parts[1])
+        archived = _admin_choose_wallet_address_owner_tx(wallet_id, callback.from_user.id)
+        await callback.answer(f"✅ Canonical owner selected; archived {archived} duplicate rows" if archived else "Conflict no longer exists", show_alert=not bool(archived))
+        await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "admin_bot_moderation")
     async def admin_bot_moderation(callback: types.CallbackQuery):

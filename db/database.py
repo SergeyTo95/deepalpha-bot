@@ -731,11 +731,23 @@ def _init_db_inner(conn, cursor):
         archived_at TEXT NOT NULL,
         archived_by BIGINT,
         canonical_wallet_id BIGINT,
-        archive_reason TEXT NOT NULL
+        archive_reason TEXT NOT NULL,
+        restored_at TEXT,
+        restored_by TEXT,
+        restore_status TEXT DEFAULT 'archived'
     )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallet_archive_user_id ON user_ton_wallet_quarantine_archive(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallet_archive_address ON user_ton_wallet_quarantine_archive(wallet_address)")
+    for migration in [
+        "ALTER TABLE user_ton_wallet_quarantine_archive ADD COLUMN IF NOT EXISTS restored_at TEXT",
+        "ALTER TABLE user_ton_wallet_quarantine_archive ADD COLUMN IF NOT EXISTS restored_by TEXT",
+        "ALTER TABLE user_ton_wallet_quarantine_archive ADD COLUMN IF NOT EXISTS restore_status TEXT DEFAULT 'archived'",
+    ]:
+        try:
+            cursor.execute(migration)
+        except Exception:
+            pass
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_ton_wallet_quarantine_audit (
         id SERIAL PRIMARY KEY,

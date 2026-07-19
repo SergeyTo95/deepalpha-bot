@@ -358,3 +358,116 @@ def test_duplicate_wallet_address_blocks_all_user_flows(monkeypatch):
     assert svc.get_user_ton_wallet(42)['error'] == 'wallet_conflict'
     assert svc.get_or_create_user_ton_wallet(42)['error'] == 'wallet_conflict'
     assert svc.send_ton_from_user_wallet(42, 'bad', 1)['error'] in {'wallet_conflict', 'invalid_address'}
+
+
+def test_admin_wallet_address_view_and_cross_user_remediation(monkeypatch):
+    admin = _install_fake_admin(monkeypatch)
+    rows = [(7, 42, 'UQshared', 'active', '1', '2026', False), (8, 43, 'UQshared', 'inactive', '2', '2026', True)]
+    text = admin._admin_gram_wallets_address_incident_text('UQshared', rows)
+    assert 'wallet_id=7 user_id=42' in text and 'wallet_id=8 user_id=43' in text
+    prod = [
+        [7,42,'UQshared','mainnet','v4r2','pub1','encrypted-a',None,False,'inactive','c','u','1','chk'],
+        [8,43,'UQshared','mainnet','v4r2','pub2','encrypted-b',None,True,'active','c','u','2','chk'],
+    ]
+    archive = [] ; executed = []
+    class Cur:
+        rowcount = 0
+        def execute(self, q, params=None):
+            executed.append(q)
+            if q.startswith('SELECT wallet_address'):
+                self.one = ('UQshared',)
+            elif q.startswith('SELECT id,user_id,wallet_address'):
+                self.result = [tuple(r) for r in prod]
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_archive'):
+                archive.append(('archive', params)); self.rowcount = 1
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_audit'):
+                archive.append(('audit', params)); self.rowcount = 1
+            elif q.startswith('DELETE FROM user_ton_wallets'):
+                wid = int(params[0]); before=len(prod); prod[:] = [r for r in prod if int(r[0]) != wid]; self.rowcount = before-len(prod)
+            elif q.startswith("UPDATE user_ton_wallets SET status='active'"):
+                for r in prod:
+                    if int(r[0]) == int(params[1]): r[9] = 'active'
+            elif 'GROUP BY' in q:
+                self.result = []
+        def fetchone(self): return self.one
+        def fetchall(self): return self.result
+    class Conn:
+        def cursor(self): return Cur()
+        def rollback(self): raise AssertionError('must not rollback')
+        def commit(self): pass
+        def close(self): pass
+    monkeypatch.setattr(admin, 'get_connection', lambda: Conn())
+    assert admin._admin_choose_wallet_address_owner_tx(7, 999) == 1
+    assert prod == [[7,42,'UQshared','mainnet','v4r2','pub1','encrypted-a',None,False,'active','c','u','1','chk']]
+    assert [x for kind, x in archive if kind == 'archive'][0][6] == 'encrypted-b'
+    assert any('CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_user_id_unique' in q for q in executed)
+    assert any('CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_wallet_address_unique' in q for q in executed)
+    assert any('DELETE FROM settings WHERE key' in q for q in executed)
+
+
+def test_address_conflict_blocks_balance_reveal_send_before_secret_or_network(monkeypatch):
+    _install_fake_requests(monkeypatch)
+    from services import ton_wallet_service as svc
+    class Cur:
+        def __init__(self): self.result = []
+        def execute(self, q, params=None):
+            if 'WHERE user_id=%s' in q:
+                self.result = [(42,'UQshared','mainnet','v4r2','0',None,False,None,'active',None,'c',7)]
+            elif 'WHERE wallet_address=%s' in q and 'id,user_id,wallet_address,status' in q:
+                self.result = [(7,42,'UQshared','active'), (8,43,'UQshared','active')]
+            elif 'SELECT id,user_id FROM user_ton_wallets WHERE wallet_address' in q:
+                self.result = [(7,42),(8,43)]
+            elif 'SELECT id,user_id,wallet_address,status,seed_encrypted,seed_reveal_used' in q:
+                self.result = [(7,42,'UQshared','active','encrypted',False)]
+        def fetchall(self): return self.result
+    class Conn:
+        def cursor(self): return Cur()
+        def rollback(self): pass
+        def close(self): pass
+    monkeypatch.setattr(svc, 'get_connection', lambda: Conn())
+    monkeypatch.setattr(svc, 'get_setting', lambda key, default='': default)
+    monkeypatch.setenv('TON_WALLET_ENABLED','true'); monkeypatch.setenv('TON_SEED_EXPORT_ENABLED','true')
+    monkeypatch.setattr(svc, '_get_fernet', lambda: object()); monkeypatch.setattr(svc, '_wallet_ready', lambda: True)
+    monkeypatch.setattr(svc, 'validate_ton_address', lambda x: True); monkeypatch.setattr(svc, 'normalize_ton_address', lambda x: x)
+    monkeypatch.setattr(svc, 'get_ton_balance', lambda *a, **k: (_ for _ in ()).throw(AssertionError('network called')))
+    monkeypatch.setattr(svc, 'decrypt_secret', lambda *a, **k: (_ for _ in ()).throw(AssertionError('decrypt called')))
+    assert svc.get_user_ton_balance(42, refresh=True)['error'] == 'wallet_conflict'
+    assert svc.reveal_user_ton_seed_once(42, 7, 'UQshared')['error'] == 'wallet_conflict'
+    assert svc.send_ton_from_user_wallet(42, 'UQdest', 1)['error'] == 'wallet_conflict'
+
+
+def test_restore_archived_wallet_dry_run_conflict_and_success(monkeypatch):
+    from scripts import restore_archived_ton_wallet as restore
+    archive_row = (5, 8, 42, 'UQrestore', 'mainnet', 'v4r2', 'public-key-secret', 'encrypted-restore', None, False, 'active', 'c', 'u', '9', 'chk', 'archived')
+    state = {'prod': [], 'archive_updated': False, 'audit': [], 'rolled': 0, 'committed': 0}
+    class Cur:
+        rowcount = 0
+        def execute(self, q, params=None):
+            if q.startswith('SELECT id,original_wallet_id'):
+                self.one = archive_row
+            elif q.startswith('SELECT id,user_id FROM user_ton_wallets'):
+                self.result = list(state['prod'])
+            elif q.startswith('INSERT INTO user_ton_wallets'):
+                state['prod'].append(params); self.rowcount = 1
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_audit'):
+                state['audit'].append(params); self.rowcount = 1
+            elif q.startswith('UPDATE user_ton_wallet_quarantine_archive'):
+                state['archive_updated'] = True; self.rowcount = 1
+        def fetchone(self): return self.one
+        def fetchall(self): return self.result
+    class Conn:
+        def cursor(self): return Cur()
+        def rollback(self): state['rolled'] += 1
+        def commit(self): state['committed'] += 1
+        def close(self): pass
+    monkeypatch.setattr(restore, 'get_connection', lambda: Conn())
+    assert restore.restore_archive_record(5, 'tester', dry_run=True)['dry_run'] is True
+    assert state['prod'] == [] and state['committed'] == 0
+    state['prod'] = [(7,42)]
+    assert restore.restore_archive_record(5, 'tester', dry_run=False)['error'] == 'production_conflict'
+    assert state['committed'] == 0
+    state['prod'] = []
+    out = restore.restore_archive_record(5, 'tester', dry_run=False)
+    assert out['ok'] is True and state['committed'] == 1 and state['archive_updated'] is True
+    assert state['prod'][0][5] == 'encrypted-restore'
+    assert 'encrypted-restore' not in str(state['audit']).lower()
