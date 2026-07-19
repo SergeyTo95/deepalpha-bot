@@ -5,28 +5,14 @@ import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-if "psycopg2" not in sys.modules:
-    psycopg2 = types.ModuleType("psycopg2")
-    psycopg2.connect = lambda *a, **k: None
-    psycopg2.errors = types.SimpleNamespace(UniqueViolation=Exception)
-    psycopg2.extras = types.SimpleNamespace(RealDictCursor=object)
-    monkey_errors = types.ModuleType("psycopg2.errors")
-    monkey_errors.UniqueViolation = Exception
-    monkey_extras = types.ModuleType("psycopg2.extras")
-    monkey_extras.RealDictCursor = object
-    sys.modules["psycopg2"] = psycopg2
-    sys.modules["psycopg2.errors"] = monkey_errors
-    sys.modules["psycopg2.extras"] = monkey_extras
-
-if "requests" not in sys.modules:
-    class _FakeRequestsSession:
-        def __init__(self): self.headers = {}
-        def get(self, *args, **kwargs): return None
-        def post(self, *args, **kwargs): return None
-    sys.modules["requests"] = types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None, Session=lambda *a, **k: _FakeRequestsSession())
 
 
 def _install_fake_aiogram(monkeypatch):
+    try:
+        import aiogram  # noqa: F401
+        return
+    except ImportError:
+        pass
     class Button:
         def __init__(self, text, callback_data=None, **kwargs):
             self.text = text; self.callback_data = callback_data
@@ -82,6 +68,12 @@ def _install_fake_aiogram(monkeypatch):
 
 
 def _install_fake_aiohttp(monkeypatch):
+    try:
+        import aiohttp  # noqa: F401
+        return
+    except ImportError:
+        pass
+
     class Response:
         def __init__(self, text="", status=200, content_type=None, headers=None):
             self.text = text; self.status = status; self.content_type = content_type; self.headers = headers or {}
@@ -219,12 +211,25 @@ def test_web_ton_disabled_blocks_wallet_endpoints(monkeypatch):
 
 
 def _callback_data_from_markup(markup):
-    return [getattr(button, "callback_data", "") for button in getattr(markup, "buttons", [])]
+    if hasattr(markup, "buttons"):
+        return [getattr(button, "callback_data", "") for button in markup.buttons]
+    if hasattr(markup, "to_python"):
+        payload = markup.to_python()
+        return [
+            button.get("callback_data", "")
+            for row in payload.get("inline_keyboard", [])
+            for button in row
+        ]
+    return [
+        getattr(button, "callback_data", "")
+        for row in getattr(markup, "inline_keyboard", [])
+        for button in row
+    ]
 
 
 def _import_telegram_bot_for_wallet_test(monkeypatch):
     _install_fake_aiogram(monkeypatch)
-    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
     sys.modules.pop("telegram_bot", None)
     import telegram_bot
     return telegram_bot
