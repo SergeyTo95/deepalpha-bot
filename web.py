@@ -32,6 +32,7 @@ from services.ton_wallet_service import (
     get_user_ton_transactions,
     calculate_ton_withdraw_platform_fee,
     get_ton_wallet_runtime_status,
+    get_public_ton_wallet_runtime_status,
 )
 from services.ton_chain_service import validate_ton_address, ton_to_nano, nano_to_ton_display
 from services.airdrop_points_service import award_article_unique_view_points, award_article_shared_points
@@ -1254,7 +1255,7 @@ async def handle_webapp_summary(request):
             "app": "/app",
         },
         "ton_wallet": {
-            **get_ton_wallet_runtime_status(),
+            **_web_ton_public_status(),
             "token_purchase_enabled": is_ton_wallet_token_purchase_enabled(),
             "cashier_purchase_wallet": resolve_ton_purchase_project_wallet(),
             "ton_purchase_wallet": resolve_ton_purchase_project_wallet(),
@@ -1262,6 +1263,29 @@ async def handle_webapp_summary(request):
         },
     })
 
+
+
+def _web_ton_enabled_setting() -> bool:
+    return str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
+
+
+def _web_ton_public_status() -> dict:
+    status = get_public_ton_wallet_runtime_status()
+    web_enabled = _web_ton_enabled_setting()
+    reason = str(status.get("reason") or "setup_required")
+    effective = bool(web_enabled and status.get("effective_enabled"))
+    if not web_enabled:
+        reason = "disabled"
+    return {**status, "web_enabled": web_enabled, "effective_enabled": effective, "reason": reason}
+
+
+def _web_ton_block_response(required_capability: str = "can_read_existing"):
+    status = _web_ton_public_status()
+    if not status.get("web_enabled"):
+        return _json_response({"ok": False, "error": "disabled", "wallet_status": status}, status=400)
+    if required_capability and not status.get(required_capability):
+        return _json_response({"ok": False, "error": status.get("reason") or "setup_required", "wallet_status": status}, status=400)
+    return None
 
 def _current_web_user_id(request) -> int:
     token = request.cookies.get("deepalpha_session", "")
@@ -1287,9 +1311,10 @@ async def handle_wallet_ton(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
-    runtime_status = get_ton_wallet_runtime_status()
-    if not runtime_status.get("effective_enabled"):
-        return _json_response({"ok": False, "error": runtime_status.get("reason") or "disabled", "wallet_status": runtime_status}, status=400)
+    blocked = _web_ton_block_response("can_read_existing")
+    if blocked:
+        return blocked
+    runtime_status = _web_ton_public_status()
     wallet = get_or_create_user_ton_wallet(user_id)
     if not wallet.get("ok"):
         return _json_response(wallet, status=400)
@@ -1330,9 +1355,10 @@ async def handle_wallet_ton_refresh(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
-    runtime_status = get_ton_wallet_runtime_status()
-    if not runtime_status.get("effective_enabled"):
-        return _json_response({"ok": False, "error": runtime_status.get("reason") or "disabled", "wallet_status": runtime_status}, status=400)
+    blocked = _web_ton_block_response("can_refresh_balance")
+    if blocked:
+        return blocked
+    runtime_status = _web_ton_public_status()
     balance = get_user_ton_balance(user_id, refresh=True)
     if not balance.get("ok"):
         return _json_response(balance, status=400)
@@ -1347,6 +1373,9 @@ async def handle_wallet_ton_send(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
+    blocked = _web_ton_block_response("can_send")
+    if blocked:
+        return blocked
     try:
         payload = await request.json()
     except Exception:
@@ -1617,6 +1646,9 @@ async def handle_wallet_ton_transactions(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
+    blocked = _web_ton_block_response("can_read_existing")
+    if blocked:
+        return blocked
     limit = _safe_int(request.query.get("limit", "20"), default=20, min_value=1, max_value=50)
     offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0, max_value=10000)
     items = get_user_ton_transactions(user_id=user_id, limit=limit + 1, offset=offset)
@@ -1639,6 +1671,9 @@ async def handle_wallet_ton_buy_tokens(request):
         return _json_response({"ok": False, "error": "unauthorized"}, status=401)
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
+    blocked = _web_ton_block_response("can_send")
+    if blocked:
+        return blocked
     if not is_ton_wallet_token_purchase_enabled():
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:

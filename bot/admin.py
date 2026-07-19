@@ -205,23 +205,24 @@ def _mask_ton_admin(value: str) -> str:
 
 def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
     status = get_ton_wallet_runtime_status()
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) FROM user_ton_wallets")
-    counts = cur.fetchone() or (0, 0)
-    found = None
-    if search_user_id:
-        found = get_user_ton_wallet(int(search_user_id))
-    conn.close()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) FROM user_ton_wallets")
+        counts = cur.fetchone() or (0, 0)
+        found = get_user_ton_wallet(int(search_user_id)) if search_user_id else None
+    finally:
+        conn.close()
     cashier = get_active_cashier_payment_wallet() or {}
     referral = get_active_referral_payout_wallet() or {}
     lines = [
         "💎 Gram Wallets", "",
         f"Enabled: {'ON' if status.get('enabled') else 'OFF'}",
-        f"Effective: {'READY' if status.get('effective_enabled') else 'NOT READY'} ({status.get('reason')})",
+        f"Effective: {'READY' if status.get('can_read_existing') else 'NOT READY'} ({status.get('reason')})",
         f"Network: {status.get('network')}",
         f"tonsdk: {'ready' if status.get('tonsdk_ready') else 'missing'}",
         f"MASTER_ENCRYPTION_KEY: {'ready' if status.get('master_encryption_key_ready') else 'missing'}",
-        f"Toncenter: {('configured' if (status.get('toncenter') or {}).get('configured') else 'missing')} / API key: {('set' if (status.get('toncenter') or {}).get('api_key_configured') else 'not set')}",
+        f"Toncenter: {('configured' if (status.get('toncenter') or {}).get('endpoint_available') else 'missing')} / API key: {('set' if (status.get('toncenter') or {}).get('api_key_configured') else 'not set')}",
         "",
         f"User custodial wallets: {int(counts[0] or 0)} total / {int(counts[1] or 0)} active",
         f"Cashier purchase wallet: {_mask_ton_admin(cashier.get('wallet_address'))} [{cashier.get('status') or 'not configured'}]",
@@ -234,7 +235,7 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
                 f"Address: {_mask_ton_admin(found.get('wallet_address'))}",
                 f"Cached balance: {found.get('last_balance_nano') or 0} nano",
                 f"Last checked: {found.get('last_balance_checked_at') or '—'}",
-                f"Status: active",
+                f"Status: {found.get('status') or 'unknown'}",
             ]
         else:
             lines.append("Wallet: not found")
