@@ -162,8 +162,8 @@ def test_admin_choose_canonical_archives_duplicates_and_unblocks_unique(monkeypa
     _install_fake_requests(monkeypatch)
     from bot import admin
     rows = [
-        [7, 42, 'UQcanon', 'mainnet', 'v4r2', 'active', '10', '2026', False],
-        [8, 42, 'UQdup', 'mainnet', 'v4r2', 'active', '20', '2026', False],
+        [7, 42, 'UQcanon', 'mainnet', 'v4r2', 'pub1', 'encrypted-seed-1', None, False, 'active', '2026', '2026', '10', '2026'],
+        [8, 42, 'UQdup', 'mainnet', 'v4r2', 'pub2', 'encrypted-seed-2', None, False, 'active', '2026', '2026', '20', '2026'],
     ]
     audit = []
     class Cur:
@@ -171,13 +171,15 @@ def test_admin_choose_canonical_archives_duplicates_and_unblocks_unique(monkeypa
         def execute(self, q, params=None):
             if q.startswith('SELECT id,user_id,wallet_address'):
                 self.result = [tuple(r) for r in rows]
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_archive'):
+                audit.append(('archive', params)); self.rowcount = 1
             elif q.startswith('INSERT INTO user_ton_wallet_quarantine_audit'):
-                audit.append(params)
+                audit.append(('audit', params)); self.rowcount = 1
             elif q.startswith('DELETE FROM user_ton_wallets'):
                 wid = int(params[1]); before = len(rows); rows[:] = [r for r in rows if int(r[0]) != wid]; self.rowcount = before - len(rows)
             elif q.startswith('UPDATE user_ton_wallets'):
                 for r in rows:
-                    if int(r[0]) == int(params[2]): r[5] = 'active'
+                    if int(r[0]) == int(params[2]): r[9] = 'active'
         def fetchall(self): return self.result
     class Conn:
         def cursor(self): return Cur()
@@ -188,7 +190,10 @@ def test_admin_choose_canonical_archives_duplicates_and_unblocks_unique(monkeypa
     archived = admin._admin_choose_canonical_wallet_tx(42, 7, 999)
     assert archived == 1
     assert [r[0] for r in rows] == [7]
-    assert audit and 'enc' not in str(audit).lower() and 'seed' not in str(audit).lower()
+    archive_rows = [x for kind, x in audit if kind == 'archive']
+    audit_rows = [x for kind, x in audit if kind == 'audit']
+    assert archive_rows and archive_rows[0][6] == 'encrypted-seed-2'
+    assert audit_rows and 'encrypted-seed-2' not in str(audit_rows).lower()
 
 
 def _load_telegram_seed_helpers():
@@ -250,3 +255,106 @@ def test_conftest_has_only_sqlite_adapter_no_dependency_stubs():
     assert 'requests' not in text
     assert 'psycopg2' not in text
     assert 'sys.modules' not in text
+
+
+def _install_fake_admin(monkeypatch):
+    aiogram = types.ModuleType("aiogram"); aiogram.types = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "aiogram", aiogram)
+    types_mod = types.ModuleType("aiogram.types")
+    types_mod.InlineKeyboardMarkup = lambda *a, **k: types.SimpleNamespace(buttons=[], add=lambda *x, **y: None)
+    types_mod.InlineKeyboardButton = lambda *a, **k: object()
+    monkeypatch.setitem(sys.modules, "aiogram.types", types_mod)
+    monkeypatch.setitem(sys.modules, "aiogram.dispatcher", types.SimpleNamespace(Dispatcher=object, FSMContext=object))
+    monkeypatch.setitem(sys.modules, "aiogram.dispatcher.filters.state", types.SimpleNamespace(State=object, StatesGroup=object))
+    _install_fake_requests(monkeypatch)
+    from bot import admin
+    return admin
+
+
+def test_quarantine_single_wallet_forbidden_and_archive_insert_failure_rolls_back(monkeypatch):
+    admin = _install_fake_admin(monkeypatch)
+    rows = [[7,42,'UQone','mainnet','v4r2','pub','encrypted-seed',None,False,'active','c','u','0','chk']]
+    class CurSingle:
+        rowcount = 0
+        def execute(self, q, params=None):
+            if q.startswith('SELECT id,user_id,wallet_address'): self.result = [tuple(r) for r in rows]
+        def fetchall(self): return self.result
+    class ConnSingle:
+        rolled = committed = False
+        def cursor(self): return CurSingle()
+        def rollback(self): self.rolled = True
+        def commit(self): self.committed = True
+        def close(self): pass
+    conn = ConnSingle(); monkeypatch.setattr(admin, 'get_connection', lambda: conn)
+    assert admin._admin_quarantine_wallet_tx(42, 7, 999) == 0
+    assert rows and conn.rolled and not conn.committed
+
+    rows = [[7,42,'UQa','mainnet','v4r2','pub','encrypted-a',None,False,'active','c','u','0','chk'], [8,42,'UQb','mainnet','v4r2','pub','encrypted-b',None,False,'active','c','u','0','chk']]
+    class CurFailArchive:
+        rowcount = 0
+        def execute(self, q, params=None):
+            if q.startswith('SELECT id,user_id,wallet_address'): self.result = [tuple(r) for r in rows]
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_archive'): self.rowcount = 0
+            elif q.startswith('DELETE FROM user_ton_wallets'): rows.clear()
+        def fetchall(self): return self.result
+    class ConnFail:
+        rolled = False
+        def cursor(self): return CurFailArchive()
+        def rollback(self): self.rolled = True
+        def commit(self): raise AssertionError('must not commit')
+        def close(self): pass
+    conn = ConnFail(); monkeypatch.setattr(admin, 'get_connection', lambda: conn)
+    try:
+        admin._admin_quarantine_wallet_tx(42, 8, 999)
+    except RuntimeError as exc:
+        assert str(exc) == 'wallet_archive_insert_failed'
+    assert len(rows) == 2 and conn.rolled
+
+
+def test_delete_rowcount_zero_rolls_back(monkeypatch):
+    admin = _install_fake_admin(monkeypatch)
+    rows = [[7,42,'UQa','mainnet','v4r2','pub','encrypted-a',None,False,'active','c','u','0','chk'], [8,42,'UQb','mainnet','v4r2','pub','encrypted-b',None,False,'active','c','u','0','chk']]
+    class Cur:
+        rowcount = 0
+        def execute(self, q, params=None):
+            if q.startswith('SELECT id,user_id,wallet_address'): self.result = [tuple(r) for r in rows]
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_archive'): self.rowcount = 1
+            elif q.startswith('INSERT INTO user_ton_wallet_quarantine_audit'): self.rowcount = 1
+            elif q.startswith('DELETE FROM user_ton_wallets'): self.rowcount = 0
+        def fetchall(self): return self.result
+    class Conn:
+        rolled = False
+        def cursor(self): return Cur()
+        def rollback(self): self.rolled = True
+        def commit(self): raise AssertionError('must not commit')
+        def close(self): pass
+    conn = Conn(); monkeypatch.setattr(admin, 'get_connection', lambda: conn)
+    try:
+        admin._admin_quarantine_wallet_tx(42, 8, 999)
+    except RuntimeError as exc:
+        assert str(exc) == 'wallet_delete_failed'
+    assert len(rows) == 2 and conn.rolled
+
+
+def test_duplicate_wallet_address_blocks_all_user_flows(monkeypatch):
+    _install_fake_requests(monkeypatch)
+    from services import ton_wallet_service as svc
+    class Cur:
+        def __init__(self): self.result = []
+        def execute(self, q, params=None):
+            if 'FROM user_ton_wallets' in q and 'WHERE user_id=%s' in q:
+                uid = int(params[0]); self.result = [(uid,'UQshared','mainnet','v4r2','0',None,False,None,'active',None,'c',uid)]
+            elif 'WHERE wallet_address=%s' in q:
+                self.result = [(7,42,'UQshared','active'), (8,43,'UQshared','active')]
+        def fetchall(self): return self.result
+    class Conn:
+        def cursor(self): return Cur()
+        def close(self): pass
+    monkeypatch.setattr(svc, 'get_connection', lambda: Conn())
+    monkeypatch.setenv('TON_WALLET_ENABLED', 'true'); monkeypatch.setenv('TON_SEED_EXPORT_ENABLED', 'true')
+    monkeypatch.setattr(svc, '_get_fernet', lambda: object())
+    monkeypatch.setattr(svc, '_wallet_ready', lambda: True)
+    monkeypatch.setattr(svc, 'get_setting', lambda key, default='': default)
+    assert svc.get_user_ton_wallet(42)['error'] == 'wallet_conflict'
+    assert svc.get_or_create_user_ton_wallet(42)['error'] == 'wallet_conflict'
+    assert svc.send_ton_from_user_wallet(42, 'bad', 1)['error'] in {'wallet_conflict', 'invalid_address'}

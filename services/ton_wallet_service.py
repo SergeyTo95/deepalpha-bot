@@ -484,6 +484,11 @@ def _load_canonical_wallet_row(user_id: int):
         _log_wallet_conflict(user_id, rows)
         return {"wallet_conflict": True, "rows": rows}
 
+    wallet_address_conflicts = _load_wallet_address_conflicts(str(rows[0][1] or ""))
+    if len(wallet_address_conflicts) > 1 or len({int(r[1]) for r in wallet_address_conflicts}) > 1:
+        _log_wallet_address_conflict(str(rows[0][1] or ""), wallet_address_conflicts)
+        return {"wallet_conflict": True, "rows": rows, "address_conflicts": wallet_address_conflicts}
+
     if override_address:
         for row in rows:
             if normalize_ton_address(str(row[1] or "").strip()) == override_address:
@@ -511,6 +516,33 @@ def _load_canonical_wallet_row(user_id: int):
 
     return rows[0]
 
+
+
+def _load_wallet_address_conflicts(wallet_address: str):
+    address = str(wallet_address or "").strip()
+    if not address:
+        return []
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id,user_id,wallet_address,status
+               FROM user_ton_wallets
+               WHERE wallet_address=%s
+               ORDER BY id ASC""",
+            (address,),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def _log_wallet_address_conflict(wallet_address: str, rows) -> None:
+    for row in rows or []:
+        logger.critical(
+            "TON wallet_address_conflict id=%s user_id=%s wallet_address=%s status=%s",
+            row[0], row[1], str(row[2] or wallet_address), str(row[3] or ""),
+        )
 
 def _log_wallet_conflict(user_id: int, rows) -> None:
     for row in rows or []:
@@ -759,6 +791,12 @@ def reveal_user_ton_seed_once(user_id: int, wallet_id: int = None, wallet_addres
             conn.rollback()
             return {"ok": False, "error": "wallet_not_found"}
         row = rows[0]
+        cur.execute("SELECT id,user_id FROM user_ton_wallets WHERE wallet_address=%s ORDER BY id ASC FOR UPDATE", (str(row[2] or ""),))
+        address_rows = cur.fetchall()
+        if len(address_rows) > 1 or len({int(r[1]) for r in address_rows}) > 1:
+            logger.critical("TON wallet_address_conflict reveal wallet_address=%s rows=%s", str(row[2] or ""), [(r[0], r[1]) for r in address_rows])
+            conn.rollback()
+            return _wallet_conflict_payload()
         if int(row[0]) != int(wallet_id) or int(row[1]) != int(user_id):
             conn.rollback()
             return {"ok": False, "error": "invalid_reveal_target"}

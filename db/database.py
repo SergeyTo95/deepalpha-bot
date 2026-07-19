@@ -712,6 +712,31 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_wallet_quarantine_archive (
+        id SERIAL PRIMARY KEY,
+        original_wallet_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT,
+        network TEXT,
+        wallet_version TEXT,
+        public_key TEXT,
+        seed_encrypted TEXT NOT NULL,
+        seed_revealed_at TEXT,
+        seed_reveal_used BOOLEAN,
+        status TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        last_balance_nano TEXT,
+        last_balance_checked_at TEXT,
+        archived_at TEXT NOT NULL,
+        archived_by BIGINT,
+        canonical_wallet_id BIGINT,
+        archive_reason TEXT NOT NULL
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallet_archive_user_id ON user_ton_wallet_quarantine_archive(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallet_archive_address ON user_ton_wallet_quarantine_archive(wallet_address)")
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_ton_wallet_quarantine_audit (
         id SERIAL PRIMARY KEY,
         original_wallet_id BIGINT NOT NULL,
