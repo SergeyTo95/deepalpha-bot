@@ -12,6 +12,7 @@ from db.database import (
 )
 from services.ton_chain_service import (
     get_ton_balance,
+    get_toncenter_configuration_status,
     get_wallet_seqno,
     nano_to_ton_display,
     normalize_ton_address,
@@ -38,6 +39,60 @@ except Exception:
 
 def _enabled() -> bool:
     return (os.getenv("TON_WALLET_ENABLED") or "false").lower() == "true"
+
+
+def _ton_runtime_reason(enabled: bool, can_create: bool, can_refresh_balance: bool, can_send: bool) -> str:
+    if not enabled:
+        return "disabled"
+    if not can_refresh_balance:
+        return "toncenter_unavailable"
+    if not can_create or not can_send:
+        return "setup_required"
+    return "ok"
+
+
+def get_ton_wallet_runtime_status(public: bool = False) -> Dict[str, Any]:
+    encryption_ready = _get_fernet() is not None
+    tonsdk_ready = _wallet_ready()
+    toncenter = get_toncenter_configuration_status()
+    enabled = _enabled()
+    can_read_existing = bool(enabled)
+    can_create = bool(enabled and tonsdk_ready and encryption_ready)
+    can_refresh_balance = bool(enabled and toncenter.get("endpoint_available") and toncenter.get("network_valid"))
+    can_send = bool(can_create and can_refresh_balance)
+    can_export_seed = bool(enabled and encryption_ready)
+    reason = _ton_runtime_reason(enabled, can_create, can_refresh_balance, can_send)
+    payload = {
+        "enabled": enabled,
+        "effective_enabled": bool(enabled and can_read_existing),
+        "network": get_ton_runtime_network(),
+        "can_read_existing": can_read_existing,
+        "can_create": can_create,
+        "can_refresh_balance": can_refresh_balance,
+        "can_send": can_send,
+        "can_export_seed": can_export_seed,
+        "setup_ready": bool(tonsdk_ready and encryption_ready),
+        "reason": reason,
+    }
+    if public:
+        payload["toncenter"] = {
+            "endpoint_available": bool(toncenter.get("endpoint_available")),
+            "configured": bool(toncenter.get("configured")),
+            "using_default_endpoint": bool(toncenter.get("using_default_endpoint")),
+            "api_key_configured": bool(toncenter.get("api_key_configured")),
+            "network_valid": bool(toncenter.get("network_valid")),
+        }
+        return payload
+    payload.update({
+        "tonsdk_ready": tonsdk_ready,
+        "master_encryption_key_ready": encryption_ready,
+        "toncenter": toncenter,
+    })
+    return payload
+
+
+def get_public_ton_wallet_runtime_status() -> Dict[str, Any]:
+    return get_ton_wallet_runtime_status(public=True)
 
 
 TON_SEND_FEE_RESERVE_NANO = 50_000_000
@@ -390,6 +445,7 @@ def _safe_wallet_data(row):
         "last_balance_checked_at": row[5],
         "seed_reveal_used": row[6],
         "seed_revealed_at": row[7],
+        "status": row[8],
         "id": row[11],
     }
 
@@ -465,13 +521,12 @@ def get_user_ton_wallet(user_id: int) -> Optional[dict]:
 
 
 def get_or_create_user_ton_wallet(user_id: int) -> dict:
-    if not _enabled():
-        return {"ok": False, "disabled": True, "error": "disabled"}
-    if not _wallet_ready():
-        return {"ok": False, "error": "setup_required"}
+    status = get_ton_wallet_runtime_status()
     existing = get_user_ton_wallet(user_id)
     if existing:
-        return {"ok": True, **existing}
+        return {"ok": True, "read_only": not status.get("can_send"), "wallet_status": get_public_ton_wallet_runtime_status(), **existing}
+    if not status.get("can_create"):
+        return {"ok": False, "disabled": not status.get("enabled"), "error": status.get("reason") or "setup_required", "wallet_status": get_public_ton_wallet_runtime_status()}
     try:
         seed_phrase, address, public_key = _generate_wallet_real()
         encrypted = encrypt_secret(seed_phrase)
@@ -493,15 +548,19 @@ def get_user_ton_balance(user_id: int, refresh: bool = True) -> dict:
     balance_nano = int(w.get("last_balance_nano") or 0)
     checked_at = w.get("last_balance_checked_at")
     if refresh:
+        status = get_ton_wallet_runtime_status()
+        if not status.get("can_refresh_balance"):
+            return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at, "balance_stale": True, "refresh_error": "toncenter_unavailable"}
         try:
             balance_nano = get_ton_balance(w["wallet_address"])
             checked_at = _now()
             conn = get_connection(); cur = conn.cursor()
             cur.execute("UPDATE user_ton_wallets SET last_balance_nano=%s,last_balance_checked_at=%s,updated_at=%s WHERE id=%s", (str(balance_nano), checked_at, _now(), w.get("id")))
             conn.commit(); conn.close()
-        except Exception:
-            pass
-    return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at}
+        except Exception as exc:
+            logger.warning("TON balance refresh failed user_id=%s wallet=%s error_type=%s", user_id, w.get("wallet_address"), exc.__class__.__name__, exc_info=True)
+            return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at, "balance_stale": True, "refresh_error": "balance_refresh_failed"}
+    return {"ok": True, "balance_nano": str(balance_nano), "balance_display": nano_to_ton_display(balance_nano), "wallet_address": w["wallet_address"], "network": w["network"], "last_balance_checked_at": checked_at, "balance_stale": False, "refresh_error": ""}
 
 
 def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination: str, status: str, tx_hash: Optional[str], comment: str, error: Optional[str], tx_hash_source: str = "missing") -> None:
@@ -523,10 +582,11 @@ def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination:
 
 
 def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nano: int, comment: str = "") -> dict:
-    if not _enabled():
-        return {"ok": False, "error": "disabled"}
-    if not _wallet_ready():
-        return {"ok": False, "error": "setup_required"}
+    status = get_ton_wallet_runtime_status()
+    if not status.get("enabled"):
+        return {"ok": False, "error": "disabled", "wallet_status": get_public_ton_wallet_runtime_status()}
+    if not status.get("can_send"):
+        return {"ok": False, "error": status.get("reason") or "setup_required", "wallet_status": get_public_ton_wallet_runtime_status()}
     destination = normalize_ton_address(destination_address)
     if not validate_ton_address(destination):
         return {"ok": False, "error": "invalid_address"}
@@ -551,9 +611,10 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
     try:
         balance = get_ton_balance(wallet_address)
-    except Exception:
-        _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "balance_unavailable")
-        return {"ok": False, "error": "balance_unavailable"}
+    except Exception as exc:
+        logger.warning("TON send balance preflight failed user_id=%s wallet=%s error_type=%s", user_id, wallet_address, exc.__class__.__name__, exc_info=True)
+        _record_tx(user_id, wallet_address, amount_nano, destination, "failed", None, comment, "toncenter_unavailable")
+        return {"ok": False, "error": "toncenter_unavailable"}
     reserve = get_ton_send_fee_reserve_nano()
     if balance < int(amount_nano) + reserve:
         return {"ok": False, "error": "insufficient_balance"}
@@ -644,6 +705,11 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
 
 
 def reveal_user_ton_seed_once(user_id: int) -> dict:
+    status = get_ton_wallet_runtime_status()
+    if not status.get("enabled"):
+        return {"ok": False, "error": "disabled"}
+    if not status.get("can_export_seed"):
+        return {"ok": False, "error": "setup_required"}
     canonical = get_user_ton_wallet(user_id)
     if not canonical or not canonical.get("id"):
         return {"ok": False, "error": "wallet_not_found"}

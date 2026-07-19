@@ -94,7 +94,12 @@ const I18N = {
     openInTonviewer: "Open in Tonviewer",
     buyWithTon: "Buy tokens with Gram wallet",
     articles: "📰 Articles",
-    articlesDesc: "Read analysis from authors"
+    articlesDesc: "Read analysis from authors",
+    tonSetupError: "Gram wallet backend setup is incomplete.",
+    tonNetworkError: "Gram wallet network provider is not configured.",
+    tonDisabledError: "Gram wallet is temporarily disabled.",
+    tonReadOnlyBanner: "Read-only mode: address, copy and history are available; send/refresh may be disabled.",
+    tonCachedBalanceWarning: "Showing cached balance because network refresh is unavailable."
   },
   ru: {
     title: "Личный кабинет",
@@ -167,7 +172,12 @@ const I18N = {
     openInTonviewer: "Открыть в Tonviewer",
     buyWithTon: "Купить токены с Gram кошелька",
     articles: "📰 Статьи",
-    articlesDesc: "Читать аналитику авторов"
+    articlesDesc: "Читать аналитику авторов",
+    tonSetupError: "Gram кошелёк не настроен на сервере.",
+    tonNetworkError: "Провайдер сети Gram не настроен.",
+    tonDisabledError: "Gram кошелёк временно отключён.",
+    tonReadOnlyBanner: "Read-only режим: адрес, копирование и история доступны; отправка/обновление могут быть отключены.",
+    tonCachedBalanceWarning: "Показан cached balance: сеть временно недоступна для обновления."
   }
 };
 
@@ -351,6 +361,15 @@ function renderAuthed(summary, lang) {
   const subscriptionLine = sub.active
     ? `${t.activeUntil} ${escapeHtml(sub.until || sub.raw_subscription_until || "-")}`
     : t.notActive;
+  const tonStatus = summary.ton_wallet || {};
+  const tonEffectiveEnabled = !!tonStatus.effective_enabled;
+  const tonCanRead = !!tonStatus.can_read_existing;
+  const tonCanRefresh = !!tonStatus.can_refresh_balance;
+  const tonCanSend = !!tonStatus.can_send;
+  const tonTokenPurchaseEnabled = !!tonStatus.token_purchase_enabled;
+  const tonCardVisible = tonEffectiveEnabled || (!!tonStatus.web_enabled && tonCanRead);
+  const tonReason = String(tonStatus.reason || (tonStatus.enabled === false ? "disabled" : "setup_required"));
+  const tonUnavailableText = tonReason === "disabled" ? t.tonDisabledError : (tonReason === "toncenter_unavailable" ? t.tonNetworkError : t.tonSetupError);
 
   document.getElementById("appRoot").innerHTML = `
     <section class="card">
@@ -393,31 +412,32 @@ function renderAuthed(summary, lang) {
       <p class="meta">${t.cashierDesc}</p>
       <a href="/pay"><button class="btn btn-primary">${t.openCashier}</button></a>
     </section>
-    <section class="card">
+    ${tonCardVisible ? `<section class="card" id="tonWalletCard">
       <h2>💎 ${t.tonWallet}</h2>
+      ${(!tonCanSend || !tonCanRefresh) ? `<p class="meta status-warning" id="tonDegradedBanner">${escapeHtml(t.tonReadOnlyBanner)}</p>` : ""}
       <p class="meta" id="tonNetworkLine">-</p>
       <p class="small" id="tonAddressLine">-</p>
       <p class="value" id="tonBalanceLine">-</p>
       <div class="inline-links">
-        <button id="tonRefreshBtn" class="btn btn-secondary">🔄 ${t.refresh}</button>
+        ${tonCanRefresh ? `<button id="tonRefreshBtn" class="btn btn-secondary">🔄 ${t.refresh}</button>` : ""}
         <button id="tonCopyBtn" class="btn btn-secondary">📋 ${t.copyAddress}</button>
       </div>
-      <div class="inline-links" style="margin-top:8px;">
+      ${tonCanSend ? `<div class="inline-links" style="margin-top:8px;">
         <input id="tonDestInput" class="analysis-input" placeholder="EQ..." />
         <input id="tonAmountInput" class="analysis-input" placeholder="0.1" />
       </div>
       <div class="inline-links" style="margin-top:8px;">
         <button id="tonSendBtn" class="btn btn-primary">📤 ${t.sendTon}</button>
         <button id="tonMaxBtn" class="btn btn-secondary">💰 ${t.sendMax}</button>
-      </div>
+      </div>` : ""}
       <p class="small" id="tonJettonsLine">${t.tonTokensDisabled}</p>
       <p class="small" id="tonStatusLine"></p>
       <h3>${t.tonHistory}</h3>
       <button id="tonHistoryRefreshBtn" class="btn btn-secondary">🔄 ${t.refreshHistory}</button>
       <div id="tonHistoryList" class="history-list"></div>
-      <h3>${t.buyWithTon}</h3>
-      <div class="inline-links"><input id="tonBuyTokensInput" class="analysis-input" placeholder="10" /><button id="tonBuyBtn" class="btn btn-primary">🪙 Buy</button></div>
-    </section>
+      ${(tonCanSend && tonTokenPurchaseEnabled) ? `<h3>${t.buyWithTon}</h3>
+      <div class="inline-links"><input id="tonBuyTokensInput" class="analysis-input" placeholder="10" /><button id="tonBuyBtn" class="btn btn-primary">🪙 Buy</button></div>` : ""}
+    </section>` : `<section class="card" id="tonWalletUnavailable"><h2>💎 ${t.tonWallet}</h2><p class="meta">${escapeHtml(tonUnavailableText)}</p></section>`}
 
     <section class="card">
       <h2>${t.actions}</h2>
@@ -530,15 +550,16 @@ function renderAuthed(summary, lang) {
     tonRefreshRunning = true;
     const res = doRefresh ? await callTonRefresh() : await callTonWallet();
     if (!res.ok || !res.data?.ok) {
-      tonStatusLine.textContent = "Gram wallet unavailable";
+      const code = String(res.data?.error || res.data?.wallet_status?.reason || "setup_required");
+      tonStatusLine.textContent = code === "disabled" ? t.tonDisabledError : (code === "toncenter_unavailable" ? t.tonNetworkError : t.tonSetupError);
       tonRefreshRunning = false;
       return;
     }
     tonWalletData = res.data;
     tonNetworkLine.textContent = `Network: ${String(res.data.network || "").toUpperCase()}`;
-    tonAddressLine.textContent = `Address: ${res.data.wallet_address || "-"}`;
+    tonAddressLine.textContent = `Address: ${res.data.user_custodial_wallet_address || res.data.wallet_address || "-"}`;
     tonBalanceLine.textContent = `${res.data.balance_display || "0"} Gram`;
-    tonStatusLine.textContent = "";
+    tonStatusLine.textContent = res.data.balance_stale ? t.tonCachedBalanceWarning : "";
     const balanceNano = BigInt(String(res.data.balance_nano || "0"));
     const feeReserveNano = BigInt(String(res.data.fee_reserve_nano || "0"));
     let maxSendNano = balanceNano - feeReserveNano;
@@ -635,72 +656,79 @@ function renderAuthed(summary, lang) {
     historyHasMore = Boolean(res.data?.pagination?.has_more);
     renderHistoryItems();
   };
-  document.getElementById("tonRefreshBtn").onclick = async () => { await loadTonWallet(true); };
-  document.getElementById("tonHistoryRefreshBtn").onclick = async () => { await loadTonHistory(); };
-  document.getElementById("tonCopyBtn").onclick = async () => { if (tonWalletData?.wallet_address) await copyToClipboardSafe(tonWalletData.wallet_address); };
-  document.getElementById("tonMaxBtn").onclick = async () => {
-    if (tonWalletState.maxSendNano <= 0n) {
+  if (tonCardVisible) {
+    const tonRefreshBtn = document.getElementById("tonRefreshBtn");
+    if (tonRefreshBtn) tonRefreshBtn.onclick = async () => { await loadTonWallet(true); };
+    document.getElementById("tonHistoryRefreshBtn").onclick = async () => { await loadTonHistory(); };
+    document.getElementById("tonCopyBtn").onclick = async () => { if (tonWalletData?.wallet_address) await copyToClipboardSafe(tonWalletData.wallet_address); };
+    const tonMaxBtn = document.getElementById("tonMaxBtn");
+    if (tonMaxBtn) tonMaxBtn.onclick = async () => {
+      if (tonWalletState.maxSendNano <= 0n) {
+        tonStatusLine.textContent = lang === "ru"
+          ? `Недостаточно Gram для отправки с учётом резерва комиссии.\nБаланс: ${tonWalletState.balanceDisplay} Gram\nРезерв: ~${tonWalletState.feeReserveDisplay} Gram`
+          : `Not enough Gram to send after fee reserve.\nBalance: ${tonWalletState.balanceDisplay} Gram\nReserve: ~${tonWalletState.feeReserveDisplay} Gram`;
+        return;
+      }
+      document.getElementById("tonAmountInput").value = tonWalletState.maxSendDisplay;
       tonStatusLine.textContent = lang === "ru"
-        ? `Недостаточно Gram для отправки с учётом резерва комиссии.\nБаланс: ${tonWalletState.balanceDisplay} Gram\nРезерв: ~${tonWalletState.feeReserveDisplay} Gram`
-        : `Not enough Gram to send after fee reserve.\nBalance: ${tonWalletState.balanceDisplay} Gram\nReserve: ~${tonWalletState.feeReserveDisplay} Gram`;
-      return;
-    }
-    document.getElementById("tonAmountInput").value = tonWalletState.maxSendDisplay;
-    tonStatusLine.textContent = lang === "ru"
-      ? `Будет отправлено всё доступное за вычетом резерва комиссии: ${tonWalletState.maxSendDisplay} Gram`
-      : `Will send all available after fee reserve: ${tonWalletState.maxSendDisplay} Gram`;
-  };
-  document.getElementById("tonSendBtn").onclick = async () => {
-    const destination = String(document.getElementById("tonDestInput").value || "").trim();
-    const amount = String(document.getElementById("tonAmountInput").value || "").trim();
-    const amountNano = parseTonToNanoClient(amount);
-    if (amountNano === null || amountNano <= 0n) {
-      tonStatusLine.textContent = mapTonError("invalid_amount", tonWalletState);
-      return;
-    }
-    if (amountNano > tonWalletState.maxSendNano) {
-      tonStatusLine.textContent = mapTonError("insufficient_balance", tonWalletState);
-      return;
-    }
-    const sent = await callTonSend(destination, amount, "");
-    if (sent.data?.ok) {
-      tonStatusLine.textContent = lang === "ru" ? "✅ Gram отправлен.\nБаланс обновляется..." : "✅ Gram sent.\nRefreshing balance...";
-      await loadTonWallet(true);
-      await loadTonHistory();
-      return;
-    }
-    const details = {
-      balanceDisplay: String(sent.data?.balance_display || tonWalletState.balanceDisplay || "0"),
-      feeReserveDisplay: String(sent.data?.fee_reserve_display || tonWalletState.feeReserveDisplay || "0"),
-      maxSendDisplay: String(sent.data?.max_send_display || tonWalletState.maxSendDisplay || "0")
+        ? `Будет отправлено всё доступное за вычетом резерва комиссии: ${tonWalletState.maxSendDisplay} Gram`
+        : `Will send all available after fee reserve: ${tonWalletState.maxSendDisplay} Gram`;
     };
-    tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details, sent.data?.error_detail || "unknown");
-  };
-  const mapTonPurchaseError = (code) => {
-    const unavailable = lang === "ru"
-      ? "Покупка токенов временно недоступна."
-      : "Token purchases are temporarily unavailable.";
-    const c = String(code || "");
-    if (c === "ton_token_purchase_disabled" || c === "ton_platform_wallet_not_configured") return unavailable;
-    if (c === "invalid_amount_tokens") return lang === "ru" ? "Введите корректное количество токенов." : "Enter a valid token amount.";
-    if (c === "amount_tokens_too_small") return lang === "ru" ? "Слишком маленькое количество токенов." : "Token amount is too small.";
-    if (c === "invalid_ton_token_price") return unavailable;
-    return unavailable;
-  };
-
-  document.getElementById("tonBuyBtn").onclick = async () => {
-    const amount_tokens = String(document.getElementById("tonBuyTokensInput").value || "").trim();
-    const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount_tokens }) });
-    const d = await r.json();
-    tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : mapTonPurchaseError(d.error || "buy_failed");
-    if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
-  };
-  loadTonWallet(false).then(() => loadTonWallet(true));
-  loadTonHistory();
-  if (window.__tonRefreshIntervalId) clearInterval(window.__tonRefreshIntervalId);
-  window.__tonRefreshIntervalId = setInterval(() => {
-    if (document.getElementById("tonNetworkLine")) loadTonWallet(true);
-  }, 30000);
+    const tonSendBtn = document.getElementById("tonSendBtn");
+    if (tonSendBtn) tonSendBtn.onclick = async () => {
+      const destination = String(document.getElementById("tonDestInput").value || "").trim();
+      const amount = String(document.getElementById("tonAmountInput").value || "").trim();
+      const amountNano = parseTonToNanoClient(amount);
+      if (amountNano === null || amountNano <= 0n) {
+        tonStatusLine.textContent = mapTonError("invalid_amount", tonWalletState);
+        return;
+      }
+      if (amountNano > tonWalletState.maxSendNano) {
+        tonStatusLine.textContent = mapTonError("insufficient_balance", tonWalletState);
+        return;
+      }
+      const sent = await callTonSend(destination, amount, "");
+      if (sent.data?.ok) {
+        tonStatusLine.textContent = lang === "ru" ? "✅ Gram отправлен.\nБаланс обновляется..." : "✅ Gram sent.\nRefreshing balance...";
+        await loadTonWallet(true);
+        await loadTonHistory();
+        return;
+      }
+      const details = {
+        balanceDisplay: String(sent.data?.balance_display || tonWalletState.balanceDisplay || "0"),
+        feeReserveDisplay: String(sent.data?.fee_reserve_display || tonWalletState.feeReserveDisplay || "0"),
+        maxSendDisplay: String(sent.data?.max_send_display || tonWalletState.maxSendDisplay || "0")
+      };
+      tonStatusLine.textContent = mapTonError(sent.data?.error || "send_failed", details, sent.data?.error_detail || "unknown");
+    };
+    const mapTonPurchaseError = (code) => {
+      const unavailable = lang === "ru"
+        ? "Покупка токенов временно недоступна."
+        : "Token purchases are temporarily unavailable.";
+      const c = String(code || "");
+      if (c === "ton_token_purchase_disabled" || c === "ton_platform_wallet_not_configured") return unavailable;
+      if (c === "invalid_amount_tokens") return lang === "ru" ? "Введите корректное количество токенов." : "Enter a valid token amount.";
+      if (c === "amount_tokens_too_small") return lang === "ru" ? "Слишком маленькое количество токенов." : "Token amount is too small.";
+      if (c === "invalid_ton_token_price") return unavailable;
+      return unavailable;
+    };
+  
+    const tonBuyBtn = document.getElementById("tonBuyBtn");
+    if (tonBuyBtn) tonBuyBtn.onclick = async () => {
+      const amount_tokens = String(document.getElementById("tonBuyTokensInput").value || "").trim();
+      const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount_tokens }) });
+      const d = await r.json();
+      tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : mapTonPurchaseError(d.error || "buy_failed");
+      if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
+    };
+    loadTonWallet(false).then(() => { if (tonCanRefresh) return loadTonWallet(true); });
+    loadTonHistory();
+    if (window.__tonRefreshIntervalId) clearInterval(window.__tonRefreshIntervalId);
+    window.__tonRefreshIntervalId = setInterval(() => {
+      if (tonCanRefresh && document.getElementById("tonNetworkLine")) loadTonWallet(true);
+    }, 30000);
+  
+    }
 
   const topProgressPhrases = {
     en: [

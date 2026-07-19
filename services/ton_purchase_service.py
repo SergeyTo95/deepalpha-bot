@@ -1,8 +1,11 @@
 import os
+import logging
 from datetime import datetime
 
 from db.database import get_active_cashier_payment_wallet, get_connection, get_setting, submit_ton_purchase_intent
 from services.ton_chain_service import normalize_ton_address, resolve_recent_ton_tx_hash, ton_to_nano
+
+logger = logging.getLogger(__name__)
 
 
 def get_ton_token_price_per_internal_token_nano() -> int:
@@ -122,7 +125,8 @@ def verify_ton_purchase_onchain(intent_id: int) -> dict:
             if created_at and tx_created and tx_created < str(created_at):
                 return {"ok": False, "error": "timestamp_mismatch"}
         return {"ok": True, "tx_hash": h}
-    except Exception as e:
-        return {"ok": False, "error": f"verify_failed:{e}"}
+    except Exception:
+        logger.exception("TON purchase verification failed intent_id=%s", intent_id)
+        return {"ok": False, "error": "verification_failed"}
     finally:
         conn.close()
