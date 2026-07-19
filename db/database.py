@@ -118,6 +118,22 @@ def get_connection():
     return conn
 
 
+
+def _diagnose_and_enforce_user_ton_wallet_uniques(conn, cursor) -> None:
+    if not _table_exists(cursor, "user_ton_wallets"):
+        return
+    reports = []
+    for col in ("user_id", "wallet_address"):
+        cursor.execute(f"SELECT {col}, COUNT(*) FROM user_ton_wallets GROUP BY {col} HAVING COUNT(*) > 1")
+        dupes = cursor.fetchall()
+        if dupes:
+            reports.append(f"duplicate {col}: " + ", ".join(f"{_first_scalar(r)} x{r[1]}" for r in dupes[:20]))
+    if reports:
+        conn.rollback()
+        raise RuntimeError("user_ton_wallets uniqueness migration blocked; manual quarantine/remediation required; " + "; ".join(reports))
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_user_id_unique ON user_ton_wallets(user_id)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_wallet_address_unique ON user_ton_wallets(wallet_address)")
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -681,6 +697,7 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_user_id ON user_ton_wallets(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
+    _diagnose_and_enforce_user_ton_wallet_uniques(conn, cursor)
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS ton_wallet_transactions (

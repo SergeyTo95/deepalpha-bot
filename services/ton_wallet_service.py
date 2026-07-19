@@ -3,6 +3,7 @@ import os
 import logging
 import re
 import time
+import zlib
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -41,6 +42,10 @@ def _enabled() -> bool:
     return (os.getenv("TON_WALLET_ENABLED") or "false").lower() == "true"
 
 
+def _seed_export_enabled() -> bool:
+    return (os.getenv("TON_SEED_EXPORT_ENABLED") or "false").lower() == "true"
+
+
 def _ton_runtime_reason(enabled: bool, can_create: bool, can_refresh_balance: bool, can_send: bool) -> str:
     if not enabled:
         return "disabled"
@@ -60,7 +65,7 @@ def get_ton_wallet_runtime_status(public: bool = False) -> Dict[str, Any]:
     can_create = bool(enabled and tonsdk_ready and encryption_ready)
     can_refresh_balance = bool(enabled and toncenter.get("endpoint_available") and toncenter.get("network_valid"))
     can_send = bool(can_create and can_refresh_balance)
-    can_export_seed = bool(enabled and encryption_ready)
+    can_export_seed = bool(enabled and _seed_export_enabled() and encryption_ready)
     reason = _ton_runtime_reason(enabled, can_create, can_refresh_balance, can_send)
     payload = {
         "enabled": enabled,
@@ -70,6 +75,7 @@ def get_ton_wallet_runtime_status(public: bool = False) -> Dict[str, Any]:
         "can_create": can_create,
         "can_refresh_balance": can_refresh_balance,
         "can_send": can_send,
+        "seed_export_enabled": _seed_export_enabled(),
         "can_export_seed": can_export_seed,
         "setup_ready": bool(tonsdk_ready and encryption_ready),
         "reason": reason,
@@ -475,17 +481,8 @@ def _load_canonical_wallet_row(user_id: int):
         return None
 
     if len(rows) > 1:
-        for row in rows:
-            logger.warning(
-                "TON duplicate wallet row user_id=%s id=%s wallet_address=%s status=%s last_balance_nano=%s created_at=%s updated_at=%s",
-                user_id,
-                row[11],
-                str(row[1] or ""),
-                str(row[8] or ""),
-                str(row[4] or "0"),
-                str(row[10] or ""),
-                str(row[9] or ""),
-            )
+        _log_wallet_conflict(user_id, rows)
+        return {"wallet_conflict": True, "rows": rows}
 
     if override_address:
         for row in rows:
@@ -515,14 +512,30 @@ def _load_canonical_wallet_row(user_id: int):
     return rows[0]
 
 
+def _log_wallet_conflict(user_id: int, rows) -> None:
+    for row in rows or []:
+        logger.critical(
+            "TON wallet_conflict user_id=%s id=%s wallet_address=%s status=%s last_balance_nano=%s created_at=%s updated_at=%s",
+            user_id, row[11], str(row[1] or ""), str(row[8] or ""), str(row[4] or "0"), str(row[10] or ""), str(row[9] or ""),
+        )
+
+
+def _wallet_conflict_payload() -> dict:
+    return {"ok": False, "error": "wallet_conflict", "safe_message": "Gram wallet conflict detected. Please contact an administrator. Seed export and transfers are blocked."}
+
+
 def get_user_ton_wallet(user_id: int) -> Optional[dict]:
     row = _load_canonical_wallet_row(user_id)
+    if isinstance(row, dict) and row.get("wallet_conflict"):
+        return {**_wallet_conflict_payload(), "wallet_conflict": True}
     return _safe_wallet_data(row) if row else None
 
 
 def get_or_create_user_ton_wallet(user_id: int) -> dict:
     status = get_ton_wallet_runtime_status()
     existing = get_user_ton_wallet(user_id)
+    if existing and existing.get("wallet_conflict"):
+        return {**_wallet_conflict_payload(), "wallet_status": get_public_ton_wallet_runtime_status()}
     if existing:
         return {"ok": True, "read_only": not status.get("can_send"), "wallet_status": get_public_ton_wallet_runtime_status(), **existing}
     if not status.get("can_create"):
@@ -593,6 +606,8 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     if int(amount_nano) <= 0:
         return {"ok": False, "error": "invalid_amount"}
     canonical = get_user_ton_wallet(user_id)
+    if canonical and canonical.get("wallet_conflict"):
+        return _wallet_conflict_payload()
     if not canonical or not canonical.get("id"):
         return {"ok": False, "error": "wallet_not_found"}
     conn = get_connection(); cur = conn.cursor()
@@ -704,42 +719,87 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "status": "submitted"}
 
 
-def reveal_user_ton_seed_once(user_id: int) -> dict:
+def _advisory_lock_key(prefix: str, user_id: int) -> int:
+    return zlib.crc32(f"{prefix}:{int(user_id)}".encode("utf-8"))
+
+
+def reveal_user_ton_seed_once(user_id: int, wallet_id: int = None, wallet_address: str = None) -> dict:
     status = get_ton_wallet_runtime_status()
     if not status.get("enabled"):
         return {"ok": False, "error": "disabled"}
     if not status.get("can_export_seed"):
         return {"ok": False, "error": "setup_required"}
-    canonical = get_user_ton_wallet(user_id)
-    if not canonical or not canonical.get("id"):
-        return {"ok": False, "error": "wallet_not_found"}
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute(
-        """SELECT id,seed_encrypted,seed_reveal_used
-           FROM user_ton_wallets
-           WHERE id=%s
-           LIMIT 1""",
-        (canonical["id"],),
-    )
-    row = cur.fetchone()
-    if not row:
-        conn.close(); return {"ok": False, "error": "wallet_not_found"}
-    if row[2]:
-        conn.close(); return {"ok": False, "error": "already_revealed"}
+    if wallet_id is None or not wallet_address:
+        return {"ok": False, "error": "invalid_reveal_target"}
+    expected_address = normalize_ton_address(str(wallet_address or "").strip())
+    conn = None
     try:
-        seed = decrypt_secret(row[1]).strip()
-        words = [w for w in seed.split() if w]
-        if len(words) < 12:
-            conn.close(); return {"ok": False, "error": "wallet_unavailable"}
-        if mnemonic_is_valid and not mnemonic_is_valid(words):
-            conn.close(); return {"ok": False, "error": "wallet_unavailable"}
-    except Exception:
-        conn.close(); return {"ok": False, "error": "wallet_unavailable"}
-    now = _now()
-    cur.execute("UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE id=%s AND seed_reveal_used=FALSE", (now, now, row[0]))
-    conn.commit(); conn.close()
-    return {"ok": True, "seed_phrase": seed}
-
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("BEGIN")
+        except Exception:
+            pass
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_advisory_lock_key("ton_seed_reveal", int(user_id)),))
+        cur.execute(
+            """SELECT id,user_id,wallet_address,status,seed_encrypted,seed_reveal_used
+               FROM user_ton_wallets
+               WHERE user_id=%s
+               ORDER BY id ASC
+               FOR UPDATE""",
+            (int(user_id),),
+        )
+        rows = cur.fetchall()
+        if len(rows) > 1:
+            # Safe columns only: id/address/status/timestamps; never seed_encrypted/mnemonic.
+            _log_wallet_conflict(int(user_id), [(r[1], r[2], None, None, None, None, None, r[5], r[3], None, None, r[0]) for r in rows])
+            conn.rollback()
+            return _wallet_conflict_payload()
+        if not rows:
+            conn.rollback()
+            return {"ok": False, "error": "wallet_not_found"}
+        row = rows[0]
+        if int(row[0]) != int(wallet_id) or int(row[1]) != int(user_id):
+            conn.rollback()
+            return {"ok": False, "error": "invalid_reveal_target"}
+        if str(row[3] or "").lower() != "active":
+            conn.rollback()
+            return {"ok": False, "error": "wallet_not_active"}
+        if normalize_ton_address(str(row[2] or "").strip()) != expected_address:
+            conn.rollback()
+            return {"ok": False, "error": "invalid_reveal_target"}
+        if row[5]:
+            conn.rollback()
+            return {"ok": False, "error": "already_revealed"}
+        try:
+            seed = decrypt_secret(row[4]).strip()
+            words = [w for w in seed.split() if w]
+            if len(words) < 12 or (mnemonic_is_valid and not mnemonic_is_valid(words)):
+                conn.rollback()
+                return {"ok": False, "error": "wallet_unavailable"}
+        except Exception:
+            conn.rollback()
+            return {"ok": False, "error": "wallet_unavailable"}
+        now = _now()
+        cur.execute(
+            "UPDATE user_ton_wallets SET seed_reveal_used=TRUE,seed_revealed_at=%s,updated_at=%s WHERE id=%s AND user_id=%s AND wallet_address=%s AND status='active' AND seed_reveal_used=FALSE",
+            (now, now, int(wallet_id), int(user_id), str(row[2] or "")),
+        )
+        if int(getattr(cur, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            return {"ok": False, "error": "already_revealed"}
+        conn.commit()
+        return {"ok": True, "seed_phrase": seed}
+    except Exception as exc:
+        if conn:
+            try: conn.rollback()
+            except Exception: pass
+        logger.error("TON seed reveal failed closed user_id=%s wallet_id=%s error_type=%s", user_id, wallet_id, exc.__class__.__name__, exc_info=True)
+        return {"ok": False, "error": "wallet_unavailable"}
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 def create_referral_payout_wallet(admin_user_id: int) -> dict:
     if not _wallet_ready():

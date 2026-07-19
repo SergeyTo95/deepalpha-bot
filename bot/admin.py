@@ -210,7 +210,16 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) FROM user_ton_wallets")
         counts = cur.fetchone() or (0, 0)
-        found = get_user_ton_wallet(int(search_user_id)) if search_user_id else None
+        found_rows = []
+        if search_user_id:
+            cur.execute("""SELECT id,wallet_address,status,last_balance_nano,created_at,seed_reveal_used
+                           FROM user_ton_wallets WHERE user_id=%s ORDER BY id ASC""", (int(search_user_id),))
+            if hasattr(cur, "fetchall"):
+                found_rows = cur.fetchall()
+            else:
+                found = get_user_ton_wallet(int(search_user_id))
+                if found:
+                    found_rows = [(found.get("id"), found.get("wallet_address"), found.get("status"), found.get("last_balance_nano"), found.get("created_at"), found.get("seed_reveal_used"))]
     finally:
         conn.close()
     cashier = get_active_cashier_payment_wallet() or {}
@@ -236,14 +245,15 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
         f"Referral payout wallet: {_mask_ton_admin(referral.get('wallet_address'))} [{referral.get('status') or 'not configured'}]",
     ]
     if search_user_id:
-        lines += ["", f"Search user_id: {search_user_id}"]
-        if found:
-            lines += [
-                f"Address: {_mask_ton_admin(found.get('wallet_address'))}",
-                f"Cached balance: {found.get('last_balance_nano') or 0} nano",
-                f"Last checked: {found.get('last_balance_checked_at') or '—'}",
-                f"Status: {found.get('status') or 'unknown'}",
-            ]
+        lines += ["", f"Incident search user_id: {search_user_id}"]
+        if found_rows:
+            lines.append("Rows (safe incident view; secret fields omitted):")
+            for r in found_rows:
+                lines.append(f"id={r[0]} address={_mask_ton_admin(r[1])} status={r[2] or 'unknown'} balance={r[3] or 0} created_at={r[4] or '—'} seed_reveal_used={bool(r[5])}")
+                lines.append(f"Status: {r[2] or 'unknown'}")
+            if len(found_rows) > 1:
+                lines.append("⚠️ wallet_conflict: quarantine or choose canonical only after explicit out-of-band confirmation.")
+                lines.append(f"Actions: admin_gram_wallets_quarantine:{search_user_id}:<wallet_id>:CONFIRM or admin_gram_wallets_canonical:{search_user_id}:<wallet_id>:CONFIRM")
         else:
             lines.append("Wallet: not found")
     return "\n".join(lines)
@@ -1390,6 +1400,33 @@ def register_admin(dp: Dispatcher):
             await message.answer("Invalid user_id", reply_markup=admin_gram_wallets_kb()); await state.finish(); return
         await message.answer(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
         await state.finish()
+
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_quarantine:"))
+    async def admin_gram_wallets_quarantine(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        parts = str(callback.data or "").split(":")
+        if len(parts) != 4 or parts[3] != "CONFIRM":
+            await callback.answer("Explicit CONFIRM required", show_alert=True); return
+        user_id, wallet_id = int(parts[1]), int(parts[2])
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("UPDATE user_ton_wallets SET status='quarantined',updated_at=%s WHERE user_id=%s AND id=%s", (datetime.utcnow().isoformat(), user_id, wallet_id))
+        conn.commit(); conn.close()
+        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_canonical:"))
+    async def admin_gram_wallets_canonical(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        parts = str(callback.data or "").split(":")
+        if len(parts) != 4 or parts[3] != "CONFIRM":
+            await callback.answer("Explicit CONFIRM required", show_alert=True); return
+        user_id, wallet_id = int(parts[1]), int(parts[2])
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("UPDATE user_ton_wallets SET status=CASE WHEN id=%s THEN 'active' ELSE 'quarantined' END,updated_at=%s WHERE user_id=%s", (wallet_id, datetime.utcnow().isoformat(), user_id))
+        conn.commit(); conn.close()
+        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "admin_bot_moderation")
     async def admin_bot_moderation(callback: types.CallbackQuery):
