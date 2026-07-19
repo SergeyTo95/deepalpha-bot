@@ -1312,7 +1312,7 @@ async def handle_wallet_ton(request):
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
     blocked = _web_ton_block_response("can_read_existing")
-    if blocked:
+    if blocked is not None:
         return blocked
     runtime_status = _web_ton_public_status()
     wallet = get_or_create_user_ton_wallet(user_id)
@@ -1356,7 +1356,7 @@ async def handle_wallet_ton_refresh(request):
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
     blocked = _web_ton_block_response("can_refresh_balance")
-    if blocked:
+    if blocked is not None:
         return blocked
     runtime_status = _web_ton_public_status()
     balance = get_user_ton_balance(user_id, refresh=True)
@@ -1374,7 +1374,7 @@ async def handle_wallet_ton_send(request):
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
     blocked = _web_ton_block_response("can_send")
-    if blocked:
+    if blocked is not None:
         return blocked
     try:
         payload = await request.json()
@@ -1647,7 +1647,7 @@ async def handle_wallet_ton_transactions(request):
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
     blocked = _web_ton_block_response("can_read_existing")
-    if blocked:
+    if blocked is not None:
         return blocked
     limit = _safe_int(request.query.get("limit", "20"), default=20, min_value=1, max_value=50)
     offset = _safe_int(request.query.get("offset", "0"), default=0, min_value=0, max_value=10000)
@@ -1672,7 +1672,7 @@ async def handle_wallet_ton_buy_tokens(request):
     if not is_moderation_allowed(user_id):
         return _webapp_moderation_block_response(user_id)
     blocked = _web_ton_block_response("can_send")
-    if blocked:
+    if blocked is not None:
         return blocked
     if not is_ton_wallet_token_purchase_enabled():
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)

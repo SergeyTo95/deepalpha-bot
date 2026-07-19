@@ -77,6 +77,8 @@ def _install_fake_aiohttp(monkeypatch):
     class Response:
         def __init__(self, text="", status=200, content_type=None, headers=None):
             self.text = text; self.status = status; self.content_type = content_type; self.headers = headers or {}
+        def __bool__(self):
+            return False
     class Router:
         def add_get(self, *a, **k): pass
         def add_post(self, *a, **k): pass
