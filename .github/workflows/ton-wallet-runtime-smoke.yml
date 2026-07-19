@@ -25,7 +25,7 @@ jobs:
 
 
       - name: Focused TON wallet runtime tests
-        run: pytest tests/test_ton_wallet_e2e_status.py -q
+        run: pytest -q tests/test_ton_security_hotfix.py tests/test_ton_wallet_e2e_status.py
 
 
       - name: tonsdk API introspection

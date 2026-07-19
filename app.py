@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import zlib
 import random
 from datetime import datetime, timezone, timedelta
 
@@ -1262,23 +1263,29 @@ async def notification_worker():
 # ═══════════════════════════════════════════
 
 async def run_polling():
-    while True:
-        try:
-            print("✅ Starting polling...")
-            await telegram_bot.dp.start_polling(
-                reset_webhook=True,
-                timeout=20,
-                relax=0.5,
-                fast=True,
-            )
-        except Exception as e:
-            err = str(e)
-            if "TerminatedByOtherGetUpdates" in err or "Conflict" in err:
-                print("⚠️ Conflict detected, waiting 15 seconds...")
-                await asyncio.sleep(15)
-            else:
-                print(f"Polling error: {e}")
-                await asyncio.sleep(5)
+    if (os.getenv("BOT_POLLING_ENABLED") or "false").lower() != "true":
+        print("ℹ️ Telegram polling disabled by BOT_POLLING_ENABLED=false")
+        return
+    conn = None
+    try:
+        from db.database import get_connection, _db_identifier_redacted
+        conn = get_connection()
+        cur = conn.cursor()
+        lock_key = zlib.crc32(b"deepalpha:telegram_polling")
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+        locked = bool((cur.fetchone() or [False])[0])
+        print(f"polling_guard db={_db_identifier_redacted()} railway_service={os.getenv('RAILWAY_SERVICE_NAME') or os.getenv('RAILWAY_SERVICE_ID') or 'unknown'} railway_environment={os.getenv('RAILWAY_ENVIRONMENT_NAME') or os.getenv('RAILWAY_ENVIRONMENT_ID') or 'unknown'} commit_sha={(os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('GIT_COMMIT_SHA') or 'unknown')[:12]} lock_acquired={locked}")
+        if not locked:
+            print("⚠️ Telegram polling lock is busy; exiting polling path")
+            return
+        print("✅ Starting polling...")
+        await telegram_bot.dp.start_polling(reset_webhook=True, timeout=20, relax=0.5, fast=True)
+    except Exception as e:
+        print(f"Polling error: {e.__class__.__name__}")
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 
 async def main():
