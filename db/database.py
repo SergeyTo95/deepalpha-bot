@@ -123,14 +123,28 @@ def _diagnose_and_enforce_user_ton_wallet_uniques(conn, cursor) -> None:
     if not _table_exists(cursor, "user_ton_wallets"):
         return
     reports = []
-    for col in ("user_id", "wallet_address"):
+    duplicate_user_ids = []
+    duplicate_addresses = []
+    for col, target in (("user_id", duplicate_user_ids), ("wallet_address", duplicate_addresses)):
         cursor.execute(f"SELECT {col}, COUNT(*) FROM user_ton_wallets GROUP BY {col} HAVING COUNT(*) > 1")
         dupes = cursor.fetchall()
-        if dupes:
-            reports.append(f"duplicate {col}: " + ", ".join(f"{_first_scalar(r)} x{r[1]}" for r in dupes[:20]))
+        for row in dupes:
+            value = _first_scalar(row, "")
+            count = row[1] if not isinstance(row, dict) else list(row.values())[1]
+            target.append(str(value))
+            reports.append(f"duplicate {col}: {value} x{count}")
     if reports:
-        conn.rollback()
-        raise RuntimeError("user_ton_wallets uniqueness migration blocked; manual quarantine/remediation required; " + "; ".join(reports))
+        report = "; ".join(reports[:50])
+        print(f"CRITICAL user_ton_wallets duplicate incident; unique indexes deferred; {report}")
+        try:
+            cursor.execute("""
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at
+            """, ("ton_wallet_duplicate_incident", report, datetime.utcnow().isoformat()))
+        except Exception as exc:
+            print(f"CRITICAL failed to write ton_wallet_duplicate_incident marker: {exc.__class__.__name__}")
+        return
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_user_id_unique ON user_ton_wallets(user_id)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_wallet_address_unique ON user_ton_wallets(wallet_address)")
 
@@ -697,6 +711,25 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_user_id ON user_ton_wallets(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_wallet_address ON user_ton_wallets(wallet_address)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallets_status ON user_ton_wallets(status)")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_ton_wallet_quarantine_audit (
+        id SERIAL PRIMARY KEY,
+        original_wallet_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        wallet_address TEXT,
+        network TEXT,
+        wallet_version TEXT,
+        status TEXT,
+        last_balance_nano TEXT,
+        seed_reveal_used BOOLEAN,
+        original_created_at TEXT,
+        action TEXT NOT NULL,
+        canonical_wallet_id BIGINT,
+        admin_user_id BIGINT,
+        created_at TEXT NOT NULL
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_ton_wallet_quarantine_user_id ON user_ton_wallet_quarantine_audit(user_id)")
     _diagnose_and_enforce_user_ton_wallet_uniques(conn, cursor)
 
     cursor.execute("""

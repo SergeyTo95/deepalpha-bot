@@ -11795,16 +11795,47 @@ def _ton_seed_callback_secret() -> bytes:
     return (os.getenv("BOT_TOKEN") or os.getenv("TON_SEED_CALLBACK_SECRET") or "deepalpha-local-dev").encode("utf-8")
 
 
-def _make_ton_seed_reveal_token(user_id: int, wallet_id: int, wallet_address: str) -> str:
+def _cleanup_ton_seed_reveal_tokens(now: float = None) -> None:
+    now = time.time() if now is None else float(now)
+    expired = [token for token, pending in TON_SEED_REVEAL_PENDING.items() if now > float(pending.get("expires_at", 0))]
+    for token in expired:
+        TON_SEED_REVEAL_PENDING.pop(token, None)
+
+
+def _drop_ton_seed_reveal_tokens_for_user(user_id: int) -> None:
+    for token, pending in list(TON_SEED_REVEAL_PENDING.items()):
+        if int(pending.get("user_id", 0)) == int(user_id):
+            TON_SEED_REVEAL_PENDING.pop(token, None)
+
+
+def _make_ton_seed_reveal_token(user_id: int, wallet_id: int, wallet_address: str, chat_id: int = None, message_id: int = None) -> str:
+    _cleanup_ton_seed_reveal_tokens()
+    _drop_ton_seed_reveal_tokens_for_user(user_id)
     token = secrets.token_urlsafe(16)
     expires_at = time.time() + TON_SEED_REVEAL_TTL_SECONDS
-    payload = f"{int(user_id)}:{int(wallet_id)}:{wallet_address}:{token}:{int(expires_at)}"
+    chat_part = "" if chat_id is None else str(int(chat_id))
+    message_part = "" if message_id is None else str(int(message_id))
+    payload = f"{int(user_id)}:{int(wallet_id)}:{wallet_address}:{chat_part}:{message_part}:{token}:{int(expires_at)}"
     sig = hmac.new(_ton_seed_callback_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    TON_SEED_REVEAL_PENDING[token] = {"user_id": int(user_id), "wallet_id": int(wallet_id), "wallet_address": wallet_address, "expires_at": expires_at, "sig": sig}
+    TON_SEED_REVEAL_PENDING[token] = {"user_id": int(user_id), "wallet_id": int(wallet_id), "wallet_address": wallet_address, "chat_id": chat_id, "message_id": message_id, "expires_at": expires_at, "sig": sig}
     return f"ton_seed_reveal:{token}:{sig}"
 
 
-def _pop_ton_seed_reveal_token(user_id: int, callback_data: str) -> Optional[dict]:
+def _bind_ton_seed_reveal_message(callback_data: str, chat_id: int, message_id: int) -> str:
+    parts = str(callback_data or "").split(":")
+    if len(parts) != 3 or parts[0] != "ton_seed_reveal":
+        return callback_data
+    token = parts[1]
+    pending = TON_SEED_REVEAL_PENDING.get(token)
+    if not pending:
+        return callback_data
+    pending["chat_id"] = int(chat_id)
+    pending["message_id"] = int(message_id)
+    return _make_ton_seed_reveal_token(pending["user_id"], pending["wallet_id"], pending["wallet_address"], int(chat_id), int(message_id))
+
+
+def _pop_ton_seed_reveal_token(user_id: int, callback_data: str, chat_id: int = None, message_id: int = None) -> Optional[dict]:
+    _cleanup_ton_seed_reveal_tokens()
     parts = str(callback_data or "").split(":")
     if len(parts) != 3 or parts[0] != "ton_seed_reveal":
         return None
@@ -11812,12 +11843,22 @@ def _pop_ton_seed_reveal_token(user_id: int, callback_data: str) -> Optional[dic
     pending = TON_SEED_REVEAL_PENDING.pop(token, None)
     if not pending or int(pending.get("user_id")) != int(user_id) or time.time() > float(pending.get("expires_at", 0)):
         return None
-    payload = f"{int(user_id)}:{int(pending['wallet_id'])}:{pending['wallet_address']}:{token}:{int(pending['expires_at'])}"
+    if pending.get("chat_id") is not None and (chat_id is None or int(pending.get("chat_id")) != int(chat_id)):
+        return None
+    if pending.get("message_id") is not None and (message_id is None or int(pending.get("message_id")) != int(message_id)):
+        return None
+    chat_part = "" if pending.get("chat_id") is None else str(int(pending["chat_id"]))
+    message_part = "" if pending.get("message_id") is None else str(int(pending["message_id"]))
+    payload = f"{int(user_id)}:{int(pending['wallet_id'])}:{pending['wallet_address']}:{chat_part}:{message_part}:{token}:{int(pending['expires_at'])}"
     expected = hmac.new(_ton_seed_callback_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
     if not hmac.compare_digest(expected, sig) or not hmac.compare_digest(str(pending.get("sig")), sig):
         return None
     return pending
 
+
+def _cancel_ton_seed_reveal_token(user_id: int, callback_data: str, chat_id: int = None, message_id: int = None) -> bool:
+    pending = _pop_ton_seed_reveal_token(user_id, callback_data, chat_id, message_id)
+    return bool(pending)
 
 def _ton_project_wallet() -> str:
     return resolve_ton_purchase_project_wallet()
@@ -12247,18 +12288,35 @@ async def ton_seed_export_cb(c: types.CallbackQuery):
     token = _make_ton_seed_reveal_token(c.from_user.id, int(w.get("id")), str(w.get("wallet_address") or ""))
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("✅ Показать seed phrase один раз" if lang=="ru" else "✅ Show seed phrase once", callback_data=token))
-    kb.add(InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data="ton_seed_reveal_cancel"))
-    await c.message.answer((f"⚠️ Important: seed phrase for wallet {w.get('wallet_address')} will be shown only once." if lang=="en" else f"⚠️ Важно: seed phrase для кошелька {w.get('wallet_address')} будет показана только один раз."), reply_markup=kb)
+    kb.add(InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data=f"ton_seed_reveal_cancel:{token}"))
+    sent = await c.message.answer((f"⚠️ Important: seed phrase for wallet {w.get('wallet_address')} will be shown only once." if lang=="en" else f"⚠️ Важно: seed phrase для кошелька {w.get('wallet_address')} будет показана только один раз."), reply_markup=kb)
+    bound = _bind_ton_seed_reveal_message(token, sent.chat.id, sent.message_id)
+    if bound != token:
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("✅ Показать seed phrase один раз" if lang=="ru" else "✅ Show seed phrase once", callback_data=bound))
+        kb.add(InlineKeyboardButton("❌ Отмена" if lang=="ru" else "❌ Cancel", callback_data=f"ton_seed_reveal_cancel:{bound}"))
+        try:
+            await sent.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
     await c.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "ton_seed_reveal_cancel")
+@dp.callback_query_handler(lambda c: str(c.data or "").startswith("ton_seed_reveal_cancel:"))
 async def ton_seed_cancel(c: types.CallbackQuery):
-    await c.answer("Cancelled")
+    lang = get_user_lang(c.from_user.id)
+    raw = str(c.data or "")
+    token_data = raw.split(":", 1)[1] if ":" in raw else ""
+    _cancel_ton_seed_reveal_token(c.from_user.id, token_data, getattr(c.message.chat, "id", None), getattr(c.message, "message_id", None))
+    try:
+        await c.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await c.answer("Cancelled" if lang=="en" else "Отменено")
 
 @dp.callback_query_handler(lambda c: str(c.data or "").startswith("ton_seed_reveal:"))
 async def ton_seed_confirm(c: types.CallbackQuery):
     lang = get_user_lang(c.from_user.id)
-    pending = _pop_ton_seed_reveal_token(c.from_user.id, c.data)
+    pending = _pop_ton_seed_reveal_token(c.from_user.id, c.data, getattr(c.message.chat, "id", None), getattr(c.message, "message_id", None))
     if not pending:
         await c.answer("Reveal confirmation expired or invalid." if lang=="en" else "Подтверждение устарело или недействительно.", show_alert=True); return
     r = reveal_user_ton_seed_once(c.from_user.id, pending["wallet_id"], pending["wallet_address"])

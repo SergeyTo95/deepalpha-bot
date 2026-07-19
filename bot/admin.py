@@ -203,6 +203,91 @@ def _mask_ton_admin(value: str) -> str:
     return raw[:10] + "…" + raw[-8:]
 
 
+
+def _fetch_ton_wallet_incident_rows(user_id: int):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT id,wallet_address,network,wallet_version,status,last_balance_nano,created_at,seed_reveal_used
+                       FROM user_ton_wallets WHERE user_id=%s ORDER BY id ASC""", (int(user_id),))
+        if hasattr(cur, "fetchall"):
+            return cur.fetchall()
+        found = get_user_ton_wallet(int(user_id))
+        if found:
+            return [(found.get("id"), found.get("wallet_address"), found.get("network"), found.get("wallet_version"), found.get("status"), found.get("last_balance_nano"), found.get("created_at"), found.get("seed_reveal_used"))]
+        return []
+    finally:
+        conn.close()
+
+
+def _admin_gram_wallets_incident_kb(user_id: int, rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    for r in rows or []:
+        wallet_id = int(r[0])
+        kb.add(InlineKeyboardButton(f"Select wallet #{wallet_id} {_mask_ton_admin(r[1])}", callback_data=f"admin_gram_wallets_select:{int(user_id)}:{wallet_id}"))
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="admin_gram_wallets_cancel"))
+    kb.add(InlineKeyboardButton("⬅️ Back", callback_data="admin_gram_wallets"))
+    return kb
+
+
+def _admin_gram_wallets_confirm_kb(user_id: int, wallet_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🟡 Quarantine this wallet", callback_data=f"admin_gram_wallets_quarantine_confirm:{int(user_id)}:{int(wallet_id)}"))
+    kb.add(InlineKeyboardButton("✅ Choose as canonical", callback_data=f"admin_gram_wallets_canonical_confirm:{int(user_id)}:{int(wallet_id)}"))
+    kb.add(InlineKeyboardButton("❌ Cancel", callback_data="admin_gram_wallets_cancel"))
+    return kb
+
+
+def _admin_quarantine_wallet_tx(user_id: int, wallet_id: int, admin_user_id: int, canonical_wallet_id: int | None = None) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("""SELECT id,user_id,wallet_address,network,wallet_version,status,last_balance_nano,created_at,seed_reveal_used
+                       FROM user_ton_wallets WHERE user_id=%s AND id=%s FOR UPDATE""", (int(user_id), int(wallet_id)))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback(); return 0
+        cur.execute("""INSERT INTO user_ton_wallet_quarantine_audit
+                       (original_wallet_id,user_id,wallet_address,network,wallet_version,status,last_balance_nano,seed_reveal_used,original_created_at,action,canonical_wallet_id,admin_user_id,created_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[8], row[7], "quarantine", canonical_wallet_id, int(admin_user_id), datetime.utcnow().isoformat()))
+        cur.execute("DELETE FROM user_ton_wallets WHERE user_id=%s AND id=%s", (int(user_id), int(wallet_id)))
+        changed = int(getattr(cur, "rowcount", 0) or 0)
+        conn.commit(); return changed
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
+
+def _admin_choose_canonical_wallet_tx(user_id: int, wallet_id: int, admin_user_id: int) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("""SELECT id,user_id,wallet_address,network,wallet_version,status,last_balance_nano,created_at,seed_reveal_used
+                       FROM user_ton_wallets WHERE user_id=%s ORDER BY id ASC FOR UPDATE""", (int(user_id),))
+        rows = cur.fetchall()
+        if not rows or int(wallet_id) not in {int(r[0]) for r in rows}:
+            conn.rollback(); return 0
+        archived = 0
+        for row in rows:
+            if int(row[0]) == int(wallet_id):
+                continue
+            cur.execute("""INSERT INTO user_ton_wallet_quarantine_audit
+                           (original_wallet_id,user_id,wallet_address,network,wallet_version,status,last_balance_nano,seed_reveal_used,original_created_at,action,canonical_wallet_id,admin_user_id,created_at)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[8], row[7], "choose_canonical", int(wallet_id), int(admin_user_id), datetime.utcnow().isoformat()))
+            cur.execute("DELETE FROM user_ton_wallets WHERE user_id=%s AND id=%s", (int(user_id), int(row[0])))
+            archived += int(getattr(cur, "rowcount", 0) or 0)
+        cur.execute("UPDATE user_ton_wallets SET status='active',updated_at=%s WHERE user_id=%s AND id=%s", (datetime.utcnow().isoformat(), int(user_id), int(wallet_id)))
+        conn.commit(); return archived
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        conn.close()
+
 def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
     status = get_ton_wallet_runtime_status()
     conn = get_connection()
@@ -210,16 +295,7 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) FROM user_ton_wallets")
         counts = cur.fetchone() or (0, 0)
-        found_rows = []
-        if search_user_id:
-            cur.execute("""SELECT id,wallet_address,status,last_balance_nano,created_at,seed_reveal_used
-                           FROM user_ton_wallets WHERE user_id=%s ORDER BY id ASC""", (int(search_user_id),))
-            if hasattr(cur, "fetchall"):
-                found_rows = cur.fetchall()
-            else:
-                found = get_user_ton_wallet(int(search_user_id))
-                if found:
-                    found_rows = [(found.get("id"), found.get("wallet_address"), found.get("status"), found.get("last_balance_nano"), found.get("created_at"), found.get("seed_reveal_used"))]
+        found_rows = _fetch_ton_wallet_incident_rows(int(search_user_id)) if search_user_id else []
     finally:
         conn.close()
     cashier = get_active_cashier_payment_wallet() or {}
@@ -249,11 +325,10 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
         if found_rows:
             lines.append("Rows (safe incident view; secret fields omitted):")
             for r in found_rows:
-                lines.append(f"id={r[0]} address={_mask_ton_admin(r[1])} status={r[2] or 'unknown'} balance={r[3] or 0} created_at={r[4] or '—'} seed_reveal_used={bool(r[5])}")
-                lines.append(f"Status: {r[2] or 'unknown'}")
+                lines.append(f"id={r[0]} address={_mask_ton_admin(r[1])} status={r[4] or 'unknown'} balance={r[5] or 0} created_at={r[6] or '—'} seed_reveal_used={bool(r[7])}")
+                lines.append(f"Status: {r[4] or 'unknown'}")
             if len(found_rows) > 1:
                 lines.append("⚠️ wallet_conflict: quarantine or choose canonical only after explicit out-of-band confirmation.")
-                lines.append(f"Actions: admin_gram_wallets_quarantine:{search_user_id}:<wallet_id>:CONFIRM or admin_gram_wallets_canonical:{search_user_id}:<wallet_id>:CONFIRM")
         else:
             lines.append("Wallet: not found")
     return "\n".join(lines)
@@ -1398,35 +1473,57 @@ def register_admin(dp: Dispatcher):
             user_id = int((message.text or "").strip())
         except Exception:
             await message.answer("Invalid user_id", reply_markup=admin_gram_wallets_kb()); await state.finish(); return
-        await message.answer(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
+        rows = _fetch_ton_wallet_incident_rows(user_id)
+        await message.answer(admin_gram_wallets_text(user_id), reply_markup=_admin_gram_wallets_incident_kb(user_id, rows) if rows else admin_gram_wallets_kb())
         await state.finish()
 
 
-    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_quarantine:"))
+    @dp.callback_query_handler(lambda c: c.data == "admin_gram_wallets_cancel")
+    async def admin_gram_wallets_cancel(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_select:"))
+    async def admin_gram_wallets_select(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True); return
+        parts = str(callback.data or "").split(":")
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Invalid wallet action", show_alert=True); return
+        user_id, wallet_id = int(parts[1]), int(parts[2])
+        rows = [r for r in _fetch_ton_wallet_incident_rows(user_id) if int(r[0]) == wallet_id]
+        if not rows:
+            await callback.answer("Wallet row not found", show_alert=True); return
+        r = rows[0]
+        text = f"Confirm admin action for user_id={user_id}\nwallet_id={r[0]}\naddress={_mask_ton_admin(r[1])}\nstatus={r[4] or 'unknown'}\n\nChoose an action or cancel. Seed fields are never displayed."
+        await callback.message.edit_text(text, reply_markup=_admin_gram_wallets_confirm_kb(user_id, wallet_id))
+
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_quarantine_confirm:"))
     async def admin_gram_wallets_quarantine(callback: types.CallbackQuery):
         if not is_admin(callback.from_user.id):
             await callback.answer("Unauthorized", show_alert=True); return
         parts = str(callback.data or "").split(":")
-        if len(parts) != 4 or parts[3] != "CONFIRM":
-            await callback.answer("Explicit CONFIRM required", show_alert=True); return
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Invalid wallet action", show_alert=True); return
         user_id, wallet_id = int(parts[1]), int(parts[2])
-        conn = get_connection(); cur = conn.cursor()
-        cur.execute("UPDATE user_ton_wallets SET status='quarantined',updated_at=%s WHERE user_id=%s AND id=%s", (datetime.utcnow().isoformat(), user_id, wallet_id))
-        conn.commit(); conn.close()
-        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
+        changed = _admin_quarantine_wallet_tx(user_id, wallet_id, callback.from_user.id)
+        await callback.answer("✅ Quarantined" if changed else "Wallet row not found", show_alert=not bool(changed))
+        rows = _fetch_ton_wallet_incident_rows(user_id)
+        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=_admin_gram_wallets_incident_kb(user_id, rows) if rows else admin_gram_wallets_kb())
 
-    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_canonical:"))
+    @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_canonical_confirm:"))
     async def admin_gram_wallets_canonical(callback: types.CallbackQuery):
         if not is_admin(callback.from_user.id):
             await callback.answer("Unauthorized", show_alert=True); return
         parts = str(callback.data or "").split(":")
-        if len(parts) != 4 or parts[3] != "CONFIRM":
-            await callback.answer("Explicit CONFIRM required", show_alert=True); return
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Invalid wallet action", show_alert=True); return
         user_id, wallet_id = int(parts[1]), int(parts[2])
-        conn = get_connection(); cur = conn.cursor()
-        cur.execute("UPDATE user_ton_wallets SET status=CASE WHEN id=%s THEN 'active' ELSE 'quarantined' END,updated_at=%s WHERE user_id=%s", (wallet_id, datetime.utcnow().isoformat(), user_id))
-        conn.commit(); conn.close()
-        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=admin_gram_wallets_kb())
+        archived = _admin_choose_canonical_wallet_tx(user_id, wallet_id, callback.from_user.id)
+        await callback.answer(f"✅ Canonical selected; archived {archived} duplicate rows")
+        rows = _fetch_ton_wallet_incident_rows(user_id)
+        await callback.message.edit_text(admin_gram_wallets_text(user_id), reply_markup=_admin_gram_wallets_incident_kb(user_id, rows) if rows else admin_gram_wallets_kb())
 
     @dp.callback_query_handler(lambda c: c.data == "admin_bot_moderation")
     async def admin_bot_moderation(callback: types.CallbackQuery):

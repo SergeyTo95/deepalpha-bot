@@ -230,6 +230,14 @@ def _callback_data_from_markup(markup):
 
 
 def _import_telegram_bot_for_wallet_test(monkeypatch):
+    class ReqSession:
+        def __init__(self): self.headers = {}
+        def get(self, *a, **k): return types.SimpleNamespace(status_code=200, text="", json=lambda: {})
+        def post(self, *a, **k): return types.SimpleNamespace(status_code=200, text="", json=lambda: {})
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(Session=ReqSession, get=ReqSession().get, post=ReqSession().post))
+    psy_extras = types.SimpleNamespace(RealDictCursor=object)
+    monkeypatch.setitem(sys.modules, "psycopg2", types.SimpleNamespace(extras=psy_extras, errors=types.SimpleNamespace(), connect=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("psycopg2 missing in test"))))
+    monkeypatch.setitem(sys.modules, "psycopg2.extras", psy_extras)
     _install_fake_aiogram(monkeypatch)
     monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
     sys.modules.pop("telegram_bot", None)
