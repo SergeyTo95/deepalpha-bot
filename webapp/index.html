@@ -1219,8 +1219,9 @@
                     messages: [{
                         address: intent.treasury_address,
                         amount: String(intent.amount_nano || Math.floor(donationAmount * 1e9)),
-                        comment: intent.public_reference,
-                        payload: intent.public_reference,
+                        payload: intent.payload_boc,
+                        network: intent.network_id,
+                        from: tonConnectUI.wallet?.account?.address,
                     }]
                 });
 
@@ -1363,8 +1364,9 @@
                     messages: [{
                         address: intent.treasury_address,
                         amount: String(intent.amount_nano || amountNano),
-                        comment: intent.public_reference,
-                        payload: intent.public_reference,
+                        payload: intent.payload_boc,
+                        network: intent.network_id,
+                        from: tonConnectUI.wallet?.account?.address,
                     }]
                 });
 

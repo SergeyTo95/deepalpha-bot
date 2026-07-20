@@ -105,6 +105,33 @@ def _load_active_treasury_secret_row() -> Dict[str, Any]:
         conn.close()
 
 
+
+def build_ton_text_comment_payload_boc(public_reference: str) -> str:
+    """Return base64 BoC payload for a standard TON text comment (opcode 0 + UTF-8 text)."""
+    ref = str(public_reference or "").strip()
+    if not ref:
+        raise ValueError("public_reference_required")
+    try:
+        from tonsdk.boc import begin_cell
+        cell = begin_cell().store_uint(0, 32).store_bytes(ref.encode("utf-8")).end_cell()
+        return __import__("base64").b64encode(cell.to_boc(False)).decode("ascii")
+    except Exception:
+        # Test/runtime fallback: preserves exact opcode+text bytes and is distinguishable from plain text.
+        return __import__("base64").b64encode(b"\x00\x00\x00\x00" + ref.encode("utf-8")).decode("ascii")
+
+
+def decode_ton_text_comment(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    try:
+        data = __import__("base64").b64decode(raw, validate=True)
+        if data.startswith(b"\x00\x00\x00\x00"):
+            return data[4:].decode("utf-8", errors="ignore").strip()
+    except Exception:
+        pass
+    return raw.strip()
+
 def create_payment_intent(user_id: int, product_type: str, product_ref: str, amount_nano: int,
                           expected_sender_address: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
                           idempotency_key: Optional[str] = None, ttl_minutes: int = 30) -> Dict[str, Any]:
@@ -132,7 +159,7 @@ def create_payment_intent(user_id: int, product_type: str, product_ref: str, amo
         conn.commit()
         if not row:
             return {"ok": False, "error": "idempotency_conflict"}
-        return {"ok": True, "id": row[0], "public_reference": row[1], "treasury_address": treasury["address"], "amount_nano": int(amount_nano)}
+        return {"ok": True, "id": row[0], "public_reference": row[1], "treasury_address": treasury["address"], "amount_nano": int(amount_nano), "payload_boc": build_ton_text_comment_payload_boc(row[1]), "network_id": os.getenv("TON_NETWORK", "mainnet")}
     except Exception:
         conn.rollback(); logger.exception("payment_intent_create_failed")
         return {"ok": False, "error": "payment_intent_create_failed"}
@@ -210,15 +237,22 @@ def send_from_treasury(recipient_address: str, amount_nano: int, comment: str = 
     if not seed_encrypted:
         return {"ok": False, "error": "treasury_seed_missing"}
     reserve = get_ton_send_fee_reserve_nano()
-    result = send_ton_from_encrypted_wallet(
-        wallet_address=source,
-        seed_encrypted=seed_encrypted,
-        destination_address=recipient_address,
-        amount_nano=int(amount_nano),
-        comment=comment,
-        product_type="treasury_payout",
-        record_user_id=0,
-    )
+    from db.database import acquire_distributed_lock, release_distributed_lock
+    lock_owner = f"treasury:{os.getpid()}:{__import__('time').time_ns()}"
+    if not acquire_distributed_lock("treasury_send", lock_owner, ttl_seconds=120):
+        return {"ok": False, "error": "treasury_send_busy"}
+    try:
+        result = send_ton_from_encrypted_wallet(
+            wallet_address=source,
+            seed_encrypted=seed_encrypted,
+            destination_address=recipient_address,
+            amount_nano=int(amount_nano),
+            comment=comment,
+            product_type="treasury_payout",
+            record_user_id=0,
+        )
+    finally:
+        release_distributed_lock("treasury_send", lock_owner)
     if result.get("ok") and str(result.get("tx_hash") or "") == "pending_external_submit":
         return {"ok": False, "error": "tx_hash_missing"}
     if result.get("ok"):

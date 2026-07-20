@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
-from services.treasury_service import verify_payment_intent
+from services.treasury_service import verify_payment_intent, decode_ton_text_comment
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
 from services.watchlist_ai_summary_service import build_watchlist_ai_summary, format_watchlist_ai_summary
@@ -861,9 +861,35 @@ async def check_ton_payments():
     await asyncio.sleep(15)
     while True:
         try:
-            transactions = get_transactions(limit=20)
-            intents = get_pending_payment_intents(limit=200)
+            transactions = get_transactions(limit=200)
+            intents = get_pending_payment_intents(limit=500)
             pending = {}  # legacy pending_payments is read-only; Telegram-ID comments no longer fulfill products.
+
+            for verified_intent in [it for it in intents if str(it.get("status") or "") == "verified"]:
+                try:
+                    user_id = int(verified_intent["user_id"])
+                    ensure_user(user_id)
+                    tx_hash = str(verified_intent.get("tx_hash") or "")
+                    payment_type = str(verified_intent.get("product_type") or "tokens")
+                    ton_amount = int(verified_intent.get("expected_amount_nano") or 0) / 1_000_000_000
+                    if payment_type == "donation":
+                        fulfill_verified_donation_intent(int(verified_intent["id"]))
+                    elif payment_type == "subscription":
+                        set_subscription(user_id, days=int(get_setting("subscription_days", "30")))
+                        save_transaction(tx_hash, user_id, ton_amount, 0, referral_bonus_ton=0, referrer_id=None)
+                        mark_payment_intent_fulfilled(int(verified_intent["id"]))
+                    elif payment_type == "author_status":
+                        set_author_status(user_id, True)
+                        save_transaction(tx_hash, user_id, ton_amount, 0, referral_bonus_ton=0, referrer_id=None)
+                        mark_payment_intent_fulfilled(int(verified_intent["id"]))
+                    else:
+                        tokens = calculate_tokens_for_amount(ton_amount)
+                        if tokens > 0:
+                            add_tokens(user_id, tokens)
+                            save_transaction(tx_hash, user_id, ton_amount, tokens, referral_bonus_ton=0, referrer_id=None)
+                            mark_payment_intent_fulfilled(int(verified_intent["id"]))
+                except Exception as exc:
+                    print(f"verified intent resume error: {type(exc).__name__}")
 
             for tx in transactions:
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
@@ -883,7 +909,9 @@ async def check_ton_payments():
                 msg_data = in_msg.get("msg_data", {}) if isinstance(in_msg, dict) else {}
                 comment = ""
                 if isinstance(msg_data, dict):
-                    comment = str(msg_data.get("text") or msg_data.get("body") or "")
+                    comment = decode_ton_text_comment(str(msg_data.get("text") or msg_data.get("body") or msg_data.get("dataText", {}).get("text") if isinstance(msg_data.get("dataText"), dict) else ""))
+                if not comment:
+                    comment = decode_ton_text_comment(str(in_msg.get("message") or in_msg.get("comment") or ""))
                 source = str(in_msg.get("source") or "")
                 destination = str(in_msg.get("destination") or in_msg.get("dest") or "")
                 matched_intent = next((it for it in intents if str(it.get("public_reference")) and str(it.get("public_reference")) in comment), None)

@@ -5643,7 +5643,30 @@ def create_author_withdrawal_to_treasury_payout(author_id: int, amount_nano: int
         conn.close()
 
 def create_referral_withdrawal_to_treasury_payout(request_id: int, user_id: int, amount_nano: int):
-    return create_treasury_payout("referral", int(request_id), int(user_id), int(amount_nano), f"referral:{request_id}")
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM treasury_payouts WHERE payout_type='referral' AND source_record_id=%s ORDER BY id DESC LIMIT 1", (int(request_id),))
+        existing = cur.fetchone()
+        if existing:
+            conn.rollback(); return {"ok": True, "payout_id": existing[0], "existing": True}
+        cur.execute("UPDATE referral_reward_withdrawal_requests SET status='processing',processed_by=NULL WHERE id=%s AND status='pending'", (int(request_id),))
+        if cur.rowcount != 1:
+            conn.rollback(); return {"ok": False, "error": "request_not_pending"}
+        conn.commit()
+    except Exception:
+        conn.rollback(); return {"ok": False, "error": "request_update_failed"}
+    finally:
+        conn.close()
+    created = create_treasury_payout("referral", int(request_id), int(user_id), int(amount_nano), f"referral:{request_id}")
+    if not created.get("ok"):
+        conn = get_connection(); cur = conn.cursor()
+        try:
+            cur.execute("UPDATE referral_reward_withdrawal_requests SET status='pending' WHERE id=%s AND status='processing'", (int(request_id),)); conn.commit()
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+    return created
 
 
 def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
@@ -5664,19 +5687,7 @@ def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
         conn.commit()
     finally:
         conn.close()
-    lock_owner = f"payout:{payout_id}:{admin_user_id}"
-    if not acquire_distributed_lock("treasury_send", lock_owner, ttl_seconds=120):
-        conn = get_connection(); cur = conn.cursor()
-        try:
-            cur.execute("UPDATE treasury_payouts SET status='approved',fail_reason='treasury_send_lock_busy' WHERE id=%s AND status='processing'", (int(payout_id),))
-            conn.commit()
-        finally:
-            conn.close()
-        return {"ok": False, "error": "treasury_send_busy"}
-    try:
-        sent = send_from_treasury(str(row[4]), int(row[5]), comment=f"payout:{payout_id}")
-    finally:
-        release_distributed_lock("treasury_send", lock_owner)
+    sent = send_from_treasury(str(row[4]), int(row[5]), comment=f"payout:{payout_id}")
     conn = get_connection(); cur = conn.cursor()
     try:
         if sent.get("ok"):
@@ -5754,7 +5765,8 @@ def create_donation_with_payment_intent(donor_id: int, author_id: int, amount_na
         intent_id = int(cur.fetchone()[0])
         cur.execute("UPDATE author_donations SET payment_intent_id=%s WHERE id=%s", (intent_id, donation_id))
         conn.commit()
-        return {"ok": True, "donation_id": donation_id, "payment_intent": {"id": intent_id, "public_reference": public_reference, "treasury_address": treasury_address, "amount_nano": gross}}
+        from services.treasury_service import build_ton_text_comment_payload_boc
+        return {"ok": True, "donation_id": donation_id, "payment_intent": {"id": intent_id, "public_reference": public_reference, "treasury_address": treasury_address, "amount_nano": gross, "payload_boc": build_ton_text_comment_payload_boc(public_reference), "network_id": os.getenv("TON_NETWORK", "mainnet")}}
     except Exception as e:
         conn.rollback(); print(f"create_donation_with_payment_intent error: {type(e).__name__}"); return {"ok": False, "error": "intent_create_failed"}
     finally:
@@ -5795,10 +5807,10 @@ def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
 def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor()
     try:
-        cur.execute("""SELECT id,public_reference,user_id,product_type,product_ref,expected_amount_nano,treasury_address,expected_sender_address,status,expires_at
-                       FROM payment_intents WHERE status='pending' AND expires_at > NOW() ORDER BY created_at ASC LIMIT %s""", (int(limit),))
+        cur.execute("""SELECT id,public_reference,user_id,product_type,product_ref,expected_amount_nano,treasury_address,expected_sender_address,status,expires_at,tx_hash
+                       FROM payment_intents WHERE status IN ('pending','verified') AND expires_at > NOW() ORDER BY created_at ASC LIMIT %s""", (int(limit),))
         rows = cur.fetchall() or []
-        return [{"id": r[0], "public_reference": r[1], "user_id": int(r[2]), "product_type": r[3], "product_ref": r[4], "expected_amount_nano": int(r[5]), "treasury_address": r[6], "expected_sender_address": r[7], "status": r[8], "expires_at": r[9]} for r in rows]
+        return [{"id": r[0], "public_reference": r[1], "user_id": int(r[2]), "product_type": r[3], "product_ref": r[4], "expected_amount_nano": int(r[5]), "treasury_address": r[6], "expected_sender_address": r[7], "status": r[8], "expires_at": r[9], "tx_hash": (r[10] if len(r) > 10 else None)} for r in rows]
     except Exception as e:
         print(f"get_pending_payment_intents error: {e}"); return []
     finally:
@@ -5825,6 +5837,11 @@ def finalize_treasury_payout_reconciliation(payout_id: int, admin_user_id: int =
             cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s, author_withdrawn_nano=author_withdrawn_nano+%s, author_withdrawn_ton=author_withdrawn_ton+(%s::float/1000000000.0) WHERE user_id=%s AND author_reserved_nano >= %s", (int(row[3]), int(row[3]), int(row[3]), int(row[2]), int(row[3])))
             if cur.rowcount != 1:
                 conn.rollback(); return {"ok": False, "error": "accounting_mismatch"}
+        if str(row[1] or '') == 'referral':
+            cur.execute("SELECT source_record_id FROM treasury_payouts WHERE id=%s", (int(payout_id),))
+            src = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute("UPDATE referral_reward_withdrawal_requests SET status='paid',tx_hash=%s,processed_at=NOW(),processed_by=%s WHERE id=%s AND status IN ('processing','payout_sent_reconcile_required','pending')", (str(row[5]), int(admin_user_id or 0), src))
+            cur.execute("UPDATE referral_rewards SET status='withdrawn',withdrawn_at=NOW(),withdrawal_tx_hash=%s,updated_at=NOW() WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (str(row[5]), src))
         conn.commit(); return {"ok": True, "tx_hash": str(row[5])}
     except Exception:
         conn.rollback(); return {"ok": False, "error": "reconcile_failed"}
