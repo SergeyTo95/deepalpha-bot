@@ -364,10 +364,58 @@ def _init_db_inner(conn, cursor):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cashier_payment_wallets_status ON cashier_payment_wallets(status)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_single_active ON cashier_payment_wallets((status)) WHERE status='active'")
 
     _init_live_analyst_tables(cursor)
     ensure_gemini_lockdown_tables(cursor)
     _live_analyst_tables_ready = True
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS payment_intents (
+        id SERIAL PRIMARY KEY,
+        public_reference TEXT NOT NULL UNIQUE,
+        user_id BIGINT NOT NULL,
+        product_type TEXT NOT NULL,
+        product_ref TEXT,
+        expected_amount_nano BIGINT NOT NULL,
+        treasury_wallet_id BIGINT NOT NULL,
+        treasury_address TEXT NOT NULL,
+        expected_sender_address TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        tx_hash TEXT UNIQUE,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        verified_at TIMESTAMP,
+        fulfilled_at TIMESTAMP,
+        fail_reason TEXT,
+        metadata_json TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_payment_intents_status ON payment_intents(status)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS treasury_payouts (
+        id SERIAL PRIMARY KEY,
+        payout_type TEXT NOT NULL,
+        source_record_id BIGINT,
+        recipient_user_id BIGINT NOT NULL,
+        recipient_wallet_id BIGINT NOT NULL,
+        recipient_wallet_address TEXT NOT NULL,
+        treasury_wallet_id BIGINT NOT NULL,
+        treasury_address TEXT NOT NULL,
+        amount_nano BIGINT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        tx_hash TEXT UNIQUE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        approved_at TIMESTAMP,
+        submitted_at TIMESTAMP,
+        paid_at TIMESTAMP,
+        fail_reason TEXT
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_treasury_payouts_status ON treasury_payouts(status)")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS signal_history (
@@ -899,6 +947,9 @@ def _init_db_inner(conn, cursor):
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_author INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_balance_ton REAL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_withdrawn_ton REAL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_available_nano BIGINT DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_reserved_nano BIGINT DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_withdrawn_nano BIGINT DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_bio TEXT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_since TEXT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS ton_wallet TEXT DEFAULT NULL",
@@ -5519,3 +5570,88 @@ def release_distributed_lock(lock_name: str, owner: str) -> bool:
         conn.rollback(); return False
     finally:
         cur.close(); conn.close()
+
+# ═══════════════════════════════════════════
+# TREASURY SECURITY HOTFIX HELPERS
+# ═══════════════════════════════════════════
+
+def get_active_treasury_wallet():
+    from services.treasury_service import get_active_treasury_wallet as _svc
+    return _svc()
+
+
+def create_treasury_payout(payout_type: str, source_record_id: int, recipient_user_id: int, amount_nano: int, idempotency_key: str):
+    from services.treasury_service import get_public_treasury_address, resolve_internal_payout_wallet
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        treasury = get_public_treasury_address()
+        if not treasury.get("ok"):
+            return treasury
+        wallet = resolve_internal_payout_wallet(int(recipient_user_id), conn=conn, for_update=True)
+        if not wallet.get("ok"):
+            conn.rollback(); return wallet
+        cur.execute("""
+            INSERT INTO treasury_payouts (payout_type,source_record_id,recipient_user_id,recipient_wallet_id,
+              recipient_wallet_address,treasury_wallet_id,treasury_address,amount_nano,status,idempotency_key)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id
+        """, (payout_type, int(source_record_id or 0), int(recipient_user_id), int(wallet["wallet_id"]), wallet["wallet_address"], int(treasury["wallet_id"]), treasury["address"], int(amount_nano), idempotency_key))
+        row = cur.fetchone(); conn.commit()
+        return {"ok": bool(row), "payout_id": (row[0] if row else None), "recipient_wallet_address": wallet["wallet_address"]}
+    except Exception as e:
+        conn.rollback(); print(f"create_treasury_payout error: {e}"); return {"ok": False, "error": "payout_create_failed"}
+    finally:
+        conn.close()
+
+
+def create_author_withdrawal_to_treasury_payout(author_id: int, amount_nano: int):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE users SET author_available_nano=author_available_nano-%s, author_reserved_nano=author_reserved_nano+%s
+            WHERE user_id=%s AND author_available_nano >= %s
+        """, (int(amount_nano), int(amount_nano), int(author_id), int(amount_nano)))
+        if cur.rowcount != 1:
+            conn.rollback(); return {"ok": False, "error": "insufficient_author_balance"}
+        conn.commit()
+    finally:
+        conn.close()
+    return create_treasury_payout("author", int(author_id), int(author_id), int(amount_nano), f"author:{author_id}:{amount_nano}:{int(time.time())}")
+
+
+def create_referral_withdrawal_to_treasury_payout(request_id: int, user_id: int, amount_nano: int):
+    return create_treasury_payout("referral", int(request_id), int(user_id), int(amount_nano), f"referral:{request_id}")
+
+
+def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
+    from services.treasury_service import get_public_treasury_address, resolve_internal_payout_wallet, send_from_treasury
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,status,recipient_user_id,recipient_wallet_id,recipient_wallet_address,amount_nano,treasury_address FROM treasury_payouts WHERE id=%s FOR UPDATE", (int(payout_id),))
+        row = cur.fetchone()
+        if not row: return {"ok": False, "error": "payout_not_found"}
+        if row[1] in ("processing", "submitted", "paid", "payout_sent_reconcile_required"):
+            return {"ok": False, "error": "payout_already_processing"}
+        wallet = resolve_internal_payout_wallet(int(row[2]), conn=conn, for_update=True)
+        treasury = get_public_treasury_address()
+        if not wallet.get("ok") or not treasury.get("ok") or wallet.get("wallet_id") != row[3] or wallet.get("wallet_address") != row[4] or treasury.get("address") != row[6]:
+            cur.execute("UPDATE treasury_payouts SET status='recipient_revalidation_required',fail_reason='recipient_or_treasury_changed' WHERE id=%s", (int(payout_id),)); conn.commit(); return {"ok": False, "error": "recipient_revalidation_required"}
+        cur.execute("UPDATE treasury_payouts SET status='processing',approved_at=NOW() WHERE id=%s AND status IN ('pending','approved')", (int(payout_id),))
+        if cur.rowcount != 1: conn.rollback(); return {"ok": False, "error": "concurrent_payout"}
+        conn.commit()
+    finally:
+        conn.close()
+    sent = send_from_treasury(str(row[4]), int(row[5]), comment=f"payout:{payout_id}")
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        if sent.get("ok"):
+            cur.execute("UPDATE treasury_payouts SET status='submitted',submitted_at=NOW(),tx_hash=%s WHERE id=%s AND status='processing'", (sent.get("tx_hash"), int(payout_id)))
+            if cur.rowcount != 1:
+                conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
+            conn.commit(); return {"ok": True, "tx_hash": sent.get("tx_hash")}
+        cur.execute("UPDATE treasury_payouts SET status='failed',fail_reason=%s WHERE id=%s AND status='processing'", (sent.get("error"), int(payout_id))); conn.commit(); return sent
+    except Exception:
+        conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
+    finally:
+        conn.close()

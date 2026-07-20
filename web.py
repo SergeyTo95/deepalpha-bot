@@ -55,6 +55,7 @@ from services.ton_purchase_service import (
     verify_ton_purchase_onchain,
 )
 from services.referral_rewards_service import process_token_purchase_referral_reward
+from services.treasury_service import create_payment_intent
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
@@ -526,7 +527,10 @@ async def handle_article_cover_api(request):
 async def handle_create_donation(request):
     try:
         data = await request.json()
-        donor_id = int(data.get("donor_id", 0))
+        donor_id = _get_authenticated_web_user_id(request)
+        if not donor_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
+        donor_id = int(donor_id)
         supplied_author_id = int(data.get("author_id", 0) or 0)
         ton_amount = float(data.get("ton_amount", 0))
         post_id_raw = data.get("post_id")
@@ -578,7 +582,16 @@ async def handle_create_donation(request):
         if not donation_id:
             return _json_response({"error": "Failed to create donation"}, status=500)
 
-        add_pending(donor_id, ton_amount, f"donation:{donation_id}")
+        intent = create_payment_intent(
+            user_id=donor_id,
+            product_type="donation",
+            product_ref=str(donation_id),
+            amount_nano=ton_to_nano(ton_amount),
+            metadata={"donation_id": donation_id, "author_id": author_id, "post_id": post_id},
+            idempotency_key=f"donation:{donation_id}",
+        )
+        if not intent.get("ok"):
+            return _json_response({"error": intent.get("error", "treasury_not_configured")}, status=503)
 
         print(
             f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
@@ -590,6 +603,7 @@ async def handle_create_donation(request):
             "donation_id": donation_id,
             "amount": ton_amount,
             "payment_type": f"donation:{donation_id}",
+            "payment_intent": intent,
         })
     except Exception as e:
         print(f"handle_create_donation error: {e}")

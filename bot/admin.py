@@ -3952,3 +3952,34 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
+
+
+def treasury_admin_panel_text() -> str:
+    """Telegram admin Treasury panel without seed/private material."""
+    from services.treasury_service import get_treasury_runtime_status, get_treasury_balance
+    status = get_treasury_runtime_status()
+    balance = get_treasury_balance() if status.get("ok") else {}
+    address = str(status.get("address") or "")
+    masked = (address[:6] + "…" + address[-6:]) if len(address) > 14 else address
+    return (
+        "🏦 Treasury\n"
+        f"Wallet: {masked or status.get('error', 'treasury_not_configured')}\n"
+        f"Network: {status.get('network', '')}\n"
+        f"Balance: {balance.get('balance_nano', 0)} nano\n"
+        f"Incoming: {'enabled' if status.get('incoming_enabled') else 'paused'}\n"
+        f"Outgoing: {'enabled' if status.get('outgoing_enabled') else 'paused'}\n"
+        "Pending payment intents: use /treasury_intents\n"
+        "Pending payouts: use /treasury_payouts\n"
+        "Reconciliation-required payouts: use /treasury_reconciliation"
+    )
+
+
+def treasury_admin_panel_buttons():
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("Pause/Resume incoming", callback_data="treasury_toggle_incoming_confirm"))
+    kb.add(InlineKeyboardButton("Pause/Resume outgoing", callback_data="treasury_toggle_outgoing_confirm"))
+    kb.add(InlineKeyboardButton("Pending payouts", callback_data="treasury_pending_payouts"))
+    kb.add(InlineKeyboardButton("Reconciliation", callback_data="treasury_reconciliation"))
+    kb.add(InlineKeyboardButton("Refresh", callback_data="treasury_refresh"))
+    return kb

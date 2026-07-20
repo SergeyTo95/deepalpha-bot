@@ -1,7 +1,7 @@
 import os
 import requests
 from typing import List, Dict, Any, Optional
-from services.ton_purchase_service import resolve_ton_purchase_project_wallet
+from services.treasury_service import get_public_treasury_address
 
 TONCENTER_API = "https://toncenter.com/api/v2"
 TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
@@ -13,7 +13,7 @@ def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
         response = requests.get(
             f"{TONCENTER_API}/getTransactions",
             params={
-                "address": resolve_ton_purchase_project_wallet(),
+                "address": (get_public_treasury_address().get("address") or ""),
                 "limit": limit,
                 "api_key": TONCENTER_KEY,
             },
