@@ -1506,7 +1506,6 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
         InlineKeyboardButton("💎 Изменить минимум вывода" if lang == "ru" else "💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
         InlineKeyboardButton("🧢 Изменить дневной лимит" if lang == "ru" else "🧢 Set daily cap", callback_data="referral_set_daily_cap"),
         InlineKeyboardButton("📤 Заявки на вывод" if lang == "ru" else "📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
-        InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"),
         InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back to admin", callback_data="admin_back"),
     )
@@ -3209,7 +3208,7 @@ def register_admin(dp: Dispatcher):
             lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} Gram | {created}")
             kb.add(
                 InlineKeyboardButton(
-                    (f"✅ Отметить выплаченным #{r['id']}" if lang == "ru" else f"✅ Mark Paid #{r['id']}"),
+                    (f"💸 Treasury payout #{r['id']}" if lang == "ru" else f"💸 Treasury payout #{r['id']}"),
                     callback_data=f"ref_withdraw_paid:{r['id']}",
                 ),
                 InlineKeyboardButton(
@@ -3224,14 +3223,12 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_paid:"))
     async def ref_withdraw_paid(callback: types.CallbackQuery):
         request_id = int(callback.data.split(":")[1])
-        ok = mark_referral_withdrawal_request_paid(request_id, callback.from_user.id, tx_hash="manual_admin_paid")
+        from db.database import get_referral_withdrawal_request, create_referral_withdrawal_to_treasury_payout, approve_and_send_treasury_payout
+        req = get_referral_withdrawal_request(request_id)
+        created = create_referral_withdrawal_to_treasury_payout(request_id, int(req.get("user_id") or 0), int(req.get("amount_nano") or 0)) if req else {"ok": False, "error": "request_not_found"}
+        sent = approve_and_send_treasury_payout(int(created.get("payout_id") or 0), callback.from_user.id) if created.get("ok") else created
         lang = _get_lang(callback.from_user.id)
-        await callback.answer(
-            ("✅ Отмечено как выплаченное" if ok else "❌ Не удалось обновить")
-            if lang == "ru" else
-            ("✅ Marked as paid" if ok else "❌ Cannot update"),
-            show_alert=True
-        )
+        await callback.answer(("✅ Выплата отправлена" if sent.get("ok") else f"❌ {sent.get('error')}") if lang == "ru" else ("✅ Payout sent" if sent.get("ok") else f"❌ {sent.get('error')}"), show_alert=True)
         await referral_pending_withdrawals(callback)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_reject:"))

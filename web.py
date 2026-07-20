@@ -60,7 +60,7 @@ from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post, list_public_articles, get_public_article,
-    is_author, create_donation, add_pending, create_donation_with_payment_intent,
+    is_author, create_donation, add_pending, create_donation_with_payment_intent, find_package_by_amount,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
@@ -266,28 +266,39 @@ async def handle_user_api(request):
 
 async def handle_pending(request):
     try:
+        user_id = _get_authenticated_web_user_id(request)
+        if not user_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
+        if not incoming_enabled():
+            return _json_response({"error": "treasury_incoming_disabled"}, status=503)
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
-        amount = float(data.get("amount", 0))
-        payment_type = data.get("payment_type", "tokens")
-
-        if user_id <= 0:
-            return _json_response({"error": "Invalid user_id"}, status=400)
-
-        valid_types = ("tokens", "subscription", "author_status", "watchlist_slots")
-        if payment_type not in valid_types and not payment_type.startswith("donation:"):
+        payment_type = str(data.get("payment_type", "tokens") or "tokens")
+        if payment_type not in ("tokens", "subscription", "author_status"):
             return _json_response({"error": "Invalid payment_type"}, status=400)
-
-        add_pending(user_id, amount, payment_type)
-        print(f"PENDING SAVED: user_id={user_id}, amount={amount}, type={payment_type}")
-
-        return _json_response({"ok": True})
+        amount = float(data.get("amount", 0) or 0)
+        product_ref = str(data.get("product_ref") or payment_type)
+        if payment_type == "subscription":
+            amount = float(get_setting("subscription_price_ton", "1"))
+        elif payment_type == "author_status":
+            amount = float(get_setting("author_status_price_ton", "5"))
+        elif amount <= 0:
+            return _json_response({"error": "Invalid amount"}, status=400)
+        amount_nano = ton_to_nano(amount)
+        intent = create_payment_intent(
+            user_id=int(user_id),
+            product_type=payment_type,
+            product_ref=product_ref,
+            amount_nano=amount_nano,
+            idempotency_key=str(data.get("idempotency_key") or f"webapp:{user_id}:{payment_type}:{product_ref}:{time.time_ns()}"),
+        )
+        if not intent.get("ok"):
+            return _json_response({"error": intent.get("error", "treasury_not_configured")}, status=503)
+        return _json_response({"ok": True, "payment_intent": intent, "public_reference": intent.get("public_reference"), "treasury_address": intent.get("treasury_address"), "amount_nano": intent.get("amount_nano")})
     except Exception as e:
         print(f"handle_pending error: {e}")
         import traceback
         traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
-
 
 async def handle_authors_list(request):
     try:

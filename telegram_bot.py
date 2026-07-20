@@ -6429,13 +6429,11 @@ async def referral_withdrawals_admin(message: types.Message, state: FSMContext):
             f"• #{r.get('id')} | user={r.get('user_id')} | amount_nano={r.get('amount_nano')} | status={r.get('status')} | created={r.get('created_at')}"
         )
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"))
     for r in rows[:15]:
         rid = int(r.get("id") or 0)
         status = str(r.get("status") or "")
         if status == "pending":
-            kb.add(InlineKeyboardButton(f"💸 Pay from payout wallet #{rid}", callback_data=f"ref_pay_wallet_{rid}"))
-            kb.add(InlineKeyboardButton(f"✅ Mark Paid manually #{rid}", callback_data=f"ref_mark_paid_{rid}"))
+            kb.add(InlineKeyboardButton(f"💸 Treasury payout #{rid}", callback_data=f"ref_pay_wallet_{rid}"))
             kb.add(InlineKeyboardButton(f"❌ Reject #{rid}", callback_data=f"ref_reject_{rid}"))
         elif status == "payout_sent_reconcile_required":
             kb.add(InlineKeyboardButton(f"🧾 Finalize reconciliation #{rid}", callback_data=f"ref_reconcile_paid_{rid}"))
@@ -6448,50 +6446,12 @@ async def ref_payout_wallet_cb(c: types.CallbackQuery):
     if not is_admin(c.from_user.id):
         return
     w = get_active_referral_payout_wallet()
-    if not w:
-        text = "💼 Referral payout wallet\n\nStatus: not created"
-    else:
-        bal = "0"
-        try:
-            bal = nano_to_ton_display(get_ton_balance(str(w.get("wallet_address") or "")))
-        except Exception:
-            pass
-        text = f"💼 Referral payout wallet\n\nStatus: active\nAddress:\n{w.get('wallet_address')}\n\nBalance: {bal} Gram"
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("➕ Create payout wallet", callback_data="ref_payout_create"))
-    kb.add(InlineKeyboardButton("🔐 Reveal seed phrase", callback_data="ref_payout_seed"))
-    await c.message.answer(text, reply_markup=kb); await c.answer()
+    text = "💼 Legacy referral payout wallet (read-only)\n\n" + (f"Address:\n{w.get('wallet_address')}" if w else "Status: not configured")
+    await c.message.answer(text); await c.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "ref_payout_create")
-async def ref_payout_create_cb(c: types.CallbackQuery):
-    from bot.admin import is_admin
-    if not is_admin(c.from_user.id):
-        return
-    res = create_referral_payout_wallet(c.from_user.id)
-    await c.message.answer("✅ Payout wallet created." if res.get("ok") else f"❌ Failed: {res.get('error')}")
-    await c.answer()
-
-@dp.callback_query_handler(lambda c: c.data == "ref_payout_seed")
-async def ref_payout_seed_cb(c: types.CallbackQuery):
-    from bot.admin import is_admin
-    if not is_admin(c.from_user.id):
-        return
-    if c.message.chat.type != "private":
-        lang = get_user_lang(c.from_user.id)
-        await c.answer("Для безопасности откройте это в личном чате с ботом." if lang == "ru" else "For security, open this in a private chat with the bot.", show_alert=True)
-        return
-    res = reveal_referral_payout_wallet_seed_once(c.from_user.id)
-    if not res.get("ok"):
-        await c.message.answer("❌ Seed unavailable.")
-    else:
-        lang = get_user_lang(c.from_user.id)
-        warning = (
-            "⚠️ Эта seed-фраза управляет кошельком реферальных выплат.\nСохраните её офлайн. Никому не передавайте. Она показывается только один раз."
-            if lang == "ru"
-            else "⚠️ This seed controls the referral payout wallet.\nStore it offline. Do not share it. It is shown only once."
-        )
-        await c.message.answer(f"{warning}\n\n{res.get('seed_phrase')}", disable_web_page_preview=True)
-    await c.answer()
+@dp.callback_query_handler(lambda c: c.data in {"ref_payout_create", "ref_payout_seed"})
+async def ref_payout_legacy_disabled_cb(c: types.CallbackQuery):
+    await c.answer("Legacy referral payout wallet is read-only; use Treasury payouts.", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ref_pay_wallet_"))
 async def ref_pay_wallet_cb(c: types.CallbackQuery):
@@ -6499,7 +6459,10 @@ async def ref_pay_wallet_cb(c: types.CallbackQuery):
     if not is_admin(c.from_user.id):
         return
     rid = int(c.data.split("_")[-1])
-    res = send_referral_payout_from_wallet(rid, c.from_user.id)
+    from db.database import get_referral_withdrawal_request, create_referral_withdrawal_to_treasury_payout, approve_and_send_treasury_payout
+    req = get_referral_withdrawal_request(rid)
+    created = create_referral_withdrawal_to_treasury_payout(rid, int(req.get("user_id") or 0), int(req.get("amount_nano") or 0)) if req else {"ok": False, "error": "request_not_found"}
+    res = approve_and_send_treasury_payout(int(created.get("payout_id") or 0), c.from_user.id) if created.get("ok") else created
     if res.get("ok"):
         await c.message.answer(f"✅ Paid #{rid}\nTx: {res.get('tx_hash')}")
     else:
@@ -6536,8 +6499,7 @@ async def ref_mark_paid_cb(c: types.CallbackQuery):
     if not is_admin(c.from_user.id):
         return
     rid = int(c.data.split("_")[-1])
-    ok = mark_referral_withdrawal_request_paid(rid, c.from_user.id, tx_hash="manual_admin_paid")
-    await c.message.answer("✅ Marked paid manually." if ok else "❌ Failed to mark paid.")
+    await c.message.answer("❌ Manual paid path disabled; use Treasury payout.")
     await c.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("ref_reject_"))

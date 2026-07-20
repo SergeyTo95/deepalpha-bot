@@ -5664,20 +5664,51 @@ def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
         conn.commit()
     finally:
         conn.close()
-    sent = send_from_treasury(str(row[4]), int(row[5]), comment=f"payout:{payout_id}")
+    lock_owner = f"payout:{payout_id}:{admin_user_id}"
+    if not acquire_distributed_lock("treasury_send", lock_owner, ttl_seconds=120):
+        conn = get_connection(); cur = conn.cursor()
+        try:
+            cur.execute("UPDATE treasury_payouts SET status='approved',fail_reason='treasury_send_lock_busy' WHERE id=%s AND status='processing'", (int(payout_id),))
+            conn.commit()
+        finally:
+            conn.close()
+        return {"ok": False, "error": "treasury_send_busy"}
+    try:
+        sent = send_from_treasury(str(row[4]), int(row[5]), comment=f"payout:{payout_id}")
+    finally:
+        release_distributed_lock("treasury_send", lock_owner)
     conn = get_connection(); cur = conn.cursor()
     try:
         if sent.get("ok"):
             cur.execute("UPDATE treasury_payouts SET status='submitted',submitted_at=NOW(),tx_hash=%s WHERE id=%s AND status='processing'", (sent.get("tx_hash"), int(payout_id)))
             if cur.rowcount != 1:
-                conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
+                conn.rollback()
+                recover_conn = get_connection(); recover_cur = recover_conn.cursor()
+                try:
+                    recover_cur.execute("UPDATE treasury_payouts SET status='payout_sent_reconcile_required',tx_hash=%s,fail_reason=%s WHERE id=%s", (sent.get("tx_hash"), "TON sent but submitted update rowcount was zero", int(payout_id)))
+                    recover_conn.commit()
+                except Exception:
+                    recover_conn.rollback()
+                finally:
+                    recover_conn.close()
+                return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
             conn.commit(); return {"ok": True, "tx_hash": sent.get("tx_hash")}
         cur.execute("UPDATE treasury_payouts SET status='failed',fail_reason=%s WHERE id=%s AND status='processing'", (sent.get("error"), int(payout_id)))
         if str(row[7] or '') == 'author':
             cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s, author_available_nano=author_available_nano+%s WHERE user_id=%s", (int(row[5]), int(row[5]), int(row[2])))
         conn.commit(); return sent
     except Exception:
-        conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
+        conn.rollback()
+        if sent.get("ok") and sent.get("tx_hash"):
+            recover_conn = get_connection(); recover_cur = recover_conn.cursor()
+            try:
+                recover_cur.execute("UPDATE treasury_payouts SET status='payout_sent_reconcile_required',tx_hash=%s,fail_reason=%s WHERE id=%s", (sent.get("tx_hash"), "TON sent but DB finalization failed", int(payout_id)))
+                recover_conn.commit()
+            except Exception:
+                recover_conn.rollback()
+            finally:
+                recover_conn.close()
+        return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
     finally:
         conn.close()
 
@@ -5797,5 +5828,17 @@ def finalize_treasury_payout_reconciliation(payout_id: int, admin_user_id: int =
         conn.commit(); return {"ok": True, "tx_hash": str(row[5])}
     except Exception:
         conn.rollback(); return {"ok": False, "error": "reconcile_failed"}
+    finally:
+        conn.close()
+
+def mark_payment_intent_fulfilled(intent_id: int) -> bool:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE payment_intents SET status='fulfilled',fulfilled_at=NOW() WHERE id=%s AND status='verified'", (int(intent_id),))
+        ok = cur.rowcount == 1
+        conn.commit()
+        return ok
+    except Exception:
+        conn.rollback(); return False
     finally:
         conn.close()

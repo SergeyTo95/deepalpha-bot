@@ -20,7 +20,7 @@ from services.polymarket_resolver import resolve_prediction, fetch_market_by_slu
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
-    get_all_pending, get_pending_payment_intents, fulfill_verified_donation_intent, delete_pending, get_all_users,
+    get_all_pending, get_pending_payment_intents, fulfill_verified_donation_intent, mark_payment_intent_fulfilled, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
@@ -947,6 +947,7 @@ async def check_ton_payments():
                         referral_bonus_ton=referral_bonus_ton,
                         referrer_id=referrer_id,
                     )
+                    mark_payment_intent_fulfilled(int(matched_intent["id"]))
 
                     try:
                         await telegram_bot.bot.send_message(
@@ -971,6 +972,7 @@ async def check_ton_payments():
                         tx_hash, user_id, ton_amount, 0,
                         referral_bonus_ton=0, referrer_id=None,
                     )
+                    mark_payment_intent_fulfilled(int(matched_intent["id"]))
 
                     try:
                         await telegram_bot.bot.send_message(
@@ -997,6 +999,7 @@ async def check_ton_payments():
                         tx_hash, user_id, ton_amount, 0,
                         referral_bonus_ton=0, referrer_id=None,
                     )
+                    mark_payment_intent_fulfilled(int(matched_intent["id"]))
 
                     try:
                         await telegram_bot.bot.send_message(
@@ -1104,6 +1107,7 @@ async def check_ton_payments():
                         referral_bonus_ton=referral_bonus_ton,
                         referrer_id=referrer_id,
                     )
+                    mark_payment_intent_fulfilled(int(matched_intent["id"]))
 
                     package = find_package_by_amount(ton_amount, tolerance=0.05)
                     package_name = f"«{package['name']}»" if package else ""
