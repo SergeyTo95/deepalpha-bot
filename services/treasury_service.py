@@ -106,8 +106,13 @@ def _load_active_treasury_secret_row() -> Dict[str, Any]:
 
 
 
+def ton_network_id(network: str = "") -> str:
+    net = str(network or os.getenv("TON_NETWORK", "mainnet")).lower()
+    return "-3" if "test" in net else "-239"
+
+
 def build_ton_text_comment_payload_boc(public_reference: str) -> str:
-    """Return base64 BoC payload for a standard TON text comment (opcode 0 + UTF-8 text)."""
+    """Return base64 BoC payload for a standard TON text comment (opcode 0 + UTF-8 text); fail closed if unavailable."""
     ref = str(public_reference or "").strip()
     if not ref:
         raise ValueError("public_reference_required")
@@ -115,22 +120,44 @@ def build_ton_text_comment_payload_boc(public_reference: str) -> str:
         from tonsdk.boc import begin_cell
         cell = begin_cell().store_uint(0, 32).store_bytes(ref.encode("utf-8")).end_cell()
         return __import__("base64").b64encode(cell.to_boc(False)).decode("ascii")
-    except Exception:
-        # Test/runtime fallback: preserves exact opcode+text bytes and is distinguishable from plain text.
-        return __import__("base64").b64encode(b"\x00\x00\x00\x00" + ref.encode("utf-8")).decode("ascii")
+    except Exception as exc:
+        raise RuntimeError("payment_payload_build_failed") from exc
+
+
+def decode_ton_text_comment_from_msg(in_msg: Dict[str, Any]) -> str:
+    msg = in_msg or {}
+    msg_data = msg.get("msg_data") or msg.get("message_content") or {}
+    data_text = None
+    if isinstance(msg_data, dict):
+        data_text = msg_data.get("dataText") or msg_data.get("text")
+        if isinstance(data_text, dict):
+            data_text = data_text.get("text")
+        if data_text:
+            try:
+                return __import__("base64").b64decode(str(data_text), validate=True).decode("utf-8").strip()
+            except Exception:
+                return str(data_text).strip()
+        data_raw = msg_data.get("dataRaw") or msg_data.get("body")
+        if isinstance(data_raw, dict):
+            data_raw = data_raw.get("body") or data_raw.get("text")
+        if data_raw:
+            try:
+                from tonsdk.boc import Cell
+                cells = Cell.one_from_boc(__import__("base64").b64decode(str(data_raw)))
+                sl = cells.begin_parse()
+                if sl.read_uint(32) == 0:
+                    return bytes(sl.read_bytes(len(sl) // 8)).decode("utf-8", errors="ignore").strip()
+            except Exception:
+                pass
+    already = msg.get("message") or msg.get("comment")
+    return str(already or "").strip()
 
 
 def decode_ton_text_comment(value: str) -> str:
-    raw = str(value or "")
-    if not raw:
-        return ""
     try:
-        data = __import__("base64").b64decode(raw, validate=True)
-        if data.startswith(b"\x00\x00\x00\x00"):
-            return data[4:].decode("utf-8", errors="ignore").strip()
+        return __import__("base64").b64decode(str(value or ""), validate=True).decode("utf-8").strip()
     except Exception:
-        pass
-    return raw.strip()
+        return str(value or "").strip()
 
 def create_payment_intent(user_id: int, product_type: str, product_ref: str, amount_nano: int,
                           expected_sender_address: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
@@ -141,6 +168,10 @@ def create_payment_intent(user_id: int, product_type: str, product_ref: str, amo
     if not treasury.get("ok"):
         return treasury
     ref = "pay_" + uuid.uuid4().hex
+    try:
+        payload_boc = build_ton_text_comment_payload_boc(ref)
+    except Exception:
+        return {"ok": False, "error": "payment_payload_build_failed"}
     idem = idempotency_key or f"{user_id}:{product_type}:{product_ref}:{uuid.uuid4().hex}"
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     conn = get_connection(); cur = conn.cursor()
@@ -159,7 +190,7 @@ def create_payment_intent(user_id: int, product_type: str, product_ref: str, amo
         conn.commit()
         if not row:
             return {"ok": False, "error": "idempotency_conflict"}
-        return {"ok": True, "id": row[0], "public_reference": row[1], "treasury_address": treasury["address"], "amount_nano": int(amount_nano), "payload_boc": build_ton_text_comment_payload_boc(row[1]), "network_id": os.getenv("TON_NETWORK", "mainnet")}
+        return {"ok": True, "id": row[0], "public_reference": row[1], "treasury_address": treasury["address"], "amount_nano": int(amount_nano), "payload_boc": payload_boc, "network_id": ton_network_id(os.getenv("TON_NETWORK", "mainnet"))}
     except Exception:
         conn.rollback(); logger.exception("payment_intent_create_failed")
         return {"ok": False, "error": "payment_intent_create_failed"}

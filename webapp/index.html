@@ -1216,12 +1216,12 @@
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
+                    network: intent.network_id,
+                    from: tonConnectUI.wallet?.account?.address,
                     messages: [{
                         address: intent.treasury_address,
                         amount: String(intent.amount_nano || Math.floor(donationAmount * 1e9)),
                         payload: intent.payload_boc,
-                        network: intent.network_id,
-                        from: tonConnectUI.wallet?.account?.address,
                     }]
                 });
 
@@ -1361,12 +1361,12 @@
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
+                    network: intent.network_id,
+                    from: tonConnectUI.wallet?.account?.address,
                     messages: [{
                         address: intent.treasury_address,
                         amount: String(intent.amount_nano || amountNano),
                         payload: intent.payload_boc,
-                        network: intent.network_id,
-                        from: tonConnectUI.wallet?.account?.address,
                     }]
                 });
 

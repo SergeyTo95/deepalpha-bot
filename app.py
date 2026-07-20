@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
-from services.treasury_service import verify_payment_intent, decode_ton_text_comment
+from services.treasury_service import verify_payment_intent, decode_ton_text_comment_from_msg
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
 from services.watchlist_ai_summary_service import build_watchlist_ai_summary, format_watchlist_ai_summary
@@ -861,7 +861,7 @@ async def check_ton_payments():
     await asyncio.sleep(15)
     while True:
         try:
-            transactions = get_transactions(limit=200)
+            transactions = get_transactions(limit=500)
             intents = get_pending_payment_intents(limit=500)
             pending = {}  # legacy pending_payments is read-only; Telegram-ID comments no longer fulfill products.
 
@@ -906,12 +906,7 @@ async def check_ton_payments():
                     continue
 
                 in_msg = tx.get("in_msg", {}) or {}
-                msg_data = in_msg.get("msg_data", {}) if isinstance(in_msg, dict) else {}
-                comment = ""
-                if isinstance(msg_data, dict):
-                    comment = decode_ton_text_comment(str(msg_data.get("text") or msg_data.get("body") or msg_data.get("dataText", {}).get("text") if isinstance(msg_data.get("dataText"), dict) else ""))
-                if not comment:
-                    comment = decode_ton_text_comment(str(in_msg.get("message") or in_msg.get("comment") or ""))
+                comment = decode_ton_text_comment_from_msg(in_msg)
                 source = str(in_msg.get("source") or "")
                 destination = str(in_msg.get("destination") or in_msg.get("dest") or "")
                 matched_intent = next((it for it in intents if str(it.get("public_reference")) and str(it.get("public_reference")) in comment), None)
