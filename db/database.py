@@ -5791,35 +5791,122 @@ def create_donation_with_payment_intent(donor_id: int, author_id: int, amount_na
         conn.close()
 
 
-def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
-    """Idempotently completes a verified donation intent exactly once."""
+
+def _calculate_tokens_for_amount_conn(cur, ton_amount: float) -> int:
+    try:
+        cur.execute("SELECT tokens,price_ton FROM token_packages WHERE is_active=1 ORDER BY sort_order,id")
+        for tokens, price in (cur.fetchall() or []):
+            try:
+                if abs(float(price) - float(ton_amount)) <= 0.05:
+                    return int(tokens)
+            except Exception:
+                continue
+        cur.execute("SELECT value FROM settings WHERE key='token_price_ton'")
+        row = cur.fetchone()
+        token_price = float(row[0]) if row and row[0] else 0.1
+        if token_price <= 0:
+            token_price = 0.1
+        return int(float(ton_amount) / token_price)
+    except Exception:
+        return int(float(ton_amount) / 0.1)
+
+
+def _set_subscription_conn(cur, user_id: int, days: int) -> str:
+    now = datetime.utcnow()
+    cur.execute("SELECT subscription_until FROM users WHERE user_id=%s FOR UPDATE", (int(user_id),))
+    row = cur.fetchone()
+    base = now
+    if row and row[0]:
+        try:
+            current_dt = datetime.fromisoformat(str(row[0]))
+            if current_dt > now:
+                base = current_dt
+        except Exception:
+            pass
+    until = (base + timedelta(days=int(days))).isoformat()
+    cur.execute("UPDATE users SET subscription_until=%s,updated_at=%s WHERE user_id=%s", (until, datetime.utcnow().isoformat(), int(user_id)))
+    return until
+
+
+def fulfill_verified_payment_intent(intent_id: int) -> Dict[str, Any]:
+    """Atomically deliver a verified payment intent exactly once."""
     conn = get_connection(); cur = conn.cursor()
     try:
-        cur.execute("SELECT id,product_type,product_ref,status,tx_hash FROM payment_intents WHERE id=%s FOR UPDATE", (int(intent_id),))
+        cur.execute("SELECT id,user_id,product_type,product_ref,expected_amount_nano,status,tx_hash,metadata_json FROM payment_intents WHERE id=%s FOR UPDATE", (int(intent_id),))
         intent = cur.fetchone()
         if not intent:
             conn.rollback(); return {"ok": False, "error": "intent_not_found"}
-        if intent[3] == 'fulfilled':
+        iid, user_id, product_type, product_ref, amount_nano, status, tx_hash, metadata_json = intent
+        if status == 'fulfilled':
             conn.rollback(); return {"ok": True, "already_fulfilled": True}
-        if intent[1] != 'donation' or intent[3] != 'verified':
+        if status != 'verified':
             conn.rollback(); return {"ok": False, "error": "intent_not_verified"}
-        donation_id = int(intent[2]); tx_hash = str(intent[4] or '')
-        cur.execute("SELECT donor_id,author_id,post_id,ton_amount,author_net_amount_nano,status FROM author_donations WHERE id=%s FOR UPDATE", (donation_id,))
-        d = cur.fetchone()
-        if not d:
-            conn.rollback(); return {"ok": False, "error": "donation_not_found"}
-        if d[5] != 'paid':
-            cur.execute("UPDATE author_donations SET status='paid',tx_hash=%s WHERE id=%s AND status='pending'", (tx_hash, donation_id))
-            if cur.rowcount == 1:
-                cur.execute("UPDATE users SET author_available_nano=author_available_nano+%s, author_balance_ton=author_balance_ton+(%s::float/1000000000.0), updated_at=%s WHERE user_id=%s", (int(d[4] or 0), int(d[4] or 0), datetime.utcnow().isoformat(), int(d[1])))
-        cur.execute("UPDATE payment_intents SET status='fulfilled',fulfilled_at=NOW() WHERE id=%s AND status='verified'", (int(intent_id),))
+        tx_hash = str(tx_hash or '').strip()
+        if not tx_hash:
+            conn.rollback(); return {"ok": False, "error": "tx_hash_missing"}
+        ton_amount = int(amount_nano or 0) / 1_000_000_000
+        metadata = {}
+        try:
+            metadata = json.loads(metadata_json or '{}') if metadata_json else {}
+        except Exception:
+            metadata = {}
+        cur.execute("""
+            INSERT INTO transactions (tx_hash,user_id,ton_amount,tokens_granted,referral_bonus_ton,referrer_id,created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (tx_hash) DO NOTHING
+        """, (tx_hash, int(user_id), ton_amount, 0, 0, None, datetime.utcnow().isoformat()))
+        inserted_ledger = cur.rowcount == 1
+        if not inserted_ledger:
+            cur.execute("UPDATE payment_intents SET status='fulfilled',fulfilled_at=COALESCE(fulfilled_at,NOW()) WHERE id=%s AND status='verified'", (int(iid),))
+            conn.commit(); return {"ok": True, "already_fulfilled": True}
+        tokens_granted = 0; referral_bonus_ton = 0; referrer_id = None; result = {"ok": True, "product_type": product_type}
+        if product_type == 'donation':
+            donation_id = int(product_ref)
+            cur.execute("SELECT donor_id,author_id,author_net_amount_nano,status FROM author_donations WHERE id=%s FOR UPDATE", (donation_id,))
+            d = cur.fetchone()
+            if not d:
+                raise RuntimeError('donation_not_found')
+            if str(d[3] or '') != 'paid':
+                cur.execute("UPDATE author_donations SET status='paid',tx_hash=%s WHERE id=%s AND status='pending'", (tx_hash, donation_id))
+                if cur.rowcount == 1:
+                    cur.execute("UPDATE users SET author_available_nano=author_available_nano+%s,author_balance_ton=author_balance_ton+(%s::float/1000000000.0),updated_at=%s WHERE user_id=%s", (int(d[2] or 0), int(d[2] or 0), datetime.utcnow().isoformat(), int(d[1])))
+            result["donation_id"] = donation_id
+        elif product_type == 'subscription':
+            days = int(str(get_setting('subscription_days', '30') or '30'))
+            result["subscription_until"] = _set_subscription_conn(cur, int(user_id), days)
+        elif product_type == 'author_status':
+            cur.execute("UPDATE users SET is_author=1,author_status=1,updated_at=%s WHERE user_id=%s", (datetime.utcnow().isoformat(), int(user_id)))
+        else:
+            tokens_granted = int(metadata.get('tokens') or metadata.get('total_tokens') or 0)
+            if tokens_granted <= 0:
+                tokens_granted = _calculate_tokens_for_amount_conn(cur, ton_amount)
+            if tokens_granted > 0:
+                cur.execute("UPDATE users SET token_balance=token_balance+%s,updated_at=%s WHERE user_id=%s", (tokens_granted, datetime.utcnow().isoformat(), int(user_id)))
+        if product_type in ('tokens', 'subscription'):
+            cur.execute("SELECT referred_by FROM users WHERE user_id=%s", (int(user_id),))
+            u = cur.fetchone()
+            if u and u[0]:
+                referrer_id = int(u[0])
+                cur.execute("SELECT value FROM settings WHERE key='referral_percent'")
+                rr = cur.fetchone()
+                try: ref_percent = float(rr[0]) if rr and rr[0] else 10.0
+                except Exception: ref_percent = 10.0
+                referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
+                if referral_bonus_ton > 0:
+                    cur.execute("UPDATE users SET referral_earnings_ton=COALESCE(referral_earnings_ton,0)+%s,updated_at=%s WHERE user_id=%s", (referral_bonus_ton, datetime.utcnow().isoformat(), referrer_id))
+        cur.execute("UPDATE transactions SET tokens_granted=%s,referral_bonus_ton=%s,referrer_id=%s WHERE tx_hash=%s", (tokens_granted, referral_bonus_ton, referrer_id, tx_hash))
+        cur.execute("UPDATE payment_intents SET status='fulfilled',fulfilled_at=NOW() WHERE id=%s AND status='verified'", (int(iid),))
         if cur.rowcount != 1:
-            conn.rollback(); return {"ok": True, "already_fulfilled": True}
-        conn.commit(); return {"ok": True, "donation_id": donation_id}
-    except Exception:
-        conn.rollback(); return {"ok": False, "error": "donation_fulfill_failed"}
+            raise RuntimeError('intent_state_changed')
+        conn.commit(); result.update({"tokens_granted": tokens_granted, "referral_bonus_ton": referral_bonus_ton, "referrer_id": referrer_id, "tx_hash": tx_hash}); return result
+    except Exception as e:
+        conn.rollback(); print(f"fulfill_verified_payment_intent error: {type(e).__name__}"); return {"ok": False, "error": "fulfillment_failed"}
     finally:
         conn.close()
+
+def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
+    """Backward-compatible wrapper for donation intents; uses unified exactly-once fulfillment."""
+    return fulfill_verified_payment_intent(intent_id)
 
 
 def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
@@ -5836,35 +5923,47 @@ def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
 
 def finalize_treasury_payout_reconciliation(payout_id: int, admin_user_id: int = 0) -> Dict[str, Any]:
     """Complete accounting for a payout already sent on-chain; never resends."""
+    from services.treasury_service import verify_treasury_payout_onchain
     conn = get_connection(); cur = conn.cursor()
     try:
-        cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts WHERE id=%s FOR UPDATE", (int(payout_id),))
+        cur.execute("""SELECT id,payout_type,source_record_id,recipient_user_id,recipient_wallet_id,recipient_wallet_address,
+                          treasury_wallet_id,treasury_address,amount_nano,status,tx_hash
+                       FROM treasury_payouts WHERE id=%s FOR UPDATE""", (int(payout_id),))
         row = cur.fetchone()
         if not row:
             conn.rollback(); return {"ok": False, "error": "payout_not_found"}
-        if row[4] == 'paid':
+        payout = {
+            "id": row[0], "payout_type": row[1], "source_record_id": row[2], "recipient_user_id": row[3],
+            "recipient_wallet_id": row[4], "recipient_wallet_address": row[5], "treasury_wallet_id": row[6],
+            "treasury_address": row[7], "amount_nano": int(row[8] or 0), "status": row[9], "tx_hash": row[10],
+        }
+        if payout["status"] == 'paid':
             conn.rollback(); return {"ok": True, "already_paid": True}
-        if row[4] not in ('submitted', 'payout_sent_reconcile_required'):
+        if payout["status"] not in ('submitted', 'payout_sent_reconcile_required'):
             conn.rollback(); return {"ok": False, "error": "invalid_status"}
-        if not str(row[5] or '').strip():
-            conn.rollback(); return {"ok": False, "error": "tx_hash_missing"}
-        cur.execute("UPDATE treasury_payouts SET status='paid',paid_at=NOW() WHERE id=%s AND status IN ('submitted','payout_sent_reconcile_required')", (int(payout_id),))
+        chain = verify_treasury_payout_onchain(payout)
+        if not chain.get("ok"):
+            cur.execute("UPDATE treasury_payouts SET status='payout_sent_reconcile_required',fail_reason=%s WHERE id=%s", (str(chain.get("error") or "onchain_mismatch"), int(payout_id)))
+            conn.commit(); return {"ok": False, "error": chain.get("error") or "onchain_mismatch"}
+        cur.execute("UPDATE treasury_payouts SET status='paid',paid_at=NOW(),fail_reason=NULL WHERE id=%s AND status IN ('submitted','payout_sent_reconcile_required')", (int(payout_id),))
         if cur.rowcount != 1:
             conn.rollback(); return {"ok": False, "error": "payout_state_changed"}
-        if str(row[1] or '') == 'author':
-            cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s, author_withdrawn_nano=author_withdrawn_nano+%s, author_withdrawn_ton=author_withdrawn_ton+(%s::float/1000000000.0) WHERE user_id=%s AND author_reserved_nano >= %s", (int(row[3]), int(row[3]), int(row[3]), int(row[2]), int(row[3])))
+        if str(payout["payout_type"] or '') == 'author':
+            cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s,author_withdrawn_nano=author_withdrawn_nano+%s,author_withdrawn_ton=author_withdrawn_ton+(%s::float/1000000000.0) WHERE user_id=%s AND author_reserved_nano >= %s", (payout["amount_nano"], payout["amount_nano"], payout["amount_nano"], int(payout["recipient_user_id"]), payout["amount_nano"]))
             if cur.rowcount != 1:
                 conn.rollback(); return {"ok": False, "error": "accounting_mismatch"}
-        if str(row[1] or '') == 'referral':
-            cur.execute("SELECT source_record_id FROM treasury_payouts WHERE id=%s", (int(payout_id),))
-            src = int((cur.fetchone() or [0])[0] or 0)
-            cur.execute("UPDATE referral_reward_withdrawal_requests SET status='paid',tx_hash=%s,processed_at=NOW(),processed_by=%s WHERE id=%s AND status IN ('processing','payout_sent_reconcile_required','pending')", (str(row[5]), int(admin_user_id or 0), src))
-            cur.execute("UPDATE referral_rewards SET status='withdrawn',withdrawn_at=NOW(),withdrawal_tx_hash=%s,updated_at=NOW() WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (str(row[5]), src))
-        conn.commit(); return {"ok": True, "tx_hash": str(row[5])}
+        if str(payout["payout_type"] or '') == 'referral':
+            src = int(payout["source_record_id"] or 0)
+            cur.execute("UPDATE referral_reward_withdrawal_requests SET status='paid',tx_hash=%s,processed_at=NOW(),processed_by=%s WHERE id=%s AND status='processing'", (str(payout["tx_hash"]), int(admin_user_id or 0), src))
+            if cur.rowcount != 1:
+                conn.rollback(); return {"ok": False, "error": "referral_request_state_changed"}
+            cur.execute("UPDATE referral_rewards SET status='withdrawn',withdrawn_at=NOW(),withdrawal_tx_hash=%s,updated_at=NOW() WHERE withdrawal_request_id=%s AND status='pending_admin_review'", (str(payout["tx_hash"]), src))
+        conn.commit(); return {"ok": True, "tx_hash": str(payout["tx_hash"])}
     except Exception:
-        conn.rollback(); return {"ok": False, "error": "reconcile_failed"}
+        conn.rollback(); return {"ok": False, "error": "reconciliation_failed"}
     finally:
         conn.close()
+
 
 def mark_payment_intent_fulfilled(intent_id: int) -> bool:
     conn = get_connection(); cur = conn.cursor()

@@ -1,4 +1,9 @@
 from pathlib import Path
+import sys
+import types
+
+sys.modules.setdefault("requests", types.SimpleNamespace(get=lambda *args, **kwargs: None, post=lambda *args, **kwargs: None))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def read(path):
@@ -88,3 +93,65 @@ def test_spoofed_donor_id_contract_is_documented_by_session_requirement():
     web = read("web.py")
     assert "_get_authenticated_web_user_id(request)" in web
     assert "Cannot donate to yourself" in web
+
+
+def test_behavioral_cursor_paginates_600_transactions_and_persists_after_mark(monkeypatch):
+    import services.ton_service as ton_service
+    calls = []
+    pages = []
+    for page_no in range(6):
+        page = []
+        start = 600 - page_no * 100
+        for lt in range(start, start - 100, -1):
+            page.append({"transaction_id": {"lt": str(lt), "hash": f"h{lt}"}, "in_msg": {"value": "1"}})
+        pages.append(page)
+
+    def fake_page(limit, lt="", tx_hash=""):
+        calls.append((limit, lt, tx_hash))
+        return pages[len(calls) - 1] if len(calls) <= len(pages) else []
+
+    settings = {"treasury_last_processed_lt": "", "treasury_last_processed_hash": ""}
+    monkeypatch.setattr(ton_service, "_get_transactions_page", fake_page)
+    monkeypatch.setattr("db.database.get_setting", lambda key, default="": settings.get(key, default))
+    monkeypatch.setattr("db.database.set_setting", lambda key, value: settings.__setitem__(key, value))
+
+    txs = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    assert len(txs) == 600
+    assert txs[0]["transaction_id"]["lt"] == "1"
+    assert txs[-1]["transaction_id"]["lt"] == "600"
+    assert settings["treasury_last_processed_lt"] == ""
+    ton_service.mark_treasury_transactions_cursor(txs)
+    assert settings["treasury_last_processed_lt"] == "600"
+    assert settings["treasury_last_processed_hash"] == "h600"
+
+
+def test_behavioral_data_text_comment_decoding():
+    import base64
+    from services.treasury_service import decode_ton_text_comment_from_msg
+
+    ref = "pay_behavioral_ref"
+    msg = {"msg_data": {"dataText": base64.b64encode(ref.encode("utf-8")).decode("ascii")}}
+    assert decode_ton_text_comment_from_msg(msg) == ref
+
+
+def test_behavioral_reconciliation_rejects_wrong_source(monkeypatch):
+    from services.treasury_service import verify_treasury_payout_onchain
+    import services.ton_service as ton_service
+
+    payout = {
+        "id": 55,
+        "tx_hash": "tx55",
+        "treasury_address": "treasury_snapshot",
+        "recipient_wallet_address": "recipient_snapshot",
+        "amount_nano": 1000,
+    }
+    tx = {
+        "transaction_id": {"hash": "tx55"},
+        "network": "mainnet",
+        "out_msgs": [{"source": "wrong_source", "destination": "recipient_snapshot", "value": "1000", "message": "payout:55"}],
+    }
+    monkeypatch.setenv("TON_NETWORK", "mainnet")
+    monkeypatch.setattr(ton_service, "get_transactions", lambda limit=100: [tx])
+    monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
+
+    assert verify_treasury_payout_onchain(payout) == {"ok": False, "error": "source_mismatch"}

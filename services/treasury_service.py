@@ -225,6 +225,45 @@ def verify_payment_intent(intent_id: int, tx: Dict[str, Any]) -> Dict[str, Any]:
         conn.close()
 
 
+
+def verify_treasury_payout_onchain(payout: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify submitted payout tx before DB accounting is finalized."""
+    tx_hash = str(payout.get("tx_hash") or "").strip()
+    if not tx_hash:
+        return {"ok": False, "error": "tx_hash_missing"}
+    try:
+        import requests
+        from services.ton_service import TONCENTER_API, TONCENTER_KEY, get_transactions
+        # TON Center v2 does not expose a universal by-hash endpoint across deployments; scan recent treasury txs safely.
+        candidates = get_transactions(limit=100)
+        tx = next((t for t in candidates if str((t.get("transaction_id") or {}).get("hash") or t.get("hash") or "") == tx_hash), None)
+        if not tx:
+            return {"ok": False, "error": "tx_not_found"}
+        if tx.get("@type") == "error" or tx.get("aborted") is True:
+            return {"ok": False, "error": "tx_unconfirmed"}
+        in_msg = tx.get("in_msg") or {}
+        out_msgs = tx.get("out_msgs") or tx.get("out_messages") or []
+        msg = out_msgs[0] if out_msgs else in_msg
+        source = msg.get("source") or in_msg.get("source") or payout.get("treasury_address")
+        destination = msg.get("destination") or msg.get("dest") or in_msg.get("destination") or in_msg.get("dest")
+        amount_nano = int(msg.get("value") or in_msg.get("value") or 0)
+        if str(tx.get("network") or os.getenv("TON_NETWORK", "mainnet")).lower() != str(os.getenv("TON_NETWORK", "mainnet")).lower():
+            return {"ok": False, "error": "network_mismatch"}
+        if normalize_ton_address(source) != normalize_ton_address(payout.get("treasury_address")):
+            return {"ok": False, "error": "source_mismatch"}
+        if normalize_ton_address(destination) != normalize_ton_address(payout.get("recipient_wallet_address")):
+            return {"ok": False, "error": "destination_mismatch"}
+        if amount_nano < int(payout.get("amount_nano") or 0):
+            return {"ok": False, "error": "amount_too_low"}
+        comment = decode_ton_text_comment_from_msg(msg)
+        expected = f"payout:{payout.get('id')}"
+        if comment and expected not in comment:
+            return {"ok": False, "error": "reference_mismatch"}
+        return {"ok": True, "tx_hash": tx_hash}
+    except Exception:
+        logger.exception("payout_onchain_verify_failed")
+        return {"ok": False, "error": "payout_onchain_verify_failed"}
+
 def resolve_internal_payout_wallet(user_id: int, conn=None, for_update: bool = False) -> Dict[str, Any]:
     own = conn is None
     if own: conn = get_connection()

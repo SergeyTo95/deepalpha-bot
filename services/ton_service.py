@@ -28,6 +28,73 @@ def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
         return []
 
 
+def _tx_lt_hash(tx: Dict[str, Any]) -> tuple[str, str]:
+    tid = tx.get("transaction_id") or {}
+    return str(tid.get("lt") or tx.get("lt") or ""), str(tid.get("hash") or tx.get("hash") or "")
+
+
+def _get_transactions_page(limit: int = 100, lt: str = "", tx_hash: str = "") -> List[Dict[str, Any]]:
+    try:
+        params = {
+            "address": (get_public_treasury_address().get("address") or ""),
+            "limit": int(limit),
+            "api_key": TONCENTER_KEY,
+        }
+        if lt and tx_hash:
+            params["lt"] = lt
+            params["hash"] = tx_hash
+        response = requests.get(f"{TONCENTER_API}/getTransactions", params=params, timeout=20)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        return data.get("result", []) or []
+    except Exception as e:
+        print(f"TON API PAGE ERROR: {e}")
+        return []
+
+
+def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int = 20) -> List[Dict[str, Any]]:
+    """Read treasury transactions page-by-page until the persisted cursor, returning old->new safely."""
+    from db.database import get_setting, set_setting
+    last_lt = str(get_setting("treasury_last_processed_lt", "") or "")
+    last_hash = str(get_setting("treasury_last_processed_hash", "") or "")
+    pages: List[List[Dict[str, Any]]] = []
+    cursor_lt = ""; cursor_hash = ""; found_cursor = False
+    for _ in range(int(max_pages)):
+        page = _get_transactions_page(int(page_limit), cursor_lt, cursor_hash)
+        if not page:
+            break
+        kept = []
+        for tx in page:
+            lt, h = _tx_lt_hash(tx)
+            if last_lt and last_hash and lt == last_lt and h == last_hash:
+                found_cursor = True
+                break
+            kept.append(tx)
+        if kept:
+            pages.append(kept)
+        if found_cursor or len(page) < int(page_limit):
+            break
+        cursor_lt, cursor_hash = _tx_lt_hash(page[-1])
+        if not cursor_lt or not cursor_hash:
+            break
+    txs: List[Dict[str, Any]] = []
+    for page in reversed(pages):
+        txs.extend(reversed(page))
+    return txs
+
+
+def mark_treasury_transactions_cursor(transactions: List[Dict[str, Any]]) -> None:
+    """Persist cursor only after caller safely processes the returned old->new batch."""
+    if not transactions:
+        return
+    from db.database import set_setting
+    newest_lt, newest_hash = _tx_lt_hash(transactions[-1])
+    if newest_lt and newest_hash:
+        set_setting("treasury_last_processed_lt", newest_lt)
+        set_setting("treasury_last_processed_hash", newest_hash)
+
+
 def parse_payment(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Парсит транзакцию и извлекает:
