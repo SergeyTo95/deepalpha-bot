@@ -55,12 +55,12 @@ from services.ton_purchase_service import (
     verify_ton_purchase_onchain,
 )
 from services.referral_rewards_service import process_token_purchase_referral_reward
-from services.treasury_service import create_payment_intent
+from services.treasury_service import create_payment_intent, incoming_enabled
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post, list_public_articles, get_public_article,
-    is_author, create_donation, add_pending,
+    is_author, create_donation, add_pending, create_donation_with_payment_intent,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
@@ -569,29 +569,20 @@ async def handle_create_donation(request):
 
         if not is_author(author_id):
             return _json_response({"error": "User is not an author"}, status=400)
+        if not incoming_enabled():
+            return _json_response({"error": "treasury_incoming_disabled"}, status=503)
 
-        donation_id = create_donation(
+        created = create_donation_with_payment_intent(
             donor_id=donor_id,
             author_id=author_id,
-            ton_amount=ton_amount,
+            amount_nano=ton_to_nano(ton_amount),
             post_id=post_id,
             comment=comment,
-            status="pending",
         )
-
-        if not donation_id:
-            return _json_response({"error": "Failed to create donation"}, status=500)
-
-        intent = create_payment_intent(
-            user_id=donor_id,
-            product_type="donation",
-            product_ref=str(donation_id),
-            amount_nano=ton_to_nano(ton_amount),
-            metadata={"donation_id": donation_id, "author_id": author_id, "post_id": post_id},
-            idempotency_key=f"donation:{donation_id}",
-        )
-        if not intent.get("ok"):
-            return _json_response({"error": intent.get("error", "treasury_not_configured")}, status=503)
+        if not created.get("ok"):
+            return _json_response({"error": created.get("error", "treasury_not_configured")}, status=503)
+        donation_id = int(created["donation_id"])
+        intent = created["payment_intent"]
 
         print(
             f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
@@ -1688,6 +1679,8 @@ async def handle_wallet_ton_buy_tokens(request):
     blocked = _web_ton_block_response("can_send")
     if blocked is not None:
         return blocked
+    if not incoming_enabled():
+        return _json_response({"ok": False, "error": "treasury_incoming_disabled"}, status=503)
     if not is_ton_wallet_token_purchase_enabled():
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:

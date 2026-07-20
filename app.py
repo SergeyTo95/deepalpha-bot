@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
+from services.treasury_service import verify_payment_intent
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
 from services.watchlist_ai_summary_service import build_watchlist_ai_summary, format_watchlist_ai_summary
@@ -19,7 +20,7 @@ from services.polymarket_resolver import resolve_prediction, fetch_market_by_slu
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
-    get_all_pending, delete_pending, get_all_users,
+    get_all_pending, get_pending_payment_intents, fulfill_verified_donation_intent, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
@@ -861,7 +862,8 @@ async def check_ton_payments():
     while True:
         try:
             transactions = get_transactions(limit=20)
-            pending = get_all_pending()
+            intents = get_pending_payment_intents(limit=200)
+            pending = {}  # legacy pending_payments is read-only; Telegram-ID comments no longer fulfill products.
 
             for tx in transactions:
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
@@ -877,31 +879,26 @@ async def check_ton_payments():
                 if ton_amount <= 0:
                     continue
 
-                payment = parse_payment(tx)
-                user_id = None
-                payment_type = "tokens"
-
-                # Поиск user_id + payment_type:
-                # сперва через parse_payment (комментарий к транзакции),
-                # затем через pending по времени и сумме
-                if payment and payment.get("user_id"):
-                    user_id = payment["user_id"]
-                    # Даже если нашли через комментарий — проверим pending для payment_type
-                    p = pending.get(user_id)
-                    if p:
-                        payment_type = p.get("payment_type", "tokens")
-                else:
-                    tx_time = tx.get("utime", 0)
-                    for uid, p in list(pending.items()):
-                        time_diff = abs(tx_time - p["timestamp"])
-                        amount_diff = abs(ton_amount - p["amount"])
-                        if time_diff < 300 and amount_diff < 0.1:
-                            user_id = uid
-                            payment_type = p.get("payment_type", "tokens")
-                            break
-
-                if not user_id:
+                in_msg = tx.get("in_msg", {}) or {}
+                msg_data = in_msg.get("msg_data", {}) if isinstance(in_msg, dict) else {}
+                comment = ""
+                if isinstance(msg_data, dict):
+                    comment = str(msg_data.get("text") or msg_data.get("body") or "")
+                source = str(in_msg.get("source") or "")
+                destination = str(in_msg.get("destination") or in_msg.get("dest") or "")
+                matched_intent = next((it for it in intents if str(it.get("public_reference")) and str(it.get("public_reference")) in comment), None)
+                if not matched_intent:
                     continue
+                verified = verify_payment_intent(int(matched_intent["id"]), {
+                    "tx_hash": tx_hash, "source": source, "destination": destination, "amount_nano": value,
+                    "network": os.getenv("TON_NETWORK", "mainnet"), "comment": comment,
+                })
+                if not verified.get("ok"):
+                    continue
+                user_id = int(matched_intent["user_id"])
+                payment_type = str(matched_intent["product_type"] or "tokens")
+                if payment_type == "donation":
+                    payment_type = f"donation:{matched_intent.get('product_ref')}"
 
                 ensure_user(user_id)
 
@@ -1033,7 +1030,7 @@ async def check_ton_payments():
                     post_id = donation.get("post_id")
                     comment = donation.get("comment", "") or ""
 
-                    success = complete_donation(donation_id, tx_hash)
+                    success = bool(fulfill_verified_donation_intent(int(matched_intent["id"])).get("ok"))
 
                     if not success:
                         print(f"⚠️ Failed to complete donation {donation_id}")

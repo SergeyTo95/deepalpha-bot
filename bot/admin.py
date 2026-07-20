@@ -1519,6 +1519,32 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
 
 def register_admin(dp: Dispatcher):
 
+    @dp.message_handler(commands=["treasury"])
+    async def treasury_admin_command(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        await message.answer(treasury_admin_panel_text(), reply_markup=treasury_admin_panel_buttons())
+
+    @dp.callback_query_handler(lambda c: str(c.data or "") in {"treasury_refresh", "treasury_toggle_incoming_confirm", "treasury_toggle_outgoing_confirm", "treasury_pending_payouts", "treasury_reconciliation"})
+    async def treasury_admin_callbacks(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            return
+        data = str(callback.data or "")
+        if data in {"treasury_toggle_incoming_confirm", "treasury_toggle_outgoing_confirm"}:
+            await callback.answer("Treasury gates are env-controlled; change TREASURY_*_ENABLED and redeploy.", show_alert=True)
+            return
+        if data == "treasury_pending_payouts":
+            rows = get_treasury_payouts_for_admin(statuses=["pending", "approved", "processing", "submitted"], limit=20)
+            text = "Pending treasury payouts:\n" + ("\n".join([f"#{r['id']} {r['payout_type']} user={r['recipient_user_id']} amount={r['amount_nano']} status={r['status']}" for r in rows]) or "None")
+            await callback.message.edit_text(text, reply_markup=treasury_admin_panel_buttons())
+            return
+        if data == "treasury_reconciliation":
+            rows = get_treasury_payouts_for_admin(statuses=["payout_sent_reconcile_required", "recipient_revalidation_required"], limit=20)
+            text = "Treasury reconciliation:\n" + ("\n".join([f"#{r['id']} {r['payout_type']} user={r['recipient_user_id']} tx={r.get('tx_hash') or '-'} status={r['status']}" for r in rows]) or "None")
+            await callback.message.edit_text(text, reply_markup=treasury_admin_panel_buttons())
+            return
+        await callback.message.edit_text(treasury_admin_panel_text(), reply_markup=treasury_admin_panel_buttons())
+
     @dp.message_handler(commands=["watchlist_billing_on"])
     async def watchlist_billing_on(message: types.Message):
         if not is_admin(message.from_user.id):
@@ -3952,6 +3978,23 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
+
+
+def get_treasury_payouts_for_admin(statuses=None, limit: int = 20):
+    from db.database import get_connection
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        statuses = statuses or []
+        if statuses:
+            cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts WHERE status = ANY(%s) ORDER BY id ASC LIMIT %s", (statuses, int(limit)))
+        else:
+            cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts ORDER BY id DESC LIMIT %s", (int(limit),))
+        rows = cur.fetchall() or []
+        return [{"id": r[0], "payout_type": r[1], "recipient_user_id": r[2], "amount_nano": r[3], "status": r[4], "tx_hash": r[5]} for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
 
 
 def treasury_admin_panel_text() -> str:

@@ -80,8 +80,8 @@ def test_emergency_flags_default_false_and_no_secret_exposure():
     treasury = read("services/treasury_service.py").lower()
     assert "TREASURY_INCOMING_ENABLED=false" in env
     assert "TREASURY_OUTGOING_ENABLED=false" in env
-    for secret in ["seed_encrypted", "mnemonic", "private key", "decrypted seed"]:
-        assert secret not in treasury
+    for bad_log in ["seed_encrypted=%s", "mnemonic=%s", "private_key=%s", "decrypted seed"]:
+        assert bad_log not in treasury
 
 
 def test_spoofed_donor_id_contract_is_documented_by_session_requirement():

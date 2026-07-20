@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from db.database import get_connection, get_setting
-from services.ton_chain_service import normalize_ton_address
+from services.ton_chain_service import normalize_ton_address, validate_ton_address, get_ton_balance
+from services.ton_wallet_service import get_ton_runtime_network, get_ton_send_fee_reserve_nano, send_ton_from_encrypted_wallet
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,12 @@ def get_treasury_balance() -> Dict[str, Any]:
     res = get_public_treasury_address()
     if not res.get("ok"):
         return res
-    # Balance backend is deliberately pluggable; never expose secrets.
-    return {"ok": True, "address": res["address"], "network": res.get("network"), "balance_nano": 0}
+    try:
+        balance = get_ton_balance(str(res["address"]))
+        return {"ok": True, "address": res["address"], "network": res.get("network"), "balance_nano": int(balance)}
+    except Exception:
+        logger.warning("treasury_balance_unavailable address=%s", res.get("address"), exc_info=True)
+        return {"ok": False, "error": "balance_unavailable", "address": res.get("address"), "network": res.get("network")}
 
 
 def get_treasury_runtime_status() -> Dict[str, Any]:
@@ -82,6 +87,22 @@ def get_treasury_runtime_status() -> Dict[str, Any]:
         "incoming_enabled": incoming_enabled(),
         "outgoing_enabled": outgoing_enabled(),
     }
+
+
+def _load_active_treasury_secret_row() -> Dict[str, Any]:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,wallet_address,network,status,seed_encrypted FROM cashier_payment_wallets WHERE status='active' ORDER BY id ASC FOR UPDATE")
+        rows = cur.fetchall() or []
+        if len(rows) == 0:
+            return {"ok": False, "error": "treasury_not_configured"}
+        if len(rows) > 1:
+            return {"ok": False, "error": "treasury_conflict"}
+        r = rows[0]
+        data = dict(r) if hasattr(r, "keys") else {"id": r[0], "wallet_address": r[1], "network": r[2], "status": r[3], "seed_encrypted": r[4]}
+        return {"ok": True, "wallet": data}
+    finally:
+        conn.close()
 
 
 def create_payment_intent(user_id: int, product_type: str, product_ref: str, amount_nano: int,
@@ -151,24 +172,57 @@ def resolve_internal_payout_wallet(user_id: int, conn=None, for_update: bool = F
     if own: conn = get_connection()
     cur = conn.cursor()
     try:
-        sql = "SELECT id,user_id,wallet_address,status,COALESCE(archived_at,NULL) FROM user_ton_wallets WHERE user_id=%s AND network='production' ORDER BY id ASC"
+        runtime_network = get_ton_runtime_network()
+        sql = "SELECT id,user_id,wallet_address,status,network FROM user_ton_wallets WHERE user_id=%s AND network=%s ORDER BY id ASC"
         if for_update: sql += " FOR UPDATE"
-        cur.execute(sql, (int(user_id),))
+        cur.execute(sql, (int(user_id), runtime_network))
         rows = cur.fetchall() or []
         if len(rows) == 0: return {"ok": False, "error": "internal_wallet_required"}
         if len(rows) > 1: return {"ok": False, "error": "wallet_conflict"}
-        r = rows[0]; wid, uid, addr, status = r[0], r[1], r[2], r[3]
-        if status != "active" or not normalize_ton_address(addr): return {"ok": False, "error": "internal_wallet_required"}
+        r = rows[0]; wid, uid, addr, status = r[0], r[1], r[2], str(r[3] or "").lower()
+        normalized = normalize_ton_address(addr)
+        if status != "active" or not normalized or not validate_ton_address(normalized): return {"ok": False, "error": "internal_wallet_required"}
+        cur.execute("SELECT COUNT(*) FROM user_ton_wallets WHERE user_id=%s", (int(user_id),))
+        if int((cur.fetchone() or [0])[0] or 0) != 1: return {"ok": False, "error": "wallet_conflict"}
         cur.execute("SELECT COUNT(*) FROM user_ton_wallets WHERE wallet_address=%s", (addr,))
-        if int((cur.fetchone() or [0])[0] or 0) > 1: return {"ok": False, "error": "wallet_conflict"}
-        return {"ok": True, "wallet_id": wid, "wallet_address": addr}
+        if int((cur.fetchone() or [0])[0] or 0) != 1: return {"ok": False, "error": "wallet_conflict"}
+        cur.execute("SELECT COUNT(*) FROM user_ton_wallet_quarantine_archive WHERE user_id=%s OR wallet_address=%s", (int(user_id), addr))
+        if int((cur.fetchone() or [0])[0] or 0) > 0: return {"ok": False, "error": "wallet_conflict"}
+        return {"ok": True, "wallet_id": wid, "wallet_address": normalized}
     finally:
         if own: conn.close()
 
 
 def send_from_treasury(recipient_address: str, amount_nano: int, comment: str = "") -> Dict[str, Any]:
-    if not outgoing_enabled(): return {"ok": False, "error": "treasury_outgoing_disabled"}
-    treasury = get_public_treasury_address()
-    if not treasury.get("ok"): return treasury
-    if not normalize_ton_address(recipient_address): return {"ok": False, "error": "invalid_recipient_wallet"}
-    return {"ok": True, "tx_hash": "pending_external_submit", "treasury_address": treasury["address"]}
+    if not outgoing_enabled():
+        return {"ok": False, "error": "treasury_outgoing_disabled"}
+    row = _load_active_treasury_secret_row()
+    if not row.get("ok"):
+        return row
+    wallet = row["wallet"]
+    runtime_network = get_ton_runtime_network()
+    if str(wallet.get("network") or "").lower() != str(runtime_network or "").lower():
+        return {"ok": False, "error": "network_mismatch"}
+    source = normalize_ton_address(str(wallet.get("wallet_address") or ""))
+    if not source or not validate_ton_address(source):
+        return {"ok": False, "error": "invalid_treasury_wallet"}
+    seed_encrypted = str(wallet.get("seed_encrypted") or "")
+    if not seed_encrypted:
+        return {"ok": False, "error": "treasury_seed_missing"}
+    reserve = get_ton_send_fee_reserve_nano()
+    result = send_ton_from_encrypted_wallet(
+        wallet_address=source,
+        seed_encrypted=seed_encrypted,
+        destination_address=recipient_address,
+        amount_nano=int(amount_nano),
+        comment=comment,
+        product_type="treasury_payout",
+        record_user_id=0,
+    )
+    if result.get("ok") and str(result.get("tx_hash") or "") == "pending_external_submit":
+        return {"ok": False, "error": "tx_hash_missing"}
+    if result.get("ok"):
+        result["treasury_wallet_id"] = wallet.get("id")
+        result["treasury_address"] = source
+        result["fee_reserve_nano"] = str(reserve)
+    return result

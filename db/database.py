@@ -950,6 +950,10 @@ def _init_db_inner(conn, cursor):
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_available_nano BIGINT DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_reserved_nano BIGINT DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_withdrawn_nano BIGINT DEFAULT 0",
+        "ALTER TABLE author_donations ADD COLUMN IF NOT EXISTS gross_amount_nano BIGINT DEFAULT 0",
+        "ALTER TABLE author_donations ADD COLUMN IF NOT EXISTS platform_fee_nano BIGINT DEFAULT 0",
+        "ALTER TABLE author_donations ADD COLUMN IF NOT EXISTS author_net_amount_nano BIGINT DEFAULT 0",
+        "ALTER TABLE author_donations ADD COLUMN IF NOT EXISTS payment_intent_id BIGINT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_bio TEXT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS author_since TEXT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS ton_wallet TEXT DEFAULT NULL",
@@ -5605,20 +5609,38 @@ def create_treasury_payout(payout_type: str, source_record_id: int, recipient_us
         conn.close()
 
 
-def create_author_withdrawal_to_treasury_payout(author_id: int, amount_nano: int):
+def create_author_withdrawal_to_treasury_payout(author_id: int, amount_nano: int, withdrawal_request_id: int = 0):
+    from services.treasury_service import get_public_treasury_address, resolve_internal_payout_wallet
     conn = get_connection(); cur = conn.cursor()
     try:
+        treasury = get_public_treasury_address()
+        if not treasury.get("ok"):
+            return treasury
+        wallet = resolve_internal_payout_wallet(int(author_id), conn=conn, for_update=True)
+        if not wallet.get("ok"):
+            conn.rollback(); return wallet
+        source_id = int(withdrawal_request_id or 0)
+        idem = f"author_withdrawal:{source_id}" if source_id else f"author_user:{int(author_id)}:{int(amount_nano)}"
         cur.execute("""
             UPDATE users SET author_available_nano=author_available_nano-%s, author_reserved_nano=author_reserved_nano+%s
             WHERE user_id=%s AND author_available_nano >= %s
         """, (int(amount_nano), int(amount_nano), int(author_id), int(amount_nano)))
         if cur.rowcount != 1:
             conn.rollback(); return {"ok": False, "error": "insufficient_author_balance"}
-        conn.commit()
+        cur.execute("""
+            INSERT INTO treasury_payouts (payout_type,source_record_id,recipient_user_id,recipient_wallet_id,recipient_wallet_address,treasury_wallet_id,treasury_address,amount_nano,status,idempotency_key)
+            VALUES ('author',%s,%s,%s,%s,%s,%s,%s,'pending',%s)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id
+        """, (source_id, int(author_id), int(wallet["wallet_id"]), wallet["wallet_address"], int(treasury["wallet_id"]), treasury["address"], int(amount_nano), idem))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback(); return {"ok": False, "error": "idempotency_conflict"}
+        conn.commit(); return {"ok": True, "payout_id": row[0], "recipient_wallet_address": wallet["wallet_address"]}
+    except Exception as e:
+        conn.rollback(); print(f"create_author_withdrawal_to_treasury_payout error: {e}"); return {"ok": False, "error": "payout_create_failed"}
     finally:
         conn.close()
-    return create_treasury_payout("author", int(author_id), int(author_id), int(amount_nano), f"author:{author_id}:{amount_nano}:{int(time.time())}")
-
 
 def create_referral_withdrawal_to_treasury_payout(request_id: int, user_id: int, amount_nano: int):
     return create_treasury_payout("referral", int(request_id), int(user_id), int(amount_nano), f"referral:{request_id}")
@@ -5628,7 +5650,7 @@ def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
     from services.treasury_service import get_public_treasury_address, resolve_internal_payout_wallet, send_from_treasury
     conn = get_connection(); cur = conn.cursor()
     try:
-        cur.execute("SELECT id,status,recipient_user_id,recipient_wallet_id,recipient_wallet_address,amount_nano,treasury_address FROM treasury_payouts WHERE id=%s FOR UPDATE", (int(payout_id),))
+        cur.execute("SELECT id,status,recipient_user_id,recipient_wallet_id,recipient_wallet_address,amount_nano,treasury_address,payout_type FROM treasury_payouts WHERE id=%s FOR UPDATE", (int(payout_id),))
         row = cur.fetchone()
         if not row: return {"ok": False, "error": "payout_not_found"}
         if row[1] in ("processing", "submitted", "paid", "payout_sent_reconcile_required"):
@@ -5650,8 +5672,130 @@ def approve_and_send_treasury_payout(payout_id: int, admin_user_id: int):
             if cur.rowcount != 1:
                 conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
             conn.commit(); return {"ok": True, "tx_hash": sent.get("tx_hash")}
-        cur.execute("UPDATE treasury_payouts SET status='failed',fail_reason=%s WHERE id=%s AND status='processing'", (sent.get("error"), int(payout_id))); conn.commit(); return sent
+        cur.execute("UPDATE treasury_payouts SET status='failed',fail_reason=%s WHERE id=%s AND status='processing'", (sent.get("error"), int(payout_id)))
+        if str(row[7] or '') == 'author':
+            cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s, author_available_nano=author_available_nano+%s WHERE user_id=%s", (int(row[5]), int(row[5]), int(row[2])))
+        conn.commit(); return sent
     except Exception:
         conn.rollback(); return {"ok": False, "error": "payout_sent_reconcile_required", "tx_hash": sent.get("tx_hash")}
+    finally:
+        conn.close()
+
+
+def create_donation_with_payment_intent(donor_id: int, author_id: int, amount_nano: int, post_id: Optional[int] = None, comment: str = "") -> Dict[str, Any]:
+    """Atomically creates pending donation + immutable treasury payment intent. No orphan donation on intent failure."""
+    from services.treasury_service import incoming_enabled
+    if not incoming_enabled():
+        return {"ok": False, "error": "treasury_incoming_disabled"}
+    gross = int(amount_nano)
+    if gross <= 0:
+        return {"ok": False, "error": "invalid_amount"}
+    fee_percent = float(get_setting("platform_fee_percent", "20"))
+    platform_fee_nano = int(gross * fee_percent / 100)
+    author_net_nano = gross - platform_fee_nano
+    ton_amount = gross / 1_000_000_000
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,wallet_address,network FROM cashier_payment_wallets WHERE status='active' ORDER BY id ASC FOR UPDATE")
+        treasuries = cur.fetchall() or []
+        if len(treasuries) == 0:
+            conn.rollback(); return {"ok": False, "error": "treasury_not_configured"}
+        if len(treasuries) > 1:
+            conn.rollback(); return {"ok": False, "error": "treasury_conflict"}
+        tr = treasuries[0]; treasury_id, treasury_address = int(tr[0]), str(tr[1])
+        platform_fee_ton = platform_fee_nano / 1_000_000_000
+        author_received_ton = author_net_nano / 1_000_000_000
+        cur.execute("""
+            INSERT INTO author_donations (donor_id,author_id,post_id,ton_amount,platform_fee_ton,author_received_ton,
+              gross_amount_nano,platform_fee_nano,author_net_amount_nano,status,comment,created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)
+            RETURNING id
+        """, (int(donor_id), int(author_id), post_id, ton_amount, platform_fee_ton, author_received_ton, gross, platform_fee_nano, author_net_nano, comment, datetime.utcnow().isoformat()))
+        donation_id = int(cur.fetchone()[0])
+        public_reference = "pay_" + __import__('uuid').uuid4().hex
+        idempotency_key = f"donation:{donation_id}"
+        cur.execute("""
+            INSERT INTO payment_intents (public_reference,user_id,product_type,product_ref,expected_amount_nano,
+              treasury_wallet_id,treasury_address,status,expires_at,metadata_json,idempotency_key)
+            VALUES (%s,%s,'donation',%s,%s,%s,%s,'pending',NOW() + INTERVAL '30 minutes',%s,%s)
+            RETURNING id
+        """, (public_reference, int(donor_id), str(donation_id), gross, treasury_id, treasury_address, json.dumps({"donation_id": donation_id, "author_id": int(author_id), "post_id": post_id}, ensure_ascii=False), idempotency_key))
+        intent_id = int(cur.fetchone()[0])
+        cur.execute("UPDATE author_donations SET payment_intent_id=%s WHERE id=%s", (intent_id, donation_id))
+        conn.commit()
+        return {"ok": True, "donation_id": donation_id, "payment_intent": {"id": intent_id, "public_reference": public_reference, "treasury_address": treasury_address, "amount_nano": gross}}
+    except Exception as e:
+        conn.rollback(); print(f"create_donation_with_payment_intent error: {type(e).__name__}"); return {"ok": False, "error": "intent_create_failed"}
+    finally:
+        conn.close()
+
+
+def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
+    """Idempotently completes a verified donation intent exactly once."""
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,product_type,product_ref,status,tx_hash FROM payment_intents WHERE id=%s FOR UPDATE", (int(intent_id),))
+        intent = cur.fetchone()
+        if not intent:
+            conn.rollback(); return {"ok": False, "error": "intent_not_found"}
+        if intent[3] == 'fulfilled':
+            conn.rollback(); return {"ok": True, "already_fulfilled": True}
+        if intent[1] != 'donation' or intent[3] != 'verified':
+            conn.rollback(); return {"ok": False, "error": "intent_not_verified"}
+        donation_id = int(intent[2]); tx_hash = str(intent[4] or '')
+        cur.execute("SELECT donor_id,author_id,post_id,ton_amount,author_net_amount_nano,status FROM author_donations WHERE id=%s FOR UPDATE", (donation_id,))
+        d = cur.fetchone()
+        if not d:
+            conn.rollback(); return {"ok": False, "error": "donation_not_found"}
+        if d[5] != 'paid':
+            cur.execute("UPDATE author_donations SET status='paid',tx_hash=%s WHERE id=%s AND status='pending'", (tx_hash, donation_id))
+            if cur.rowcount == 1:
+                cur.execute("UPDATE users SET author_available_nano=author_available_nano+%s, author_balance_ton=author_balance_ton+(%s::float/1000000000.0), updated_at=%s WHERE user_id=%s", (int(d[4] or 0), int(d[4] or 0), datetime.utcnow().isoformat(), int(d[1])))
+        cur.execute("UPDATE payment_intents SET status='fulfilled',fulfilled_at=NOW() WHERE id=%s AND status='verified'", (int(intent_id),))
+        if cur.rowcount != 1:
+            conn.rollback(); return {"ok": True, "already_fulfilled": True}
+        conn.commit(); return {"ok": True, "donation_id": donation_id}
+    except Exception:
+        conn.rollback(); return {"ok": False, "error": "donation_fulfill_failed"}
+    finally:
+        conn.close()
+
+
+def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id,public_reference,user_id,product_type,product_ref,expected_amount_nano,treasury_address,expected_sender_address,status,expires_at
+                       FROM payment_intents WHERE status='pending' AND expires_at > NOW() ORDER BY created_at ASC LIMIT %s""", (int(limit),))
+        rows = cur.fetchall() or []
+        return [{"id": r[0], "public_reference": r[1], "user_id": int(r[2]), "product_type": r[3], "product_ref": r[4], "expected_amount_nano": int(r[5]), "treasury_address": r[6], "expected_sender_address": r[7], "status": r[8], "expires_at": r[9]} for r in rows]
+    except Exception as e:
+        print(f"get_pending_payment_intents error: {e}"); return []
+    finally:
+        conn.close()
+
+def finalize_treasury_payout_reconciliation(payout_id: int, admin_user_id: int = 0) -> Dict[str, Any]:
+    """Complete accounting for a payout already sent on-chain; never resends."""
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts WHERE id=%s FOR UPDATE", (int(payout_id),))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback(); return {"ok": False, "error": "payout_not_found"}
+        if row[4] == 'paid':
+            conn.rollback(); return {"ok": True, "already_paid": True}
+        if row[4] not in ('submitted', 'payout_sent_reconcile_required'):
+            conn.rollback(); return {"ok": False, "error": "invalid_status"}
+        if not str(row[5] or '').strip():
+            conn.rollback(); return {"ok": False, "error": "tx_hash_missing"}
+        cur.execute("UPDATE treasury_payouts SET status='paid',paid_at=NOW() WHERE id=%s AND status IN ('submitted','payout_sent_reconcile_required')", (int(payout_id),))
+        if cur.rowcount != 1:
+            conn.rollback(); return {"ok": False, "error": "payout_state_changed"}
+        if str(row[1] or '') == 'author':
+            cur.execute("UPDATE users SET author_reserved_nano=author_reserved_nano-%s, author_withdrawn_nano=author_withdrawn_nano+%s, author_withdrawn_ton=author_withdrawn_ton+(%s::float/1000000000.0) WHERE user_id=%s AND author_reserved_nano >= %s", (int(row[3]), int(row[3]), int(row[3]), int(row[2]), int(row[3])))
+            if cur.rowcount != 1:
+                conn.rollback(); return {"ok": False, "error": "accounting_mismatch"}
+        conn.commit(); return {"ok": True, "tx_hash": str(row[5])}
+    except Exception:
+        conn.rollback(); return {"ok": False, "error": "reconcile_failed"}
     finally:
         conn.close()
