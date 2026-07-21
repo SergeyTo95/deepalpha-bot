@@ -226,6 +226,17 @@ def _init_db_inner(conn, cursor):
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS watchlist_slot_purchases (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        slots_added INTEGER NOT NULL,
+        tokens_spent INTEGER NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """)
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_analyst_profiles (
         user_id BIGINT PRIMARY KEY,
         risk_style TEXT NOT NULL DEFAULT 'balanced',
@@ -4549,6 +4560,38 @@ def can_add_to_watchlist(user_id: int) -> Dict[str, Any]:
     return {"allowed": True, "reason": None, "current": current, "limit": limit}
 
 
+
+def buy_watchlist_slots_atomic(user_id: int, slots_price: int, slots_count: int, idempotency_key: str) -> Dict[str, Any]:
+    """Atomically debit tokens and add watchlist slots exactly once by idempotency key."""
+    key = str(idempotency_key or "").strip()
+    if not key:
+        return {"ok": False, "error": "idempotency_key_required"}
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,slots_added,tokens_spent FROM watchlist_slot_purchases WHERE idempotency_key=%s AND user_id=%s", (key, int(user_id)))
+        existing = cur.fetchone()
+        if existing:
+            cur.execute("SELECT token_balance,extra_watchlist_slots FROM users WHERE user_id=%s", (int(user_id),))
+            u = cur.fetchone(); conn.rollback()
+            return {"ok": True, "already_processed": True, "slots_added": int(existing[1]), "tokens_spent": int(existing[2]), "new_balance": int((u or [0,0])[0] or 0), "total_extra_slots": int((u or [0,0])[1] or 0)}
+        cur.execute("SELECT token_balance,extra_watchlist_slots FROM users WHERE user_id=%s FOR UPDATE", (int(user_id),))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback(); return {"ok": False, "error": "user_not_found"}
+        balance = int(row[0] or 0)
+        extra = int(row[1] or 0)
+        if balance < int(slots_price):
+            conn.rollback(); return {"ok": False, "error": "insufficient_tokens", "need_tokens": int(slots_price) - balance}
+        new_balance = balance - int(slots_price)
+        new_slots = extra + int(slots_count)
+        cur.execute("UPDATE users SET token_balance=%s,extra_watchlist_slots=%s,updated_at=%s WHERE user_id=%s", (new_balance, new_slots, datetime.utcnow().isoformat(), int(user_id)))
+        cur.execute("INSERT INTO watchlist_slot_purchases (user_id,idempotency_key,slots_added,tokens_spent) VALUES (%s,%s,%s,%s)", (int(user_id), key, int(slots_count), int(slots_price)))
+        conn.commit(); return {"ok": True, "slots_added": int(slots_count), "total_extra_slots": new_slots, "tokens_spent": int(slots_price), "new_balance": new_balance}
+    except Exception as e:
+        conn.rollback(); print(f"buy_watchlist_slots_atomic error: {e}"); return {"ok": False, "error": "slot_purchase_failed"}
+    finally:
+        conn.close()
+
 def add_watchlist_extra_slots(user_id: int, count: int) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -5965,6 +6008,26 @@ def set_treasury_transaction_cursor(last_lt: str, last_hash: str, backlog_lt: st
     finally:
         conn.close()
 
+
+
+def get_payment_intent_by_public_reference(reference: str) -> Dict[str, Any]:
+    """Exact indexed lookup by immutable public_reference; DB errors are retryable."""
+    ref = str(reference or "").strip()
+    if not ref:
+        return {"ok": False, "error": "invalid_reference", "terminal": True}
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id,public_reference,user_id,product_type,product_ref,expected_amount_nano,treasury_address,expected_sender_address,status,expires_at,tx_hash
+                       FROM payment_intents WHERE public_reference=%s LIMIT 1""", (ref,))
+        r = cur.fetchone()
+        if not r:
+            return {"ok": False, "error": "intent_not_found", "terminal": True}
+        return {"ok": True, "intent": {"id": r[0], "public_reference": r[1], "user_id": int(r[2]), "product_type": r[3], "product_ref": r[4], "expected_amount_nano": int(r[5]), "treasury_address": r[6], "expected_sender_address": r[7], "status": r[8], "expires_at": r[9], "tx_hash": (r[10] if len(r) > 10 else None)}}
+    except Exception as e:
+        print(f"get_payment_intent_by_public_reference error: {e}")
+        return {"ok": False, "error": "intent_lookup_failed", "retryable": True}
+    finally:
+        conn.close()
 
 def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor()

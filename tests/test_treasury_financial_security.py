@@ -188,7 +188,7 @@ def test_behavioral_cursor_prefix_mark_stops_before_transient_failure(monkeypatc
     monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash="": saved.update({"lt": last_lt, "hash": last_hash, "backlog_lt": backlog_lt, "backlog_hash": backlog_hash, "pending_lt": pending_newest_lt, "pending_hash": pending_newest_hash}))
     scan = {"transactions": txs, "next_page_cursor": {"lt": "old", "hash": "oldh"}}
     ton_service.mark_treasury_transactions_cursor(scan, 2)
-    assert saved == {"lt": "2", "hash": "h2", "backlog_lt": "", "backlog_hash": "", "pending_lt": "", "pending_hash": ""}
+    assert saved == {"lt": "", "hash": "", "backlog_lt": "old", "backlog_hash": "oldh", "pending_lt": "", "pending_hash": ""}
 
 
 def test_behavioral_reconciliation_missing_fields_rejected(monkeypatch):
@@ -233,3 +233,19 @@ def test_behavioral_cursor_not_advanced_after_fulfillment_failure_then_advances_
     assert saved == []
     ton_service.mark_treasury_transactions_cursor(scan, 1)
     assert saved == [("10", "h10", "", "", "", "")]
+
+
+
+def test_payment_intent_reference_lookup_and_buy_slots_hardened_contract():
+    db = read("db/database.py")
+    web = read("web.py")
+    app = read("app.py")
+    assert "def get_payment_intent_by_public_reference" in db
+    assert "WHERE public_reference=%s" in db
+    assert "intent_lookup_failed" in db
+    assert "get_payment_intent_by_public_reference(reference)" in app
+    assert "buy_watchlist_slots_atomic" in db
+    assert "FOR UPDATE" in db
+    assert "watchlist_slot_purchases" in db
+    assert "_get_authenticated_web_user_id(request)" in web
+    assert "data.get(\"user_id\"" not in web[web.index("async def handle_buy_slots"):web.index("async def handle_options")]

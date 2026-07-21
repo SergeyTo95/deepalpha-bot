@@ -110,12 +110,21 @@ def mark_treasury_transactions_cursor(scan_result: Dict[str, Any], processed_cou
     if safe_count <= 0:
         return
     from db.database import set_treasury_transaction_cursor
+    history_complete = bool((scan_result or {}).get("history_complete"))
     if safe_count < len(transactions):
+        if not history_complete:
+            saved = (scan_result or {}).get("saved_cursor") or {}
+            backlog = (scan_result or {}).get("next_page_cursor") or {}
+            pending = (scan_result or {}).get("pending_newest") or {}
+            newest_seen = (scan_result or {}).get("newest_seen") or {}
+            pending_lt = str(pending.get("lt") or newest_seen.get("lt") or "")
+            pending_hash = str(pending.get("hash") or newest_seen.get("hash") or "")
+            set_treasury_transaction_cursor(str(saved.get("lt") or ""), str(saved.get("hash") or ""), str(backlog.get("lt") or ""), str(backlog.get("hash") or ""), pending_lt, pending_hash)
+            return
         newest_lt, newest_hash = _tx_lt_hash(transactions[safe_count - 1])
         if newest_lt and newest_hash:
             set_treasury_transaction_cursor(newest_lt, newest_hash, "", "", "", "")
         return
-    history_complete = bool((scan_result or {}).get("history_complete"))
     backlog = (scan_result or {}).get("next_page_cursor") or {}
     pending = (scan_result or {}).get("pending_newest") or {}
     newest_seen = (scan_result or {}).get("newest_seen") or {}

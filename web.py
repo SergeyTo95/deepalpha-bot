@@ -636,50 +636,25 @@ async def handle_public_settings(request):
 
 
 async def handle_buy_slots(request):
-    """Покупка доп. слотов Watchlist за токены."""
+    """Покупка доп. слотов Watchlist за токены; authenticated, atomic, idempotent."""
     try:
+        user_id = _get_authenticated_web_user_id(request)
+        if not user_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
-
-        if user_id <= 0:
-            return _json_response({"error": "Invalid user_id"}, status=400)
-
         if get_setting("watchlist_enabled", "on") != "on":
             return _json_response({"error": "Watchlist disabled"}, status=400)
-
         slots_price = int(get_setting("watchlist_extra_slots_price", "20"))
         slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
-
-        user = get_user(user_id)
-        if not user:
-            return _json_response({"error": "User not found"}, status=404)
-
-        current_balance = user.get("token_balance", 0) or 0
-
-        if current_balance < slots_price:
-            return _json_response({
-                "error": f"Insufficient tokens: need {slots_price}, have {current_balance}",
-                "need_tokens": slots_price - current_balance,
-            }, status=400)
-
-        from db.database import add_tokens, add_watchlist_extra_slots
-
-        new_balance = add_tokens(user_id, -slots_price)
-        new_slots = add_watchlist_extra_slots(user_id, slots_count)
-
-        print(
-            f"SLOTS PURCHASED: user_id={user_id}, "
-            f"price={slots_price} tokens, slots=+{slots_count}, "
-            f"new_balance={new_balance}, total_extra={new_slots}"
-        )
-
-        return _json_response({
-            "ok": True,
-            "slots_added": slots_count,
-            "total_extra_slots": new_slots,
-            "tokens_spent": slots_price,
-            "new_balance": new_balance,
-        })
+        idempotency_key = str(data.get("idempotency_key") or request.headers.get("X-Idempotency-Key") or "").strip()
+        if not idempotency_key:
+            return _json_response({"error": "idempotency_key_required"}, status=400)
+        from db.database import buy_watchlist_slots_atomic
+        result = buy_watchlist_slots_atomic(int(user_id), slots_price, slots_count, idempotency_key)
+        if not result.get("ok"):
+            status = 404 if result.get("error") == "user_not_found" else (400 if result.get("error") in {"insufficient_tokens", "idempotency_key_required"} else 500)
+            return _json_response(result, status=status)
+        return _json_response(result)
     except Exception as e:
         print(f"handle_buy_slots error: {e}")
         import traceback
