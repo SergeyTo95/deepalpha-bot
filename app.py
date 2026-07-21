@@ -20,7 +20,7 @@ from services.polymarket_resolver import resolve_prediction, fetch_market_by_slu
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
-    get_all_pending, get_pending_payment_intents, fulfill_verified_payment_intent, delete_pending, get_all_users,
+    get_all_pending, get_pending_payment_intents, fulfill_verified_payment_intent, record_treasury_payment_reconciliation, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
@@ -865,6 +865,7 @@ async def check_ton_payments():
             scan_result = get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
             transactions = scan_result.get("transactions", [])
             intents = get_pending_payment_intents(limit=1000)
+            terminal_verification_errors = {"intent_expired", "amount_too_low", "destination_mismatch", "source_mismatch", "reference_missing", "intent_already_fulfilled", "invalid_reference"}
 
             async def _notify_fulfilled(intent, result):
                 try:
@@ -901,7 +902,7 @@ async def check_ton_payments():
                 matched_intent = next((it for it in intents if str(it.get("status") or "") == "pending" and str(it.get("public_reference") or "") in comment), None)
                 if not matched_intent:
                     if str(comment or "").startswith("pay_"):
-                        break
+                        record_treasury_payment_reconciliation(tx_hash, str((tx.get("transaction_id") or {}).get("lt") or ""), source, destination, value, comment, "unknown_payment_reference")
                     safe_cursor_count += 1
                     continue
                 verified = verify_payment_intent(int(matched_intent["id"]), {
@@ -913,6 +914,11 @@ async def check_ton_payments():
                     "comment": comment,
                 })
                 if not verified.get("ok"):
+                    err = str(verified.get("error") or "verification_failed")
+                    if err in terminal_verification_errors:
+                        record_treasury_payment_reconciliation(tx_hash, str((tx.get("transaction_id") or {}).get("lt") or ""), source, destination, value, comment, err)
+                        safe_cursor_count += 1
+                        continue
                     break
                 result = fulfill_verified_payment_intent(int(matched_intent["id"]))
                 if result.get("ok") and not result.get("already_fulfilled"):

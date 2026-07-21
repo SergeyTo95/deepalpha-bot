@@ -113,7 +113,7 @@ def test_behavioral_cursor_paginates_600_transactions_and_persists_after_mark(mo
     settings = {"treasury_last_processed_lt": "", "treasury_last_processed_hash": ""}
     monkeypatch.setattr(ton_service, "_get_transactions_page", fake_page)
     monkeypatch.setattr("db.database.get_setting", lambda key, default="": settings.get(key, default))
-    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="": (settings.__setitem__("treasury_last_processed_lt", last_lt), settings.__setitem__("treasury_last_processed_hash", last_hash)))
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash="": (settings.__setitem__("treasury_last_processed_lt", last_lt), settings.__setitem__("treasury_last_processed_hash", last_hash)))
 
     scan = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
     txs = scan["transactions"]
@@ -185,10 +185,10 @@ def test_behavioral_cursor_prefix_mark_stops_before_transient_failure(monkeypatc
     import services.ton_service as ton_service
     txs = [{"transaction_id": {"lt": str(i), "hash": f"h{i}"}} for i in range(1, 6)]
     saved = {}
-    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="": saved.update({"lt": last_lt, "hash": last_hash, "backlog_lt": backlog_lt, "backlog_hash": backlog_hash}))
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash="": saved.update({"lt": last_lt, "hash": last_hash, "backlog_lt": backlog_lt, "backlog_hash": backlog_hash, "pending_lt": pending_newest_lt, "pending_hash": pending_newest_hash}))
     scan = {"transactions": txs, "next_page_cursor": {"lt": "old", "hash": "oldh"}}
     ton_service.mark_treasury_transactions_cursor(scan, 2)
-    assert saved == {"lt": "2", "hash": "h2", "backlog_lt": "", "backlog_hash": ""}
+    assert saved == {"lt": "2", "hash": "h2", "backlog_lt": "", "backlog_hash": "", "pending_lt": "", "pending_hash": ""}
 
 
 def test_behavioral_reconciliation_missing_fields_rejected(monkeypatch):
@@ -211,3 +211,25 @@ def test_behavioral_reconciliation_finds_hash_older_than_100(monkeypatch):
     monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
     assert verify_treasury_payout_onchain(payout)["ok"] is True
     assert len(calls) == 2
+
+
+def test_behavioral_toncenter_v2_payout_response_without_network_succeeds(monkeypatch):
+    from services.treasury_service import verify_treasury_payout_onchain
+    import services.ton_service as ton_service
+    payout = {"id": 77, "tx_hash": "tx77", "treasury_address": "src", "recipient_wallet_address": "dst", "amount_nano": 123}
+    tx = {"transaction_id": {"lt": "777", "hash": "tx77"}, "out_msgs": [{"source": "src", "destination": "dst", "value": "123", "message": "payout:77"}]}
+    monkeypatch.setattr(ton_service, "_get_transactions_page", lambda limit=100, lt="", tx_hash="": [tx])
+    monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
+    assert verify_treasury_payout_onchain(payout) == {"ok": True, "tx_hash": "tx77"}
+
+
+def test_behavioral_cursor_not_advanced_after_fulfillment_failure_then_advances_once(monkeypatch):
+    import services.ton_service as ton_service
+    tx = {"transaction_id": {"lt": "10", "hash": "h10"}, "in_msg": {"value": "100"}}
+    scan = {"transactions": [tx], "history_complete": True, "newest_seen": {"lt": "10", "hash": "h10"}, "pending_newest": {"lt": "", "hash": ""}}
+    saved = []
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda *args: saved.append(args))
+    ton_service.mark_treasury_transactions_cursor(scan, 0)
+    assert saved == []
+    ton_service.mark_treasury_transactions_cursor(scan, 1)
+    assert saved == [("10", "h10", "", "", "", "")]

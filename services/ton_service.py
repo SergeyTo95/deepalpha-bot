@@ -3,7 +3,7 @@ import requests
 from typing import List, Dict, Any, Optional
 from services.treasury_service import get_public_treasury_address
 
-TONCENTER_API = "https://toncenter.com/api/v2"
+TONCENTER_API = "https://testnet.toncenter.com/api/v2" if "test" in os.getenv("TON_NETWORK", "mainnet").lower() else "https://toncenter.com/api/v2"
 TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
 
 
@@ -39,6 +39,7 @@ def _get_transactions_page(limit: int = 100, lt: str = "", tx_hash: str = "") ->
             "address": (get_public_treasury_address().get("address") or ""),
             "limit": int(limit),
             "api_key": TONCENTER_KEY,
+            "archival": "true",
         }
         if lt and tx_hash:
             params["lt"] = lt
@@ -60,6 +61,8 @@ def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int
     last_hash = str(get_setting("treasury_last_processed_hash", "") or "")
     start_lt = str(get_setting("treasury_scan_page_lt", "") or "")
     start_hash = str(get_setting("treasury_scan_page_hash", "") or "")
+    pending_newest_lt = str(get_setting("treasury_scan_newest_lt", "") or "")
+    pending_newest_hash = str(get_setting("treasury_scan_newest_hash", "") or "")
     pages: List[List[Dict[str, Any]]] = []
     cursor_lt = start_lt; cursor_hash = start_hash; found_cursor = False; next_page_cursor = None
     for _ in range(int(max_pages)):
@@ -88,30 +91,45 @@ def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int
     for page in reversed(pages):
         txs.extend(reversed(page))
     history_complete = bool(found_cursor or (not last_lt and not last_hash and next_page_cursor is None))
+    newest_seen = _tx_lt_hash(pages[0][0]) if pages and pages[0] else (pending_newest_lt, pending_newest_hash)
     return {
         "transactions": txs,
         "cursor_reached": bool(found_cursor),
         "history_complete": history_complete,
         "next_page_cursor": (None if history_complete else next_page_cursor),
         "saved_cursor": {"lt": last_lt, "hash": last_hash},
+        "pending_newest": {"lt": pending_newest_lt, "hash": pending_newest_hash},
+        "newest_seen": {"lt": newest_seen[0], "hash": newest_seen[1]},
     }
 
 
 def mark_treasury_transactions_cursor(scan_result: Dict[str, Any], processed_count: int) -> None:
-    """Persist only the consecutive safely processed prefix and scan backlog atomically."""
+    """Persist only safely processed cursor state without moving canonical cursor past incomplete history."""
     transactions = list((scan_result or {}).get("transactions") or [])
     safe_count = max(0, min(int(processed_count or 0), len(transactions)))
     if safe_count <= 0:
         return
     from db.database import set_treasury_transaction_cursor
-    newest_lt, newest_hash = _tx_lt_hash(transactions[safe_count - 1])
-    if not newest_lt or not newest_hash:
-        return
-    backlog = (scan_result or {}).get("next_page_cursor") or {}
-    # If only a prefix was processed, restart this batch next cycle rather than advancing page backlog.
     if safe_count < len(transactions):
-        backlog = {}
-    set_treasury_transaction_cursor(newest_lt, newest_hash, str(backlog.get("lt") or ""), str(backlog.get("hash") or ""))
+        newest_lt, newest_hash = _tx_lt_hash(transactions[safe_count - 1])
+        if newest_lt and newest_hash:
+            set_treasury_transaction_cursor(newest_lt, newest_hash, "", "", "", "")
+        return
+    history_complete = bool((scan_result or {}).get("history_complete"))
+    backlog = (scan_result or {}).get("next_page_cursor") or {}
+    pending = (scan_result or {}).get("pending_newest") or {}
+    newest_seen = (scan_result or {}).get("newest_seen") or {}
+    if history_complete:
+        final_lt = str(pending.get("lt") or newest_seen.get("lt") or "")
+        final_hash = str(pending.get("hash") or newest_seen.get("hash") or "")
+        if final_lt and final_hash:
+            set_treasury_transaction_cursor(final_lt, final_hash, "", "", "", "")
+        return
+    # Incomplete scan: store page backlog and the newest tx seen, but do not advance canonical last_processed.
+    saved = (scan_result or {}).get("saved_cursor") or {}
+    pending_lt = str(pending.get("lt") or newest_seen.get("lt") or "")
+    pending_hash = str(pending.get("hash") or newest_seen.get("hash") or "")
+    set_treasury_transaction_cursor(str(saved.get("lt") or ""), str(saved.get("hash") or ""), str(backlog.get("lt") or ""), str(backlog.get("hash") or ""), pending_lt, pending_hash)
 
 
 def parse_payment(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -395,6 +395,21 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_payment_intents_status ON payment_intents(status)")
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS treasury_payment_reconciliation (
+        id SERIAL PRIMARY KEY,
+        tx_hash TEXT NOT NULL UNIQUE,
+        tx_lt TEXT,
+        source_address TEXT,
+        destination_address TEXT,
+        amount_nano BIGINT,
+        comment TEXT,
+        error_code TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_treasury_payment_reconciliation_error ON treasury_payment_reconciliation(error_code)")
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS treasury_payouts (
         id SERIAL PRIMARY KEY,
         payout_type TEXT NOT NULL,
@@ -5909,7 +5924,24 @@ def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
     return fulfill_verified_payment_intent(intent_id)
 
 
-def set_treasury_transaction_cursor(last_lt: str, last_hash: str, backlog_lt: str = "", backlog_hash: str = "") -> None:
+
+def record_treasury_payment_reconciliation(tx_hash: str, tx_lt: str = "", source: str = "", destination: str = "", amount_nano: int = 0, comment: str = "", error_code: str = "unmatched_payment") -> None:
+    """Immutable terminal unmatched/failed treasury inbound record; never fulfills products."""
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO treasury_payment_reconciliation (tx_hash,tx_lt,source_address,destination_address,amount_nano,comment,error_code)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (tx_hash) DO NOTHING
+        """, (str(tx_hash or ""), str(tx_lt or ""), str(source or ""), str(destination or ""), int(amount_nano or 0), str(comment or ""), str(error_code or "unmatched_payment")))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); print(f"record_treasury_payment_reconciliation error: {e}")
+        raise
+    finally:
+        conn.close()
+
+def set_treasury_transaction_cursor(last_lt: str, last_hash: str, backlog_lt: str = "", backlog_hash: str = "", pending_newest_lt: str = "", pending_newest_hash: str = "") -> None:
     """Atomically persist treasury scan cursor and optional backlog page cursor."""
     conn = get_connection(); cur = conn.cursor()
     try:
@@ -5919,6 +5951,8 @@ def set_treasury_transaction_cursor(last_lt: str, last_hash: str, backlog_lt: st
             ("treasury_last_processed_hash", str(last_hash or ""), now),
             ("treasury_scan_page_lt", str(backlog_lt or ""), now),
             ("treasury_scan_page_hash", str(backlog_hash or ""), now),
+            ("treasury_scan_newest_lt", str(pending_newest_lt or ""), now),
+            ("treasury_scan_newest_hash", str(pending_newest_hash or ""), now),
         ]
         cur.executemany("""
             INSERT INTO settings (key,value,updated_at) VALUES (%s,%s,%s)

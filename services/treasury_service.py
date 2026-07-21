@@ -267,12 +267,9 @@ def verify_treasury_payout_onchain(payout: Dict[str, Any]) -> Dict[str, Any]:
         tx = _find_treasury_transaction_by_hash(tx_hash, page_limit=100, max_pages=25)
         if not tx:
             return {"ok": False, "error": "tx_not_found"}
-        network = tx.get("network")
-        if not network:
-            return {"ok": False, "error": "onchain_data_incomplete"}
-        if str(network).lower() != str(os.getenv("TON_NETWORK", "mainnet")).lower():
-            return {"ok": False, "error": "network_mismatch"}
-        if not _phase_success(tx):
+        # TON Center v2 getTransactions is queried from the network-specific provider URL;
+        # individual transaction objects do not reliably include a network field.
+        if tx.get("aborted") is True:
             return {"ok": False, "error": "tx_unconfirmed"}
         out_msgs = tx.get("out_msgs") or tx.get("out_messages") or []
         if not isinstance(out_msgs, list) or not out_msgs:
