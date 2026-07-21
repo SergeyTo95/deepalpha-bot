@@ -11,6 +11,10 @@ try:
     import psycopg2
     import psycopg2.extras
     from psycopg2 import errors
+    try:
+        from psycopg2 import sql
+    except ImportError:  # pragma: no cover - test stubs may omit psycopg2.sql
+        sql = None
 except ModuleNotFoundError:  # pragma: no cover - minimal test env
     class _MissingPsycopg2:
         def connect(self, *args, **kwargs):
@@ -19,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal test env
         pass
     psycopg2 = _MissingPsycopg2()
     errors = _Errors()
+    sql = None
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -157,32 +162,44 @@ def migrate_watchlist_slot_purchases_idempotency_index(cursor) -> None:
         return
     try:
         cursor.execute("""
-            SELECT conname
+            SELECT c.conname
             FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE t.relname='watchlist_slot_purchases'
-              AND c.contype='u'
-              AND (SELECT array_agg(a.attname ORDER BY a.attnum)
-                   FROM unnest(c.conkey) ck(attnum)
-                   JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ck.attnum) = ARRAY['idempotency_key']
+            WHERE c.conrelid = 'watchlist_slot_purchases'::regclass
+              AND c.contype = 'u'
+              AND cardinality(c.conkey) = 1
+              AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
+                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ordinality)
+                   JOIN pg_attribute a
+                     ON a.attrelid = c.conrelid
+                    AND a.attnum = k.attnum) = ARRAY['idempotency_key']::text[]
         """)
         for (conname,) in cursor.fetchall() or []:
-            cursor.execute(f'ALTER TABLE watchlist_slot_purchases DROP CONSTRAINT IF EXISTS "{conname}"')
+            cursor.execute(
+                sql.SQL("ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}").format(
+                    sql.Identifier("watchlist_slot_purchases"),
+                    sql.Identifier(conname),
+                )
+            )
         cursor.execute("""
             SELECT i.relname
             FROM pg_index ix
-            JOIN pg_class i ON i.oid=ix.indexrelid
-            JOIN pg_class t ON t.oid=ix.indrelid
-            WHERE t.relname='watchlist_slot_purchases'
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            WHERE ix.indrelid = 'watchlist_slot_purchases'::regclass
               AND ix.indisunique
-              AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid=ix.indexrelid)
-              AND (SELECT array_agg(a.attname ORDER BY a.attnum)
-                   FROM unnest(ix.indkey) k(attnum)
-                   JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=k.attnum) = ARRAY['idempotency_key']
+              AND NOT ix.indisprimary
+              AND ix.indnkeyatts = 1
+              AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.indexrelid)
+              AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
+                   FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ordinality)
+                   JOIN pg_attribute a
+                     ON a.attrelid = ix.indrelid
+                    AND a.attnum = k.attnum
+                   WHERE k.ordinality <= ix.indnkeyatts) = ARRAY['idempotency_key']::text[]
         """)
         for (idxname,) in cursor.fetchall() or []:
-            cursor.execute(f'DROP INDEX IF EXISTS "{idxname}"')
+            cursor.execute(
+                sql.SQL("DROP INDEX IF EXISTS {}").format(sql.Identifier(idxname))
+            )
         cursor.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS ux_watchlist_slot_purchases_user_idempotency
             ON watchlist_slot_purchases(user_id, idempotency_key)
