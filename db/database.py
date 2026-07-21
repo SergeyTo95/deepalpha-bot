@@ -229,10 +229,11 @@ def _init_db_inner(conn, cursor):
     CREATE TABLE IF NOT EXISTS watchlist_slot_purchases (
         id SERIAL PRIMARY KEY,
         user_id BIGINT NOT NULL,
-        idempotency_key TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL,
         slots_added INTEGER NOT NULL,
         tokens_spent INTEGER NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, idempotency_key)
     )
     """)
 
@@ -5852,13 +5853,6 @@ def create_donation_with_payment_intent(donor_id: int, author_id: int, amount_na
 
 def _calculate_tokens_for_amount_conn(cur, ton_amount: float) -> int:
     try:
-        cur.execute("SELECT tokens,price_ton FROM token_packages WHERE is_active=1 ORDER BY sort_order,id")
-        for tokens, price in (cur.fetchall() or []):
-            try:
-                if abs(float(price) - float(ton_amount)) <= 0.05:
-                    return int(tokens)
-            except Exception:
-                continue
         cur.execute("SELECT value FROM settings WHERE key='token_price_ton'")
         row = cur.fetchone()
         token_price = float(row[0]) if row and row[0] else 0.1

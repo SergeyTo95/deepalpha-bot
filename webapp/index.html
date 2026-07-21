@@ -944,7 +944,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        user_id: userId,
+                        idempotency_key: window.watchlistSlotsIdempotencyKey || (window.watchlistSlotsIdempotencyKey = `slots:${userId}:${Date.now()}:${Math.random().toString(36).slice(2)}`),
                     })
                 });
 
@@ -969,6 +969,7 @@
                 );
 
                 // Обновляем данные юзера
+                window.watchlistSlotsIdempotencyKey = null;
                 await loadUserData();
 
             } catch(e) {
@@ -1302,9 +1303,10 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    amount: amount,
+                    amount: paymentType === 'tokens' && selectedPackageId ? undefined : amount,
+                    package_id: paymentType === 'tokens' ? selectedPackageId : undefined,
                     payment_type: paymentType,
-                    product_ref: paymentType === 'tokens' ? String(selectedPackageId || amount) : paymentType,
+                    product_ref: paymentType === 'tokens' && selectedPackageId ? String(selectedPackageId) : paymentType,
                     idempotency_key: `webapp:${userId}:${paymentType}:${Date.now()}:${Math.random().toString(36).slice(2)}`
                 })
             });

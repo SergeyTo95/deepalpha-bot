@@ -936,7 +936,9 @@ async def check_ton_payments():
                         continue
                     break
                 result = fulfill_verified_payment_intent(int(matched_intent["id"]))
-                if result.get("ok") and not result.get("already_fulfilled"):
+                if not result.get("ok"):
+                    break
+                if not result.get("already_fulfilled"):
                     await _notify_fulfilled(matched_intent, result)
                 safe_cursor_count += 1
 

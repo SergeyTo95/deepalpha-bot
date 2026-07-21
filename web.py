@@ -277,18 +277,34 @@ async def handle_pending(request):
             return _json_response({"error": "Invalid payment_type"}, status=400)
         amount = float(data.get("amount", 0) or 0)
         product_ref = str(data.get("product_ref") or payment_type)
+        metadata = {}
         if payment_type == "subscription":
             amount = float(get_setting("subscription_price_ton", "1"))
         elif payment_type == "author_status":
             amount = float(get_setting("author_status_price_ton", "5"))
-        elif amount <= 0:
-            return _json_response({"error": "Invalid amount"}, status=400)
-        amount_nano = ton_to_nano(amount)
+        elif payment_type == "tokens":
+            package_id = int(data.get("package_id") or data.get("product_ref") or 0)
+            if package_id > 0:
+                from db.database import get_token_package
+                pkg = get_token_package(package_id)
+                if not pkg or not pkg.get("is_active"):
+                    return _json_response({"error": "invalid_package_id"}, status=400)
+                amount = float(pkg.get("price_ton") or 0)
+                product_ref = str(package_id)
+                metadata = {"package_id": package_id, "price_nano": str(ton_to_nano(amount)), "tokens": int(pkg.get("tokens") or 0)}
+            elif amount > 0:
+                price_per_token_nano = int(float(get_setting("token_price_ton", "0.1")) * 1_000_000_000)
+                amount_nano_tmp = ton_to_nano(amount)
+                metadata = {"price_nano": str(amount_nano_tmp), "tokens": int(amount_nano_tmp // max(price_per_token_nano, 1))}
+            else:
+                return _json_response({"error": "Invalid amount"}, status=400)
+        amount_nano = int(metadata.get("price_nano") or ton_to_nano(amount))
         intent = create_payment_intent(
             user_id=int(user_id),
             product_type=payment_type,
             product_ref=product_ref,
             amount_nano=amount_nano,
+            metadata=metadata,
             idempotency_key=str(data.get("idempotency_key") or f"webapp:{user_id}:{payment_type}:{product_ref}:{time.time_ns()}"),
         )
         if not intent.get("ok"):
