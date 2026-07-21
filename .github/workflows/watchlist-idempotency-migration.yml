@@ -76,7 +76,7 @@ jobs:
       - name: Run focused PostgreSQL migration regression test
         run: |
           set -o pipefail
-          pytest -vv -rA --tb=long -s tests/test_watchlist_idempotency_migration_postgres.py 2>&1 | tee postgres-migration-test.log
+          PYTHONPATH=. python -m pytest -vv -rA --tb=long -s tests/test_watchlist_idempotency_migration_postgres.py 2>&1 | tee postgres-migration-test.log
       - name: Upload PostgreSQL test log
         if: always()
         uses: actions/upload-artifact@v4
