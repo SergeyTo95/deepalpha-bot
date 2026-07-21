@@ -181,14 +181,166 @@ def test_behavioral_cursor_incomplete_1200_transactions_does_not_advance_without
     assert settings["treasury_last_processed_lt"] == "1"
 
 
-def test_behavioral_cursor_prefix_mark_stops_before_transient_failure(monkeypatch):
+def test_behavioral_cursor_zero_prefix_incomplete_failure_resets_backlog(monkeypatch):
     import services.ton_service as ton_service
-    txs = [{"transaction_id": {"lt": str(i), "hash": f"h{i}"}} for i in range(1, 6)]
-    saved = {}
-    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash="": saved.update({"lt": last_lt, "hash": last_hash, "backlog_lt": backlog_lt, "backlog_hash": backlog_hash, "pending_lt": pending_newest_lt, "pending_hash": pending_newest_hash}))
-    scan = {"transactions": txs, "next_page_cursor": {"lt": "old", "hash": "oldh"}}
-    ton_service.mark_treasury_transactions_cursor(scan, 2)
-    assert saved == {"lt": "", "hash": "", "backlog_lt": "old", "backlog_hash": "oldh", "pending_lt": "", "pending_hash": ""}
+
+    settings = {
+        "treasury_last_processed_lt": "1",
+        "treasury_last_processed_hash": "h1",
+        "treasury_scan_page_lt": "old",
+        "treasury_scan_page_hash": "oldh",
+        "treasury_scan_newest_lt": "99",
+        "treasury_scan_newest_hash": "h99",
+    }
+
+    def set_cursor(last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash=""):
+        settings.update({
+            "treasury_last_processed_lt": last_lt,
+            "treasury_last_processed_hash": last_hash,
+            "treasury_scan_page_lt": backlog_lt,
+            "treasury_scan_page_hash": backlog_hash,
+            "treasury_scan_newest_lt": pending_newest_lt,
+            "treasury_scan_newest_hash": pending_newest_hash,
+        })
+
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", set_cursor)
+    scan = {
+        "transactions": [{"transaction_id": {"lt": "2", "hash": "h2"}}],
+        "history_complete": False,
+        "next_page_cursor": {"lt": "old", "hash": "oldh"},
+        "pending_newest": {"lt": "99", "hash": "h99"},
+        "saved_cursor": {"lt": "1", "hash": "h1"},
+    }
+    result = ton_service.process_treasury_payment_scan_once(scan, lambda tx: {"ok": False, "error": "fulfillment_failed"})
+    assert result == {"ok": False, "safe_cursor_count": 0}
+    assert settings == {
+        "treasury_last_processed_lt": "1",
+        "treasury_last_processed_hash": "h1",
+        "treasury_scan_page_lt": "",
+        "treasury_scan_page_hash": "",
+        "treasury_scan_newest_lt": "",
+        "treasury_scan_newest_hash": "",
+    }
+
+
+def test_behavioral_cursor_partial_prefix_incomplete_failure_resets_backlog(monkeypatch):
+    import services.ton_service as ton_service
+
+    saved_calls = []
+
+    def set_cursor(last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash=""):
+        saved_calls.append((last_lt, last_hash, backlog_lt, backlog_hash, pending_newest_lt, pending_newest_hash))
+
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", set_cursor)
+    txs = [{"transaction_id": {"lt": str(i), "hash": f"h{i}"}} for i in range(2, 6)]
+    scan = {
+        "transactions": txs,
+        "history_complete": False,
+        "next_page_cursor": {"lt": "old", "hash": "oldh"},
+        "pending_newest": {"lt": "99", "hash": "h99"},
+        "saved_cursor": {"lt": "1", "hash": "h1"},
+    }
+
+    def processor(tx):
+        return {"ok": tx["transaction_id"]["lt"] == "2"}
+
+    result = ton_service.process_treasury_payment_scan_once(scan, processor)
+    assert result == {"ok": False, "safe_cursor_count": 1}
+    assert saved_calls == [("1", "h1", "", "", "", "")]
+
+
+def test_behavioral_cursor_multicycle_incomplete_failure_restart_no_loss(monkeypatch):
+    import services.ton_service as ton_service
+
+    settings = {
+        "treasury_last_processed_lt": "1",
+        "treasury_last_processed_hash": "h1",
+        "treasury_scan_page_lt": "",
+        "treasury_scan_page_hash": "",
+        "treasury_scan_newest_lt": "",
+        "treasury_scan_newest_hash": "",
+    }
+    cursor_writes = []
+
+    def get_setting(key, default=""):
+        return settings.get(key, default)
+
+    def set_cursor(last_lt, last_hash, backlog_lt="", backlog_hash="", pending_newest_lt="", pending_newest_hash=""):
+        write = (str(last_lt), str(last_hash), str(backlog_lt), str(backlog_hash), str(pending_newest_lt), str(pending_newest_hash))
+        cursor_writes.append(write)
+        settings.update({
+            "treasury_last_processed_lt": write[0],
+            "treasury_last_processed_hash": write[1],
+            "treasury_scan_page_lt": write[2],
+            "treasury_scan_page_hash": write[3],
+            "treasury_scan_newest_lt": write[4],
+            "treasury_scan_newest_hash": write[5],
+        })
+
+    newest_to_oldest = list(range(1200, 0, -1))
+
+    def make_tx(lt):
+        return {"transaction_id": {"lt": str(lt), "hash": f"h{lt}"}, "in_msg": {"value": "1"}}
+
+    def fake_page(limit, lt="", tx_hash=""):
+        if lt:
+            start_index = newest_to_oldest.index(int(lt)) + 1
+        else:
+            start_index = 0
+        return [make_tx(i) for i in newest_to_oldest[start_index:start_index + int(limit)]]
+
+    monkeypatch.setattr(ton_service, "_get_transactions_page", fake_page)
+    monkeypatch.setattr("db.database.get_setting", get_setting)
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", set_cursor)
+
+    processed = set()
+    deliveries = {}
+    attempts = {}
+
+    def processor(tx):
+        lt = int(tx["transaction_id"]["lt"])
+        attempts[lt] = attempts.get(lt, 0) + 1
+        if lt in processed:
+            return {"ok": True, "already_processed": True}
+        if lt == 500 and attempts[lt] == 1:
+            return {"ok": False, "error": "fulfillment_failed"}
+        processed.add(lt)
+        deliveries[lt] = deliveries.get(lt, 0) + 1
+        return {"ok": True}
+
+    scan1 = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    assert [int(t["transaction_id"]["lt"]) for t in (scan1["transactions"][0], scan1["transactions"][-1])] == [201, 1200]
+    result1 = ton_service.process_treasury_payment_scan_once(scan1, processor)
+    assert result1 == {"ok": False, "safe_cursor_count": 299}
+    assert settings["treasury_last_processed_lt"] == "1"
+    assert settings["treasury_scan_page_lt"] == ""
+    assert settings["treasury_scan_newest_lt"] == ""
+    assert 500 not in processed
+
+    # Restart: empty backlog makes the scan start from newest again, so tx500 is present again.
+    scan2 = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    lts2 = [int(t["transaction_id"]["lt"]) for t in scan2["transactions"]]
+    assert 500 in lts2
+    result2 = ton_service.process_treasury_payment_scan_once(scan2, processor)
+    assert result2 == {"ok": True, "safe_cursor_count": 1000}
+    assert settings["treasury_last_processed_lt"] == "1"
+    assert settings["treasury_scan_page_lt"] == "201"
+    assert settings["treasury_scan_newest_lt"] == "1200"
+
+    scan3 = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    lts3 = [int(t["transaction_id"]["lt"]) for t in scan3["transactions"]]
+    assert lts3 == list(range(2, 201))
+    result3 = ton_service.process_treasury_payment_scan_once(scan3, processor)
+    assert result3 == {"ok": True, "safe_cursor_count": 199}
+    assert settings["treasury_last_processed_lt"] == "1200"
+    assert settings["treasury_scan_page_lt"] == ""
+    assert settings["treasury_scan_newest_lt"] == ""
+
+    assert set(deliveries) == set(range(2, 1201))
+    assert all(count == 1 for count in deliveries.values())
+    assert attempts[500] == 2
+    assert deliveries[500] == 1
+    assert ("500", "h500", "", "", "", "") not in cursor_writes
 
 
 def test_behavioral_reconciliation_missing_fields_rejected(monkeypatch):

@@ -104,27 +104,28 @@ def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int
 
 
 def mark_treasury_transactions_cursor(scan_result: Dict[str, Any], processed_count: int) -> None:
-    """Persist only safely processed cursor state without moving canonical cursor past incomplete history."""
+    """Persist only safely processed cursor state without moving canonical cursor past retryable gaps."""
     transactions = list((scan_result or {}).get("transactions") or [])
     safe_count = max(0, min(int(processed_count or 0), len(transactions)))
+    history_complete = bool((scan_result or {}).get("history_complete"))
+    saved = (scan_result or {}).get("saved_cursor") or {}
+    from db.database import set_treasury_transaction_cursor
+
+    # Retryable gap inside an incomplete scan: reset scan state and keep canonical cursor unchanged.
+    # This also applies to safe_count == 0 so a stale page backlog cannot skip the failed tx on restart.
+    if (not history_complete) and safe_count < len(transactions):
+        set_treasury_transaction_cursor(str(saved.get("lt") or ""), str(saved.get("hash") or ""), "", "", "", "")
+        return
+
     if safe_count <= 0:
         return
-    from db.database import set_treasury_transaction_cursor
-    history_complete = bool((scan_result or {}).get("history_complete"))
+
     if safe_count < len(transactions):
-        if not history_complete:
-            saved = (scan_result or {}).get("saved_cursor") or {}
-            backlog = (scan_result or {}).get("next_page_cursor") or {}
-            pending = (scan_result or {}).get("pending_newest") or {}
-            newest_seen = (scan_result or {}).get("newest_seen") or {}
-            pending_lt = str(pending.get("lt") or newest_seen.get("lt") or "")
-            pending_hash = str(pending.get("hash") or newest_seen.get("hash") or "")
-            set_treasury_transaction_cursor(str(saved.get("lt") or ""), str(saved.get("hash") or ""), str(backlog.get("lt") or ""), str(backlog.get("hash") or ""), pending_lt, pending_hash)
-            return
         newest_lt, newest_hash = _tx_lt_hash(transactions[safe_count - 1])
         if newest_lt and newest_hash:
             set_treasury_transaction_cursor(newest_lt, newest_hash, "", "", "", "")
         return
+
     backlog = (scan_result or {}).get("next_page_cursor") or {}
     pending = (scan_result or {}).get("pending_newest") or {}
     newest_seen = (scan_result or {}).get("newest_seen") or {}
@@ -134,11 +135,25 @@ def mark_treasury_transactions_cursor(scan_result: Dict[str, Any], processed_cou
         if final_lt and final_hash:
             set_treasury_transaction_cursor(final_lt, final_hash, "", "", "", "")
         return
-    # Incomplete scan: store page backlog and the newest tx seen, but do not advance canonical last_processed.
-    saved = (scan_result or {}).get("saved_cursor") or {}
+
+    # Full safe batch from incomplete scan: keep canonical cursor unchanged and continue old-history pagination later.
     pending_lt = str(pending.get("lt") or newest_seen.get("lt") or "")
     pending_hash = str(pending.get("hash") or newest_seen.get("hash") or "")
     set_treasury_transaction_cursor(str(saved.get("lt") or ""), str(saved.get("hash") or ""), str(backlog.get("lt") or ""), str(backlog.get("hash") or ""), pending_lt, pending_hash)
+
+
+def process_treasury_payment_scan_once(scan_result: Dict[str, Any], process_transaction) -> Dict[str, Any]:
+    """Testable one-batch processor: stops on retryable failure and marks only safe prefix."""
+    transactions = list((scan_result or {}).get("transactions") or [])
+    safe_count = 0
+    for tx in transactions:
+        result = process_transaction(tx)
+        ok = bool(result is True or (isinstance(result, dict) and result.get("ok")))
+        if not ok:
+            break
+        safe_count += 1
+    mark_treasury_transactions_cursor(scan_result, safe_count)
+    return {"ok": safe_count == len(transactions), "safe_cursor_count": safe_count}
 
 
 def parse_payment(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
