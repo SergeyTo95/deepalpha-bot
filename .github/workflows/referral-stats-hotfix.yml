@@ -24,4 +24,20 @@ jobs:
       - name: Compile referral service
         run: python -m py_compile services/airdrop_referral_service.py
       - name: Run referral regression tests
-        run: pytest -q tests/test_airdrop_referral_service.py tests/test_referral_stats_display_hotfix.py
+        id: referral_tests
+        shell: bash
+        run: |
+          set +e
+          pytest -q tests/test_airdrop_referral_service.py tests/test_referral_stats_display_hotfix.py > referral-test.log 2>&1
+          code=$?
+          cat referral-test.log
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload referral test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: referral-test-output
+          path: referral-test.log
+      - name: Fail when referral tests failed
+        run: test "${{ steps.referral_tests.outputs.exit_code }}" = "0"
