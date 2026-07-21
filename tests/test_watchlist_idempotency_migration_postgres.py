@@ -80,22 +80,24 @@ def _constraints(cur):
     return {name: (contype, columns) for name, contype, columns in cur.fetchall()}
 
 
-def _assert_composite_uniqueness(conn, cur):
+def _assert_composite_uniqueness(cur):
     cur.execute(
         "INSERT INTO watchlist_slot_purchases(user_id, idempotency_key) VALUES (1, 'abc')"
     )
     cur.execute(
         "INSERT INTO watchlist_slot_purchases(user_id, idempotency_key) VALUES (2, 'abc')"
     )
+    cur.execute("SAVEPOINT duplicate_check")
     with pytest.raises(psycopg2.errors.UniqueViolation):
         cur.execute(
             "INSERT INTO watchlist_slot_purchases(user_id, idempotency_key) VALUES (1, 'abc')"
         )
-    conn.rollback()
+    cur.execute("ROLLBACK TO SAVEPOINT duplicate_check")
+    cur.execute("RELEASE SAVEPOINT duplicate_check")
 
 
 def test_migrates_legacy_table_constraint_without_name_array_type_crash(pg_cursor):
-    conn, cur = pg_cursor
+    _conn, cur = pg_cursor
     _create_table(cur)
     cur.execute(
         "ALTER TABLE watchlist_slot_purchases ADD CONSTRAINT legacy_global_idempotency UNIQUE (idempotency_key)"
@@ -114,11 +116,11 @@ def test_migrates_legacy_table_constraint_without_name_array_type_crash(pg_curso
         "user_id",
         "idempotency_key",
     ]
-    _assert_composite_uniqueness(conn, cur)
+    _assert_composite_uniqueness(cur)
 
 
 def test_migrates_legacy_standalone_unique_index_without_name_array_type_crash(pg_cursor):
-    conn, cur = pg_cursor
+    _conn, cur = pg_cursor
     _create_table(cur)
     cur.execute(
         "CREATE UNIQUE INDEX legacy_global_idempotency_idx ON watchlist_slot_purchases(idempotency_key)"
@@ -132,11 +134,11 @@ def test_migrates_legacy_standalone_unique_index_without_name_array_type_crash(p
         "user_id",
         "idempotency_key",
     ]
-    _assert_composite_uniqueness(conn, cur)
+    _assert_composite_uniqueness(cur)
 
 
 def test_already_migrated_schema_is_idempotent(pg_cursor):
-    conn, cur = pg_cursor
+    _conn, cur = pg_cursor
     _create_table(cur)
     cur.execute(
         "CREATE UNIQUE INDEX ux_watchlist_slot_purchases_user_idempotency ON watchlist_slot_purchases(user_id, idempotency_key)"
@@ -149,11 +151,11 @@ def test_already_migrated_schema_is_idempotent(pg_cursor):
         "user_id",
         "idempotency_key",
     ]
-    _assert_composite_uniqueness(conn, cur)
+    _assert_composite_uniqueness(cur)
 
 
 def test_unrelated_indexes_are_preserved(pg_cursor):
-    conn, cur = pg_cursor
+    _conn, cur = pg_cursor
     _create_table(cur)
     cur.execute("CREATE INDEX regular_idempotency_idx ON watchlist_slot_purchases(idempotency_key)")
     cur.execute("CREATE UNIQUE INDEX unique_other_key_idx ON watchlist_slot_purchases(other_key)")
@@ -180,4 +182,4 @@ def test_unrelated_indexes_are_preserved(pg_cursor):
         "user_id",
         "idempotency_key",
     ]
-    _assert_composite_uniqueness(conn, cur)
+    _assert_composite_uniqueness(cur)
