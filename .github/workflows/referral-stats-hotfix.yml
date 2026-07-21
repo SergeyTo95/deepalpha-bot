@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          pytest -q tests/test_airdrop_referral_service.py tests/test_referral_stats_display_hotfix.py > referral-test.log 2>&1
+          PYTHONPATH=. pytest -q tests/test_airdrop_referral_service.py tests/test_referral_stats_display_hotfix.py > referral-test.log 2>&1
           code=$?
           cat referral-test.log
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
