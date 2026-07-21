@@ -5909,6 +5909,29 @@ def fulfill_verified_donation_intent(intent_id: int) -> Dict[str, Any]:
     return fulfill_verified_payment_intent(intent_id)
 
 
+def set_treasury_transaction_cursor(last_lt: str, last_hash: str, backlog_lt: str = "", backlog_hash: str = "") -> None:
+    """Atomically persist treasury scan cursor and optional backlog page cursor."""
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        now = datetime.utcnow().isoformat()
+        rows = [
+            ("treasury_last_processed_lt", str(last_lt or ""), now),
+            ("treasury_last_processed_hash", str(last_hash or ""), now),
+            ("treasury_scan_page_lt", str(backlog_lt or ""), now),
+            ("treasury_scan_page_hash", str(backlog_hash or ""), now),
+        ]
+        cur.executemany("""
+            INSERT INTO settings (key,value,updated_at) VALUES (%s,%s,%s)
+            ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at
+        """, rows)
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); print(f"set_treasury_transaction_cursor error: {e}")
+        raise
+    finally:
+        conn.close()
+
+
 def get_pending_payment_intents(limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_connection(); cur = conn.cursor()
     try:

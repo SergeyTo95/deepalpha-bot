@@ -226,43 +226,90 @@ def verify_payment_intent(intent_id: int, tx: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+def _phase_success(tx: Dict[str, Any]) -> bool:
+    if tx.get("aborted") is True:
+        return False
+    for key in ("compute_phase", "compute", "action_phase", "action"):
+        phase = tx.get(key)
+        if isinstance(phase, dict):
+            if phase.get("success") is False or phase.get("skipped") is True:
+                return False
+            if str(phase.get("exit_code", "0")) not in {"", "0", "None"}:
+                return False
+            if str(phase.get("result_code", "0")) not in {"", "0", "None"}:
+                return False
+    return True
+
+
+def _find_treasury_transaction_by_hash(tx_hash: str, page_limit: int = 100, max_pages: int = 25) -> Optional[Dict[str, Any]]:
+    from services.ton_service import _get_transactions_page, _tx_lt_hash
+    cursor_lt = ""; cursor_hash = ""
+    for _ in range(int(max_pages)):
+        page = _get_transactions_page(int(page_limit), cursor_lt, cursor_hash)
+        if not page:
+            return None
+        for tx in page:
+            h = str((tx.get("transaction_id") or {}).get("hash") or tx.get("hash") or "")
+            if h == tx_hash:
+                return tx
+        cursor_lt, cursor_hash = _tx_lt_hash(page[-1])
+        if not cursor_lt or not cursor_hash or len(page) < int(page_limit):
+            return None
+    return None
+
+
 def verify_treasury_payout_onchain(payout: Dict[str, Any]) -> Dict[str, Any]:
-    """Verify submitted payout tx before DB accounting is finalized."""
+    """Verify submitted payout tx before DB accounting is finalized; fail closed on incomplete on-chain data."""
     tx_hash = str(payout.get("tx_hash") or "").strip()
     if not tx_hash:
         return {"ok": False, "error": "tx_hash_missing"}
     try:
-        import requests
-        from services.ton_service import TONCENTER_API, TONCENTER_KEY, get_transactions
-        # TON Center v2 does not expose a universal by-hash endpoint across deployments; scan recent treasury txs safely.
-        candidates = get_transactions(limit=100)
-        tx = next((t for t in candidates if str((t.get("transaction_id") or {}).get("hash") or t.get("hash") or "") == tx_hash), None)
+        tx = _find_treasury_transaction_by_hash(tx_hash, page_limit=100, max_pages=25)
         if not tx:
             return {"ok": False, "error": "tx_not_found"}
-        if tx.get("@type") == "error" or tx.get("aborted") is True:
-            return {"ok": False, "error": "tx_unconfirmed"}
-        in_msg = tx.get("in_msg") or {}
-        out_msgs = tx.get("out_msgs") or tx.get("out_messages") or []
-        msg = out_msgs[0] if out_msgs else in_msg
-        source = msg.get("source") or in_msg.get("source") or payout.get("treasury_address")
-        destination = msg.get("destination") or msg.get("dest") or in_msg.get("destination") or in_msg.get("dest")
-        amount_nano = int(msg.get("value") or in_msg.get("value") or 0)
-        if str(tx.get("network") or os.getenv("TON_NETWORK", "mainnet")).lower() != str(os.getenv("TON_NETWORK", "mainnet")).lower():
+        network = tx.get("network")
+        if not network:
+            return {"ok": False, "error": "onchain_data_incomplete"}
+        if str(network).lower() != str(os.getenv("TON_NETWORK", "mainnet")).lower():
             return {"ok": False, "error": "network_mismatch"}
-        if normalize_ton_address(source) != normalize_ton_address(payout.get("treasury_address")):
-            return {"ok": False, "error": "source_mismatch"}
-        if normalize_ton_address(destination) != normalize_ton_address(payout.get("recipient_wallet_address")):
-            return {"ok": False, "error": "destination_mismatch"}
-        if amount_nano < int(payout.get("amount_nano") or 0):
-            return {"ok": False, "error": "amount_too_low"}
-        comment = decode_ton_text_comment_from_msg(msg)
-        expected = f"payout:{payout.get('id')}"
-        if comment and expected not in comment:
-            return {"ok": False, "error": "reference_mismatch"}
+        if not _phase_success(tx):
+            return {"ok": False, "error": "tx_unconfirmed"}
+        out_msgs = tx.get("out_msgs") or tx.get("out_messages") or []
+        if not isinstance(out_msgs, list) or not out_msgs:
+            return {"ok": False, "error": "onchain_data_incomplete"}
+        expected_source = normalize_ton_address(payout.get("treasury_address"))
+        expected_destination = normalize_ton_address(payout.get("recipient_wallet_address"))
+        expected_amount = int(payout.get("amount_nano") or 0)
+        if not expected_source or not expected_destination or expected_amount <= 0:
+            return {"ok": False, "error": "payout_snapshot_incomplete"}
+        selected = None
+        incomplete_seen = False
+        for msg in out_msgs:
+            source = msg.get("source")
+            destination = msg.get("destination") or msg.get("dest")
+            value = msg.get("value")
+            if source is None or destination is None or value is None:
+                incomplete_seen = True
+                continue
+            if normalize_ton_address(source) != expected_source:
+                continue
+            if normalize_ton_address(destination) != expected_destination:
+                continue
+            if int(value or 0) < expected_amount:
+                continue
+            comment = decode_ton_text_comment_from_msg(msg)
+            expected_ref = f"payout:{payout.get('id')}"
+            if comment and expected_ref not in comment:
+                continue
+            selected = msg
+            break
+        if selected is None:
+            return {"ok": False, "error": "onchain_data_incomplete" if incomplete_seen else "payout_tx_mismatch"}
         return {"ok": True, "tx_hash": tx_hash}
     except Exception:
         logger.exception("payout_onchain_verify_failed")
         return {"ok": False, "error": "payout_onchain_verify_failed"}
+
 
 def resolve_internal_payout_wallet(user_id: int, conn=None, for_update: bool = False) -> Dict[str, Any]:
     own = conn is None

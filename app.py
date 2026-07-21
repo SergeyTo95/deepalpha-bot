@@ -862,7 +862,8 @@ async def check_ton_payments():
     while True:
         try:
             from services.ton_service import get_transactions_since_treasury_cursor, mark_treasury_transactions_cursor
-            transactions = get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+            scan_result = get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+            transactions = scan_result.get("transactions", [])
             intents = get_pending_payment_intents(limit=1000)
 
             async def _notify_fulfilled(intent, result):
@@ -883,19 +884,25 @@ async def check_ton_payments():
                 if result.get("ok") and not result.get("already_fulfilled"):
                     await _notify_fulfilled(verified_intent, result)
 
+            safe_cursor_count = 0
             for tx in transactions:
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
                 if not tx_hash or is_tx_processed(tx_hash):
+                    safe_cursor_count += 1
                     continue
                 in_msg = tx.get("in_msg", {}) or {}
                 value = int(in_msg.get("value", 0) or 0)
                 if value <= 0:
+                    safe_cursor_count += 1
                     continue
                 comment = decode_ton_text_comment_from_msg(in_msg)
                 source = str(in_msg.get("source") or "")
                 destination = str(in_msg.get("destination") or in_msg.get("dest") or "")
                 matched_intent = next((it for it in intents if str(it.get("status") or "") == "pending" and str(it.get("public_reference") or "") in comment), None)
                 if not matched_intent:
+                    if str(comment or "").startswith("pay_"):
+                        break
+                    safe_cursor_count += 1
                     continue
                 verified = verify_payment_intent(int(matched_intent["id"]), {
                     "tx_hash": tx_hash,
@@ -906,12 +913,13 @@ async def check_ton_payments():
                     "comment": comment,
                 })
                 if not verified.get("ok"):
-                    continue
+                    break
                 result = fulfill_verified_payment_intent(int(matched_intent["id"]))
                 if result.get("ok") and not result.get("already_fulfilled"):
                     await _notify_fulfilled(matched_intent, result)
+                safe_cursor_count += 1
 
-            mark_treasury_transactions_cursor(transactions)
+            mark_treasury_transactions_cursor(scan_result, safe_cursor_count)
 
         except Exception as e:
             print(f"TON WORKER ERROR: {e}")

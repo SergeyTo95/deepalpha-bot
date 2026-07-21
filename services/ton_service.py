@@ -53,16 +53,19 @@ def _get_transactions_page(limit: int = 100, lt: str = "", tx_hash: str = "") ->
         return []
 
 
-def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int = 20) -> List[Dict[str, Any]]:
-    """Read treasury transactions page-by-page until the persisted cursor, returning old->new safely."""
-    from db.database import get_setting, set_setting
+def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int = 20) -> Dict[str, Any]:
+    """Read treasury transactions page-by-page without advancing persisted cursor."""
+    from db.database import get_setting
     last_lt = str(get_setting("treasury_last_processed_lt", "") or "")
     last_hash = str(get_setting("treasury_last_processed_hash", "") or "")
+    start_lt = str(get_setting("treasury_scan_page_lt", "") or "")
+    start_hash = str(get_setting("treasury_scan_page_hash", "") or "")
     pages: List[List[Dict[str, Any]]] = []
-    cursor_lt = ""; cursor_hash = ""; found_cursor = False
+    cursor_lt = start_lt; cursor_hash = start_hash; found_cursor = False; next_page_cursor = None
     for _ in range(int(max_pages)):
         page = _get_transactions_page(int(page_limit), cursor_lt, cursor_hash)
         if not page:
+            found_cursor = True if not last_lt and not last_hash else found_cursor
             break
         kept = []
         for tx in page:
@@ -74,25 +77,41 @@ def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int
         if kept:
             pages.append(kept)
         if found_cursor or len(page) < int(page_limit):
+            if len(page) < int(page_limit):
+                found_cursor = True if not last_lt and not last_hash else found_cursor
             break
         cursor_lt, cursor_hash = _tx_lt_hash(page[-1])
         if not cursor_lt or not cursor_hash:
             break
+        next_page_cursor = {"lt": cursor_lt, "hash": cursor_hash}
     txs: List[Dict[str, Any]] = []
     for page in reversed(pages):
         txs.extend(reversed(page))
-    return txs
+    history_complete = bool(found_cursor or (not last_lt and not last_hash and next_page_cursor is None))
+    return {
+        "transactions": txs,
+        "cursor_reached": bool(found_cursor),
+        "history_complete": history_complete,
+        "next_page_cursor": (None if history_complete else next_page_cursor),
+        "saved_cursor": {"lt": last_lt, "hash": last_hash},
+    }
 
 
-def mark_treasury_transactions_cursor(transactions: List[Dict[str, Any]]) -> None:
-    """Persist cursor only after caller safely processes the returned old->new batch."""
-    if not transactions:
+def mark_treasury_transactions_cursor(scan_result: Dict[str, Any], processed_count: int) -> None:
+    """Persist only the consecutive safely processed prefix and scan backlog atomically."""
+    transactions = list((scan_result or {}).get("transactions") or [])
+    safe_count = max(0, min(int(processed_count or 0), len(transactions)))
+    if safe_count <= 0:
         return
-    from db.database import set_setting
-    newest_lt, newest_hash = _tx_lt_hash(transactions[-1])
-    if newest_lt and newest_hash:
-        set_setting("treasury_last_processed_lt", newest_lt)
-        set_setting("treasury_last_processed_hash", newest_hash)
+    from db.database import set_treasury_transaction_cursor
+    newest_lt, newest_hash = _tx_lt_hash(transactions[safe_count - 1])
+    if not newest_lt or not newest_hash:
+        return
+    backlog = (scan_result or {}).get("next_page_cursor") or {}
+    # If only a prefix was processed, restart this batch next cycle rather than advancing page backlog.
+    if safe_count < len(transactions):
+        backlog = {}
+    set_treasury_transaction_cursor(newest_lt, newest_hash, str(backlog.get("lt") or ""), str(backlog.get("hash") or ""))
 
 
 def parse_payment(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:

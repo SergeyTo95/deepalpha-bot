@@ -113,14 +113,15 @@ def test_behavioral_cursor_paginates_600_transactions_and_persists_after_mark(mo
     settings = {"treasury_last_processed_lt": "", "treasury_last_processed_hash": ""}
     monkeypatch.setattr(ton_service, "_get_transactions_page", fake_page)
     monkeypatch.setattr("db.database.get_setting", lambda key, default="": settings.get(key, default))
-    monkeypatch.setattr("db.database.set_setting", lambda key, value: settings.__setitem__(key, value))
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="": (settings.__setitem__("treasury_last_processed_lt", last_lt), settings.__setitem__("treasury_last_processed_hash", last_hash)))
 
-    txs = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    scan = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    txs = scan["transactions"]
     assert len(txs) == 600
     assert txs[0]["transaction_id"]["lt"] == "1"
     assert txs[-1]["transaction_id"]["lt"] == "600"
     assert settings["treasury_last_processed_lt"] == ""
-    ton_service.mark_treasury_transactions_cursor(txs)
+    ton_service.mark_treasury_transactions_cursor(scan, len(txs))
     assert settings["treasury_last_processed_lt"] == "600"
     assert settings["treasury_last_processed_hash"] == "h600"
 
@@ -151,7 +152,62 @@ def test_behavioral_reconciliation_rejects_wrong_source(monkeypatch):
         "out_msgs": [{"source": "wrong_source", "destination": "recipient_snapshot", "value": "1000", "message": "payout:55"}],
     }
     monkeypatch.setenv("TON_NETWORK", "mainnet")
-    monkeypatch.setattr(ton_service, "get_transactions", lambda limit=100: [tx])
+    monkeypatch.setattr(ton_service, "_get_transactions_page", lambda limit=100, lt="", tx_hash="": [tx])
     monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
 
-    assert verify_treasury_payout_onchain(payout) == {"ok": False, "error": "source_mismatch"}
+    assert verify_treasury_payout_onchain(payout) == {"ok": False, "error": "payout_tx_mismatch"}
+
+
+
+def test_behavioral_cursor_incomplete_1200_transactions_does_not_advance_without_mark(monkeypatch):
+    import services.ton_service as ton_service
+    pages = []
+    for page_no in range(12):
+        page = []
+        start = 1200 - page_no * 100
+        for lt in range(start, start - 100, -1):
+            page.append({"transaction_id": {"lt": str(lt), "hash": f"h{lt}"}, "in_msg": {"value": "1"}})
+        pages.append(page)
+    calls = []
+    monkeypatch.setattr(ton_service, "_get_transactions_page", lambda limit, lt="", tx_hash="": (calls.append((lt, tx_hash)) or pages[len(calls)-1]))
+    settings = {"treasury_last_processed_lt": "1", "treasury_last_processed_hash": "h1", "treasury_scan_page_lt": "", "treasury_scan_page_hash": ""}
+    monkeypatch.setattr("db.database.get_setting", lambda key, default="": settings.get(key, default))
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda *args: (_ for _ in ()).throw(AssertionError("must not mark during scan")))
+    scan = ton_service.get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+    assert len(scan["transactions"]) == 1000
+    assert scan["cursor_reached"] is False
+    assert scan["history_complete"] is False
+    assert scan["next_page_cursor"] == {"lt": "201", "hash": "h201"}
+    assert settings["treasury_last_processed_lt"] == "1"
+
+
+def test_behavioral_cursor_prefix_mark_stops_before_transient_failure(monkeypatch):
+    import services.ton_service as ton_service
+    txs = [{"transaction_id": {"lt": str(i), "hash": f"h{i}"}} for i in range(1, 6)]
+    saved = {}
+    monkeypatch.setattr("db.database.set_treasury_transaction_cursor", lambda last_lt, last_hash, backlog_lt="", backlog_hash="": saved.update({"lt": last_lt, "hash": last_hash, "backlog_lt": backlog_lt, "backlog_hash": backlog_hash}))
+    scan = {"transactions": txs, "next_page_cursor": {"lt": "old", "hash": "oldh"}}
+    ton_service.mark_treasury_transactions_cursor(scan, 2)
+    assert saved == {"lt": "2", "hash": "h2", "backlog_lt": "", "backlog_hash": ""}
+
+
+def test_behavioral_reconciliation_missing_fields_rejected(monkeypatch):
+    from services.treasury_service import verify_treasury_payout_onchain
+    import services.ton_service as ton_service
+    payout = {"id": 1, "tx_hash": "tx", "treasury_address": "src", "recipient_wallet_address": "dst", "amount_nano": 10}
+    monkeypatch.setattr(ton_service, "_get_transactions_page", lambda limit=100, lt="", tx_hash="": [{"transaction_id": {"hash": "tx"}, "network": "mainnet", "out_msgs": [{"source": "src", "value": "10"}]}])
+    monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
+    assert verify_treasury_payout_onchain(payout) == {"ok": False, "error": "onchain_data_incomplete"}
+
+
+def test_behavioral_reconciliation_finds_hash_older_than_100(monkeypatch):
+    from services.treasury_service import verify_treasury_payout_onchain
+    import services.ton_service as ton_service
+    payout = {"id": 9, "tx_hash": "target", "treasury_address": "src", "recipient_wallet_address": "dst", "amount_nano": 10}
+    page1 = [{"transaction_id": {"lt": str(300-i), "hash": f"h{i}"}, "network": "mainnet", "out_msgs": [{"source": "x", "destination": "y", "value": "1"}]} for i in range(100)]
+    page2 = [{"transaction_id": {"lt": "199", "hash": "target"}, "network": "mainnet", "out_msgs": [{"source": "src", "destination": "dst", "value": "10", "message": "payout:9"}]}]
+    calls = []
+    monkeypatch.setattr(ton_service, "_get_transactions_page", lambda limit=100, lt="", tx_hash="": (calls.append(1) or (page1 if len(calls) == 1 else page2)))
+    monkeypatch.setattr("services.treasury_service.normalize_ton_address", lambda value: str(value or ""))
+    assert verify_treasury_payout_onchain(payout)["ok"] is True
+    assert len(calls) == 2
