@@ -291,14 +291,33 @@ async def handle_pending(request):
                     return _json_response({"error": "invalid_package_id"}, status=400)
                 amount = float(pkg.get("price_ton") or 0)
                 product_ref = str(package_id)
-                metadata = {"package_id": package_id, "price_nano": str(ton_to_nano(amount)), "tokens": int(pkg.get("tokens") or 0)}
+                metadata = {"package_id": package_id, "amount_nano": str(ton_to_nano(str(pkg.get("price_ton") or "0"))), "price_per_token_nano": str(int(ton_to_nano(str(pkg.get("price_ton") or "0")) // max(int(pkg.get("tokens") or 1), 1))), "tokens": int(pkg.get("tokens") or 0), "purchase_mode": "package"}
             elif amount > 0:
-                price_per_token_nano = int(float(get_setting("token_price_ton", "0.1")) * 1_000_000_000)
-                amount_nano_tmp = ton_to_nano(amount)
-                metadata = {"price_nano": str(amount_nano_tmp), "tokens": int(amount_nano_tmp // max(price_per_token_nano, 1))}
+                token_price_raw = str(get_setting("token_price_ton", "0.1") or "0.1")
+                try:
+                    price_per_token_nano = ton_to_nano(token_price_raw)
+                except Exception:
+                    return _json_response({"error": "token_price_invalid"}, status=400)
+                if price_per_token_nano <= 0:
+                    return _json_response({"error": "token_price_invalid"}, status=400)
+                amount_raw = str(data.get("amount", "") or "")
+                try:
+                    amount_nano_tmp = ton_to_nano(amount_raw)
+                except Exception:
+                    return _json_response({"error": "Invalid amount"}, status=400)
+                min_nano = int(str(get_setting("custom_token_purchase_min_nano", os.getenv("CUSTOM_TOKEN_PURCHASE_MIN_NANO", "1")) or "1"))
+                max_nano = int(str(get_setting("custom_token_purchase_max_nano", os.getenv("CUSTOM_TOKEN_PURCHASE_MAX_NANO", "1000000000000")) or "1000000000000"))
+                if amount_nano_tmp < min_nano:
+                    return _json_response({"error": "amount_below_minimum"}, status=400)
+                if amount_nano_tmp > max_nano:
+                    return _json_response({"error": "amount_above_maximum"}, status=400)
+                calculated_tokens = int(amount_nano_tmp // price_per_token_nano)
+                if calculated_tokens <= 0:
+                    return _json_response({"error": "amount_below_minimum"}, status=400)
+                metadata = {"amount_nano": str(amount_nano_tmp), "price_nano": str(amount_nano_tmp), "price_per_token_nano": str(price_per_token_nano), "tokens": calculated_tokens, "purchase_mode": "custom"}
             else:
                 return _json_response({"error": "Invalid amount"}, status=400)
-        amount_nano = int(metadata.get("price_nano") or ton_to_nano(amount))
+        amount_nano = int(metadata.get("amount_nano") or metadata.get("price_nano") or ton_to_nano(str(amount)))
         intent = create_payment_intent(
             user_id=int(user_id),
             product_type=payment_type,

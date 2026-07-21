@@ -148,6 +148,49 @@ def _diagnose_and_enforce_user_ton_wallet_uniques(conn, cursor) -> None:
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_user_id_unique ON user_ton_wallets(user_id)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS user_ton_wallets_wallet_address_unique ON user_ton_wallets(wallet_address)")
 
+
+def migrate_watchlist_slot_purchases_idempotency_index(cursor) -> None:
+    """PostgreSQL-only migration from global UNIQUE(idempotency_key) to UNIQUE(user_id,idempotency_key)."""
+    try:
+        cursor.execute("SELECT current_database()")
+    except Exception:
+        return
+    try:
+        cursor.execute("""
+            SELECT conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE t.relname='watchlist_slot_purchases'
+              AND c.contype='u'
+              AND (SELECT array_agg(a.attname ORDER BY a.attnum)
+                   FROM unnest(c.conkey) ck(attnum)
+                   JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ck.attnum) = ARRAY['idempotency_key']
+        """)
+        for (conname,) in cursor.fetchall() or []:
+            cursor.execute(f'ALTER TABLE watchlist_slot_purchases DROP CONSTRAINT IF EXISTS "{conname}"')
+        cursor.execute("""
+            SELECT i.relname
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid=ix.indexrelid
+            JOIN pg_class t ON t.oid=ix.indrelid
+            WHERE t.relname='watchlist_slot_purchases'
+              AND ix.indisunique
+              AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid=ix.indexrelid)
+              AND (SELECT array_agg(a.attname ORDER BY a.attnum)
+                   FROM unnest(ix.indkey) k(attnum)
+                   JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=k.attnum) = ARRAY['idempotency_key']
+        """)
+        for (idxname,) in cursor.fetchall() or []:
+            cursor.execute(f'DROP INDEX IF EXISTS "{idxname}"')
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_watchlist_slot_purchases_user_idempotency
+            ON watchlist_slot_purchases(user_id, idempotency_key)
+        """)
+    except Exception as e:
+        print(f"migrate_watchlist_slot_purchases_idempotency_index error: {e}")
+        raise
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -236,6 +279,8 @@ def _init_db_inner(conn, cursor):
         UNIQUE(user_id, idempotency_key)
     )
     """)
+
+    migrate_watchlist_slot_purchases_idempotency_index(cursor)
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_analyst_profiles (
