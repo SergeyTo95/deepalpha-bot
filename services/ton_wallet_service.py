@@ -626,6 +626,69 @@ def _record_tx(user_id: int, wallet_address: str, amount_nano: int, destination:
     )
 
 
+
+def send_ton_from_encrypted_wallet(wallet_address: str, seed_encrypted: str, destination_address: str, amount_nano: int, comment: str = "", product_type: str = "treasury_payout", record_user_id: int = 0) -> dict:
+    """Shared audited TON signing/send path for treasury-like wallets. Never logs seed material."""
+    status = get_ton_wallet_runtime_status()
+    if not status.get("can_send"):
+        return {"ok": False, "error": status.get("reason") or "setup_required", "wallet_status": get_public_ton_wallet_runtime_status()}
+    source = normalize_ton_address(wallet_address)
+    destination = normalize_ton_address(destination_address)
+    if not validate_ton_address(source):
+        return {"ok": False, "error": "invalid_source_wallet"}
+    if not validate_ton_address(destination):
+        return {"ok": False, "error": "invalid_address"}
+    if int(amount_nano) <= 0:
+        return {"ok": False, "error": "invalid_amount"}
+    try:
+        balance = get_ton_balance(source)
+    except Exception as exc:
+        logger.warning("TON treasury balance preflight failed wallet=%s error_type=%s", source, exc.__class__.__name__, exc_info=True)
+        return {"ok": False, "error": "toncenter_unavailable"}
+    reserve = get_ton_send_fee_reserve_nano()
+    if balance < int(amount_nano) + reserve:
+        return {"ok": False, "error": "insufficient_balance", "balance_nano": str(balance), "fee_reserve_nano": str(reserve)}
+    try:
+        seed_phrase = decrypt_secret(seed_encrypted)
+        wallet, _public_key, private_key, derived_address = _wallet_from_mnemonic(seed_phrase)
+        if normalize_ton_address(derived_address) != source:
+            raise RuntimeError("wallet_mismatch")
+        seqno = get_wallet_seqno(source)
+        if seqno is None:
+            time.sleep(0.5)
+            seqno = get_wallet_seqno(source)
+        logger.warning("TON treasury seqno fetched network=%s wallet=%s seqno=%s", get_ton_runtime_network(), source, seqno)
+        if seqno is None:
+            return {"ok": False, "error": "send_failed", "error_detail": "seqno_or_account_state"}
+        transfer = _build_signed_transfer_message(wallet=wallet, private_key=private_key, destination_address=destination, amount_nano=amount_nano, seqno=seqno, comment=comment)
+        boc_base64 = _extract_boc_from_transfer(transfer)
+        if not boc_base64:
+            raise RuntimeError("signing_failed")
+    except RuntimeError as exc:
+        if str(exc) == "wallet_mismatch":
+            return {"ok": False, "error": "wallet_mismatch"}
+        return {"ok": False, "error": "signing_failed"}
+    except Exception:
+        return {"ok": False, "error": "signing_failed"}
+    send_started_ts = int(time.time())
+    result = send_boc_return_hash(boc_base64)
+    if not result.get("ok"):
+        return {"ok": False, "error": "send_failed", "error_detail": str(result.get("error_detail") or "unknown")}
+    tx_hash = str(result.get("tx_hash") or "").strip()
+    tx_hash_source = "send_boc" if tx_hash else "missing"
+    if not tx_hash:
+        resolved = resolve_recent_ton_tx_hash(source_address=source, destination_address=destination, amount_nano=int(amount_nano), after_ts=send_started_ts, attempts=3, delay_seconds=1.5)
+        if resolved:
+            tx_hash = resolved; tx_hash_source = "get_transactions"
+    if not tx_hash:
+        return {"ok": False, "error": "tx_hash_missing"}
+    try:
+        _record_tx(int(record_user_id or 0), source, int(amount_nano), destination, "submitted", tx_hash, comment, None, tx_hash_source)
+    except Exception:
+        logger.warning("TON treasury tx record failed wallet=%s tx_hash_present=%s", source, bool(tx_hash), exc_info=True)
+    return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "source_address": source, "status": "submitted"}
+
+
 def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nano: int, comment: str = "") -> dict:
     status = get_ton_wallet_runtime_status()
     if not status.get("enabled"):
@@ -840,6 +903,7 @@ def reveal_user_ton_seed_once(user_id: int, wallet_id: int = None, wallet_addres
             except Exception: pass
 
 def create_referral_payout_wallet(admin_user_id: int) -> dict:
+    return {"ok": False, "error": "legacy_referral_payout_wallet_read_only"}
     if not _wallet_ready():
         return {"ok": False, "error": "setup_required"}
     try:
@@ -857,6 +921,7 @@ def create_referral_payout_wallet(admin_user_id: int) -> dict:
 
 
 def reveal_referral_payout_wallet_seed_once(admin_user_id: int) -> dict:
+    return {"ok": False, "error": "legacy_referral_payout_wallet_read_only"}
     del admin_user_id
     conn = get_connection(); cur = conn.cursor()
     try:
@@ -891,6 +956,7 @@ def reveal_referral_payout_wallet_seed_once(admin_user_id: int) -> dict:
 
 
 def send_referral_payout_from_wallet(request_id: int, admin_user_id: int) -> dict:
+    return {"ok": False, "error": "legacy_referral_payout_wallet_read_only"}
     request_id = int(request_id)
     admin_user_id = int(admin_user_id)
     # Phase 1: preflight + transition pending -> processing under lock.

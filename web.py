@@ -55,11 +55,12 @@ from services.ton_purchase_service import (
     verify_ton_purchase_onchain,
 )
 from services.referral_rewards_service import process_token_purchase_referral_reward
+from services.treasury_service import create_payment_intent, incoming_enabled
 from db.database import (
     get_user, get_setting, is_subscribed, ensure_user,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post, list_public_articles, get_public_article,
-    is_author, create_donation, add_pending,
+    is_author, create_donation, add_pending, create_donation_with_payment_intent, find_package_by_amount,
     create_web_session, get_user_by_session, delete_web_session,
     link_web_account, get_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
@@ -265,28 +266,74 @@ async def handle_user_api(request):
 
 async def handle_pending(request):
     try:
+        user_id = _get_authenticated_web_user_id(request)
+        if not user_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
+        if not incoming_enabled():
+            return _json_response({"error": "treasury_incoming_disabled"}, status=503)
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
-        amount = float(data.get("amount", 0))
-        payment_type = data.get("payment_type", "tokens")
-
-        if user_id <= 0:
-            return _json_response({"error": "Invalid user_id"}, status=400)
-
-        valid_types = ("tokens", "subscription", "author_status", "watchlist_slots")
-        if payment_type not in valid_types and not payment_type.startswith("donation:"):
+        payment_type = str(data.get("payment_type", "tokens") or "tokens")
+        if payment_type not in ("tokens", "subscription", "author_status"):
             return _json_response({"error": "Invalid payment_type"}, status=400)
-
-        add_pending(user_id, amount, payment_type)
-        print(f"PENDING SAVED: user_id={user_id}, amount={amount}, type={payment_type}")
-
-        return _json_response({"ok": True})
+        amount = float(data.get("amount", 0) or 0)
+        product_ref = str(data.get("product_ref") or payment_type)
+        metadata = {}
+        if payment_type == "subscription":
+            amount = float(get_setting("subscription_price_ton", "1"))
+        elif payment_type == "author_status":
+            amount = float(get_setting("author_status_price_ton", "5"))
+        elif payment_type == "tokens":
+            package_id = int(data.get("package_id") or data.get("product_ref") or 0)
+            if package_id > 0:
+                from db.database import get_token_package
+                pkg = get_token_package(package_id)
+                if not pkg or not pkg.get("is_active"):
+                    return _json_response({"error": "invalid_package_id"}, status=400)
+                amount = float(pkg.get("price_ton") or 0)
+                product_ref = str(package_id)
+                metadata = {"package_id": package_id, "amount_nano": str(ton_to_nano(str(pkg.get("price_ton") or "0"))), "price_per_token_nano": str(int(ton_to_nano(str(pkg.get("price_ton") or "0")) // max(int(pkg.get("tokens") or 1), 1))), "tokens": int(pkg.get("tokens") or 0), "purchase_mode": "package"}
+            elif amount > 0:
+                token_price_raw = str(get_setting("token_price_ton", "0.1") or "0.1")
+                try:
+                    price_per_token_nano = ton_to_nano(token_price_raw)
+                except Exception:
+                    return _json_response({"error": "token_price_invalid"}, status=400)
+                if price_per_token_nano <= 0:
+                    return _json_response({"error": "token_price_invalid"}, status=400)
+                amount_raw = str(data.get("amount", "") or "")
+                try:
+                    amount_nano_tmp = ton_to_nano(amount_raw)
+                except Exception:
+                    return _json_response({"error": "Invalid amount"}, status=400)
+                min_nano = int(str(get_setting("custom_token_purchase_min_nano", os.getenv("CUSTOM_TOKEN_PURCHASE_MIN_NANO", "1")) or "1"))
+                max_nano = int(str(get_setting("custom_token_purchase_max_nano", os.getenv("CUSTOM_TOKEN_PURCHASE_MAX_NANO", "1000000000000")) or "1000000000000"))
+                if amount_nano_tmp < min_nano:
+                    return _json_response({"error": "amount_below_minimum"}, status=400)
+                if amount_nano_tmp > max_nano:
+                    return _json_response({"error": "amount_above_maximum"}, status=400)
+                calculated_tokens = int(amount_nano_tmp // price_per_token_nano)
+                if calculated_tokens <= 0:
+                    return _json_response({"error": "amount_below_minimum"}, status=400)
+                metadata = {"amount_nano": str(amount_nano_tmp), "price_nano": str(amount_nano_tmp), "price_per_token_nano": str(price_per_token_nano), "tokens": calculated_tokens, "purchase_mode": "custom"}
+            else:
+                return _json_response({"error": "Invalid amount"}, status=400)
+        amount_nano = int(metadata.get("amount_nano") or metadata.get("price_nano") or ton_to_nano(str(amount)))
+        intent = create_payment_intent(
+            user_id=int(user_id),
+            product_type=payment_type,
+            product_ref=product_ref,
+            amount_nano=amount_nano,
+            metadata=metadata,
+            idempotency_key=str(data.get("idempotency_key") or f"webapp:{user_id}:{payment_type}:{product_ref}:{time.time_ns()}"),
+        )
+        if not intent.get("ok"):
+            return _json_response({"error": intent.get("error", "treasury_not_configured")}, status=503)
+        return _json_response({"ok": True, "payment_intent": intent, "public_reference": intent.get("public_reference"), "treasury_address": intent.get("treasury_address"), "amount_nano": intent.get("amount_nano")})
     except Exception as e:
         print(f"handle_pending error: {e}")
         import traceback
         traceback.print_exc()
         return _json_response({"error": str(e)}, status=500)
-
 
 async def handle_authors_list(request):
     try:
@@ -526,7 +573,10 @@ async def handle_article_cover_api(request):
 async def handle_create_donation(request):
     try:
         data = await request.json()
-        donor_id = int(data.get("donor_id", 0))
+        donor_id = _get_authenticated_web_user_id(request)
+        if not donor_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
+        donor_id = int(donor_id)
         supplied_author_id = int(data.get("author_id", 0) or 0)
         ton_amount = float(data.get("ton_amount", 0))
         post_id_raw = data.get("post_id")
@@ -565,20 +615,20 @@ async def handle_create_donation(request):
 
         if not is_author(author_id):
             return _json_response({"error": "User is not an author"}, status=400)
+        if not incoming_enabled():
+            return _json_response({"error": "treasury_incoming_disabled"}, status=503)
 
-        donation_id = create_donation(
+        created = create_donation_with_payment_intent(
             donor_id=donor_id,
             author_id=author_id,
-            ton_amount=ton_amount,
+            amount_nano=ton_to_nano(ton_amount),
             post_id=post_id,
             comment=comment,
-            status="pending",
         )
-
-        if not donation_id:
-            return _json_response({"error": "Failed to create donation"}, status=500)
-
-        add_pending(donor_id, ton_amount, f"donation:{donation_id}")
+        if not created.get("ok"):
+            return _json_response({"error": created.get("error", "treasury_not_configured")}, status=503)
+        donation_id = int(created["donation_id"])
+        intent = created["payment_intent"]
 
         print(
             f"DONATION CREATED: id={donation_id}, donor={donor_id}, "
@@ -590,6 +640,7 @@ async def handle_create_donation(request):
             "donation_id": donation_id,
             "amount": ton_amount,
             "payment_type": f"donation:{donation_id}",
+            "payment_intent": intent,
         })
     except Exception as e:
         print(f"handle_create_donation error: {e}")
@@ -620,50 +671,25 @@ async def handle_public_settings(request):
 
 
 async def handle_buy_slots(request):
-    """Покупка доп. слотов Watchlist за токены."""
+    """Покупка доп. слотов Watchlist за токены; authenticated, atomic, idempotent."""
     try:
+        user_id = _get_authenticated_web_user_id(request)
+        if not user_id:
+            return _json_response({"error": "Unauthorized"}, status=401)
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
-
-        if user_id <= 0:
-            return _json_response({"error": "Invalid user_id"}, status=400)
-
         if get_setting("watchlist_enabled", "on") != "on":
             return _json_response({"error": "Watchlist disabled"}, status=400)
-
         slots_price = int(get_setting("watchlist_extra_slots_price", "20"))
         slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
-
-        user = get_user(user_id)
-        if not user:
-            return _json_response({"error": "User not found"}, status=404)
-
-        current_balance = user.get("token_balance", 0) or 0
-
-        if current_balance < slots_price:
-            return _json_response({
-                "error": f"Insufficient tokens: need {slots_price}, have {current_balance}",
-                "need_tokens": slots_price - current_balance,
-            }, status=400)
-
-        from db.database import add_tokens, add_watchlist_extra_slots
-
-        new_balance = add_tokens(user_id, -slots_price)
-        new_slots = add_watchlist_extra_slots(user_id, slots_count)
-
-        print(
-            f"SLOTS PURCHASED: user_id={user_id}, "
-            f"price={slots_price} tokens, slots=+{slots_count}, "
-            f"new_balance={new_balance}, total_extra={new_slots}"
-        )
-
-        return _json_response({
-            "ok": True,
-            "slots_added": slots_count,
-            "total_extra_slots": new_slots,
-            "tokens_spent": slots_price,
-            "new_balance": new_balance,
-        })
+        idempotency_key = str(data.get("idempotency_key") or request.headers.get("X-Idempotency-Key") or "").strip()
+        if not idempotency_key:
+            return _json_response({"error": "idempotency_key_required"}, status=400)
+        from db.database import buy_watchlist_slots_atomic
+        result = buy_watchlist_slots_atomic(int(user_id), slots_price, slots_count, idempotency_key)
+        if not result.get("ok"):
+            status = 404 if result.get("error") == "user_not_found" else (400 if result.get("error") in {"insufficient_tokens", "idempotency_key_required"} else 500)
+            return _json_response(result, status=status)
+        return _json_response(result)
     except Exception as e:
         print(f"handle_buy_slots error: {e}")
         import traceback
@@ -1674,6 +1700,8 @@ async def handle_wallet_ton_buy_tokens(request):
     blocked = _web_ton_block_response("can_send")
     if blocked is not None:
         return blocked
+    if not incoming_enabled():
+        return _json_response({"ok": False, "error": "treasury_incoming_disabled"}, status=503)
     if not is_ton_wallet_token_purchase_enabled():
         return _json_response({"ok": False, "error": "ton_token_purchase_disabled"}, status=400)
     try:

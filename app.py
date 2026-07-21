@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import telegram_bot
+from services.treasury_service import verify_payment_intent, decode_ton_text_comment_from_msg
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
 from services.watchlist_ai_summary_service import build_watchlist_ai_summary, format_watchlist_ai_summary
@@ -19,7 +20,7 @@ from services.polymarket_resolver import resolve_prediction, fetch_market_by_slu
 from db.database import (
     is_tx_processed, save_transaction, add_tokens, ensure_user,
     get_user, add_referral_earnings, get_setting, set_setting,
-    get_all_pending, delete_pending, get_all_users,
+    get_all_pending, get_pending_payment_intents, get_payment_intent_by_public_reference, fulfill_verified_payment_intent, record_treasury_payment_reconciliation, delete_pending, get_all_users,
     get_subscribed_users, set_subscription, is_subscribed,
     save_signal_cache, get_signal_cache,
     get_token_packages, find_package_by_amount,
@@ -860,274 +861,88 @@ async def check_ton_payments():
     await asyncio.sleep(15)
     while True:
         try:
-            transactions = get_transactions(limit=20)
-            pending = get_all_pending()
+            from services.ton_service import get_transactions_since_treasury_cursor, mark_treasury_transactions_cursor
+            scan_result = get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+            transactions = scan_result.get("transactions", [])
+            intents = get_pending_payment_intents(limit=1000)
+            terminal_verification_errors = {"intent_expired", "amount_too_low", "destination_mismatch", "source_mismatch", "reference_missing", "intent_already_fulfilled", "invalid_reference"}
 
+            async def _notify_fulfilled(intent, result):
+                try:
+                    user_id = int(intent["user_id"])
+                    product_type = str(intent.get("product_type") or "tokens")
+                    if product_type == "subscription":
+                        await telegram_bot.bot.send_message(user_id, "✅ Подписка активирована!")
+                    elif product_type == "author_status":
+                        await telegram_bot.bot.send_message(user_id, "✅ Статус автора активирован!")
+                    elif product_type != "donation":
+                        await telegram_bot.bot.send_message(user_id, f"✅ Начислено токенов: {int(result.get('tokens_granted') or 0)}")
+                except Exception as exc:
+                    print(f"payment notify error: {type(exc).__name__}")
+
+            for verified_intent in [it for it in intents if str(it.get("status") or "") == "verified"]:
+                result = fulfill_verified_payment_intent(int(verified_intent["id"]))
+                if result.get("ok") and not result.get("already_fulfilled"):
+                    await _notify_fulfilled(verified_intent, result)
+
+            safe_cursor_count = 0
             for tx in transactions:
                 tx_hash = tx.get("transaction_id", {}).get("hash", "")
-                if not tx_hash:
+                if not tx_hash or is_tx_processed(tx_hash):
+                    safe_cursor_count += 1
                     continue
-                if is_tx_processed(tx_hash):
+                in_msg = tx.get("in_msg", {}) or {}
+                value = int(in_msg.get("value", 0) or 0)
+                if value <= 0:
+                    safe_cursor_count += 1
                     continue
-
-                in_msg = tx.get("in_msg", {})
-                value = int(in_msg.get("value", 0))
-                ton_amount = value / 1_000_000_000
-
-                if ton_amount <= 0:
+                comment = decode_ton_text_comment_from_msg(in_msg)
+                source = str(in_msg.get("source") or "")
+                destination = str(in_msg.get("destination") or in_msg.get("dest") or "")
+                reference = ""
+                for part in str(comment or "").replace("\n", " ").split():
+                    if part.startswith("pay_"):
+                        reference = part.strip()
+                        break
+                if not reference and str(comment or "").startswith("pay_"):
+                    reference = str(comment or "").strip()
+                matched_intent = None
+                if reference:
+                    lookup = get_payment_intent_by_public_reference(reference)
+                    if lookup.get("retryable"):
+                        break
+                    if lookup.get("ok"):
+                        matched_intent = lookup.get("intent")
+                    else:
+                        record_treasury_payment_reconciliation(tx_hash, str((tx.get("transaction_id") or {}).get("lt") or ""), source, destination, value, comment, "unknown_payment_reference")
+                        safe_cursor_count += 1
+                        continue
+                if not matched_intent:
+                    safe_cursor_count += 1
                     continue
-
-                payment = parse_payment(tx)
-                user_id = None
-                payment_type = "tokens"
-
-                # Поиск user_id + payment_type:
-                # сперва через parse_payment (комментарий к транзакции),
-                # затем через pending по времени и сумме
-                if payment and payment.get("user_id"):
-                    user_id = payment["user_id"]
-                    # Даже если нашли через комментарий — проверим pending для payment_type
-                    p = pending.get(user_id)
-                    if p:
-                        payment_type = p.get("payment_type", "tokens")
-                else:
-                    tx_time = tx.get("utime", 0)
-                    for uid, p in list(pending.items()):
-                        time_diff = abs(tx_time - p["timestamp"])
-                        amount_diff = abs(ton_amount - p["amount"])
-                        if time_diff < 300 and amount_diff < 0.1:
-                            user_id = uid
-                            payment_type = p.get("payment_type", "tokens")
-                            break
-
-                if not user_id:
-                    continue
-
-                ensure_user(user_id)
-
-                # ═══ РЕФЕРАЛЬНЫЙ БОНУС (только для tokens/subscription) ═══
-                # Для author_status/watchlist_slots/donation не даём рефералку
-                referral_bonus_ton = 0
-                referrer_id = None
-
-                is_token_or_sub = payment_type in ("tokens", "subscription")
-
-                if is_token_or_sub:
-                    user = get_user(user_id)
-                    if user and user.get("referred_by"):
-                        referrer_id = user["referred_by"]
-                        try:
-                            ref_percent = float(get_setting("referral_percent", "10"))
-                        except Exception:
-                            ref_percent = 10
-                        referral_bonus_ton = round(ton_amount * ref_percent / 100, 6)
-
-                        referral_tokens = calculate_tokens_for_amount(referral_bonus_ton)
-                        if referral_tokens > 0:
-                            add_tokens(referrer_id, referral_tokens)
-                        add_referral_earnings(referrer_id, referral_bonus_ton)
-
-                        try:
-                            await telegram_bot.bot.send_message(
-                                referrer_id,
-                                f"🎉 Ваш реферал пополнил баланс!\n\n"
-                                f"💎 Его покупка: {ton_amount:.2f} Gram\n"
-                                f"🎁 Ваш бонус: {referral_bonus_ton:.4f} Gram "
-                                f"({referral_tokens} токенов)"
-                            )
-                        except Exception as e:
-                            print(f"REFERRAL NOTIFY ERROR: {e}")
-
-                # ═══ ВЕТВЛЕНИЕ ПО ТИПУ ПЛАТЕЖА ═══
-
-                if payment_type == "subscription":
-                    # Активация подписки
-                    sub_days = int(get_setting("subscription_days", "30"))
-                    until = set_subscription(user_id, days=sub_days)
-
-                    save_transaction(
-                        tx_hash, user_id, ton_amount, 0,
-                        referral_bonus_ton=referral_bonus_ton,
-                        referrer_id=referrer_id,
-                    )
-
-                    try:
-                        await telegram_bot.bot.send_message(
-                            user_id,
-                            f"✅ Подписка активирована!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} Gram\n"
-                            f"📅 Действует до: {until[:10]}\n\n"
-                            f"Теперь у тебя:\n"
-                            f"• 🔔 Ежедневные сигналы\n"
-                            f"• 📊 До 15 анализов в день\n"
-                            f"• 💡 До 3 сигналов в день\n"
-                            f"• ⭐ Watchlist бесплатно"
-                        )
-                    except Exception as e:
-                        print(f"SUB NOTIFY ERROR: {e}")
-
-                elif payment_type == "author_status":
-                    # Выдача статуса автора
-                    set_author_status(user_id, True)
-
-                    save_transaction(
-                        tx_hash, user_id, ton_amount, 0,
-                        referral_bonus_ton=0, referrer_id=None,
-                    )
-
-                    try:
-                        await telegram_bot.bot.send_message(
-                            user_id,
-                            f"🎉 Поздравляем! Ты теперь Автор DeepAlpha!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} Gram\n\n"
-                            f"Теперь ты можешь:\n"
-                            f"• 📝 Публиковать свои прогнозы\n"
-                            f"• 👥 Получать подписчиков\n"
-                            f"• 💝 Получать донаты в Gram от юзеров\n\n"
-                            f"Настрой профиль: /profile\n"
-                            f"Установи bio: /edit_bio\n"
-                            f"Добавь Gram кошелёк для выплат: /set_wallet"
-                        )
-                    except Exception as e:
-                        print(f"AUTHOR STATUS NOTIFY ERROR: {e}")
-
-                elif payment_type == "watchlist_slots":
-                    # Покупка доп. слотов Watchlist
-                    slots_count = int(get_setting("watchlist_extra_slots_count", "5"))
-                    new_total = add_watchlist_extra_slots(user_id, slots_count)
-
-                    save_transaction(
-                        tx_hash, user_id, ton_amount, 0,
-                        referral_bonus_ton=0, referrer_id=None,
-                    )
-
-                    try:
-                        await telegram_bot.bot.send_message(
-                            user_id,
-                            f"✅ Доп. слоты Watchlist добавлены!\n\n"
-                            f"💎 Оплачено: {ton_amount:.2f} Gram\n"
-                            f"➕ Добавлено: {slots_count} слотов\n"
-                            f"📊 Всего доп. слотов: {new_total}\n\n"
-                            f"Теперь ты можешь добавить больше рынков!\n"
-                            f"📋 /watchlist"
-                        )
-                    except Exception as e:
-                        print(f"WATCHLIST SLOTS NOTIFY ERROR: {e}")
-
-                elif payment_type.startswith("donation:"):
-                    # Завершение доната автору
-                    try:
-                        donation_id = int(payment_type.split(":", 1)[1])
-                    except (ValueError, IndexError):
-                        print(f"⚠️ Invalid donation payment_type: {payment_type}")
-                        delete_pending(user_id)
+                verified = verify_payment_intent(int(matched_intent["id"]), {
+                    "tx_hash": tx_hash,
+                    "source": source,
+                    "destination": destination,
+                    "amount_nano": value,
+                    "network": os.getenv("TON_NETWORK", "mainnet"),
+                    "comment": comment,
+                })
+                if not verified.get("ok"):
+                    err = str(verified.get("error") or "verification_failed")
+                    if err in terminal_verification_errors:
+                        record_treasury_payment_reconciliation(tx_hash, str((tx.get("transaction_id") or {}).get("lt") or ""), source, destination, value, comment, err)
+                        safe_cursor_count += 1
                         continue
+                    break
+                result = fulfill_verified_payment_intent(int(matched_intent["id"]))
+                if not result.get("ok"):
+                    break
+                if not result.get("already_fulfilled"):
+                    await _notify_fulfilled(matched_intent, result)
+                safe_cursor_count += 1
 
-                    donation = get_donation(donation_id)
-                    if not donation:
-                        print(f"⚠️ Donation {donation_id} not found, user {user_id}")
-                        delete_pending(user_id)
-                        continue
-
-                    author_id = donation["author_id"]
-                    post_id = donation.get("post_id")
-                    comment = donation.get("comment", "") or ""
-
-                    success = complete_donation(donation_id, tx_hash)
-
-                    if not success:
-                        print(f"⚠️ Failed to complete donation {donation_id}")
-                        delete_pending(user_id)
-                        continue
-
-                    save_transaction(
-                        tx_hash, user_id, ton_amount, 0,
-                        referral_bonus_ton=0, referrer_id=None,
-                    )
-
-                    # Получаем актуальные данные после завершения
-                    updated_donation = get_donation(donation_id)
-                    author_received = updated_donation.get("author_received_ton", 0) if updated_donation else 0
-                    platform_fee = updated_donation.get("platform_fee_ton", 0) if updated_donation else 0
-
-                    # Уведомление донору
-                    try:
-                        author = get_author_profile(author_id)
-                        author_name = (
-                            author.get("username") or author.get("first_name") or str(author_id)
-                        ) if author else str(author_id)
-
-                        donor_text = (
-                            f"💝 Донат отправлен!\n\n"
-                            f"👤 Автору: @{author_name}\n"
-                            f"💎 Сумма: {ton_amount:.4f} Gram\n"
-                        )
-                        if post_id:
-                            donor_text += f"📝 Пост: /post_{post_id}\n"
-                        donor_text += f"\nСпасибо за поддержку автора! 🙏"
-
-                        await telegram_bot.bot.send_message(user_id, donor_text)
-                    except Exception as e:
-                        print(f"DONATION DONOR NOTIFY ERROR: {e}")
-
-                    # Уведомление автору
-                    try:
-                        donor = get_user(user_id)
-                        donor_name = (
-                            donor.get("username") or donor.get("first_name") or str(user_id)
-                        ) if donor else str(user_id)
-
-                        author_text = (
-                            f"💝 Ты получил донат!\n\n"
-                            f"👤 От: @{donor_name}\n"
-                            f"💎 Сумма доната: {ton_amount:.4f} Gram\n"
-                            f"🏦 Комиссия платформы: {platform_fee:.4f} Gram\n"
-                            f"💰 Тебе зачислено: {author_received:.4f} Gram\n"
-                        )
-                        if post_id:
-                            author_text += f"📝 За пост: /post_{post_id}\n"
-                        if comment:
-                            author_text += f"\n💬 Комментарий:\n{comment[:300]}\n"
-                        author_text += f"\n💰 Проверить баланс: нажми 💰 Баланс автора"
-
-                        await telegram_bot.bot.send_message(author_id, author_text)
-                    except Exception as e:
-                        print(f"DONATION AUTHOR NOTIFY ERROR: {e}")
-
-                else:
-                    # Дефолт: tokens
-                    tokens = calculate_tokens_for_amount(ton_amount)
-                    if tokens <= 0:
-                        continue
-
-                    new_balance = add_tokens(user_id, tokens)
-
-                    save_transaction(
-                        tx_hash, user_id, ton_amount, tokens,
-                        referral_bonus_ton=referral_bonus_ton,
-                        referrer_id=referrer_id,
-                    )
-
-                    package = find_package_by_amount(ton_amount, tolerance=0.05)
-                    package_name = f"«{package['name']}»" if package else ""
-                    discount_text = ""
-                    if package and package.get("discount_percent", 0) > 0:
-                        discount_text = f"\n🏷 Скидка: {package['discount_percent']}%"
-
-                    try:
-                        await telegram_bot.bot.send_message(
-                            user_id,
-                            f"✅ Оплата получена!\n\n"
-                            f"💎 Gram: {ton_amount:.4f}\n"
-                            f"📦 Пакет: {package_name}\n"
-                            f"🪙 Начислено токенов: {tokens}"
-                            f"{discount_text}\n"
-                            f"💰 Баланс: {new_balance} токенов"
-                        )
-                    except Exception as e:
-                        print(f"TON NOTIFY ERROR: {e}")
-
-                delete_pending(user_id)
+            mark_treasury_transactions_cursor(scan_result, safe_cursor_count)
 
         except Exception as e:
             print(f"TON WORKER ERROR: {e}")

@@ -1506,7 +1506,6 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
         InlineKeyboardButton("💎 Изменить минимум вывода" if lang == "ru" else "💎 Set min withdrawal", callback_data="referral_set_min_withdrawal"),
         InlineKeyboardButton("🧢 Изменить дневной лимит" if lang == "ru" else "🧢 Set daily cap", callback_data="referral_set_daily_cap"),
         InlineKeyboardButton("📤 Заявки на вывод" if lang == "ru" else "📤 Pending withdrawals", callback_data="referral_pending_withdrawals"),
-        InlineKeyboardButton("💼 Payout wallet", callback_data="ref_payout_wallet"),
         InlineKeyboardButton("🔄 Обновить" if lang == "ru" else "🔄 Refresh", callback_data="admin_referral_rewards"),
         InlineKeyboardButton("⬅️ Назад" if lang == "ru" else "⬅️ Back to admin", callback_data="admin_back"),
     )
@@ -1518,6 +1517,32 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
 # ═══════════════════════════════════════════
 
 def register_admin(dp: Dispatcher):
+
+    @dp.message_handler(commands=["treasury"])
+    async def treasury_admin_command(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        await message.answer(treasury_admin_panel_text(), reply_markup=treasury_admin_panel_buttons())
+
+    @dp.callback_query_handler(lambda c: str(c.data or "") in {"treasury_refresh", "treasury_toggle_incoming_confirm", "treasury_toggle_outgoing_confirm", "treasury_pending_payouts", "treasury_reconciliation"})
+    async def treasury_admin_callbacks(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            return
+        data = str(callback.data or "")
+        if data in {"treasury_toggle_incoming_confirm", "treasury_toggle_outgoing_confirm"}:
+            await callback.answer("Treasury gates are env-controlled; change TREASURY_*_ENABLED and redeploy.", show_alert=True)
+            return
+        if data == "treasury_pending_payouts":
+            rows = get_treasury_payouts_for_admin(statuses=["pending", "approved", "processing", "submitted"], limit=20)
+            text = "Pending treasury payouts:\n" + ("\n".join([f"#{r['id']} {r['payout_type']} user={r['recipient_user_id']} amount={r['amount_nano']} status={r['status']}" for r in rows]) or "None")
+            await callback.message.edit_text(text, reply_markup=treasury_admin_panel_buttons())
+            return
+        if data == "treasury_reconciliation":
+            rows = get_treasury_payouts_for_admin(statuses=["payout_sent_reconcile_required", "recipient_revalidation_required"], limit=20)
+            text = "Treasury reconciliation:\n" + ("\n".join([f"#{r['id']} {r['payout_type']} user={r['recipient_user_id']} tx={r.get('tx_hash') or '-'} status={r['status']}" for r in rows]) or "None")
+            await callback.message.edit_text(text, reply_markup=treasury_admin_panel_buttons())
+            return
+        await callback.message.edit_text(treasury_admin_panel_text(), reply_markup=treasury_admin_panel_buttons())
 
     @dp.message_handler(commands=["watchlist_billing_on"])
     async def watchlist_billing_on(message: types.Message):
@@ -3183,7 +3208,7 @@ def register_admin(dp: Dispatcher):
             lines.append(f"#{r['id']} | {r['user_id']} | {amount_ton:.4f} Gram | {created}")
             kb.add(
                 InlineKeyboardButton(
-                    (f"✅ Отметить выплаченным #{r['id']}" if lang == "ru" else f"✅ Mark Paid #{r['id']}"),
+                    (f"💸 Treasury payout #{r['id']}" if lang == "ru" else f"💸 Treasury payout #{r['id']}"),
                     callback_data=f"ref_withdraw_paid:{r['id']}",
                 ),
                 InlineKeyboardButton(
@@ -3198,14 +3223,12 @@ def register_admin(dp: Dispatcher):
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_paid:"))
     async def ref_withdraw_paid(callback: types.CallbackQuery):
         request_id = int(callback.data.split(":")[1])
-        ok = mark_referral_withdrawal_request_paid(request_id, callback.from_user.id, tx_hash="manual_admin_paid")
+        from db.database import get_referral_withdrawal_request, create_referral_withdrawal_to_treasury_payout, approve_and_send_treasury_payout
+        req = get_referral_withdrawal_request(request_id)
+        created = create_referral_withdrawal_to_treasury_payout(request_id, int(req.get("user_id") or 0), int(req.get("amount_nano") or 0)) if req else {"ok": False, "error": "request_not_found"}
+        sent = approve_and_send_treasury_payout(int(created.get("payout_id") or 0), callback.from_user.id) if created.get("ok") else created
         lang = _get_lang(callback.from_user.id)
-        await callback.answer(
-            ("✅ Отмечено как выплаченное" if ok else "❌ Не удалось обновить")
-            if lang == "ru" else
-            ("✅ Marked as paid" if ok else "❌ Cannot update"),
-            show_alert=True
-        )
+        await callback.answer(("✅ Выплата отправлена" if sent.get("ok") else f"❌ {sent.get('error')}") if lang == "ru" else ("✅ Payout sent" if sent.get("ok") else f"❌ {sent.get('error')}"), show_alert=True)
         await referral_pending_withdrawals(callback)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("ref_withdraw_reject:"))
@@ -3952,3 +3975,51 @@ def register_admin(dp: Dispatcher):
         set_setting("crypto_default_timeframe", value)
         await state.finish()
         await message.answer(f"✅ Таймфрейм: {value}", reply_markup=crypto_admin_kb())
+
+
+def get_treasury_payouts_for_admin(statuses=None, limit: int = 20):
+    from db.database import get_connection
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        statuses = statuses or []
+        if statuses:
+            cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts WHERE status = ANY(%s) ORDER BY id ASC LIMIT %s", (statuses, int(limit)))
+        else:
+            cur.execute("SELECT id,payout_type,recipient_user_id,amount_nano,status,tx_hash FROM treasury_payouts ORDER BY id DESC LIMIT %s", (int(limit),))
+        rows = cur.fetchall() or []
+        return [{"id": r[0], "payout_type": r[1], "recipient_user_id": r[2], "amount_nano": r[3], "status": r[4], "tx_hash": r[5]} for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def treasury_admin_panel_text() -> str:
+    """Telegram admin Treasury panel without seed/private material."""
+    from services.treasury_service import get_treasury_runtime_status, get_treasury_balance
+    status = get_treasury_runtime_status()
+    balance = get_treasury_balance() if status.get("ok") else {}
+    address = str(status.get("address") or "")
+    masked = (address[:6] + "…" + address[-6:]) if len(address) > 14 else address
+    return (
+        "🏦 Treasury\n"
+        f"Wallet: {masked or status.get('error', 'treasury_not_configured')}\n"
+        f"Network: {status.get('network', '')}\n"
+        f"Balance: {balance.get('balance_nano', 0)} nano\n"
+        f"Incoming: {'enabled' if status.get('incoming_enabled') else 'paused'}\n"
+        f"Outgoing: {'enabled' if status.get('outgoing_enabled') else 'paused'}\n"
+        "Pending payment intents: use /treasury_intents\n"
+        "Pending payouts: use /treasury_payouts\n"
+        "Reconciliation-required payouts: use /treasury_reconciliation"
+    )
+
+
+def treasury_admin_panel_buttons():
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(InlineKeyboardButton("Pause/Resume incoming", callback_data="treasury_toggle_incoming_confirm"))
+    kb.add(InlineKeyboardButton("Pause/Resume outgoing", callback_data="treasury_toggle_outgoing_confirm"))
+    kb.add(InlineKeyboardButton("Pending payouts", callback_data="treasury_pending_payouts"))
+    kb.add(InlineKeyboardButton("Reconciliation", callback_data="treasury_reconciliation"))
+    kb.add(InlineKeyboardButton("Refresh", callback_data="treasury_refresh"))
+    return kb

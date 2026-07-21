@@ -472,7 +472,7 @@
         </div>
     </div>
     <script>
-        let OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
+        let OWNER_ADDRESS = "";
         const API_BASE = window.location.origin;
 
         let tg = window.Telegram.WebApp;
@@ -944,7 +944,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        user_id: userId,
+                        idempotency_key: window.watchlistSlotsIdempotencyKey || (window.watchlistSlotsIdempotencyKey = `slots:${userId}:${Date.now()}:${Math.random().toString(36).slice(2)}`),
                     })
                 });
 
@@ -969,6 +969,7 @@
                 );
 
                 // Обновляем данные юзера
+                window.watchlistSlotsIdempotencyKey = null;
                 await loadUserData();
 
             } catch(e) {
@@ -1209,14 +1210,19 @@
                     throw new Error(createData.error || 'Не удалось создать донат');
                 }
 
-                // Отправляем транзакцию Gram
-                const amountNano = Math.floor(donationAmount * 1e9).toString();
+                const intent = createData.payment_intent;
+                if (!intent || !intent.treasury_address || !intent.public_reference) {
+                    throw new Error('Payment intent отсутствует');
+                }
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
+                    network: intent.network_id,
+                    from: tonConnectUI.wallet?.account?.address,
                     messages: [{
-                        address: OWNER_ADDRESS,
-                        amount: amountNano,
+                        address: intent.treasury_address,
+                        amount: String(intent.amount_nano || Math.floor(donationAmount * 1e9)),
+                        payload: intent.payload_boc,
                     }]
                 });
 
@@ -1292,20 +1298,23 @@
         // PENDING REGISTRATION
         // ═══════════════════════════════════════════
 
-        async function registerPending(amount, paymentType) {
-            try {
-                await fetch(`${API_BASE}/api/pending`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        user_id: userId,
-                        amount: amount,
-                        payment_type: paymentType,
-                    })
-                });
-            } catch(e) {
-                console.log('Pending error:', e);
+        async function createPaymentIntent(amount, paymentType) {
+            const resp = await fetch(`${API_BASE}/api/pending`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    amount: paymentType === 'tokens' && selectedPackageId ? undefined : amount,
+                    package_id: paymentType === 'tokens' ? selectedPackageId : undefined,
+                    payment_type: paymentType,
+                    product_ref: paymentType === 'tokens' && selectedPackageId ? String(selectedPackageId) : paymentType,
+                    idempotency_key: `webapp:${userId}:${paymentType}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+                })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok || !data.payment_intent) {
+                throw new Error(data.error || 'Не удалось создать payment intent');
             }
+            return data.payment_intent;
         }
 
         // ═══════════════════════════════════════════
@@ -1347,13 +1356,19 @@
                 document.getElementById('sub-pay-btn').disabled = true;
                 document.getElementById('author-pay-btn').disabled = true;
 
-                await registerPending(amount, paymentType);
+                const intent = await createPaymentIntent(amount, paymentType);
+                if (!intent || !intent.treasury_address || !intent.public_reference) {
+                    throw new Error('Payment intent отсутствует');
+                }
 
                 await tonConnectUI.sendTransaction({
                     validUntil: Math.floor(Date.now() / 1000) + 600,
+                    network: intent.network_id,
+                    from: tonConnectUI.wallet?.account?.address,
                     messages: [{
-                        address: OWNER_ADDRESS,
-                        amount: amountNano,
+                        address: intent.treasury_address,
+                        amount: String(intent.amount_nano || amountNano),
+                        payload: intent.payload_boc,
                     }]
                 });
 
