@@ -113,7 +113,6 @@ def _install_fake_aiogram(monkeypatch):
             return None
     aiogram.Bot = _Bot
     aiogram.Dispatcher = _FakeDispatcher
-    aiogram.types = types.SimpleNamespace(Message=_FakeMessage, CallbackQuery=object, ContentType=types.SimpleNamespace(PHOTO="photo", TEXT="text", DOCUMENT="document", ANY="any"))
 
     types_mod = types.ModuleType("aiogram.types")
     types_mod.InlineKeyboardMarkup = _Markup
@@ -122,8 +121,10 @@ def _install_fake_aiogram(monkeypatch):
     types_mod.KeyboardButton = _Button
     types_mod.Message = _FakeMessage
     types_mod.CallbackQuery = object
+    types_mod.InlineQuery = object
     types_mod.ContentType = types.SimpleNamespace(PHOTO="photo", TEXT="text", DOCUMENT="document", ANY="any")
     types_mod.WebAppInfo = lambda *a, **k: object()
+    aiogram.types = types_mod
 
     dispatcher_mod = types.ModuleType("aiogram.dispatcher")
     dispatcher_mod.Dispatcher = _FakeDispatcher
