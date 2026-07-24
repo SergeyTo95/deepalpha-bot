@@ -31,4 +31,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
       - name: Run focused treasury admin command regression tests
-        run: PYTHONPATH=. python -m pytest -q tests/test_treasury_admin_command.py
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python -m pytest \
+            -vv -rA --tb=long -s \
+            tests/test_treasury_admin_command.py \
+            2>&1 | tee treasury-admin-command-test.log
+      - name: Upload treasury routing test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: treasury-admin-command-test-log
+          path: treasury-admin-command-test.log

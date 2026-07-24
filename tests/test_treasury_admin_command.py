@@ -153,21 +153,46 @@ def _install_fake_aiogram(monkeypatch):
 
 
 def _install_runtime_dependency_stubs(monkeypatch):
-    if "requests" not in sys.modules:
-        monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network disabled in test")), post=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network disabled in test")), Session=lambda *a, **k: types.SimpleNamespace(headers={}, get=lambda *x, **y: (_ for _ in ()).throw(RuntimeError("network disabled in test")), post=lambda *x, **y: (_ for _ in ()).throw(RuntimeError("network disabled in test")))))
+    def _blocked_network(*args, **kwargs):
+        raise RuntimeError("network disabled in test")
 
-    if "psycopg2" not in sys.modules:
-        psycopg2_mod = types.ModuleType("psycopg2")
-        psycopg2_mod.connect = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("database disabled in test"))
-        psycopg2_mod.Error = Exception
+    class _BlockedSession:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def get(self, *args, **kwargs):
+            return _blocked_network(*args, **kwargs)
+
+        def post(self, *args, **kwargs):
+            return _blocked_network(*args, **kwargs)
+
+    try:
+        import requests
+    except ImportError:
+        requests = types.ModuleType("requests")
+        monkeypatch.setitem(sys.modules, "requests", requests)
+    monkeypatch.setattr(requests, "get", _blocked_network, raising=False)
+    monkeypatch.setattr(requests, "post", _blocked_network, raising=False)
+    monkeypatch.setattr(requests, "Session", _BlockedSession, raising=False)
+
+    def _blocked_database(*args, **kwargs):
+        raise RuntimeError("database disabled in test")
+
+    try:
+        import psycopg2
+    except ImportError:
+        psycopg2 = types.ModuleType("psycopg2")
+        psycopg2.Error = Exception
         errors_mod = types.ModuleType("psycopg2.errors")
-        psycopg2_mod.errors = errors_mod
         extras_mod = types.ModuleType("psycopg2.extras")
         extras_mod.RealDictCursor = object
-        psycopg2_mod.extras = extras_mod
-        monkeypatch.setitem(sys.modules, "psycopg2", psycopg2_mod)
-        monkeypatch.setitem(sys.modules, "psycopg2.extras", extras_mod)
+        psycopg2.errors = errors_mod
+        psycopg2.extras = extras_mod
+        monkeypatch.setitem(sys.modules, "psycopg2", psycopg2)
         monkeypatch.setitem(sys.modules, "psycopg2.errors", errors_mod)
+        monkeypatch.setitem(sys.modules, "psycopg2.extras", extras_mod)
+    monkeypatch.setattr(psycopg2, "connect", _blocked_database, raising=False)
+
     if "aiohttp" not in sys.modules:
         aiohttp_mod = types.ModuleType("aiohttp")
         web_mod = types.ModuleType("aiohttp.web")
