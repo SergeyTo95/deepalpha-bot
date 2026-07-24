@@ -1,0 +1,28 @@
+name: Treasury admin command routing
+
+on:
+  pull_request:
+    paths:
+      - "bot/admin.py"
+      - "telegram_bot.py"
+      - "app.py"
+      - "tests/test_treasury_admin_command.py"
+      - ".github/workflows/treasury-admin-command.yml"
+  push:
+    paths:
+      - "bot/admin.py"
+      - "telegram_bot.py"
+      - "app.py"
+      - "tests/test_treasury_admin_command.py"
+      - ".github/workflows/treasury-admin-command.yml"
+
+jobs:
+  treasury-admin-command:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run focused treasury admin command regression tests
+        run: PYTHONPATH=. pytest -q tests/test_treasury_admin_command.py
