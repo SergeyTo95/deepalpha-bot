@@ -8,7 +8,9 @@ on:
       - "services/kimi_gateway.py"
       - "tests/test_kimi_provider.py"
       - "tests/test_kimi_runtime_config.py"
+      - "tests/test_kimi_smoke_test_docs.py"
       - "docs/kimi-k3-runtime.md"
+      - "docs/kimi-k3-test-market.md"
       - ".env.example"
       - ".github/workflows/kimi-completion-hotfix.yml"
   workflow_dispatch:
@@ -42,6 +44,7 @@ jobs:
           pytest -q \
             tests/test_kimi_provider.py \
             tests/test_kimi_runtime_config.py \
+            tests/test_kimi_smoke_test_docs.py \
             2>&1 | tee kimi-completion-hotfix.log
 
       - name: Upload test log
