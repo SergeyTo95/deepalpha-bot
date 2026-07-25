@@ -3,12 +3,16 @@ from typing import Any, Dict, List
 from agents.forecast_aware_trading_plan_agent import ForecastAwareTradingPlanAgent
 
 
+WATCH_EDGE_THRESHOLD_PP = 5.0
+BUY_EDGE_THRESHOLD_PP = 8.1  # ValueDecisionAgent requires strictly more than 8 pp.
+
+
 class DecisionFirstTradingPlanAgent(ForecastAwareTradingPlanAgent):
     """Add an actionable decision summary to the existing forecast card.
 
     The summary does not invent a new probability or overwrite the established
     forecast/value logic. It translates the already computed fair probability,
-    market price, edge, confidence and entry-price margin into a compact product
+    market price, edge, confidence and policy state into a compact product
     contract that can be rendered first in Telegram and the WebApp.
     """
 
@@ -87,10 +91,6 @@ def build_decision_summary(
     if edge_pp is None and fair_probability is not None and current_market_probability is not None:
         edge_pp = round(fair_probability - current_market_probability, 2)
 
-    required_edge = 5.0 if confidence == "low" else 3.0
-    if confidence not in {"low", "medium", "high"}:
-        required_edge = 5.0
-
     has_independent_model = bool(
         independent
         and model_level > 0
@@ -106,10 +106,15 @@ def build_decision_summary(
         elif raw_decision in {"WATCH", "WAIT"}:
             verdict = "WATCH"
 
-    entry_prices = _numeric_options(value.get("entry_price"))
-    entry_price_max = entry_prices.get(best_side)
-    if entry_price_max is None and fair_probability is not None:
-        entry_price_max = round(max(1.0, fair_probability - required_edge), 2)
+    watch_price_max = None
+    if has_independent_model and fair_probability is not None:
+        watch_price_max = round(max(1.0, fair_probability - WATCH_EDGE_THRESHOLD_PP), 2)
+
+    buy_available = bool(has_independent_model and confidence in {"medium", "high"})
+    buy_edge_required = BUY_EDGE_THRESHOLD_PP if buy_available else None
+    buy_price_max = None
+    if buy_available and fair_probability is not None:
+        buy_price_max = round(max(1.0, fair_probability - BUY_EDGE_THRESHOLD_PP), 2)
 
     quality_score = _data_quality_score(analysis_quality)
     quality_label = _quality_label(quality_score)
@@ -118,20 +123,31 @@ def build_decision_summary(
         independent=has_independent_model,
         side=best_side,
         edge_pp=edge_pp,
-        required_edge=required_edge,
+        confidence=confidence,
+        watch_price_max=watch_price_max,
+        buy_price_max=buy_price_max,
         lang=lang,
     )
 
     return {
-        "version": "1.0",
+        "version": "1.1",
         "verdict": verdict,
+        "policy_state": raw_decision,
         "entry_now": verdict == "BUY",
         "side": best_side or likely_side or "NONE",
         "fair_probability": _round_or_none(fair_probability),
         "market_probability": _round_or_none(current_market_probability),
         "edge_pp": _round_or_none(edge_pp),
-        "minimum_edge_required_pp": required_edge,
-        "entry_price_max": _round_or_none(entry_price_max),
+        "watch_edge_required_pp": WATCH_EDGE_THRESHOLD_PP,
+        "watch_price_max": _round_or_none(watch_price_max),
+        "minimum_edge_required_pp": _round_or_none(buy_edge_required),
+        "entry_price_max": _round_or_none(buy_price_max),
+        "buy_available": buy_available,
+        "buy_blocked_reason": (
+            "confidence_below_medium"
+            if has_independent_model and not buy_available
+            else ""
+        ),
         "confidence": confidence,
         "independent_probability": has_independent_model,
         "data_quality_score": quality_score,
@@ -147,25 +163,43 @@ def _decision_reason(
     independent: bool,
     side: str,
     edge_pp: Any,
-    required_edge: float,
+    confidence: str,
+    watch_price_max: Any,
+    buy_price_max: Any,
     lang: str,
 ) -> str:
-    edge_value = _safe_float(edge_pp)
+    edge_value = _safe_float(edge_pp) or 0.0
     if lang == "ru":
         if not independent:
             return "Отдельная AI-оценка не подтверждена, поэтому вход по рыночной линии не рекомендуется."
         if verdict == "BUY":
-            return f"Перевес {edge_value:+.1f} п.п. по {side} превышает требуемые {required_edge:.1f} п.п."
+            return f"Перевес {edge_value:+.1f} п.п. по {side} соответствует политике BUY при уверенности {confidence}."
         if verdict == "WATCH":
-            return f"Перевес {edge_value:+.1f} п.п. по {side} есть, но для входа требуется минимум {required_edge:.1f} п.п."
+            if confidence == "low":
+                return (
+                    f"Текущий перевес {edge_value:+.1f} п.п. недостаточен для входа. "
+                    f"Сигнал WATCH усилится около {watch_price_max:.1f}%, а BUY недоступен до повышения уверенности минимум до средней."
+                )
+            return (
+                f"Текущий перевес {edge_value:+.1f} п.п.; для BUY требуется более +8.0 п.п. "
+                f"Ориентир цены для BUY — {buy_price_max:.1f}% или ниже."
+            )
         return "Цена почти совпадает со справедливой оценкой; отдельного преимущества для входа нет."
 
     if not independent:
         return "A separate AI estimate is not confirmed, so entry at the market line is not recommended."
     if verdict == "BUY":
-        return f"The {side} edge of {edge_value:+.1f} pp exceeds the required {required_edge:.1f} pp."
+        return f"The {side} edge of {edge_value:+.1f} pp satisfies the BUY policy at {confidence} confidence."
     if verdict == "WATCH":
-        return f"A {side} edge of {edge_value:+.1f} pp exists, but entry requires at least {required_edge:.1f} pp."
+        if confidence == "low":
+            return (
+                f"The current edge is {edge_value:+.1f} pp, which is not enough for entry. "
+                f"WATCH strengthens near {watch_price_max:.1f}%, while BUY remains blocked until confidence is at least medium."
+            )
+        return (
+            f"The current edge is {edge_value:+.1f} pp; BUY requires more than +8.0 pp. "
+            f"The BUY price reference is {buy_price_max:.1f}% or lower."
+        )
     return "Market price is close to fair value; no separate entry advantage is confirmed."
 
 
