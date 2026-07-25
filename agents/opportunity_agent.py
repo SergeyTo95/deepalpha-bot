@@ -1,16 +1,27 @@
+import os
 import random
 from typing import Any, Dict, List, Optional
 
-from agents.news_agent import NewsAgent
-from agents.decision_agent import DecisionAgent
 from db.database import save_opportunity
+from services.free_opportunity_scanner import (
+    format_free_opportunity_result,
+    scan_free_opportunities,
+)
 from services.polymarket_service import list_markets, normalize_market_data
 
 
 class OpportunityAgent:
+    """Opportunity discovery with a zero-LLM default and opt-in paid deep pass.
+
+    Production now runs the deterministic public-data pre-scanner unless
+    OPPORTUNITY_PAID_ANALYSIS_ENABLED=true is set explicitly. The paid path is
+    preserved for a later controlled rollout and lazily imports providers only
+    after that opt-in flag is enabled.
+    """
+
     def __init__(self) -> None:
-        self.news_agent = NewsAgent()
-        self.decision_agent = DecisionAgent()
+        self.news_agent = None
+        self.decision_agent = None
 
     def run(
         self,
@@ -25,6 +36,49 @@ class OpportunityAgent:
         job_id: str = None,
         request_id: str = None,
     ) -> Dict[str, Any]:
+        if not self._paid_analysis_enabled():
+            result_limit = max(5, min(10, int(limit or 3) * 2))
+            scan = scan_free_opportunities(
+                result_limit=result_limit,
+                category_filter=category_filter,
+            )
+            result = format_free_opportunity_result(scan, lang=lang)
+            result.update({
+                "opportunity_mode": "free_prescan",
+                "paid_analysis_enabled": False,
+                "provider_calls": 0,
+                "paid_ai_used": False,
+            })
+            return result
+
+        return self._run_paid_analysis(
+            limit=limit,
+            category_filter=category_filter,
+            strong_only=strong_only,
+            min_score=min_score,
+            lang=lang,
+            exclude_questions=exclude_questions,
+            is_background=is_background,
+            cycle_id=cycle_id,
+            job_id=job_id,
+            request_id=request_id,
+        )
+
+    def _run_paid_analysis(
+        self,
+        *,
+        limit: int,
+        category_filter: str,
+        strong_only: bool,
+        min_score: int,
+        lang: str,
+        exclude_questions: list,
+        is_background: bool,
+        cycle_id: str,
+        job_id: str,
+        request_id: str,
+    ) -> Dict[str, Any]:
+        self._ensure_paid_agents()
         raw_markets = self._get_candidate_markets(
             limit=limit,
             category_filter=category_filter,
@@ -42,44 +96,56 @@ class OpportunityAgent:
             return self._fallback("No active candidate markets found.")
 
         candidates = []
-
         for raw_market in raw_markets:
             try:
                 market_data = self._build_market_context(raw_market)
                 if not market_data:
                     continue
-
                 if category_filter != "All" and market_data.get("category") != category_filter:
                     continue
 
-                news_data = self.news_agent.run(market_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
-                decision_data = self.decision_agent.run(market_data, news_data, lang=lang, is_background=is_background, cycle_id=cycle_id, job_id=job_id, request_id=request_id)
+                news_data = self.news_agent.run(
+                    market_data,
+                    lang=lang,
+                    is_background=is_background,
+                    cycle_id=cycle_id,
+                    job_id=job_id,
+                    request_id=request_id,
+                )
+                decision_data = self.decision_agent.run(
+                    market_data,
+                    news_data,
+                    lang=lang,
+                    is_background=is_background,
+                    cycle_id=cycle_id,
+                    job_id=job_id,
+                    request_id=request_id,
+                )
                 score = self._score_opportunity(market_data, decision_data)
-
                 if strong_only and score < min_score:
                     continue
-
                 candidates.append({
                     "market_data": market_data,
                     "news_data": news_data,
                     "decision_data": decision_data,
                     "score": score,
                 })
-            except Exception as e:
-                print(f"Market analysis error: {e}")
+            except Exception as exc:
+                print(f"Market analysis error: {exc}")
                 continue
 
         if not candidates:
             return self._fallback("No viable opportunities after analysis.")
 
-        best = sorted(candidates, key=lambda x: x["score"], reverse=True)[0]
-
+        best = sorted(candidates, key=lambda item: item["score"], reverse=True)[0]
         market_data = best["market_data"]
         decision_data = best["decision_data"]
         news_data = best.get("news_data", {})
 
         result = {
             "mode": "opportunity",
+            "opportunity_mode": "paid_deep_analysis",
+            "paid_analysis_enabled": True,
             "question": market_data.get("question", "Unknown market"),
             "category": market_data.get("category", "Unknown"),
             "market_probability": market_data.get("market_probability", "Unknown"),
@@ -94,9 +160,22 @@ class OpportunityAgent:
             "news_items": news_data.get("sources", []),
             "news_sources": news_data.get("sources", []),
         }
-
         save_opportunity(result)
         return result
+
+    def _ensure_paid_agents(self) -> None:
+        if self.news_agent is not None and self.decision_agent is not None:
+            return
+        from agents.news_agent import NewsAgent
+        from agents.decision_agent import DecisionAgent
+
+        self.news_agent = NewsAgent()
+        self.decision_agent = DecisionAgent()
+
+    def _paid_analysis_enabled(self) -> bool:
+        return str(os.getenv("OPPORTUNITY_PAID_ANALYSIS_ENABLED", "false")).strip().lower() in {
+            "1", "true", "yes", "on", "enabled"
+        }
 
     def _get_candidate_markets(
         self,
@@ -107,14 +186,12 @@ class OpportunityAgent:
         cycle_id: str = None,
         job_id: str = None,
     ) -> List[Dict[str, Any]]:
-        exclude = set(q.lower() for q in (exclude_questions or []))
-
+        exclude = set(question.lower() for question in (exclude_questions or []))
         random_offset = random.randint(0, 100)
         markets = list_markets(limit=max(limit * 5, 20), offset=random_offset)
 
         if len(markets) < limit:
             markets += list_markets(limit=max(limit * 5, 20))
-
         random.shuffle(markets)
 
         filtered = []
@@ -135,7 +212,6 @@ class OpportunityAgent:
             filtered.append(market)
             if len(filtered) >= limit:
                 break
-
         return filtered
 
     def _is_too_one_sided(self, market: Dict[str, Any]) -> bool:
@@ -143,16 +219,12 @@ class OpportunityAgent:
             outcome_prices = market.get("outcomePrices", "")
             if isinstance(outcome_prices, str):
                 cleaned = outcome_prices.strip("[]")
-                prices = [float(p.strip().strip('"')) for p in cleaned.split(",") if p.strip()]
+                prices = [float(price.strip().strip('"')) for price in cleaned.split(",") if price.strip()]
             elif isinstance(outcome_prices, list):
-                prices = [float(p) for p in outcome_prices]
+                prices = [float(price) for price in outcome_prices]
             else:
                 return False
-
-            if not prices:
-                return False
-
-            return max(prices) >= 0.85
+            return bool(prices) and max(prices) >= 0.85
         except Exception:
             return False
 
@@ -160,18 +232,14 @@ class OpportunityAgent:
         normalized = normalize_market_data(raw_market)
         if not normalized:
             return None
-
         question = normalized.get("question", "Unknown market")
         options = normalized.get("options", [])
-        category = self._detect_category(question)
-        market_type = self._detect_market_type(options)
-
         return {
             "url": raw_market.get("url", ""),
             "slug": raw_market.get("slug", ""),
             "question": question,
-            "category": category,
-            "market_type": market_type,
+            "category": self._detect_category(question),
+            "market_type": self._detect_market_type(options),
             "market_probability": normalized.get("market_probability", "Unknown"),
             "options": options,
             "related_markets": [],
@@ -186,7 +254,6 @@ class OpportunityAgent:
 
     def _score_opportunity(self, market_data: Dict[str, Any], decision_data: Dict[str, Any]) -> int:
         score = 0
-
         confidence = str(decision_data.get("confidence", "")).lower()
         probability_text = str(decision_data.get("probability", "")).lower()
         category = str(market_data.get("category", "")).lower()
@@ -202,15 +269,12 @@ class OpportunityAgent:
             score += 15
         else:
             score += 5
-
         if "%" in probability_text:
             score += 15
-
         if category in {"politics", "crypto", "economy"}:
             score += 10
         elif category in {"sports", "tech"}:
             score += 6
-
         if "accelerated" in trend_summary:
             score += 10
         if "24h move" in trend_summary:
@@ -219,15 +283,12 @@ class OpportunityAgent:
             score += 8
         elif "moderately" in crowd_behavior:
             score += 4
-
         score += self._parse_numeric_bonus(liquidity, max_bonus=20)
         score += self._parse_numeric_bonus(volume, max_bonus=20)
-
         if "market" in reasoning:
             score += 5
         if "related" in reasoning or "external" in reasoning:
             score += 5
-
         return score
 
     def _parse_numeric_bonus(self, value: str, max_bonus: int = 20) -> int:
@@ -254,7 +315,6 @@ class OpportunityAgent:
         return "unknown"
 
     def _detect_category(self, text: str) -> str:
-        """Используем единую функцию из news_agent для консистентности."""
         from agents.news_agent import detect_category_from_text
         return detect_category_from_text(text)
 
