@@ -1,9 +1,7 @@
-import os
-
 import pytest
 
 from services import edge_watch_service as service
-from services.edge_watch_market_resolver import select_best_market
+from services.edge_watch_market_resolver import market_matches_question, select_best_market
 from services.edge_watch_runtime_patch import install as install_edge_watch
 
 
@@ -76,18 +74,18 @@ def test_medium_confidence_price_crossing_can_become_buy():
     assert snapshot.decision == "BUY"
 
 
-def test_event_resolver_selects_exact_truth_social_submarket():
+def test_event_resolver_rejects_wrong_first_range_and_selects_exact_submarket():
+    question = "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?"
     markets = [
         {"question": "Will Donald Trump post 100-119 Truth Social posts from July 28 to August 4, 2026?", "id": "a"},
-        {"question": "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?", "id": "b"},
+        {"question": question, "id": "b"},
         {"question": "Will Donald Trump post 140-159 Truth Social posts from July 28 to August 4, 2026?", "id": "c"},
     ]
 
-    selected = select_best_market(
-        "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?",
-        markets,
-    )
+    assert market_matches_question(question, markets[0], minimum_score=0.90) is False
+    assert market_matches_question(question, markets[1], minimum_score=0.90) is True
 
+    selected = select_best_market(question, markets)
     assert selected is not None
     assert selected["id"] == "b"
 
