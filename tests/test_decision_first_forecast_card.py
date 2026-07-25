@@ -6,6 +6,7 @@ from services.decision_first_renderer_patch import (
     build_decision_first_block,
     install,
 )
+from services.webapp_report_formatter import build_webapp_analysis_report
 
 
 def _card(
@@ -37,10 +38,7 @@ def _card(
             "edge": {"YES": edge_yes, "NO": edge_no},
             "decision": decision,
             "best_side": best_side,
-            "entry_price": {
-                "YES": max(1.0, fair_yes - (5.0 if confidence == "low" else 3.0)),
-                "NO": max(1.0, fair_no - (5.0 if confidence == "low" else 3.0)),
-            },
+            "entry_price": {},
         },
         "what_would_change": ["Verified Truth Social posting-rate data appears."],
         "data_requirements": [],
@@ -48,7 +46,7 @@ def _card(
     }
 
 
-def test_small_low_confidence_edge_becomes_watch_with_entry_price():
+def test_small_low_confidence_edge_becomes_watch_without_fake_buy_price():
     summary = build_decision_summary(
         forecast_card=_card(),
         analysis_quality={"quality_score": 0.2},
@@ -61,18 +59,23 @@ def test_small_low_confidence_edge_becomes_watch_with_entry_price():
     assert summary["fair_probability"] == 80.0
     assert summary["market_probability"] == 77.5
     assert summary["edge_pp"] == 2.5
-    assert summary["minimum_edge_required_pp"] == 5.0
-    assert summary["entry_price_max"] == 75.0
+    assert summary["watch_edge_required_pp"] == 5.0
+    assert summary["watch_price_max"] == 75.0
+    assert summary["minimum_edge_required_pp"] is None
+    assert summary["entry_price_max"] is None
+    assert summary["buy_available"] is False
+    assert summary["buy_blocked_reason"] == "confidence_below_medium"
     assert summary["data_quality_score"] == 2
-    assert "не входить" not in summary["reason"].lower()
-    assert "требуется минимум 5.0" in summary["reason"].lower()
+    assert "buy недоступен" in summary["reason"].lower()
 
 
-def test_strong_medium_confidence_consider_becomes_buy():
+def test_strong_medium_confidence_consider_becomes_buy_at_actual_policy_threshold():
     summary = build_decision_summary(
         forecast_card=_card(
             fair_yes=34.0,
             fair_no=66.0,
+            market_yes=22.5,
+            market_no=77.5,
             edge_yes=11.5,
             edge_no=-11.5,
             confidence="medium",
@@ -86,9 +89,38 @@ def test_strong_medium_confidence_consider_becomes_buy():
     assert summary["verdict"] == "BUY"
     assert summary["entry_now"] is True
     assert summary["side"] == "YES"
-    assert summary["minimum_edge_required_pp"] == 3.0
-    assert summary["entry_price_max"] == 31.0
+    assert summary["watch_edge_required_pp"] == 5.0
+    assert summary["minimum_edge_required_pp"] == 8.1
+    assert summary["watch_price_max"] == 29.0
+    assert summary["entry_price_max"] == 25.9
+    assert summary["buy_available"] is True
     assert summary["data_quality_score"] == 8
+
+
+def test_medium_confidence_watch_uses_buy_threshold_not_three_point_margin():
+    summary = build_decision_summary(
+        forecast_card=_card(
+            fair_yes=34.0,
+            fair_no=66.0,
+            market_yes=28.0,
+            market_no=72.0,
+            edge_yes=6.0,
+            edge_no=-6.0,
+            confidence="medium",
+            decision="WATCH",
+            best_side="YES",
+        ),
+        analysis_quality={"quality_score": 0.6},
+        lang="ru",
+    )
+
+    assert summary["verdict"] == "WATCH"
+    assert summary["edge_pp"] == 6.0
+    assert summary["minimum_edge_required_pp"] == 8.1
+    assert summary["entry_price_max"] == 25.9
+    assert summary["market_probability"] == 28.0
+    assert summary["market_probability"] > summary["entry_price_max"]
+    assert "более +8.0" in summary["reason"]
 
 
 def test_market_fallback_is_always_no_trade():
@@ -108,6 +140,8 @@ def test_market_fallback_is_always_no_trade():
     assert summary["verdict"] == "NO_TRADE"
     assert summary["entry_now"] is False
     assert summary["independent_probability"] is False
+    assert summary["watch_price_max"] is None
+    assert summary["entry_price_max"] is None
     assert "отдельная ai-оценка" in summary["reason"].lower()
 
 
@@ -140,13 +174,15 @@ def test_renderer_places_actionable_summary_before_long_analysis():
 
     assert text.index("🎯 РЕШЕНИЕ:") < text.index("📌 Рынок:")
     assert "WATCH — НАБЛЮДАТЬ, НЕ ВХОДИТЬ" in text
-    assert "Интересная цена NO: 75% или ниже" in text
+    assert "Цена для усиления WATCH NO: 75% или ниже" in text
+    assert "Порог BUY: сначала нужна уверенность не ниже средней" in text
+    assert "Интересная цена" not in text
     assert "Качество данных: 2/10" in text
     assert "исход NO" not in text
     assert "— YES: 20.0%" in text
 
 
-def test_block_exposes_fair_price_edge_and_threshold():
+def test_block_exposes_fair_price_edge_and_separate_watch_policy():
     summary = build_decision_summary(
         forecast_card=_card(),
         analysis_quality={"quality_score": 0.2},
@@ -157,7 +193,36 @@ def test_block_exposes_fair_price_edge_and_threshold():
     assert "Справедливая вероятность: 80%" in block
     assert "Цена рынка: 77.5%" in block
     assert "Edge: +2.5 п.п." in block
-    assert "Минимум для входа: +5.0 п.п." in block
+    assert "Порог усиления WATCH: +5.0 п.п." in block
+    assert "Порог BUY: сначала нужна уверенность не ниже средней" in block
+    assert "Минимум для входа: +5.0" not in block
+
+
+def test_webapp_report_receives_same_decision_first_canonical_text():
+    summary = build_decision_summary(
+        forecast_card=_card(),
+        analysis_quality={"quality_score": 0.2},
+        lang="ru",
+    )
+    forecast_card = _card()
+    forecast_card["decision_summary"] = summary
+    raw = {
+        "question": "Test market",
+        "lang": "ru",
+        "full_analysis": "🔎 DeepAlpha Signal\n\n📌 Рынок: Test market\n\n— исход NO: 80.0%",
+        "forecast_card": forecast_card,
+        "decision_summary": summary,
+    }
+
+    report = build_webapp_analysis_report(raw, market_url="https://polymarket.com/event/test", lang="ru")
+
+    assert report["canonical_text"].index("🎯 РЕШЕНИЕ:") < report["canonical_text"].index("📌 Рынок:")
+    assert report["telegram_text"] == report["canonical_text"]
+    assert report["copy_text"] == report["canonical_text"]
+    assert "исход NO" not in report["canonical_text"]
+    assert report["decision_summary"]["verdict"] == "WATCH"
+    assert report["sections"]["decision_summary"]["side"] == "NO"
+    assert report["sections"]["forecast_card"]["version"] == "1.0"
 
 
 def test_preview_and_wrong_branch_never_poll_telegram():
