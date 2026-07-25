@@ -49,8 +49,10 @@ def main() -> None:
     import app
     from services.decision_first_renderer_patch import install as install_decision_renderer
     from services.edge_watch_runtime_patch import install as install_edge_watch
+    from services.free_opportunity_runtime_patch import install as install_free_opportunity_renderer
 
     install_decision_renderer(app.telegram_bot)
+    install_free_opportunity_renderer(app.telegram_bot)
     install_edge_watch(app)
     asyncio.run(app.main())
 
