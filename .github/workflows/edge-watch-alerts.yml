@@ -6,6 +6,7 @@ on:
       - feature/turbo-short-term-btc
     paths:
       - "services/edge_watch_service.py"
+      - "services/edge_watch_market_resolver.py"
       - "services/edge_watch_runtime_patch.py"
       - "services/decision_first_renderer_patch.py"
       - "run_bot_process.py"
@@ -43,6 +44,7 @@ jobs:
         run: |
           python -m py_compile \
             services/edge_watch_service.py \
+            services/edge_watch_market_resolver.py \
             services/edge_watch_runtime_patch.py \
             run_bot_process.py
 
