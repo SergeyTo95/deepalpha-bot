@@ -23,6 +23,17 @@ def _market(yes=0.225, no=0.775):
     }
 
 
+def _row(*, watchlist_id=11, user_id=22, question="Will the event happen?", language="ru"):
+    return {
+        "watchlist_id": watchlist_id,
+        "user_id": user_id,
+        "market_slug": "example-event",
+        "market_url": "https://polymarket.com/event/example-event",
+        "question": question,
+        "language": language,
+    }
+
+
 def test_probability_and_side_price_parsing():
     assert service.parse_probability_text("No — 79.0%") == ("NO", 79.0)
     assert service.parse_probability_text("YES: 21,5%") == ("YES", 21.5)
@@ -90,7 +101,7 @@ def test_event_resolver_rejects_wrong_first_range_and_selects_exact_submarket():
     assert selected["id"] == "b"
 
 
-def test_alert_explains_real_trade_transition():
+def test_alert_explains_real_trade_transition_in_both_languages():
     snapshot = service.build_snapshot(
         side="NO",
         fair_probability=79.0,
@@ -99,28 +110,35 @@ def test_alert_explains_real_trade_transition():
         independent=True,
         analysis_id=7,
     )
-    text = service.format_edge_alert(
+    previous = {"decision": "NO_TRADE", "market_probability": 77.5}
+
+    ru = service.format_edge_alert(
         question="Will the event happen?",
         market_url="https://polymarket.com/event/example",
-        previous={"decision": "NO_TRADE", "market_probability": 77.5},
+        previous=previous,
         snapshot=snapshot,
         lang="ru",
     )
+    en = service.format_edge_alert(
+        question="Will the event happen?",
+        market_url="https://polymarket.com/event/example",
+        previous=previous,
+        snapshot=snapshot,
+        lang="en",
+    )
 
-    assert "NO_TRADE → WATCH" in text
-    assert "Edge: +5.0 п.п." in text
-    assert "Цена рынка: 74.0%" in text
-    assert "BUY пока недоступен" in text
+    assert "NO_TRADE → WATCH" in ru
+    assert "Edge: +5.0 п.п." in ru
+    assert "Цена рынка: 74.0%" in ru
+    assert "BUY пока недоступен" in ru
+    assert "Decision changed: NO_TRADE → WATCH" in en
+    assert "Market price: 74.0%" in en
+    assert "BUY remains blocked" in en
 
 
 @pytest.mark.asyncio
 async def test_worker_initializes_silently_then_notifies_on_transition(monkeypatch):
-    item = {
-        "market_slug": "example",
-        "question": "Will the event happen?",
-        "market_url": "https://polymarket.com/event/example",
-    }
-    sub = {"id": 11, "user_id": 22, "notify_enabled": True, "lang": "ru"}
+    row = _row()
     previous = {
         "watchlist_id": 11,
         "side": "NO",
@@ -136,19 +154,22 @@ async def test_worker_initializes_silently_then_notifies_on_transition(monkeypat
             messages.append((user_id, text, kwargs))
 
     monkeypatch.setattr(service, "init_edge_watch_schema", lambda: None)
-    monkeypatch.setattr(service, "get_active_watchlist_items", lambda limit=500: [item])
-    monkeypatch.setattr(service, "get_watchlist_subscribers", lambda slug: [sub])
-    monkeypatch.setattr(service, "fetch_market_by_slug", lambda slug: _market(yes=0.26, no=0.74))
+    monkeypatch.setattr(service, "get_active_edge_watch_rows", lambda limit=500: [row])
+    monkeypatch.setattr(
+        service,
+        "resolve_watch_market",
+        lambda market_slug, market_url, question: _market(yes=0.26, no=0.74),
+    )
     monkeypatch.setattr(service, "is_market_resolved", lambda market: False)
     monkeypatch.setattr(service, "get_latest_analysis", lambda *args: _analysis())
     monkeypatch.setattr(service, "get_edge_state", lambda watchlist_id: previous)
-    monkeypatch.setattr(service, "charge_watchlist_event", lambda *args: {"charged": True, "cost": 1})
+    monkeypatch.setattr(service, "charge_edge_transition", lambda *args: {"charged": False, "reason": "edge_alert_included"})
     monkeypatch.setattr(service, "upsert_edge_state", lambda **kwargs: updates.append(kwargs))
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_args, **_kwargs: _completed_sleep())
 
     stats = await service.check_edge_watch_once(FakeBot())
 
-    assert stats["notified"] == 1
+    assert stats == {"rows": 1, "initialized": 0, "notified": 1, "errors": 0}
     assert len(messages) == 1
     assert messages[0][0] == 22
     assert "NO_TRADE → WATCH" in messages[0][1]
@@ -156,7 +177,69 @@ async def test_worker_initializes_silently_then_notifies_on_transition(monkeypat
     assert updates[-1]["last_notification_fingerprint"].startswith("edge:11:NO_TRADE->WATCH")
 
 
-def test_runtime_patch_includes_edge_alerts_without_second_charge(monkeypatch):
+@pytest.mark.asyncio
+async def test_same_event_slug_rows_are_processed_as_distinct_contracts(monkeypatch):
+    rows = [
+        _row(watchlist_id=11, user_id=22, question="Range 100-119", language="ru"),
+        _row(watchlist_id=12, user_id=23, question="Range 120-139", language="en"),
+    ]
+    resolved_questions = []
+    analysis_questions = []
+    messages = []
+
+    class FakeBot:
+        async def send_message(self, user_id, text, **kwargs):
+            messages.append((user_id, text))
+
+    monkeypatch.setattr(service, "init_edge_watch_schema", lambda: None)
+    monkeypatch.setattr(service, "get_active_edge_watch_rows", lambda limit=500: rows)
+
+    def resolve(market_slug, market_url, question):
+        resolved_questions.append(question)
+        return _market(yes=0.26, no=0.74)
+
+    def latest(user_id, market_slug, question):
+        analysis_questions.append((user_id, question))
+        return _analysis()
+
+    monkeypatch.setattr(service, "resolve_watch_market", resolve)
+    monkeypatch.setattr(service, "is_market_resolved", lambda market: False)
+    monkeypatch.setattr(service, "get_latest_analysis", latest)
+    monkeypatch.setattr(
+        service,
+        "get_edge_state",
+        lambda watchlist_id: {
+            "watchlist_id": watchlist_id,
+            "side": "NO",
+            "decision": "NO_TRADE",
+            "market_probability": 77.5,
+            "last_notification_fingerprint": None,
+        },
+    )
+    monkeypatch.setattr(service, "charge_edge_transition", lambda *args: {"charged": False})
+    monkeypatch.setattr(service, "upsert_edge_state", lambda **kwargs: None)
+    monkeypatch.setattr(service.asyncio, "sleep", lambda *_args, **_kwargs: _completed_sleep())
+
+    stats = await service.check_edge_watch_once(FakeBot())
+
+    assert stats["rows"] == 2
+    assert stats["notified"] == 2
+    assert resolved_questions == ["Range 100-119", "Range 120-139"]
+    assert analysis_questions == [(22, "Range 100-119"), (23, "Range 120-139")]
+    assert "Решение изменилось" in messages[0][1]
+    assert "Decision changed" in messages[1][1]
+
+
+def test_edge_alerts_are_included_without_second_charge(monkeypatch):
+    monkeypatch.delenv("EDGE_WATCH_BILLING_ENABLED", raising=False)
+    assert service.charge_edge_transition(1, 2, "slug", "fingerprint") == {
+        "charged": False,
+        "reason": "edge_alert_included",
+        "cost": 0,
+    }
+
+
+def test_runtime_patch_wraps_existing_watchlist_worker():
     class FakeBot:
         pass
 
@@ -170,17 +253,9 @@ def test_runtime_patch_includes_edge_alerts_without_second_charge(monkeypatch):
         watchlist_worker = staticmethod(legacy_worker)
         telegram_bot = FakeTelegram()
 
-    monkeypatch.delenv("EDGE_WATCH_BILLING_ENABLED", raising=False)
-    original_charge = service.charge_watchlist_event
-    original_fetch = service.fetch_market_by_slug
-    try:
-        install_edge_watch(FakeApp)
-        charge = service.charge_watchlist_event(1, 2, "slug", "edge_transition", "fp")
-        assert charge == {"charged": False, "reason": "edge_alert_included", "cost": 0}
-        assert getattr(FakeApp.watchlist_worker, "_deepalpha_edge_watch", False) is True
-    finally:
-        service.charge_watchlist_event = original_charge
-        service.fetch_market_by_slug = original_fetch
+    install_edge_watch(FakeApp)
+
+    assert getattr(FakeApp.watchlist_worker, "_deepalpha_edge_watch", False) is True
 
 
 async def _completed_sleep():
