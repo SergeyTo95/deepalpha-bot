@@ -107,6 +107,20 @@ class SafeDecisionAgent(_BaseDecisionAgent):
                 reason=f"exception:{exc.__class__.__name__}",
             )
 
+    def _market_aligned_fallback(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Mark every parent fallback as non-independent market guidance.
+
+        The base DecisionAgent calls this method directly when the provider returns
+        an empty or invalid response. Without the marker, SafeDecisionAgent sees the
+        numeric market probability as usable and incorrectly labels it `ok`, which
+        later makes Telegram present the market line as a DeepAlpha AI estimate.
+        """
+        result = super()._market_aligned_fallback(*args, **kwargs)
+        if isinstance(result, dict):
+            result["decision_runtime_guard"] = "market_aligned_fallback"
+            result.setdefault("decision_fallback_reason", "provider_empty_or_invalid")
+        return result
+
     def _parse_llm_output(self, text: str, market_type: str = "binary") -> Dict[str, str]:
         raw = str(text or "").strip()
         if not raw:
