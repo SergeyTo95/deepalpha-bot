@@ -5,18 +5,16 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from db.database import (
     acquire_distributed_lock,
     charge_watchlist_event,
-    get_active_watchlist_items,
     get_connection,
-    get_watchlist_subscribers,
     release_distributed_lock,
 )
-from services.polymarket_resolver import fetch_market_by_slug, is_market_resolved
+from services.edge_watch_market_resolver import resolve_watch_market
+from services.polymarket_resolver import is_market_resolved
 
 logger = logging.getLogger(__name__)
 
@@ -59,26 +57,20 @@ def parse_probability_text(value: Any) -> Tuple[str, Optional[float]]:
     text = str(value or "").strip()
     if not text:
         return "", None
-
-    outcome_match = re.search(
+    match = re.search(
         r"\b(YES|NO|Yes|No|ДА|НЕТ|Да|Нет)\b[^0-9]{0,12}([0-9]+(?:[.,][0-9]+)?)\s*%",
         text,
     )
-    if outcome_match:
-        raw_side = outcome_match.group(1).lower()
-        side = "YES" if raw_side in {"yes", "да"} else "NO"
-        return side, float(outcome_match.group(2).replace(",", "."))
-
-    number_match = re.search(r"([0-9]+(?:[.,][0-9]+)?)\s*%", text)
-    if number_match:
-        return "", float(number_match.group(1).replace(",", "."))
-    return "", None
+    if match:
+        side = "YES" if match.group(1).lower() in {"yes", "да"} else "NO"
+        return side, float(match.group(2).replace(",", "."))
+    number = re.search(r"([0-9]+(?:[.,][0-9]+)?)\s*%", text)
+    return ("", float(number.group(1).replace(",", "."))) if number else ("", None)
 
 
 def parse_market_probability_text(value: Any, side: str) -> Optional[float]:
     text = str(value or "")
-    side = str(side or "").upper()
-    aliases = ("YES", "Yes", "ДА", "Да") if side == "YES" else ("NO", "No", "НЕТ", "Нет")
+    aliases = ("YES", "Yes", "ДА", "Да") if str(side).upper() == "YES" else ("NO", "No", "НЕТ", "Нет")
     for alias in aliases:
         match = re.search(
             rf"\b{re.escape(alias)}\b[^0-9]{{0,12}}([0-9]+(?:[.,][0-9]+)?)\s*%",
@@ -90,9 +82,9 @@ def parse_market_probability_text(value: Any, side: str) -> Optional[float]:
 
 
 def classify_decision(edge_pp: float, confidence: str, independent: bool = True) -> str:
-    if not independent or edge_pp < WATCH_EDGE_THRESHOLD_PP:
+    if not independent or float(edge_pp) < WATCH_EDGE_THRESHOLD_PP:
         return "NO_TRADE"
-    if edge_pp > BUY_EDGE_THRESHOLD_PP and confidence in {"medium", "high"}:
+    if float(edge_pp) > BUY_EDGE_THRESHOLD_PP and normalize_confidence(confidence) in {"medium", "high"}:
         return "BUY"
     return "WATCH"
 
@@ -106,16 +98,17 @@ def build_snapshot(
     independent: bool,
     analysis_id: Optional[int] = None,
 ) -> EdgeSnapshot:
-    side = str(side or "").upper()
-    edge_pp = round(float(fair_probability) - float(market_probability), 2)
+    fair = round(float(fair_probability), 2)
+    market = round(float(market_probability), 2)
     confidence = normalize_confidence(confidence)
+    edge = round(fair - market, 2)
     return EdgeSnapshot(
-        side=side,
-        fair_probability=round(float(fair_probability), 2),
-        market_probability=round(float(market_probability), 2),
-        edge_pp=edge_pp,
+        side=str(side or "").upper(),
+        fair_probability=fair,
+        market_probability=market,
+        edge_pp=edge,
         confidence=confidence,
-        decision=classify_decision(edge_pp, confidence, independent),
+        decision=classify_decision(edge, confidence, independent),
         independent=bool(independent),
         analysis_id=int(analysis_id) if analysis_id is not None else None,
     )
@@ -150,14 +143,12 @@ def extract_side_price(market_data: Dict[str, Any], side: str) -> Optional[float
             prices.append(float("nan"))
 
     target = str(side or "").strip().upper()
-    for idx, outcome in enumerate(outcomes):
-        if outcome == target and idx < len(prices):
-            price = prices[idx]
+    for index, outcome in enumerate(outcomes):
+        if outcome == target and index < len(prices):
+            price = prices[index]
             return None if price != price else round(price, 4)
-
     if len(prices) == 2 and target in {"YES", "NO"}:
-        idx = 0 if target == "YES" else 1
-        price = prices[idx]
+        price = prices[0 if target == "YES" else 1]
         return None if price != price else round(price, 4)
     return None
 
@@ -187,16 +178,60 @@ def init_edge_watch_schema() -> None:
             )
             """
         )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_edge_state_slug ON watchlist_edge_state(market_slug)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_edge_state_user ON watchlist_edge_state(user_id)")
         cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_watchlist_edge_state_slug ON watchlist_edge_state(market_slug)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_watchlist_edge_state_user ON watchlist_edge_state(user_id)"
+            """
+            DELETE FROM watchlist_edge_state state
+            WHERE NOT EXISTS (
+                SELECT 1 FROM watchlist w
+                WHERE w.id = state.watchlist_id AND w.is_closed = 0
+            )
+            """
         )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_active_edge_watch_rows(limit: int = 500) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT w.id, w.user_id, w.market_slug, w.market_url, w.question,
+                   COALESCE(u.language, 'ru') AS language
+            FROM watchlist w
+            LEFT JOIN users u ON u.user_id = w.user_id
+            WHERE w.is_closed = 0
+              AND COALESCE(w.notify_enabled, 1) = 1
+              AND COALESCE(w.autopilot_enabled, 1) = 1
+              AND (w.billing_status IS NULL OR w.billing_status = 'active')
+            ORDER BY w.id ASC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall() or []
+        return [
+            {
+                "watchlist_id": row[0],
+                "user_id": row[1],
+                "market_slug": row[2],
+                "market_url": row[3],
+                "question": row[4],
+                "language": row[5] or "ru",
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        logger.warning("EDGE_WATCH_ROWS_FAILED type=%s", exc.__class__.__name__)
+        return []
     finally:
         cur.close()
         conn.close()
@@ -214,18 +249,24 @@ def get_latest_analysis(user_id: int, market_slug: str, question: str) -> Option
             FROM analyses
             WHERE (user_id = %s OR user_id = 0)
               AND (
-                    (%s <> '%%' AND COALESCE(url, '') ILIKE %s)
-                    OR COALESCE(question, '') = %s
+                    COALESCE(question, '') = %s
+                    OR (%s <> '%%' AND COALESCE(url, '') ILIKE %s)
                   )
-            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, id DESC
+            ORDER BY
+                CASE WHEN COALESCE(question, '') = %s THEN 0 ELSE 1 END,
+                CASE WHEN user_id = %s THEN 0 ELSE 1 END,
+                id DESC
             LIMIT 1
             """,
-            (int(user_id), slug_like, slug_like, str(question or ""), int(user_id)),
+            (
+                int(user_id), str(question or ""), slug_like, slug_like,
+                str(question or ""), int(user_id),
+            ),
         )
         row = cur.fetchone()
         if not row:
             return None
-        columns = [desc[0] for desc in cur.description]
+        columns = [description[0] for description in cur.description]
         return dict(zip(columns, row))
     except Exception as exc:
         logger.warning("EDGE_WATCH_ANALYSIS_LOOKUP_FAILED type=%s", exc.__class__.__name__)
@@ -235,28 +276,19 @@ def get_latest_analysis(user_id: int, market_slug: str, question: str) -> Option
         conn.close()
 
 
-def snapshot_from_analysis(
-    analysis: Dict[str, Any], market_data: Dict[str, Any]
-) -> Optional[EdgeSnapshot]:
-    side, fair_probability = parse_probability_text((analysis or {}).get("system_probability"))
-    if side not in {"YES", "NO"} or fair_probability is None:
+def snapshot_from_analysis(analysis: Dict[str, Any], market_data: Dict[str, Any]) -> Optional[EdgeSnapshot]:
+    side, fair = parse_probability_text((analysis or {}).get("system_probability"))
+    if side not in {"YES", "NO"} or fair is None:
         return None
-
-    current_market_probability = extract_side_price(market_data, side)
-    if current_market_probability is None:
+    market = extract_side_price(market_data, side)
+    if market is None:
         return None
-
-    stored_market_probability = parse_market_probability_text(
-        (analysis or {}).get("market_probability"), side
-    )
-    independent = True
-    if stored_market_probability is not None and abs(fair_probability - stored_market_probability) < 0.05:
-        independent = False
-
+    stored_market = parse_market_probability_text((analysis or {}).get("market_probability"), side)
+    independent = not (stored_market is not None and abs(float(fair) - float(stored_market)) < 0.05)
     return build_snapshot(
         side=side,
-        fair_probability=fair_probability,
-        market_probability=current_market_probability,
+        fair_probability=fair,
+        market_probability=market,
         confidence=(analysis or {}).get("confidence"),
         independent=independent,
         analysis_id=(analysis or {}).get("id"),
@@ -271,7 +303,7 @@ def get_edge_state(watchlist_id: int) -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
         if not row:
             return None
-        columns = [desc[0] for desc in cur.description]
+        columns = [description[0] for description in cur.description]
         return dict(zip(columns, row))
     finally:
         cur.close()
@@ -335,9 +367,13 @@ def decision_rank(value: Any) -> int:
     return {"NO_TRADE": 0, "WATCH": 1, "BUY": 2}.get(str(value or "").upper(), 0)
 
 
-def transition_fingerprint(
-    watchlist_id: int, previous_decision: str, snapshot: EdgeSnapshot
-) -> str:
+def should_notify_transition(previous: Dict[str, Any], snapshot: EdgeSnapshot) -> bool:
+    old_decision = str((previous or {}).get("decision") or "NO_TRADE").upper()
+    old_side = str((previous or {}).get("side") or "").upper()
+    return (bool(old_side) and old_side != snapshot.side) or old_decision != snapshot.decision
+
+
+def transition_fingerprint(watchlist_id: int, previous_decision: str, snapshot: EdgeSnapshot) -> str:
     return (
         f"edge:{int(watchlist_id)}:{str(previous_decision or 'NONE').upper()}"
         f"->{snapshot.decision}:{snapshot.side}:{snapshot.market_probability:.2f}"
@@ -345,12 +381,21 @@ def transition_fingerprint(
     )
 
 
-def should_notify_transition(previous: Dict[str, Any], snapshot: EdgeSnapshot) -> bool:
-    old_decision = str((previous or {}).get("decision") or "NO_TRADE").upper()
-    old_side = str((previous or {}).get("side") or "").upper()
-    if old_side and old_side != snapshot.side:
-        return True
-    return old_decision != snapshot.decision
+def charge_edge_transition(
+    user_id: int,
+    watchlist_id: int,
+    market_slug: str,
+    fingerprint: str,
+) -> Dict[str, Any]:
+    if not env_true(os.getenv("EDGE_WATCH_BILLING_ENABLED"), default=False):
+        return {"charged": False, "reason": "edge_alert_included", "cost": 0}
+    return charge_watchlist_event(
+        user_id,
+        watchlist_id,
+        market_slug,
+        "probability_change",
+        fingerprint,
+    )
 
 
 def format_edge_alert(
@@ -363,14 +408,11 @@ def format_edge_alert(
 ) -> str:
     old_decision = str((previous or {}).get("decision") or "NO_TRADE").upper()
     old_market = _safe_float((previous or {}).get("market_probability"))
-    direction = "усилился" if decision_rank(snapshot.decision) > decision_rank(old_decision) else "ослаб"
+    stronger = decision_rank(snapshot.decision) > decision_rank(old_decision)
 
-    if lang == "en":
+    if str(lang).lower() == "en":
         lines = [
-            "⚡ DeepAlpha Edge Alert",
-            "",
-            f"📌 {question}",
-            "",
+            "⚡ DeepAlpha Edge Alert", "", f"📌 {question}", "",
             f"Decision changed: {old_decision} → {snapshot.decision}",
             f"Side: {snapshot.side}",
             f"Fair probability: {snapshot.fair_probability:.1f}%",
@@ -386,31 +428,26 @@ def format_edge_alert(
             lines.append("The edge now satisfies the BUY policy (>8 pp, confidence medium or high).")
         elif snapshot.decision == "NO_TRADE":
             lines.append("The price no longer provides a sufficient independent edge.")
-        if market_url:
-            lines.extend(["", f"🔗 {market_url}"])
-        return "\n".join(lines)
+    else:
+        lines = [
+            "⚡ DeepAlpha Edge Alert", "", f"📌 {question}", "",
+            f"Решение изменилось: {old_decision} → {snapshot.decision}",
+            f"Сигнал {'усилился' if stronger else 'ослаб'}.",
+            f"Сторона: {snapshot.side}",
+            f"Справедливая вероятность: {snapshot.fair_probability:.1f}%",
+            f"Цена рынка: {snapshot.market_probability:.1f}%",
+            f"Edge: {snapshot.edge_pp:+.1f} п.п.",
+            f"Уверенность: {_ru_confidence(snapshot.confidence)}",
+        ]
+        if old_market is not None:
+            lines.append(f"Предыдущая цена рынка: {old_market:.1f}%")
+        if snapshot.decision == "WATCH" and snapshot.confidence == "low":
+            lines.append("BUY пока недоступен: уверенность должна вырасти минимум до средней.")
+        elif snapshot.decision == "BUY":
+            lines.append("Перевес соответствует политике BUY: более 8 п.п. при уверенности не ниже средней.")
+        elif snapshot.decision == "NO_TRADE":
+            lines.append("Цена больше не даёт достаточного независимого преимущества.")
 
-    lines = [
-        "⚡ DeepAlpha Edge Alert",
-        "",
-        f"📌 {question}",
-        "",
-        f"Решение изменилось: {old_decision} → {snapshot.decision}",
-        f"Сигнал {direction}.",
-        f"Сторона: {snapshot.side}",
-        f"Справедливая вероятность: {snapshot.fair_probability:.1f}%",
-        f"Цена рынка: {snapshot.market_probability:.1f}%",
-        f"Edge: {snapshot.edge_pp:+.1f} п.п.",
-        f"Уверенность: {_ru_confidence(snapshot.confidence)}",
-    ]
-    if old_market is not None:
-        lines.append(f"Предыдущая цена рынка: {old_market:.1f}%")
-    if snapshot.decision == "WATCH" and snapshot.confidence == "low":
-        lines.append("BUY пока недоступен: уверенность должна вырасти минимум до средней.")
-    elif snapshot.decision == "BUY":
-        lines.append("Перевес теперь соответствует политике BUY: более 8 п.п. при уверенности не ниже средней.")
-    elif snapshot.decision == "NO_TRADE":
-        lines.append("Цена больше не даёт достаточного независимого преимущества.")
     if market_url:
         lines.extend(["", f"🔗 {market_url}"])
     return "\n".join(lines)
@@ -418,49 +455,39 @@ def format_edge_alert(
 
 async def check_edge_watch_once(bot: Any) -> Dict[str, int]:
     init_edge_watch_schema()
-    stats = {"markets": 0, "subscribers": 0, "initialized": 0, "notified": 0, "errors": 0}
-    items = get_active_watchlist_items(limit=500)
-    for item in items or []:
-        slug = str((item or {}).get("market_slug") or "").strip()
-        if not slug:
-            continue
+    stats = {"rows": 0, "initialized": 0, "notified": 0, "errors": 0}
+    for row in get_active_edge_watch_rows(limit=500):
+        stats["rows"] += 1
         try:
-            market_data = fetch_market_by_slug(slug)
+            market_data = resolve_watch_market(
+                market_slug=str(row.get("market_slug") or ""),
+                market_url=str(row.get("market_url") or ""),
+                question=str(row.get("question") or ""),
+            )
             if not market_data or is_market_resolved(market_data):
                 continue
-            stats["markets"] += 1
-            subscribers = get_watchlist_subscribers(slug)
-            for sub in subscribers or []:
-                stats["subscribers"] += 1
-                if not sub.get("notify_enabled"):
-                    continue
-                try:
-                    await _check_edge_subscriber(bot, item, sub, market_data, stats)
-                except Exception as exc:
-                    stats["errors"] += 1
-                    logger.warning(
-                        "EDGE_WATCH_SUBSCRIBER_FAILED watchlist_id=%s type=%s",
-                        sub.get("id"), exc.__class__.__name__,
-                    )
-            await asyncio.sleep(0.15)
+            await _check_edge_row(bot, row, market_data, stats)
+            await asyncio.sleep(0.10)
         except Exception as exc:
             stats["errors"] += 1
-            logger.warning("EDGE_WATCH_MARKET_FAILED slug=%s type=%s", slug[:80], exc.__class__.__name__)
+            logger.warning(
+                "EDGE_WATCH_ROW_FAILED watchlist_id=%s type=%s",
+                row.get("watchlist_id"), exc.__class__.__name__,
+            )
     return stats
 
 
-async def _check_edge_subscriber(
+async def _check_edge_row(
     bot: Any,
-    item: Dict[str, Any],
-    sub: Dict[str, Any],
+    row: Dict[str, Any],
     market_data: Dict[str, Any],
     stats: Dict[str, int],
 ) -> None:
-    user_id = int(sub["user_id"])
-    watchlist_id = int(sub["id"])
-    slug = str(item.get("market_slug") or "")
-    question = str(item.get("question") or "")
-    market_url = str(item.get("market_url") or "")
+    watchlist_id = int(row["watchlist_id"])
+    user_id = int(row["user_id"])
+    slug = str(row.get("market_slug") or "")
+    question = str(row.get("question") or "")
+    market_url = str(row.get("market_url") or "")
 
     analysis = get_latest_analysis(user_id, slug, question)
     if not analysis:
@@ -505,18 +532,17 @@ async def _check_edge_subscriber(
         )
         return
 
-    charge = charge_watchlist_event(user_id, watchlist_id, slug, "edge_transition", fingerprint)
+    charge = charge_edge_transition(user_id, watchlist_id, slug, fingerprint)
     if charge.get("reason") == "insufficient_tokens":
         logger.info("EDGE_WATCH_PAUSED_INSUFFICIENT_TOKENS watchlist_id=%s", watchlist_id)
         return
 
-    lang = str(sub.get("language") or sub.get("lang") or "ru").lower()
     text = format_edge_alert(
         question=question,
         market_url=market_url,
         previous=previous,
         snapshot=snapshot,
-        lang="en" if lang == "en" else "ru",
+        lang="en" if str(row.get("language") or "ru").lower() == "en" else "ru",
     )
     await bot.send_message(user_id, text, disable_web_page_preview=True)
     upsert_edge_state(
@@ -530,7 +556,8 @@ async def _check_edge_subscriber(
     stats["notified"] += 1
     logger.info(
         "EDGE_WATCH_NOTIFIED watchlist_id=%s transition=%s->%s side=%s edge=%.2f",
-        watchlist_id, previous.get("decision"), snapshot.decision, snapshot.side, snapshot.edge_pp,
+        watchlist_id, previous.get("decision"), snapshot.decision,
+        snapshot.side, snapshot.edge_pp,
     )
 
 
@@ -551,9 +578,8 @@ async def edge_watch_worker(bot: Any) -> None:
             if locked:
                 stats = await check_edge_watch_once(bot)
                 logger.info(
-                    "EDGE_WATCH_DONE markets=%s subscribers=%s initialized=%s notified=%s errors=%s",
-                    stats["markets"], stats["subscribers"], stats["initialized"],
-                    stats["notified"], stats["errors"],
+                    "EDGE_WATCH_DONE rows=%s initialized=%s notified=%s errors=%s",
+                    stats["rows"], stats["initialized"], stats["notified"], stats["errors"],
                 )
         except Exception as exc:
             logger.exception("EDGE_WATCH_WORKER_ERROR type=%s", exc.__class__.__name__)
