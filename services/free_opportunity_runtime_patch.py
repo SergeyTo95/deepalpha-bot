@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 
 def install(telegram_module: Any) -> None:
-    """Render zero-LLM opportunity results before the generic signal formatter."""
+    """Render zero-cost opportunity results before the generic signal formatter."""
     original = getattr(telegram_module, "_format_analysis", None)
     if not callable(original) or getattr(original, "_deepalpha_free_opportunity", False):
         return
@@ -33,13 +33,13 @@ def format_free_opportunity_card(result: Dict[str, Any], lang: str = "ru") -> st
                 "🔍 Бесплатный Opportunity Scan\n\n"
                 "Подходящие рынки сейчас не найдены.\n\n"
                 "💸 AI-расход: 0\n"
-                "Kimi и Gemini не запускались. Попробуй повторить сканирование позже."
+                "Использовалась только публичная рыночная статистика. Попробуй повторить сканирование позже."
             )
         return (
             "🔍 Free Opportunity Scan\n\n"
             "No suitable markets were found right now.\n\n"
             "💸 AI cost: 0\n"
-            "Kimi and Gemini were not called. Run the scan again later."
+            "Only public market data was used. Run the scan again later."
         )
 
     lines: List[str] = []
@@ -96,7 +96,7 @@ def format_free_opportunity_card(result: Dict[str, Any], lang: str = "ru") -> st
             "🔍 <b>Бесплатный Opportunity Scan</b>\n\n"
             f"Проверено рынков: {int(result.get('markets_received') or len(candidates))}\n"
             f"Подходящих кандидатов: {int(result.get('eligible_markets') or len(candidates))}\n"
-            "💸 AI-расход: <b>0</b> — Kimi/Gemini не запускались.\n\n"
+            "💸 AI-расход: <b>0</b> — использовалась только публичная рыночная статистика.\n\n"
             + "\n\n".join(lines)
             + "\n\n⚠️ Это предварительный отбор, а не BUY. "
               "Справедливая вероятность и edge появятся только после обычного анализа выбранного рынка."
@@ -105,7 +105,7 @@ def format_free_opportunity_card(result: Dict[str, Any], lang: str = "ru") -> st
         "🔍 <b>Free Opportunity Scan</b>\n\n"
         f"Markets checked: {int(result.get('markets_received') or len(candidates))}\n"
         f"Eligible candidates: {int(result.get('eligible_markets') or len(candidates))}\n"
-        "💸 AI cost: <b>0</b> — Kimi/Gemini were not called.\n\n"
+        "💸 AI cost: <b>0</b> — only public market data was used.\n\n"
         + "\n\n".join(lines)
         + "\n\n⚠️ This is a pre-screen, not BUY. "
           "Fair probability and edge require a normal analysis of the selected market."

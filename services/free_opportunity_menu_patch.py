@@ -166,9 +166,9 @@ async def run_free_opportunity(message: Any, state: Optional[Any], telegram_modu
 
     lang = telegram_module.get_user_lang(user_id)
     status_text = (
-        "🔍 Бесплатно проверяю рынки Polymarket…\n\nKimi и Gemini не запускаются."
+        "🔍 Бесплатно проверяю рынки Polymarket…"
         if lang == "ru"
-        else "🔍 Scanning Polymarket markets for free…\n\nKimi and Gemini are not being called."
+        else "🔍 Scanning Polymarket markets for free…"
     )
     status_message = await message.answer(status_text)
 
@@ -184,9 +184,9 @@ async def run_free_opportunity(message: Any, state: Optional[Any], telegram_modu
     except Exception as exc:
         logger.exception("FREE_OPPORTUNITY_USER_SCAN_FAILED type=%s", exc.__class__.__name__)
         text = (
-            "❌ Не удалось получить список рынков. Попробуй повторить сканирование позже.\n\nAI-запросы не выполнялись."
+            "❌ Не удалось получить список рынков. Попробуй повторить сканирование позже.\n\nПлатные AI-запросы не выполнялись."
             if lang == "ru"
-            else "❌ Could not load the market shortlist. Try again later.\n\nNo AI requests were made."
+            else "❌ Could not load the market shortlist. Try again later.\n\nNo paid AI requests were made."
         )
     finally:
         try:
