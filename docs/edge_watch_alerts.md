@@ -16,9 +16,16 @@ The monitor sends an alert only when the decision state or forecasted side chang
 
 When an analysis returns `WAIT`, `WATCH`, or `NO_TRADE`, the decision block explicitly proposes adding the market to Watchlist with the button below it.
 
-- `WAIT` / `NO_TRADE`: DeepAlpha will notify the user when the decision becomes `WATCH` or `BUY`;
-- `WATCH`: DeepAlpha will notify the user when `BUY` appears or the signal weakens;
+- `WAIT` / `NO_TRADE`: DeepAlpha tells the user it will notify them when the decision becomes `WATCH` or `BUY`;
+- `WATCH`: DeepAlpha tells the user it will notify them when `BUY` appears or the signal weakens;
 - `BUY`: no tracking proposal is inserted because the card already presents an entry decision.
+
+Russian copy:
+
+```text
+🔔 Предлагаю отслеживать рынок: добавь его в Watchlist кнопкой ниже —
+DeepAlpha сообщит, когда появится WATCH или BUY.
+```
 
 The proposal is localized in Russian and English.
 
