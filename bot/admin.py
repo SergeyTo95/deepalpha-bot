@@ -1524,6 +1524,18 @@ def register_admin(dp: Dispatcher):
             return
         await message.answer(treasury_admin_panel_text(), reply_markup=treasury_admin_panel_buttons())
 
+    @dp.message_handler(commands=["ref_payout_wallet"])
+    async def legacy_referral_payout_wallet_command(message: types.Message):
+        if not is_admin(message.from_user.id):
+            return
+        wallet = get_active_referral_payout_wallet() or {}
+        await message.answer(
+            "💼 Legacy referral payout wallet (read-only)\n\n"
+            f"Address: {_mask_ton_admin(wallet.get('wallet_address'))}\n"
+            f"Status: {wallet.get('status') or 'not configured'}\n"
+            f"Network: {wallet.get('network') or os.getenv('TON_NETWORK', 'mainnet')}"
+        )
+
     @dp.callback_query_handler(lambda c: str(c.data or "") in {"treasury_refresh", "treasury_toggle_incoming_confirm", "treasury_toggle_outgoing_confirm", "treasury_pending_payouts", "treasury_reconciliation"})
     async def treasury_admin_callbacks(callback: types.CallbackQuery):
         if not is_admin(callback.from_user.id):
