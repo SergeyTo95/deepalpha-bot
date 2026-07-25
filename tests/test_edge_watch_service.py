@@ -1,6 +1,7 @@
 import pytest
 
 from services import edge_watch_service as service
+from services.decision_first_renderer_patch import build_decision_first_block
 from services.edge_watch_market_resolver import market_matches_question, select_best_market
 from services.edge_watch_runtime_patch import install as install_edge_watch
 
@@ -34,6 +35,19 @@ def _row(*, watchlist_id=11, user_id=22, question="Will the event happen?", lang
     }
 
 
+def _decision_summary(verdict="NO_TRADE"):
+    return {
+        "verdict": verdict,
+        "side": "NO",
+        "fair_probability": 79.0,
+        "market_probability": 77.5,
+        "edge_pp": 1.5,
+        "confidence": "low",
+        "data_quality_score": 5,
+        "data_quality_label": "limited",
+    }
+
+
 def test_probability_and_side_price_parsing():
     assert service.parse_probability_text("No — 79.0%") == ("NO", 79.0)
     assert service.parse_probability_text("YES: 21,5%") == ("YES", 21.5)
@@ -48,6 +62,21 @@ def test_decision_policy_matches_product_contract():
     assert service.classify_decision(8.0, "medium", True) == "WATCH"
     assert service.classify_decision(8.01, "medium", True) == "BUY"
     assert service.classify_decision(20.0, "high", False) == "NO_TRADE"
+
+
+def test_no_trade_wait_and_watch_offer_watchlist_tracking():
+    no_trade_ru = build_decision_first_block(_decision_summary("NO_TRADE"), lang="ru")
+    wait_ru = build_decision_first_block(_decision_summary("WAIT"), lang="ru")
+    watch_en = build_decision_first_block(_decision_summary("WATCH"), lang="en")
+    buy_ru = build_decision_first_block(_decision_summary("BUY"), lang="ru")
+
+    assert "Предлагаю отслеживать рынок" in no_trade_ru
+    assert "WATCH или BUY" in no_trade_ru
+    assert "ОЖИДАТЬ — НЕ ВХОДИТЬ" in wait_ru
+    assert "Watchlist кнопкой ниже" in wait_ru
+    assert "Track this market" in watch_en
+    assert "BUY appears" in watch_en
+    assert "Watchlist кнопкой ниже" not in buy_ru
 
 
 def test_exact_market_fallback_is_not_independent():
