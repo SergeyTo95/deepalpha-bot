@@ -26,8 +26,25 @@ class ProbabilityEstimatorAgent:
         facts = structured_evidence.get("facts") if isinstance(structured_evidence, dict) else []
         facts = facts if isinstance(facts, list) else []
 
+        # A valid priced market must always receive a directional baseline forecast.
+        # This is deliberately not presented as independent alpha: without usable
+        # facts the safest transparent estimate is the current market prior itself.
+        # Keeping probability_range empty makes renderers show the exact point
+        # estimate (for example NO 77.5%) instead of implying a researched range.
         if not facts and coverage_score == 0 and not existing_model:
-            out["limitations"].append("No usable evidence and zero coverage; independent probability not produced.")
+            if not market:
+                out["limitations"].append("Market options unavailable; cannot anchor a baseline forecast.")
+                return out
+            out["model_level"] = 1
+            out["confidence"] = "low"
+            out["point_estimate"] = dict(market)
+            out["probability_range"] = {}
+            out["estimate_source"] = "market_aligned_baseline"
+            out["independent_probability"] = False
+            out["why"].append("Used current market probabilities as a low-confidence baseline because no usable directional evidence was available.")
+            out["limitations"].append("Fresh relevant evidence was not found; this baseline follows market consensus and is not an independent value estimate.")
+            if missing_high_impact > 0:
+                out["limitations"].append("Some high-impact drivers are missing.")
             return out
 
         model_level = self._infer_model_level(facts, coverage_score, usable_sources_count, missing_high_impact, event_profile, existing_model)
@@ -36,12 +53,16 @@ class ProbabilityEstimatorAgent:
 
         if existing_model:
             point = dict(existing_model)
+            out["estimate_source"] = "existing_model"
+            out["independent_probability"] = True
             out["why"].append("Used existing model_options as primary independent model signal.")
         elif not market:
             out["limitations"].append("Market options unavailable; cannot anchor base prior.")
             return out
         else:
             point = dict(market)
+            out["estimate_source"] = "evidence_adjusted"
+            out["independent_probability"] = bool(facts)
 
         point, adjustments = self._apply_adjustments(point, facts, model_level)
         out["adjustments"] = adjustments
