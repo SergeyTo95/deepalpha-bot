@@ -44,6 +44,27 @@ def _enable_kimi(monkeypatch):
     monkeypatch.setenv("KIMI_API_KEY", "secret-kimi-key")
     monkeypatch.setenv("KIMI_MODEL", "kimi-k3")
     monkeypatch.setenv("KIMI_MAX_RETRIES", "0")
+    monkeypatch.delenv("KIMI_MAX_COMPLETION_TOKENS", raising=False)
+    monkeypatch.delenv("KIMI_MAX_COMPLETION_TOKENS_CAP", raising=False)
+
+
+def _success_payload(content="Final answer", finish_reason="stop", completion_tokens=20):
+    return {
+        "choices": [{
+            "finish_reason": finish_reason,
+            "message": {
+                "reasoning_content": "private chain of thought",
+                "content": content,
+            },
+        }],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": completion_tokens,
+            "total_tokens": 100 + completion_tokens,
+            "prompt_tokens_details": {"cached_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 12},
+        },
+    }
 
 
 def test_default_text_provider_remains_gemini(monkeypatch):
@@ -55,32 +76,18 @@ def test_default_text_provider_remains_gemini(monkeypatch):
     assert llm.resolve_text_provider("signal_generation") == "gemini"
 
 
-def test_kimi_request_uses_reasoning_effort_without_sampling_and_hides_reasoning(monkeypatch):
+def test_kimi_uses_max_completion_tokens_and_hides_reasoning(monkeypatch):
     from services import kimi_gateway as kimi
 
     _enable_kimi(monkeypatch)
     monkeypatch.setenv("KIMI_REASONING_EFFORT", "high")
+    monkeypatch.setenv("KIMI_MAX_COMPLETION_TOKENS", "4096")
     reservations, finalizations, _ = _install_fake_db(monkeypatch)
     calls = []
 
-    payload = {
-        "choices": [{
-            "message": {
-                "reasoning_content": "private chain of thought",
-                "content": "Final answer",
-            }
-        }],
-        "usage": {
-            "prompt_tokens": 100,
-            "completion_tokens": 20,
-            "total_tokens": 120,
-            "prompt_tokens_details": {"cached_tokens": 40},
-        },
-    }
-
     def fake_post(url, **kwargs):
         calls.append((url, kwargs))
-        return _FakeResponse(200, payload, {"x-request-id": "kimi-req-1"})
+        return _FakeResponse(200, _success_payload(), {"x-request-id": "kimi-req-1"})
 
     monkeypatch.setattr(kimi.requests, "post", fake_post)
     result = kimi.call_kimi(prompt="Analyze this market", feature="signal_generation", max_tokens=300)
@@ -91,13 +98,89 @@ def test_kimi_request_uses_reasoning_effort_without_sampling_and_hides_reasoning
     request_json = calls[0][1]["json"]
     assert request_json["model"] == "kimi-k3"
     assert request_json["reasoning_effort"] == "high"
-    assert request_json["max_tokens"] == 300
+    assert request_json["max_completion_tokens"] == 4096
+    assert "max_tokens" not in request_json
     assert "temperature" not in request_json
     assert "top_p" not in request_json
     assert reservations[0]["model"] == "kimi:kimi-k3"
     assert finalizations[0][1]["prompt_tokens"] == 100
     assert finalizations[0][1]["completion_tokens"] == 20
     assert result["usage"]["cached_input_tokens"] == 40
+    assert result["usage"]["reasoning_tokens"] == 12
+    assert result["finish_reason"] == "stop"
+
+
+def test_old_1200_output_limit_cannot_starve_reasoning_request(monkeypatch):
+    from services import kimi_gateway as kimi
+
+    _enable_kimi(monkeypatch)
+    monkeypatch.setenv("KIMI_MAX_OUTPUT_TOKENS", "1200")
+    _install_fake_db(monkeypatch)
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return _FakeResponse(200, _success_payload())
+
+    monkeypatch.setattr(kimi.requests, "post", fake_post)
+    result = kimi.call_kimi(prompt="Analyze", feature="signal_generation", max_tokens=1024)
+
+    assert result["ok"] is True
+    assert calls[0]["max_completion_tokens"] == 8192
+
+
+def test_finish_reason_length_is_failed_and_fallback_eligible(monkeypatch):
+    from services import kimi_gateway as kimi
+
+    _enable_kimi(monkeypatch)
+    monkeypatch.setenv("KIMI_MAX_COMPLETION_TOKENS", "4096")
+    _, finalizations, _ = _install_fake_db(monkeypatch)
+    monkeypatch.setattr(
+        kimi.requests,
+        "post",
+        lambda *a, **k: _FakeResponse(200, _success_payload(content="Partial", finish_reason="length", completion_tokens=4096)),
+    )
+
+    result = kimi.call_kimi(prompt="x", feature="signal_generation")
+
+    assert result["ok"] is False
+    assert result["reason"] == "completion_length"
+    assert result["finish_reason"] == "length"
+    assert result["fallback_allowed"] is True
+    assert result["text"] == ""
+    assert finalizations[0][1]["status"] == "failed"
+    assert finalizations[0][1]["reason"] == "completion_length"
+
+
+def test_truncation_retry_doubles_limit_then_succeeds(monkeypatch):
+    from services import kimi_gateway as kimi
+
+    _enable_kimi(monkeypatch)
+    monkeypatch.setenv("KIMI_MAX_RETRIES", "1")
+    monkeypatch.setenv("KIMI_MAX_COMPLETION_TOKENS", "4096")
+    monkeypatch.setenv("KIMI_MAX_COMPLETION_TOKENS_CAP", "16384")
+    reservations, finalizations, _ = _install_fake_db(monkeypatch)
+    calls = []
+    responses = [
+        _FakeResponse(200, _success_payload(content="Partial", finish_reason="length", completion_tokens=4096)),
+        _FakeResponse(200, _success_payload(content="Complete", finish_reason="stop", completion_tokens=5000)),
+    ]
+
+    def fake_post(url, **kwargs):
+        calls.append(kwargs["json"]["max_completion_tokens"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(kimi.requests, "post", fake_post)
+    monkeypatch.setattr(kimi.time, "sleep", lambda *a, **k: None)
+    result = kimi.call_kimi(prompt="x", feature="signal_generation")
+
+    assert result["ok"] is True
+    assert result["text"] == "Complete"
+    assert result["attempts_used"] == 2
+    assert calls == [4096, 8192]
+    assert len(reservations) == 2
+    assert finalizations[0][1]["reason"] == "completion_length"
+    assert finalizations[1][1]["status"] == "success"
 
 
 def test_kimi_auth_error_is_not_retried_or_fallback_eligible(monkeypatch):
@@ -144,7 +227,7 @@ def test_retryable_kimi_failure_falls_back_to_gemini_once(monkeypatch):
     def fake_provider(provider, *args, **kwargs):
         calls.append(provider)
         if provider == "kimi":
-            return {"text": "", "reason": "timeout", "fallback_allowed": True}
+            return {"text": "", "reason": "completion_length", "fallback_allowed": True}
         return {"text": "Gemini fallback"}
 
     monkeypatch.setattr(llm, "_provider_result", fake_provider)
@@ -183,17 +266,20 @@ def test_identical_primary_and_fallback_are_not_called_twice(monkeypatch):
     assert calls == ["kimi"]
 
 
-def test_api_key_is_not_logged(monkeypatch, caplog):
+def test_api_key_and_prompt_are_not_logged(monkeypatch, caplog):
     from services import kimi_gateway as kimi
 
     _enable_kimi(monkeypatch)
     _install_fake_db(monkeypatch)
     monkeypatch.setattr(kimi.requests, "post", lambda *a, **k: _FakeResponse(503, {}))
 
-    with caplog.at_level(logging.WARNING):
-        kimi.call_kimi(prompt="x", feature="signal_generation")
+    with caplog.at_level(logging.INFO):
+        kimi.call_kimi(prompt="private user market text", feature="signal_generation")
 
     assert "secret-kimi-key" not in caplog.text
+    assert "private user market text" not in caplog.text
+    assert "KIMI_REQUEST_START" in caplog.text
+    assert "KIMI_REQUEST_FAILED" in caplog.text
 
 
 def test_moonshot_endpoint_is_isolated_to_kimi_gateway():

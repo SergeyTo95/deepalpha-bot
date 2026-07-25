@@ -19,7 +19,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 WORKER_ID = os.getenv("RAILWAY_REPLICA_ID") or os.getenv("HOSTNAME") or socket.gethostname()
 _ALLOWED_REASONING_EFFORTS = {"low", "high", "max"}
-_RETRYABLE_REASONS = {"timeout", "connection_error", "rate_limit", "server_error", "empty_200", "json_parse_error"}
+_RETRYABLE_REASONS = {
+    "timeout",
+    "connection_error",
+    "rate_limit",
+    "server_error",
+    "empty_200",
+    "json_parse_error",
+    "completion_length",
+}
+_HIGH_REASONING_FEATURES = {
+    "decision_agent",
+    "signal_generation",
+    "live_analyst",
+    "summary_agent",
+    "dynamic_driver_agent",
+    "watchlist_ai_summary",
+}
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -52,18 +68,49 @@ def kimi_base_url() -> str:
 
 
 def kimi_reasoning_effort() -> str:
-    value = (os.getenv("KIMI_REASONING_EFFORT", "max") or "max").strip().lower()
-    return value if value in _ALLOWED_REASONING_EFFORTS else "max"
+    value = (os.getenv("KIMI_REASONING_EFFORT", "high") or "high").strip().lower()
+    return value if value in _ALLOWED_REASONING_EFFORTS else "high"
 
 
 def _api_key() -> str:
     return (os.getenv("KIMI_API_KEY", "") or "").strip()
 
 
+def _feature_default_completion_tokens(feature: str) -> int:
+    return 8192 if feature in _HIGH_REASONING_FEATURES else 4096
+
+
+def _initial_completion_limit(feature: str, requested_tokens: Optional[int]) -> int:
+    requested = max(1, int(requested_tokens or 0))
+    explicit = env_int("KIMI_MAX_COMPLETION_TOKENS", 0)
+    legacy = env_int("KIMI_MAX_OUTPUT_TOKENS", 0)
+
+    if explicit > 0:
+        configured = explicit
+    else:
+        # Compatibility with the original variable, but never allow an old low
+        # value such as 1200 to starve K3's hidden reasoning plus final answer.
+        configured = max(_feature_default_completion_tokens(feature), legacy)
+
+    cap = max(2048, env_int("KIMI_MAX_COMPLETION_TOKENS_CAP", 32768) or 32768)
+    return min(cap, max(2048, requested, configured))
+
+
+def _finish_reason(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    return str(choices[0].get("finish_reason") or "").strip().lower()
+
+
 def _usage(data: Any) -> Dict[str, Optional[int]]:
     usage = data.get("usage", {}) if isinstance(data, dict) else {}
     prompt_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+    completion_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
     cached = prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None
+    reasoning = completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
     prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
     completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
     total_tokens = usage.get("total_tokens")
@@ -74,6 +121,7 @@ def _usage(data: Any) -> Dict[str, Optional[int]]:
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "cached_input_tokens": cached,
+        "reasoning_tokens": reasoning,
     }
 
 
@@ -86,7 +134,8 @@ def _extract_final_text(data: Any) -> str:
     message = choices[0].get("message") or {}
     if not isinstance(message, dict):
         return ""
-    # Deliberately ignore reasoning_content/reasoning/thinking/analysis.
+
+    # Never expose hidden reasoning fields to Telegram users.
     content = message.get("content")
     if isinstance(content, str):
         return content.strip()
@@ -113,10 +162,9 @@ def _estimated_cost_usd(prompt_tokens: int, cached_input_tokens: int, completion
     ) / 1_000_000.0
 
 
-def _worst_case_cost_usd(prompt: str, max_tokens: int) -> float:
-    # Conservative local estimate when the provider returns no usage metadata.
+def _worst_case_cost_usd(prompt: str, completion_limit: int) -> float:
     estimated_prompt_tokens = max(1, (len(prompt or "") + 2) // 3)
-    return _estimated_cost_usd(estimated_prompt_tokens, 0, max_tokens)
+    return _estimated_cost_usd(estimated_prompt_tokens, 0, completion_limit)
 
 
 def _record_block(reason: str, **kwargs: Any) -> Dict[str, Any]:
@@ -166,11 +214,12 @@ def call_kimi(
 ) -> Dict[str, Any]:
     request_id = request_id or str(uuid.uuid4())
     selected_model = (model or kimi_model()).strip()
-    output_limit = max(1, int(max_tokens or env_int("KIMI_MAX_OUTPUT_TOKENS", 1200) or 1200))
-    timeout_seconds = max(1, int(timeout or env_int("KIMI_TIMEOUT_SECONDS", 90) or 90))
+    completion_limit = _initial_completion_limit(feature, max_tokens)
+    completion_cap = max(completion_limit, env_int("KIMI_MAX_COMPLETION_TOKENS_CAP", 32768) or 32768)
+    timeout_seconds = max(1, int(timeout or env_int("KIMI_TIMEOUT_SECONDS", 120) or 120))
     if max_attempts is None:
-        max_attempts = 1 + env_int("KIMI_MAX_RETRIES", 2)
-    attempts_limit = max(1, min(int(max_attempts), 5))
+        max_attempts = 1 + env_int("KIMI_MAX_RETRIES", 1)
+    attempts_limit = max(1, min(int(max_attempts), 3))
     db_model = f"kimi:{selected_model}"
     common = {
         "request_id": request_id,
@@ -194,7 +243,7 @@ def call_kimi(
     payload = {
         "model": selected_model,
         "messages": [{"role": "user", "content": str(prompt)}],
-        "max_tokens": output_limit,
+        "max_completion_tokens": completion_limit,
         "reasoning_effort": kimi_reasoning_effort(),
     }
     headers = {
@@ -232,20 +281,38 @@ def call_kimi(
         provider_request_id: Optional[str] = None
         data: Any = {}
         reason = "exception"
+        finish_reason = ""
+        current_limit = int(payload["max_completion_tokens"])
+
+        logger.info(
+            "KIMI_REQUEST_START feature=%s model=%s attempt=%s max_completion_tokens=%s reasoning_effort=%s",
+            feature,
+            selected_model,
+            attempt_index + 1,
+            current_limit,
+            payload["reasoning_effort"],
+        )
+
         try:
             response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
             status_code = int(response.status_code)
             response_headers = getattr(response, "headers", {}) or {}
             provider_request_id = response_headers.get("x-request-id") or response_headers.get("request-id")
+
             if status_code == 200:
                 try:
                     data = response.json()
                 except Exception:
                     data = {}
                     reason = "json_parse_error"
+
+                finish_reason = _finish_reason(data)
                 text = _extract_final_text(data)
-                if text:
-                    usage = _usage(data)
+                usage = _usage(data)
+
+                if finish_reason == "length":
+                    reason = "completion_length"
+                elif text:
                     cost = _estimated_cost_usd(
                         int(usage.get("prompt_tokens") or 0),
                         int(usage.get("cached_input_tokens") or 0),
@@ -263,6 +330,16 @@ def call_kimi(
                         total_tokens=usage.get("total_tokens"),
                         estimated_cost=cost,
                     )
+                    logger.info(
+                        "KIMI_REQUEST_SUCCESS feature=%s model=%s attempt=%s finish_reason=%s prompt_tokens=%s completion_tokens=%s reasoning_tokens=%s",
+                        feature,
+                        selected_model,
+                        attempt_index + 1,
+                        finish_reason or "stop",
+                        usage.get("prompt_tokens"),
+                        usage.get("completion_tokens"),
+                        usage.get("reasoning_tokens"),
+                    )
                     return {
                         "ok": True,
                         "text": text,
@@ -273,10 +350,13 @@ def call_kimi(
                         "attempt_id": attempt_id,
                         "attempts_used": attempt_index + 1,
                         "usage": usage,
+                        "finish_reason": finish_reason,
+                        "max_completion_tokens": current_limit,
                         "estimated_cost_usd": cost,
                         "fallback_allowed": False,
                     }
-                reason = reason if reason == "json_parse_error" else "empty_200"
+                elif reason != "json_parse_error":
+                    reason = "empty_200"
             elif status_code == 429:
                 reason = "rate_limit"
             elif status_code in {500, 502, 503, 504}:
@@ -304,11 +384,15 @@ def call_kimi(
             status_code = 0
 
         usage = _usage(data)
-        estimated_cost = _estimated_cost_usd(
-            int(usage.get("prompt_tokens") or 0),
-            int(usage.get("cached_input_tokens") or 0),
-            int(usage.get("completion_tokens") or 0),
-        ) if any(usage.get(key) is not None for key in ("prompt_tokens", "completion_tokens")) else _worst_case_cost_usd(prompt, output_limit)
+        estimated_cost = (
+            _estimated_cost_usd(
+                int(usage.get("prompt_tokens") or 0),
+                int(usage.get("cached_input_tokens") or 0),
+                int(usage.get("completion_tokens") or 0),
+            )
+            if any(usage.get(key) is not None for key in ("prompt_tokens", "completion_tokens"))
+            else _worst_case_cost_usd(prompt, current_limit)
+        )
         try:
             finalize_gemini_attempt(
                 attempt_id,
@@ -334,20 +418,31 @@ def call_kimi(
             "model": selected_model,
             "status_code": status_code,
             "reason": reason,
+            "finish_reason": finish_reason,
             "attempts_used": attempt_index + 1,
+            "max_completion_tokens": current_limit,
             "fallback_allowed": retryable,
             "estimated_cost_usd": estimated_cost,
         }
         logger.warning(
-            "KIMI_REQUEST_FAILED feature=%s model=%s attempt=%s status=%s reason=%s",
+            "KIMI_REQUEST_FAILED feature=%s model=%s attempt=%s status=%s reason=%s finish_reason=%s max_completion_tokens=%s",
             feature,
             selected_model,
             attempt_index + 1,
             status_code,
             reason,
+            finish_reason or "none",
+            current_limit,
         )
+
         if not retryable or attempt_index + 1 >= attempts_limit:
             break
+
+        if reason == "completion_length":
+            next_limit = min(completion_cap, max(current_limit + 2048, current_limit * 2))
+            if next_limit <= current_limit:
+                break
+            payload["max_completion_tokens"] = next_limit
         time.sleep(min(2 ** attempt_index, 8))
 
     return last
