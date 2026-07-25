@@ -1,13 +1,16 @@
 """DeepAlpha agent package runtime wiring."""
 
-# Install a guarded, independent DecisionAgent implementation before ChiefAgent
-# performs its dynamic import. This keeps legacy import paths stable, prevents
-# provider-format failures from degrading to probability=N/A, and explicitly
-# requires a numeric DeepAlpha point estimate even when source confidence is low.
+# Preserve the established SafeDecisionAgent class identity while extending its
+# prompt contract with an explicit independent numeric forecast requirement.
 from agents import decision_agent as _decision_agent_module
-from agents.independent_forecast_decision_agent import IndependentForecastDecisionAgent
+from agents.safe_decision_agent import SafeDecisionAgent
+from agents.independent_forecast_decision_agent import (
+    IndependentForecastDecisionAgent,
+    safe_decision_build_prompt,
+)
 
-_decision_agent_module.DecisionAgent = IndependentForecastDecisionAgent
+SafeDecisionAgent._build_prompt = safe_decision_build_prompt
+_decision_agent_module.DecisionAgent = SafeDecisionAgent
 
 # Preserve an upstream DecisionAgent/Kimi probability when TradingPlanAgent
 # builds the forecast card, while keeping market-aligned fallbacks non-independent.
@@ -25,6 +28,7 @@ _news_agent_module.build_targeted_news_queries = wrap_targeted_news_queries(
 )
 
 __all__ = [
+    "SafeDecisionAgent",
     "IndependentForecastDecisionAgent",
     "ForecastAwareTradingPlanAgent",
 ]
