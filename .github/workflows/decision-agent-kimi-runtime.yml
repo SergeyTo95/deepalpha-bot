@@ -1,0 +1,63 @@
+name: DecisionAgent Kimi runtime guard
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "agents/__init__.py"
+      - "agents/safe_decision_agent.py"
+      - "tests/test_decision_agent_kimi_runtime.py"
+      - ".github/workflows/decision-agent-kimi-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: decision-agent-kimi-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  decision-agent-kimi-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Compile runtime guard
+        run: |
+          python -m py_compile \
+            agents/__init__.py \
+            agents/safe_decision_agent.py \
+            agents/decision_agent.py \
+            agents/chief_agent.py
+
+      - name: Run DecisionAgent runtime tests
+        shell: bash
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_decision_agent_kimi_runtime.py \
+            tests/test_kimi_provider.py \
+            2>&1 | tee decision-agent-kimi-runtime.log
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: decision-agent-kimi-runtime-log
+          path: decision-agent-kimi-runtime.log
+          if-no-files-found: warn
