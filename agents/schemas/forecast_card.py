@@ -10,6 +10,7 @@ class ForecastCard(TypedDict):
     evidence: Dict[str, List[Any]]
     model: Dict[str, Any]
     value: Dict[str, Any]
+    decision_summary: Dict[str, Any]
     what_would_change: List[Any]
     risks: List[Any]
     next_queries: List[Any]
@@ -54,6 +55,7 @@ def empty_forecast_card() -> ForecastCard:
             "best_side": "NONE",
             "entry_price": {},
         },
+        "decision_summary": {},
         "what_would_change": [],
         "risks": [],
         "next_queries": [],
