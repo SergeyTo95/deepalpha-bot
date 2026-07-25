@@ -1,0 +1,54 @@
+name: Market-aligned baseline forecast
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "agents/__init__.py"
+      - "agents/forecast_aware_trading_plan_agent.py"
+      - "agents/probability_estimator_agent.py"
+      - "agents/schemas/probability.py"
+      - "tests/test_market_aligned_baseline_forecast.py"
+      - ".github/workflows/market-aligned-baseline-forecast.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-aligned-baseline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline-forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Compile forecast modules
+        run: |
+          python -m py_compile \
+            agents/__init__.py \
+            agents/forecast_aware_trading_plan_agent.py \
+            agents/schemas/probability.py \
+            agents/probability_estimator_agent.py \
+            agents/value_decision_agent.py \
+            agents/forecast_card_agent.py \
+            agents/trading_plan_agent.py
+
+      - name: Run focused baseline forecast tests
+        run: |
+          PYTHONPATH=. python -m pytest -q tests/test_market_aligned_baseline_forecast.py

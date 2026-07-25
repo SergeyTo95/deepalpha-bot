@@ -9,4 +9,12 @@ from agents.safe_decision_agent import SafeDecisionAgent
 
 _decision_agent_module.DecisionAgent = SafeDecisionAgent
 
-__all__ = ["SafeDecisionAgent"]
+# Preserve an upstream DecisionAgent/Kimi probability when TradingPlanAgent
+# builds the forecast card. Without this wiring, valid AI probabilities are
+# discarded whenever the news-evidence layer is empty.
+from agents import trading_plan_agent as _trading_plan_agent_module
+from agents.forecast_aware_trading_plan_agent import ForecastAwareTradingPlanAgent
+
+_trading_plan_agent_module.TradingPlanAgent = ForecastAwareTradingPlanAgent
+
+__all__ = ["SafeDecisionAgent", "ForecastAwareTradingPlanAgent"]

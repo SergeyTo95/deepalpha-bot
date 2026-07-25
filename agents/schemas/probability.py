@@ -3,6 +3,7 @@ from typing import Dict, List, Literal, TypedDict
 
 ProbabilityConfidence = Literal["none", "low", "medium", "high"]
 Direction = Literal["YES", "NO", "NEUTRAL", "UNKNOWN"]
+ProbabilityEstimateSource = Literal["unavailable", "market_aligned_baseline", "existing_model", "evidence_adjusted"]
 
 
 class ProbabilityAdjustment(TypedDict):
@@ -35,12 +36,14 @@ class ProbabilityEstimate(TypedDict):
     why: List[str]
     limitations: List[str]
     data_quality: ProbabilityDataQuality
+    estimate_source: ProbabilityEstimateSource
+    independent_probability: bool
 
 
 
 def empty_probability_estimate() -> ProbabilityEstimate:
     return {
-        "version": "1.0",
+        "version": "1.1",
         "model_level": 0,
         "confidence": "none",
         "probability_range": {},
@@ -54,4 +57,6 @@ def empty_probability_estimate() -> ProbabilityEstimate:
             "usable_sources_count": 0,
             "missing_high_impact_drivers": 0,
         },
+        "estimate_source": "unavailable",
+        "independent_probability": False,
     }
