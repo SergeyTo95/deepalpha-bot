@@ -12,35 +12,44 @@ def install(telegram_module: Any) -> None:
         if not isinstance(text, str) or not text.strip():
             return text
 
-        forecast_card = result.get("forecast_card") if isinstance(result, dict) else {}
-        summary = (
-            forecast_card.get("decision_summary")
-            if isinstance(forecast_card, dict)
-            and isinstance(forecast_card.get("decision_summary"), dict)
-            else {}
-        )
-        if not summary or "🎯 РЕШЕНИЕ:" in text[:700] or "🎯 DECISION:" in text[:700]:
-            return _clean_generic_outcome_labels(text)
-
+        summary = extract_decision_summary(result)
         lang = (
             result.get("lang")
             or result.get("language")
             or getattr(telegram_module, "get_user_lang", lambda _uid: "ru")(uid)
         )
-        block = build_decision_first_block(summary, lang=str(lang or "ru"))
-        if not block:
-            return _clean_generic_outcome_labels(text)
-
-        marker = "🔎 DeepAlpha Signal"
-        if text.startswith(marker):
-            remainder = text[len(marker):].lstrip("\n")
-            text = f"{marker}\n\n{block}\n\n{remainder}"
-        else:
-            text = f"{block}\n\n{text}"
-        return _clean_generic_outcome_labels(text)
+        return prepend_decision_first_block(text, summary, lang=str(lang or "ru"))
 
     decision_first_renderer._deepalpha_decision_first = True
     telegram_module._format_forecast_card_signal = decision_first_renderer
+
+
+def extract_decision_summary(result: Any) -> Dict[str, Any]:
+    payload = result if isinstance(result, dict) else {}
+    direct = payload.get("decision_summary")
+    if isinstance(direct, dict) and direct:
+        return direct
+    forecast_card = payload.get("forecast_card") if isinstance(payload.get("forecast_card"), dict) else {}
+    nested = forecast_card.get("decision_summary")
+    return nested if isinstance(nested, dict) else {}
+
+
+def prepend_decision_first_block(text: str, summary: Dict[str, Any], lang: str = "ru") -> str:
+    clean_text = _clean_generic_outcome_labels(str(text or ""))
+    if not clean_text.strip() or not isinstance(summary, dict) or not summary:
+        return clean_text
+    if "🎯 РЕШЕНИЕ:" in clean_text[:700] or "🎯 DECISION:" in clean_text[:700]:
+        return clean_text
+
+    block = build_decision_first_block(summary, lang=lang)
+    if not block:
+        return clean_text
+
+    marker = "🔎 DeepAlpha Signal"
+    if clean_text.startswith(marker):
+        remainder = clean_text[len(marker):].lstrip("\n")
+        return f"{marker}\n\n{block}\n\n{remainder}"
+    return f"{block}\n\n{clean_text}"
 
 
 def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str:
@@ -53,8 +62,11 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
     fair = _number(summary.get("fair_probability"))
     market = _number(summary.get("market_probability"))
     edge = _number(summary.get("edge_pp"))
-    required = _number(summary.get("minimum_edge_required_pp"))
-    entry = _number(summary.get("entry_price_max"))
+    watch_required = _number(summary.get("watch_edge_required_pp"))
+    watch_price = _number(summary.get("watch_price_max"))
+    buy_required = _number(summary.get("minimum_edge_required_pp"))
+    buy_price = _number(summary.get("entry_price_max"))
+    buy_available = bool(summary.get("buy_available"))
     quality = _number(summary.get("data_quality_score"))
     confidence = str(summary.get("confidence") or "none").lower().strip()
     reason = str(summary.get("reason") or "").strip()
@@ -81,10 +93,24 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
             lines.append(f"Цена рынка: {_fmt(market)}%")
         if edge is not None:
             lines.append(f"Edge: {edge:+.1f} п.п.")
-        if required is not None:
-            lines.append(f"Минимум для входа: +{required:.1f} п.п.")
-        if entry is not None and side != "NONE":
-            lines.append(f"📍 Интересная цена {side}: {_fmt(entry)}% или ниже")
+
+        if verdict == "WATCH":
+            if watch_required is not None:
+                lines.append(f"Порог усиления WATCH: +{watch_required:.1f} п.п.")
+            if watch_price is not None and side != "NONE":
+                lines.append(f"📍 Цена для усиления WATCH {side}: {_fmt(watch_price)}% или ниже")
+            if buy_available and buy_required is not None:
+                lines.append(f"Порог BUY: +{buy_required:.1f} п.п.")
+            elif summary.get("buy_blocked_reason") == "confidence_below_medium":
+                lines.append("Порог BUY: сначала нужна уверенность не ниже средней")
+            if buy_price is not None and side != "NONE":
+                lines.append(f"📍 Цена для BUY {side}: {_fmt(buy_price)}% или ниже")
+        elif verdict == "BUY":
+            if buy_required is not None:
+                lines.append(f"Порог BUY: +{buy_required:.1f} п.п.")
+            if buy_price is not None and side != "NONE":
+                lines.append(f"📍 Максимальная цена BUY {side}: {_fmt(buy_price)}%")
+
         lines.append(f"🧠 Уверенность: {confidence_text}")
         if quality is not None:
             lines.append(f"🧾 Качество данных: {int(round(quality))}/10 — {quality_text}")
@@ -107,10 +133,24 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
         lines.append(f"Market price: {_fmt(market)}%")
     if edge is not None:
         lines.append(f"Edge: {edge:+.1f} pp")
-    if required is not None:
-        lines.append(f"Minimum required edge: +{required:.1f} pp")
-    if entry is not None and side != "NONE":
-        lines.append(f"📍 Interesting {side} price: {_fmt(entry)}% or lower")
+
+    if verdict == "WATCH":
+        if watch_required is not None:
+            lines.append(f"WATCH strengthening threshold: +{watch_required:.1f} pp")
+        if watch_price is not None and side != "NONE":
+            lines.append(f"📍 Stronger WATCH price for {side}: {_fmt(watch_price)}% or lower")
+        if buy_available and buy_required is not None:
+            lines.append(f"BUY threshold: +{buy_required:.1f} pp")
+        elif summary.get("buy_blocked_reason") == "confidence_below_medium":
+            lines.append("BUY threshold: confidence must first reach at least medium")
+        if buy_price is not None and side != "NONE":
+            lines.append(f"📍 BUY price for {side}: {_fmt(buy_price)}% or lower")
+    elif verdict == "BUY":
+        if buy_required is not None:
+            lines.append(f"BUY threshold: +{buy_required:.1f} pp")
+        if buy_price is not None and side != "NONE":
+            lines.append(f"📍 Maximum BUY price for {side}: {_fmt(buy_price)}%")
+
     lines.append(f"🧠 Confidence: {confidence}")
     if quality is not None:
         lines.append(f"🧾 Data quality: {int(round(quality))}/10 — {quality_text}")
