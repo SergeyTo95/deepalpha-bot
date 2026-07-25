@@ -1,6 +1,10 @@
+import os
+
 import pytest
 
 from services import edge_watch_service as service
+from services.edge_watch_market_resolver import select_best_market
+from services.edge_watch_runtime_patch import install as install_edge_watch
 
 
 def _analysis(system="No — 79.0%", market="Yes: 22.5% | No: 77.5%", confidence="Low", analysis_id=7):
@@ -72,6 +76,22 @@ def test_medium_confidence_price_crossing_can_become_buy():
     assert snapshot.decision == "BUY"
 
 
+def test_event_resolver_selects_exact_truth_social_submarket():
+    markets = [
+        {"question": "Will Donald Trump post 100-119 Truth Social posts from July 28 to August 4, 2026?", "id": "a"},
+        {"question": "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?", "id": "b"},
+        {"question": "Will Donald Trump post 140-159 Truth Social posts from July 28 to August 4, 2026?", "id": "c"},
+    ]
+
+    selected = select_best_market(
+        "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?",
+        markets,
+    )
+
+    assert selected is not None
+    assert selected["id"] == "b"
+
+
 def test_alert_explains_real_trade_transition():
     snapshot = service.build_snapshot(
         side="NO",
@@ -136,6 +156,33 @@ async def test_worker_initializes_silently_then_notifies_on_transition(monkeypat
     assert "NO_TRADE → WATCH" in messages[0][1]
     assert updates[-1]["last_notified_decision"] == "WATCH"
     assert updates[-1]["last_notification_fingerprint"].startswith("edge:11:NO_TRADE->WATCH")
+
+
+def test_runtime_patch_includes_edge_alerts_without_second_charge(monkeypatch):
+    class FakeBot:
+        pass
+
+    async def legacy_worker():
+        return None
+
+    class FakeTelegram:
+        bot = FakeBot()
+
+    class FakeApp:
+        watchlist_worker = staticmethod(legacy_worker)
+        telegram_bot = FakeTelegram()
+
+    monkeypatch.delenv("EDGE_WATCH_BILLING_ENABLED", raising=False)
+    original_charge = service.charge_watchlist_event
+    original_fetch = service.fetch_market_by_slug
+    try:
+        install_edge_watch(FakeApp)
+        charge = service.charge_watchlist_event(1, 2, "slug", "edge_transition", "fp")
+        assert charge == {"charged": False, "reason": "edge_alert_included", "cost": 0}
+        assert getattr(FakeApp.watchlist_worker, "_deepalpha_edge_watch", False) is True
+    finally:
+        service.charge_watchlist_event = original_charge
+        service.fetch_market_by_slug = original_fetch
 
 
 async def _completed_sleep():
