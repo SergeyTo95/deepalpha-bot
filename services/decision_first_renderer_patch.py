@@ -75,6 +75,7 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
         verdict_text = {
             "BUY": "BUY — РАССМОТРЕТЬ ВХОД",
             "WATCH": "WATCH — НАБЛЮДАТЬ, НЕ ВХОДИТЬ",
+            "WAIT": "ОЖИДАТЬ — НЕ ВХОДИТЬ",
             "NO_TRADE": "NO TRADE — НЕ ВХОДИТЬ",
         }.get(verdict, "NO TRADE — НЕ ВХОДИТЬ")
         confidence_text = {
@@ -116,11 +117,15 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
             lines.append(f"🧾 Качество данных: {int(round(quality))}/10 — {quality_text}")
         if reason:
             lines.append(f"Почему: {reason}")
+        tracking_offer = _tracking_offer(verdict, is_ru=True)
+        if tracking_offer:
+            lines.extend(["", tracking_offer])
         return "\n".join(lines)
 
     verdict_text = {
         "BUY": "BUY — CONSIDER ENTRY",
         "WATCH": "WATCH — DO NOT ENTER YET",
+        "WAIT": "WAIT — DO NOT ENTER YET",
         "NO_TRADE": "NO TRADE",
     }.get(verdict, "NO TRADE")
     quality_text = _quality_text(summary.get("data_quality_label"), False)
@@ -156,7 +161,35 @@ def build_decision_first_block(summary: Dict[str, Any], lang: str = "ru") -> str
         lines.append(f"🧾 Data quality: {int(round(quality))}/10 — {quality_text}")
     if reason:
         lines.append(f"Why: {reason}")
+    tracking_offer = _tracking_offer(verdict, is_ru=False)
+    if tracking_offer:
+        lines.extend(["", tracking_offer])
     return "\n".join(lines)
+
+
+def _tracking_offer(verdict: str, is_ru: bool) -> str:
+    normalized = str(verdict or "").upper().strip()
+    if normalized not in {"WAIT", "WATCH", "NO_TRADE"}:
+        return ""
+    if is_ru:
+        if normalized == "WATCH":
+            return (
+                "🔔 Отслеживать рынок: добавь его в Watchlist кнопкой ниже — "
+                "DeepAlpha сообщит, когда появится BUY или сигнал ослабнет."
+            )
+        return (
+            "🔔 Предлагаю отслеживать рынок: добавь его в Watchlist кнопкой ниже — "
+            "DeepAlpha сообщит, когда появится WATCH или BUY."
+        )
+    if normalized == "WATCH":
+        return (
+            "🔔 Track this market: add it to Watchlist with the button below — "
+            "DeepAlpha will alert you when BUY appears or the signal weakens."
+        )
+    return (
+        "🔔 Track this market: add it to Watchlist with the button below — "
+        "DeepAlpha will alert you when the decision changes to WATCH or BUY."
+    )
 
 
 def _clean_generic_outcome_labels(text: str) -> str:

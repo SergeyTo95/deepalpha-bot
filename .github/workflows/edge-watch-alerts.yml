@@ -1,0 +1,55 @@
+name: Edge watch alerts
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/edge_watch_service.py"
+      - "services/edge_watch_market_resolver.py"
+      - "services/edge_watch_runtime_patch.py"
+      - "services/decision_first_renderer_patch.py"
+      - "run_bot_process.py"
+      - "tests/test_edge_watch_service.py"
+      - "docs/edge_watch_alerts.md"
+      - ".github/workflows/edge-watch-alerts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-watch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  edge-watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            services/edge_watch_service.py \
+            services/edge_watch_market_resolver.py \
+            services/edge_watch_runtime_patch.py \
+            services/decision_first_renderer_patch.py \
+            run_bot_process.py
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q tests/test_edge_watch_service.py
