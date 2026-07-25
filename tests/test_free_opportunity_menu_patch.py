@@ -174,8 +174,10 @@ async def test_user_scan_is_zero_token_and_uses_dedicated_card():
     result_text = message.answers[1][0]
     result_kwargs = message.answers[1][1]
 
-    assert "Kimi и Gemini не запускаются" in status_text
+    assert status_text == "🔍 Бесплатно проверяю рынки Polymarket…"
     assert "AI-расход: <b>0</b>" in result_text
     assert "Это предварительный отбор, а не BUY" in result_text
+    assert "Kimi" not in status_text + result_text
+    assert "Gemini" not in status_text + result_text
     assert result_kwargs["parse_mode"] == "HTML"
     assert result_kwargs["disable_web_page_preview"] is True
