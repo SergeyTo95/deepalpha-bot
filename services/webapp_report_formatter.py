@@ -1,15 +1,29 @@
 from typing import Any, Dict, Optional
 
 from db.database import add_web_analysis_history
+from services.decision_first_renderer_patch import (
+    extract_decision_summary,
+    prepend_decision_first_block,
+)
 
 
-def build_canonical_quick_analysis_text(raw_result: Dict[str, Any]) -> str:
+def build_canonical_quick_analysis_text(raw_result: Dict[str, Any], lang: str = "") -> str:
     result = raw_result if isinstance(raw_result, dict) else {}
+    base_text = ""
     for key in ("canonical_text", "telegram_text", "copy_text", "full_analysis"):
         val = result.get(key)
         if isinstance(val, str) and val.strip():
-            return val.strip()
-    return ""
+            base_text = val.strip()
+            break
+    if not base_text:
+        return ""
+
+    effective_lang = str(lang or result.get("lang") or result.get("language") or "en")
+    return prepend_decision_first_block(
+        base_text,
+        extract_decision_summary(result),
+        lang=effective_lang,
+    )
 
 
 def _extract_slug(url: str) -> str:
@@ -91,13 +105,21 @@ def build_webapp_top_analysis_report(raw_result: Dict[str, Any], market_url: str
 def build_webapp_analysis_report(raw_result: Dict[str, Any], market_url: str = "", lang: str = "en") -> Dict[str, Any]:
     result = raw_result if isinstance(raw_result, dict) else {}
     question = str(result.get("question") or "").strip()
-    canonical_text = build_canonical_quick_analysis_text(result)
+    canonical_text = build_canonical_quick_analysis_text(result, lang=lang)
     display_prediction = str(result.get("display_prediction") or "").strip()
     market_probability = str(result.get("market_probability") or "").strip()
     confidence = str(result.get("confidence") or "").strip()
     category = str(result.get("category") or "").strip()
     conclusion = str(result.get("conclusion") or result.get("reasoning") or "").strip()
     slug = str(result.get("slug") or _extract_slug(market_url)).strip()
+
+    forecast_card = result.get("forecast_card") if isinstance(result.get("forecast_card"), dict) else {}
+    decision_summary = extract_decision_summary(result)
+    sections = dict(result.get("sections")) if isinstance(result.get("sections"), dict) else {}
+    if forecast_card:
+        sections["forecast_card"] = forecast_card
+    if decision_summary:
+        sections["decision_summary"] = decision_summary
 
     return {
         "question": question,
@@ -110,7 +132,9 @@ def build_webapp_analysis_report(raw_result: Dict[str, Any], market_url: str = "
         "telegram_text": canonical_text,
         "copy_text": canonical_text or conclusion,
         "market_slug": slug,
-        "sections": result.get("sections") if isinstance(result.get("sections"), dict) else {},
+        "forecast_card": forecast_card,
+        "decision_summary": decision_summary,
+        "sections": sections,
     }
 
 
