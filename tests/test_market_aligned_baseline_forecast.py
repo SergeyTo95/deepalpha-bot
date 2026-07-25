@@ -178,3 +178,54 @@ def test_real_directional_evidence_still_replaces_market_baseline():
     assert estimate["point_estimate"]["YES"] > 22.5
     assert estimate["point_estimate"]["NO"] < 77.5
     assert estimate["probability_range"]
+
+
+def test_neutral_fact_keeps_market_aligned_baseline_not_researched_range():
+    neutral_evidence = {
+        "facts": [
+            {
+                "driver_id": "deadline",
+                "direction": "NEUTRAL",
+                "impact": "high",
+                "confidence": "high",
+                "claim": "The market has a fixed weekly deadline.",
+            }
+        ],
+        "missing_driver_data": [],
+        "source_quality": {
+            "coverage_score": 0.6,
+            "usable_sources_count": 2,
+        },
+    }
+
+    estimate = ProbabilityEstimatorAgent().estimate(
+        event_profile={"event_type": "generic_binary_event"},
+        driver_map={},
+        data_plan={},
+        structured_evidence=neutral_evidence,
+        market_options={"YES": 22.5, "NO": 77.5},
+        model_options=None,
+    )
+
+    assert estimate["point_estimate"] == {"YES": 22.5, "NO": 77.5}
+    assert estimate["probability_range"] == {}
+    assert estimate["estimate_source"] == "market_aligned_baseline"
+    assert estimate["independent_probability"] is False
+    assert any("neutral" in item.lower() for item in estimate["limitations"])
+
+
+def test_partial_binary_market_does_not_emit_baseline():
+    estimate = ProbabilityEstimatorAgent().estimate(
+        event_profile={"event_type": "generic_binary_event"},
+        driver_map={},
+        data_plan={},
+        structured_evidence=_empty_evidence(),
+        market_options={"YES": 22.5},
+        model_options=None,
+    )
+
+    assert estimate["model_level"] == 0
+    assert estimate["point_estimate"] == {}
+    assert estimate["probability_range"] == {}
+    assert estimate["estimate_source"] == "unavailable"
+    assert any("complete market options" in item.lower() for item in estimate["limitations"])
