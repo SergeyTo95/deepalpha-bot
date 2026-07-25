@@ -1,0 +1,53 @@
+name: Free opportunity menu
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/free_opportunity_menu_patch.py"
+      - "services/free_opportunity_runtime_patch.py"
+      - "run_bot_process.py"
+      - "tests/test_free_opportunity_menu_patch.py"
+      - ".github/workflows/free-opportunity-menu.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: free-opportunity-menu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  free-opportunity-menu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            services/free_opportunity_menu_patch.py \
+            run_bot_process.py
+
+      - name: Enforce no token billing in free menu handler
+        run: |
+          ! grep -En "_check_tokens|_deduct_tokens|opportunity_price_tokens|use_free_trial" services/free_opportunity_menu_patch.py
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q tests/test_free_opportunity_menu_patch.py tests/test_free_opportunity_scanner.py
