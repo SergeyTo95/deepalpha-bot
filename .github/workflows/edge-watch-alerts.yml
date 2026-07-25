@@ -11,6 +11,7 @@ on:
       - "services/decision_first_renderer_patch.py"
       - "run_bot_process.py"
       - "tests/test_edge_watch_service.py"
+      - "docs/edge_watch_alerts.md"
       - ".github/workflows/edge-watch-alerts.yml"
   workflow_dispatch:
 
@@ -46,6 +47,7 @@ jobs:
             services/edge_watch_service.py \
             services/edge_watch_market_resolver.py \
             services/edge_watch_runtime_patch.py \
+            services/decision_first_renderer_patch.py \
             run_bot_process.py
 
       - name: Run focused tests
