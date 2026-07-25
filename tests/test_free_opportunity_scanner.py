@@ -182,9 +182,11 @@ def test_free_card_explicitly_says_not_buy_and_zero_ai_cost():
     text = format_free_opportunity_card(result, lang="ru")
 
     assert "AI-расход: <b>0</b>" in text
-    assert "Kimi/Gemini не запускались" in text
+    assert "публичная рыночная статистика" in text
     assert "не BUY" in text
     assert "Открыть рынок" in text
+    assert "Kimi" not in text
+    assert "Gemini" not in text
 
 
 def test_scanner_source_has_no_llm_or_paid_provider_dependency():
