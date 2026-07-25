@@ -58,13 +58,25 @@ def _keyboard_texts(markup):
     return [button.text for row in markup.keyboard for button in row]
 
 
+def _handler_names(module):
+    return [
+        getattr(getattr(item, "handler", None), "__name__", "")
+        for item in module.dp.message_handlers.handlers
+    ]
+
+
 def _fake_module(lang="ru"):
     dispatcher = FakeDispatcher()
 
     async def personal_signal_handler(message):
         raise AssertionError("legacy billed handler must be removed")
 
-    dispatcher.message_handlers.handlers.append(FakeHandlerItem(personal_signal_handler))
+    async def generic_fallback_handler(message):
+        raise AssertionError("generic fallback must not intercept opportunity button")
+
+    dispatcher.message_handlers.handlers.extend(
+        [FakeHandlerItem(personal_signal_handler), FakeHandlerItem(generic_fallback_handler)]
+    )
 
     class FakeAgent:
         def run(self, **kwargs):
@@ -118,16 +130,23 @@ def test_install_adds_visible_button_and_removes_legacy_billed_handler():
 
     analysis_texts = _keyboard_texts(module.get_analysis_keyboard(42))
     other_texts = _keyboard_texts(module.get_other_analyses_keyboard(42))
-    handler_names = [
-        getattr(getattr(item, "handler", None), "__name__", "")
-        for item in module.dp.message_handlers.handlers
-    ]
+    handler_names = _handler_names(module)
 
     assert RU_BUTTON in analysis_texts
     assert RU_BUTTON in other_texts
     assert LEGACY_RU_BUTTON not in other_texts
     assert "personal_signal_handler" not in handler_names
     assert len(module.dp.registered) == 2
+
+
+def test_free_handlers_are_promoted_before_generic_fallback():
+    module = _fake_module(lang="ru")
+
+    install(module)
+
+    handler_names = _handler_names(module)
+    assert handler_names[:2] == ["free_opportunity_handler", "free_opportunity_handler"]
+    assert handler_names.index("free_opportunity_handler") < handler_names.index("generic_fallback_handler")
 
 
 def test_english_menu_uses_find_opportunities_label():
