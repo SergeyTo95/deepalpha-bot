@@ -25,15 +25,15 @@ class ProbabilityEstimatorAgent:
 
         facts = structured_evidence.get("facts") if isinstance(structured_evidence, dict) else []
         facts = facts if isinstance(facts, list) else []
+        directional_facts = self._directional_facts(facts)
 
-        # A valid priced market must always receive a directional baseline forecast.
-        # This is deliberately not presented as independent alpha: without usable
-        # facts the safest transparent estimate is the current market prior itself.
-        # Keeping probability_range empty makes renderers show the exact point
-        # estimate (for example NO 77.5%) instead of implying a researched range.
-        if not facts and coverage_score == 0 and not existing_model:
-            if not market:
-                out["limitations"].append("Market options unavailable; cannot anchor a baseline forecast.")
+        # A complete priced market must always receive a directional baseline
+        # forecast even when fresh evidence is absent or only neutral. This is not
+        # presented as independent alpha: it transparently follows market prior.
+        # Keeping probability_range empty makes Telegram show exact point values.
+        if not directional_facts and not existing_model:
+            if not self._has_complete_market_prior(market):
+                out["limitations"].append("Complete market options are unavailable; cannot anchor a baseline forecast.")
                 return out
             out["model_level"] = 1
             out["confidence"] = "low"
@@ -42,12 +42,16 @@ class ProbabilityEstimatorAgent:
             out["estimate_source"] = "market_aligned_baseline"
             out["independent_probability"] = False
             out["why"].append("Used current market probabilities as a low-confidence baseline because no usable directional evidence was available.")
-            out["limitations"].append("Fresh relevant evidence was not found; this baseline follows market consensus and is not an independent value estimate.")
+            if facts:
+                out["limitations"].append("Available facts were neutral and did not support either outcome direction.")
+            else:
+                out["limitations"].append("Fresh relevant evidence was not found.")
+            out["limitations"].append("This baseline follows market consensus and is not an independent value estimate.")
             if missing_high_impact > 0:
                 out["limitations"].append("Some high-impact drivers are missing.")
             return out
 
-        model_level = self._infer_model_level(facts, coverage_score, usable_sources_count, missing_high_impact, event_profile, existing_model)
+        model_level = self._infer_model_level(directional_facts, coverage_score, usable_sources_count, missing_high_impact, event_profile, existing_model)
         out["model_level"] = model_level
         out["confidence"] = {0: "none", 1: "low", 2: "medium", 3: "high"}.get(model_level, "low")
 
@@ -56,22 +60,22 @@ class ProbabilityEstimatorAgent:
             out["estimate_source"] = "existing_model"
             out["independent_probability"] = True
             out["why"].append("Used existing model_options as primary independent model signal.")
-        elif not market:
-            out["limitations"].append("Market options unavailable; cannot anchor base prior.")
+        elif not self._has_complete_market_prior(market):
+            out["limitations"].append("Complete market options are unavailable; cannot anchor base prior.")
             return out
         else:
             point = dict(market)
             out["estimate_source"] = "evidence_adjusted"
-            out["independent_probability"] = bool(facts)
+            out["independent_probability"] = bool(directional_facts)
 
-        point, adjustments = self._apply_adjustments(point, facts, model_level)
+        point, adjustments = self._apply_adjustments(point, directional_facts, model_level)
         out["adjustments"] = adjustments
 
         if point:
             out["point_estimate"] = point
             out["probability_range"] = self._build_ranges(point, model_level)
 
-        if not facts:
+        if not directional_facts:
             out["limitations"].append("No extracted directional facts; model relies on prior only.")
         if missing_high_impact > 0:
             out["limitations"].append("Some high-impact drivers are missing.")
@@ -119,7 +123,7 @@ class ProbabilityEstimatorAgent:
             delta = base * weight
             adjustments.append({
                 "driver_id": str(fact.get("driver_id") or "unknown"),
-                "direction": direction if direction in {"YES", "NO", "NEUTRAL", "UNKNOWN"} else "UNKNOWN",
+                "direction": direction,
                 "impact_points": round(base, 3),
                 "confidence_weight": round(weight, 3),
                 "reason": str(fact.get("claim") or fact.get("driver_label") or "Directional fact"),
@@ -137,8 +141,8 @@ class ProbabilityEstimatorAgent:
             no = float(point.get("NO", 50.0)) - total_yes_shift
             yes = max(1.0, min(99.0, yes))
             no = max(1.0, min(99.0, no))
-            s = yes + no
-            point = {"YES": round((yes / s) * 100.0, 2), "NO": round((no / s) * 100.0, 2)}
+            total = yes + no
+            point = {"YES": round((yes / total) * 100.0, 2), "NO": round((no / total) * 100.0, 2)}
         return point, adjustments
 
     def _build_ranges(self, point: Dict[str, float], model_level: int) -> Dict[str, Dict[str, float]]:
@@ -146,19 +150,39 @@ class ProbabilityEstimatorAgent:
             return {}
         width = {1: 5.0, 2: 3.0, 3: 2.0}.get(model_level, 5.0)
         out: Dict[str, Dict[str, float]] = {}
-        for side, p in point.items():
-            low = max(1.0, min(99.0, float(p) - width))
-            high = max(1.0, min(99.0, float(p) + width))
+        for side, probability in point.items():
+            low = max(1.0, min(99.0, float(probability) - width))
+            high = max(1.0, min(99.0, float(probability) + width))
             out[side] = {"low": round(low, 2), "high": round(high, 2)}
         return out
+
+    @staticmethod
+    def _directional_facts(facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            fact for fact in facts
+            if isinstance(fact, dict)
+            and str(fact.get("direction") or "").upper() in {"YES", "NO"}
+        ]
+
+    @staticmethod
+    def _has_complete_market_prior(market: Dict[str, float]) -> bool:
+        if not isinstance(market, dict) or len(market) < 2:
+            return False
+        if set(market) == {"YES", "NO"}:
+            yes = market.get("YES")
+            no = market.get("NO")
+            if yes is None or no is None or not (0.0 <= yes <= 100.0 and 0.0 <= no <= 100.0):
+                return False
+            return abs((yes + no) - 100.0) <= 1.0
+        return all(0.0 <= value <= 100.0 for value in market.values()) and sum(market.values()) > 0.0
 
     def _normalize_options(self, options: Dict[str, Any]) -> Dict[str, float]:
         if not isinstance(options, dict):
             return {}
         out: Dict[str, float] = {}
-        for k, v in options.items():
+        for key, value in options.items():
             try:
-                out[str(k).upper()] = float(v)
+                out[str(key).upper()] = float(value)
             except (TypeError, ValueError):
                 continue
         return out
