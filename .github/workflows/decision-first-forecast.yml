@@ -10,6 +10,7 @@ on:
       - "agents/decision_first_trading_plan_agent.py"
       - "agents/schemas/forecast_card.py"
       - "services/decision_first_renderer_patch.py"
+      - "services/webapp_report_formatter.py"
       - "run_bot_process.py"
       - "supervisord.conf"
       - "tests/test_decision_first_forecast_card.py"
@@ -49,6 +50,7 @@ jobs:
             agents/decision_first_trading_plan_agent.py \
             agents/schemas/forecast_card.py \
             services/decision_first_renderer_patch.py \
+            services/webapp_report_formatter.py \
             run_bot_process.py
 
       - name: Run focused tests
