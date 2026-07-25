@@ -16,20 +16,21 @@ from services.polymarket_service import (
 def fetch_watch_market_by_slug(slug: str) -> Optional[Dict[str, Any]]:
     """Resolve a watchlist row to its exact contract, including event URLs.
 
-    Legacy watchlist rows often store the event slug while the forecast question
-    belongs to one submarket inside that event. The direct market endpoint then
-    returns nothing. This resolver reads the saved question and selects the exact
-    submarket from the event payload before falling back to public market search.
+    The legacy resolver may return the first submarket for an event slug. That is
+    unsafe for range events, where the saved analysis can refer to a different
+    contract. This resolver validates the returned question and, when necessary,
+    selects the exact submarket from the event payload.
     """
+    row = _watchlist_market_context(slug)
     direct = fetch_direct_market(slug)
-    if direct:
+
+    if not row:
         return direct
 
-    row = _watchlist_market_context(slug)
-    if not row:
-        return None
-
     question = str(row.get("question") or "").strip()
+    if direct and market_matches_question(question, direct, minimum_score=0.90):
+        return direct
+
     event_slug = extract_slug_from_url(str(row.get("market_url") or "")) or str(slug or "")
     event_markets = _event_markets(event_slug)
     selected = select_best_market(question, event_markets)
@@ -37,7 +38,13 @@ def fetch_watch_market_by_slug(slug: str) -> Optional[Dict[str, Any]]:
         return selected
 
     candidates = list_markets(search=question, limit=20) if question else []
-    return select_best_market(question, candidates)
+    selected = select_best_market(question, candidates)
+    if selected:
+        return selected
+
+    # A mismatched direct result is deliberately not returned: using the wrong
+    # range contract would create a false edge alert.
+    return None
 
 
 def _watchlist_market_context(slug: str) -> Optional[Dict[str, Any]]:
@@ -90,6 +97,15 @@ def _event_markets(event_slug: str) -> List[Dict[str, Any]]:
         return markets
     except Exception:
         return []
+
+
+def market_matches_question(
+    question: str,
+    market: Dict[str, Any],
+    minimum_score: float = 0.90,
+) -> bool:
+    candidate = _normalize((market or {}).get("question") or (market or {}).get("title") or "")
+    return _similarity(_normalize(question), candidate) >= float(minimum_score)
 
 
 def select_best_market(question: str, markets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
