@@ -16,10 +16,9 @@ LEGACY_EN_BUTTON = "🔮 Personal signal"
 def install(telegram_module: Any) -> None:
     """Expose the zero-cost scanner and replace the legacy billed personal signal.
 
-    PR #320 changed OpportunityAgent to a free deterministic scanner by default,
-    but the Telegram menu still hid it behind the legacy Personal signal handler,
-    which retained the old token checks. This patch gives the feature an explicit
-    menu entry and removes the legacy handler from the dispatcher registry.
+    The telegram module already registers a broad text fallback during import.
+    Runtime-installed handlers therefore have to be promoted ahead of that
+    fallback; otherwise the visible button is treated like an unknown message.
     """
     if getattr(telegram_module, "_deepalpha_free_opportunity_menu_installed", False):
         return
@@ -43,10 +42,15 @@ def install(telegram_module: Any) -> None:
         commands=["opportunities", "find_opportunities"],
         state="*",
     )
+    promoted = _promote_handler_callback(dispatcher, free_opportunity_handler)
 
     telegram_module._deepalpha_free_opportunity_menu_installed = True
     telegram_module._free_opportunity_handler = free_opportunity_handler
-    logger.info("FREE_OPPORTUNITY_MENU_INSTALLED legacy_handlers_removed=%s", removed)
+    logger.info(
+        "FREE_OPPORTUNITY_MENU_INSTALLED legacy_handlers_removed=%s promoted_handlers=%s",
+        removed,
+        promoted,
+    )
 
 
 def _install_analysis_keyboard(telegram_module: Any) -> None:
@@ -108,6 +112,10 @@ def _install_other_analyses_keyboard(telegram_module: Any) -> None:
     telegram_module.get_other_analyses_keyboard = get_other_analyses_keyboard
 
 
+def _handler_callback(item: Any) -> Any:
+    return getattr(item, "handler", None) or getattr(item, "callback", None)
+
+
 def _remove_legacy_personal_signal_handler(telegram_module: Any) -> int:
     registry = getattr(getattr(telegram_module, "dp", None), "message_handlers", None)
     handlers = getattr(registry, "handlers", None)
@@ -118,13 +126,30 @@ def _remove_legacy_personal_signal_handler(telegram_module: Any) -> int:
     kept = []
     removed = 0
     for item in handlers:
-        callback = getattr(item, "handler", None) or getattr(item, "callback", None)
+        callback = _handler_callback(item)
         if getattr(callback, "__name__", "") == "personal_signal_handler":
             removed += 1
             continue
         kept.append(item)
     handlers[:] = kept
     return removed
+
+
+def _promote_handler_callback(dispatcher: Any, callback: Any) -> int:
+    """Move all registrations for callback before broad pre-existing handlers."""
+    registry = getattr(dispatcher, "message_handlers", None)
+    handlers = getattr(registry, "handlers", None)
+    if not isinstance(handlers, list):
+        logger.warning("FREE_OPPORTUNITY_HANDLER_PRIORITY_REGISTRY_UNAVAILABLE")
+        return 0
+
+    promoted = [item for item in handlers if _handler_callback(item) is callback]
+    if not promoted:
+        logger.warning("FREE_OPPORTUNITY_HANDLER_PRIORITY_NOT_FOUND")
+        return 0
+    remaining = [item for item in handlers if _handler_callback(item) is not callback]
+    handlers[:] = promoted + remaining
+    return len(promoted)
 
 
 async def run_free_opportunity(message: Any, state: Optional[Any], telegram_module: Any) -> None:
