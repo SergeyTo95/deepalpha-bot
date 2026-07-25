@@ -7,6 +7,8 @@ on:
     paths:
       - "services/kimi_gateway.py"
       - "tests/test_kimi_provider.py"
+      - "tests/test_kimi_runtime_config.py"
+      - "docs/kimi-k3-runtime.md"
       - ".env.example"
       - ".github/workflows/kimi-completion-hotfix.yml"
   workflow_dispatch:
@@ -37,7 +39,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest -q tests/test_kimi_provider.py 2>&1 | tee kimi-completion-hotfix.log
+          pytest -q \
+            tests/test_kimi_provider.py \
+            tests/test_kimi_runtime_config.py \
+            2>&1 | tee kimi-completion-hotfix.log
 
       - name: Upload test log
         if: always()
