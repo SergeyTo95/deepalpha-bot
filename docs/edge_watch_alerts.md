@@ -12,6 +12,16 @@ For the forecasted side:
 
 The monitor sends an alert only when the decision state or forecasted side changes. Initial state is stored silently so adding a market does not immediately duplicate the analysis card.
 
+## Tracking proposal in analysis cards
+
+When an analysis returns `WAIT`, `WATCH`, or `NO_TRADE`, the decision block explicitly proposes adding the market to Watchlist with the button below it.
+
+- `WAIT` / `NO_TRADE`: DeepAlpha will notify the user when the decision becomes `WATCH` or `BUY`;
+- `WATCH`: DeepAlpha will notify the user when `BUY` appears or the signal weakens;
+- `BUY`: no tracking proposal is inserted because the card already presents an entry decision.
+
+The proposal is localized in Russian and English.
+
 ## Price source
 
 The worker resolves the exact Polymarket contract. Older Watchlist rows may contain an event slug instead of the submarket slug, so the resolver loads the event and matches the stored analysis question to the correct submarket.
