@@ -1,3 +1,4 @@
+from agents.forecast_aware_trading_plan_agent import ForecastAwareTradingPlanAgent
 from agents.probability_estimator_agent import ProbabilityEstimatorAgent
 from agents.trading_plan_agent import TradingPlanAgent
 from agents.value_decision_agent import ValueDecisionAgent
@@ -11,6 +12,28 @@ def _empty_evidence():
             "coverage_score": 0.0,
             "usable_sources_count": 0,
         },
+    }
+
+
+def _no_sources():
+    return {
+        "relevant_sources": [],
+        "sources": [],
+        "relevant_sources_count": 0,
+        "raw_sources_count": 0,
+        "news_quality": "low",
+        "source_summary": {},
+        "sources_found_but_filtered": False,
+    }
+
+
+def _trump_market(probability: str = ""):
+    question = "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?"
+    return {
+        "question": question,
+        "category": "Politics",
+        "market_probability": "Yes: 22.5% | No: 77.5%",
+        "probability": probability,
     }
 
 
@@ -55,28 +78,13 @@ def test_market_aligned_baseline_never_creates_value_edge():
     assert value["decision"] == "NO_TRADE"
 
 
-def test_trump_post_count_market_forecast_card_contains_numeric_no_forecast():
-    question = "Will Donald Trump post 120-139 Truth Social posts from July 28 to August 4, 2026?"
-    base_result = {
-        "question": question,
-        "category": "Politics",
-        "market_probability": "Yes: 22.5% | No: 77.5%",
-        "probability": "",
-    }
-    news_data = {
-        "relevant_sources": [],
-        "sources": [],
-        "relevant_sources_count": 0,
-        "raw_sources_count": 0,
-        "news_quality": "low",
-        "source_summary": {},
-        "sources_found_but_filtered": False,
-    }
+def test_trump_market_without_upstream_ai_uses_numeric_market_baseline():
+    base_result = _trump_market()
 
     result = TradingPlanAgent().run(
         result=base_result,
         market_data=base_result,
-        news_data=news_data,
+        news_data=_no_sources(),
         lang="ru",
     )
 
@@ -88,8 +96,54 @@ def test_trump_post_count_market_forecast_card_contains_numeric_no_forecast():
     assert model["confidence"] == "low"
     assert model["point_estimate"] == {"YES": 22.5, "NO": 77.5}
     assert model["probability_range"] == {}
+    assert model["estimate_source"] == "market_aligned_baseline"
+    assert model["independent_probability"] is False
     assert value["edge"] == {"YES": 0.0, "NO": 0.0}
     assert value["decision"] == "NO_TRADE"
+
+
+def test_upstream_kimi_probability_is_used_instead_of_copying_market():
+    base_result = _trump_market("No — 69.0%")
+
+    result = TradingPlanAgent().run(
+        result=base_result,
+        market_data=base_result,
+        news_data=_no_sources(),
+        lang="ru",
+    )
+
+    model = result["forecast_card"]["model"]
+    value = result["forecast_card"]["value"]
+
+    assert result["upstream_probability_used"] is True
+    assert model["point_estimate"] == {"NO": 69.0, "YES": 31.0}
+    assert model["estimate_source"] == "upstream_decision_forecast"
+    assert model["independent_probability"] is True
+    assert max(model["point_estimate"], key=model["point_estimate"].get) == "NO"
+    assert value["edge"]["YES"] == 8.5
+    assert value["edge"]["NO"] == -8.5
+
+
+def test_upstream_yes_probability_builds_complement():
+    parsed = ForecastAwareTradingPlanAgent._parse_binary_probability("YES: 63.5%")
+
+    assert parsed == {"YES": 63.5, "NO": 36.5}
+
+
+def test_invalid_upstream_probability_falls_back_to_market_baseline():
+    base_result = _trump_market("N/A")
+
+    result = TradingPlanAgent().run(
+        result=base_result,
+        market_data=base_result,
+        news_data=_no_sources(),
+        lang="ru",
+    )
+
+    model = result["forecast_card"]["model"]
+    assert result["upstream_probability_used"] is False
+    assert model["point_estimate"] == {"YES": 22.5, "NO": 77.5}
+    assert model["estimate_source"] == "market_aligned_baseline"
 
 
 def test_real_directional_evidence_still_replaces_market_baseline():
