@@ -5,6 +5,8 @@ on:
     branches:
       - feature/turbo-short-term-btc
     paths:
+      - "agents/__init__.py"
+      - "agents/forecast_aware_trading_plan_agent.py"
       - "agents/probability_estimator_agent.py"
       - "agents/schemas/probability.py"
       - "tests/test_market_aligned_baseline_forecast.py"
@@ -39,6 +41,8 @@ jobs:
       - name: Compile forecast modules
         run: |
           python -m py_compile \
+            agents/__init__.py \
+            agents/forecast_aware_trading_plan_agent.py \
             agents/schemas/probability.py \
             agents/probability_estimator_agent.py \
             agents/value_decision_agent.py \
