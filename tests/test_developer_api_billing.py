@@ -108,13 +108,18 @@ def test_new_clients_and_manual_adjustments_cannot_bypass_ledger():
     assert "/admin/api/clients/{client_id}/credits" in admin_source
 
 
-def test_admin_can_manage_prices_and_inspect_billing_without_public_execution():
+def test_admin_manages_billing_while_quick_analysis_uses_it():
     admin_source = Path("developer_api_admin_routes.py").read_text(encoding="utf-8")
     route_source = Path("developer_api_routes.py").read_text(encoding="utf-8")
+    analysis_source = Path("services/developer_api_analysis_service.py").read_text(encoding="utf-8")
 
     assert "API products and prices" in admin_source
     assert "Recent credit ledger" in admin_source
     assert "Recent reservations" in admin_source
     assert "/admin/api/products/{product_code}" in admin_source
-    assert 'app.router.add_post("/api/v1/analyses"' not in route_source
+    assert 'app.router.add_post("/api/v1/analyses"' in route_source
+    assert 'app.router.add_get("/api/v1/analyses/{job_id}"' in route_source
     assert 'app.router.add_get("/api/v1/opportunities"' not in route_source
+    assert "create_billed_api_job" in analysis_source
+    assert "complete_api_job_success" in analysis_source
+    assert "complete_api_job_failure" in analysis_source
