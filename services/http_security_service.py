@@ -69,6 +69,11 @@ def _origin_allowed(request: web.Request, origin: str, configured: Set[str]) -> 
     return bool(origin and (origin in configured or _is_same_origin(request, origin)))
 
 
+def _is_api_path(path: str) -> bool:
+    normalized = str(path or "")
+    return normalized.startswith("/api/") or normalized.startswith("/app-api/")
+
+
 def _admin_secret() -> str:
     return str(os.getenv("ADMIN_SECRET_KEY", "") or "")
 
@@ -181,7 +186,7 @@ async def deepalpha_security_middleware(request: web.Request, handler):
     origin = str(request.headers.get("Origin", "") or "").strip()
     configured_origins = allowed_cors_origins()
     origin_allowed = _origin_allowed(request, origin, configured_origins) if origin else False
-    if origin and request.path.startswith("/api/") and not origin_allowed:
+    if origin and _is_api_path(request.path) and not origin_allowed:
         return _json_response({"ok": False, "error": "origin_not_allowed"}, 403)
     if request.method == "POST" and request.path.startswith("/admin") and origin and not origin_allowed:
         return web.Response(text="Forbidden", status=403)
@@ -196,7 +201,12 @@ async def deepalpha_security_middleware(request: web.Request, handler):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    if request.path.startswith("/admin") or request.path.startswith("/api/v1/"):
+    if (
+        request.path.startswith("/admin")
+        or request.path.startswith("/api/v1/")
+        or request.path.startswith("/app-api/")
+        or request.path == "/developer"
+    ):
         response.headers["Cache-Control"] = "no-store"
 
     response.headers.pop("Access-Control-Allow-Origin", None)
@@ -205,7 +215,7 @@ async def deepalpha_security_middleware(request: web.Request, handler):
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, X-Idempotency-Key, X-Request-ID"
+            "Authorization, Content-Type, X-Idempotency-Key, X-Request-ID, X-DeepAlpha-Portal"
         )
         response.headers["Access-Control-Max-Age"] = "600"
     return response
