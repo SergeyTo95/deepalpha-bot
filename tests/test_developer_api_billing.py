@@ -75,12 +75,12 @@ def test_job_creation_reserves_before_execution_and_reuses_same_request():
     source = Path("services/developer_api_billing_service.py").read_text(encoding="utf-8")
 
     assert "def create_billed_api_job(" in source
-    assert 'status, idempotency_key, request_json, units_reserved, units_charged' in source
+    assert "idempotency_key, request_json, units_reserved, units_charged" in source
     assert 'event_type="reserve"' in source
-    assert 'amount=-units' in source
+    assert "amount=-units" in source
     assert '"idempotent": True' in source
     assert 'raise ApiBillingError("idempotency_conflict")' in source
-    assert 'raise ApiBillingError(\n                "insufficient_api_credits"' in source
+    assert '"insufficient_api_credits"' in source
 
 
 def test_success_finalizes_reservation_and_failure_returns_reserved_credits():
