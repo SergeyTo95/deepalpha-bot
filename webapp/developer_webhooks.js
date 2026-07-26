@@ -16,7 +16,12 @@
 {
   "name": "production",
   "url": "https://example.com/deepalpha/webhook",
-  "events": ["analysis.completed", "analysis.failed"]
+  "events": [
+    "analysis.completed",
+    "analysis.failed",
+    "opportunity_scan.completed",
+    "opportunity_scan.failed"
+  ]
 }</pre>
          <p>Каждая доставка содержит заголовки:</p>
          <pre>X-DeepAlpha-Event
@@ -36,7 +41,12 @@ POST /api/v1/webhook-deliveries/{delivery_id}/retry</pre>`
 {
   "name": "production",
   "url": "https://example.com/deepalpha/webhook",
-  "events": ["analysis.completed", "analysis.failed"]
+  "events": [
+    "analysis.completed",
+    "analysis.failed",
+    "opportunity_scan.completed",
+    "opportunity_scan.failed"
+  ]
 }</pre>
          <p>Every delivery includes:</p>
          <pre>X-DeepAlpha-Event
