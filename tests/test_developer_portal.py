@@ -6,6 +6,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import developer_portal_routes as routes
 from services import developer_portal_service as service
+from services import developer_portal_quick_analysis_patch as quick_patch
 
 SESSION_HEADER = {"Cookie": "deepalpha_session=valid"}
 MUTATION_HEADERS = {
@@ -35,6 +36,28 @@ def test_self_service_scopes_exclude_admin_and_wallet_permissions():
     with pytest.raises(service.DeveloperPortalError) as exc:
         service.normalize_self_service_scopes(["wallet:send"])
     assert exc.value.code == "at_least_one_scope_required"
+
+
+def test_quick_analysis_patch_adds_default_analysis_scopes(monkeypatch):
+    monkeypatch.setattr(service, "get_user_developer_overview", lambda _user_id: {
+        "projects": [],
+        "default_scopes": ["account:read", "usage:read"],
+        "analysis_endpoints_enabled": False,
+    })
+    monkeypatch.delattr(service, "_deepalpha_quick_analysis_portal_installed", raising=False)
+    quick_patch.install()
+
+    assert service.DEFAULT_SELF_SERVICE_SCOPES == [
+        "account:read",
+        "usage:read",
+        "analysis:run",
+        "analysis:read",
+    ]
+    overview = service.get_user_developer_overview(42)
+    assert overview["analysis_endpoints_enabled"] is True
+    assert overview["available_analysis_modes"] == ["quick"]
+    assert "analysis:run" in overview["default_scopes"]
+    assert "analysis:read" in overview["default_scopes"]
 
 
 def test_portal_schema_maps_each_api_client_to_one_owner():
@@ -71,10 +94,11 @@ async def test_overview_returns_only_current_users_projects(monkeypatch):
         return {
             "projects": [{"id": 7, "name": "Owned project", "keys": []}],
             "products": [],
-            "available_scopes": ["account:read"],
-            "default_scopes": ["account:read"],
+            "available_scopes": ["account:read", "analysis:run", "analysis:read"],
+            "default_scopes": ["account:read", "analysis:run", "analysis:read"],
             "limits": {"projects_per_user": 3, "keys_per_project": 5},
-            "analysis_endpoints_enabled": False,
+            "analysis_endpoints_enabled": True,
+            "available_analysis_modes": ["quick"],
             "live_keys_enabled": False,
         }
 
@@ -89,7 +113,8 @@ async def test_overview_returns_only_current_users_projects(monkeypatch):
         assert response.status == 200
         assert captured["user_id"] == 42
         assert payload["projects"][0]["id"] == 7
-        assert payload["analysis_endpoints_enabled"] is False
+        assert payload["analysis_endpoints_enabled"] is True
+        assert payload["available_analysis_modes"] == ["quick"]
     finally:
         await client.close()
 
@@ -159,11 +184,12 @@ async def test_key_secret_is_returned_only_by_issue_action(monkeypatch):
         response = await client.post(
             "/app-api/v1/developer/projects/7/keys",
             headers=MUTATION_HEADERS,
-            json={"name": "backend", "scopes": ["account:read"]},
+            json={"name": "backend", "scopes": ["account:read", "analysis:run", "analysis:read"]},
         )
         payload = await response.json()
         assert response.status == 201
         assert payload["key"]["raw_key"].startswith("da_test_")
+        assert "analysis:run" in payload["key"]["scopes"]
     finally:
         await client.close()
 
@@ -172,32 +198,42 @@ async def test_key_secret_is_returned_only_by_issue_action(monkeypatch):
     assert "k.key_hash" not in service_source.split("def list_user_api_keys", 1)[1].split("def issue_user_api_key", 1)[0]
 
 
-def test_frontend_never_persists_secret_and_authenticates_with_telegram():
+def test_frontend_never_persists_secret_and_documents_quick_analysis():
     javascript = Path("webapp/developer.js").read_text(encoding="utf-8")
+    quick_javascript = Path("webapp/developer_quick_analysis.js").read_text(encoding="utf-8")
     html = Path("webapp/developer.html").read_text(encoding="utf-8")
 
     assert 'body: JSON.stringify({ init_data: initData })' in javascript
     assert 'document.getElementById("secretValue").value = ""' in javascript
-    assert "localStorage" not in javascript
-    assert "sessionStorage" not in javascript
+    assert "localStorage" not in javascript + quick_javascript
+    assert "sessionStorage" not in javascript + quick_javascript
     assert "X-DeepAlpha-Portal" in javascript
+    assert "Idempotency-Key" in quick_javascript
+    assert "POST /api/v1/analyses" in quick_javascript
+    assert "GET  /api/v1/analyses/{job_id}" in quick_javascript
+    assert "analysis:run" in quick_javascript
+    assert "analysis:read" in quick_javascript
+    assert "developer_quick_analysis.js?v=1.0" in html
     assert "secretModal" in html
     assert "readonly" in html
 
 
-def test_public_analysis_execution_is_still_not_added_by_portal():
+def test_quick_analysis_is_public_but_opportunities_and_wallet_remain_closed():
     portal_routes = Path("developer_portal_routes.py").read_text(encoding="utf-8")
     developer_routes = Path("developer_api_routes.py").read_text(encoding="utf-8")
 
-    assert 'app.router.add_post("/api/v1/analyses"' not in developer_routes
+    assert 'app.router.add_post("/api/v1/analyses"' in developer_routes
+    assert 'app.router.add_get("/api/v1/analyses/{job_id}"' in developer_routes
     assert 'app.router.add_get("/api/v1/opportunities"' not in developer_routes
+    assert "/api/v1/wallet" not in developer_routes
     assert "/app-api/v1/developer" in portal_routes
     assert "wallet" not in service.SELF_SERVICE_SCOPES
 
 
-def test_security_middleware_covers_app_api_origins_and_portal_header():
+def test_security_middleware_covers_app_api_origins_and_idempotency_header():
     source = Path("services/http_security_service.py").read_text(encoding="utf-8")
 
     assert 'normalized.startswith("/app-api/")' in source
     assert "X-DeepAlpha-Portal" in source
+    assert "Idempotency-Key" in source
     assert 'request.path.startswith("/app-api/")' in source
