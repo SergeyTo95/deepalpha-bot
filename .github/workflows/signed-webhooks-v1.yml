@@ -1,0 +1,99 @@
+name: Signed Webhooks v1
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_api_webhook_routes.py"
+      - "run_webhook_worker.py"
+      - "run_web_process.py"
+      - "supervisord.conf"
+      - "services/developer_api_webhook_service.py"
+      - "services/developer_api_webhook_runtime_patch.py"
+      - "services/developer_api_webhook_cors_patch.py"
+      - "services/developer_api_admin_webhook_patch.py"
+      - "services/developer_portal_webhook_scope_patch.py"
+      - "webapp/developer.html"
+      - "webapp/developer_webhooks.js"
+      - "tests/test_signed_webhooks.py"
+      - "docs/signed_webhooks_v1.md"
+      - ".github/workflows/signed-webhooks-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-webhooks-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-webhooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile webhook API and workers
+        run: |
+          python -m py_compile \
+            developer_api_webhook_routes.py \
+            run_webhook_worker.py \
+            run_web_process.py \
+            services/developer_api_webhook_service.py \
+            services/developer_api_webhook_runtime_patch.py \
+            services/developer_api_webhook_cors_patch.py \
+            services/developer_api_admin_webhook_patch.py \
+            services/developer_portal_webhook_scope_patch.py
+
+      - name: Validate Developer Portal JavaScript
+        run: node --check webapp/developer_webhooks.js
+
+      - name: Verify outbox and delivery worker durability
+        run: |
+          grep -q "AFTER UPDATE OF status ON api_jobs" services/developer_api_webhook_service.py
+          grep -q "FOR UPDATE OF d SKIP LOCKED" services/developer_api_webhook_service.py
+          grep -q "recover_stale_webhook_deliveries" services/developer_api_webhook_service.py
+          grep -q "\[program:webhook-worker\]" supervisord.conf
+          ! grep -RIn "asyncio.create_task" services/developer_api_webhook_service.py run_webhook_worker.py
+
+      - name: Verify signing-secret and SSRF boundaries
+        run: |
+          ! grep -RIn "signing_secret TEXT\|secret_plaintext" services/developer_api_webhook_service.py
+          grep -q "socket.create_connection((self._resolved_ip, self.port)" services/developer_api_webhook_service.py
+          grep -q "server_hostname=self.host" services/developer_api_webhook_service.py
+          grep -q "address.is_global" services/developer_api_webhook_service.py
+          ! grep -RIn "allow_redirects\|HTTPRedirectHandler" services/developer_api_webhook_service.py
+
+      - name: Verify wallet and Opportunity API remain closed
+        run: |
+          ! grep -RIn "/api/v1/wallet" developer_api_routes.py developer_api_webhook_routes.py
+          ! grep -En "add_(post|get)\(.*(/api/v1/opportunities)" developer_api_routes.py developer_api_webhook_routes.py
+
+      - name: Run focused and regression tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_signed_webhooks.py \
+            tests/test_quick_analysis_api.py \
+            tests/test_api_beta_hardening.py \
+            tests/test_developer_api_foundation.py \
+            tests/test_developer_api_billing.py \
+            tests/test_developer_portal.py
