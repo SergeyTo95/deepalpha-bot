@@ -164,7 +164,7 @@ async def test_endpoint_rejects_key_without_required_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_capabilities_keep_analysis_endpoints_disabled(monkeypatch):
+async def test_capabilities_publish_quick_analysis_endpoints(monkeypatch):
     monkeypatch.setattr(routes, "authenticate_api_key", lambda _token: {
         "key_id": 1,
         "client_id": 1,
@@ -184,9 +184,11 @@ async def test_capabilities_keep_analysis_endpoints_disabled(monkeypatch):
         )
         payload = await response.json()
         assert response.status == 200
-        assert payload["analysis_endpoints_enabled"] is False
-        assert "POST /api/v1/analyses" in payload["planned_endpoints"]
-        assert "POST /api/v1/analyses" not in payload["available_endpoints"]
+        assert payload["analysis_endpoints_enabled"] is True
+        assert payload["available_analysis_modes"] == ["quick"]
+        assert "POST /api/v1/analyses" in payload["available_endpoints"]
+        assert "GET /api/v1/analyses/{job_id}" in payload["available_endpoints"]
+        assert "GET /api/v1/opportunities" in payload["planned_endpoints"]
     finally:
         await client.close()
 
@@ -210,15 +212,18 @@ def test_admin_cookie_is_signed_and_does_not_contain_secret():
     assert signature != security._admin_cookie_signature("another-secret")
 
 
-def test_foundation_does_not_expose_wallet_send_or_analysis_execution():
+def test_api_keeps_wallet_execution_closed_and_raw_keys_unstored():
     route_source = Path("developer_api_routes.py").read_text(encoding="utf-8")
     service_source = Path("services/developer_api_service.py").read_text(encoding="utf-8")
     security_source = Path("services/http_security_service.py").read_text(encoding="utf-8")
 
-    assert "app.router.add_post(\"/api/v1/analyses\"" not in route_source
+    assert 'app.router.add_post("/api/v1/analyses"' in route_source
+    assert 'app.router.add_get("/api/v1/analyses/{job_id}"' in route_source
+    assert "/api/v1/wallet" not in route_source
     assert "wallet:send" not in service.AVAILABLE_SCOPES
     assert "key_hash TEXT NOT NULL UNIQUE" in service_source
     assert "raw_key TEXT" not in service_source
     assert '"Access-Control-Allow-Origin": "*"' not in security_source
-    assert '/api/user/' in security_source
-    assert 'deepalpha_session' in security_source
+    assert "Idempotency-Key" in security_source
+    assert "/api/user/" in security_source
+    assert "deepalpha_session" in security_source
