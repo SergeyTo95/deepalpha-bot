@@ -6,17 +6,22 @@ on:
       - feature/turbo-short-term-btc
     paths:
       - "developer_portal_routes.py"
+      - "developer_api_routes.py"
       - "run_web_process.py"
       - "services/developer_portal_service.py"
+      - "services/developer_portal_quick_analysis_patch.py"
       - "services/http_security_service.py"
       - "services/simplified_navigation_patch.py"
       - "webapp/developer.html"
       - "webapp/developer.css"
       - "webapp/developer.js"
+      - "webapp/developer_quick_analysis.js"
       - "tests/test_developer_portal.py"
       - "tests/test_developer_portal_mobile_layout.py"
       - "tests/test_simplified_navigation_patch.py"
+      - "tests/test_quick_analysis_api.py"
       - "docs/developer_portal.md"
+      - "docs/quick_analysis_api.md"
       - ".github/workflows/developer-user-portal.yml"
   workflow_dispatch:
 
@@ -55,25 +60,32 @@ jobs:
         run: |
           python -m py_compile \
             developer_portal_routes.py \
+            developer_api_routes.py \
             run_web_process.py \
             services/developer_portal_service.py \
+            services/developer_portal_quick_analysis_patch.py \
             services/http_security_service.py \
             services/simplified_navigation_patch.py
 
       - name: Validate portal JavaScript
-        run: node --check webapp/developer.js
+        run: |
+          node --check webapp/developer.js
+          node --check webapp/developer_quick_analysis.js
 
       - name: Verify raw secrets are never persisted
         run: |
           ! grep -RIn "raw_key TEXT\|localStorage\|sessionStorage" \
             services/developer_portal_service.py \
             developer_portal_routes.py \
-            webapp/developer.js
+            webapp/developer.js \
+            webapp/developer_quick_analysis.js
           ! grep -En "SELECT .*key_hash" services/developer_portal_service.py
 
-      - name: Verify public execution remains disabled
+      - name: Verify Quick Analysis is available and wallet remains closed
         run: |
-          ! grep -En "add_(post|get)\(.*(/api/v1/analyses|/api/v1/opportunities)" developer_api_routes.py
+          grep -q 'add_post("/api/v1/analyses"' developer_api_routes.py
+          grep -q "Idempotency-Key" webapp/developer_quick_analysis.js
+          ! grep -En "add_(post|get)\(.*(/api/v1/opportunities|/api/v1/wallet)" developer_api_routes.py
 
       - name: Run focused tests
         run: |
@@ -82,4 +94,5 @@ jobs:
             tests/test_developer_portal_mobile_layout.py \
             tests/test_simplified_navigation_patch.py \
             tests/test_developer_api_foundation.py \
-            tests/test_developer_api_billing.py
+            tests/test_developer_api_billing.py \
+            tests/test_quick_analysis_api.py
