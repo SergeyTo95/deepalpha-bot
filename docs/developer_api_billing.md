@@ -2,7 +2,7 @@
 
 The Developer API uses independent API credits. Telegram user tokens and API credits are intentionally separate products with separate pricing and accounting.
 
-Public analysis execution remains disabled in this phase. The billing layer is prepared before execution is exposed.
+Quick Analysis now uses this billing lifecycle in production API jobs.
 
 ## Products
 
@@ -16,6 +16,8 @@ Default products are inserted only when missing and remain editable from DeepAlp
 | `deep_analysis` | 50 credits |
 
 An administrator may change a price or disable a product without deploying new code.
+
+Only `quick_analysis` is publicly executable in the current API phase.
 
 ## Balance model
 
@@ -46,16 +48,16 @@ Current event types:
 
 A charge has a zero delta because the available balance was already reduced atomically during reservation.
 
-## Atomic job creation
+## Atomic Quick Analysis job creation
 
-`create_billed_api_job(...)` performs one database transaction:
+`POST /api/v1/analyses` validates the request and calls `create_billed_api_job(...)`, which performs one database transaction:
 
 1. locks the API client row with `FOR UPDATE`;
-2. checks the client and product status;
+2. checks the client and `quick_analysis` product status;
 3. finds any existing reservation for the same idempotency key;
 4. compares a canonical SHA-256 request fingerprint;
 5. verifies the available balance;
-6. deducts the product price;
+6. deducts the current product price;
 7. creates the credit reservation;
 8. creates the queued API job;
 9. appends the reserve ledger entry;
@@ -63,9 +65,11 @@ A charge has a zero delta because the available balance was already reduced atom
 
 No job is created without a matching reservation, and no reservation is committed without its ledger entry.
 
+Submissions are also serialized per API client before checking the active-job limit. The current default is two queued or running jobs.
+
 ## Idempotency
 
-Future paid execution requests must include:
+Every paid Quick Analysis request must include:
 
 ```http
 Idempotency-Key: request_01J...
@@ -87,9 +91,9 @@ On success:
 reserved → charged
 ```
 
-The job result and charge finalization are committed together. Repeating success settlement is idempotent.
+The normalized public result and charge finalization are committed together. Repeating success settlement is idempotent.
 
-On internal failure:
+On internal failure or terminal worker recovery:
 
 ```text
 reserved/charged → refunded
@@ -97,9 +101,19 @@ reserved/charged → refunded
 
 The client's available balance is increased by the reservation amount, the job is marked as error, and one refund entry is appended. Repeating failure settlement is idempotent.
 
+The worker uses database leases. A stale running job is retried when attempts remain; otherwise its reservation is refunded.
+
+## Request usage versus credit ledger
+
+`api_usage.units` records billable units associated with the accepted API request. It does not replace the credit ledger.
+
+- a new accepted Quick Analysis request records the reserved units;
+- an idempotent replay records zero additional units;
+- the ledger remains the source of truth for balance movement and settlement.
+
 ## Admin controls
 
-The API section now supports:
+The API section supports:
 
 - editing product prices and enabled status;
 - creating clients with a ledger-backed opening grant;
@@ -119,20 +133,27 @@ Billing adds:
 - `api_credit_reservations`;
 - `api_credit_ledger`.
 
-It reuses:
+Quick Analysis execution extends `api_jobs` with:
+
+- progress;
+- worker ID;
+- attempt count;
+- start and finish timestamps;
+- heartbeat and lease timestamps.
+
+It also reuses:
 
 - `api_clients`;
 - `api_keys`;
-- `api_jobs`;
 - `api_audit_log`.
 
-## Next phase
+## Next billing integrations
 
-The next phase may safely register:
+The prepared billing lifecycle can next be reused by:
 
 ```http
-POST /api/v1/analyses
-GET  /api/v1/analyses/{job_id}
+GET /api/v1/opportunities
+POST /api/v1/analyses with mode=deep
 ```
 
-That phase still needs the execution worker, stable public result schema, active-job concurrency limits, timeouts, and signed webhook delivery.
+Signed webhook delivery will not create a second charge; it will report the result of the already settled job.
