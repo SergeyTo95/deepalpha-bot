@@ -8,12 +8,16 @@ on:
       - "developer_api_admin_routes.py"
       - "developer_api_routes.py"
       - "run_web_process.py"
+      - "run_api_worker.py"
+      - "services/developer_api_analysis_service.py"
       - "services/developer_api_billing_service.py"
       - "services/developer_api_service.py"
       - "tests/test_developer_api_billing.py"
       - "tests/test_developer_api_foundation.py"
+      - "tests/test_quick_analysis_api.py"
       - "docs/developer_api_v1.md"
       - "docs/developer_api_billing.md"
+      - "docs/quick_analysis_api.md"
       - ".github/workflows/developer-api-billing.yml"
   workflow_dispatch:
 
@@ -43,14 +47,16 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest pytest-asyncio
 
-      - name: Compile billing and API modules
+      - name: Compile billing and analysis modules
         run: |
           python -m py_compile \
             services/developer_api_billing_service.py \
+            services/developer_api_analysis_service.py \
             services/developer_api_service.py \
             developer_api_admin_routes.py \
             developer_api_routes.py \
-            run_web_process.py
+            run_web_process.py \
+            run_api_worker.py
 
       - name: Verify ledger remains append-only
         run: |
@@ -58,12 +64,17 @@ jobs:
           ! grep -RIn "UPDATE api_credit_ledger\|DELETE FROM api_credit_ledger" \
             services/developer_api_billing_service.py developer_api_admin_routes.py
 
-      - name: Verify public execution remains disabled
+      - name: Verify Quick Analysis uses billing and other execution stays closed
         run: |
-          ! grep -En "add_(post|get)\(.*(/api/v1/analyses|/api/v1/opportunities)" developer_api_routes.py
+          grep -q "create_billed_api_job" services/developer_api_analysis_service.py
+          grep -q "complete_api_job_success" services/developer_api_analysis_service.py
+          grep -q "complete_api_job_failure" services/developer_api_analysis_service.py
+          grep -q 'add_post("/api/v1/analyses"' developer_api_routes.py
+          ! grep -En "add_(post|get)\(.*(/api/v1/opportunities|/api/v1/wallet)" developer_api_routes.py
 
       - name: Run focused tests
         run: |
           PYTHONPATH=. python -m pytest -q \
             tests/test_developer_api_billing.py \
-            tests/test_developer_api_foundation.py
+            tests/test_developer_api_foundation.py \
+            tests/test_quick_analysis_api.py
