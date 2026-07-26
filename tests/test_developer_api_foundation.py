@@ -1,3 +1,4 @@
+import inspect
 import json
 from pathlib import Path
 
@@ -31,6 +32,41 @@ def test_scope_normalization_rejects_unknown_permissions():
 
     assert scopes == ["account:read", "analysis:run"]
     assert "wallet:send" not in service.AVAILABLE_SCOPES
+
+
+def test_explicit_empty_scopes_are_not_replaced_with_defaults():
+    assert set(service.normalize_scopes(None)) == service.DEFAULT_SCOPES
+    assert service.normalize_scopes([]) == []
+    assert service.parse_scopes("") == set()
+    assert service.parse_scopes(None) == set()
+
+
+def test_key_issuance_rejects_empty_scope_selection_before_storage(monkeypatch):
+    monkeypatch.setattr(service, "ensure_developer_api_tables", lambda: None)
+    monkeypatch.setattr(service, "get_api_client", lambda _client_id: {"id": 3, "status": "active"})
+    monkeypatch.setattr(
+        service,
+        "get_connection",
+        lambda: (_ for _ in ()).throw(AssertionError("database should not be opened")),
+    )
+
+    with pytest.raises(ValueError, match="at_least_one_scope_required"):
+        service.issue_api_key(client_id=3, scopes=[])
+
+
+def test_limits_are_shared_across_all_keys_of_one_client():
+    source = inspect.getsource(service.enforce_api_limits)
+
+    assert "_RATE_BUCKETS[client_id]" in source
+    assert "WHERE client_id=%s" in source
+    assert "WHERE key_id=%s" not in source
+
+
+def test_key_and_audit_are_committed_in_one_transaction():
+    source = inspect.getsource(service.issue_api_key)
+
+    assert "write_api_audit" not in source
+    assert source.index("_insert_audit(") < source.index("conn.commit()")
 
 
 def test_bearer_parser_requires_exact_bearer_scheme():
