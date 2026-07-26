@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>DeepAlpha Developer API</title>
+  <link rel="stylesheet" href="/webapp/developer.css?v=1.0">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">DeepAlpha</p>
+        <h1 id="pageTitle">API для разработчиков</h1>
+        <p id="pageSubtitle" class="subtitle">Ключи, лимиты, credits и документация ваших API-проектов.</p>
+      </div>
+      <span id="environmentBadge" class="badge">TEST</span>
+    </header>
+
+    <main id="appRoot" class="stack" aria-live="polite">
+      <section class="card"><p>Загрузка API-кабинета…</p></section>
+    </main>
+  </div>
+
+  <div id="secretModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="secretTitle">
+    <div class="modal-card">
+      <p class="eyebrow">SECRET KEY</p>
+      <h2 id="secretTitle">Сохраните ключ сейчас</h2>
+      <p id="secretWarning" class="warning">После закрытия этого окна секретный ключ больше не будет показан.</p>
+      <textarea id="secretValue" rows="4" readonly spellcheck="false"></textarea>
+      <div class="button-row">
+        <button id="copySecretButton" class="primary" type="button">Копировать</button>
+        <button id="closeSecretButton" class="secondary" type="button">Я сохранил ключ</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/webapp/developer.js?v=1.0"></script>
+</body>
+</html>
