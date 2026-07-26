@@ -53,11 +53,11 @@ def main() -> None:
 
     install_persistence_flag()
 
-    from services.developer_api_analysis_service import run_api_analysis_worker_forever
     from services.developer_api_analysis_result_patch import install as install_result_normalization
+    from services.developer_api_observed_worker import run_observed_api_analysis_worker_forever
 
     install_result_normalization()
-    run_api_analysis_worker_forever()
+    run_observed_api_analysis_worker_forever()
 
 
 if __name__ == "__main__":
