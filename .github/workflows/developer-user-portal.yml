@@ -1,0 +1,83 @@
+name: Developer user portal
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_portal_routes.py"
+      - "run_web_process.py"
+      - "services/developer_portal_service.py"
+      - "services/http_security_service.py"
+      - "services/simplified_navigation_patch.py"
+      - "webapp/developer.html"
+      - "webapp/developer.css"
+      - "webapp/developer.js"
+      - "tests/test_developer_portal.py"
+      - "tests/test_simplified_navigation_patch.py"
+      - "docs/developer_portal.md"
+      - ".github/workflows/developer-user-portal.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: developer-user-portal-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  developer-user-portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile portal modules
+        run: |
+          python -m py_compile \
+            developer_portal_routes.py \
+            run_web_process.py \
+            services/developer_portal_service.py \
+            services/http_security_service.py \
+            services/simplified_navigation_patch.py
+
+      - name: Validate portal JavaScript
+        run: node --check webapp/developer.js
+
+      - name: Verify raw secrets are never persisted
+        run: |
+          ! grep -RIn "raw_key TEXT\|localStorage\|sessionStorage" \
+            services/developer_portal_service.py \
+            developer_portal_routes.py \
+            webapp/developer.js
+          ! grep -En "SELECT .*key_hash" services/developer_portal_service.py
+
+      - name: Verify public execution remains disabled
+        run: |
+          ! grep -En "add_(post|get)\(.*(/api/v1/analyses|/api/v1/opportunities)" developer_api_routes.py
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_developer_portal.py \
+            tests/test_simplified_navigation_patch.py \
+            tests/test_developer_api_foundation.py \
+            tests/test_developer_api_billing.py
