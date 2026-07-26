@@ -86,11 +86,12 @@ def _job_row(job: Dict[str, Any]) -> str:
 def _worker_row(worker: Dict[str, Any]) -> str:
     fresh = bool(worker.get("fresh"))
     heartbeat = _duration(worker.get("heartbeat_age_seconds"))
+    freshness = "fresh" if fresh else "<span class='danger'>stale</span>"
     return (
         "<tr>"
         f"<td><code>{escape(str(worker.get('worker_id') or ''))}</code></td>"
         f"<td>{_status_pill(str(worker.get('status') or ''))}</td>"
-        f"<td>{'fresh' if fresh else '<span class=\"danger\">stale</span>'}</td>"
+        f"<td>{freshness}</td>"
         f"<td>{heartbeat} ago</td>"
         f"<td><code>{escape(str(worker.get('current_job_id') or '—'))}</code></td>"
         f"<td>{escape(str(worker.get('started_at') or ''))}</td>"
@@ -121,6 +122,11 @@ def _dashboard_html(request) -> str:
     )
     job_rows = "".join(_job_row(job) for job in jobs)
     worker_rows = "".join(_worker_row(worker) for worker in workers)
+    status_options = "".join(
+        f"<option value='{value}' {'selected' if value == status_filter else ''}>{value}</option>"
+        for value in filters
+        if value
+    )
 
     return f"""
     <div class='card'>
@@ -154,7 +160,7 @@ def _dashboard_html(request) -> str:
         <input name='client_id' value='{escape(str(client_filter or ''))}' placeholder='Client ID'>
         <select name='job_status'>
           <option value=''>all statuses</option>
-          {''.join(f"<option value='{value}' {'selected' if value == status_filter else ''}>{value}</option>" for value in filters if value)}
+          {status_options}
         </select>
         <button>Apply</button>
         <a class='pill' href='/admin/api'>Reset</a>
