@@ -44,8 +44,15 @@ def main() -> None:
     if reason:
         idle_forever(reason)
         return
+
+    from services.developer_api_opportunity_webhook_patch import (
+        ensure_opportunity_webhook_trigger,
+        install as install_opportunity_webhook_events,
+    )
     from services.developer_api_opportunity_service import run_opportunity_scan_worker_forever
 
+    install_opportunity_webhook_events()
+    ensure_opportunity_webhook_trigger()
     run_opportunity_scan_worker_forever()
 
 
