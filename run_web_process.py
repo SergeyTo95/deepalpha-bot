@@ -16,6 +16,7 @@ def main() -> None:
     from services.developer_api_health_patch import install as install_api_health_observability
     from services.developer_api_observability_service import ensure_api_observability_tables
     from services.developer_api_service import ensure_developer_api_tables
+    from services.developer_api_webhook_cors_patch import install as install_webhook_cors
     from services.developer_api_webhook_runtime_patch import install as install_webhook_runtime
     from services.developer_api_webhook_service import ensure_api_webhook_tables
     from services.developer_portal_quick_analysis_patch import install as install_portal_quick_analysis
@@ -24,6 +25,7 @@ def main() -> None:
     from services.http_security_service import install_http_security
 
     install_http_security(deepalpha_web.app, admin_routes_module)
+    install_webhook_cors(deepalpha_web.app)
     install_portal_quick_analysis()
     install_portal_webhook_scope()
     install_api_health_observability()
