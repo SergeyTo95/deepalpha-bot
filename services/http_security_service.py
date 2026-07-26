@@ -57,6 +57,18 @@ def allowed_cors_origins() -> Set[str]:
     return result
 
 
+def _is_same_origin(request: web.Request, origin: str) -> bool:
+    parsed = urlparse(str(origin or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    request_host = str(request.host or "").lower()
+    return parsed.netloc.lower() == request_host
+
+
+def _origin_allowed(request: web.Request, origin: str, configured: Set[str]) -> bool:
+    return bool(origin and (origin in configured or _is_same_origin(request, origin)))
+
+
 def _admin_secret() -> str:
     return str(os.getenv("ADMIN_SECRET_KEY", "") or "")
 
@@ -167,9 +179,12 @@ async def deepalpha_security_middleware(request: web.Request, handler):
             return _strip_admin_key_redirect(request)
 
     origin = str(request.headers.get("Origin", "") or "").strip()
-    allowed_origins = allowed_cors_origins()
-    if origin and request.path.startswith("/api/") and origin not in allowed_origins:
+    configured_origins = allowed_cors_origins()
+    origin_allowed = _origin_allowed(request, origin, configured_origins) if origin else False
+    if origin and request.path.startswith("/api/") and not origin_allowed:
         return _json_response({"ok": False, "error": "origin_not_allowed"}, 403)
+    if request.method == "POST" and request.path.startswith("/admin") and origin and not origin_allowed:
+        return web.Response(text="Forbidden", status=403)
 
     protected = _protect_legacy_user_api(request)
     if protected is not None:
@@ -185,7 +200,7 @@ async def deepalpha_security_middleware(request: web.Request, handler):
         response.headers["Cache-Control"] = "no-store"
 
     response.headers.pop("Access-Control-Allow-Origin", None)
-    if origin and origin in allowed_origins:
+    if origin_allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
