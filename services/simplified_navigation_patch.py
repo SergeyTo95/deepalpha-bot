@@ -1,7 +1,13 @@
 import logging
 from typing import Any, Dict, Optional
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +19,8 @@ RU_REWARDS = "🎁 Награды"
 EN_REWARDS = "🎁 Rewards"
 RU_COMMUNITY = "📰 Сообщество"
 EN_COMMUNITY = "📰 Community"
+RU_DEVELOPER_API = "🔑 API для разработчиков"
+EN_DEVELOPER_API = "🔑 Developer API"
 RU_MAIN_MENU = "⬅️ Главное меню"
 EN_MAIN_MENU = "⬅️ Main menu"
 
@@ -25,6 +33,8 @@ _SECTION_LABELS = {
     EN_REWARDS,
     RU_COMMUNITY,
     EN_COMMUNITY,
+    RU_DEVELOPER_API,
+    EN_DEVELOPER_API,
     RU_MAIN_MENU,
     EN_MAIN_MENU,
 }
@@ -88,11 +98,13 @@ def _install_keyboards(telegram_module: Any) -> None:
         if lang == "ru":
             kb.add(KeyboardButton("👤 Профиль"), KeyboardButton("🧠 Analyst Profile"))
             kb.add(KeyboardButton("💰 Баланс автора"))
+            kb.add(KeyboardButton(RU_DEVELOPER_API))
             kb.add(KeyboardButton("🌐 Язык"), KeyboardButton("❓ Помощь"))
             kb.add(KeyboardButton(RU_MAIN_MENU))
         else:
             kb.add(KeyboardButton("👤 Profile"), KeyboardButton("🧠 Analyst Profile"))
             kb.add(KeyboardButton("💰 Author balance"))
+            kb.add(KeyboardButton(EN_DEVELOPER_API))
             kb.add(KeyboardButton("🌐 Language"), KeyboardButton("❓ Help"))
             kb.add(KeyboardButton(EN_MAIN_MENU))
         return kb
@@ -174,6 +186,17 @@ def _community_keyboard(telegram_module: Any, user_id: int) -> ReplyKeyboardMark
     return kb
 
 
+def _developer_portal_keyboard(telegram_module: Any, lang: str, chat_type: str) -> InlineKeyboardMarkup:
+    portal_url = f"{str(telegram_module.WEBAPP_URL).rstrip('/')}/developer"
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    label = "🚀 Открыть API-кабинет" if lang == "ru" else "🚀 Open API portal"
+    if chat_type == "private":
+        keyboard.add(InlineKeyboardButton(label, web_app=WebAppInfo(url=portal_url)))
+    else:
+        keyboard.add(InlineKeyboardButton(label, url=portal_url))
+    return keyboard
+
+
 async def _open_navigation_section(
     message: Any,
     state: Optional[Any],
@@ -192,6 +215,27 @@ async def _open_navigation_section(
 
     text = str(getattr(message, "text", "") or "")
     lang = telegram_module.get_user_lang(user_id)
+
+    if text in {RU_DEVELOPER_API, EN_DEVELOPER_API}:
+        if lang == "ru":
+            portal_text = (
+                "🔑 <b>API для разработчиков</b>\n\n"
+                "Создавай API-проекты, выпускай test-ключи, смотри credits, лимиты и использование.\n\n"
+                "Секретный ключ показывается только один раз внутри защищённого кабинета."
+            )
+        else:
+            portal_text = (
+                "🔑 <b>Developer API</b>\n\n"
+                "Create API projects, issue test keys, and view credits, limits, and usage.\n\n"
+                "A secret key is shown only once inside the protected portal."
+            )
+        chat_type = str(getattr(getattr(message, "chat", None), "type", "private") or "private")
+        await message.answer(
+            portal_text,
+            parse_mode="HTML",
+            reply_markup=_developer_portal_keyboard(telegram_module, lang, chat_type),
+        )
+        return
 
     sections: Dict[str, tuple] = {
         RU_MY_MARKETS: ("📌 Мои рынки", telegram_module.get_my_markets_keyboard),
