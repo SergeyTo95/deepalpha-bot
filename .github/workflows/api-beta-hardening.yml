@@ -1,0 +1,106 @@
+name: API beta hardening
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_api_health_patch.py"
+      - "developer_portal_jobs_routes.py"
+      - "run_api_worker.py"
+      - "run_web_process.py"
+      - "scripts/quick_analysis_api_smoke.py"
+      - "services/developer_api_admin_observability_patch.py"
+      - "services/developer_api_health_patch.py"
+      - "services/developer_api_observability_service.py"
+      - "services/developer_api_observed_worker.py"
+      - "webapp/developer.html"
+      - "webapp/developer_jobs.css"
+      - "webapp/developer_jobs.js"
+      - "tests/test_api_beta_hardening.py"
+      - "tests/test_quick_analysis_api.py"
+      - "tests/test_developer_portal.py"
+      - "docs/api_beta_hardening.md"
+      - ".github/workflows/api-beta-hardening.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-beta-hardening-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-beta-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile runtime and smoke modules
+        run: |
+          python -m py_compile \
+            developer_portal_jobs_routes.py \
+            run_api_worker.py \
+            run_web_process.py \
+            scripts/quick_analysis_api_smoke.py \
+            services/developer_api_admin_observability_patch.py \
+            services/developer_api_health_patch.py \
+            services/developer_api_observability_service.py \
+            services/developer_api_observed_worker.py
+
+      - name: Validate portal JavaScript
+        run: node --check webapp/developer_jobs.js
+
+      - name: Verify heartbeat and health boundaries
+        run: |
+          grep -q "CREATE TABLE IF NOT EXISTS api_worker_heartbeats" services/developer_api_observability_service.py
+          grep -q "ON CONFLICT (worker_id) DO UPDATE SET" services/developer_api_observability_service.py
+          grep -q "run_observed_api_analysis_worker_forever" run_api_worker.py
+          grep -q "database.*available" services/developer_api_health_patch.py
+          grep -q "no_fresh_api_worker" services/developer_api_observability_service.py
+
+      - name: Verify portal ownership and secret isolation
+        run: |
+          grep -q "JOIN api_client_owners" services/developer_api_observability_service.py
+          grep -q "WHERE o.user_id=%s AND c.id=%s" services/developer_api_observability_service.py
+          ! grep -RIn "raw_key\|key_hash\|request_json\|result_json" \
+            developer_portal_jobs_routes.py \
+            webapp/developer_jobs.js
+          ! grep -RIn "localStorage\|sessionStorage" webapp/developer_jobs.js
+
+      - name: Verify jobs dashboard and settlement smoke
+        run: |
+          grep -q "Quick Analysis jobs" services/developer_api_admin_observability_patch.py
+          grep -q "Credits R/C" services/developer_api_admin_observability_patch.py
+          grep -q "validate_terminal_payload" scripts/quick_analysis_api_smoke.py
+          grep -q "reservation_status.*charged" scripts/quick_analysis_api_smoke.py
+          grep -q "reservation_status.*refunded" scripts/quick_analysis_api_smoke.py
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_api_beta_hardening.py \
+            tests/test_quick_analysis_api.py \
+            tests/test_developer_api_foundation.py \
+            tests/test_developer_api_billing.py \
+            tests/test_developer_portal.py \
+            tests/test_developer_portal_mobile_layout.py
