@@ -4,7 +4,6 @@ import secrets
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from db.database import get_connection
@@ -26,10 +25,6 @@ _RATE_LOCK = threading.Lock()
 _RATE_BUCKETS: Dict[int, deque] = defaultdict(deque)
 
 
-def _utcnow() -> datetime:
-    return datetime.utcnow()
-
-
 def _row_to_dict(cursor, row) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
@@ -48,18 +43,24 @@ def _normalize_environment(environment: str) -> str:
 
 
 def normalize_scopes(scopes: Optional[Iterable[str]]) -> List[str]:
-    result = []
-    for raw in scopes or DEFAULT_SCOPES:
+    source = DEFAULT_SCOPES if scopes is None else scopes
+    result: List[str] = []
+    for raw in source:
         scope = str(raw or "").strip().lower()
         if scope in AVAILABLE_SCOPES and scope not in result:
             result.append(scope)
-    return result or sorted(DEFAULT_SCOPES)
+    return result
 
 
 def parse_scopes(value: Any) -> Set[str]:
+    if value is None:
+        return set()
     if isinstance(value, (list, tuple, set)):
         return set(normalize_scopes(value))
-    return set(normalize_scopes(str(value or "").split(",")))
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    return set(normalize_scopes(raw.split(",")))
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -71,6 +72,30 @@ def generate_api_key(environment: str = "test") -> Tuple[str, str, str]:
     raw_key = f"da_{env}_{secrets.token_urlsafe(32)}"
     key_prefix = raw_key[:18]
     return raw_key, key_prefix, hash_api_key(raw_key)
+
+
+def _insert_audit(
+    cursor,
+    actor: str,
+    action: str,
+    target_type: Optional[str],
+    target_id: Any,
+    metadata: Optional[Dict[str, Any]],
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO api_audit_log (
+            actor, action, target_type, target_id, metadata_json
+        ) VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            str(actor or "system")[:100],
+            str(action or "unknown")[:120],
+            str(target_type or "")[:80],
+            str(target_id or "")[:120],
+            json.dumps(metadata or {}, ensure_ascii=False, default=str),
+        ),
+    )
 
 
 def ensure_developer_api_tables() -> None:
@@ -224,8 +249,8 @@ def create_api_client(
             (clean_name, daily, monthly, per_minute, credits, json.dumps(metadata or {})),
         )
         row = _row_to_dict(cursor, cursor.fetchone()) or {}
+        _insert_audit(cursor, "admin", "client.create", "api_client", row.get("id"), {"name": clean_name})
         conn.commit()
-        write_api_audit("admin", "client.create", "api_client", row.get("id"), {"name": clean_name})
         return row
     except Exception:
         conn.rollback()
@@ -280,8 +305,10 @@ def issue_api_key(
     client = get_api_client(client_id)
     if not client or str(client.get("status")) != "active":
         raise ValueError("client_not_active")
-    raw_key, key_prefix, key_hash = generate_api_key(environment)
     scope_list = normalize_scopes(scopes)
+    if not scope_list:
+        raise ValueError("at_least_one_scope_required")
+    raw_key, key_prefix, key_hash = generate_api_key(environment)
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -301,8 +328,15 @@ def issue_api_key(
             ),
         )
         row = _row_to_dict(cursor, cursor.fetchone()) or {}
+        _insert_audit(
+            cursor,
+            "admin",
+            "key.issue",
+            "api_key",
+            row.get("id"),
+            {"client_id": int(client_id), "scopes": scope_list},
+        )
         conn.commit()
-        write_api_audit("admin", "key.issue", "api_key", row.get("id"), {"client_id": int(client_id), "scopes": scope_list})
         return {**row, "raw_key": raw_key, "scopes": scope_list}
     except Exception:
         conn.rollback()
@@ -346,9 +380,9 @@ def revoke_api_key(key_id: int) -> bool:
             (int(key_id),),
         )
         changed = cursor.rowcount > 0
-        conn.commit()
         if changed:
-            write_api_audit("admin", "key.revoke", "api_key", int(key_id), {})
+            _insert_audit(cursor, "admin", "key.revoke", "api_key", int(key_id), {})
+        conn.commit()
         return changed
     except Exception:
         conn.rollback()
@@ -396,11 +430,13 @@ def authenticate_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
 
 
 def enforce_api_limits(auth: Dict[str, Any]) -> Dict[str, Any]:
-    key_id = int(auth.get("key_id") or 0)
+    client_id = int(auth.get("client_id") or 0)
+    if client_id <= 0:
+        return {"ok": False, "error": "invalid_client"}
     per_minute = max(1, int(auth.get("rate_limit_per_minute") or 60))
     now = time.time()
     with _RATE_LOCK:
-        bucket = _RATE_BUCKETS[key_id]
+        bucket = _RATE_BUCKETS[client_id]
         while bucket and now - bucket[0] >= 60:
             bucket.popleft()
         if len(bucket) >= per_minute:
@@ -417,9 +453,10 @@ def enforce_api_limits(auth: Dict[str, Any]) -> Dict[str, Any]:
             SELECT
                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) AS daily_count,
                 COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW())) AS monthly_count
-            FROM api_usage WHERE key_id=%s
+            FROM api_usage
+            WHERE client_id=%s
             """,
-            (key_id,),
+            (client_id,),
         )
         counts = _row_to_dict(cursor, cursor.fetchone()) or {}
     finally:
@@ -533,16 +570,7 @@ def write_api_audit(
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO api_audit_log (actor, action, target_type, target_id, metadata_json) VALUES (%s, %s, %s, %s, %s)",
-            (
-                str(actor or "system")[:100],
-                str(action or "unknown")[:120],
-                str(target_type or "")[:80],
-                str(target_id or "")[:120],
-                json.dumps(metadata or {}, ensure_ascii=False, default=str),
-            ),
-        )
+        _insert_audit(cursor, actor, action, target_type, target_id, metadata)
         conn.commit()
     except Exception:
         conn.rollback()
