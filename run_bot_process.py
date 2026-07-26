@@ -51,12 +51,14 @@ def main() -> None:
     from services.edge_watch_runtime_patch import install as install_edge_watch
     from services.free_opportunity_runtime_patch import install as install_free_opportunity_renderer
     from services.free_opportunity_menu_patch import install as install_free_opportunity_menu
+    from services.profile_api_button_patch import install as install_profile_api_button
     from services.simplified_navigation_patch import install as install_simplified_navigation
 
     install_decision_renderer(app.telegram_bot)
     install_free_opportunity_renderer(app.telegram_bot)
     install_free_opportunity_menu(app.telegram_bot)
     install_simplified_navigation(app.telegram_bot)
+    install_profile_api_button(app.telegram_bot)
     install_edge_watch(app)
     asyncio.run(app.main())
 

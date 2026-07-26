@@ -1,0 +1,54 @@
+name: Profile Developer API button
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "run_bot_process.py"
+      - "services/profile_api_button_patch.py"
+      - "tests/test_profile_api_button_patch.py"
+      - ".github/workflows/profile-api-button.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-api-button-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-api-button:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile runtime patch
+        run: |
+          python -m py_compile \
+            run_bot_process.py \
+            services/profile_api_button_patch.py
+
+      - name: Verify portal key is not sent in Telegram text
+        run: |
+          ! grep -RIn "da_test_\|raw_key" services/profile_api_button_patch.py
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_profile_api_button_patch.py \
+            tests/test_simplified_navigation_patch.py
