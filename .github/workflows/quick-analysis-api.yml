@@ -1,0 +1,97 @@
+name: Quick Analysis API v1
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_api_routes.py"
+      - "run_api_worker.py"
+      - "run_web_process.py"
+      - "supervisord.conf"
+      - "services/developer_api_analysis_service.py"
+      - "services/developer_api_analysis_result_patch.py"
+      - "services/chief_agent_persistence_patch.py"
+      - "services/developer_portal_quick_analysis_patch.py"
+      - "services/http_security_service.py"
+      - "webapp/developer.html"
+      - "webapp/developer_quick_analysis.js"
+      - "tests/test_quick_analysis_api.py"
+      - "tests/test_developer_api_foundation.py"
+      - "tests/test_developer_api_billing.py"
+      - "tests/test_developer_portal.py"
+      - "docs/quick_analysis_api.md"
+      - ".github/workflows/quick-analysis-api.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quick-analysis-api-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-analysis-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile API and worker
+        run: |
+          python -m py_compile \
+            developer_api_routes.py \
+            run_api_worker.py \
+            run_web_process.py \
+            services/developer_api_analysis_service.py \
+            services/developer_api_analysis_result_patch.py \
+            services/chief_agent_persistence_patch.py \
+            services/developer_portal_quick_analysis_patch.py
+
+      - name: Validate portal JavaScript
+        run: node --check webapp/developer_quick_analysis.js
+
+      - name: Verify persistent database worker
+        run: |
+          grep -q "FOR UPDATE SKIP LOCKED" services/developer_api_analysis_service.py
+          grep -q "recover_stale_api_analysis_jobs" services/developer_api_analysis_service.py
+          grep -q "lease_until" services/developer_api_analysis_service.py
+          grep -q "\[program:api-worker\]" supervisord.conf
+          ! grep -RIn "asyncio.create_task" services/developer_api_analysis_service.py run_api_worker.py
+
+      - name: Verify public contract and security boundary
+        run: |
+          grep -q 'add_post("/api/v1/analyses"' developer_api_routes.py
+          grep -q 'add_get("/api/v1/analyses/{job_id}"' developer_api_routes.py
+          grep -q "Idempotency-Key" developer_api_routes.py
+          grep -q "persist=False" services/developer_api_analysis_service.py
+          ! grep -En "add_(post|get)\(.*(/api/v1/opportunities|/api/v1/wallet)" developer_api_routes.py
+          ! grep -RIn "raw_key TEXT\|localStorage\|sessionStorage" \
+            services/developer_api_analysis_service.py \
+            webapp/developer_quick_analysis.js
+
+      - name: Run focused tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_quick_analysis_api.py \
+            tests/test_developer_api_foundation.py \
+            tests/test_developer_api_billing.py \
+            tests/test_developer_portal.py
