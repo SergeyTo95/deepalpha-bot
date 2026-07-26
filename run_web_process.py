@@ -16,23 +16,32 @@ def main() -> None:
     from services.developer_api_health_patch import install as install_api_health_observability
     from services.developer_api_observability_service import ensure_api_observability_tables
     from services.developer_api_service import ensure_developer_api_tables
+    from services.developer_api_webhook_runtime_patch import install as install_webhook_runtime
+    from services.developer_api_webhook_service import ensure_api_webhook_tables
     from services.developer_portal_quick_analysis_patch import install as install_portal_quick_analysis
     from services.developer_portal_service import ensure_developer_portal_tables
+    from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_portal_quick_analysis()
+    install_portal_webhook_scope()
     install_api_health_observability()
+    install_webhook_runtime()
 
-    # Import after runtime security and portal capability patches are installed.
+    # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
+    from developer_api_webhook_routes import setup_developer_api_webhook_routes
     from developer_portal_jobs_routes import setup_developer_portal_jobs_routes
     from developer_portal_routes import setup_developer_portal_routes
     from services.developer_api_admin_observability_patch import install as install_admin_observability
+    from services.developer_api_admin_webhook_patch import install as install_admin_webhooks
 
     install_admin_observability()
+    install_admin_webhooks()
 
     setup_developer_api_routes(deepalpha_web.app)
+    setup_developer_api_webhook_routes(deepalpha_web.app)
     setup_developer_api_admin_routes(deepalpha_web.app)
     setup_developer_portal_routes(deepalpha_web.app)
     setup_developer_portal_jobs_routes(deepalpha_web.app)
@@ -43,6 +52,7 @@ def main() -> None:
         ensure_developer_portal_tables()
         ensure_api_analysis_tables()
         ensure_api_observability_tables()
+        ensure_api_webhook_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.
