@@ -12,7 +12,7 @@ The portal is served at:
 /developer
 ```
 
-It uses the existing DeepAlpha WebApp session. When opened as a Telegram WebApp, it submits Telegram `initData` to the existing `/api/auth/telegram` endpoint and receives the normal HttpOnly `deepalpha_session` cookie.
+It uses the existing DeepAlpha WebApp session. When opened as a Telegram WebApp, it submits Telegram `initData` to `/api/auth/telegram` and receives the normal HttpOnly `deepalpha_session` cookie.
 
 ## User capabilities
 
@@ -27,7 +27,7 @@ A signed-in user can:
 - revoke an active key;
 - inspect recent credit ledger entries;
 - view current API product pricing;
-- read quick-start documentation and endpoint examples.
+- read Quick Analysis request and status examples.
 
 ## Ownership
 
@@ -49,9 +49,10 @@ Default self-service limits:
 100 requests per day
 2,000 requests per month
 30 requests per minute
+2 active Quick Analysis jobs per project
 ```
 
-These defaults are configurable:
+Portal defaults are configurable:
 
 ```env
 DEVELOPER_PORTAL_MAX_PROJECTS=3
@@ -59,9 +60,10 @@ DEVELOPER_PORTAL_MAX_KEYS_PER_PROJECT=5
 DEVELOPER_PORTAL_DEFAULT_DAILY_LIMIT=100
 DEVELOPER_PORTAL_DEFAULT_MONTHLY_LIMIT=2000
 DEVELOPER_PORTAL_DEFAULT_RATE_LIMIT=30
+API_ANALYSIS_MAX_ACTIVE_JOBS_PER_CLIENT=2
 ```
 
-## Test keys only
+## Test keys during beta
 
 The user portal currently issues only:
 
@@ -69,18 +71,21 @@ The user portal currently issues only:
 da_test_...
 ```
 
-Live keys remain an administrator-controlled capability until public paid analysis execution is enabled.
+Test keys can run paid Quick Analysis using API credits. Live keys remain administrator-controlled until beta testing is complete.
 
-Self-service scopes:
+Default selected scopes for a new key:
 
 - `account:read`
 - `usage:read`
 - `analysis:run`
 - `analysis:read`
+
+Other selectable self-service scopes:
+
 - `opportunities:read`
 - `markets:read`
 
-The public analysis routes are still disabled, so `analysis:*` and `opportunities:read` prepare future access but do not yet execute paid analysis.
+The latter scopes prepare future methods; Opportunity Scan is not public yet.
 
 The portal does not expose:
 
@@ -105,7 +110,7 @@ Only the SHA-256 hash and public prefix remain on the server.
 
 ## App API routes
 
-All routes require the existing HttpOnly WebApp session:
+All portal routes require the existing HttpOnly WebApp session:
 
 ```http
 GET  /app-api/v1/developer/overview
@@ -126,20 +131,32 @@ The custom header forces cross-origin browser requests through CORS preflight. T
 
 ## Current Developer API methods
 
-Keys can currently call:
+Keys can call:
 
 ```http
-GET /api/v1/account
-GET /api/v1/usage
-GET /api/v1/capabilities
-```
-
-Public execution remains disabled:
-
-```http
+GET  /api/v1/account
+GET  /api/v1/usage
+GET  /api/v1/capabilities
 POST /api/v1/analyses
 GET  /api/v1/analyses/{job_id}
-GET  /api/v1/opportunities
 ```
 
-The next API phase will connect those routes to the prepared billing reservation and settlement lifecycle.
+Starting an analysis additionally requires:
+
+```http
+Idempotency-Key: request_01J...
+```
+
+Quick Analysis accepts only HTTPS Polymarket event/market URLs, `mode=quick`, and Russian or English output.
+
+The portal documentation shows an up-to-date curl example and automatically selects `analysis:run` and `analysis:read` for newly created test keys.
+
+Still planned:
+
+```http
+GET /api/v1/opportunities
+POST /api/v1/webhooks
+POST /api/v1/analyses with mode=deep
+```
+
+See `docs/quick_analysis_api.md` for the full contract.

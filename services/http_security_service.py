@@ -215,7 +215,8 @@ async def deepalpha_security_middleware(request: web.Request, handler):
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, X-Idempotency-Key, X-Request-ID, X-DeepAlpha-Portal"
+            "Authorization, Content-Type, Idempotency-Key, X-Idempotency-Key, "
+            "X-Request-ID, X-DeepAlpha-Portal"
         )
         response.headers["Access-Control-Max-Age"] = "600"
     return response

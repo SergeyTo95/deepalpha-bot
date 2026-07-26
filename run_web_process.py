@@ -11,17 +11,20 @@ def main() -> None:
     import web as deepalpha_web
 
     from developer_api_routes import setup_developer_api_routes
-    from developer_portal_routes import setup_developer_portal_routes
+    from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_billing_service import ensure_api_billing_tables
     from services.developer_api_service import ensure_developer_api_tables
+    from services.developer_portal_quick_analysis_patch import install as install_portal_quick_analysis
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.http_security_service import install_http_security
 
     install_http_security(deepalpha_web.app, admin_routes_module)
+    install_portal_quick_analysis()
 
-    # Import after the admin guard is replaced so the API admin handlers capture
-    # cookie-based authentication instead of the legacy query-string secret.
+    # Import after the runtime security and portal capability patches are installed.
+    # The route module captures the patched session guard and overview function.
     from developer_api_admin_routes import setup_developer_api_admin_routes
+    from developer_portal_routes import setup_developer_portal_routes
 
     setup_developer_api_routes(deepalpha_web.app)
     setup_developer_api_admin_routes(deepalpha_web.app)
@@ -31,6 +34,7 @@ def main() -> None:
         ensure_developer_api_tables()
         ensure_api_billing_tables()
         ensure_developer_portal_tables()
+        ensure_api_analysis_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.

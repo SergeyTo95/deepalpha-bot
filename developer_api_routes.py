@@ -8,6 +8,15 @@ from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
 
+from services.developer_api_analysis_service import (
+    ApiAnalysisError,
+    get_api_analysis_job,
+    normalize_quick_analysis_request,
+    serialize_api_analysis_job,
+    submit_quick_analysis_job,
+    validate_job_id,
+)
+from services.developer_api_billing_service import ApiBillingError
 from services.developer_api_service import (
     AVAILABLE_SCOPES,
     authenticate_api_key,
@@ -17,6 +26,8 @@ from services.developer_api_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_ANALYSIS_JSON_BYTES = 16 * 1024
 
 
 def _json_default(value: Any):
@@ -139,13 +150,65 @@ def _authorized(
     return auth, None, request_id, started_at
 
 
+def _analysis_error_status(code: str) -> int:
+    if code == "insufficient_api_credits":
+        return 402
+    if code in {
+        "idempotency_conflict",
+        "active_job_limit_reached",
+        "client_not_active",
+        "api_product_disabled",
+    }:
+        return 409
+    if code in {"api_product_not_found"}:
+        return 503
+    if code in {"api_job_not_found"}:
+        return 404
+    return 400
+
+
+def _analysis_error_response(
+    exc: Exception,
+    *,
+    request_id: str,
+) -> web.Response:
+    code = str(getattr(exc, "code", None) or str(exc) or "invalid_request")
+    details = getattr(exc, "details", {})
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "error": code,
+        "request_id": request_id,
+    }
+    if isinstance(details, dict) and details:
+        payload["details"] = details
+    return _json_response(payload, status=_analysis_error_status(code))
+
+
+async def _read_small_json(request: web.Request) -> Dict[str, Any]:
+    if str(request.content_type or "").lower() != "application/json":
+        raise ApiAnalysisError("json_required")
+    if request.content_length is not None and request.content_length > _MAX_ANALYSIS_JSON_BYTES:
+        raise ApiAnalysisError("request_too_large", max_bytes=_MAX_ANALYSIS_JSON_BYTES)
+    body = await request.read()
+    if len(body) > _MAX_ANALYSIS_JSON_BYTES:
+        raise ApiAnalysisError("request_too_large", max_bytes=_MAX_ANALYSIS_JSON_BYTES)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception as exc:
+        raise ApiAnalysisError("invalid_json") from exc
+    if not isinstance(payload, dict):
+        raise ApiAnalysisError("invalid_json")
+    return payload
+
+
 async def handle_developer_api_health(request: web.Request) -> web.Response:
     return _json_response({
         "ok": True,
         "service": "deepalpha-developer-api",
         "version": "v1",
-        "status": "foundation",
-        "analysis_endpoints_enabled": False,
+        "status": "operational",
+        "analysis_endpoints_enabled": True,
+        "available_analysis_modes": ["quick"],
     })
 
 
@@ -192,6 +255,109 @@ async def handle_developer_api_usage(request: web.Request) -> web.Response:
     return _json_response({"ok": True, "request_id": request_id, "usage": usage})
 
 
+async def handle_developer_api_create_analysis(request: web.Request) -> web.Response:
+    auth, error, request_id, started_at = _authorized(request, "analysis:run")
+    if error is not None:
+        return error
+    assert auth is not None
+
+    idempotency_key = str(
+        request.headers.get("Idempotency-Key")
+        or request.headers.get("X-Idempotency-Key")
+        or ""
+    ).strip()
+    if not idempotency_key:
+        _record_safely(auth, request, request_id, started_at, 400)
+        return _json_response({
+            "ok": False,
+            "error": "missing_idempotency_key",
+            "request_id": request_id,
+        }, status=400)
+
+    try:
+        incoming = await _read_small_json(request)
+        normalized = normalize_quick_analysis_request(incoming)
+        submitted = submit_quick_analysis_job(
+            client_id=int(auth.get("client_id") or 0),
+            key_id=int(auth.get("key_id") or 0),
+            idempotency_key=idempotency_key,
+            request_payload=normalized,
+        )
+    except (ApiAnalysisError, ApiBillingError) as exc:
+        status = _analysis_error_status(str(getattr(exc, "code", str(exc))))
+        _record_safely(auth, request, request_id, started_at, status)
+        return _analysis_error_response(exc, request_id=request_id)
+    except Exception:
+        logger.exception("DEVELOPER_API_ANALYSIS_SUBMIT_FAILED request_id=%s", request_id)
+        _record_safely(auth, request, request_id, started_at, 503)
+        return _json_response({
+            "ok": False,
+            "error": "service_unavailable",
+            "request_id": request_id,
+        }, status=503)
+
+    job = submitted.get("job") or {}
+    reservation = submitted.get("reservation") or {}
+    idempotent = bool(submitted.get("idempotent"))
+    response_status = 200 if idempotent else 202
+    reserved_units = int(reservation.get("units") or job.get("units_reserved") or 0)
+    _record_safely(
+        auth,
+        request,
+        request_id,
+        started_at,
+        response_status,
+        units=0 if idempotent else reserved_units,
+    )
+    return _json_response({
+        "ok": True,
+        "request_id": request_id,
+        "job_id": str(job.get("job_id") or ""),
+        "status": str(job.get("status") or "queued"),
+        "analysis_type": "quick",
+        "mode": "quick",
+        "idempotent": idempotent,
+        "credits_reserved": reserved_units,
+        "credit_balance": int(submitted.get("credit_balance") or 0),
+        "status_url": f"/api/v1/analyses/{job.get('job_id')}",
+    }, status=response_status)
+
+
+async def handle_developer_api_get_analysis(request: web.Request) -> web.Response:
+    auth, error, request_id, started_at = _authorized(request, "analysis:read")
+    if error is not None:
+        return error
+    assert auth is not None
+    try:
+        job_id = validate_job_id(request.match_info.get("job_id"))
+        job = get_api_analysis_job(int(auth.get("client_id") or 0), job_id)
+    except ApiAnalysisError as exc:
+        status = _analysis_error_status(exc.code)
+        _record_safely(auth, request, request_id, started_at, status)
+        return _analysis_error_response(exc, request_id=request_id)
+    except Exception:
+        logger.exception("DEVELOPER_API_ANALYSIS_READ_FAILED request_id=%s", request_id)
+        _record_safely(auth, request, request_id, started_at, 503)
+        return _json_response({
+            "ok": False,
+            "error": "service_unavailable",
+            "request_id": request_id,
+        }, status=503)
+
+    if not job:
+        _record_safely(auth, request, request_id, started_at, 404)
+        return _json_response({
+            "ok": False,
+            "error": "not_found",
+            "request_id": request_id,
+        }, status=404)
+
+    payload = serialize_api_analysis_job(job)
+    payload["request_id"] = request_id
+    _record_safely(auth, request, request_id, started_at, 200)
+    return _json_response(payload)
+
+
 async def handle_developer_api_capabilities(request: web.Request) -> web.Response:
     auth, error, request_id, started_at = _authorized(request, "account:read")
     if error is not None:
@@ -206,13 +372,16 @@ async def handle_developer_api_capabilities(request: web.Request) -> web.Respons
             "GET /api/v1/account",
             "GET /api/v1/usage",
             "GET /api/v1/capabilities",
-        ],
-        "planned_endpoints": [
             "POST /api/v1/analyses",
             "GET /api/v1/analyses/{job_id}",
-            "GET /api/v1/opportunities",
         ],
-        "analysis_endpoints_enabled": False,
+        "planned_endpoints": [
+            "GET /api/v1/opportunities",
+            "POST /api/v1/webhooks",
+            "mode=deep for POST /api/v1/analyses",
+        ],
+        "analysis_endpoints_enabled": True,
+        "available_analysis_modes": ["quick"],
     })
 
 
@@ -227,6 +396,15 @@ def setup_developer_api_routes(app: web.Application) -> None:
     app.router.add_get("/api/v1/account", handle_developer_api_account)
     app.router.add_get("/api/v1/usage", handle_developer_api_usage)
     app.router.add_get("/api/v1/capabilities", handle_developer_api_capabilities)
-    for path in ("/api/v1/health", "/api/v1/account", "/api/v1/usage", "/api/v1/capabilities"):
+    app.router.add_post("/api/v1/analyses", handle_developer_api_create_analysis)
+    app.router.add_get("/api/v1/analyses/{job_id}", handle_developer_api_get_analysis)
+    for path in (
+        "/api/v1/health",
+        "/api/v1/account",
+        "/api/v1/usage",
+        "/api/v1/capabilities",
+        "/api/v1/analyses",
+        "/api/v1/analyses/{job_id}",
+    ):
         app.router.add_route("OPTIONS", path, handle_developer_api_options)
     app["developer_api_v1_routes_installed"] = True
