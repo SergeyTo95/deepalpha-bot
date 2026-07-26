@@ -64,7 +64,7 @@ GET  /api/v1/analyses/{job_id}
 GET  /api/v1/opportunities
 ```
 
-They will be enabled only after API credit billing, idempotency, job execution, failure refunds, and webhook signing are connected.
+The API credit ledger, configurable products, atomic reservations, job idempotency, success charging, and failure refunds are now prepared. Public analysis execution still waits for the worker, stable result contract, concurrency controls, timeouts, and signed webhook delivery.
 
 Wallet send and withdrawal operations are not planned for the public Developer API.
 
@@ -93,6 +93,24 @@ Each client has independent controls:
 
 Every authenticated request is recorded with request ID, endpoint, method, status, units, latency, client ID, and key ID.
 
+## Billing
+
+Developer API credits are separate from Telegram user tokens.
+
+The billing foundation provides:
+
+- editable prices in `api_products`;
+- append-only `api_credit_ledger`;
+- atomic `api_credit_reservations`;
+- canonical request fingerprints;
+- `(client_id, idempotency_key)` uniqueness;
+- reserve on job creation;
+- charge finalization on success;
+- automatic refund on internal failure;
+- ledger-backed manual admin adjustments.
+
+See `docs/developer_api_billing.md` for the complete lifecycle.
+
 ## Admin management
 
 Open the `API` section in DeepAlpha Admin Center to:
@@ -103,13 +121,16 @@ Open the `API` section in DeepAlpha Admin Center to:
 - issue test or live keys;
 - select scopes;
 - inspect usage totals;
-- revoke keys.
+- revoke keys;
+- edit API product prices and enabled status;
+- add or remove credits with idempotency protection;
+- inspect recent ledger entries and reservations.
 
 A raw key is displayed once immediately after creation and is never shown again.
 
-## Security changes in this phase
+## Security changes
 
-- `/api/user/{user_id}` now requires a valid DeepAlpha web session and only permits access to the authenticated user's own ID;
+- `/api/user/{user_id}` requires a valid DeepAlpha web session and only permits access to the authenticated user's own ID;
 - wildcard CORS is removed by the runtime security middleware;
 - same-origin requests remain allowed;
 - additional origins must be listed in `CORS_ALLOWED_ORIGINS`;
