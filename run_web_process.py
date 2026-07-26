@@ -11,6 +11,7 @@ def main() -> None:
     import web as deepalpha_web
 
     from developer_api_routes import setup_developer_api_routes
+    from services.developer_api_billing_service import ensure_api_billing_tables
     from services.developer_api_service import ensure_developer_api_tables
     from services.http_security_service import install_http_security
 
@@ -25,6 +26,7 @@ def main() -> None:
 
     try:
         ensure_developer_api_tables()
+        ensure_api_billing_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.
