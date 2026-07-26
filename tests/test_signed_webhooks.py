@@ -283,7 +283,7 @@ def test_portal_docs_and_cors_support_webhook_management():
     javascript = Path("webapp/developer_webhooks.js").read_text(encoding="utf-8")
     cors_patch = Path("services/developer_api_webhook_cors_patch.py").read_text(encoding="utf-8")
 
-    assert "developer_webhooks.js?v=1.0" in html
+    assert "developer_webhooks.js?v=1.1" in html
     assert "webhooks:manage" in javascript
     assert "X-DeepAlpha-Signature" in javascript
     assert "raw_body" in javascript

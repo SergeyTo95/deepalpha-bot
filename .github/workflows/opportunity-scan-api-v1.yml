@@ -1,0 +1,74 @@
+name: Opportunity Scan API v1
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_api_opportunity_routes.py"
+      - "developer_portal_opportunity_routes.py"
+      - "run_opportunity_worker.py"
+      - "run_web_process.py"
+      - "supervisord.conf"
+      - "services/developer_api_opportunity_service.py"
+      - "services/developer_api_opportunity_runtime_patch.py"
+      - "services/developer_api_opportunity_scope_patch.py"
+      - "services/developer_api_opportunity_webhook_patch.py"
+      - "services/developer_api_admin_opportunity_patch.py"
+      - "services/developer_portal_opportunity_history.py"
+      - "webapp/developer.html"
+      - "webapp/developer_opportunities.js"
+      - "webapp/developer_webhooks.js"
+      - "tests/test_opportunity_scan_api.py"
+      - "docs/opportunity_scan_api.md"
+      - ".github/workflows/opportunity-scan-api-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  opportunity-scan-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile modules
+        run: |
+          python -m py_compile developer_api_opportunity_routes.py
+          python -m py_compile developer_portal_opportunity_routes.py
+          python -m py_compile run_opportunity_worker.py
+          python -m py_compile run_web_process.py
+          python -m py_compile services/developer_api_opportunity_service.py
+          python -m py_compile services/developer_api_opportunity_runtime_patch.py
+          python -m py_compile services/developer_api_opportunity_scope_patch.py
+          python -m py_compile services/developer_api_opportunity_webhook_patch.py
+          python -m py_compile services/developer_api_admin_opportunity_patch.py
+          python -m py_compile services/developer_portal_opportunity_history.py
+
+      - name: Validate portal JavaScript
+        run: |
+          node --check webapp/developer_opportunities.js
+          node --check webapp/developer_webhooks.js
+
+      - name: Run tests
+        run: |
+          PYTHONPATH=. python -m pytest -q tests/test_opportunity_scan_api.py tests/test_free_opportunity_scanner.py tests/test_quick_analysis_api.py tests/test_api_beta_hardening.py tests/test_signed_webhooks.py tests/test_developer_api_foundation.py tests/test_developer_api_billing.py tests/test_developer_portal.py
