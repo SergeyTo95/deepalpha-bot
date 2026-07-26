@@ -42,6 +42,11 @@ def _install_capabilities() -> None:
                 "POST /api/v1/opportunity-scans",
             }
         ]
+        webhook_events = list(payload.get("webhook_events") or [])
+        for event in ("opportunity_scan.completed", "opportunity_scan.failed"):
+            if event not in webhook_events:
+                webhook_events.append(event)
+        payload["webhook_events"] = webhook_events
         payload["opportunity_scan_enabled"] = True
         payload["opportunity_scan"] = {
             "product_code": "opportunity_scan",
@@ -51,6 +56,7 @@ def _install_capabilities() -> None:
             "categories": ["All", "Crypto", "Politics", "Sports", "Economy", "Tech", "Other"],
             "tiers": ["DEEP_ANALYSIS_CANDIDATE", "WATCH_CANDIDATE", "LOW_PRIORITY"],
             "limits": {"scan_limit_max": 200, "result_limit_max": 20},
+            "webhook_events": ["opportunity_scan.completed", "opportunity_scan.failed"],
         }
         return routes._json_response(payload)
 
