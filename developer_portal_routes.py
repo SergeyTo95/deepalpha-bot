@@ -10,7 +10,6 @@ from db.database import get_user, get_user_by_session
 from services.developer_portal_service import (
     DeveloperPortalError,
     create_user_api_project,
-    ensure_developer_portal_tables,
     get_user_developer_overview,
     issue_user_api_key,
     revoke_user_api_key,
@@ -100,12 +99,6 @@ def _error_status(code: str) -> int:
         "key_not_active",
     }:
         return 409
-    if code in {
-        "project_name_required",
-        "at_least_one_scope_required",
-        "invalid_json",
-    }:
-        return 400
     return 400
 
 
@@ -182,6 +175,8 @@ async def handle_developer_portal_issue_key(request: web.Request) -> web.Respons
     assert current is not None
     try:
         client_id = int(request.match_info.get("client_id") or 0)
+        if client_id <= 0:
+            return _json_response({"ok": False, "error": "invalid_project_id"}, status=400)
         payload = await _read_json(request)
         scopes = payload.get("scopes")
         if scopes is not None and not isinstance(scopes, list):
@@ -193,10 +188,10 @@ async def handle_developer_portal_issue_key(request: web.Request) -> web.Respons
             scopes=scopes,
         )
         return _json_response({"ok": True, "key": key}, status=201)
-    except (TypeError, ValueError):
-        return _json_response({"ok": False, "error": "invalid_project_id"}, status=400)
     except DeveloperPortalError as exc:
         return _portal_error(exc)
+    except (TypeError, ValueError):
+        return _json_response({"ok": False, "error": "invalid_project_id"}, status=400)
     except Exception:
         logger.exception("DEVELOPER_PORTAL_KEY_ISSUE_FAILED user_id=%s", current.get("user_id"))
         return _json_response({"ok": False, "error": "service_unavailable"}, status=503)
@@ -212,6 +207,8 @@ async def handle_developer_portal_revoke_key(request: web.Request) -> web.Respon
     assert current is not None
     try:
         key_id = int(request.match_info.get("key_id") or 0)
+        if key_id <= 0:
+            return _json_response({"ok": False, "error": "invalid_key_id"}, status=400)
         changed = revoke_user_api_key(user_id=int(current["user_id"]), key_id=key_id)
         if not changed:
             return _json_response({"ok": False, "error": "key_not_found"}, status=404)
@@ -233,14 +230,14 @@ async def handle_developer_portal_rotate_key(request: web.Request) -> web.Respon
     assert current is not None
     try:
         key_id = int(request.match_info.get("key_id") or 0)
+        if key_id <= 0:
+            return _json_response({"ok": False, "error": "invalid_key_id"}, status=400)
         replacement = rotate_user_api_key(user_id=int(current["user_id"]), key_id=key_id)
         return _json_response({"ok": True, "key": replacement}, status=201)
-    except (TypeError, ValueError) as exc:
-        if isinstance(exc, DeveloperPortalError):
-            return _portal_error(exc)
-        return _json_response({"ok": False, "error": "invalid_key_id"}, status=400)
     except DeveloperPortalError as exc:
         return _portal_error(exc)
+    except (TypeError, ValueError):
+        return _json_response({"ok": False, "error": "invalid_key_id"}, status=400)
     except Exception:
         logger.exception("DEVELOPER_PORTAL_KEY_ROTATE_FAILED user_id=%s", current.get("user_id"))
         return _json_response({"ok": False, "error": "service_unavailable"}, status=503)
@@ -253,7 +250,6 @@ async def handle_developer_portal_options(request: web.Request) -> web.Response:
 def setup_developer_portal_routes(app: web.Application) -> None:
     if app.get("developer_portal_routes_installed"):
         return
-    ensure_developer_portal_tables()
     app.router.add_get("/developer", handle_developer_portal_page)
     app.router.add_get("/app-api/v1/developer/overview", handle_developer_portal_overview)
     app.router.add_post("/app-api/v1/developer/projects", handle_developer_portal_create_project)
