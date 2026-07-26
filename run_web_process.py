@@ -46,6 +46,7 @@ def main() -> None:
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
     from developer_api_webhook_routes import setup_developer_api_webhook_routes
     from developer_portal_jobs_routes import setup_developer_portal_jobs_routes
+    from developer_portal_opportunity_routes import setup_developer_portal_opportunity_routes
     from developer_portal_routes import setup_developer_portal_routes
     from services.developer_api_admin_observability_patch import install as install_admin_observability
     from services.developer_api_admin_opportunity_patch import install as install_admin_opportunity
@@ -61,6 +62,7 @@ def main() -> None:
     setup_developer_api_admin_routes(deepalpha_web.app)
     setup_developer_portal_routes(deepalpha_web.app)
     setup_developer_portal_jobs_routes(deepalpha_web.app)
+    setup_developer_portal_opportunity_routes(deepalpha_web.app)
 
     try:
         ensure_developer_api_tables()
