@@ -3,8 +3,10 @@ from types import SimpleNamespace
 import pytest
 
 from services.simplified_navigation_patch import (
+    EN_DEVELOPER_API,
     EN_MAIN_MENU,
     RU_COMMUNITY,
+    RU_DEVELOPER_API,
     RU_FINANCE,
     RU_MAIN_MENU,
     RU_MY_MARKETS,
@@ -29,10 +31,10 @@ class FakeDispatcher:
 
 
 class FakeMessage:
-    def __init__(self, text, user_id=42):
+    def __init__(self, text, user_id=42, chat_type="private"):
         self.text = text
         self.from_user = SimpleNamespace(id=user_id)
-        self.chat = SimpleNamespace(type="private")
+        self.chat = SimpleNamespace(type=chat_type)
         self.answers = []
 
     async def answer(self, text, **kwargs):
@@ -72,6 +74,7 @@ def _fake_module(lang="ru"):
 
     return SimpleNamespace(
         dp=dispatcher,
+        WEBAPP_URL="https://deepalpha.example",
         LIVE_ANALYST_BUTTON="🧠 Live Analyst",
         get_user_lang=lambda user_id: lang,
         native_wallet_label=lambda language: "GRAM кошелёк" if language == "ru" else "GRAM wallet",
@@ -160,6 +163,7 @@ def test_existing_actions_are_only_relocated_to_logical_sections():
         "👤 Профиль",
         "🧠 Analyst Profile",
         "💰 Баланс автора",
+        RU_DEVELOPER_API,
         "🌐 Язык",
         "❓ Помощь",
         RU_MAIN_MENU,
@@ -195,6 +199,23 @@ async def test_section_button_opens_section_and_main_menu_button_returns_home():
     assert _texts(main_message.answers[0][1]["reply_markup"]) == _texts(module.get_main_keyboard(42))
 
 
+@pytest.mark.asyncio
+async def test_developer_api_button_opens_protected_webapp_portal():
+    module = _fake_module("ru")
+    install(module)
+
+    message = FakeMessage(RU_DEVELOPER_API)
+    await module._simplified_navigation_handler(message, FakeState())
+
+    text, kwargs = message.answers[0]
+    markup = kwargs["reply_markup"]
+    button = markup.inline_keyboard[0][0]
+    assert "API для разработчиков" in text
+    assert "секретный ключ" in text.lower()
+    assert button.web_app.url == "https://deepalpha.example/developer"
+    assert "da_test_" not in text
+
+
 def test_english_navigation_has_same_structure():
     module = _fake_module("en")
     install(module)
@@ -204,6 +225,8 @@ def test_english_navigation_has_same_structure():
         ["💰 Finance", "🎁 Rewards"],
         ["📰 Community", "👤 Profile"],
     ]
+    profile = _texts(module.get_profile_menu_keyboard(42))
+    assert EN_DEVELOPER_API in profile
     analysis = _texts(module.get_analysis_keyboard(42))
     assert "💡 Signal of the hour" not in analysis
     assert "🔮 Personal signal" not in analysis
