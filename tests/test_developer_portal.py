@@ -7,6 +7,12 @@ from aiohttp.test_utils import TestClient, TestServer
 import developer_portal_routes as routes
 from services import developer_portal_service as service
 
+SESSION_HEADER = {"Cookie": "deepalpha_session=valid"}
+MUTATION_HEADERS = {
+    "Cookie": "deepalpha_session=valid",
+    "X-DeepAlpha-Portal": "1",
+}
+
 
 async def _client_with_routes():
     app = web.Application()
@@ -77,7 +83,7 @@ async def test_overview_returns_only_current_users_projects(monkeypatch):
     try:
         response = await client.get(
             "/app-api/v1/developer/overview",
-            cookies={"deepalpha_session": "valid"},
+            headers=SESSION_HEADER,
         )
         payload = await response.json()
         assert response.status == 200
@@ -96,7 +102,7 @@ async def test_mutations_require_portal_header_and_json(monkeypatch):
     try:
         missing_header = await client.post(
             "/app-api/v1/developer/projects",
-            cookies={"deepalpha_session": "valid"},
+            headers=SESSION_HEADER,
             json={"name": "Project"},
         )
         assert missing_header.status == 403
@@ -104,8 +110,7 @@ async def test_mutations_require_portal_header_and_json(monkeypatch):
 
         wrong_content_type = await client.post(
             "/app-api/v1/developer/projects",
-            cookies={"deepalpha_session": "valid"},
-            headers={"X-DeepAlpha-Portal": "1"},
+            headers=MUTATION_HEADERS,
             data="name=Project",
         )
         assert wrong_content_type.status == 415
@@ -128,8 +133,7 @@ async def test_project_creation_uses_authenticated_user_not_request_user_id(monk
     try:
         response = await client.post(
             "/app-api/v1/developer/projects",
-            cookies={"deepalpha_session": "valid"},
-            headers={"X-DeepAlpha-Portal": "1"},
+            headers=MUTATION_HEADERS,
             json={"name": "Partner backend", "user_id": 999999},
         )
         payload = await response.json()
@@ -154,8 +158,7 @@ async def test_key_secret_is_returned_only_by_issue_action(monkeypatch):
     try:
         response = await client.post(
             "/app-api/v1/developer/projects/7/keys",
-            cookies={"deepalpha_session": "valid"},
-            headers={"X-DeepAlpha-Portal": "1"},
+            headers=MUTATION_HEADERS,
             json={"name": "backend", "scopes": ["account:read"]},
         )
         payload = await response.json()
@@ -174,7 +177,7 @@ def test_frontend_never_persists_secret_and_authenticates_with_telegram():
     html = Path("webapp/developer.html").read_text(encoding="utf-8")
 
     assert 'body: JSON.stringify({ init_data: initData })' in javascript
-    assert 'field.value = ""' in javascript
+    assert 'document.getElementById("secretValue").value = ""' in javascript
     assert "localStorage" not in javascript
     assert "sessionStorage" not in javascript
     assert "X-DeepAlpha-Portal" in javascript
