@@ -6,9 +6,9 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-import developer_api_health_patch
 import developer_api_routes
 import developer_portal_jobs_routes
+from services import developer_api_health_patch
 
 
 SMOKE_PATH = Path("scripts/quick_analysis_api_smoke.py")
