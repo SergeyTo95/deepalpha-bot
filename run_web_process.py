@@ -13,6 +13,7 @@ def main() -> None:
     from developer_api_routes import setup_developer_api_routes
     from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_billing_service import ensure_api_billing_tables
+    from services.developer_api_commercial_launch_service import ensure_commercial_launch_tables
     from services.developer_api_commercial_runtime_patch import install as install_commercial_runtime
     from services.developer_api_commercial_service import ensure_api_commercial_tables
     from services.developer_api_health_patch import install as install_api_health_observability
@@ -89,6 +90,7 @@ def main() -> None:
         ensure_api_webhook_tables()
         ensure_opportunity_webhook_trigger()
         ensure_api_commercial_tables()
+        ensure_commercial_launch_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.
