@@ -99,8 +99,9 @@ def ensure_commercial_launch_tables() -> None:
         conn.close()
 
 
-def automatic_payment_worker_required() -> bool:
-    return (
+def automatic_payment_worker_required(pending_ton_invoices: int = 0) -> bool:
+    """Require the worker for current automatic sales or historical payable TON invoices."""
+    return int(pending_ton_invoices or 0) > 0 or (
         v2.credit_purchases_enabled()
         and v2.invoice_provider_name() == "ton_treasury"
     )
@@ -118,6 +119,10 @@ def get_commercial_runtime_health(*, include_workers: bool = False) -> Dict[str,
                 COUNT(*) FILTER (
                     WHERE status IN ('pending','awaiting_payment','payment_detected','paid','crediting')
                 ) AS pending,
+                COUNT(*) FILTER (
+                    WHERE payment_provider='ton_treasury'
+                      AND status IN ('pending','awaiting_payment','payment_detected','paid','crediting')
+                ) AS pending_ton,
                 COUNT(*) FILTER (WHERE status='expired') AS expired,
                 COUNT(*) FILTER (
                     WHERE status='credited' AND credited_at >= NOW() - INTERVAL '24 hours'
@@ -163,7 +168,8 @@ def get_commercial_runtime_health(*, include_workers: bool = False) -> Dict[str,
         conn.close()
 
     fresh = sum(1 for item in workers if bool(item.get("fresh")))
-    worker_required = automatic_payment_worker_required()
+    pending_ton = int(metrics.get("pending_ton") or 0)
+    worker_required = automatic_payment_worker_required(pending_ton)
     warnings: List[str] = []
     if worker_required and fresh == 0:
         warnings.append("no_fresh_commercial_worker")
@@ -182,6 +188,7 @@ def get_commercial_runtime_health(*, include_workers: bool = False) -> Dict[str,
         "worker_available": fresh > 0,
         "fresh_workers": fresh,
         "pending_invoices": int(metrics.get("pending") or 0),
+        "pending_ton_invoices": pending_ton,
         "expired_invoices": int(metrics.get("expired") or 0),
         "paid_24h": int(metrics.get("paid_24h") or 0),
         "credits_sold_24h": int(metrics.get("credits_24h") or 0),
