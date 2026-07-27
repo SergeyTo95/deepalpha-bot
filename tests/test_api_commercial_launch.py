@@ -127,16 +127,20 @@ def test_database_initialization_remains_inside_guarded_startup():
     assert "ensure_commercial_launch_tables" not in install_body
 
 
-def test_worker_is_provider_and_production_guarded():
+def test_worker_stays_available_for_existing_ton_settlement():
     assert run_api_commercial_worker.worker_disabled_reason({}) == "API_COMMERCIAL_LAUNCH_ENABLED=false"
     assert run_api_commercial_worker.worker_disabled_reason({
         "API_COMMERCIAL_LAUNCH_ENABLED": "true",
-    }) == "API_CREDIT_PURCHASES_ENABLED=false"
+    }) is None
     assert run_api_commercial_worker.worker_disabled_reason({
         "API_COMMERCIAL_LAUNCH_ENABLED": "true",
-        "API_CREDIT_PURCHASES_ENABLED": "true",
+        "API_CREDIT_PURCHASES_ENABLED": "false",
         "API_CREDIT_INVOICE_PROVIDER": "manual",
-    }) == "manual_provider_has_no_automatic_worker"
+    }) is None
+    assert run_api_commercial_worker.worker_disabled_reason({
+        "API_COMMERCIAL_LAUNCH_ENABLED": "true",
+        "API_COMMERCIAL_WORKER_ENABLED": "false",
+    }) == "API_COMMERCIAL_WORKER_ENABLED=false"
     assert run_api_commercial_worker.worker_disabled_reason({
         "API_COMMERCIAL_LAUNCH_ENABLED": "true",
         "API_CREDIT_PURCHASES_ENABLED": "true",
@@ -145,6 +149,7 @@ def test_worker_is_provider_and_production_guarded():
         "RAILWAY_GIT_BRANCH": "feature/turbo-short-term-btc",
     }) is None
     worker = (ROOT / "run_api_commercial_worker.py").read_text(encoding="utf-8")
+    assert "already-issued `ton_treasury` invoices must remain settleable" in worker
     assert "developer_api_commercial_final_service" in worker
 
 
