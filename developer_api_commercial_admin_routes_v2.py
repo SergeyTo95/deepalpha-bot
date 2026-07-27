@@ -19,10 +19,22 @@ def _request_key(request: web.Request) -> str:
 
 
 def _inject_admin_key(html: str, key: str) -> str:
+    hidden = (
+        f"<input type='hidden' name='key' value='{escape(key, quote=True)}'>"
+        if key
+        else ""
+    )
+    # The registered dashboard route is /admin/api, not /admin/developer-api.
+    html = re.sub(
+        r"<form method='get' action='/admin/developer-api'([^>]*)>",
+        lambda match: (
+            f"<form method='get' action='/admin/api'{match.group(1)}>{hidden}"
+        ),
+        html,
+    )
     if not key:
         return html
     encoded = escape(quote_plus(key), quote=True)
-    hidden = f"<input type='hidden' name='key' value='{escape(key, quote=True)}'>"
 
     def replace(match: re.Match) -> str:
         action = match.group(1)
