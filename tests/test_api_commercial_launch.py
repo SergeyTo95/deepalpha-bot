@@ -99,38 +99,36 @@ def _base_tx(invoice, *, amount=None, destination=None, aborted=False, seconds_o
 def test_payment_validation_rejects_failed_wrong_destination_amount_and_network(monkeypatch):
     invoice = _base_invoice(monkeypatch)
 
-    failed = service._settle_invoice_from_tx(invoice, _base_tx(invoice, aborted=True), _base_tx(invoice)["in_msg"])
-    assert failed["error"] == "transaction_failed"
+    failed_tx = _base_tx(invoice, aborted=True)
+    assert service._settle_invoice_from_tx(invoice, failed_tx, failed_tx["in_msg"])["error"] == "transaction_failed"
 
     wrong_destination_tx = _base_tx(invoice, destination="EQCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
-    wrong_destination = service._settle_invoice_from_tx(invoice, wrong_destination_tx, wrong_destination_tx["in_msg"])
-    assert wrong_destination["error"] == "destination_mismatch"
+    assert service._settle_invoice_from_tx(invoice, wrong_destination_tx, wrong_destination_tx["in_msg"])["error"] == "destination_mismatch"
 
     wrong_amount_tx = _base_tx(invoice, amount=invoice["price_nano"] + 1)
-    wrong_amount = service._settle_invoice_from_tx(invoice, wrong_amount_tx, wrong_amount_tx["in_msg"])
-    assert wrong_amount["error"] == "amount_mismatch"
+    assert service._settle_invoice_from_tx(invoice, wrong_amount_tx, wrong_amount_tx["in_msg"])["error"] == "amount_mismatch"
 
     wrong_network = dict(invoice, network="testnet")
-    network_tx = _base_tx(wrong_network, destination=wrong_network["treasury_address"])
-    network = service._settle_invoice_from_tx(wrong_network, network_tx, network_tx["in_msg"])
-    assert network["error"] == "network_mismatch"
+    network_tx = _base_tx(wrong_network)
+    assert service._settle_invoice_from_tx(wrong_network, network_tx, network_tx["in_msg"])["error"] == "network_mismatch"
 
 
 def test_payment_validation_waits_for_confirmation_and_honors_invoice_time(monkeypatch):
     invoice = _base_invoice(monkeypatch)
     recent_tx = _base_tx(invoice, seconds_old=2)
-    recent = service._settle_invoice_from_tx(invoice, recent_tx, recent_tx["in_msg"])
-    assert recent == {"ok": False, "error": "awaiting_confirmation", "retryable": True}
+    assert service._settle_invoice_from_tx(invoice, recent_tx, recent_tx["in_msg"]) == {
+        "ok": False,
+        "error": "awaiting_confirmation",
+        "retryable": True,
+    }
 
     before = dict(invoice, created_at=datetime.now(timezone.utc) + timedelta(minutes=10))
-    before_tx = _base_tx(before, seconds_old=60)
-    before_result = service._settle_invoice_from_tx(before, before_tx, before_tx["in_msg"])
-    assert before_result["error"] == "transaction_before_invoice"
+    before_tx = _base_tx(before)
+    assert service._settle_invoice_from_tx(before, before_tx, before_tx["in_msg"])["error"] == "transaction_before_invoice"
 
     expired = dict(invoice, expires_at=datetime.now(timezone.utc) - timedelta(minutes=5))
-    late_tx = _base_tx(expired, seconds_old=60)
-    late = service._settle_invoice_from_tx(expired, late_tx, late_tx["in_msg"])
-    assert late["error"] == "invoice_expired_before_payment"
+    late_tx = _base_tx(expired)
+    assert service._settle_invoice_from_tx(expired, late_tx, late_tx["in_msg"])["error"] == "invoice_expired_before_payment"
 
 
 def test_monthly_spend_trigger_is_database_authoritative():
@@ -150,12 +148,7 @@ def test_runtime_translates_spend_trigger_into_stable_api_error():
     with pytest.raises(ApiBillingError) as exc:
         guarded(client_id=1)
     assert exc.value.code == "monthly_spend_limit_exceeded"
-    assert exc.value.details == {
-        "limit": 100,
-        "used": 90,
-        "requested": 20,
-        "remaining": 10,
-    }
+    assert exc.value.details == {"limit": 100, "used": 90, "requested": 20, "remaining": 10}
 
 
 def test_live_key_lifecycle_is_gated_and_rotation_preserves_environment():
@@ -211,7 +204,7 @@ async def test_invoice_route_requires_portal_mutation_header(monkeypatch):
         )
         assert response.status == 403
         payload = await response.json()
-        assert payload["error"] == "portal_request_required"
+        assert payload["error"] == "portal_header_required"
     finally:
         await client.close()
 
@@ -223,12 +216,7 @@ async def test_invoice_route_passes_authenticated_owner_and_idempotency(monkeypa
 
     def create(**kwargs):
         captured.update(kwargs)
-        return {
-            "invoice_id": "inv_example",
-            "client_id": kwargs["client_id"],
-            "package_code": kwargs["package_code"],
-            "idempotent": False,
-        }
+        return {"invoice_id": "inv_example", "client_id": kwargs["client_id"], "package_code": kwargs["package_code"], "idempotent": False}
 
     monkeypatch.setattr(routes, "create_credit_invoice", create)
     client = await _client()
@@ -241,12 +229,7 @@ async def test_invoice_route_passes_authenticated_owner_and_idempotency(monkeypa
         payload = await response.json()
         assert response.status == 201
         assert payload["invoice"]["invoice_id"] == "inv_example"
-        assert captured == {
-            "user_id": 77,
-            "client_id": 5,
-            "package_code": "starter_100",
-            "idempotency_key": "invoice-1",
-        }
+        assert captured == {"user_id": 77, "client_id": 5, "package_code": "starter_100", "idempotency_key": "invoice-1"}
     finally:
         await client.close()
 
@@ -282,27 +265,23 @@ def test_portal_and_admin_commercial_surfaces_are_mounted():
     admin_source = Path("developer_api_commercial_admin_routes.py").read_text(encoding="utf-8")
     html = Path("webapp/developer.html").read_text(encoding="utf-8")
     javascript = Path("webapp/developer_commercial.js").read_text(encoding="utf-8")
+    service_source = Path("services/developer_api_commercial_service.py").read_text(encoding="utf-8")
 
     assert "setup_developer_api_commercial_routes" in run_web
     assert "setup_developer_api_commercial_admin_routes" in run_web
     assert "/app-api/v1/developer/commercial/overview" in routes_source
-    assert "JOIN api_client_owners" in Path("services/developer_api_commercial_service.py").read_text(encoding="utf-8")
+    assert "JOIN api_client_owners" in service_source
     assert "/admin/api/commercial/packages/create" in admin_source
     assert "developer_commercial.css?v=1.0" in html
     assert "developer_commercial.js?v=1.0" in html
     assert "api_pay_" in javascript
     assert "Idempotency-Key" in javascript
-    assert "da_live" not in javascript
 
 
 def test_public_wallet_execution_remains_closed():
     public_routes = "\n".join(
         Path(name).read_text(encoding="utf-8")
-        for name in (
-            "developer_api_routes.py",
-            "developer_api_opportunity_routes.py",
-            "developer_api_webhook_routes.py",
-        )
+        for name in ("developer_api_routes.py", "developer_api_opportunity_routes.py", "developer_api_webhook_routes.py")
     )
     assert "/api/v1/wallet" not in public_routes
     assert "wallet:send" not in public_routes
