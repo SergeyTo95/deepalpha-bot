@@ -46,7 +46,7 @@ def main() -> None:
     if reason:
         idle_forever(reason)
         return
-    from services.developer_api_commercial_launch_v2_service import run_commercial_worker_forever
+    from services.developer_api_commercial_final_service import run_commercial_worker_forever
 
     run_commercial_worker_forever()
 
