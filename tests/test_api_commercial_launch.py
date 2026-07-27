@@ -274,7 +274,7 @@ def test_portal_and_admin_commercial_surfaces_are_mounted():
     assert "/admin/api/commercial/packages/create" in admin_source
     assert "developer_commercial.css?v=1.0" in html
     assert "developer_commercial.js?v=1.0" in html
-    assert "api_pay_" in javascript
+    assert "api_pay_" in service_source
     assert "Idempotency-Key" in javascript
 
 
