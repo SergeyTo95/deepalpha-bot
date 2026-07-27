@@ -15,6 +15,7 @@ def main() -> None:
     from services.developer_api_billing_service import ensure_api_billing_tables
     from services.developer_api_health_patch import install as install_api_health_observability
     from services.developer_api_observability_service import ensure_api_observability_tables
+    from services.developer_api_openapi_runtime_patch import install as install_openapi_runtime
     from services.developer_api_opportunity_runtime_patch import install as install_opportunity_runtime
     from services.developer_api_opportunity_scope_patch import install as install_opportunity_scope
     from services.developer_api_opportunity_service import ensure_api_opportunity_tables
@@ -40,9 +41,11 @@ def main() -> None:
     install_api_health_observability()
     install_webhook_runtime()
     install_opportunity_runtime()
+    install_openapi_runtime()
 
     # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
+    from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
     from developer_api_webhook_routes import setup_developer_api_webhook_routes
     from developer_portal_jobs_routes import setup_developer_portal_jobs_routes
@@ -56,6 +59,7 @@ def main() -> None:
     install_admin_webhooks()
     install_admin_opportunity()
 
+    setup_developer_api_openapi_routes(deepalpha_web.app)
     setup_developer_api_routes(deepalpha_web.app)
     setup_developer_api_opportunity_routes(deepalpha_web.app)
     setup_developer_api_webhook_routes(deepalpha_web.app)

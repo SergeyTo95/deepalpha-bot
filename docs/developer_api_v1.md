@@ -54,6 +54,22 @@ GET /api/v1/capabilities
 Authorization: Bearer <api-key>
 ```
 
+### OpenAPI and interactive documentation
+
+These endpoints are public:
+
+```http
+GET /api/docs
+GET /api/openapi.json
+GET /api/postman.json
+```
+
+- `/api/docs` serves Swagger UI with bearer authorization and Try It Out;
+- `/api/openapi.json` is the canonical OpenAPI 3.1 machine contract;
+- `/api/postman.json` is an importable Postman Collection v2.1 with variables and request tests.
+
+The OpenAPI document includes all public v1 methods, request and response schemas, stable error responses, required scopes, idempotency headers, webhook events, and product examples. Contract tests compare the committed runtime routes against the generated specification so undocumented v1 routes fail CI.
+
 ### Quick Analysis
 
 Requires `analysis:run`:
@@ -146,8 +162,7 @@ See `docs/signed_webhooks_v1.md`.
 
 ```http
 POST /api/v1/analyses with mode=deep
-OpenAPI 3.1 / Swagger
-Python and TypeScript SDKs
+Python and TypeScript SDKs generated from OpenAPI 3.1
 ```
 
 Wallet send and withdrawal operations are not planned for the public Developer API.
@@ -247,7 +262,9 @@ A raw API key or webhook signing secret is displayed once immediately after crea
 - admin and Developer API responses receive `Cache-Control: no-store` and security headers;
 - public analysis results omit internal provider names, prompts, and raw agent payloads;
 - webhook targets are restricted to public HTTPS port 443 addresses and connections are pinned to freshly validated DNS results;
-- webhook signatures use HMAC-SHA256 over the timestamp and raw request body.
+- webhook signatures use HMAC-SHA256 over the timestamp and raw request body;
+- Swagger UI loads a pinned `swagger-ui-dist` version under a restrictive Content Security Policy;
+- OpenAPI and Postman JSON responses use ETags and a five-minute public cache.
 
 Optional environment variables:
 

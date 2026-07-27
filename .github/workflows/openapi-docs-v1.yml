@@ -1,0 +1,110 @@
+name: OpenAPI docs v1
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "developer_api_openapi_routes.py"
+      - "run_web_process.py"
+      - "services/developer_api_openapi_components.py"
+      - "services/developer_api_openapi_paths.py"
+      - "services/developer_api_openapi_service.py"
+      - "services/developer_api_openapi_runtime_patch.py"
+      - "docs/deepalpha_api.postman_collection.json"
+      - "docs/developer_api_v1.md"
+      - "webapp/developer.html"
+      - "webapp/developer_openapi.js"
+      - "tests/test_openapi_contract.py"
+      - ".github/workflows/openapi-docs-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-docs-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openapi-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Compile documentation modules
+        run: |
+          python -m py_compile developer_api_openapi_routes.py
+          python -m py_compile run_web_process.py
+          python -m py_compile services/developer_api_openapi_components.py
+          python -m py_compile services/developer_api_openapi_paths.py
+          python -m py_compile services/developer_api_openapi_service.py
+          python -m py_compile services/developer_api_openapi_runtime_patch.py
+
+      - name: Validate generated OpenAPI and Postman JSON
+        run: |
+          python - <<'PY'
+          import json
+          from services.developer_api_openapi_service import build_openapi_spec
+          spec = build_openapi_spec()
+          assert spec["openapi"] == "3.1.0"
+          json.dumps(spec)
+          PY
+          python -m json.tool docs/deepalpha_api.postman_collection.json >/dev/null
+
+      - name: Validate Developer Portal JavaScript
+        run: node --check webapp/developer_openapi.js
+
+      - name: Verify routes and scopes
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_openapi_contract.py::test_openapi_is_31_and_every_public_v1_route_is_documented \
+            tests/test_openapi_contract.py::test_operation_ids_are_unique_and_required_scopes_are_declared
+
+      - name: Verify examples and closed surfaces
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_openapi_contract.py::test_openapi_request_examples_match_runtime_normalizers \
+            tests/test_openapi_contract.py::test_openapi_keeps_deep_analysis_and_wallet_execution_closed
+
+      - name: Verify Postman and documentation delivery
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_openapi_contract.py::test_postman_collection_covers_every_documented_v1_operation \
+            tests/test_openapi_contract.py::test_documentation_routes_serve_swagger_openapi_postman_and_etag \
+            tests/test_openapi_contract.py::test_serialized_openapi_is_deterministic_and_etag_matches
+
+      - name: Verify capabilities and Developer Portal links
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_openapi_contract.py::test_capabilities_publish_documentation_endpoints \
+            tests/test_openapi_contract.py::test_developer_portal_links_all_documentation_assets
+
+      - name: Run API regression tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_opportunity_scan_api.py \
+            tests/test_signed_webhooks.py \
+            tests/test_quick_analysis_api.py \
+            tests/test_api_beta_hardening.py \
+            tests/test_developer_api_foundation.py \
+            tests/test_developer_api_billing.py \
+            tests/test_developer_portal.py
