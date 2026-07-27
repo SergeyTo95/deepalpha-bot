@@ -145,7 +145,7 @@ def test_worker_is_provider_and_production_guarded():
         "RAILWAY_GIT_BRANCH": "feature/turbo-short-term-btc",
     }) is None
     worker = (ROOT / "run_api_commercial_worker.py").read_text(encoding="utf-8")
-    assert "developer_api_commercial_launch_v2_service" in worker
+    assert "developer_api_commercial_final_service" in worker
 
 
 def test_portal_admin_and_mobile_assets_are_mounted():
