@@ -3,12 +3,14 @@ from pathlib import Path
 import pytest
 
 import run_api_commercial_worker
-from services import developer_api_commercial_launch_service as service
+from services import developer_api_commercial_launch_v2_service as service
 from services import developer_api_commercial_runtime_patch as runtime_patch
 from services.developer_api_billing_service import ApiBillingError
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BASE_SOURCE = (ROOT / "services/developer_api_commercial_launch_service.py").read_text(encoding="utf-8")
+V2_SOURCE = (ROOT / "services/developer_api_commercial_launch_v2_service.py").read_text(encoding="utf-8")
 
 
 def test_commercial_gates_fail_closed(monkeypatch):
@@ -21,6 +23,12 @@ def test_commercial_gates_fail_closed(monkeypatch):
     assert service.legacy.commercial_launch_enabled() is False
     assert service.credit_purchases_enabled() is False
     assert service.legacy.live_keys_globally_enabled() is False
+
+
+def test_purchase_gate_stays_closed_when_only_launch_is_enabled(monkeypatch):
+    monkeypatch.setenv("API_COMMERCIAL_LAUNCH_ENABLED", "true")
+    monkeypatch.delenv("API_CREDIT_PURCHASES_ENABLED", raising=False)
+    assert service.credit_purchases_enabled() is False
 
 
 def test_provider_modes_are_explicit(monkeypatch):
@@ -41,32 +49,29 @@ def test_no_fake_client_settlement_route_exists():
 
 
 def test_invoice_schema_and_settlement_are_exactly_once():
-    source = (ROOT / "services/developer_api_commercial_launch_service.py").read_text(encoding="utf-8")
-    assert "credited_at TIMESTAMP" in source
-    assert "SELECT * FROM api_credit_invoices WHERE invoice_id=%s FOR UPDATE" in source
-    assert "SELECT * FROM api_clients WHERE id=%s FOR UPDATE" in source
-    assert 'ledger_key = f"invoice:{invoice_id}"' in source
-    assert "INSERT INTO api_credit_ledger" in source
-    assert "api_payment_events_append_only" in source
+    assert "credited_at TIMESTAMP" in BASE_SOURCE
+    assert "SELECT * FROM api_credit_invoices WHERE invoice_id=%s FOR UPDATE" in BASE_SOURCE
+    assert "SELECT * FROM api_clients WHERE id=%s FOR UPDATE" in BASE_SOURCE
+    assert 'ledger_key = f"invoice:{invoice_id}"' in BASE_SOURCE
+    assert "INSERT INTO api_credit_ledger" in BASE_SOURCE
+    assert "api_payment_events_append_only" in BASE_SOURCE
 
 
 def test_ton_validation_is_reused_not_duplicated():
-    source = (ROOT / "services/developer_api_commercial_launch_service.py").read_text(encoding="utf-8")
-    assert "legacy._transaction_success" in source
-    assert "normalize_ton_address" in source
-    assert "tx_hash_not_unique" in source
-    assert "destination_mismatch" in source
-    assert "amount_mismatch" in source
-    assert "network_mismatch" in source
+    assert "legacy._transaction_success" in BASE_SOURCE
+    assert "normalize_ton_address" in BASE_SOURCE
+    assert "tx_hash_not_unique" in BASE_SOURCE
+    assert "destination_mismatch" in BASE_SOURCE
+    assert "amount_mismatch" in BASE_SOURCE
+    assert "network_mismatch" in BASE_SOURCE
 
 
 def test_daily_and_monthly_spend_trigger_is_database_authoritative():
-    source = (ROOT / "services/developer_api_commercial_launch_service.py").read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE FUNCTION enforce_api_credit_spend_limits" in source
-    assert "FROM api_clients WHERE id=NEW.client_id FOR UPDATE" in source
-    assert "status IN ('reserved','charged')" in source
-    assert "daily_credit_spend_limit_reached" in source
-    assert "monthly_credit_spend_limit_reached" in source
+    assert "CREATE OR REPLACE FUNCTION enforce_api_credit_spend_limits" in BASE_SOURCE
+    assert "FROM api_clients WHERE id=NEW.client_id FOR UPDATE" in BASE_SOURCE
+    assert "status IN ('reserved','charged')" in BASE_SOURCE
+    assert "daily_credit_spend_limit_reached" in BASE_SOURCE
+    assert "monthly_credit_spend_limit_reached" in BASE_SOURCE
 
 
 def test_runtime_translates_old_and_new_spend_errors():
@@ -85,14 +90,41 @@ def test_runtime_translates_old_and_new_spend_errors():
         assert exc.value.details == {"limit": 100, "used": 90, "requested": 20, "remaining": 10}
 
 
-def test_live_lifecycle_and_key_rotation_are_safe():
-    source = (ROOT / "services/developer_api_commercial_launch_service.py").read_text(encoding="utf-8")
-    legacy = (ROOT / "services/developer_api_commercial_service.py").read_text(encoding="utf-8")
+def test_live_lifecycle_key_rotation_and_suspend_revocation_are_safe():
+    legacy_source = (ROOT / "services/developer_api_commercial_service.py").read_text(encoding="utf-8")
     for state in ("test_only", "live_requested", "live_approved", "live_rejected", "live_suspended"):
-        assert state in source
-    assert "generate_api_key(\"live\")" in source
-    assert 'environment = "live" if str(existing.get("environment") or "") == "live" else "test"' in legacy
-    assert "generate_api_key(environment)" in legacy
+        assert state in BASE_SOURCE
+    assert "generate_api_key(\"live\")" in BASE_SOURCE
+    assert 'environment = "live" if str(existing.get("environment") or "") == "live" else "test"' in legacy_source
+    assert "generate_api_key(environment)" in legacy_source
+    assert "environment='live' AND status='active'" in V2_SOURCE
+    assert "SET status='revoked', revoked_at=COALESCE(revoked_at,NOW())" in V2_SOURCE
+    assert "revoked_live_key_ids" in V2_SOURCE
+
+
+def test_documented_package_json_schema_is_seeded_after_v2_columns():
+    assert "_ORIGINAL_ENSURE()" in V2_SOURCE
+    assert "price_amount" in V2_SOURCE
+    assert "price_currency" in V2_SOURCE
+    assert "ON CONFLICT (package_code) DO NOTHING" in V2_SOURCE
+    assert "_seed_configured_packages(cursor)" in V2_SOURCE
+
+
+def test_old_invoice_fingerprint_remains_replayable():
+    assert 'old_fingerprint = legacy._canonical_fingerprint(' in V2_SOURCE
+    assert '{"client_id": int(client_id), "package_code": code}' in V2_SOURCE
+    assert "stored_provider != requested_provider" in V2_SOURCE
+    assert '"idempotent": True' in V2_SOURCE
+
+
+def test_database_initialization_remains_inside_guarded_startup():
+    run_web = (ROOT / "run_web_process.py").read_text(encoding="utf-8")
+    runtime_v2 = (ROOT / "services/developer_api_commercial_runtime_v2_patch.py").read_text(encoding="utf-8")
+    assert "from services.developer_api_commercial_runtime_v2_patch" in run_web
+    assert "try:\n        ensure_developer_api_tables()" in run_web
+    assert "ensure_commercial_launch_tables()" in run_web.split("try:", 1)[1]
+    install_body = runtime_v2.split("def install() -> None:", 1)[1]
+    assert "ensure_commercial_launch_tables" not in install_body
 
 
 def test_worker_is_provider_and_production_guarded():
@@ -112,6 +144,8 @@ def test_worker_is_provider_and_production_guarded():
         "RAILWAY_ENVIRONMENT_NAME": "production",
         "RAILWAY_GIT_BRANCH": "feature/turbo-short-term-btc",
     }) is None
+    worker = (ROOT / "run_api_commercial_worker.py").read_text(encoding="utf-8")
+    assert "developer_api_commercial_launch_v2_service" in worker
 
 
 def test_portal_admin_and_mobile_assets_are_mounted():
