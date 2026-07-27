@@ -1,7 +1,9 @@
-"""Install commercial runtime patches without touching PostgreSQL at import/startup patch time."""
+"""Install commercial runtime patches without touching PostgreSQL at patch time."""
 
 import logging
 
+# Importing v2 patches the base service globals but performs no database work.
+from services import developer_api_commercial_launch_v2_service as _commercial_v2  # noqa: F401
 from services import developer_api_commercial_runtime_patch as base
 
 logger = logging.getLogger(__name__)
