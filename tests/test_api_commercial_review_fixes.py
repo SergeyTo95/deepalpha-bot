@@ -84,6 +84,16 @@ def test_zero_spend_caps_are_enforced_and_only_null_disables():
     assert service._control_value(0, 500, "daily_spend_limit_credits") == 0
 
 
+def test_legacy_zero_monthly_caps_migrate_once_to_null():
+    migration = FINAL_SOURCE.split("The legacy schema used", 1)[1].split(
+        "CREATE OR REPLACE FUNCTION enforce_api_credit_spend_limits", 1
+    )[0]
+    assert "monthly_spend_limit_credits = NULL" in migration
+    assert "WHERE monthly_spend_limit_credits = 0" in migration
+    assert "ALTER COLUMN monthly_spend_limit_credits DROP DEFAULT" in migration
+    assert "IF v_default IN ('0', '0::integer')" in migration
+
+
 def test_admin_commercial_forms_preserve_query_key_and_hidden_field():
     html = (
         "<form method='post' action='/admin/api/credit-invoices/inv_1/mark-paid'>"
@@ -93,6 +103,17 @@ def test_admin_commercial_forms_preserve_query_key_and_hidden_field():
     assert "action='/admin/api/credit-invoices/inv_1/mark-paid?key=secret+value'" in secured
     assert "name='key' value='secret value'" in secured
     assert "developer_api_commercial_admin_routes_v2" in RUN_WEB
+
+
+def test_admin_invoice_filter_uses_registered_dashboard_route_and_key():
+    html = (
+        "<form method='get' action='/admin/developer-api' class='grid'>"
+        "<input name='invoice_status'></form>"
+    )
+    secured = admin_v2._inject_admin_key(html, "secret value")
+    assert "action='/admin/api'" in secured
+    assert "name='key' value='secret value'" in secured
+    assert "/admin/developer-api" not in secured
 
 
 def test_health_uses_migrated_invoice_and_live_request_states():
