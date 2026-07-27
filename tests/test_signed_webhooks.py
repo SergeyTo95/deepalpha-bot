@@ -97,8 +97,10 @@ def test_signing_secret_is_deterministic_derived_and_verifiable(monkeypatch):
     assert service.verify_webhook_signature(first, "1785081600", body + b" ", signature) is False
 
 
-def test_supported_events_are_strict():
-    assert service.normalize_webhook_events(None) == ["analysis.completed", "analysis.failed"]
+def test_supported_events_are_strict_and_extension_safe():
+    defaults = service.normalize_webhook_events(None)
+    assert defaults == sorted(service.SUPPORTED_WEBHOOK_EVENTS)
+    assert {"analysis.completed", "analysis.failed"} <= set(defaults)
     assert service.normalize_webhook_events([
         "analysis.failed", "unknown", "analysis.failed"
     ]) == ["analysis.failed"]
