@@ -25,6 +25,31 @@ def ensure_commercial_launch_tables() -> None:
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        # The legacy schema used NOT NULL DEFAULT 0 to mean "unlimited". Convert those
+        # values exactly once while the legacy zero default is still present, then remove
+        # the default. Explicit zero caps set after this migration remain valid freezes.
+        cursor.execute(
+            """
+            DO $$
+            DECLARE
+                v_default TEXT;
+            BEGIN
+                SELECT column_default INTO v_default
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'api_clients'
+                  AND column_name = 'monthly_spend_limit_credits';
+
+                IF v_default IN ('0', '0::integer') THEN
+                    UPDATE api_clients
+                    SET monthly_spend_limit_credits = NULL
+                    WHERE monthly_spend_limit_credits = 0;
+                    ALTER TABLE api_clients
+                    ALTER COLUMN monthly_spend_limit_credits DROP DEFAULT;
+                END IF;
+            END $$
+            """
+        )
         cursor.execute(
             """
             CREATE OR REPLACE FUNCTION enforce_api_credit_spend_limits()
