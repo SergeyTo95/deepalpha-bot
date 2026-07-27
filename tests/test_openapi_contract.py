@@ -126,14 +126,17 @@ def test_openapi_request_examples_match_runtime_normalizers():
 
 
 def test_openapi_keeps_deep_analysis_and_wallet_execution_closed():
-    serialized = json.dumps(build_openapi_spec(), ensure_ascii=False).lower()
+    spec = build_openapi_spec()
+    serialized = json.dumps(spec, ensure_ascii=False).lower()
 
     assert "/api/v1/wallet" not in serialized
     assert "wallet:send" not in serialized
     assert '"const": "deep"' not in serialized
     assert '"mode": "deep"' not in serialized
-    assert '"provider_calls": 0' in serialized
-    assert '"paid_ai_used": false' in serialized
+
+    opportunity_properties = spec["components"]["schemas"]["OpportunityScanResult"]["properties"]
+    assert opportunity_properties["provider_calls"]["const"] == 0
+    assert opportunity_properties["paid_ai_used"]["const"] is False
 
 
 def test_postman_collection_covers_every_documented_v1_operation():
