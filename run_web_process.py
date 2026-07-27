@@ -13,7 +13,7 @@ def main() -> None:
     from developer_api_routes import setup_developer_api_routes
     from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_billing_service import ensure_api_billing_tables
-    from services.developer_api_commercial_launch_v2_service import ensure_commercial_launch_tables
+    from services.developer_api_commercial_final_service import ensure_commercial_launch_tables
     from services.developer_api_commercial_runtime_v2_patch import install as install_commercial_runtime
     from services.developer_api_commercial_service import ensure_api_commercial_tables
     from services.developer_api_health_patch import install as install_api_health_observability
@@ -49,7 +49,7 @@ def main() -> None:
 
     # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
-    from developer_api_commercial_admin_routes import (
+    from developer_api_commercial_admin_routes_v2 import (
         install as install_admin_commercial,
         setup_developer_api_commercial_admin_routes,
     )
