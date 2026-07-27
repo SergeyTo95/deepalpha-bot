@@ -1,7 +1,10 @@
 .commercial-panel {
+  width: 100%;
+  min-width: 0;
   margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid rgba(148, 163, 184, 0.24);
+  overflow: hidden;
 }
 
 .commercial-header,
@@ -13,24 +16,44 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .commercial-grid,
 .package-grid,
-.invoice-grid {
+.invoice-grid,
+.commercial-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.commercial-stats {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin: 10px 0 14px;
+}
+
+.commercial-stats span {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .package-card,
 .invoice-card,
 .live-access-card,
 .spend-control-card {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 14px;
   padding: 14px;
   background: rgba(15, 23, 42, 0.35);
+  overflow: hidden;
 }
 
 .package-card h4,
@@ -38,25 +61,51 @@
 .live-access-card h4,
 .spend-control-card h4 {
   margin: 0 0 8px;
+  overflow-wrap: anywhere;
 }
 
-.invoice-card.pending {
+.invoice-card.pending,
+.invoice-card.awaiting_payment,
+.invoice-card.payment_detected,
+.invoice-card.crediting {
   border-color: rgba(245, 158, 11, 0.55);
 }
 
-.invoice-card.paid {
+.invoice-card.paid,
+.invoice-card.credited {
   border-color: rgba(34, 197, 94, 0.55);
+}
+
+.invoice-card.expired,
+.invoice-card.cancelled,
+.invoice-card.failed,
+.invoice-card.refunded {
+  border-color: rgba(239, 68, 68, 0.45);
 }
 
 .invoice-payment {
   display: grid;
   gap: 8px;
   margin-top: 12px;
+  min-width: 0;
+}
+
+.invoice-payment label,
+.commercial-panel label,
+.commercial-panel form,
+.commercial-panel input,
+.commercial-panel textarea,
+.commercial-panel button,
+.commercial-panel a {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .invoice-payment code,
-.commercial-panel .copy-field {
+.commercial-panel .copy-field,
+.commercial-panel code {
   display: block;
+  max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -67,6 +116,7 @@
   border-radius: 10px;
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.35);
+  overflow-wrap: anywhere;
 }
 
 .commercial-danger {
@@ -81,12 +131,8 @@
 
 .commercial-panel textarea {
   width: 100%;
-  min-height: 86px;
+  min-height: 96px;
   resize: vertical;
-}
-
-.commercial-panel .compact-input {
-  max-width: 180px;
 }
 
 .commercial-panel .wallet-link {
@@ -102,22 +148,34 @@
 
 .commercial-panel .invoice-meta {
   display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr;
+  grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
   gap: 6px 10px;
+  min-width: 0;
 }
 
 .commercial-panel .invoice-meta span:nth-child(odd) {
   opacity: 0.7;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .commercial-grid,
   .package-grid,
-  .invoice-grid {
+  .invoice-grid,
+  .commercial-stats {
     grid-template-columns: 1fr;
   }
 
   .commercial-panel .invoice-meta {
     grid-template-columns: 1fr;
+  }
+
+  .commercial-panel .button-row,
+  .commercial-panel .button-row > * {
+    width: 100%;
+  }
+
+  .commercial-panel button,
+  .commercial-panel .wallet-link {
+    width: 100%;
   }
 }
