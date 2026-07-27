@@ -13,6 +13,10 @@ def env_true(value: Optional[str], default: bool = False) -> bool:
 def worker_disabled_reason(env: Mapping[str, str]) -> Optional[str]:
     if not env_true(env.get("API_COMMERCIAL_LAUNCH_ENABLED"), default=False):
         return "API_COMMERCIAL_LAUNCH_ENABLED=false"
+    if not env_true(env.get("API_CREDIT_PURCHASES_ENABLED"), default=False):
+        return "API_CREDIT_PURCHASES_ENABLED=false"
+    if str(env.get("API_CREDIT_INVOICE_PROVIDER") or "ton_treasury").strip().lower() == "manual":
+        return "manual_provider_has_no_automatic_worker"
     if not env_true(env.get("API_COMMERCIAL_WORKER_ENABLED"), default=True):
         return "API_COMMERCIAL_WORKER_ENABLED=false"
     if env_true(env.get("API_COMMERCIAL_WORKER_ALLOW_PREVIEW"), default=False):
@@ -42,7 +46,7 @@ def main() -> None:
     if reason:
         idle_forever(reason)
         return
-    from services.developer_api_commercial_service import run_commercial_worker_forever
+    from services.developer_api_commercial_launch_service import run_commercial_worker_forever
 
     run_commercial_worker_forever()
 
