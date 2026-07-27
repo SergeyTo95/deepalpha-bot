@@ -2,8 +2,8 @@
 
 import logging
 
-# Importing v2 patches the base service globals but performs no database work.
-from services import developer_api_commercial_launch_v2_service as _commercial_v2  # noqa: F401
+# Importing the final service patches runtime-resolved service functions without DB work.
+from services import developer_api_commercial_final_service as _commercial_final  # noqa: F401
 from services import developer_api_commercial_runtime_patch as base
 
 logger = logging.getLogger(__name__)
