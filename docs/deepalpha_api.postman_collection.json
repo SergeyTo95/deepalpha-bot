@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b4e8f8e1-8e0d-4b57-9072-deepalpha-api-v1",
     "name": "DeepAlpha Developer API v1",
-    "description": "Quick Analysis, zero-LLM Opportunity Scan, account usage, capabilities, and HMAC-signed webhook management. Set base_url and api_key before running authenticated requests.",
+    "description": "Public bearer API only. Set base_url and either a da_test_ key or an administrator-approved da_live_ key. Credit packages, invoices, live approval and spend controls use the authenticated Developer Portal and are intentionally not included in this bearer collection. Wallet send, withdrawal, trading execution, Deep Analysis execution and auto recharge remain unavailable.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -16,42 +16,15 @@
     ]
   },
   "variable": [
-    {
-      "key": "base_url",
-      "value": "https://your-deepalpha-host.example"
-    },
-    {
-      "key": "api_key",
-      "value": "da_test_replace_me"
-    },
-    {
-      "key": "market_url",
-      "value": "https://polymarket.com/event/example-market"
-    },
-    {
-      "key": "webhook_url",
-      "value": "https://example.com/deepalpha/webhook"
-    },
-    {
-      "key": "analysis_job_id",
-      "value": "job_replace_me"
-    },
-    {
-      "key": "opportunity_job_id",
-      "value": "job_replace_me"
-    },
-    {
-      "key": "webhook_id",
-      "value": "wh_replace_me"
-    },
-    {
-      "key": "delivery_id",
-      "value": "delivery_replace_me"
-    },
-    {
-      "key": "webhook_signing_secret",
-      "value": "whsec_replace_me"
-    }
+    {"key": "base_url", "value": "https://your-deepalpha-host.example"},
+    {"key": "api_key", "value": "da_test_or_live_replace_me"},
+    {"key": "market_url", "value": "https://polymarket.com/event/example-market"},
+    {"key": "webhook_url", "value": "https://example.com/deepalpha/webhook"},
+    {"key": "analysis_job_id", "value": "job_replace_me"},
+    {"key": "opportunity_job_id", "value": "job_replace_me"},
+    {"key": "webhook_id", "value": "wh_replace_me"},
+    {"key": "delivery_id", "value": "delivery_replace_me"},
+    {"key": "webhook_signing_secret", "value": "whsec_replace_me"}
   ],
   "item": [
     {
@@ -59,71 +32,29 @@
       "item": [
         {
           "name": "Swagger UI",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "url": "{{base_url}}/api/docs"
-          }
+          "request": {"auth": {"type": "noauth"}, "method": "GET", "url": "{{base_url}}/api/docs"}
         },
         {
           "name": "OpenAPI 3.1 JSON",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "url": "{{base_url}}/api/openapi.json"
-          }
+          "request": {"auth": {"type": "noauth"}, "method": "GET", "url": "{{base_url}}/api/openapi.json"}
+        },
+        {
+          "name": "Postman collection",
+          "request": {"auth": {"type": "noauth"}, "method": "GET", "url": "{{base_url}}/api/postman.json"}
         },
         {
           "name": "Health",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/health"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('health responds', function () { pm.expect(pm.response.code).to.be.oneOf([200, 503]); });"
-                ]
-              }
-            }
-          ]
+          "request": {"auth": {"type": "noauth"}, "method": "GET", "url": "{{base_url}}/api/v1/health"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('health responds', function () { pm.expect(pm.response.code).to.be.oneOf([200, 503]); });"]}}]
         }
       ]
     },
     {
       "name": "Account",
       "item": [
-        {
-          "name": "Get account",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/account"
-          }
-        },
-        {
-          "name": "Get usage",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/usage"
-          }
-        },
-        {
-          "name": "Get capabilities",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/capabilities"
-          }
-        }
+        {"name": "Get account", "request": {"method": "GET", "url": "{{base_url}}/api/v1/account"}},
+        {"name": "Get usage", "request": {"method": "GET", "url": "{{base_url}}/api/v1/usage"}},
+        {"name": "Get capabilities", "request": {"method": "GET", "url": "{{base_url}}/api/v1/capabilities"}}
       ]
     },
     {
@@ -134,42 +65,18 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Idempotency-Key",
-                "value": "analysis-{{$guid}}"
-              }
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Idempotency-Key", "value": "analysis-{{$guid}}"}
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"market_url\": \"{{market_url}}\",\n  \"mode\": \"quick\",\n  \"language\": \"en\"\n}"
-            },
+            "body": {"mode": "raw", "raw": "{\n  \"market_url\": \"{{market_url}}\",\n  \"mode\": \"quick\",\n  \"language\": \"en\"\n}"},
             "url": "{{base_url}}/api/v1/analyses"
           },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('accepted or idempotent replay', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202]); });",
-                  "const body = pm.response.json();",
-                  "if (body.job_id) pm.collectionVariables.set('analysis_job_id', body.job_id);"
-                ]
-              }
-            }
-          ]
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "pm.test('accepted, replayed, or spend-capped', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202, 409]); });",
+            "if (pm.response.code === 200 || pm.response.code === 202) { const body = pm.response.json(); if (body.job_id) pm.collectionVariables.set('analysis_job_id', body.job_id); }"
+          ]}}]
         },
-        {
-          "name": "Get Quick Analysis",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/analyses/{{analysis_job_id}}"
-          }
-        }
+        {"name": "Get Quick Analysis", "request": {"method": "GET", "url": "{{base_url}}/api/v1/analyses/{{analysis_job_id}}"}}
       ]
     },
     {
@@ -180,42 +87,18 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Idempotency-Key",
-                "value": "opportunity-{{$guid}}"
-              }
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Idempotency-Key", "value": "opportunity-{{$guid}}"}
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"category\": \"All\",\n  \"language\": \"en\",\n  \"scan_limit\": 100,\n  \"result_limit\": 10,\n  \"min_score\": 52,\n  \"min_liquidity\": 1000,\n  \"min_volume_24h\": 500,\n  \"tiers\": [\"DEEP_ANALYSIS_CANDIDATE\", \"WATCH_CANDIDATE\"]\n}"
-            },
+            "body": {"mode": "raw", "raw": "{\n  \"category\": \"All\",\n  \"language\": \"en\",\n  \"scan_limit\": 100,\n  \"result_limit\": 10,\n  \"min_score\": 52,\n  \"min_liquidity\": 1000,\n  \"min_volume_24h\": 500,\n  \"tiers\": [\"DEEP_ANALYSIS_CANDIDATE\", \"WATCH_CANDIDATE\"]\n}"},
             "url": "{{base_url}}/api/v1/opportunity-scans"
           },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('accepted or idempotent replay', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202]); });",
-                  "const body = pm.response.json();",
-                  "if (body.job_id) pm.collectionVariables.set('opportunity_job_id', body.job_id);"
-                ]
-              }
-            }
-          ]
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "pm.test('accepted, replayed, or spend-capped', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202, 409]); });",
+            "if (pm.response.code === 200 || pm.response.code === 202) { const body = pm.response.json(); if (body.job_id) pm.collectionVariables.set('opportunity_job_id', body.job_id); }"
+          ]}}]
         },
-        {
-          "name": "Get Opportunity Scan",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/opportunity-scans/{{opportunity_job_id}}"
-          }
-        }
+        {"name": "Get Opportunity Scan", "request": {"method": "GET", "url": "{{base_url}}/api/v1/opportunity-scans/{{opportunity_job_id}}"}}
       ]
     },
     {
@@ -225,99 +108,37 @@
           "name": "Create webhook",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"production\",\n  \"url\": \"{{webhook_url}}\",\n  \"events\": [\n    \"analysis.completed\",\n    \"analysis.failed\",\n    \"opportunity_scan.completed\",\n    \"opportunity_scan.failed\"\n  ]\n}"
-            },
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"production\",\n  \"url\": \"{{webhook_url}}\",\n  \"events\": [\n    \"analysis.completed\",\n    \"analysis.failed\",\n    \"opportunity_scan.completed\",\n    \"opportunity_scan.failed\"\n  ]\n}"},
             "url": "{{base_url}}/api/v1/webhooks"
           },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('webhook created', function () { pm.response.to.have.status(201); });",
-                  "const body = pm.response.json();",
-                  "if (body.webhook && body.webhook.webhook_id) pm.collectionVariables.set('webhook_id', body.webhook.webhook_id);",
-                  "if (body.webhook && body.webhook.signing_secret) pm.collectionVariables.set('webhook_signing_secret', body.webhook.signing_secret);"
-                ]
-              }
-            }
-          ]
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "pm.test('webhook created', function () { pm.response.to.have.status(201); });",
+            "const body = pm.response.json();",
+            "if (body.webhook && body.webhook.webhook_id) pm.collectionVariables.set('webhook_id', body.webhook.webhook_id);",
+            "if (body.webhook && body.webhook.signing_secret) pm.collectionVariables.set('webhook_signing_secret', body.webhook.signing_secret);"
+          ]}}]
         },
-        {
-          "name": "List webhooks",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/webhooks"
-          }
-        },
+        {"name": "List webhooks", "request": {"method": "GET", "url": "{{base_url}}/api/v1/webhooks"}},
         {
           "name": "Rotate webhook secret",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/api/v1/webhooks/{{webhook_id}}/rotate-secret"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const body = pm.response.json();",
-                  "if (body.webhook && body.webhook.signing_secret) pm.collectionVariables.set('webhook_signing_secret', body.webhook.signing_secret);"
-                ]
-              }
-            }
-          ]
+          "request": {"method": "POST", "url": "{{base_url}}/api/v1/webhooks/{{webhook_id}}/rotate-secret"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "const body = pm.response.json();",
+            "if (body.webhook && body.webhook.signing_secret) pm.collectionVariables.set('webhook_signing_secret', body.webhook.signing_secret);"
+          ]}}]
         },
-        {
-          "name": "Disable webhook",
-          "request": {
-            "method": "DELETE",
-            "url": "{{base_url}}/api/v1/webhooks/{{webhook_id}}"
-          }
-        },
+        {"name": "Disable webhook", "request": {"method": "DELETE", "url": "{{base_url}}/api/v1/webhooks/{{webhook_id}}"}},
         {
           "name": "List webhook deliveries",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/webhook-deliveries?limit=50"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const body = pm.response.json();",
-                  "if (body.deliveries && body.deliveries.length) pm.collectionVariables.set('delivery_id', body.deliveries[0].delivery_id);"
-                ]
-              }
-            }
-          ]
+          "request": {"method": "GET", "url": "{{base_url}}/api/v1/webhook-deliveries?limit=50"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "const body = pm.response.json();",
+            "if (body.deliveries && body.deliveries.length) pm.collectionVariables.set('delivery_id', body.deliveries[0].delivery_id);"
+          ]}}]
         },
-        {
-          "name": "Get webhook delivery",
-          "request": {
-            "method": "GET",
-            "url": "{{base_url}}/api/v1/webhook-deliveries/{{delivery_id}}"
-          }
-        },
-        {
-          "name": "Retry webhook delivery",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/api/v1/webhook-deliveries/{{delivery_id}}/retry"
-          }
-        }
+        {"name": "Get webhook delivery", "request": {"method": "GET", "url": "{{base_url}}/api/v1/webhook-deliveries/{{delivery_id}}"}},
+        {"name": "Retry webhook delivery", "request": {"method": "POST", "url": "{{base_url}}/api/v1/webhook-deliveries/{{delivery_id}}/retry"}}
       ]
     }
   ]
