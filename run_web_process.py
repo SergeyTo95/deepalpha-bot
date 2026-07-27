@@ -13,6 +13,8 @@ def main() -> None:
     from developer_api_routes import setup_developer_api_routes
     from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_billing_service import ensure_api_billing_tables
+    from services.developer_api_commercial_runtime_patch import install as install_commercial_runtime
+    from services.developer_api_commercial_service import ensure_api_commercial_tables
     from services.developer_api_health_patch import install as install_api_health_observability
     from services.developer_api_observability_service import ensure_api_observability_tables
     from services.developer_api_openapi_runtime_patch import install as install_openapi_runtime
@@ -42,9 +44,15 @@ def main() -> None:
     install_webhook_runtime()
     install_opportunity_runtime()
     install_openapi_runtime()
+    install_commercial_runtime()
 
     # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
+    from developer_api_commercial_admin_routes import (
+        install as install_admin_commercial,
+        setup_developer_api_commercial_admin_routes,
+    )
+    from developer_api_commercial_routes import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
     from developer_api_webhook_routes import setup_developer_api_webhook_routes
@@ -58,15 +66,18 @@ def main() -> None:
     install_admin_observability()
     install_admin_webhooks()
     install_admin_opportunity()
+    install_admin_commercial()
 
     setup_developer_api_openapi_routes(deepalpha_web.app)
     setup_developer_api_routes(deepalpha_web.app)
     setup_developer_api_opportunity_routes(deepalpha_web.app)
     setup_developer_api_webhook_routes(deepalpha_web.app)
     setup_developer_api_admin_routes(deepalpha_web.app)
+    setup_developer_api_commercial_admin_routes(deepalpha_web.app)
     setup_developer_portal_routes(deepalpha_web.app)
     setup_developer_portal_jobs_routes(deepalpha_web.app)
     setup_developer_portal_opportunity_routes(deepalpha_web.app)
+    setup_developer_api_commercial_routes(deepalpha_web.app)
 
     try:
         ensure_developer_api_tables()
@@ -77,6 +88,7 @@ def main() -> None:
         ensure_api_opportunity_tables()
         ensure_api_webhook_tables()
         ensure_opportunity_webhook_trigger()
+        ensure_api_commercial_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.
