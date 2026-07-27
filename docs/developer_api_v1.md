@@ -1,6 +1,6 @@
 # DeepAlpha Developer API v1
 
-DeepAlpha Developer API lets approved projects authenticate with scoped keys, inspect usage, run asynchronous Quick Analysis jobs, scan Polymarket for analysis candidates, and receive signed terminal events.
+DeepAlpha Developer API lets approved projects authenticate with scoped keys, inspect usage, run asynchronous Quick Analysis jobs, scan Polymarket for analysis candidates, receive signed terminal events, and fund API projects with TON-backed API credit invoices.
 
 ## Authentication
 
@@ -14,8 +14,10 @@ API keys are shown once when created. The database stores only a SHA-256 hash an
 
 Key environments:
 
-- `da_test_...` — available through the user Developer Portal during beta;
-- `da_live_...` — administrator-controlled until public launch.
+- `da_test_...` — self-service test environment;
+- `da_live_...` — available to an approved project when the global live-key gate is enabled.
+
+Live access is requested and managed in the authenticated Developer Portal. Rotating a key preserves its test/live environment.
 
 ## Available endpoints
 
@@ -25,7 +27,7 @@ Key environments:
 GET /api/v1/health
 ```
 
-The response includes database status plus Quick Analysis, Opportunity Scan, and Signed Webhook worker/queue health.
+The response includes database status plus Quick Analysis, Opportunity Scan, Signed Webhook, and commercial payment worker/queue health.
 
 ### Client account
 
@@ -35,6 +37,8 @@ Requires `account:read`:
 GET /api/v1/account
 Authorization: Bearer <api-key>
 ```
+
+The response includes the project credit balance, commercial/live status, monthly spend snapshot, and low-balance state.
 
 ### Usage
 
@@ -68,7 +72,7 @@ GET /api/postman.json
 - `/api/openapi.json` is the canonical OpenAPI 3.1 machine contract;
 - `/api/postman.json` is an importable Postman Collection v2.1 with variables and request tests.
 
-The OpenAPI document includes all public v1 methods, request and response schemas, stable error responses, required scopes, idempotency headers, webhook events, and product examples. Contract tests compare the committed runtime routes against the generated specification so undocumented v1 routes fail CI.
+Contract tests compare registered public v1 routes against the generated specification so undocumented bearer API routes fail CI.
 
 ### Quick Analysis
 
@@ -158,6 +162,34 @@ opportunity_scan.failed
 
 See `docs/signed_webhooks_v1.md`.
 
+## Commercial Developer Portal
+
+Commercial operations use the authenticated DeepAlpha web session rather than bearer API keys:
+
+```http
+GET  /app-api/v1/developer/commercial/overview
+POST /app-api/v1/developer/projects/{client_id}/credit-invoices
+GET  /app-api/v1/developer/projects/{client_id}/credit-invoices
+POST /app-api/v1/developer/credit-invoices/{invoice_id}/refresh
+POST /app-api/v1/developer/credit-invoices/{invoice_id}/cancel
+POST /app-api/v1/developer/projects/{client_id}/live-access/request
+POST /app-api/v1/developer/projects/{client_id}/live-keys
+POST /app-api/v1/developer/projects/{client_id}/commercial-settings
+```
+
+Project owners can:
+
+- purchase configured API credit packages with exact TON invoices;
+- inspect invoice status and payment references;
+- request administrator-reviewed live access;
+- issue `da_live_...` keys after approval;
+- configure a monthly credit-spend limit;
+- configure a low-balance warning threshold.
+
+No credit package or financial price is invented automatically. Admin Center must explicitly configure packages.
+
+See `docs/api_commercial_launch.md`.
+
 ## Planned
 
 ```http
@@ -191,8 +223,12 @@ Each client has independent controls:
 - requests per month;
 - available API credit balance;
 - active queued/running API jobs;
+- monthly credit-spend limit;
+- low-balance threshold;
 - Quick Analysis and Opportunity worker timeouts;
 - webhook endpoint and delivery retry limits.
+
+A PostgreSQL reservation trigger enforces the monthly spend limit under concurrency. Current-month reserved and charged units count toward the limit; refunded reservations do not. Over-limit submissions return stable error `monthly_spend_limit_exceeded`.
 
 The default active-job limit is two queued/running jobs per project. Quick Analysis and Opportunity Scan submissions share the same project-level serialization lock so concurrent requests cannot bypass the limit.
 
@@ -212,9 +248,10 @@ The billing system provides:
 - reserve on job creation;
 - charge finalization on success;
 - automatic refund on internal failure;
-- ledger-backed manual admin adjustments.
+- ledger-backed manual admin adjustments;
+- immutable TON credit invoices and exactly-once `purchase` ledger entries.
 
-Default products:
+Default execution products:
 
 | Product | Default credits |
 |---|---:|
@@ -225,13 +262,13 @@ Default products:
 
 Only Opportunity Scan and Quick Analysis are publicly executable at this phase.
 
-See `docs/developer_api_billing.md`.
+See `docs/developer_api_billing.md` and `docs/api_commercial_launch.md`.
 
 ## Persistent execution
 
-Quick Analysis, Opportunity Scan, and Signed Webhook delivery run in dedicated Supervisor processes backed by PostgreSQL jobs/outbox rows. They do not depend on in-memory HTTP tasks.
+Quick Analysis, Opportunity Scan, Signed Webhook delivery, and API credit payment reconciliation run in dedicated Supervisor processes backed by PostgreSQL jobs/outbox/invoice rows. They do not depend on in-memory HTTP tasks.
 
-Workers claim work with `FOR UPDATE SKIP LOCKED`, maintain leases and heartbeats, recover stale work after restarts, and settle credits idempotently.
+Workers maintain leases or heartbeats, recover safely after restarts, and settle credits idempotently.
 
 ## Admin management
 
@@ -239,21 +276,27 @@ Open the `API` section in DeepAlpha Admin Center to:
 
 - create API clients;
 - configure daily, monthly, per-minute, and credit limits;
-- issue test or live keys;
+- issue and revoke test/live keys;
 - select scopes;
 - inspect usage totals;
-- revoke keys;
-- edit API product prices and enabled status;
+- edit API execution product prices;
+- create and edit API credit purchase packages and explicit TON prices;
 - add or remove credits with idempotency protection;
+- approve or reject live-access requests;
+- inspect invoices, TON references, transaction hashes, and payment errors;
 - inspect ledger entries and reservations;
-- inspect Quick Analysis and Opportunity Scan workers/jobs;
-- inspect webhook endpoints, workers, deliveries, retries, HTTP statuses, and errors.
+- inspect all API workers, jobs, webhook deliveries, and commercial runtime health.
 
 A raw API key or webhook signing secret is displayed once immediately after creation/rotation and is never shown again.
 
 ## Security
 
-- `/api/user/{user_id}` requires a valid DeepAlpha web session and only permits access to the authenticated user's own ID;
+- project purchase/live routes require a valid DeepAlpha web session and ownership of the API client;
+- portal mutations require `X-DeepAlpha-Portal: 1`;
+- API invoice references use `api_pay_...`, isolated from Telegram token payment references;
+- invoice settlement validates Treasury snapshot, exact amount, network, timestamp, confirmations, and unique transaction hash;
+- credit purchase settlement is atomic and ledger-idempotent;
+- all financial and live-key environment gates default off;
 - wildcard CORS is removed by the runtime security middleware;
 - same-origin requests remain allowed;
 - additional origins must be listed in `CORS_ALLOWED_ORIGINS`;
@@ -263,10 +306,9 @@ A raw API key or webhook signing secret is displayed once immediately after crea
 - public analysis results omit internal provider names, prompts, and raw agent payloads;
 - webhook targets are restricted to public HTTPS port 443 addresses and connections are pinned to freshly validated DNS results;
 - webhook signatures use HMAC-SHA256 over the timestamp and raw request body;
-- Swagger UI loads a pinned `swagger-ui-dist` version under a restrictive Content Security Policy;
-- OpenAPI and Postman JSON responses use ETags and a five-minute public cache.
+- Swagger UI loads a pinned `swagger-ui-dist` version under a restrictive Content Security Policy.
 
-Optional environment variables:
+Important environment variables:
 
 ```env
 CORS_ALLOWED_ORIGINS=https://app.example.com,https://partner.example.com
@@ -274,15 +316,17 @@ CORS_ALLOW_LOCALHOST=false
 COOKIE_SECURE=true
 
 API_ANALYSIS_WORKER_ENABLED=true
-API_ANALYSIS_MAX_ACTIVE_JOBS_PER_CLIENT=2
-API_ANALYSIS_TIMEOUT_SECONDS=120
-API_ANALYSIS_MAX_ATTEMPTS=2
-
 API_OPPORTUNITY_WORKER_ENABLED=true
-API_OPPORTUNITY_MAX_ACTIVE_JOBS_PER_CLIENT=2
-API_OPPORTUNITY_TIMEOUT_SECONDS=45
-API_OPPORTUNITY_MAX_ATTEMPTS=2
-
 API_WEBHOOK_WORKER_ENABLED=true
 WEBHOOK_SIGNING_MASTER_KEY=<random 32+ character secret>
+
+API_COMMERCIAL_LAUNCH_ENABLED=false
+API_LIVE_KEYS_ENABLED=false
+API_LIVE_ACCESS_AUTO_APPROVE_ON_PAYMENT=false
+API_CREDIT_PACKAGES_JSON=[]
+API_CREDIT_INVOICE_TTL_MINUTES=60
+API_CREDIT_CONFIRMATION_SECONDS=20
+API_COMMERCIAL_WORKER_ENABLED=true
+API_COMMERCIAL_POLL_SECONDS=10
+TREASURY_INCOMING_ENABLED=false
 ```
