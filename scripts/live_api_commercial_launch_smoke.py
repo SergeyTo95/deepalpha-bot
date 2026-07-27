@@ -7,6 +7,7 @@ and refuses to run unless DEEPALPHA_COMMERCIAL_SMOKE_ENABLED=true.
 
 import json
 import os
+import secrets
 import sys
 import urllib.error
 import urllib.parse
@@ -19,6 +20,10 @@ def required(name: str) -> str:
     if not value:
         raise RuntimeError(f"missing_{name.lower()}")
     return value
+
+
+def new_smoke_request_id(project_id: int) -> str:
+    return f"commercial-smoke-{int(project_id)}-{secrets.token_hex(12)}"
 
 
 def json_request(
@@ -86,6 +91,18 @@ def ledger_purchase_count(base_url: str, cookie: str, project_id: int, invoice_i
     return count
 
 
+def revoke_smoke_key(base_url: str, portal_cookie: str, key_id: int) -> None:
+    result = json_request(
+        base_url,
+        f"/app-api/v1/developer/keys/{int(key_id)}/revoke",
+        method="POST",
+        payload={},
+        cookie=portal_cookie,
+    )
+    if not result.get("revoked"):
+        raise RuntimeError(f"smoke_live_key_not_revoked:{key_id}")
+
+
 def main() -> int:
     if str(os.getenv("DEEPALPHA_COMMERCIAL_SMOKE_ENABLED", "")).strip().lower() != "true":
         raise RuntimeError("set_DEEPALPHA_COMMERCIAL_SMOKE_ENABLED=true_for_dedicated_manual_smoke")
@@ -102,7 +119,7 @@ def main() -> int:
     project_before = project_from_overview(before, project_id)
     balance_before = int(project_before.get("credit_balance") or project_before.get("spend", {}).get("balance") or 0)
 
-    request_id = f"commercial-smoke-{project_id}"
+    request_id = new_smoke_request_id(project_id)
     created = json_request(
         base_url,
         f"/app-api/v1/developer/projects/{project_id}/credit-invoices",
@@ -114,6 +131,8 @@ def main() -> int:
     invoice = created["invoice"]
     invoice_id = str(invoice["invoice_id"])
     credits = int(invoice["credits"])
+    if created.get("invoice", {}).get("idempotent") or created.get("idempotent"):
+        raise RuntimeError("smoke_invoice_unexpectedly_replayed")
     if invoice.get("status") not in {"awaiting_payment", "paid", "credited"}:
         raise RuntimeError(f"unexpected_invoice_status:{invoice.get('status')}")
 
@@ -169,33 +188,43 @@ def main() -> int:
             payload={"comment": "Dedicated commercial smoke approval"},
         )
 
-    issued = json_request(
-        base_url,
-        f"/app-api/v1/developer/projects/{project_id}/live-keys",
-        method="POST",
-        payload={"name": "commercial-smoke", "scopes": ["account:read", "usage:read"]},
-        cookie=portal_cookie,
-    )
-    raw_key = str(issued.get("key", {}).get("raw_key") or "")
-    if not raw_key.startswith("da_live_"):
-        raise RuntimeError("live_key_prefix_invalid")
+    key_id = 0
+    raw_key = ""
+    try:
+        issued = json_request(
+            base_url,
+            f"/app-api/v1/developer/projects/{project_id}/live-keys",
+            method="POST",
+            payload={"name": "commercial-smoke", "scopes": ["account:read", "usage:read"]},
+            cookie=portal_cookie,
+        )
+        key_id = int(issued.get("key", {}).get("id") or 0)
+        raw_key = str(issued.get("key", {}).get("raw_key") or "")
+        if key_id <= 0:
+            raise RuntimeError("live_key_id_missing")
+        if not raw_key.startswith("da_live_"):
+            raise RuntimeError("live_key_prefix_invalid")
 
-    persisted = json_request(base_url, "/app-api/v1/developer/overview", cookie=portal_cookie)
-    if "raw_key" in json.dumps(persisted):
-        raise RuntimeError("raw_key_reappeared_after_one_time_response")
+        persisted = json_request(base_url, "/app-api/v1/developer/overview", cookie=portal_cookie)
+        if "raw_key" in json.dumps(persisted):
+            raise RuntimeError("raw_key_reappeared_after_one_time_response")
 
-    print(json.dumps({
-        "ok": True,
-        "project_id": project_id,
-        "invoice_id": invoice_id,
-        "credits": credits,
-        "balance_before": balance_before,
-        "balance_after": balance_second,
-        "ledger_purchase_entries": 1,
-        "live_key_prefix": raw_key[:18],
-        "provider": "manual",
-    }, indent=2))
-    return 0
+        print(json.dumps({
+            "ok": True,
+            "project_id": project_id,
+            "invoice_id": invoice_id,
+            "credits": credits,
+            "balance_before": balance_before,
+            "balance_after": balance_second,
+            "ledger_purchase_entries": 1,
+            "live_key_prefix": raw_key[:18],
+            "live_key_revoked_in_cleanup": True,
+            "provider": "manual",
+        }, indent=2))
+        return 0
+    finally:
+        if key_id > 0:
+            revoke_smoke_key(base_url, portal_cookie, key_id)
 
 
 if __name__ == "__main__":
