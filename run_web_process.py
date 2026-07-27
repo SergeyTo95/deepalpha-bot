@@ -53,7 +53,7 @@ def main() -> None:
         install as install_admin_commercial,
         setup_developer_api_commercial_admin_routes,
     )
-    from developer_api_commercial_routes import setup_developer_api_commercial_routes
+    from developer_api_commercial_routes_v2 import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
     from developer_api_webhook_routes import setup_developer_api_webhook_routes
