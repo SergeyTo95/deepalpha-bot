@@ -1,82 +1,51 @@
 # DeepAlpha Developer API v1
 
-DeepAlpha Developer API lets approved projects authenticate with scoped keys, inspect usage, run asynchronous Quick Analysis jobs, scan Polymarket for analysis candidates, receive signed terminal events, and fund API projects with TON-backed API credit invoices.
+DeepAlpha Developer API provides scoped bearer access to durable Quick Analysis jobs, deterministic Opportunity Scan jobs, usage/billing data, and HMAC-signed terminal webhooks. Commercial activation, credit purchases, invoices, and live-key issuance are managed through the authenticated Developer Portal.
 
 ## Authentication
-
-Send an API key in the Authorization header:
 
 ```http
 Authorization: Bearer da_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-API keys are shown once when created. The database stores only a SHA-256 hash and a short public prefix.
-
 Key environments:
 
-- `da_test_...` — self-service test environment;
-- `da_live_...` — available to an approved project when the global live-key gate is enabled.
+- `da_test_...` — self-service test key;
+- `da_live_...` — production key available only after administrator approval and while live issuance is globally enabled.
 
-Live access is requested and managed in the authenticated Developer Portal. Rotating a key preserves its test/live environment.
+A raw key is displayed once. PostgreSQL stores only its SHA-256 hash and public prefix. Rotation preserves environment: test remains test and live remains live.
 
-## Available endpoints
+## Public Developer API
 
-### Public health
+### Health and documentation
 
 ```http
 GET /api/v1/health
-```
-
-The response includes database status plus Quick Analysis, Opportunity Scan, Signed Webhook, and commercial payment worker/queue health.
-
-### Client account
-
-Requires `account:read`:
-
-```http
-GET /api/v1/account
-Authorization: Bearer <api-key>
-```
-
-The response includes the project credit balance, commercial/live status, monthly spend snapshot, and low-balance state.
-
-### Usage
-
-Requires `usage:read`:
-
-```http
-GET /api/v1/usage
-Authorization: Bearer <api-key>
-```
-
-### Capabilities
-
-Requires `account:read`:
-
-```http
-GET /api/v1/capabilities
-Authorization: Bearer <api-key>
-```
-
-### OpenAPI and interactive documentation
-
-These endpoints are public:
-
-```http
 GET /api/docs
 GET /api/openapi.json
 GET /api/postman.json
 ```
 
-- `/api/docs` serves Swagger UI with bearer authorization and Try It Out;
-- `/api/openapi.json` is the canonical OpenAPI 3.1 machine contract;
-- `/api/postman.json` is an importable Postman Collection v2.1 with variables and request tests.
+`/api/openapi.json` is the runtime OpenAPI 3.1 contract. `docs/openapi.json` is the committed public-route snapshot validated in CI. Portal session endpoints are deliberately excluded from the bearer security scheme.
 
-Contract tests compare registered public v1 routes against the generated specification so undocumented bearer API routes fail CI.
+### Account, usage, and capabilities
+
+```http
+GET /api/v1/account       # account:read
+GET /api/v1/usage         # usage:read
+GET /api/v1/capabilities  # account:read
+```
+
+The account response includes credit balance, live state, provider mode, daily/monthly spend controls, low-balance state, and estimated remaining analyses.
 
 ### Quick Analysis
 
-Requires `analysis:run`:
+```http
+POST /api/v1/analyses             # analysis:run
+GET  /api/v1/analyses/{job_id}    # analysis:read
+```
+
+Example:
 
 ```http
 POST /api/v1/analyses
@@ -93,53 +62,18 @@ Content-Type: application/json
 }
 ```
 
-Read with `analysis:read`:
-
-```http
-GET /api/v1/analyses/{job_id}
-Authorization: Bearer <api-key>
-```
-
-See `docs/quick_analysis_api.md`.
+Quick Analysis costs 10 API credits by default. Deep Analysis execution remains closed.
 
 ### Opportunity Scan
 
-Starting a scan requires `opportunities:run`:
-
 ```http
-POST /api/v1/opportunity-scans
-Authorization: Bearer <api-key>
-Idempotency-Key: scan_01J...
-Content-Type: application/json
+POST /api/v1/opportunity-scans            # opportunities:run
+GET  /api/v1/opportunity-scans/{job_id}   # opportunities:read
 ```
 
-```json
-{
-  "category": "All",
-  "language": "en",
-  "scan_limit": 100,
-  "result_limit": 10,
-  "min_score": 52,
-  "min_liquidity": 1000,
-  "min_volume_24h": 500,
-  "tiers": ["DEEP_ANALYSIS_CANDIDATE", "WATCH_CANDIDATE"]
-}
-```
-
-Read with `opportunities:read`:
-
-```http
-GET /api/v1/opportunity-scans/{job_id}
-Authorization: Bearer <api-key>
-```
-
-Opportunity Scan costs 1 API credit by default and uses zero paid AI-provider calls. It ranks markets for later analysis and does not produce fair probability, edge, or a BUY decision.
-
-See `docs/opportunity_scan_api.md`.
+Opportunity Scan costs 1 API credit by default, is deterministic, uses zero paid LLM calls, and does not return a fair probability or trading decision.
 
 ### Signed Webhooks
-
-Requires `webhooks:manage`:
 
 ```http
 POST   /api/v1/webhooks
@@ -151,7 +85,9 @@ GET    /api/v1/webhook-deliveries/{delivery_id}
 POST   /api/v1/webhook-deliveries/{delivery_id}/retry
 ```
 
-Current events:
+Scope: `webhooks:manage`.
+
+Events:
 
 ```text
 analysis.completed
@@ -160,48 +96,9 @@ opportunity_scan.completed
 opportunity_scan.failed
 ```
 
-See `docs/signed_webhooks_v1.md`.
-
-## Commercial Developer Portal
-
-Commercial operations use the authenticated DeepAlpha web session rather than bearer API keys:
-
-```http
-GET  /app-api/v1/developer/commercial/overview
-POST /app-api/v1/developer/projects/{client_id}/credit-invoices
-GET  /app-api/v1/developer/projects/{client_id}/credit-invoices
-POST /app-api/v1/developer/credit-invoices/{invoice_id}/refresh
-POST /app-api/v1/developer/credit-invoices/{invoice_id}/cancel
-POST /app-api/v1/developer/projects/{client_id}/live-access/request
-POST /app-api/v1/developer/projects/{client_id}/live-keys
-POST /app-api/v1/developer/projects/{client_id}/commercial-settings
-```
-
-Project owners can:
-
-- purchase configured API credit packages with exact TON invoices;
-- inspect invoice status and payment references;
-- request administrator-reviewed live access;
-- issue `da_live_...` keys after approval;
-- configure a monthly credit-spend limit;
-- configure a low-balance warning threshold.
-
-No credit package or financial price is invented automatically. Admin Center must explicitly configure packages.
-
-See `docs/api_commercial_launch.md`.
-
-## Planned
-
-```http
-POST /api/v1/analyses with mode=deep
-Python and TypeScript SDKs generated from OpenAPI 3.1
-```
-
-Wallet send and withdrawal operations are not planned for the public Developer API.
-
 ## Scopes
 
-Recognized scopes:
+Recognized public scopes:
 
 - `account:read`
 - `usage:read`
@@ -212,121 +109,194 @@ Recognized scopes:
 - `markets:read`
 - `webhooks:manage`
 
-A key receives only explicitly selected recognized scopes. `wallet:send` is not a valid Developer API permission.
+`wallet:send`, wallet withdrawal, and trading execution are not available Developer API scopes.
 
-## Limits
+## Billing model
 
-Each client has independent controls:
+API credits are separate from Telegram user tokens.
 
-- requests per minute;
-- requests per day;
-- requests per month;
-- available API credit balance;
-- active queued/running API jobs;
-- monthly credit-spend limit;
-- low-balance threshold;
-- Quick Analysis and Opportunity worker timeouts;
-- webhook endpoint and delivery retry limits.
+The billing system uses:
 
-A PostgreSQL reservation trigger enforces the monthly spend limit under concurrency. Current-month reserved and charged units count toward the limit; refunded reservations do not. Over-limit submissions return stable error `monthly_spend_limit_exceeded`.
-
-The default active-job limit is two queued/running jobs per project. Quick Analysis and Opportunity Scan submissions share the same project-level serialization lock so concurrent requests cannot bypass the limit.
-
-Every authenticated request is recorded with request ID, endpoint, method, status, units, latency, client ID, and key ID.
-
-## Billing
-
-Developer API credits are separate from Telegram user tokens.
-
-The billing system provides:
-
-- editable prices in `api_products`;
+- editable `api_products` prices;
 - append-only `api_credit_ledger`;
 - atomic `api_credit_reservations`;
+- reserve → charge/refund lifecycle;
 - canonical request fingerprints;
 - `(client_id, idempotency_key)` uniqueness;
-- reserve on job creation;
-- charge finalization on success;
-- automatic refund on internal failure;
-- ledger-backed manual admin adjustments;
-- immutable TON credit invoices and exactly-once `purchase` ledger entries.
+- PostgreSQL row locks and durable jobs.
 
-Default execution products:
+Default products:
 
-| Product | Default credits |
-|---|---:|
-| `opportunity_scan` | 1 |
-| `market_data` | 1 |
-| `quick_analysis` | 10 |
-| `deep_analysis` | 50 |
+| Product | Default credits | Public execution |
+|---|---:|---|
+| `opportunity_scan` | 1 | yes |
+| `market_data` | 1 | internal/supporting |
+| `quick_analysis` | 10 | yes |
+| `deep_analysis` | 50 | no |
 
-Only Opportunity Scan and Quick Analysis are publicly executable at this phase.
+## Commercial Developer Portal
 
-See `docs/developer_api_billing.md` and `docs/api_commercial_launch.md`.
+Canonical routes:
 
-## Persistent execution
+```http
+GET   /app-api/v1/developer/commercial/overview
+POST  /app-api/v1/developer/projects/{client_id}/live-request
+POST  /app-api/v1/developer/projects/{client_id}/live-keys
+POST  /app-api/v1/developer/projects/{client_id}/credit-invoices
+GET   /app-api/v1/developer/projects/{client_id}/credit-invoices
+GET   /app-api/v1/developer/credit-invoices/{invoice_id}
+POST  /app-api/v1/developer/credit-invoices/{invoice_id}/refresh
+POST  /app-api/v1/developer/credit-invoices/{invoice_id}/cancel
+PATCH /app-api/v1/developer/projects/{client_id}/billing-controls
+```
 
-Quick Analysis, Opportunity Scan, Signed Webhook delivery, and API credit payment reconciliation run in dedicated Supervisor processes backed by PostgreSQL jobs/outbox/invoice rows. They do not depend on in-memory HTTP tasks.
+These endpoints require an authenticated DeepAlpha web session. Mutations require:
 
-Workers maintain leases or heartbeats, recover safely after restarts, and settle credits idempotently.
+```http
+X-DeepAlpha-Portal: 1
+```
+
+Ownership is checked server-side for every project, live-key, and invoice operation.
+
+### Live activation
+
+Lifecycle:
+
+```text
+test_only
+live_requested
+live_approved
+live_rejected
+live_suspended
+```
+
+Request body:
+
+```json
+{
+  "company_name": "Example LTD",
+  "website": "https://example.com",
+  "use_case": "Prediction market analytics",
+  "expected_monthly_requests": 10000,
+  "contact": "@username"
+}
+```
+
+Only `http` and `https` websites are accepted. There is no automatic approval on payment. Admin can approve, reject with a reason, suspend, and approve again after corrections.
+
+A live key additionally requires:
+
+- active project;
+- `live_approved` state;
+- `API_LIVE_KEYS_ENABLED=true`;
+- minimum balance when configured;
+- allowed scopes;
+- available key slot.
+
+### Credit packages and invoices
+
+Packages contain server-controlled credits, amount, currency, enabled state, sort order, and metadata. User requests send only `package_code`; the server snapshots the package into the invoice.
+
+Invoice statuses:
+
+```text
+pending
+awaiting_payment
+payment_detected
+paid
+crediting
+credited
+expired
+cancelled
+failed
+refunded
+```
+
+One invoice can increase balance at most once. Settlement locks invoice and client, uses ledger idempotency key `invoice:<invoice_id>`, writes one `purchase` entry, sets `credited_at`, appends audit/payment events, and commits atomically.
+
+Payment providers:
+
+- `ton_treasury` — real Treasury routing plus exact TON transaction validation;
+- `manual` — explicit authenticated Admin settlement with no fake automatic verification.
+
+The launch does not accept a public callback such as `{ "invoice_id": "...", "paid": true }`.
+
+### Spend controls
+
+```json
+{
+  "low_balance_threshold": 20,
+  "max_daily_credit_spend": 200,
+  "max_monthly_credit_spend": 3000
+}
+```
+
+`null` disables a limit. Reserved and charged units count until refund. Stable errors:
+
+```text
+daily_credit_spend_limit_reached
+monthly_credit_spend_limit_reached
+```
+
+Idempotent replay does not create a second reservation and therefore does not count spend twice.
+
+Auto recharge remains disabled until a secure reusable payment method exists.
+
+### Low balance
+
+Overview returns balance, threshold, `low_balance`, daily/monthly spend, caps, estimated remaining Quick Analyses, and estimated remaining Opportunity Scans. Durable notification state is stored, but this launch sends no Telegram/email notification by itself.
+
+See `docs/api_commercial_launch.md`.
 
 ## Admin management
 
-Open the `API` section in DeepAlpha Admin Center to:
+Admin Center → API supports:
 
-- create API clients;
-- configure daily, monthly, per-minute, and credit limits;
-- issue and revoke test/live keys;
-- select scopes;
-- inspect usage totals;
-- edit API execution product prices;
-- create and edit API credit purchase packages and explicit TON prices;
-- add or remove credits with idempotency protection;
-- approve or reject live-access requests;
-- inspect invoices, TON references, transaction hashes, and payment errors;
-- inspect ledger entries and reservations;
-- inspect all API workers, jobs, webhook deliveries, and commercial runtime health.
+- package create/edit/enable/disable;
+- live request approve/reject/suspend/re-approve;
+- invoice filters by status/client/provider;
+- payment references, amount/currency, paid/credited timestamps;
+- manual `mark-paid`, exactly-once `credit`, and cancel actions;
+- project spend controls;
+- purchase ledger and payment audit trail;
+- TON scanner and commercial worker health.
 
-A raw API key or webhook signing secret is displayed once immediately after creation/rotation and is never shown again.
+Admin mutations use the existing authenticated Admin session. Paid/credited invoices and append-only ledger/payment events are not deleted or edited.
 
-## Security
+## Security invariants
 
-- project purchase/live routes require a valid DeepAlpha web session and ownership of the API client;
-- portal mutations require `X-DeepAlpha-Portal: 1`;
-- API invoice references use `api_pay_...`, isolated from Telegram token payment references;
-- invoice settlement validates Treasury snapshot, exact amount, network, timestamp, confirmations, and unique transaction hash;
-- credit purchase settlement is atomic and ledger-idempotent;
-- all financial and live-key environment gates default off;
-- wildcard CORS is removed by the runtime security middleware;
-- same-origin requests remain allowed;
-- additional origins must be listed in `CORS_ALLOWED_ORIGINS`;
-- `Authorization`, `Idempotency-Key`, and request ID headers are explicitly supported;
-- the admin secret is exchanged for an HttpOnly, SameSite=Strict admin session cookie and removed from the URL;
-- admin and Developer API responses receive `Cache-Control: no-store` and security headers;
-- public analysis results omit internal provider names, prompts, and raw agent payloads;
-- webhook targets are restricted to public HTTPS port 443 addresses and connections are pinned to freshly validated DNS results;
-- webhook signatures use HMAC-SHA256 over the timestamp and raw request body;
-- Swagger UI loads a pinned `swagger-ui-dist` version under a restrictive Content Security Policy.
+- no raw API-key hash or provider secret in Portal responses;
+- raw API key appears once;
+- Portal ownership and mutation-header checks;
+- Admin session for approval and settlement;
+- unpredictable invoice IDs and references;
+- amount/credits/currency snapshots;
+- PostgreSQL `FOR UPDATE` locks;
+- append-only ledger and payment events;
+- unique transaction hash for TON settlement;
+- no card storage;
+- no withdrawal or trading execution;
+- all commercial gates default closed;
+- financial responses use `Cache-Control: no-store` through the existing security middleware.
 
-Important environment variables:
+## Railway configuration
 
 ```env
-CORS_ALLOWED_ORIGINS=https://app.example.com,https://partner.example.com
-CORS_ALLOW_LOCALHOST=false
-COOKIE_SECURE=true
-
-API_ANALYSIS_WORKER_ENABLED=true
-API_OPPORTUNITY_WORKER_ENABLED=true
-API_WEBHOOK_WORKER_ENABLED=true
-WEBHOOK_SIGNING_MASTER_KEY=<random 32+ character secret>
-
 API_COMMERCIAL_LAUNCH_ENABLED=false
 API_LIVE_KEYS_ENABLED=false
-API_LIVE_ACCESS_AUTO_APPROVE_ON_PAYMENT=false
-API_CREDIT_PACKAGES_JSON=[]
-API_CREDIT_INVOICE_TTL_MINUTES=60
+API_LIVE_MINIMUM_BALANCE=10
+API_CREDIT_PURCHASES_ENABLED=false
+API_CREDIT_INVOICE_PROVIDER=ton_treasury
+API_CREDIT_CURRENCY=TON
+API_CREDIT_INVOICE_TTL_HOURS=24
+API_CREDIT_MAX_OPEN_INVOICES=3
 API_CREDIT_CONFIRMATION_SECONDS=20
+API_LOW_BALANCE_NOTIFICATION_COOLDOWN_HOURS=24
 API_COMMERCIAL_WORKER_ENABLED=true
 API_COMMERCIAL_POLL_SECONDS=10
 TREASURY_INCOMING_ENABLED=false
 ```
+
+For `manual`, also configure `API_CREDIT_PAYMENT_ADDRESS` and `API_CREDIT_MANUAL_PAYMENT_INSTRUCTIONS` as applicable. Manual mode still requires Admin settlement.
+
+GitHub CI does not prove Railway deployment, process heartbeat, Treasury configuration, TON Center availability, or real on-chain settlement.
