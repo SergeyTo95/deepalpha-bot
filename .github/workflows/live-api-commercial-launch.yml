@@ -10,7 +10,9 @@ on:
       - "run_api_commercial_worker.py"
       - "run_web_process.py"
       - "services/developer_api_commercial_launch_service.py"
+      - "services/developer_api_commercial_launch_v2_service.py"
       - "services/developer_api_commercial_runtime_patch.py"
+      - "services/developer_api_commercial_runtime_v2_patch.py"
       - "services/developer_api_openapi_service.py"
       - "webapp/developer.html"
       - "webapp/developer_commercial.js"
@@ -65,7 +67,9 @@ jobs:
           python -m py_compile run_api_commercial_worker.py
           python -m py_compile run_web_process.py
           python -m py_compile services/developer_api_commercial_launch_service.py
+          python -m py_compile services/developer_api_commercial_launch_v2_service.py
           python -m py_compile services/developer_api_commercial_runtime_patch.py
+          python -m py_compile services/developer_api_commercial_runtime_v2_patch.py
           python -m py_compile services/developer_api_openapi_service.py
           python -m py_compile scripts/live_api_commercial_launch_smoke.py
 
