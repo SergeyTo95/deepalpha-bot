@@ -1,13 +1,14 @@
 """Security and migration hardening for the commercial launch service.
 
-This module deliberately wraps the first commercial-launch implementation so startup remains
-fail-closed and database initialization stays inside the guarded WebApp startup block.
+This module wraps the first commercial-launch implementation so startup remains fail-closed,
+database initialization stays inside the guarded WebApp startup block, and compatibility fixes
+can be applied without weakening the existing TON settlement contour.
 """
 
 import json
 import os
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
 from services import developer_api_commercial_launch_service as base
@@ -24,10 +25,12 @@ INVOICE_STATES = base.INVOICE_STATES
 OPEN_INVOICE_STATES = base.OPEN_INVOICE_STATES
 PAYABLE_INVOICE_STATES = base.PAYABLE_INVOICE_STATES
 LIVE_ALLOWED_SCOPES = base.LIVE_ALLOWED_SCOPES
+UNSET = object()
 
 _V2_TABLES_READY = False
 _ORIGINAL_ENSURE = base.ensure_commercial_launch_tables
 _ORIGINAL_CREATE_INVOICE = base.create_credit_invoice
+_ORIGINAL_INVOICE_PUBLIC = base._invoice_public
 
 
 def credit_purchases_enabled() -> bool:
@@ -67,7 +70,7 @@ def _seed_configured_packages(cursor) -> int:
             price_amount = Decimal(int(item.get("price_nano"))) / Decimal(1_000_000_000)
         amount = base._decimal(price_amount)
         price_nano = base._ton_to_nano(amount) if currency == "TON" else 1
-        metadata = item.get("metadata_json")
+        metadata = item.get("metadata_json", item.get("metadata"))
         if isinstance(metadata, str):
             try:
                 metadata = json.loads(metadata)
@@ -121,6 +124,15 @@ def ensure_commercial_launch_tables() -> None:
         conn.close()
 
 
+def _invoice_public(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Never expose the legacy manual-provider treasury sentinel as a payment address."""
+    result = _ORIGINAL_INVOICE_PUBLIC(item)
+    if str(result.get("payment_provider") or "") == "manual" and not item.get("payment_address"):
+        result["payment_address"] = None
+        result["checkout_url"] = None
+    return result
+
+
 def create_credit_invoice(
     *,
     user_id: int,
@@ -171,7 +183,7 @@ def create_credit_invoice(
         ):
             raise CommercialLaunchError("idempotency_conflict")
         conn.commit()
-        return {**base._invoice_public(existing), "idempotent": True}
+        return {**_invoice_public(existing), "idempotent": True}
     except Exception:
         conn.rollback()
         raise
@@ -291,11 +303,170 @@ def review_live_access(
         conn.close()
 
 
+def _control_value(value: Any, current: Any, field: str) -> Any:
+    if value is UNSET:
+        return current
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except Exception as exc:
+        raise CommercialLaunchError(f"invalid_{field}") from exc
+    if normalized < 0 or normalized > 1_000_000_000:
+        raise CommercialLaunchError(f"invalid_{field}")
+    return normalized
+
+
+def set_billing_controls(
+    *,
+    user_id: int,
+    client_id: int,
+    low_balance_threshold: Any = UNSET,
+    max_daily_credit_spend: Any = UNSET,
+    max_monthly_credit_spend: Any = UNSET,
+    auto_recharge_enabled: Any = UNSET,
+    auto_recharge_package_code: Any = UNSET,
+) -> Dict[str, Any]:
+    """Preserve omitted controls while allowing an explicit JSON null to disable a limit."""
+    ensure_commercial_launch_tables()
+    if auto_recharge_enabled is not UNSET and bool(auto_recharge_enabled):
+        raise CommercialLaunchError("auto_recharge_unavailable")
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        client = base._owned_client(cursor, int(user_id), int(client_id), for_update=True)
+        if not client:
+            raise CommercialLaunchError("project_not_found")
+        low = _control_value(
+            low_balance_threshold,
+            client.get("low_balance_threshold"),
+            "low_balance_threshold",
+        )
+        daily = _control_value(
+            max_daily_credit_spend,
+            client.get("daily_spend_limit_credits"),
+            "daily_spend_limit_credits",
+        )
+        monthly = _control_value(
+            max_monthly_credit_spend,
+            client.get("monthly_spend_limit_credits"),
+            "monthly_spend_limit_credits",
+        )
+        package_code = (
+            client.get("auto_recharge_package_code")
+            if auto_recharge_package_code is UNSET
+            else (str(auto_recharge_package_code or "").strip() or None)
+        )
+        cursor.execute(
+            """
+            UPDATE api_clients
+            SET low_balance_threshold=%s, daily_spend_limit_credits=%s,
+                monthly_spend_limit_credits=%s, auto_recharge_enabled=FALSE,
+                auto_recharge_package_code=%s, updated_at=NOW()
+            WHERE id=%s RETURNING *
+            """,
+            (low, daily, monthly, package_code, int(client_id)),
+        )
+        updated = base._row(cursor, cursor.fetchone()) or {}
+        base._audit(
+            cursor,
+            f"user:{int(user_id)}",
+            "commercial.billing_controls.update",
+            "api_client",
+            client_id,
+            {
+                "low_balance_threshold": low,
+                "max_daily_credit_spend": daily,
+                "max_monthly_credit_spend": monthly,
+                "auto_recharge_enabled": False,
+            },
+        )
+        conn.commit()
+        return updated
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def spend_snapshot(client_id: int, cursor=None) -> Dict[str, Any]:
+    """Return spend and estimates using the real api_products.unit_price schema."""
+    ensure_commercial_launch_tables()
+    own = cursor is None
+    conn = get_connection() if own else None
+    cur = conn.cursor() if own else cursor
+    try:
+        cur.execute(
+            """
+            SELECT credit_balance,low_balance_threshold,daily_spend_limit_credits,
+                   monthly_spend_limit_credits,auto_recharge_enabled,
+                   auto_recharge_package_code,last_low_balance_notified_at,
+                   last_low_balance_notified_balance
+            FROM api_clients WHERE id=%s
+            """,
+            (int(client_id),),
+        )
+        client = base._row(cur, cur.fetchone()) or {}
+        cur.execute(
+            """
+            SELECT
+              COALESCE(SUM(units) FILTER (WHERE created_at>=date_trunc('day',NOW())),0) AS daily_used,
+              COALESCE(SUM(units) FILTER (WHERE created_at>=date_trunc('month',NOW())),0) AS monthly_used
+            FROM api_credit_reservations
+            WHERE client_id=%s AND status IN ('reserved','charged')
+            """,
+            (int(client_id),),
+        )
+        used = base._row(cur, cur.fetchone()) or {}
+        cur.execute(
+            """
+            SELECT product_code, unit_price
+            FROM api_products
+            WHERE product_code IN ('quick_analysis','opportunity_scan')
+            """
+        )
+        prices = {
+            str(item.get("product_code")): int(item.get("unit_price") or 0)
+            for item in base._rows(cur, cur.fetchall())
+        }
+        balance = int(client.get("credit_balance") or 0)
+        threshold = client.get("low_balance_threshold")
+        threshold_value = int(threshold) if threshold is not None else None
+        daily_limit = client.get("daily_spend_limit_credits")
+        monthly_limit = client.get("monthly_spend_limit_credits")
+        quick_price = max(1, int(prices.get("quick_analysis") or 10))
+        opportunity_price = max(1, int(prices.get("opportunity_scan") or 1))
+        return {
+            "balance": balance,
+            "low_balance_threshold": threshold_value,
+            "low_balance": threshold_value is not None and balance <= threshold_value,
+            "max_daily_credit_spend": int(daily_limit) if daily_limit is not None else None,
+            "max_monthly_credit_spend": int(monthly_limit) if monthly_limit is not None else None,
+            "daily_spend": int(used.get("daily_used") or 0),
+            "monthly_spend": int(used.get("monthly_used") or 0),
+            "estimated_remaining_quick_analyses": balance // quick_price,
+            "estimated_remaining_opportunity_scans": balance // opportunity_price,
+            "auto_recharge_enabled": False,
+            "auto_recharge_package_code": client.get("auto_recharge_package_code"),
+            "last_low_balance_notified_at": client.get("last_low_balance_notified_at"),
+            "last_low_balance_notified_balance": client.get("last_low_balance_notified_balance"),
+        }
+    finally:
+        if own and conn:
+            cur.close()
+            conn.close()
+
+
 # Patch globals used dynamically inside functions defined by the base module.
 base.credit_purchases_enabled = credit_purchases_enabled
 base.ensure_commercial_launch_tables = ensure_commercial_launch_tables
+base._invoice_public = _invoice_public
 base.create_credit_invoice = create_credit_invoice
 base.review_live_access = review_live_access
+base.set_billing_controls = set_billing_controls
+base.spend_snapshot = spend_snapshot
 
 # Re-export unchanged public surface used by routes, workers and tests.
 payment_adapter = base.payment_adapter
@@ -319,8 +490,6 @@ run_commercial_worker_forever = base.run_commercial_worker_forever
 refresh_owned_invoice = base.refresh_owned_invoice
 request_live_access = base.request_live_access
 issue_live_key = base.issue_live_key
-set_billing_controls = base.set_billing_controls
-spend_snapshot = base.spend_snapshot
 commercial_overview = base.commercial_overview
 list_live_requests = base.list_live_requests
 list_all_invoices = base.list_all_invoices
