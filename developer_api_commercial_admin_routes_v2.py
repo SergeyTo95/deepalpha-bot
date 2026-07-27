@@ -18,9 +18,7 @@ def _request_key(request: web.Request) -> str:
     return str(request.query.get("key") or "")
 
 
-def _authenticated_dashboard(request: web.Request) -> str:
-    html = _ORIGINAL_DASHBOARD(request)
-    key = _request_key(request)
+def _inject_admin_key(html: str, key: str) -> str:
     if not key:
         return html
     encoded = escape(quote_plus(key), quote=True)
@@ -39,6 +37,10 @@ def _authenticated_dashboard(request: web.Request) -> str:
         replace,
         html,
     )
+
+
+def _authenticated_dashboard(request: web.Request) -> str:
+    return _inject_admin_key(_ORIGINAL_DASHBOARD(request), _request_key(request))
 
 
 async def _preserve_redirect(handler, request: web.Request) -> web.StreamResponse:
