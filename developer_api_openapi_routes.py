@@ -2,12 +2,13 @@ import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 from aiohttp import web
 
+from services.developer_api_openapi_service import serialized_openapi_spec
+
 _DOCS_DIR = Path(__file__).resolve().parent / "docs"
-_OPENAPI_PATH = _DOCS_DIR / "openapi.json"
 _POSTMAN_PATH = _DOCS_DIR / "deepalpha_api.postman_collection.json"
 
 _SWAGGER_UI_VERSION = "5.17.14"
@@ -59,23 +60,12 @@ _SWAGGER_HTML = f"""<!doctype html>
 </html>"""
 
 
-def _asset(path: Path) -> Tuple[str, str]:
-    text = path.read_text(encoding="utf-8")
-    # Parse once at process lifetime so malformed committed artifacts fail loudly
-    # during tests and return a stable 503 in a broken production deploy.
+@lru_cache(maxsize=1)
+def _postman_asset() -> Tuple[str, str]:
+    text = _POSTMAN_PATH.read_text(encoding="utf-8")
     json.loads(text)
     etag = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return text, etag
-
-
-@lru_cache(maxsize=1)
-def _openapi_asset() -> Tuple[str, str]:
-    return _asset(_OPENAPI_PATH)
-
-
-@lru_cache(maxsize=1)
-def _postman_asset() -> Tuple[str, str]:
-    return _asset(_POSTMAN_PATH)
 
 
 def _json_asset_response(request: web.Request, loader) -> web.Response:
@@ -89,7 +79,10 @@ def _json_asset_response(request: web.Request, loader) -> web.Response:
         )
     quoted = f'"{etag}"'
     if request.headers.get("If-None-Match") == quoted:
-        return web.Response(status=304, headers={"ETag": quoted, "Cache-Control": "public, max-age=300"})
+        return web.Response(
+            status=304,
+            headers={"ETag": quoted, "Cache-Control": "public, max-age=300"},
+        )
     return web.Response(
         text=text,
         content_type="application/json",
@@ -102,13 +95,15 @@ def _json_asset_response(request: web.Request, loader) -> web.Response:
 
 
 async def handle_openapi_json(request: web.Request) -> web.Response:
-    return _json_asset_response(request, _openapi_asset)
+    return _json_asset_response(request, serialized_openapi_spec)
 
 
 async def handle_postman_collection(request: web.Request) -> web.Response:
     response = _json_asset_response(request, _postman_asset)
     if response.status == 200:
-        response.headers["Content-Disposition"] = 'inline; filename="deepalpha_api.postman_collection.json"'
+        response.headers["Content-Disposition"] = (
+            'inline; filename="deepalpha_api.postman_collection.json"'
+        )
     return response
 
 
