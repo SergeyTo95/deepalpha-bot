@@ -45,6 +45,27 @@
   <script src="/webapp/developer_webhooks.js?v=1.1"></script>
   <script src="/webapp/developer_opportunities.js?v=1.0"></script>
   <script src="/webapp/developer_openapi.js?v=1.0"></script>
+  <script>
+    (() => {
+      const NativeMutationObserver = window.MutationObserver;
+      if (typeof NativeMutationObserver !== "function") return;
+      window.__deepAlphaNativeMutationObserver = NativeMutationObserver;
+      window.MutationObserver = class DeepAlphaCommercialObserver extends NativeMutationObserver {
+        observe(target, options = {}) {
+          if (target?.id === "appRoot" && options.childList && options.subtree) {
+            return super.observe(target, { ...options, subtree: false });
+          }
+          return super.observe(target, options);
+        }
+      };
+    })();
+  </script>
   <script src="/webapp/developer_commercial.js?v=2.0"></script>
+  <script>
+    if (window.__deepAlphaNativeMutationObserver) {
+      window.MutationObserver = window.__deepAlphaNativeMutationObserver;
+      delete window.__deepAlphaNativeMutationObserver;
+    }
+  </script>
 </body>
 </html>
