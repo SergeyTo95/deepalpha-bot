@@ -193,12 +193,16 @@ def test_runtime_limit_errors_are_stable():
         assert exc.value.code == expected and exc.value.details["remaining"] == 10
 
 
-def test_payment_adapters_and_worker_gates(monkeypatch):
+def test_payment_adapters_and_worker_settlement_gates(monkeypatch):
     monkeypatch.setenv("API_CREDIT_INVOICE_PROVIDER", "manual")
     assert service.payment_adapter().name == "manual"
     assert service.payment_adapter().verify_payment({})["error"] == "manual_review_required"
     assert run_api_commercial_worker.worker_disabled_reason({
         "API_COMMERCIAL_LAUNCH_ENABLED": "true",
-        "API_CREDIT_PURCHASES_ENABLED": "true",
+        "API_CREDIT_PURCHASES_ENABLED": "false",
         "API_CREDIT_INVOICE_PROVIDER": "manual",
-    }) == "manual_provider_has_no_automatic_worker"
+    }) is None
+    assert run_api_commercial_worker.worker_disabled_reason({
+        "API_COMMERCIAL_LAUNCH_ENABLED": "true",
+        "API_COMMERCIAL_WORKER_ENABLED": "false",
+    }) == "API_COMMERCIAL_WORKER_ENABLED=false"
