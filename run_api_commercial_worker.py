@@ -11,6 +11,12 @@ def env_true(value: Optional[str], default: bool = False) -> bool:
 
 
 def worker_disabled_reason(env: Mapping[str, str]) -> Optional[str]:
+    """Gate the worker process, not new invoice creation.
+
+    `API_CREDIT_PURCHASES_ENABLED` and the currently selected provider intentionally do not
+    disable this process: already-issued `ton_treasury` invoices must remain settleable after
+    new purchases are paused or the launch switches to the manual provider.
+    """
     if not env_true(env.get("API_COMMERCIAL_LAUNCH_ENABLED"), default=False):
         return "API_COMMERCIAL_LAUNCH_ENABLED=false"
     if not env_true(env.get("API_COMMERCIAL_WORKER_ENABLED"), default=True):
@@ -42,7 +48,7 @@ def main() -> None:
     if reason:
         idle_forever(reason)
         return
-    from services.developer_api_commercial_service import run_commercial_worker_forever
+    from services.developer_api_commercial_final_service import run_commercial_worker_forever
 
     run_commercial_worker_forever()
 

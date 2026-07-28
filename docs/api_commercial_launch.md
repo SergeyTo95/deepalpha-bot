@@ -1,119 +1,259 @@
 # DeepAlpha API commercial launch
 
-This module turns the completed Developer API beta into a controlled commercial product:
+DeepAlpha Developer API commercial launch adds reviewed live access, API-credit packages, durable invoices, exactly-once purchase settlement, daily/monthly spend controls, and low-balance reporting.
 
-- users buy API credits through immutable TON invoices;
-- paid credits enter the existing append-only API ledger;
-- projects request live access;
-- administrators approve or reject live projects;
-- approved projects issue `da_live_...` keys from the Developer Portal;
-- project owners set monthly credit-spend limits and low-balance thresholds.
+The implementation reuses the existing PostgreSQL-backed API billing ledger and the existing TON Treasury transaction verifier. It does not create a second token-payment contour and it never treats a browser assertion as proof of payment.
 
-All financial and live-key features fail closed by default.
-
-## Runtime gates
+## Fail-closed runtime gates
 
 ```env
 API_COMMERCIAL_LAUNCH_ENABLED=false
 API_LIVE_KEYS_ENABLED=false
-API_LIVE_ACCESS_AUTO_APPROVE_ON_PAYMENT=false
+API_LIVE_MINIMUM_BALANCE=10
+API_CREDIT_PURCHASES_ENABLED=false
+API_CREDIT_INVOICE_PROVIDER=ton_treasury
+API_CREDIT_CURRENCY=TON
+API_CREDIT_INVOICE_TTL_HOURS=24
+API_CREDIT_MAX_OPEN_INVOICES=3
+API_CREDIT_CONFIRMATION_SECONDS=20
+API_LOW_BALANCE_NOTIFICATION_COOLDOWN_HOURS=24
 TREASURY_INCOMING_ENABLED=false
 ```
 
-Recommended rollout:
+`API_LIVE_ACCESS_AUTO_APPROVE_ON_PAYMENT` remains false and is not used to bypass administrator review.
 
-1. configure and verify the single active Treasury wallet;
-2. configure TON Center for the selected `TON_NETWORK`;
-3. create credit packages in Admin Center → API;
-4. enable `TREASURY_INCOMING_ENABLED=true`;
-5. enable `API_COMMERCIAL_LAUNCH_ENABLED=true`;
-6. keep `API_LIVE_KEYS_ENABLED=false` while testing purchases;
-7. run a real on-chain invoice smoke test;
-8. enable `API_LIVE_KEYS_ENABLED=true` when live projects may issue keys.
+Supported payment providers:
 
-`API_LIVE_ACCESS_AUTO_APPROVE_ON_PAYMENT` should normally remain false. When false, paying an invoice adds credits but does not bypass administrator review.
+- `ton_treasury` — uses the existing Treasury wallet routing and TON transaction verification;
+- `manual` — creates durable invoices and requires an authenticated administrator to mark the invoice paid and credit it.
+
+Manual mode is explicit. It does not claim that an on-chain or card payment was automatically verified.
 
 ## Credit packages
 
-No financial price is invented or enabled automatically.
-
-Packages are created in Admin Center → API with:
-
-- stable package code;
-- display name;
-- API credit quantity;
-- exact TON price;
-- enabled flag;
-- sort order.
-
-An optional deployment seed may be supplied:
-
-```env
-API_CREDIT_PACKAGES_JSON=[{"package_code":"starter_100","display_name":"Starter 100","credits":100,"price_nano":500000000,"enabled":true,"sort_order":10}]
-```
-
-The seed uses `ON CONFLICT DO NOTHING`; it does not overwrite later administrator pricing.
-
-## Invoice flow
-
-The authenticated Developer Portal creates an `api_credit_invoices` row containing immutable snapshots of:
-
-- owner and API client;
-- package code and name;
-- credits to grant;
-- exact TON amount in nanoTON;
-- Treasury wallet ID and address;
-- TON network;
-- expiry;
-- idempotency key and canonical request fingerprint.
-
-Invoice references use a dedicated prefix:
+Packages are editable in Admin Center → API:
 
 ```text
-api_pay_<random>
+package_code
+display_name
+credits
+price_amount
+price_currency
+enabled
+sort_order
+metadata_json
 ```
 
-The existing Telegram token-purchase scanner only processes `pay_...` references. `api_pay_...` therefore cannot accidentally grant Telegram user tokens.
+The launch supports one explicitly configured currency (`API_CREDIT_CURRENCY`, default `TON`). The server loads the enabled package from PostgreSQL. User input cannot override credits, amount, or currency.
 
-The portal returns:
+Changing a package never changes an existing invoice because each invoice stores an immutable snapshot.
 
-- Treasury address;
-- exact nanoTON and TON amounts;
-- mandatory text comment;
-- TON transfer URI;
-- BoC comment payload;
-- expiry and invoice status.
+## Invoice lifecycle
 
-A transfer is accepted only when:
+Supported statuses:
 
-- the transaction completed successfully;
+```text
+pending
+awaiting_payment
+payment_detected
+paid
+crediting
+credited
+expired
+cancelled
+failed
+refunded
+```
+
+Normal TON flow:
+
+```text
+awaiting_payment → payment_detected → paid → crediting → credited
+```
+
+Manual flow:
+
+```text
+awaiting_payment → paid (Admin) → crediting → credited (Admin)
+```
+
+Invoice records include:
+
+- unpredictable `inv_...` ID;
+- owner and API client;
+- package code/name snapshot;
+- credits, amount, and currency snapshot;
+- provider and payment reference;
+- payment address or checkout URL when applicable;
+- expiry, payment, and credit timestamps;
+- non-public provider metadata;
+- idempotency key and request fingerprint.
+
+Open invoices per project are bounded by `API_CREDIT_MAX_OPEN_INVOICES`. Creation requires an authenticated Portal session, ownership, an active project, an enabled package, `X-DeepAlpha-Portal: 1`, and an idempotency key or `client_request_id`.
+
+No credits are granted when an invoice is created.
+
+## TON Treasury verification
+
+`ton_treasury` reuses the existing Treasury contour. A transfer is accepted only when:
+
+- transaction execution succeeded;
 - destination equals the invoice Treasury snapshot;
-- amount exactly equals the invoice amount;
-- invoice network equals runtime `TON_NETWORK`;
-- transaction timestamp is not before invoice creation;
-- transaction timestamp is not after invoice expiry;
-- the configured confirmation delay elapsed;
-- transaction hash has not funded another invoice.
+- amount exactly equals the invoice snapshot;
+- network matches `TON_NETWORK`;
+- transaction time is not before invoice creation;
+- transaction time is not after invoice expiry;
+- confirmation delay elapsed;
+- transaction hash is unique;
+- comment contains the exact `api_pay_...` reference.
 
-An expired invoice can still settle when the transaction was sent before its expiry but was discovered later.
+`api_pay_...` remains isolated from Telegram token-purchase references (`pay_...`).
 
-## Atomic credit settlement
+## Exactly-once settlement
 
-The commercial worker locks the invoice and API client in PostgreSQL.
+Settlement is one PostgreSQL transaction:
 
-Exactly once it:
+1. lock invoice `FOR UPDATE`;
+2. lock API client `FOR UPDATE`;
+3. reject invalid status;
+4. return idempotently when `credited_at` already exists;
+5. move invoice to `crediting`;
+6. add the invoice snapshot credits to `api_clients.credit_balance`;
+7. insert one append-only `api_credit_ledger` event `purchase`;
+8. use ledger idempotency key `invoice:<invoice_id>`;
+9. move invoice to `credited` and set `credited_at`;
+10. append payment/audit events;
+11. commit.
 
-1. adds package credits to `api_clients.credit_balance`;
-2. inserts an append-only `api_credit_ledger` entry with event `purchase`;
-3. uses ledger idempotency key `invoice:<invoice_id>`;
-4. stores the unique TON transaction hash;
-5. marks the invoice `paid`.
+Repeated worker scans, repeated Admin credit actions, and process restarts cannot grant credits twice.
 
-A worker restart or repeated chain scan returns the existing settlement and never grants the credits twice.
+`api_payment_events` is append-only and records invoice status transitions, actor, payment reference, metadata, and an idempotency key.
 
-The payment worker does not advance or depend on the generic Treasury transaction cursor. It performs a bounded, independently locked Treasury scan so it cannot skip or reorder other product payments.
+## Live access lifecycle
 
-## Worker
+Project state:
+
+```text
+test_only
+live_requested
+live_approved
+live_rejected
+live_suspended
+```
+
+Portal request:
+
+```http
+POST /app-api/v1/developer/projects/{client_id}/live-request
+X-DeepAlpha-Portal: 1
+Content-Type: application/json
+```
+
+```json
+{
+  "company_name": "Example LTD",
+  "website": "https://example.com",
+  "use_case": "Prediction market analytics",
+  "expected_monthly_requests": 10000,
+  "contact": "@username"
+}
+```
+
+The server validates ownership, active project status, text lengths, monthly volume, and an optional `http`/`https` website. A project cannot have two active `live_requested` applications.
+
+Admin can approve, reject with a reason, suspend, and approve again after correction. Approval never happens merely because an invoice was paid.
+
+## Live keys
+
+A Portal user can issue `da_live_...` only when:
+
+- project is active;
+- state is `live_approved`;
+- project live flag is enabled;
+- global `API_LIVE_KEYS_ENABLED=true`;
+- balance meets `API_LIVE_MINIMUM_BALANCE` when non-zero;
+- scopes are in the live self-service allowlist;
+- active key limit is not exceeded.
+
+Raw keys are shown once. PostgreSQL stores only SHA-256 hash and prefix. Rotation preserves environment: live remains live and test remains test. `wallet:send`, wallet withdrawal, and trading execution scopes remain unavailable.
+
+## Spend controls
+
+Portal endpoint:
+
+```http
+PATCH /app-api/v1/developer/projects/{client_id}/billing-controls
+X-DeepAlpha-Portal: 1
+```
+
+```json
+{
+  "low_balance_threshold": 20,
+  "max_daily_credit_spend": 200,
+  "max_monthly_credit_spend": 3000
+}
+```
+
+A JSON `null` disables a control. Negative values are rejected. `auto_recharge_enabled=true` is rejected until a reusable payment method exists.
+
+A PostgreSQL trigger locks the client before a new reservation. `reserved + charged` units count toward daily/monthly caps; refunded reservations do not. Stable errors:
+
+```text
+daily_credit_spend_limit_reached
+monthly_credit_spend_limit_reached
+```
+
+Idempotent job replay reuses the existing reservation and therefore does not count spend twice.
+
+## Low balance
+
+The Portal and authenticated account response expose:
+
+- current balance;
+- threshold and `low_balance`;
+- daily/monthly spend and caps;
+- estimated remaining Quick Analyses;
+- estimated remaining Opportunity Scans;
+- durable notification state fields.
+
+No Telegram/email notification is sent by this launch code. Notification state exists so a future approved notifier can apply transition/cooldown logic without spam.
+
+## Portal endpoints
+
+These routes use the authenticated DeepAlpha web session, not bearer-key authentication. Mutations require `X-DeepAlpha-Portal: 1`.
+
+```http
+GET   /app-api/v1/developer/commercial/overview
+POST  /app-api/v1/developer/projects/{client_id}/live-request
+POST  /app-api/v1/developer/projects/{client_id}/live-keys
+POST  /app-api/v1/developer/projects/{client_id}/credit-invoices
+GET   /app-api/v1/developer/projects/{client_id}/credit-invoices
+GET   /app-api/v1/developer/credit-invoices/{invoice_id}
+POST  /app-api/v1/developer/credit-invoices/{invoice_id}/refresh
+POST  /app-api/v1/developer/credit-invoices/{invoice_id}/cancel
+PATCH /app-api/v1/developer/projects/{client_id}/billing-controls
+```
+
+Compatibility aliases from the previous commercial beta remain mounted, but the routes above are canonical.
+
+Portal session endpoints are intentionally excluded from the public bearer OpenAPI security scheme.
+
+## Admin actions
+
+Admin session protection is required for:
+
+```http
+POST /admin/api/credit-invoices/{invoice_id}/mark-paid
+POST /admin/api/credit-invoices/{invoice_id}/credit
+POST /admin/api/credit-invoices/{invoice_id}/cancel
+POST /admin/api/commercial/live/{client_id}/approve
+POST /admin/api/commercial/live/{client_id}/reject
+POST /admin/api/commercial/live/{client_id}/suspend
+```
+
+Admin UI also shows packages, filtered invoices, payment references, paid/credited timestamps, project spend controls, recent purchase ledger entries, and payment audit events.
+
+## Production worker
 
 Supervisor runs:
 
@@ -121,122 +261,21 @@ Supervisor runs:
 commercial-worker -> python run_api_commercial_worker.py
 ```
 
-Configuration:
+The worker is active only for `ton_treasury`, enabled commercial purchases, and the configured production environment/branch. Manual provider mode intentionally keeps the automatic worker idle.
 
-```env
-API_COMMERCIAL_WORKER_ENABLED=true
-API_COMMERCIAL_WORKER_ALLOW_PREVIEW=false
-API_COMMERCIAL_POLL_SECONDS=10
-API_COMMERCIAL_WORKER_STALE_SECONDS=90
-API_COMMERCIAL_PRODUCTION_BRANCH=feature/turbo-short-term-btc
-API_CREDIT_INVOICE_TTL_MINUTES=60
-API_CREDIT_CONFIRMATION_SECONDS=20
-```
+## Still closed
 
-Preview and non-production branches remain idle unless explicitly allowed.
+- Deep Analysis execution;
+- wallet send and withdrawal;
+- trading execution;
+- card storage;
+- automatic debit;
+- auto recharge;
+- arbitrary browser-controlled settlement;
+- generic provider webhook accepting `paid=true`.
 
-`GET /api/v1/health` includes a `commercial` block with:
+## Production verification
 
-- launch and live-key gates;
-- Treasury incoming gate;
-- TON network;
-- fresh commercial workers;
-- pending and expired invoices;
-- paid invoices and credits sold during the last 24 hours;
-- pending live-access requests;
-- stable warning codes.
+Use `scripts/live_api_commercial_launch_smoke.py` only with a dedicated test project and manual provider/admin credentials. It performs no real payment. A separate controlled on-chain smoke is required before enabling production TON purchases.
 
-## Live access
-
-A project owner submits:
-
-- product/use-case description;
-- estimated monthly requests;
-- acceptance of the current beta terms version.
-
-Admin Center shows pending requests. Approval sets:
-
-```text
-commercial_status = live_enabled
-live_keys_enabled = true
-```
-
-The global `API_LIVE_KEYS_ENABLED` gate must also be enabled before a user can issue a live key.
-
-Live keys:
-
-- use prefix `da_live_...`;
-- are shown once;
-- store only SHA-256 key hashes;
-- support the same explicit scopes as test keys;
-- count toward the existing per-project active-key limit;
-- rotate without changing environment.
-
-Rejecting a request keeps the project in test-only mode.
-
-## Spend controls
-
-Each API client has:
-
-```text
-monthly_spend_limit_credits
-low_balance_threshold
-```
-
-A value of zero disables that control.
-
-A PostgreSQL trigger locks the client and rejects a new credit reservation when current-month `reserved + charged` units plus the new reservation exceed the project limit. Refunded reservations do not consume the monthly limit.
-
-The application translates the database guard into stable error:
-
-```text
-monthly_spend_limit_exceeded
-```
-
-The account response and Developer Portal expose current usage, remaining limit, balance, and low-balance state.
-
-## Portal endpoints
-
-These endpoints require an authenticated DeepAlpha web session. Mutations also require `X-DeepAlpha-Portal: 1`.
-
-```http
-GET  /app-api/v1/developer/commercial/overview
-POST /app-api/v1/developer/projects/{client_id}/credit-invoices
-GET  /app-api/v1/developer/projects/{client_id}/credit-invoices
-POST /app-api/v1/developer/credit-invoices/{invoice_id}/refresh
-POST /app-api/v1/developer/credit-invoices/{invoice_id}/cancel
-POST /app-api/v1/developer/projects/{client_id}/live-access/request
-POST /app-api/v1/developer/projects/{client_id}/live-keys
-POST /app-api/v1/developer/projects/{client_id}/commercial-settings
-```
-
-They are not bearer-key public API methods and are intentionally excluded from the public OpenAPI contract.
-
-## Admin controls
-
-Admin Center → API adds:
-
-- commercial runtime health and worker heartbeat;
-- package creation and price editing;
-- manual TON payment scan;
-- live-access approval and rejection;
-- invoice history, references, statuses, transaction hashes, and errors.
-
-## Production smoke
-
-After deployment, use a dedicated API project:
-
-1. verify `commercial-worker` heartbeat is fresh;
-2. create a small explicit package in Admin Center;
-3. create an invoice from the Developer Portal;
-4. send the exact TON amount to the displayed Treasury address with the exact `api_pay_...` comment;
-5. wait for confirmations and refresh the invoice;
-6. verify invoice status `paid`;
-7. verify one `purchase` ledger entry and one balance increase;
-8. repeat payment scans and verify no second credit grant;
-9. test wrong amount and wrong comment without automatic crediting;
-10. set a monthly spend limit and verify the next over-limit job returns `monthly_spend_limit_exceeded`;
-11. submit, approve, and issue a `da_live_...` key;
-12. rotate it and verify the replacement remains live.
-
-GitHub CI validates code and contract behavior but cannot prove Railway process startup, Treasury configuration, TON Center availability, or a real on-chain transfer.
+GitHub CI validates code and contract behavior. It does not prove Railway deployment, worker startup, Treasury configuration, TON Center availability, or a real on-chain transfer.

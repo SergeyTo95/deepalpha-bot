@@ -13,7 +13,8 @@ def main() -> None:
     from developer_api_routes import setup_developer_api_routes
     from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_billing_service import ensure_api_billing_tables
-    from services.developer_api_commercial_runtime_patch import install as install_commercial_runtime
+    from services.developer_api_commercial_final_service import ensure_commercial_launch_tables
+    from services.developer_api_commercial_runtime_v2_patch import install as install_commercial_runtime
     from services.developer_api_commercial_service import ensure_api_commercial_tables
     from services.developer_api_health_patch import install as install_api_health_observability
     from services.developer_api_observability_service import ensure_api_observability_tables
@@ -48,11 +49,11 @@ def main() -> None:
 
     # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
-    from developer_api_commercial_admin_routes import (
+    from developer_api_commercial_admin_routes_v2 import (
         install as install_admin_commercial,
         setup_developer_api_commercial_admin_routes,
     )
-    from developer_api_commercial_routes import setup_developer_api_commercial_routes
+    from developer_api_commercial_routes_v2 import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
     from developer_api_webhook_routes import setup_developer_api_webhook_routes
@@ -89,6 +90,7 @@ def main() -> None:
         ensure_api_webhook_tables()
         ensure_opportunity_webhook_trigger()
         ensure_api_commercial_tables()
+        ensure_commercial_launch_tables()
     except Exception:
         # Keep the existing WebApp available during a transient database issue;
         # authenticated Developer API endpoints will return 503 until storage recovers.

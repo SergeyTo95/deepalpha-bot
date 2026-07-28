@@ -19,8 +19,14 @@ def build_openapi_spec() -> Dict[str, Any]:
             "description": (
                 "DeepAlpha Developer API provides durable Quick Analysis and Opportunity Scan jobs, "
                 "atomic API-credit settlement, scoped bearer keys, and HMAC-signed terminal webhooks.\n\n"
+                "Use da_test_ keys for test projects. Administrator-approved live projects may issue "
+                "da_live_ keys in the authenticated Developer Portal. Rotation preserves the key environment.\n\n"
                 "API credits are separate from Telegram user tokens. Quick Analysis costs 10 credits "
-                "and Opportunity Scan costs 1 credit by default; administrators may change product prices."
+                "and Opportunity Scan costs 1 credit by default; administrators may change product prices. "
+                "Daily and monthly credit-spend caps can reject new reservations with stable error codes.\n\n"
+                "Credit packages, invoices, live approval, and billing controls are cookie-authenticated Portal "
+                "operations and are intentionally excluded from this bearer API contract. Wallet send, wallet "
+                "withdrawal, trading execution, Deep Analysis execution, and automatic recharge are unavailable."
             ),
             "contact": {"name": "DeepAlpha API"},
             "license": {"name": "Proprietary"},
@@ -28,7 +34,7 @@ def build_openapi_spec() -> Dict[str, Any]:
         "servers": [{"url": "/", "description": "Current DeepAlpha deployment"}],
         "tags": [
             {"name": "System", "description": "Public runtime health."},
-            {"name": "Account", "description": "Client, capabilities, limits, and usage."},
+            {"name": "Account", "description": "Client, capabilities, limits, spend controls, and usage."},
             {"name": "Quick Analysis", "description": "Billed AI analysis of one Polymarket market."},
             {"name": "Opportunity Scan", "description": "Billed deterministic zero-LLM market triage."},
             {"name": "Signed Webhooks", "description": "HMAC-signed terminal events and retry journal."},
@@ -39,6 +45,11 @@ def build_openapi_spec() -> Dict[str, Any]:
             "swagger_ui": "/api/docs",
             "openapi_json": "/api/openapi.json",
             "postman_collection": "/api/postman.json",
+        },
+        "x-commercial-portal": {
+            "authentication": "DeepAlpha web session plus X-DeepAlpha-Portal: 1 for mutations",
+            "document": "docs/api_commercial_launch.md",
+            "included_in_bearer_openapi": False,
         },
     }
 

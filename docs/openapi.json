@@ -1,0 +1,187 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "DeepAlpha Developer API",
+    "version": "1.0.0-beta",
+    "summary": "Billed Polymarket analysis and zero-LLM market triage.",
+    "description": "Committed public bearer-API route snapshot. Use da_test_ keys for test projects and administrator-approved da_live_ keys for production. Cookie-authenticated Developer Portal live approval, invoices, credit purchases and spend-control endpoints are intentionally excluded from this bearer security contract."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current DeepAlpha deployment"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "responses": {
+          "200": {"description": "Operational or degraded runtime health."},
+          "503": {"description": "Service unavailable."}
+        }
+      }
+    },
+    "/api/v1/account": {
+      "get": {
+        "operationId": "getAccount",
+        "x-required-scopes": ["account:read"],
+        "responses": {"200": {"description": "Client, balance, live state and limits."}}
+      }
+    },
+    "/api/v1/usage": {
+      "get": {
+        "operationId": "getUsage",
+        "x-required-scopes": ["usage:read"],
+        "responses": {"200": {"description": "Usage summary."}}
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "x-required-scopes": ["account:read"],
+        "responses": {"200": {"description": "Enabled capabilities, products and limits."}}
+      }
+    },
+    "/api/v1/analyses": {
+      "post": {
+        "operationId": "createQuickAnalysis",
+        "x-required-scopes": ["analysis:run"],
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "responses": {
+          "200": {"description": "Idempotent replay."},
+          "202": {"description": "Job accepted."},
+          "402": {"description": "Insufficient credits."},
+          "409": {"description": "Conflict or spend cap reached."}
+        }
+      }
+    },
+    "/api/v1/analyses/{job_id}": {
+      "get": {
+        "operationId": "getQuickAnalysis",
+        "x-required-scopes": ["analysis:read"],
+        "parameters": [{"$ref": "#/components/parameters/JobId"}],
+        "responses": {"200": {"description": "Quick Analysis job."}, "404": {"description": "Not found."}}
+      }
+    },
+    "/api/v1/opportunity-scans": {
+      "post": {
+        "operationId": "createOpportunityScan",
+        "x-required-scopes": ["opportunities:run"],
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "responses": {
+          "200": {"description": "Idempotent replay."},
+          "202": {"description": "Scan accepted."},
+          "402": {"description": "Insufficient credits."},
+          "409": {"description": "Conflict or spend cap reached."}
+        }
+      }
+    },
+    "/api/v1/opportunity-scans/{job_id}": {
+      "get": {
+        "operationId": "getOpportunityScan",
+        "x-required-scopes": ["opportunities:read"],
+        "parameters": [{"$ref": "#/components/parameters/JobId"}],
+        "responses": {"200": {"description": "Opportunity Scan job."}, "404": {"description": "Not found."}}
+      }
+    },
+    "/api/v1/webhooks": {
+      "post": {
+        "operationId": "createWebhook",
+        "x-required-scopes": ["webhooks:manage"],
+        "responses": {"201": {"description": "Webhook created; signing secret returned once."}}
+      },
+      "get": {
+        "operationId": "listWebhooks",
+        "x-required-scopes": ["webhooks:manage"],
+        "responses": {"200": {"description": "Webhook list without signing secrets."}}
+      }
+    },
+    "/api/v1/webhooks/{webhook_id}": {
+      "delete": {
+        "operationId": "disableWebhook",
+        "x-required-scopes": ["webhooks:manage"],
+        "parameters": [{"$ref": "#/components/parameters/WebhookId"}],
+        "responses": {"200": {"description": "Webhook disabled."}}
+      }
+    },
+    "/api/v1/webhooks/{webhook_id}/rotate-secret": {
+      "post": {
+        "operationId": "rotateWebhookSecret",
+        "x-required-scopes": ["webhooks:manage"],
+        "parameters": [{"$ref": "#/components/parameters/WebhookId"}],
+        "responses": {"200": {"description": "New signing secret returned once."}}
+      }
+    },
+    "/api/v1/webhook-deliveries": {
+      "get": {
+        "operationId": "listWebhookDeliveries",
+        "x-required-scopes": ["webhooks:manage"],
+        "responses": {"200": {"description": "Delivery journal."}}
+      }
+    },
+    "/api/v1/webhook-deliveries/{delivery_id}": {
+      "get": {
+        "operationId": "getWebhookDelivery",
+        "x-required-scopes": ["webhooks:manage"],
+        "parameters": [{"$ref": "#/components/parameters/DeliveryId"}],
+        "responses": {"200": {"description": "Delivery detail."}}
+      }
+    },
+    "/api/v1/webhook-deliveries/{delivery_id}/retry": {
+      "post": {
+        "operationId": "retryWebhookDelivery",
+        "x-required-scopes": ["webhooks:manage"],
+        "parameters": [{"$ref": "#/components/parameters/DeliveryId"}],
+        "responses": {"200": {"description": "Existing retry state."}, "202": {"description": "Retry queued."}}
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "DeepAlpha API key (da_test_... or da_live_...)"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string", "minLength": 8, "maxLength": 200}
+      },
+      "JobId": {
+        "name": "job_id",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string"}
+      },
+      "WebhookId": {
+        "name": "webhook_id",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string"}
+      },
+      "DeliveryId": {
+        "name": "delivery_id",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string"}
+      }
+    }
+  },
+  "x-commercial-portal": {
+    "included_in_bearer_openapi": false,
+    "documentation": "docs/api_commercial_launch.md",
+    "authentication": "DeepAlpha web session plus X-DeepAlpha-Portal: 1 for mutations"
+  }
+}
