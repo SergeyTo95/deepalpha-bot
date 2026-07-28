@@ -21,9 +21,10 @@
     if (testNotice) {
       const paragraph = testNotice.querySelector("p");
       if (paragraph) {
-        paragraph.textContent = ru
+        const message = ru
           ? "Test-ключи уже запускают Quick Analysis. Live-ключи включим после завершения beta-тестирования."
           : "Test keys can now run Quick Analysis. Live keys will open after beta testing is complete.";
+        if (paragraph.textContent !== message) paragraph.textContent = message;
       }
     }
 
@@ -59,6 +60,6 @@
   }
 
   const observer = new MutationObserver(patchPortal);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.getElementById("appRoot") || document.body, { childList: true });
   patchPortal();
 })();
