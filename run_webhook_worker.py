@@ -4,7 +4,7 @@ import socket
 import time
 from typing import Mapping, Optional
 
-from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
+from services.developer_api_schema_bootstrap import run_serialized_developer_api_schema_bootstrap
 from services.developer_api_webhook_service import (
     claim_next_webhook_delivery,
     ensure_api_webhook_tables,
@@ -46,8 +46,10 @@ def idle_forever(reason: str) -> None:
 
 
 def run_forever() -> None:
-    with serialized_developer_api_schema_bootstrap("webhook-worker"):
-        ensure_api_webhook_tables()
+    run_serialized_developer_api_schema_bootstrap(
+        "webhook-worker",
+        ensure_api_webhook_tables,
+    )
     worker_id = f"webhook:{socket.gethostname()}:{os.getpid()}"[:120]
     logger.info("API_WEBHOOK_WORKER_STARTED worker_id=%s", worker_id)
     last_recovery = 0.0

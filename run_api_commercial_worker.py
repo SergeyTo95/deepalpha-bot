@@ -45,10 +45,12 @@ def main() -> None:
         idle_forever(reason)
         return
     from services.developer_api_commercial_final_service import ensure_commercial_launch_tables, run_commercial_worker_forever
-    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
+    from services.developer_api_schema_bootstrap import run_serialized_developer_api_schema_bootstrap
 
-    with serialized_developer_api_schema_bootstrap("commercial-worker"):
-        ensure_commercial_launch_tables()
+    run_serialized_developer_api_schema_bootstrap(
+        "commercial-worker",
+        ensure_commercial_launch_tables,
+    )
     run_commercial_worker_forever()
 
 

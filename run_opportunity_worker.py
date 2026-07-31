@@ -53,12 +53,15 @@ def main() -> None:
         ensure_opportunity_webhook_trigger,
         install as install_opportunity_webhook_events,
     )
-    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
+    from services.developer_api_schema_bootstrap import run_serialized_developer_api_schema_bootstrap
 
     install_opportunity_webhook_events()
-    with serialized_developer_api_schema_bootstrap("opportunity-worker"):
+
+    def ensure_worker_schema() -> None:
         ensure_api_opportunity_tables()
         ensure_opportunity_webhook_trigger()
+
+    run_serialized_developer_api_schema_bootstrap("opportunity-worker", ensure_worker_schema)
     run_opportunity_scan_worker_forever()
 
 
