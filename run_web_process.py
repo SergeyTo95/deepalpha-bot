@@ -26,6 +26,7 @@ def main() -> None:
         ensure_opportunity_webhook_trigger,
         install as install_opportunity_webhook_events,
     )
+    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
     from services.developer_api_service import ensure_developer_api_tables
     from services.developer_api_webhook_cors_patch import install as install_webhook_cors
     from services.developer_api_webhook_runtime_patch import install as install_webhook_runtime
@@ -47,7 +48,6 @@ def main() -> None:
     install_openapi_runtime()
     install_commercial_runtime()
 
-    # Import after runtime security and capability patches are installed.
     from developer_api_admin_routes import setup_developer_api_admin_routes
     from developer_api_commercial_admin_routes_v2 import (
         install as install_admin_commercial,
@@ -81,19 +81,18 @@ def main() -> None:
     setup_developer_api_commercial_routes(deepalpha_web.app)
 
     try:
-        ensure_developer_api_tables()
-        ensure_api_billing_tables()
-        ensure_developer_portal_tables()
-        ensure_api_analysis_tables()
-        ensure_api_observability_tables()
-        ensure_api_opportunity_tables()
-        ensure_api_webhook_tables()
-        ensure_opportunity_webhook_trigger()
-        ensure_api_commercial_tables()
-        ensure_commercial_launch_tables()
+        with serialized_developer_api_schema_bootstrap("webapp"):
+            ensure_developer_api_tables()
+            ensure_api_billing_tables()
+            ensure_developer_portal_tables()
+            ensure_api_analysis_tables()
+            ensure_api_observability_tables()
+            ensure_api_opportunity_tables()
+            ensure_api_webhook_tables()
+            ensure_opportunity_webhook_trigger()
+            ensure_api_commercial_tables()
+            ensure_commercial_launch_tables()
     except Exception:
-        # Keep the existing WebApp available during a transient database issue;
-        # authenticated Developer API endpoints will return 503 until storage recovers.
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
