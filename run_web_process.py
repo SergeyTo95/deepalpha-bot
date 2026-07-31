@@ -26,7 +26,7 @@ def main() -> None:
         ensure_opportunity_webhook_trigger,
         install as install_opportunity_webhook_events,
     )
-    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
+    from services.developer_api_schema_bootstrap import run_serialized_developer_api_schema_bootstrap
     from services.developer_api_service import ensure_developer_api_tables
     from services.developer_api_webhook_cors_patch import install as install_webhook_cors
     from services.developer_api_webhook_runtime_patch import install as install_webhook_runtime
@@ -80,19 +80,26 @@ def main() -> None:
     setup_developer_portal_opportunity_routes(deepalpha_web.app)
     setup_developer_api_commercial_routes(deepalpha_web.app)
 
+    def ensure_developer_api_schema() -> None:
+        ensure_developer_api_tables()
+        ensure_api_billing_tables()
+        ensure_developer_portal_tables()
+        ensure_api_analysis_tables()
+        ensure_api_observability_tables()
+        ensure_api_opportunity_tables()
+        ensure_api_webhook_tables()
+        ensure_opportunity_webhook_trigger()
+        ensure_api_commercial_tables()
+        ensure_commercial_launch_tables()
+
     try:
-        with serialized_developer_api_schema_bootstrap("webapp"):
-            ensure_developer_api_tables()
-            ensure_api_billing_tables()
-            ensure_developer_portal_tables()
-            ensure_api_analysis_tables()
-            ensure_api_observability_tables()
-            ensure_api_opportunity_tables()
-            ensure_api_webhook_tables()
-            ensure_opportunity_webhook_trigger()
-            ensure_api_commercial_tables()
-            ensure_commercial_launch_tables()
+        run_serialized_developer_api_schema_bootstrap(
+            "webapp",
+            ensure_developer_api_schema,
+        )
     except Exception:
+        # Keep the main WebApp available during a transient or invalid schema
+        # startup. Developer API endpoints remain fail-closed until storage is ready.
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
