@@ -121,8 +121,11 @@ def test_database_initialization_remains_inside_guarded_startup():
     run_web = (ROOT / "run_web_process.py").read_text(encoding="utf-8")
     runtime_v2 = (ROOT / "services/developer_api_commercial_runtime_v2_patch.py").read_text(encoding="utf-8")
     assert "from services.developer_api_commercial_runtime_v2_patch" in run_web
-    assert "try:\n        ensure_developer_api_tables()" in run_web
-    assert "ensure_commercial_launch_tables()" in run_web.split("try:", 1)[1]
+    guarded = run_web.split("try:", 1)[1]
+    assert 'with serialized_developer_api_schema_bootstrap("webapp"):' in guarded
+    locked = guarded.split('with serialized_developer_api_schema_bootstrap("webapp"):', 1)[1]
+    assert "ensure_developer_api_tables()" in locked
+    assert "ensure_commercial_launch_tables()" in locked
     install_body = runtime_v2.split("def install() -> None:", 1)[1]
     assert "ensure_commercial_launch_tables" not in install_body
 
