@@ -4,6 +4,7 @@ import socket
 import time
 from typing import Mapping, Optional
 
+from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
 from services.developer_api_webhook_service import (
     claim_next_webhook_delivery,
     ensure_api_webhook_tables,
@@ -28,19 +29,11 @@ def worker_disabled_reason(env: Mapping[str, str]) -> Optional[str]:
         return "API_WEBHOOK_WORKER_ENABLED=false"
     if env_true(env.get("API_WEBHOOK_WORKER_ALLOW_PREVIEW")):
         return None
-    environment = str(
-        env.get("RAILWAY_ENVIRONMENT_NAME")
-        or env.get("RAILWAY_ENVIRONMENT")
-        or ""
-    ).strip()
+    environment = str(env.get("RAILWAY_ENVIRONMENT_NAME") or env.get("RAILWAY_ENVIRONMENT") or "").strip()
     if environment and environment.lower() not in {"production", "prod"}:
         return f"non_production_environment:{environment}"
     branch = str(env.get("RAILWAY_GIT_BRANCH") or env.get("GIT_BRANCH") or "").strip()
-    production_branch = str(
-        env.get("API_WEBHOOK_PRODUCTION_BRANCH")
-        or env.get("BOT_PRODUCTION_BRANCH")
-        or "feature/turbo-short-term-btc"
-    ).strip()
+    production_branch = str(env.get("API_WEBHOOK_PRODUCTION_BRANCH") or env.get("BOT_PRODUCTION_BRANCH") or "feature/turbo-short-term-btc").strip()
     if branch and production_branch and branch != production_branch:
         return f"non_production_branch:{branch}"
     return None
@@ -53,7 +46,8 @@ def idle_forever(reason: str) -> None:
 
 
 def run_forever() -> None:
-    ensure_api_webhook_tables()
+    with serialized_developer_api_schema_bootstrap("webhook-worker"):
+        ensure_api_webhook_tables()
     worker_id = f"webhook:{socket.gethostname()}:{os.getpid()}"[:120]
     logger.info("API_WEBHOOK_WORKER_STARTED worker_id=%s", worker_id)
     last_recovery = 0.0
