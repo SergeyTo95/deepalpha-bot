@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b4e8f8e1-8e0d-4b57-9072-deepalpha-api-v1",
     "name": "DeepAlpha Developer API v1",
-    "description": "Public bearer API only. Set base_url and either a da_test_ key or an administrator-approved da_live_ key. Credit packages, invoices, live approval and spend controls use the authenticated Developer Portal and are intentionally not included in this bearer collection. Wallet send, withdrawal, trading execution, Deep Analysis execution and auto recharge remain unavailable.",
+    "description": "Public bearer API only. The production base_url is preconfigured as https://deepalpha-ai.com. Use either a da_test_ key or an administrator-approved da_live_ key. Credit packages, invoices, live approval and spend controls use the authenticated Developer Portal and are intentionally not included in this bearer collection. Wallet send, withdrawal, trading execution, Deep Analysis execution and auto recharge remain unavailable.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -16,7 +16,7 @@
     ]
   },
   "variable": [
-    {"key": "base_url", "value": "https://your-deepalpha-host.example"},
+    {"key": "base_url", "value": "https://deepalpha-ai.com"},
     {"key": "api_key", "value": "da_test_or_live_replace_me"},
     {"key": "market_url", "value": "https://polymarket.com/event/example-market"},
     {"key": "webhook_url", "value": "https://example.com/deepalpha/webhook"},
