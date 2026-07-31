@@ -32,14 +32,21 @@ def _parse_feature_flag_value(raw_value):
 
 
 def resolve_ton_purchase_project_wallet() -> str:
+    """Return the public Treasury address without breaking read-only WebApp payloads.
+
+    Missing Treasury configuration must disable purchase surfaces, not turn unrelated
+    summary/profile endpoints into HTTP 500 responses. Mutation paths still validate
+    the returned address before creating or sending a payment.
+    """
     from services.treasury_service import get_public_treasury_address
+
     treasury = get_public_treasury_address()
     if not treasury.get("ok"):
-        raise RuntimeError(treasury.get("error") or "treasury_not_configured")
-    return str(treasury["address"]).strip()
+        return ""
+    return str(treasury.get("address") or "").strip()
 
 
-def is_ton_wallet_token_purchase_enabled() -> bool:
+def _configured_token_purchase_flag() -> bool:
     env_upper = _parse_feature_flag_value(os.getenv("TON_WALLET_TOKEN_PURCHASE_ENABLED", ""))
     if env_upper is not None:
         return env_upper
@@ -48,6 +55,12 @@ def is_ton_wallet_token_purchase_enabled() -> bool:
         return env_lower
     db_value = _parse_feature_flag_value(get_setting("ton_wallet_token_purchase_enabled", "off"))
     return bool(db_value)
+
+
+def is_ton_wallet_token_purchase_enabled() -> bool:
+    if not _configured_token_purchase_flag():
+        return False
+    return bool(resolve_ton_purchase_project_wallet())
 
 
 def verify_ton_purchase_onchain(intent_id: int) -> dict:
