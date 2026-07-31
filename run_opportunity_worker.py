@@ -45,14 +45,20 @@ def main() -> None:
         idle_forever(reason)
         return
 
+    from services.developer_api_opportunity_service import (
+        ensure_api_opportunity_tables,
+        run_opportunity_scan_worker_forever,
+    )
     from services.developer_api_opportunity_webhook_patch import (
         ensure_opportunity_webhook_trigger,
         install as install_opportunity_webhook_events,
     )
-    from services.developer_api_opportunity_service import run_opportunity_scan_worker_forever
+    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
 
     install_opportunity_webhook_events()
-    ensure_opportunity_webhook_trigger()
+    with serialized_developer_api_schema_bootstrap("opportunity-worker"):
+        ensure_api_opportunity_tables()
+        ensure_opportunity_webhook_trigger()
     run_opportunity_scan_worker_forever()
 
 

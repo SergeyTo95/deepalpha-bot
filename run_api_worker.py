@@ -54,9 +54,15 @@ def main() -> None:
     install_persistence_flag()
 
     from services.developer_api_analysis_result_patch import install as install_result_normalization
+    from services.developer_api_analysis_service import ensure_api_analysis_tables
+    from services.developer_api_observability_service import ensure_api_observability_tables
     from services.developer_api_observed_worker import run_observed_api_analysis_worker_forever
+    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
 
     install_result_normalization()
+    with serialized_developer_api_schema_bootstrap("api-worker"):
+        ensure_api_analysis_tables()
+        ensure_api_observability_tables()
     run_observed_api_analysis_worker_forever()
 
 
