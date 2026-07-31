@@ -57,12 +57,15 @@ def main() -> None:
     from services.developer_api_analysis_service import ensure_api_analysis_tables
     from services.developer_api_observability_service import ensure_api_observability_tables
     from services.developer_api_observed_worker import run_observed_api_analysis_worker_forever
-    from services.developer_api_schema_bootstrap import serialized_developer_api_schema_bootstrap
+    from services.developer_api_schema_bootstrap import run_serialized_developer_api_schema_bootstrap
 
     install_result_normalization()
-    with serialized_developer_api_schema_bootstrap("api-worker"):
+
+    def ensure_worker_schema() -> None:
         ensure_api_analysis_tables()
         ensure_api_observability_tables()
+
+    run_serialized_developer_api_schema_bootstrap("api-worker", ensure_worker_schema)
     run_observed_api_analysis_worker_forever()
 
 
