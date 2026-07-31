@@ -3,6 +3,8 @@ import os
 import time
 from typing import Mapping, Optional
 
+from services.public_domain_service import configure_public_urls
+
 
 def env_true(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -45,6 +47,11 @@ def main() -> None:
     if reason:
         idle_forever(reason)
         return
+
+    # Must run before importing app -> telegram_bot, because telegram_bot reads
+    # WEBAPP_URL at module import time and uses it for every Telegram WebApp URL.
+    public_origin = configure_public_urls(os.environ)
+    print(f"🌐 DeepAlpha public origin={public_origin}")
 
     import app
     from services.decision_first_renderer_patch import install as install_decision_renderer

@@ -3,10 +3,17 @@ import os
 
 from aiohttp import web as aiohttp_web
 
+from services.public_domain_service import configure_public_urls
+
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # Install public URL and CORS defaults before importing modules that read
+    # environment settings at import/runtime initialization.
+    public_origin = configure_public_urls(os.environ)
+    logger.info("DEEPALPHA_PUBLIC_ORIGIN origin=%s", public_origin)
+
     import admin_routes as admin_routes_module
     import web as deepalpha_web
 
