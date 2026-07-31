@@ -5,6 +5,7 @@ from typing import Any, Dict, Tuple
 
 from services.developer_api_openapi_components import build_components
 from services.developer_api_openapi_paths import build_paths
+from services.public_domain_service import CANONICAL_PUBLIC_ORIGIN
 
 
 @lru_cache(maxsize=1)
@@ -31,7 +32,12 @@ def build_openapi_spec() -> Dict[str, Any]:
             "contact": {"name": "DeepAlpha API"},
             "license": {"name": "Proprietary"},
         },
-        "servers": [{"url": "/", "description": "Current DeepAlpha deployment"}],
+        "servers": [
+            {
+                "url": CANONICAL_PUBLIC_ORIGIN,
+                "description": "DeepAlpha production API",
+            }
+        ],
         "tags": [
             {"name": "System", "description": "Public runtime health."},
             {"name": "Account", "description": "Client, capabilities, limits, spend controls, and usage."},
@@ -42,9 +48,9 @@ def build_openapi_spec() -> Dict[str, Any]:
         "paths": build_paths(),
         "components": build_components(),
         "x-documentation-endpoints": {
-            "swagger_ui": "/api/docs",
-            "openapi_json": "/api/openapi.json",
-            "postman_collection": "/api/postman.json",
+            "swagger_ui": f"{CANONICAL_PUBLIC_ORIGIN}/api/docs",
+            "openapi_json": f"{CANONICAL_PUBLIC_ORIGIN}/api/openapi.json",
+            "postman_collection": f"{CANONICAL_PUBLIC_ORIGIN}/api/postman.json",
         },
         "x-commercial-portal": {
             "authentication": "DeepAlpha web session plus X-DeepAlpha-Portal: 1 for mutations",
