@@ -12,6 +12,7 @@ def main() -> None:
     # Install public URL and CORS defaults before importing modules that read
     # environment settings at import/runtime initialization.
     public_origin = configure_public_urls(os.environ)
+    os.environ.setdefault("VELYON_IMAGES_ESTIMATED_COST_USD", "0.25")
     logger.info("DEEPALPHA_PUBLIC_ORIGIN origin=%s", public_origin)
 
     import admin_routes as admin_routes_module
