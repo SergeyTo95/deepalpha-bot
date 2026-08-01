@@ -87,7 +87,7 @@ def test_telegram_pairing_code_is_single_use_compatible_and_five_minutes(monkeyp
     assert any(query.startswith("INSERT INTO velia_mobile_pairing_codes") for query in queries)
 
 
-def test_pairing_message_does_not_claim_more_than_five_minutes():
+def test_pairing_message_explains_five_minute_copy_and_return_flow():
     text = velia_telegram_pairing_service.build_pairing_message(
         "ABCD-EFGH-JKLM-NPQR",
         300,
@@ -96,6 +96,10 @@ def test_pairing_message_does_not_claim_more_than_five_minutes():
     assert "только один раз" in text
     assert "Новый код автоматически отменит предыдущий" in text
     assert "<code>ABCD-EFGH-JKLM-NPQR</code>" in text
+    assert "Нажми на код, чтобы скопировать его" in text
+    assert "системной кнопкой «Назад»" in text
+    assert "список последних приложений" in text
+    assert "автоматически попробует подставить код из буфера" in text
 
 
 def test_connect_page_points_to_sanitized_telegram_deep_link(monkeypatch):
