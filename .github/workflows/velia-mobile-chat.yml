@@ -7,6 +7,7 @@ on:
     paths:
       - "run_web_process.py"
       - "velia_mobile_routes.py"
+      - "services/http_security_service.py"
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
       - "services/velia_llm_service.py"
@@ -42,6 +43,7 @@ jobs:
       - name: Compile VELIA mobile modules
         run: |
           python -m py_compile \
+            services/http_security_service.py \
             services/velia_mobile_auth_service.py \
             services/velia_chat_service.py \
             services/velia_llm_service.py \
