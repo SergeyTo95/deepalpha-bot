@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
 
@@ -67,8 +67,8 @@ def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, An
     preferences = plugins.get_user_plugins(user_id)
 
     # Intent precedence is deliberate. A weather question must never fall
-    # through to generic web/news search just because it also contains words
-    # such as "сейчас", "today", or "current".
+    # through to generic web/news search just because it also contains a time
+    # qualifier such as "сейчас", "today", or "current".
     if plugins._WEATHER_KEYWORDS.search(message):
         if not preferences["weather"]["enabled"]:
             return _empty_result()
@@ -78,17 +78,15 @@ def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, An
             lambda: plugins._weather_context(message),
         )
 
-    wants_search = bool(
-        plugins._SEARCH_DIRECTIVE.search(message)
-        or plugins._NEWS_KEYWORDS.search(message)
-    )
-    if not wants_search:
+    explicit_search = bool(plugins._SEARCH_DIRECTIVE.search(message))
+    news_topic = bool(plugins._NEWS_TOPIC_KEYWORDS.search(message))
+    if not explicit_search and not news_topic:
         return _empty_result()
     if not preferences["web_search"]["enabled"]:
         return _empty_result()
 
     brave_ready = bool(str(os.getenv("BRAVE_SEARCH_API_KEY", "") or "").strip())
-    use_news_fallback = bool(plugins._NEWS_KEYWORDS.search(message) and not brave_ready)
+    use_news_fallback = bool(news_topic and not brave_ready)
     return _run_selected_plugin(
         int(user_id),
         "web_search",
