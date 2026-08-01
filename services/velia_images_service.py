@@ -48,7 +48,7 @@ _ALLOWED_PROVIDER_HOST_SUFFIXES = (
     "fal.media",
 )
 _ALLOWED_OUTPUT_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
-_DEFAULT_MODEL_ENDPOINT = "https://queue.fal.run/fal-ai/reve/text-to-image"
+_DEFAULT_MODEL_ENDPOINT = "https://queue.fal.run/reve/2.1/text-to-image"
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _GLOBAL_RESERVATION_LOCK_ID = 1_450_731_593
 
@@ -311,9 +311,7 @@ def _submit_and_wait(prompt: str) -> Dict[str, Any]:
         "prompt": prompt,
         "aspect_ratio": "1:1",
         "num_images": 1,
-        "version": "latest",
         "output_format": "png",
-        "enhance_prompt": True,
     }
     submitted = _request_json(
         "POST",
