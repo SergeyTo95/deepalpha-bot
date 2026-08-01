@@ -104,7 +104,7 @@ def test_connect_page_points_to_sanitized_telegram_deep_link(monkeypatch):
     url = velia_telegram_connect_page_patch.build_telegram_connect_url()
     page = velia_telegram_connect_page_patch.build_unauthenticated_connect_page()
 
-    assert url == "https://t.me/DeepAlphaAI_botscript?start=velia_connect"
+    assert url == "https://t.me/DeepAlphaAI_bot?start=velia_connect"
     assert "Получить код в Telegram" in page
     assert "действует 5 минут" in page
     assert "velia_connect" in page
