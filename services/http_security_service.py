@@ -71,7 +71,11 @@ def _origin_allowed(request: web.Request, origin: str, configured: Set[str]) -> 
 
 def _is_api_path(path: str) -> bool:
     normalized = str(path or "")
-    return normalized.startswith("/api/") or normalized.startswith("/app-api/")
+    return (
+        normalized.startswith("/api/")
+        or normalized.startswith("/app-api/")
+        or normalized.startswith("/mobile-api/")
+    )
 
 
 def _admin_secret() -> str:
@@ -205,6 +209,7 @@ async def deepalpha_security_middleware(request: web.Request, handler):
         request.path.startswith("/admin")
         or request.path.startswith("/api/v1/")
         or request.path.startswith("/app-api/")
+        or request.path.startswith("/mobile-api/")
         or request.path == "/developer"
     ):
         response.headers["Cache-Control"] = "no-store"
@@ -213,7 +218,7 @@ async def deepalpha_security_middleware(request: web.Request, handler):
     if origin_allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = (
             "Authorization, Content-Type, Idempotency-Key, X-Idempotency-Key, "
             "X-Request-ID, X-DeepAlpha-Portal"
