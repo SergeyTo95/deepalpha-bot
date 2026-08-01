@@ -1,0 +1,84 @@
+name: VELIA mobile chat
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "run_web_process.py"
+      - "velia_mobile_routes.py"
+      - "services/velia_mobile_auth_service.py"
+      - "services/velia_chat_service.py"
+      - "services/velia_llm_service.py"
+      - "tests/test_velia_mobile_auth_service.py"
+      - "tests/test_velia_chat_service.py"
+      - "tests/test_velia_llm_service.py"
+      - "docs/velia-mobile-chat-beta.md"
+      - ".github/workflows/velia-mobile-chat.yml"
+  workflow_dispatch:
+
+jobs:
+  velia-mobile-chat-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Compile VELIA mobile modules
+        run: |
+          python -m py_compile \
+            services/velia_mobile_auth_service.py \
+            services/velia_chat_service.py \
+            services/velia_llm_service.py \
+            velia_mobile_routes.py \
+            run_web_process.py
+
+      - name: Run focused tests
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q \
+            tests/test_velia_mobile_auth_service.py \
+            tests/test_velia_chat_service.py \
+            tests/test_velia_llm_service.py \
+            2>&1 | tee velia-mobile-chat-pytest.log
+
+      - name: Verify no mobile credential exposure
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          public_files = [
+              Path("velia_mobile_routes.py"),
+              Path("docs/velia-mobile-chat-beta.md"),
+          ]
+          forbidden_literals = [
+              "Authorization: Bearer <KIMI",
+              "KIMI_API_KEY=sk-",
+          ]
+          for path in public_files:
+              text = path.read_text(encoding="utf-8")
+              for literal in forbidden_literals:
+                  assert literal not in text, f"credential-like literal found in {path}"
+          PY
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velia-mobile-chat-pytest-log
+          path: velia-mobile-chat-pytest.log
+          if-no-files-found: warn
