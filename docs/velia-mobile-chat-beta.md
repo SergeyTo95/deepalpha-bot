@@ -33,6 +33,10 @@ VELIA_CHAT_PER_USER_DAILY_COST_USD_LIMIT=2.00
 VELIA_CHAT_DAILY_COST_USD_LIMIT=10.00
 VELIA_CHAT_REQUEST_COST_RESERVE_USD=0.25
 
+# Pending assistant generations older than this lease are recovered as errors.
+# Keep this above the maximum provider timeout/retry window.
+VELIA_CHAT_PENDING_LEASE_SECONDS=600
+
 # Temporary diagnostics for named beta users only.
 VELIA_MOBILE_DEBUG_USAGE=true
 VELIA_MOBILE_DEBUG_USER_IDS=
@@ -79,7 +83,11 @@ POST   /mobile-api/v1/conversations/{id}/messages
 GET    /mobile-api/v1/usage
 ```
 
-Every message write requires an `Idempotency-Key` so Android retries cannot create duplicate provider charges. Only one pending generation is allowed per user in the beta.
+Every message write requires an `Idempotency-Key` so Android retries cannot create duplicate provider charges. Only one physical generation per user is allowed across all WebApp workers and replicas. The per-user PostgreSQL advisory lock is held through the provider call; competing requests fail with `generation_in_progress` instead of creating a second charge.
+
+The blocking provider request runs outside the aiohttp event loop. Health, authentication, Developer API and WebApp requests therefore remain responsive during a slow Kimi retry window.
+
+If a process terminates after persisting a pending assistant row, a later request marks the row `generation_abandoned` after `VELIA_CHAT_PENDING_LEASE_SECONDS`. History endpoints return the newest bounded message window in chronological order.
 
 ## Cost measurement
 
