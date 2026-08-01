@@ -8,17 +8,23 @@ on:
       - "run_bot_process.py"
       - "run_web_process.py"
       - "velia_mobile_routes.py"
+      - "velia_plugin_routes.py"
       - "services/http_security_service.py"
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
       - "services/velia_llm_service.py"
       - "services/velia_mobile_hardening_service.py"
+      - "services/velia_plugin_service.py"
+      - "services/velia_plugin_router.py"
+      - "services/velia_live_plugins_patch.py"
       - "services/velia_telegram_pairing_service.py"
       - "services/velia_telegram_connect_page_patch.py"
       - "tests/test_velia_mobile_auth_service.py"
       - "tests/test_velia_chat_service.py"
       - "tests/test_velia_llm_service.py"
       - "tests/test_velia_mobile_hardening_service.py"
+      - "tests/test_velia_plugin_service.py"
+      - "tests/test_velia_plugin_router_limits.py"
       - "tests/test_velia_telegram_pairing.py"
       - "docs/velia-mobile-chat-beta.md"
       - ".github/workflows/velia-mobile-chat.yml"
@@ -54,9 +60,13 @@ jobs:
             services/velia_chat_service.py \
             services/velia_llm_service.py \
             services/velia_mobile_hardening_service.py \
+            services/velia_plugin_service.py \
+            services/velia_plugin_router.py \
+            services/velia_live_plugins_patch.py \
             services/velia_telegram_pairing_service.py \
             services/velia_telegram_connect_page_patch.py \
             velia_mobile_routes.py \
+            velia_plugin_routes.py \
             run_bot_process.py \
             run_web_process.py
 
@@ -69,6 +79,8 @@ jobs:
             tests/test_velia_chat_service.py \
             tests/test_velia_llm_service.py \
             tests/test_velia_mobile_hardening_service.py \
+            tests/test_velia_plugin_service.py \
+            tests/test_velia_plugin_router_limits.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-mobile-chat-pytest.log
 
@@ -79,12 +91,14 @@ jobs:
 
           public_files = [
               Path("velia_mobile_routes.py"),
+              Path("velia_plugin_routes.py"),
               Path("services/velia_telegram_connect_page_patch.py"),
               Path("docs/velia-mobile-chat-beta.md"),
           ]
           forbidden_literals = [
               "Authorization: Bearer <KIMI",
               "KIMI_API_KEY=sk-",
+              "BRAVE_SEARCH_API_KEY=",
           ]
           for path in public_files:
               text = path.read_text(encoding="utf-8")
