@@ -1,4 +1,5 @@
 from services import velia_chat_service
+from services.http_security_service import _is_api_path
 
 
 def test_generate_conversation_title_uses_first_six_words():
@@ -35,3 +36,9 @@ def test_empty_allowlist_allows_enabled_users(monkeypatch):
     monkeypatch.setenv("VELIA_CHAT_ENABLED", "true")
     monkeypatch.setenv("VELIA_CHAT_BETA_USER_IDS", "")
     assert velia_chat_service.is_velia_chat_enabled_for_user(999) is True
+
+
+def test_shared_http_security_recognizes_mobile_api_paths():
+    assert _is_api_path("/mobile-api/v1/me") is True
+    assert _is_api_path("/mobile-api/v1/conversations") is True
+    assert _is_api_path("/mobile-connect") is False
