@@ -21,6 +21,8 @@ jobs:
   velia-mobile-chat-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
 
     steps:
       - name: Checkout
