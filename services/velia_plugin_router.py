@@ -14,6 +14,11 @@ def _empty_result() -> Dict[str, Any]:
     return {"ok": True, "used": [], "context": "", "sources": [], "errors": []}
 
 
+def _bounded_search_query(value: str) -> str:
+    words = str(value or "").split()[:50]
+    return " ".join(words)[:400].strip()
+
+
 def _run_selected_plugin(
     user_id: int,
     selected: str,
@@ -85,12 +90,16 @@ def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, An
     if not preferences["web_search"]["enabled"]:
         return _empty_result()
 
+    bounded_query = _bounded_search_query(message)
+    if not bounded_query:
+        return _empty_result()
+
     brave_ready = bool(str(os.getenv("BRAVE_SEARCH_API_KEY", "") or "").strip())
     use_news_fallback = bool(news_topic and not brave_ready)
     return _run_selected_plugin(
         int(user_id),
         "web_search",
-        (lambda: plugins._google_news_context(message))
+        (lambda: plugins._google_news_context(bounded_query))
         if use_news_fallback
-        else (lambda: plugins._brave_search_context(message)),
+        else (lambda: plugins._brave_search_context(bounded_query)),
     )
