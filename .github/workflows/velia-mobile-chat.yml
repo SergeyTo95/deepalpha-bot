@@ -8,11 +8,14 @@ on:
       - "run_bot_process.py"
       - "run_web_process.py"
       - "velia_mobile_routes.py"
+      - "velia_image_routes.py"
       - "velia_plugin_routes.py"
       - "services/http_security_service.py"
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
       - "services/velia_llm_service.py"
+      - "services/velia_images_service.py"
+      - "services/velia_images_runtime_patch.py"
       - "services/velia_mobile_hardening_service.py"
       - "services/velia_plugin_service.py"
       - "services/velia_plugin_router.py"
@@ -23,6 +26,7 @@ on:
       - "tests/test_velia_mobile_auth_service.py"
       - "tests/test_velia_chat_service.py"
       - "tests/test_velia_llm_service.py"
+      - "tests/test_velia_images_service.py"
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
       - "tests/test_velia_plugin_router_limits.py"
@@ -61,6 +65,8 @@ jobs:
             services/velia_mobile_auth_service.py \
             services/velia_chat_service.py \
             services/velia_llm_service.py \
+            services/velia_images_service.py \
+            services/velia_images_runtime_patch.py \
             services/velia_mobile_hardening_service.py \
             services/velia_plugin_service.py \
             services/velia_plugin_router.py \
@@ -69,6 +75,7 @@ jobs:
             services/velia_telegram_pairing_service.py \
             services/velia_telegram_connect_page_patch.py \
             velia_mobile_routes.py \
+            velia_image_routes.py \
             velia_plugin_routes.py \
             run_bot_process.py \
             run_web_process.py
@@ -81,6 +88,7 @@ jobs:
             tests/test_velia_mobile_auth_service.py \
             tests/test_velia_chat_service.py \
             tests/test_velia_llm_service.py \
+            tests/test_velia_images_service.py \
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
             tests/test_velia_plugin_router_limits.py \
@@ -88,14 +96,16 @@ jobs:
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-mobile-chat-pytest.log
 
-      - name: Verify no mobile credential exposure
+      - name: Verify no mobile credential or provider exposure
         run: |
           python - <<'PY'
           from pathlib import Path
 
           public_files = [
               Path("velia_mobile_routes.py"),
+              Path("velia_image_routes.py"),
               Path("velia_plugin_routes.py"),
+              Path("services/velia_images_runtime_patch.py"),
               Path("services/velia_telegram_connect_page_patch.py"),
               Path("docs/velia-mobile-chat-beta.md"),
           ]
@@ -104,10 +114,14 @@ jobs:
               "KIMI_API_KEY=sk-",
               "BRAVE_SEARCH_API_KEY=",
           ]
+          forbidden_provider_terms = ["reve", "fal.ai", "fal.run", "fal.media"]
           for path in public_files:
               text = path.read_text(encoding="utf-8")
               for literal in forbidden_literals:
                   assert literal not in text, f"credential-like literal found in {path}"
+              lowered = text.lower()
+              for term in forbidden_provider_terms:
+                  assert term not in lowered, f"provider name found in public file {path}"
           PY
 
       - name: Upload pytest log
