@@ -47,6 +47,7 @@ def main() -> None:
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
+    from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
@@ -105,6 +106,10 @@ def main() -> None:
         deepalpha_web.app,
         velia_chat_service_module,
         velia_mobile_routes_module,
+    )
+    install_velia_telegram_connect_page(
+        deepalpha_web.app,
+        web_user_resolver,
     )
 
     def ensure_developer_api_schema() -> None:
