@@ -17,6 +17,7 @@ on:
       - "services/velia_plugin_service.py"
       - "services/velia_plugin_router.py"
       - "services/velia_live_plugins_patch.py"
+      - "services/velia_weather_location_patch.py"
       - "services/velia_telegram_pairing_service.py"
       - "services/velia_telegram_connect_page_patch.py"
       - "tests/test_velia_mobile_auth_service.py"
@@ -25,6 +26,7 @@ on:
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
       - "tests/test_velia_plugin_router_limits.py"
+      - "tests/test_velia_weather_location_patch.py"
       - "tests/test_velia_telegram_pairing.py"
       - "docs/velia-mobile-chat-beta.md"
       - ".github/workflows/velia-mobile-chat.yml"
@@ -63,6 +65,7 @@ jobs:
             services/velia_plugin_service.py \
             services/velia_plugin_router.py \
             services/velia_live_plugins_patch.py \
+            services/velia_weather_location_patch.py \
             services/velia_telegram_pairing_service.py \
             services/velia_telegram_connect_page_patch.py \
             velia_mobile_routes.py \
@@ -81,6 +84,7 @@ jobs:
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
             tests/test_velia_plugin_router_limits.py \
+            tests/test_velia_weather_location_patch.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-mobile-chat-pytest.log
 
