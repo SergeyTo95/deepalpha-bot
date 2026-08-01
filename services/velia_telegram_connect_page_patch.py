@@ -15,8 +15,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 def _bot_username() -> str:
     raw = str(os.getenv("BOT_USERNAME", "DeepAlphaAI_bot") or "DeepAlphaAI_bot")
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "", raw.lstrip("@"))
-    return cleaned or "DeepAlphaAI_bot"
+    candidate = raw.lstrip("@")
+    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", candidate):
+        return candidate
+    return "DeepAlphaAI_bot"
 
 
 def build_telegram_connect_url() -> str:
