@@ -24,6 +24,7 @@ on:
       - "tests/test_velia_llm_service.py"
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
+      - "tests/test_velia_plugin_router_limits.py"
       - "tests/test_velia_telegram_pairing.py"
       - "docs/velia-mobile-chat-beta.md"
       - ".github/workflows/velia-mobile-chat.yml"
@@ -79,6 +80,7 @@ jobs:
             tests/test_velia_llm_service.py \
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
+            tests/test_velia_plugin_router_limits.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-mobile-chat-pytest.log
 
