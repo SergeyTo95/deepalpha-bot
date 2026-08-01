@@ -15,6 +15,8 @@ def main() -> None:
     logger.info("DEEPALPHA_PUBLIC_ORIGIN origin=%s", public_origin)
 
     import admin_routes as admin_routes_module
+    import services.velia_chat_service as velia_chat_service_module
+    import velia_mobile_routes as velia_mobile_routes_module
     import web as deepalpha_web
 
     from developer_api_routes import setup_developer_api_routes
@@ -44,7 +46,7 @@ def main() -> None:
     from services.http_security_service import install_http_security
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
-    from velia_mobile_routes import setup_velia_mobile_routes
+    from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
@@ -95,7 +97,15 @@ def main() -> None:
         web_user_resolver = getattr(deepalpha_web, "_current_web_user_id", None)
     if not callable(web_user_resolver):
         raise RuntimeError("Web session resolver is unavailable")
-    setup_velia_mobile_routes(deepalpha_web.app, web_user_resolver)
+    velia_mobile_routes_module.setup_velia_mobile_routes(
+        deepalpha_web.app,
+        web_user_resolver,
+    )
+    install_velia_mobile_hardening(
+        deepalpha_web.app,
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
 
     def ensure_developer_api_schema() -> None:
         ensure_developer_api_tables()
