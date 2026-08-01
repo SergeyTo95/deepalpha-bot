@@ -1,11 +1,9 @@
 import html
-import json
 import logging
 import os
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 import requests
@@ -29,25 +27,45 @@ _DEFAULT_ENABLED = {
     "research": False,
     "image_generation": False,
     "file_analyst": False,
-    "deepalpha_markets": True,
+    "deepalpha_markets": False,
 }
 
 _WEATHER_KEYWORDS = re.compile(
     r"(?i)\b(погода|температур[аые]?|дожд[ья]?|ветер|ветра|прогноз погоды|"
     r"weather|temperature|rain|wind|forecast|hava|sıcaklık|yağmur|rüzgar)\b"
 )
-_NEWS_KEYWORDS = re.compile(
-    r"(?i)\b(новост[ьи]|последн(?:ие|яя)|сегодня|сейчас|актуальн(?:ые|ая)|"
-    r"news|latest|today|current|breaking|güncel|haber|bugün)\b"
+_NEWS_TOPIC_KEYWORDS = re.compile(
+    r"(?i)\b(новост[ьи]|событи[яй]|обновлени[яй]|news|headlines?|updates?|"
+    r"developments?|haber(?:ler)?|gelişmeler)\b"
 )
 _SEARCH_DIRECTIVE = re.compile(
     r"(?i)\b(найди|поищи|проверь в интернете|поиск в интернете|"
     r"search|look up|find online|internette ara)\b"
 )
+
 _LOCATION_PATTERNS = (
-    re.compile(r"(?i)(?:\bв\s+)([\wÀ-ÖØ-öø-ÿА-Яа-яЁёİıŞşĞğÇçÜüÖö\- .']{2,80}?)(?:\s+(?:сейчас|сегодня|завтра|на неделю)|[?!,.;]|$)"),
-    re.compile(r"(?i)(?:\bin\s+)([\wÀ-ÖØ-öø-ÿА-Яа-яЁёİıŞşĞğÇçÜüÖö\- .']{2,80}?)(?:\s+(?:now|today|tomorrow|this week)|[?!,.;]|$)"),
-    re.compile(r"(?i)(?:\b(?:için|de|da)\s+)([\wÀ-ÖØ-öø-ÿА-Яа-яЁёİıŞşĞğÇçÜüÖö\- .']{2,80}?)(?:\s+(?:şimdi|bugün|yarın)|[?!,.;]|$)"),
+    re.compile(
+        r"(?i)(?:\bв\s+)([\wÀ-ÖØ-öø-ÿА-Яа-яЁёİıŞşĞğÇçÜüÖö\- .']{2,80}?)"
+        r"(?:\s+(?:сейчас|сегодня|завтра|на неделю)|[?!,.;]|$)"
+    ),
+    re.compile(
+        r"(?i)(?:\bin\s+)([\wÀ-ÖØ-öø-ÿА-Яа-яЁёİıŞşĞğÇçÜüÖö\- .']{2,80}?)"
+        r"(?:\s+(?:now|today|tomorrow|this week)|[?!,.;]|$)"
+    ),
+)
+_TURKISH_LOCATION_PATTERNS = (
+    re.compile(
+        r"(?i)\b([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü\- .']{1,79}?)"
+        r"\s+için\s+(?:hava|sıcaklık|yağmur|rüzgar)\b"
+    ),
+    re.compile(
+        r"(?i)\b([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü\- .']{1,79}?)"
+        r"'?\s*(?:da|de|ta|te)\s+(?:hava|sıcaklık|yağmur|rüzgar)\b"
+    ),
+    re.compile(
+        r"(?i)\b([A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü\- .']{1,79}?)"
+        r"\s+(?:hava durumu|weather)\b"
+    ),
 )
 
 _WEATHER_CODES = {
@@ -124,7 +142,7 @@ def ensure_velia_plugin_tables() -> None:
                 research_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                 image_generation_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                 file_analyst_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                deepalpha_markets_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                deepalpha_markets_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
@@ -162,7 +180,7 @@ def _availability() -> Dict[str, Dict[str, Any]]:
         "research": {"available": False, "requires_configuration": True},
         "image_generation": {"available": False, "requires_configuration": True},
         "file_analyst": {"available": False, "requires_configuration": True},
-        "deepalpha_markets": {"available": True, "requires_configuration": False},
+        "deepalpha_markets": {"available": False, "requires_configuration": True},
     }
 
 
@@ -171,11 +189,8 @@ def get_user_plugins(user_id: int) -> Dict[str, Dict[str, Any]]:
     cursor = conn.cursor()
     try:
         cursor.execute(
-            """
-            INSERT INTO velia_user_plugins (user_id)
-            VALUES (%s)
-            ON CONFLICT (user_id) DO NOTHING
-            """,
+            "INSERT INTO velia_user_plugins (user_id) VALUES (%s) "
+            "ON CONFLICT (user_id) DO NOTHING",
             (int(user_id),),
         )
         cursor.execute(
@@ -200,7 +215,7 @@ def get_user_plugins(user_id: int) -> Dict[str, Dict[str, Any]]:
     availability = _availability()
     return {
         key: {
-            "enabled": bool(row[index]),
+            "enabled": bool(row[index]) and bool(availability[key]["available"]),
             **availability[key],
         }
         for index, key in enumerate(PLUGIN_KEYS)
@@ -208,9 +223,12 @@ def get_user_plugins(user_id: int) -> Dict[str, Dict[str, Any]]:
 
 
 def update_user_plugins(user_id: int, updates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    availability = _availability()
     normalized: Dict[str, bool] = {}
     for key, value in updates.items():
         if key not in PLUGIN_KEYS or not isinstance(value, bool):
+            continue
+        if value and not availability[key]["available"]:
             continue
         normalized[key] = value
     if not normalized:
@@ -272,12 +290,24 @@ def _reserve_plugin_call(user_id: int, plugin_key: str) -> bool:
         conn.close()
 
 
+def _clean_location(value: str) -> str:
+    location = _safe_text(value, 80).strip(" .,!?:;—–-")
+    location = re.sub(r"(?i)^(?:bugün|şimdi|yarın)\s+", "", location)
+    return location
+
+
 def _extract_location(message: str) -> str:
     normalized = _safe_text(message, 500)
+    for pattern in _TURKISH_LOCATION_PATTERNS:
+        match = pattern.search(normalized)
+        if match:
+            location = _clean_location(match.group(1))
+            if location:
+                return location
     for pattern in _LOCATION_PATTERNS:
         match = pattern.search(normalized)
         if match:
-            location = _safe_text(match.group(1), 80).strip(" .,!?:;—–-")
+            location = _clean_location(match.group(1))
             if location:
                 return location
     return str(os.getenv("VELIA_DEFAULT_WEATHER_LOCATION", "") or "").strip()[:80]
@@ -368,12 +398,7 @@ def _weather_context(message: str) -> Dict[str, Any]:
         "ok": True,
         "plugin": "weather",
         "context": "\n".join(lines),
-        "sources": [
-            {
-                "title": "Open-Meteo live weather",
-                "url": "https://open-meteo.com/",
-            }
-        ],
+        "sources": [{"title": "Open-Meteo live weather", "url": "https://open-meteo.com/"}],
     }
 
 
@@ -415,12 +440,7 @@ def _brave_search_context(query: str) -> Dict[str, Any]:
         lines.append(f"[{len(sources)}] {title}\n{description}\n{url}")
     if not lines:
         return {"ok": False, "error": "web_search_no_results"}
-    return {
-        "ok": True,
-        "plugin": "web_search",
-        "context": "\n\n".join(lines),
-        "sources": sources,
-    }
+    return {"ok": True, "plugin": "web_search", "context": "\n\n".join(lines), "sources": sources}
 
 
 def _google_news_context(query: str) -> Dict[str, Any]:
@@ -446,81 +466,12 @@ def _google_news_context(query: str) -> Dict[str, Any]:
             continue
         sources.append({"title": title, "url": url})
         lines.append(
-            f"[{len(sources)}] {title}\nPublisher: {source or 'unknown'}; published: {published or 'unknown'}\n{url}"
+            f"[{len(sources)}] {title}\nPublisher: {source or 'unknown'}; "
+            f"published: {published or 'unknown'}\n{url}"
         )
     if not lines:
         return {"ok": False, "error": "web_search_no_results"}
-    return {
-        "ok": True,
-        "plugin": "web_search",
-        "context": "\n\n".join(lines),
-        "sources": sources,
-    }
-
-
-def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, Any]:
-    message = _safe_text(user_message, 12000)
-    plugins = get_user_plugins(user_id)
-    selected: Optional[str] = None
-    runner = None
-
-    if _WEATHER_KEYWORDS.search(message) and plugins["weather"]["enabled"]:
-        selected = "weather"
-        runner = lambda: _weather_context(message)
-    elif (
-        (_SEARCH_DIRECTIVE.search(message) or _NEWS_KEYWORDS.search(message))
-        and plugins["web_search"]["enabled"]
-    ):
-        selected = "web_search"
-        runner = (
-            (lambda: _google_news_context(message))
-            if _NEWS_KEYWORDS.search(message) and not str(os.getenv("BRAVE_SEARCH_API_KEY", "") or "").strip()
-            else (lambda: _brave_search_context(message))
-        )
-
-    if not selected or runner is None:
-        return {"ok": True, "used": [], "context": "", "sources": [], "errors": []}
-    if not _reserve_plugin_call(user_id, selected):
-        return {
-            "ok": False,
-            "used": [],
-            "context": "",
-            "sources": [],
-            "errors": ["plugin_daily_limit_exceeded"],
-        }
-
-    try:
-        result = runner()
-    except requests.Timeout:
-        logger.warning("VELIA_PLUGIN_TIMEOUT user_id=%s plugin=%s", user_id, selected)
-        result = {"ok": False, "error": "plugin_timeout"}
-    except Exception:
-        logger.exception("VELIA_PLUGIN_FAILED user_id=%s plugin=%s", user_id, selected)
-        result = {"ok": False, "error": "plugin_failed"}
-
-    if not result.get("ok"):
-        return {
-            "ok": False,
-            "used": [],
-            "context": "",
-            "sources": [],
-            "errors": [str(result.get("error") or "plugin_failed")],
-        }
-
-    logger.info(
-        "VELIA_PLUGIN_SUCCESS user_id=%s plugin=%s sources=%s",
-        user_id,
-        selected,
-        len(result.get("sources") or []),
-    )
-    return {
-        "ok": True,
-        "used": [selected],
-        "context": str(result.get("context") or "")[:16000],
-        "sources": list(result.get("sources") or [])[:8],
-        "errors": [],
-        "retrieved_at": datetime.utcnow().isoformat() + "Z",
-    }
+    return {"ok": True, "plugin": "web_search", "context": "\n\n".join(lines), "sources": sources}
 
 
 def plugin_context_for_prompt(result: Dict[str, Any]) -> str:
