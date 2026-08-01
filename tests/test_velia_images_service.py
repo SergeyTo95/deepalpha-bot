@@ -58,6 +58,21 @@ def test_signed_content_url_is_scoped_and_expires(monkeypatch):
     assert verify_image_signature("image-1", 42, 1, signature) is False
 
 
+def test_signature_verification_fails_closed_without_secret(monkeypatch):
+    monkeypatch.delenv("VELYON_IMAGES_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("VELYON_IMAGES_API_KEY", raising=False)
+
+    assert (
+        verify_image_signature(
+            "image-1",
+            42,
+            2_000_000_000,
+            "a" * 64,
+        )
+        is False
+    )
+
+
 def test_runtime_patch_returns_only_velyon_public_identity(monkeypatch):
     monkeypatch.setattr(
         runtime_patch,
@@ -109,7 +124,7 @@ def test_runtime_patch_returns_only_velyon_public_identity(monkeypatch):
         request_id="request-1",
     )
     serialized = module._serialize_message(
-        {"user_id": 42},
+        {"user_id": 42, "provider": "velyon_images"},
         debug_usage=False,
     )
 
@@ -119,3 +134,42 @@ def test_runtime_patch_returns_only_velyon_public_identity(monkeypatch):
     assert "fal" not in str(generated).lower()
     assert serialized["type"] == "image"
     assert serialized["image"]["content_url"].startswith("/api/mobile/images/")
+
+
+def test_runtime_patch_skips_image_lookup_for_ordinary_messages(monkeypatch):
+    def unexpected_lookup(*args, **kwargs):
+        raise AssertionError("ordinary messages must not query image metadata")
+
+    monkeypatch.setattr(
+        runtime_patch,
+        "image_metadata_for_request",
+        unexpected_lookup,
+    )
+
+    def original_serialize(row, *, debug_usage=False):
+        return {
+            "id": "assistant-1",
+            "role": "assistant",
+            "status": "completed",
+            "request_id": "request-1",
+            "content": "Обычный ответ.",
+        }
+
+    module = SimpleNamespace(
+        generate_velia_chat_result=lambda prompt, **kwargs: {
+            "ok": True,
+            "text": "Обычный ответ.",
+        },
+        _serialize_message=original_serialize,
+        _row_value=lambda row, key, index, default=None: row.get(key, default),
+        re=re,
+    )
+    runtime_patch.install(module)
+
+    serialized = module._serialize_message(
+        {"user_id": 42, "provider": "velyon_core"},
+        debug_usage=False,
+    )
+
+    assert serialized["type"] == "text"
+    assert "image" not in serialized
