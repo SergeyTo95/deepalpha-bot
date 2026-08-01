@@ -45,11 +45,14 @@ def main() -> None:
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
     from services.velia_chat_service import ensure_velia_chat_tables
+    from services.velia_images_runtime_patch import install as install_velia_images
+    from services.velia_images_service import ensure_velia_image_tables
     from services.velia_live_plugins_patch import install as install_velia_live_plugins
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
     from services.velia_plugin_service import ensure_velia_plugin_tables
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
+    from velia_image_routes import setup_velia_image_routes
     from velia_plugin_routes import setup_velia_plugin_routes
 
     install_http_security(deepalpha_web.app, admin_routes_module)
@@ -64,6 +67,7 @@ def main() -> None:
     install_openapi_runtime()
     install_commercial_runtime()
     install_velia_live_plugins(velia_chat_service_module)
+    install_velia_images(velia_chat_service_module)
 
     from developer_api_admin_routes import setup_developer_api_admin_routes
     from developer_api_commercial_admin_routes_v2 import (
@@ -106,6 +110,7 @@ def main() -> None:
         deepalpha_web.app,
         web_user_resolver,
     )
+    setup_velia_image_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
         deepalpha_web.app,
@@ -130,6 +135,7 @@ def main() -> None:
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
         ensure_velia_chat_tables()
+        ensure_velia_image_tables()
         ensure_velia_plugin_tables()
 
     try:
