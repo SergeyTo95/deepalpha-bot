@@ -22,6 +22,15 @@ _IDENTITY_CONTRACT = """VELIA IDENTITY CONTRACT — highest priority:
 - Return only the final user-facing answer. Do not reveal private chain-of-thought.
 """
 
+_QUERY_ALIASES = {
+    "анталии": "Antalya",
+    "анталье": "Antalya",
+    "анталья": "Antalya",
+    "стамбуле": "Istanbul",
+    "москве": "Moscow",
+    "минске": "Minsk",
+}
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -52,6 +61,30 @@ def _latest_user_message(user_id: int, conversation_id: str) -> str:
         conn.close()
 
 
+def _normalized_live_query(message: str) -> str:
+    result = str(message or "")
+    lower = result.lower()
+    for source, replacement in _QUERY_ALIASES.items():
+        if source in lower:
+            start = lower.index(source)
+            result = result[:start] + replacement + result[start + len(source):]
+            lower = result.lower()
+    return result
+
+
+def _source_prompt(result: dict) -> str:
+    sources = result.get("sources") if isinstance(result.get("sources"), list) else []
+    lines = []
+    for index, source in enumerate(sources[:8], start=1):
+        if not isinstance(source, dict):
+            continue
+        title = str(source.get("title") or "").strip()
+        url = str(source.get("url") or "").strip()
+        if title and url:
+            lines.append(f"[{index}] {title} — {url}")
+    return "\n".join(lines)
+
+
 def install(velia_chat_service_module: Any) -> None:
     if getattr(velia_chat_service_module, "_velia_live_plugins_patch_installed", False):
         return
@@ -65,8 +98,14 @@ def install(velia_chat_service_module: Any) -> None:
             try:
                 latest_message = _latest_user_message(user_id, conversation_id)
                 if latest_message:
-                    result = resolve_live_plugin_context(int(user_id), latest_message)
+                    result = resolve_live_plugin_context(
+                        int(user_id),
+                        _normalized_live_query(latest_message),
+                    )
                     plugin_prompt = plugin_context_for_prompt(result)
+                    sources = _source_prompt(result)
+                    if sources:
+                        plugin_prompt += "\n\nSOURCES:\n" + sources
             except Exception:
                 logger.exception(
                     "VELIA_PLUGIN_CONTEXT_FAILED user_id=%s conversation_id=%s",
