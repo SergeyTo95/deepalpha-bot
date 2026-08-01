@@ -3,10 +3,8 @@ import os
 from typing import Any
 
 from db.database import get_connection
-from services.velia_plugin_service import (
-    plugin_context_for_prompt,
-    resolve_live_plugin_context,
-)
+from services.velia_plugin_router import resolve_live_plugin_context
+from services.velia_plugin_service import plugin_context_for_prompt
 
 logger = logging.getLogger(__name__)
 
