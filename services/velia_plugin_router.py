@@ -6,6 +6,9 @@ from typing import Any, Dict
 import requests
 
 from services import velia_plugin_service as plugins
+from services.velia_weather_location_patch import install as install_weather_location_fallback
+
+install_weather_location_fallback(plugins)
 
 logger = logging.getLogger(__name__)
 
