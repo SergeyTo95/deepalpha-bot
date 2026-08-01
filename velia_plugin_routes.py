@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any, Dict, Optional
@@ -29,12 +30,18 @@ def _json_response(data: Dict[str, Any], status: int = 200) -> web.Response:
     return response
 
 
-def _auth(request: web.Request) -> Optional[Dict[str, Any]]:
+def _token(request: web.Request) -> str:
     authorization = str(request.headers.get("Authorization") or "").strip()
     if not authorization.lower().startswith("bearer "):
+        return ""
+    return authorization[7:].strip()
+
+
+async def _auth(request: web.Request) -> Optional[Dict[str, Any]]:
+    token = _token(request)
+    if not token:
         return None
-    token = authorization[7:].strip()
-    return authenticate_access_token(token) if token else None
+    return await asyncio.to_thread(authenticate_access_token, token)
 
 
 async def _read_json(request: web.Request) -> Optional[Dict[str, Any]]:
@@ -54,16 +61,16 @@ def setup_velia_plugin_routes(app: web.Application) -> None:
     async def handle_plugins_get(request: web.Request) -> web.Response:
         if not _env_bool("VELIA_MOBILE_API_ENABLED", False):
             return _json_response({"ok": False, "error": "velia_mobile_api_disabled"}, 503)
-        auth = _auth(request)
+        auth = await _auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, 401)
-        plugins = get_user_plugins(int(auth["user_id"]))
+        plugins = await asyncio.to_thread(get_user_plugins, int(auth["user_id"]))
         return _json_response({"ok": True, "plugins": plugins})
 
     async def handle_plugins_patch(request: web.Request) -> web.Response:
         if not _env_bool("VELIA_MOBILE_API_ENABLED", False):
             return _json_response({"ok": False, "error": "velia_mobile_api_disabled"}, 503)
-        auth = _auth(request)
+        auth = await _auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, 401)
         payload = await _read_json(request)
@@ -77,7 +84,11 @@ def setup_velia_plugin_routes(app: web.Application) -> None:
         }
         if not allowed_updates:
             return _json_response({"ok": False, "error": "invalid_plugin_updates"}, 400)
-        plugins = update_user_plugins(int(auth["user_id"]), allowed_updates)
+        plugins = await asyncio.to_thread(
+            update_user_plugins,
+            int(auth["user_id"]),
+            allowed_updates,
+        )
         return _json_response({"ok": True, "plugins": plugins})
 
     app.router.add_get("/mobile-api/v1/plugins", handle_plugins_get)
