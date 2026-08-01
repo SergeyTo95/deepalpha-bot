@@ -15,6 +15,7 @@ on:
       - "services/velia_llm_service.py"
       - "services/velia_mobile_hardening_service.py"
       - "services/velia_plugin_service.py"
+      - "services/velia_plugin_router.py"
       - "services/velia_live_plugins_patch.py"
       - "services/velia_telegram_pairing_service.py"
       - "services/velia_telegram_connect_page_patch.py"
@@ -59,6 +60,7 @@ jobs:
             services/velia_llm_service.py \
             services/velia_mobile_hardening_service.py \
             services/velia_plugin_service.py \
+            services/velia_plugin_router.py \
             services/velia_live_plugins_patch.py \
             services/velia_telegram_pairing_service.py \
             services/velia_telegram_connect_page_patch.py \
