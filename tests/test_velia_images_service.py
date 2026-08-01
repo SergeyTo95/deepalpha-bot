@@ -2,6 +2,7 @@ import re
 from types import SimpleNamespace
 
 from services import velia_images_runtime_patch as runtime_patch
+from services import velia_images_service as image_service
 from services.velia_images_service import (
     detect_image_intent,
     image_intent_from_chat_prompt,
@@ -47,6 +48,43 @@ def test_chat_prompt_uses_only_latest_user_turn():
 
     assert intent.requested is True
     assert intent.prompt == "белого робота в Анталии"
+
+
+def test_internal_adapter_uses_current_model_contract(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return {
+            "images": [
+                {"url": "https://v3b.fal.media/files/b/zebra/generated.png"}
+            ],
+            "request_id": "provider-request-1",
+        }
+
+    monkeypatch.setenv("VELYON_IMAGES_API_KEY", "internal-test-key")
+    monkeypatch.delenv("VELYON_IMAGES_MODEL_ENDPOINT", raising=False)
+    monkeypatch.setattr(image_service, "_request_json", fake_request)
+    monkeypatch.setattr(
+        image_service,
+        "_download_image",
+        lambda url: (b"png", "image/png", 4096, 4096),
+    )
+
+    result = image_service._submit_and_wait("A futuristic Antalya skyline")
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://queue.fal.run/reve/2.1/text-to-image"
+    assert captured["json"] == {
+        "prompt": "A futuristic Antalya skyline",
+        "aspect_ratio": "1:1",
+        "num_images": 1,
+        "output_format": "png",
+    }
+    assert result["width"] == 4096
+    assert result["height"] == 4096
 
 
 def test_signed_content_url_is_scoped_and_expires(monkeypatch):
