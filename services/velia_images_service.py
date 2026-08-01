@@ -50,6 +50,7 @@ _ALLOWED_PROVIDER_HOST_SUFFIXES = (
 _ALLOWED_OUTPUT_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 _DEFAULT_MODEL_ENDPOINT = "https://queue.fal.run/fal-ai/reve/text-to-image"
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_GLOBAL_RESERVATION_LOCK_ID = 1_450_731_593
 
 
 @dataclass(frozen=True)
@@ -121,12 +122,26 @@ def ensure_velia_image_tables() -> None:
             """
         )
         cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS velia_image_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                reserved_on DATE NOT NULL DEFAULT CURRENT_DATE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_velia_generated_images_user_created "
             "ON velia_generated_images(user_id, created_at DESC)"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_velia_generated_images_conversation "
             "ON velia_generated_images(conversation_id, created_at ASC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_velia_image_reservations_day_user "
+            "ON velia_image_reservations(reserved_on, user_id)"
         )
         conn.commit()
     except Exception:
@@ -137,30 +152,79 @@ def ensure_velia_image_tables() -> None:
         conn.close()
 
 
-def _daily_limit_error(user_id: int) -> Optional[str]:
+def _reserve_capacity(user_id: int) -> tuple[Optional[str], Optional[str]]:
     user_limit = _env_int("VELYON_IMAGES_DAILY_USER_LIMIT", 3, 1, 10000)
     global_limit = _env_int("VELYON_IMAGES_DAILY_GLOBAL_LIMIT", 100, 1, 100000)
+    stale_seconds = _env_int("VELYON_IMAGES_RESERVATION_STALE_SECONDS", 600, 180, 3600)
+    reservation_id = str(uuid.uuid4())
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_GLOBAL_RESERVATION_LOCK_ID,))
+        cursor.execute(
+            "DELETE FROM velia_image_reservations "
+            "WHERE created_at < NOW() - (%s * INTERVAL '1 second')",
+            (stale_seconds,),
+        )
+        cursor.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM velia_generated_images
+                 WHERE created_at>=CURRENT_DATE)
+              + (SELECT COUNT(*) FROM velia_image_reservations
+                 WHERE reserved_on=CURRENT_DATE)
+            """
+        )
+        global_count = int((cursor.fetchone() or (0,))[0] or 0)
+        cursor.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM velia_generated_images
+                 WHERE user_id=%s AND created_at>=CURRENT_DATE)
+              + (SELECT COUNT(*) FROM velia_image_reservations
+                 WHERE user_id=%s AND reserved_on=CURRENT_DATE)
+            """,
+            (int(user_id), int(user_id)),
+        )
+        user_count = int((cursor.fetchone() or (0,))[0] or 0)
+        if user_count >= user_limit:
+            conn.commit()
+            return "image_daily_user_limit_exceeded", None
+        if global_count >= global_limit:
+            conn.commit()
+            return "image_daily_global_limit_exceeded", None
+        cursor.execute(
+            "INSERT INTO velia_image_reservations "
+            "(reservation_id, user_id, reserved_on, created_at) "
+            "VALUES (%s, %s, CURRENT_DATE, NOW())",
+            (reservation_id, int(user_id)),
+        )
+        conn.commit()
+        return None, reservation_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _release_capacity_reservation(reservation_id: Optional[str]) -> None:
+    if not reservation_id:
+        return
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT COUNT(*) FROM velia_generated_images WHERE created_at>=CURRENT_DATE"
+            "DELETE FROM velia_image_reservations WHERE reservation_id=%s",
+            (str(reservation_id),),
         )
-        global_count = int((cursor.fetchone() or (0,))[0] or 0)
-        cursor.execute(
-            "SELECT COUNT(*) FROM velia_generated_images "
-            "WHERE user_id=%s AND created_at>=CURRENT_DATE",
-            (int(user_id),),
-        )
-        user_count = int((cursor.fetchone() or (0,))[0] or 0)
+        conn.commit()
+    except Exception:
+        conn.rollback()
     finally:
         cursor.close()
         conn.close()
-    if user_count >= user_limit:
-        return "image_daily_user_limit_exceeded"
-    if global_count >= global_limit:
-        return "image_daily_global_limit_exceeded"
-    return None
 
 
 def _provider_url_allowed(value: str) -> bool:
@@ -169,11 +233,19 @@ def _provider_url_allowed(value: str) -> bool:
         hostname = str(parsed.hostname or "").lower().rstrip(".")
         if parsed.scheme != "https" or not hostname:
             return False
-        if not any(hostname == suffix or hostname.endswith("." + suffix) for suffix in _ALLOWED_PROVIDER_HOST_SUFFIXES):
+        if not any(
+            hostname == suffix or hostname.endswith("." + suffix)
+            for suffix in _ALLOWED_PROVIDER_HOST_SUFFIXES
+        ):
             return False
         for resolved in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM):
             address = ipaddress.ip_address(resolved[4][0])
-            if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+            if (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+                or address.is_reserved
+            ):
                 return False
         return True
     except (OSError, ValueError):
@@ -213,7 +285,10 @@ def _download_image(url: str) -> tuple[bytes, str, int, int]:
         "PNG": "image/png",
         "JPEG": "image/jpeg",
         "WEBP": "image/webp",
-    }.get(format_name, str(response.headers.get("Content-Type") or "").split(";", 1)[0])
+    }.get(
+        format_name,
+        str(response.headers.get("Content-Type") or "").split(";", 1)[0],
+    )
     if mime_type not in _ALLOWED_OUTPUT_MIME_TYPES:
         raise RuntimeError("image_output_type_rejected")
     return raw, mime_type, int(width), int(height)
@@ -223,10 +298,15 @@ def _submit_and_wait(prompt: str) -> Dict[str, Any]:
     api_key = str(os.getenv("VELYON_IMAGES_API_KEY", "") or "").strip()
     if not api_key:
         raise RuntimeError("image_service_not_configured")
-    endpoint = str(os.getenv("VELYON_IMAGES_MODEL_ENDPOINT", _DEFAULT_MODEL_ENDPOINT) or "").strip()
+    endpoint = str(
+        os.getenv("VELYON_IMAGES_MODEL_ENDPOINT", _DEFAULT_MODEL_ENDPOINT) or ""
+    ).strip()
     timeout_seconds = _env_int("VELYON_IMAGES_TIMEOUT_SECONDS", 120, 20, 300)
     poll_seconds = _env_int("VELYON_IMAGES_POLL_INTERVAL_SECONDS", 2, 1, 10)
-    headers = {"Authorization": f"Key {api_key}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Key {api_key}",
+        "Content-Type": "application/json",
+    }
     request_body = {
         "prompt": prompt,
         "aspect_ratio": "1:1",
@@ -290,7 +370,10 @@ def _success_text(message: str) -> str:
     lower = str(message or "").lower()
     if re.search(r"[а-яё]", lower):
         return "Изображение готово."
-    if any(token in lower for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")):
+    if any(
+        token in lower
+        for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")
+    ):
         return "Görsel hazır."
     return "The image is ready."
 
@@ -299,7 +382,10 @@ def _clarification_text(message: str) -> str:
     lower = str(message or "").lower()
     if re.search(r"[а-яё]", lower):
         return "Опиши, пожалуйста, какое изображение нужно создать."
-    if any(token in lower for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")):
+    if any(
+        token in lower
+        for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")
+    ):
         return "Lütfen oluşturulacak görseli tarif et."
     return "Please describe the image you want me to create."
 
@@ -316,7 +402,10 @@ def _failure_text(message: str, error_code: str) -> str:
             if is_limit
             else "Сейчас не удалось создать изображение. Попробуй ещё раз немного позже."
         )
-    if any(token in lower for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")):
+    if any(
+        token in lower
+        for token in ("görsel", "resim", "fotoğraf", "oluştur", "çiz")
+    ):
         return (
             "Bugünkü görsel oluşturma limiti doldu."
             if is_limit
@@ -338,14 +427,26 @@ def generate_and_store_image(
     prompt: str,
 ) -> Dict[str, Any]:
     if not prompt:
-        return {"ok": True, "text": _clarification_text(original_message), "image_created": False}
+        return {
+            "ok": True,
+            "text": _clarification_text(original_message),
+            "image_created": False,
+        }
     if not _env_bool("VELYON_IMAGES_ENABLED", False):
         return {
             "ok": True,
             "text": _failure_text(original_message, "image_service_disabled"),
             "image_created": False,
         }
-    limit_error = _daily_limit_error(user_id)
+
+    try:
+        limit_error, reservation_id = _reserve_capacity(user_id)
+    except Exception:
+        return {
+            "ok": True,
+            "text": _failure_text(original_message, "image_capacity_unavailable"),
+            "image_created": False,
+        }
     if limit_error:
         return {
             "ok": True,
@@ -356,6 +457,7 @@ def generate_and_store_image(
     try:
         generated = _submit_and_wait(prompt)
     except Exception as exc:
+        _release_capacity_reservation(reservation_id)
         return {
             "ok": True,
             "text": _failure_text(original_message, str(exc)[:120]),
@@ -363,7 +465,9 @@ def generate_and_store_image(
         }
 
     image_id = str(uuid.uuid4())
-    estimated_cost = float(os.getenv("VELYON_IMAGES_ESTIMATED_COST_USD", "0.04") or 0.04)
+    estimated_cost = float(
+        os.getenv("VELYON_IMAGES_ESTIMATED_COST_USD", "0.04") or 0.04
+    )
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -390,10 +494,19 @@ def generate_and_store_image(
                 datetime.utcnow(),
             ),
         )
+        cursor.execute(
+            "DELETE FROM velia_image_reservations WHERE reservation_id=%s",
+            (str(reservation_id),),
+        )
         conn.commit()
     except Exception:
         conn.rollback()
-        raise
+        _release_capacity_reservation(reservation_id)
+        return {
+            "ok": True,
+            "text": _failure_text(original_message, "image_storage_failed"),
+            "image_created": False,
+        }
     finally:
         cursor.close()
         conn.close()
@@ -419,14 +532,25 @@ def sign_image_url(image_id: str, user_id: int, expires_at: int) -> str:
     return hmac.new(_signing_secret(), payload, hashlib.sha256).hexdigest()
 
 
-def verify_image_signature(image_id: str, user_id: int, expires_at: int, signature: str) -> bool:
+def verify_image_signature(
+    image_id: str,
+    user_id: int,
+    expires_at: int,
+    signature: str,
+) -> bool:
     if int(expires_at) < int(time.time()):
         return False
-    expected = sign_image_url(image_id, user_id, expires_at)
+    try:
+        expected = sign_image_url(image_id, user_id, expires_at)
+    except (RuntimeError, TypeError, ValueError):
+        return False
     return hmac.compare_digest(expected, str(signature or ""))
 
 
-def image_metadata_for_request(request_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+def image_metadata_for_request(
+    request_id: str,
+    user_id: int,
+) -> Optional[Dict[str, Any]]:
     if not request_id:
         return None
     conn = get_connection()
@@ -448,7 +572,12 @@ def image_metadata_for_request(request_id: str, user_id: int) -> Optional[Dict[s
     if not row:
         return None
     image_id = str(row[0])
-    expires_at = int(time.time()) + _env_int("VELYON_IMAGES_URL_TTL_SECONDS", 86400, 300, 604800)
+    expires_at = int(time.time()) + _env_int(
+        "VELYON_IMAGES_URL_TTL_SECONDS",
+        86400,
+        300,
+        604800,
+    )
     signature = sign_image_url(image_id, user_id, expires_at)
     return {
         "id": image_id,
@@ -482,4 +611,7 @@ def get_image_content(image_id: str, user_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
     if not row:
         return None
-    return {"bytes": bytes(row[0]), "mime_type": str(row[1] or "image/png")}
+    return {
+        "bytes": bytes(row[0]),
+        "mime_type": str(row[1] or "image/png"),
+    }
