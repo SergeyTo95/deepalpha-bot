@@ -1,4 +1,5 @@
 from services import velia_live_plugins_patch
+from services import velia_plugin_router
 from services import velia_plugin_service
 
 
@@ -99,7 +100,7 @@ def test_weather_router_respects_user_toggle(monkeypatch):
         },
     )
 
-    result = velia_plugin_service.resolve_live_plugin_context(
+    result = velia_plugin_router.resolve_live_plugin_context(
         1,
         "Какая погода в Antalya сейчас?",
     )
@@ -134,7 +135,7 @@ def test_weather_router_uses_plugin_when_enabled(monkeypatch):
         },
     )
 
-    result = velia_plugin_service.resolve_live_plugin_context(
+    result = velia_plugin_router.resolve_live_plugin_context(
         5811340792,
         "Какая погода в Antalya сейчас?",
     )
