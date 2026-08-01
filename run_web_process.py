@@ -15,6 +15,8 @@ def main() -> None:
     logger.info("DEEPALPHA_PUBLIC_ORIGIN origin=%s", public_origin)
 
     import admin_routes as admin_routes_module
+    import services.velia_chat_service as velia_chat_service_module
+    import velia_mobile_routes as velia_mobile_routes_module
     import web as deepalpha_web
 
     from developer_api_routes import setup_developer_api_routes
@@ -42,6 +44,9 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_chat_service import ensure_velia_chat_tables
+    from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
+    from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
@@ -87,6 +92,21 @@ def main() -> None:
     setup_developer_portal_opportunity_routes(deepalpha_web.app)
     setup_developer_api_commercial_routes(deepalpha_web.app)
 
+    web_user_resolver = getattr(deepalpha_web, "_get_authenticated_web_user_id", None)
+    if not callable(web_user_resolver):
+        web_user_resolver = getattr(deepalpha_web, "_current_web_user_id", None)
+    if not callable(web_user_resolver):
+        raise RuntimeError("Web session resolver is unavailable")
+    velia_mobile_routes_module.setup_velia_mobile_routes(
+        deepalpha_web.app,
+        web_user_resolver,
+    )
+    install_velia_mobile_hardening(
+        deepalpha_web.app,
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+
     def ensure_developer_api_schema() -> None:
         ensure_developer_api_tables()
         ensure_api_billing_tables()
@@ -98,6 +118,8 @@ def main() -> None:
         ensure_opportunity_webhook_trigger()
         ensure_api_commercial_tables()
         ensure_commercial_launch_tables()
+        ensure_velia_mobile_auth_tables()
+        ensure_velia_chat_tables()
 
     try:
         run_serialized_developer_api_schema_bootstrap(
@@ -106,7 +128,8 @@ def main() -> None:
         )
     except Exception:
         # Keep the main WebApp available during a transient or invalid schema
-        # startup. Developer API endpoints remain fail-closed until storage is ready.
+        # startup. Developer API and VELIA mobile endpoints remain fail-closed
+        # until their storage is ready.
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
