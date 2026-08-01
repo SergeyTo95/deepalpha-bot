@@ -15,6 +15,16 @@ class FakeResponse:
         return self._payload
 
 
+def enabled_plugins(**overrides):
+    values = {
+        key: {"enabled": True, "available": True}
+        for key in velia_plugin_service.PLUGIN_KEYS
+    }
+    for key, enabled in overrides.items():
+        values[key] = {"enabled": enabled, "available": True}
+    return values
+
+
 def test_identity_contract_fixes_public_name_and_core():
     prompt = velia_live_plugins_patch._IDENTITY_CONTRACT
 
@@ -31,6 +41,12 @@ def test_normalizes_common_russian_location_inflection():
         )
         == "Какая погода в Antalya сейчас?"
     )
+
+
+def test_extracts_turkish_location_before_postpositions():
+    assert velia_plugin_service._extract_location("Antalya için hava nasıl?") == "Antalya"
+    assert velia_plugin_service._extract_location("Antalya'da hava nasıl?") == "Antalya"
+    assert velia_plugin_service._extract_location("İstanbul'da sıcaklık kaç?") == "İstanbul"
 
 
 def test_weather_plugin_returns_live_context(monkeypatch):
@@ -94,10 +110,7 @@ def test_weather_router_respects_user_toggle(monkeypatch):
     monkeypatch.setattr(
         velia_plugin_service,
         "get_user_plugins",
-        lambda user_id: {
-            key: {"enabled": key != "weather", "available": True}
-            for key in velia_plugin_service.PLUGIN_KEYS
-        },
+        lambda user_id: enabled_plugins(weather=False),
     )
 
     result = velia_plugin_router.resolve_live_plugin_context(
@@ -110,14 +123,68 @@ def test_weather_router_respects_user_toggle(monkeypatch):
     assert result["context"] == ""
 
 
+def test_temporal_words_alone_do_not_trigger_external_search(monkeypatch):
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "get_user_plugins",
+        lambda user_id: enabled_plugins(),
+    )
+    reserved = []
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "_reserve_plugin_call",
+        lambda user_id, plugin_key: reserved.append(plugin_key) or True,
+    )
+
+    for message in (
+        "Я устал сегодня, что делать?",
+        "Расскажи, что сейчас лучше приготовить",
+        "I feel tired today",
+        "What should I do right now?",
+    ):
+        result = velia_plugin_router.resolve_live_plugin_context(1, message)
+        assert result["used"] == []
+        assert result["context"] == ""
+
+    assert reserved == []
+
+
+def test_news_noun_or_explicit_search_triggers_web_tool(monkeypatch):
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "get_user_plugins",
+        lambda user_id: enabled_plugins(),
+    )
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "_reserve_plugin_call",
+        lambda user_id, plugin_key: True,
+    )
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "_google_news_context",
+        lambda message: {
+            "ok": True,
+            "context": "Latest headlines",
+            "sources": [{"title": "Source", "url": "https://example.com/news"}],
+        },
+    )
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+
+    result = velia_plugin_router.resolve_live_plugin_context(
+        1,
+        "Последние новости про искусственный интеллект",
+    )
+
+    assert result["used"] == ["web_search"]
+    assert "Latest headlines" in result["context"]
+
+
 def test_weather_router_uses_plugin_when_enabled(monkeypatch):
     monkeypatch.setattr(
         velia_plugin_service,
         "get_user_plugins",
-        lambda user_id: {
-            key: {"enabled": True, "available": True}
-            for key in velia_plugin_service.PLUGIN_KEYS
-        },
+        lambda user_id: enabled_plugins(),
     )
     monkeypatch.setattr(
         velia_plugin_service,
