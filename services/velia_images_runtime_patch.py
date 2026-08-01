@@ -58,6 +58,13 @@ def install(velia_chat_service_module: Any) -> None:
         serialized = original_serialize(row, debug_usage=debug_usage)
         if serialized.get("role") != "assistant" or serialized.get("status") != "completed":
             return serialized
+        provider = str(
+            velia_chat_service_module._row_value(row, "provider", 9, "") or ""
+        )
+        if provider != "velyon_images":
+            serialized["type"] = "text"
+            return serialized
+
         request_id = str(serialized.get("request_id") or "")
         user_id = velia_chat_service_module._row_value(row, "user_id", 2, 0)
         try:
