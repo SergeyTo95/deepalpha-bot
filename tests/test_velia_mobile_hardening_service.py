@@ -136,8 +136,8 @@ def test_latest_messages_reader_selects_newest_then_returns_chronological_order(
 
     assert result == rows
     query = cursor.calls[1][0]
-    assert "ORDER BY created_at DESC, message_id DESC" in query
-    assert "ORDER BY created_at ASC, message_id ASC" in query
+    assert "ORDER BY created_at DESC, CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC, message_id DESC" in query
+    assert "ORDER BY created_at ASC, CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC, message_id ASC" in query
     assert cursor.calls[1][1] == ("conv", 7, 2)
 
 
