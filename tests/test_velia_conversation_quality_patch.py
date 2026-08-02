@@ -3,16 +3,20 @@ from types import SimpleNamespace
 from services import velia_conversation_quality_patch as quality_patch
 
 
-def test_memory_note_ack_is_short_and_literal_in_supported_languages():
+def test_memory_note_ack_is_short_and_uses_assistant_perspective():
     assert (
         quality_patch.memory_note_ack(
             "Запомни: мой основной проект сейчас VELIA, а не я сам"
         )
-        == "Приняла: мой основной проект сейчас VELIA, а не я сам."
+        == "Приняла: твой основной проект сейчас VELIA, а не ты сам."
+    )
+    assert (
+        quality_patch.memory_note_ack("Запомни: Моя главная цель — выпуск VELIA")
+        == "Приняла: Твоя главная цель — выпуск VELIA."
     )
     assert (
         quality_patch.memory_note_ack("Please remember: VELIA is my main project")
-        == "Noted: VELIA is my main project."
+        == "Noted: VELIA is your main project."
     )
     assert (
         quality_patch.memory_note_ack("Lütfen aklında tut: ana projem VELIA")
