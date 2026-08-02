@@ -17,7 +17,9 @@ def install_client_request_id_serialization(chat_module: Any) -> None:
     if getattr(chat_module, "_velia_client_request_id_installed", False):
         return
 
-    original_serialize = chat_module._serialize_message
+    original_serialize = getattr(chat_module, "_serialize_message", None)
+    if not callable(original_serialize):
+        return
 
     def serialize_with_client_request_id(
         row: Any,
