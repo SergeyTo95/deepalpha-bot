@@ -8,10 +8,10 @@ from aiohttp import web
 from services import gemini_gateway
 from services.velia_attachment_service import (
     AttachmentError,
-    create_attachment,
     delete_attachment,
     get_attachment,
 )
+from services.velia_attachment_upload_service import create_attachment_with_reservation
 from services.velia_chat_service import get_conversation
 from services.velia_mobile_auth_service import authenticate_access_token
 
@@ -164,7 +164,7 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         try:
             filename, mime_type, content = await _read_single_upload(request)
             attachment = await asyncio.to_thread(
-                create_attachment,
+                create_attachment_with_reservation,
                 user_id,
                 conversation_id,
                 filename=filename,
