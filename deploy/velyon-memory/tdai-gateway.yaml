@@ -3,7 +3,7 @@ stateBackend: local
 
 server:
   port: 8420
-  host: "0.0.0.0"
+  host: "::"
 
 data:
   baseDir: "/data/tdai-memory"
