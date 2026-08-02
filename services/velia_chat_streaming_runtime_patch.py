@@ -3,10 +3,12 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
+from services import kimi_gateway
 from services.kimi_streaming_gateway import call_kimi_stream
 from services.velia_chat_latency_runtime_patch import (
     _casual_intent,
-    _selected_reasoning_effort,
+    _env_bool,
+    _is_casual_message,
     _stable_prompt_cache_key,
 )
 from services.velia_conversation_quality_patch import memory_note_ack
@@ -70,6 +72,13 @@ def _should_stream_message(message: str) -> bool:
     if casual is not None and casual[1] not in {"context_ack", "capabilities"}:
         return False
     return True
+
+
+def _reasoning_effort_for_message(message: str) -> str:
+    default_effort = kimi_gateway.kimi_reasoning_effort()
+    if not _env_bool("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", True):
+        return default_effort
+    return "low" if _is_casual_message(message) else default_effort
 
 
 def run_streaming_send(
@@ -143,12 +152,7 @@ def install(chat_module: Any) -> None:
             )
 
         started = time.monotonic()
-        selected_reasoning = _selected_reasoning_effort(
-            feature="velia_chat",
-            request_id=str(request_id or ""),
-            user_id=int(user_id),
-            default_effort="high",
-        )
+        selected_reasoning = _reasoning_effort_for_message(message)
         result = call_kimi_stream(
             prompt=str(prompt),
             feature="velia_chat",
