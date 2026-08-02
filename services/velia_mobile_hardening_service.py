@@ -87,21 +87,56 @@ def build_hardened_send_message(
             if not acquired:
                 return {"ok": False, "error": "generation_in_progress"}
 
-            # Keep idempotency and attachment-set comparison inside the final
-            # attachment-aware sender. Returning a duplicate here would bypass
-            # its protection against reusing one key with a different file set.
+            # Preserve the proven legacy duplicate fast-path only when the
+            # caller did not send the File Analyst field at all. Explicit
+            # attachment lists, including [], must reach the attachment-aware
+            # sender so it can compare the exact linked set for this key.
+            use_legacy_idempotency = attachment_ids is None
+            existing: Optional[Dict[str, Any]] = None
+            if (
+                use_legacy_idempotency
+                and chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or ""))
+            ):
+                existing = chat_module._existing_request_result(
+                    lock_cursor,
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                    idempotency_key=str(idempotency_key),
+                )
+                if existing and not existing.get("pending"):
+                    lock_conn.rollback()
+                    return existing
+
             _expire_abandoned_pending(lock_cursor, int(user_id))
             lock_conn.commit()
+
+            if (
+                use_legacy_idempotency
+                and chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or ""))
+            ):
+                existing = chat_module._existing_request_result(
+                    lock_cursor,
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                    idempotency_key=str(idempotency_key),
+                )
+                if existing:
+                    lock_conn.rollback()
+                    return existing
 
             # Keep the session-level advisory lock for the complete provider call.
             # A second process cannot pass the per-user pending/spend gate while the
             # first physical request is still running.
+            send_kwargs: Dict[str, Any] = {
+                "idempotency_key": str(idempotency_key),
+            }
+            if attachment_ids is not None:
+                send_kwargs["attachment_ids"] = attachment_ids
             return original_send_message(
                 int(user_id),
                 str(conversation_id),
                 str(content),
-                idempotency_key=str(idempotency_key),
-                attachment_ids=attachment_ids,
+                **send_kwargs,
             )
         finally:
             try:
@@ -224,13 +259,17 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             or data.get("idempotency_key")
             or ""
         ).strip()
+        send_kwargs: Dict[str, Any] = {
+            "idempotency_key": idempotency_key,
+        }
+        if "attachment_ids" in data:
+            send_kwargs["attachment_ids"] = data.get("attachment_ids")
         result = await asyncio.to_thread(
             routes_module.send_message,
             int(auth["user_id"]),
             request.match_info["conversation_id"],
             str(data.get("content") or ""),
-            idempotency_key=idempotency_key,
-            attachment_ids=data.get("attachment_ids"),
+            **send_kwargs,
         )
         if result.get("ok"):
             return routes_module._json_response(
