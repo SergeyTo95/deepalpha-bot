@@ -1,7 +1,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional, Pattern
+from typing import Pattern
 
 
 _MAX_TARGET_OFFSET = 160
@@ -28,8 +28,10 @@ _RUSSIAN_SPEC = _CommandSpec(
         r"^\s*(?:пожалуйста[,.]?\s*)?"
         r"(?:(?:можешь(?:\s+ли)?|сможешь|давай|прошу|хочу(?:,?\s+чтобы\s+ты)?|нужно)\s+)?"
         r"(?:мне\s+)?"
-        r"(?P<verb>сгенерируй|сгенерировать|сгенерируем|создай|создать|создадим|"
-        r"нарисуй|нарисовать|нарисуем|сделай|сделать|сделаем)\s+"
+        r"(?P<verb>сгенерируй|сгенерировать|сгенерируем|сгенерировал|"
+        r"создай|создать|создадим|создал|"
+        r"нарисуй|нарисовать|нарисуем|нарисовал|"
+        r"сделай|сделать|сделаем|сделал)\s+"
         r"(?:мне\s+)?(?P<body>.+)$",
         re.IGNORECASE | re.DOTALL,
     ),
@@ -39,12 +41,12 @@ _RUSSIAN_SPEC = _CommandSpec(
         re.IGNORECASE,
     ),
     reject=re.compile(
-        r"\b(?:промпт\w*|описани\w*|инструкци\w*|сценари\w*|текст\w*|"
+        r"\b(?:промпт\w*|описани\w*|инструкци\w*|сценари\w*|"
         r"план\w*|анализ\w*|код\w*)\b",
         re.IGNORECASE,
     ),
     strong_verbs=re.compile(
-        r"^(?:нарисуй|нарисовать|нарисуем)$",
+        r"^(?:нарисуй|нарисовать|нарисуем|нарисовал)$",
         re.IGNORECASE,
     ),
     visual_cues=re.compile(
@@ -69,7 +71,7 @@ _ENGLISH_SPEC = _CommandSpec(
         re.IGNORECASE,
     ),
     reject=re.compile(
-        r"\b(?:prompt|description|instructions?|caption|scenario|text|plan|analysis|code)\b",
+        r"\b(?:prompt|description|instructions?|caption|scenario|plan|analysis|code)\b",
         re.IGNORECASE,
     ),
     strong_verbs=re.compile(r"^(?:draw|render)$", re.IGNORECASE),
@@ -94,7 +96,7 @@ _TURKISH_COMMAND_FIRST_SPEC = _CommandSpec(
         re.IGNORECASE,
     ),
     reject=re.compile(
-        r"\b(?:prompt|açıklama|talimat|senaryo|metin|plan|analiz|kod)\b",
+        r"\b(?:prompt|açıklama|talimat|senaryo|plan|analiz|kod)\b",
         re.IGNORECASE,
     ),
     strong_verbs=re.compile(r"^(?:çiz)$", re.IGNORECASE),
@@ -119,7 +121,7 @@ _TURKISH_TARGET = re.compile(
 )
 
 _TURKISH_REJECT = re.compile(
-    r"\b(?:prompt|açıklama|talimat|senaryo|metin|plan|analiz|kod)\b",
+    r"\b(?:prompt|açıklama|talimat|senaryo|plan|analiz|kod)\b",
     re.IGNORECASE,
 )
 
