@@ -21,12 +21,16 @@ def install(velia_chat_service_module: Any, velia_mobile_routes_module: Any) -> 
         idempotency_key: str,
         attachment_ids: Any = None,
     ) -> Dict[str, Any]:
+        send_kwargs: Dict[str, Any] = {
+            "idempotency_key": idempotency_key,
+        }
+        if attachment_ids is not None:
+            send_kwargs["attachment_ids"] = attachment_ids
         result = original_send_message(
             user_id,
             conversation_id,
             content,
-            idempotency_key=idempotency_key,
-            attachment_ids=attachment_ids,
+            **send_kwargs,
         )
         if not result.get("ok") or result.get("duplicate"):
             return result
