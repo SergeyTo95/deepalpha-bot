@@ -10,7 +10,6 @@ from services.velia_attachment_service import (
     AttachmentError,
     create_attachment,
     delete_attachment,
-    ensure_velia_attachment_tables,
     get_attachment,
 )
 from services.velia_chat_service import get_conversation
@@ -143,7 +142,6 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         "velia_file_vision",
         "VELIA_FILE_VISION_GEMINI_ENABLED",
     )
-    ensure_velia_attachment_tables()
 
     async def handle_attachment_create(request: web.Request) -> web.Response:
         if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
