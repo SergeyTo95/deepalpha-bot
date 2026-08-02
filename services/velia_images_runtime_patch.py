@@ -1,7 +1,10 @@
 import logging
 from typing import Any, Dict
 
-from services.velia_image_intent_service import image_intent_from_chat_prompt
+from services.velia_image_intent_service import (
+    image_intent_from_chat_prompt,
+    last_user_message_from_chat_prompt,
+)
 from services.velia_images_queue_runtime_patch import install as install_queue_runtime
 from services.velia_images_service import (
     image_metadata_for_request,
@@ -35,6 +38,7 @@ def install(velia_chat_service_module: Any) -> None:
                 request_id=request_id,
             )
 
+        latest_message = last_user_message_from_chat_prompt(prompt)
         logger.info(
             "VELIA_IMAGE_INTENT_MATCHED user_id=%s conversation_id=%s request_id=%s prompt_chars=%s",
             int(user_id),
@@ -42,12 +46,6 @@ def install(velia_chat_service_module: Any) -> None:
             str(request_id or ""),
             len(intent.prompt),
         )
-        original_message = velia_chat_service_module.re.findall(
-            r"(?:^|\n\n)USER:\s*(.*?)(?=\n\n(?:USER|ASSISTANT):|\Z)",
-            str(prompt or ""),
-            flags=velia_chat_service_module.re.DOTALL,
-        )
-        latest_message = str(original_message[-1] if original_message else "").strip()
         result = generate_and_store_image(
             user_id=int(user_id),
             conversation_id=str(conversation_id),
