@@ -52,6 +52,7 @@ memory:
 
   bm25:
     enabled: true
+    language: en
 
 skill:
   enabled: false
