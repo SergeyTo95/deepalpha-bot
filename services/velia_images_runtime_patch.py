@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict
 
 from services.velia_image_intent_service import image_intent_from_chat_prompt
+from services.velia_images_queue_runtime_patch import install as install_queue_runtime
 from services.velia_images_service import (
     image_metadata_for_request,
     generate_and_store_image,
@@ -14,6 +15,7 @@ def install(velia_chat_service_module: Any) -> None:
     if getattr(velia_chat_service_module, "_velia_images_patch_installed", False):
         return
 
+    install_queue_runtime()
     original_generate = velia_chat_service_module.generate_velia_chat_result
     original_serialize = velia_chat_service_module._serialize_message
 
