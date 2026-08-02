@@ -179,10 +179,22 @@ def build_latest_messages_reader(
                            latency_ms, error_code, created_at, updated_at
                     FROM velia_messages
                     WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
-                    ORDER BY created_at DESC, message_id DESC
+                    ORDER BY created_at DESC,
+                             CASE role
+                                 WHEN 'user' THEN 0
+                                 WHEN 'assistant' THEN 1
+                                 ELSE 2
+                             END ASC,
+                             message_id DESC
                     LIMIT %s
                 ) AS recent_messages
-                ORDER BY created_at ASC, message_id ASC
+                ORDER BY created_at ASC,
+                         CASE role
+                             WHEN 'user' THEN 0
+                             WHEN 'assistant' THEN 1
+                             ELSE 2
+                         END ASC,
+                         message_id ASC
                 """,
                 (str(conversation_id), int(user_id), bounded_limit),
             )
