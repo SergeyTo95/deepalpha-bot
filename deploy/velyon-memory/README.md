@@ -21,11 +21,14 @@ The Dockerfile exposes port `8420`, stores all durable runtime data below `/data
 ## Required service variables
 
 ```dotenv
+RAILWAY_RUN_UID=0
 TDAI_GATEWAY_API_KEY=<strong-random-secret-at-least-32-characters>
 TDAI_LLM_BASE_URL=<internal-openai-compatible-base-url>
 TDAI_LLM_API_KEY=<private-memory-llm-key>
 TDAI_LLM_MODEL=<private-memory-model-id>
 ```
+
+Railway mounts attached volumes as `root`. `RAILWAY_RUN_UID=0` is therefore required so the runtime can create and update its SQLite database on the mounted volume. Outside Railway, the image keeps its non-root default user.
 
 Do not reuse the Android token, Telegram token, image key, database password, or public API credentials.
 
@@ -37,12 +40,14 @@ The container configures:
 
 ```dotenv
 TDAI_GATEWAY_CONFIG=/data/config/tdai-gateway.yaml
-TDAI_GATEWAY_HOST=0.0.0.0
+TDAI_GATEWAY_HOST=::
 TDAI_GATEWAY_PORT=8420
 TDAI_DATA_DIR=/data/tdai-memory
 TDAI_DEPLOY_MODE=standalone
 STATE_BACKEND=local
 ```
+
+Binding to `::` supports Railway environments whose private DNS resolves to IPv6 as well as current dual-stack environments.
 
 The standalone pilot uses:
 
@@ -80,7 +85,7 @@ The internal Railway endpoint uses HTTP inside the private project network. Do n
 ## Safe activation order
 
 1. Deploy `velyon-memory` with its volume and required variables.
-2. Confirm its Railway deployment is healthy.
+2. Confirm its Railway deployment is healthy and the runtime can write under `/data/tdai-memory`.
 3. Deploy `deepalpha-bot` with the memory variables while `VELIA_MEMORY_SHADOW_ENABLED=false`.
 4. Confirm logs contain `VELIA_MEMORY_SHADOW_RUNTIME_PATCH_INSTALLED` and that the worker remains healthy.
 5. Set `VELIA_MEMORY_SHADOW_ENABLED=true` only after both services are healthy.
@@ -89,11 +94,7 @@ The internal Railway endpoint uses HTTP inside the private project network. Do n
 
 ## Expected logs
 
-Memory service:
-
-```text
-Gateway listening on 0.0.0.0:8420
-```
+Memory service should report a healthy gateway listening on port `8420`.
 
 Backend:
 
@@ -111,7 +112,7 @@ No message text, API keys, or memory LLM credentials should appear in logs.
 The memory container health check calls:
 
 ```text
-http://127.0.0.1:8420/health
+http://[::1]:8420/health
 ```
 
 Outbox status:
@@ -150,7 +151,7 @@ VELIA chat immediately continues without new memory capture. Existing outbox row
 
 Before wider rollout:
 
-- pin the base image to an reviewed immutable version or digest;
+- pin the base image to a reviewed immutable version or digest;
 - implement user-visible memory review, deletion, and opt-out controls;
 - add a retention policy for raw L0 conversations;
 - test volume backup and restore;

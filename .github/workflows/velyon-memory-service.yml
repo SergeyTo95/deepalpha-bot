@@ -33,12 +33,13 @@ jobs:
           assert re.search(r"(?m)^ARG VELYON_MEMORY_BASE_IMAGE=", dockerfile)
           assert re.search(r"(?m)^FROM \$\{VELYON_MEMORY_BASE_IMAGE\}$", dockerfile)
           assert "COPY --chown=10001:10001 tdai-gateway.yaml" in dockerfile
-          assert "TDAI_GATEWAY_HOST=0.0.0.0" in dockerfile
+          assert "TDAI_GATEWAY_HOST=::" in dockerfile
           assert "TDAI_GATEWAY_PORT=8420" in dockerfile
           assert "TDAI_DATA_DIR=/data/tdai-memory" in dockerfile
           assert re.search(r"(?m)^USER 10001$", dockerfile)
           assert re.search(r"(?m)^EXPOSE 8420$", dockerfile)
-          assert "http://127.0.0.1:8420/health" in dockerfile
+          assert "http://[::1]:8420/health" in dockerfile
+          assert "RAILWAY_RUN_UID=0" in dockerfile
 
           top_level_instructions = [
               line
@@ -53,7 +54,7 @@ jobs:
           required_config = [
               "deployMode: standalone",
               "stateBackend: local",
-              'host: "0.0.0.0"',
+              'host: "::"',
               "port: 8420",
               'baseDir: "/data/tdai-memory"',
               'baseUrl: "${TDAI_LLM_BASE_URL}"',
@@ -80,6 +81,8 @@ jobs:
           assert "public domain: disabled" in readme.lower()
           assert "replicas: `1`" in readme
           assert "mount path: `/data/tdai-memory`" in readme
+          assert "RAILWAY_RUN_UID=0" in readme
+          assert "TDAI_GATEWAY_HOST=::" in readme
           assert "VELIA_MEMORY_SHADOW_ENABLED=false" in readme
           assert "VELIA_MEMORY_SHADOW_ALLOW_ALL=false" in readme
           assert "http://velyon-memory.railway.internal:8420" in readme
