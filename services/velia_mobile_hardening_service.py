@@ -77,6 +77,7 @@ def build_hardened_send_message(
         content: str,
         *,
         idempotency_key: str,
+        attachment_ids: Any = None,
     ) -> Dict[str, Any]:
         lock_conn = chat_module.get_connection()
         lock_cursor = chat_module._dict_cursor(lock_conn)
@@ -86,31 +87,11 @@ def build_hardened_send_message(
             if not acquired:
                 return {"ok": False, "error": "generation_in_progress"}
 
-            existing: Optional[Dict[str, Any]] = None
-            if chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or "")):
-                existing = chat_module._existing_request_result(
-                    lock_cursor,
-                    user_id=int(user_id),
-                    conversation_id=str(conversation_id),
-                    idempotency_key=str(idempotency_key),
-                )
-                if existing and not existing.get("pending"):
-                    lock_conn.rollback()
-                    return existing
-
+            # Keep idempotency and attachment-set comparison inside the final
+            # attachment-aware sender. Returning a duplicate here would bypass
+            # its protection against reusing one key with a different file set.
             _expire_abandoned_pending(lock_cursor, int(user_id))
             lock_conn.commit()
-
-            if chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or "")):
-                existing = chat_module._existing_request_result(
-                    lock_cursor,
-                    user_id=int(user_id),
-                    conversation_id=str(conversation_id),
-                    idempotency_key=str(idempotency_key),
-                )
-                if existing:
-                    lock_conn.rollback()
-                    return existing
 
             # Keep the session-level advisory lock for the complete provider call.
             # A second process cannot pass the per-user pending/spend gate while the
@@ -120,6 +101,7 @@ def build_hardened_send_message(
                 str(conversation_id),
                 str(content),
                 idempotency_key=str(idempotency_key),
+                attachment_ids=attachment_ids,
             )
         finally:
             try:
@@ -248,6 +230,7 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             request.match_info["conversation_id"],
             str(data.get("content") or ""),
             idempotency_key=idempotency_key,
+            attachment_ids=data.get("attachment_ids"),
         )
         if result.get("ok"):
             return routes_module._json_response(
@@ -256,9 +239,12 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             )
         error = str(result.get("error") or "generation_failed")
         status = 400
-        if error == "conversation_not_found":
+        if error in {"conversation_not_found", "attachment_not_found"}:
             status = 404
-        elif error == "generation_in_progress" or result.get("pending"):
+        elif error in {
+            "generation_in_progress",
+            "idempotency_attachment_mismatch",
+        } or result.get("pending"):
             status = 409
         elif error.endswith("limit_exceeded"):
             status = 429
