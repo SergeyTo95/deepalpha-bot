@@ -1,6 +1,7 @@
 from services.velia_image_intent_service import (
     detect_image_intent,
     image_intent_from_chat_prompt,
+    last_user_message_from_chat_prompt,
 )
 
 
@@ -15,6 +16,23 @@ def test_routes_exact_real_device_russian_request_with_modifier():
     assert intent.requested is True
     assert intent.prompt.startswith("квадратное изображение: 1:1")
     assert "Рыжая пушистая белка" in intent.prompt
+
+
+def test_routes_first_user_turn_directly_after_conversation_header():
+    prompt = (
+        "You are Velia.\n\nConversation:\n"
+        "USER: Создай квадратное изображение: рыжая пушистая белка сидит "
+        "на высоком барном стуле и пьёт пиво из большой кружки, уютный паб, "
+        "реалистичный стиль, без текста."
+    )
+
+    latest = last_user_message_from_chat_prompt(prompt)
+    intent = image_intent_from_chat_prompt(prompt)
+
+    assert latest.startswith("Создай квадратное изображение")
+    assert intent.requested is True
+    assert intent.prompt.startswith("квадратное изображение")
+    assert "без текста" in intent.prompt
 
 
 def test_routes_conversational_russian_prefixes():
@@ -116,7 +134,9 @@ def test_chat_router_uses_only_latest_user_turn():
         "USER: Можешь создать квадратное изображение белки в баре"
     )
 
+    latest = last_user_message_from_chat_prompt(prompt)
     intent = image_intent_from_chat_prompt(prompt)
 
+    assert latest == "Можешь создать квадратное изображение белки в баре"
     assert intent.requested is True
     assert intent.prompt == "квадратное изображение белки в баре"
