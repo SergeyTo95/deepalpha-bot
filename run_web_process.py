@@ -47,6 +47,7 @@ def main() -> None:
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
     from services.velia_chat_service import ensure_velia_chat_tables
+    from services.velia_conversation_quality_patch import install as install_velia_conversation_quality
     from services.velia_images_runtime_patch import install as install_velia_images
     from services.velia_images_service import ensure_velia_image_tables
     from services.velia_live_plugins_patch import install as install_velia_live_plugins
@@ -74,6 +75,10 @@ def main() -> None:
     install_openapi_runtime()
     install_commercial_runtime()
     install_velia_live_plugins(velia_chat_service_module)
+    install_velia_conversation_quality(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
     install_velia_user_profile(velia_chat_service_module)
     install_velia_images(velia_chat_service_module)
     install_velia_memory_shadow(
