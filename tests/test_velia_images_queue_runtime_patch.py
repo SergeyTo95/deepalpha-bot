@@ -46,14 +46,14 @@ def test_long_queue_flow_tracks_states_and_returns_image(monkeypatch):
             },
             {
                 "images": [
-                    {"url": "https://cdn.example/generated.png"}
+                    {"url": "https://cdn.example/generated.jpg"}
                 ]
             },
         ]
     )
 
     def fake_request_json(method, url, **kwargs):
-        calls.append((method, url))
+        calls.append((method, url, kwargs))
         return next(responses)
 
     monkeypatch.setenv("VELYON_IMAGES_API_KEY", "secret")
@@ -62,22 +62,29 @@ def test_long_queue_flow_tracks_states_and_returns_image(monkeypatch):
     monkeypatch.setattr(
         queue_patch.image_service,
         "_download_image",
-        lambda url: (b"png", "image/png", 4096, 4096),
+        lambda url: (b"jpeg", "image/jpeg", 4096, 4096),
     )
     monkeypatch.setattr(queue_patch.time, "sleep", lambda seconds: None)
 
     result = queue_patch.submit_and_wait("A squirrel in a cozy bar")
 
     assert result == {
-        "image_bytes": b"png",
-        "mime_type": "image/png",
+        "image_bytes": b"jpeg",
+        "mime_type": "image/jpeg",
         "width": 4096,
         "height": 4096,
         "external_request_id": "request-1",
     }
-    assert calls[0] == ("POST", "https://queue.example/model")
+    assert calls[0][0:2] == ("POST", "https://queue.example/model")
+    assert calls[0][2]["json"] == {
+        "prompt": "A squirrel in a cozy bar",
+        "aspect_ratio": "1:1",
+        "num_images": 1,
+        "output_format": "jpeg",
+    }
+    assert calls[0][2]["headers"]["X-Fal-Request-Timeout"] == "300"
     assert calls[1][1].endswith("/status?logs=1")
-    assert calls[-1] == ("GET", "https://queue.example/response")
+    assert calls[-1][0:2] == ("GET", "https://queue.example/response")
 
 
 def test_timeout_cancels_persistent_queue_request(monkeypatch):
