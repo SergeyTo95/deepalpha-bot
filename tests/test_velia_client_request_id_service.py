@@ -59,3 +59,12 @@ def test_omits_blank_client_request_id():
     )
 
     assert "client_request_id" not in result
+
+
+def test_noops_for_reduced_runtime_test_doubles_without_serializer():
+    module = SimpleNamespace(generate_velia_chat_result=lambda: None)
+
+    install_client_request_id_serialization(module)
+
+    assert not hasattr(module, "_velia_client_request_id_installed")
+    assert not hasattr(module, "_serialize_message")
