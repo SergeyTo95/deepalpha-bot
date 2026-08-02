@@ -4,25 +4,76 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, Optional
+import unicodedata
+from typing import Any, Dict, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
 
 _CONTEXT = threading.local()
-_CASUAL_MESSAGE = re.compile(
-    r"^(?:"
-    r"привет(?:ик)?|здравствуй(?:те)?|ку[\s-]*ку|доброе\s+утро|"
-    r"добрый\s+(?:день|вечер)|спасибо|благодарю|ок(?:ей)?|понял(?:а)?|"
-    r"ясно|хорошо|ладно|да|нет|пока|до\s+свидания|как\s+дела|"
-    r"кто\s+ты|что\s+ты\s+умеешь|"
-    r"hi|hello|hey|thanks|thank\s+you|ok(?:ay)?|got\s+it|yes|no|bye|"
-    r"good\s+(?:morning|afternoon|evening)|how\s+are\s+you|who\s+are\s+you|"
-    r"merhaba|selam|teşekkür(?:ler|\s+ederim)?|tamam|evet|hayır|görüşürüz|"
-    r"nasılsın|sen\s+kimsin"
-    r")[\s.!?…,:;\-—–🙂😊😉👍👌❤️❤]*$",
-    re.IGNORECASE,
-)
+
+_GREETING_PHRASES = {
+    "ru": {
+        "привет",
+        "приветик",
+        "здравствуй",
+        "здравствуйте",
+        "ку ку",
+        "доброе утро",
+        "добрый день",
+        "добрый вечер",
+    },
+    "en": {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    },
+    "tr": {
+        "merhaba",
+        "selam",
+        "günaydın",
+        "iyi günler",
+        "iyi akşamlar",
+    },
+}
+_HOW_ARE_YOU_PHRASES = {
+    "ru": {"как дела", "как ты", "как у тебя дела"},
+    "en": {"how are you", "how is it going", "how are things"},
+    "tr": {"nasılsın", "nasılsınız", "nasıl gidiyor"},
+}
+_THANKS_PHRASES = {
+    "ru": {"спасибо", "благодарю", "спасибо тебе", "большое спасибо"},
+    "en": {"thanks", "thank you", "many thanks"},
+    "tr": {"teşekkürler", "teşekkür ederim", "sağ ol", "sag ol"},
+}
+_ACKNOWLEDGEMENT_PHRASES = {
+    "ru": {"ок", "окей", "понял", "поняла", "ясно", "хорошо", "ладно"},
+    "en": {"ok", "okay", "got it", "understood", "all right", "alright"},
+    "tr": {"tamam", "anladım", "peki"},
+}
+_CONTEXT_ACK_PHRASES = {
+    "ru": {"да", "нет"},
+    "en": {"yes", "no"},
+    "tr": {"evet", "hayır", "hayir"},
+}
+_BYE_PHRASES = {
+    "ru": {"пока", "до свидания", "до связи", "увидимся"},
+    "en": {"bye", "goodbye", "see you", "talk later"},
+    "tr": {"görüşürüz", "hoşça kal", "hosca kal"},
+}
+_IDENTITY_PHRASES = {
+    "ru": {"кто ты", "ты кто"},
+    "en": {"who are you"},
+    "tr": {"sen kimsin", "kimsin"},
+}
+_CAPABILITY_PHRASES = {
+    "ru": {"что ты умеешь", "что умеешь"},
+    "en": {"what can you do"},
+    "tr": {"ne yapabilirsin", "neler yapabilirsin"},
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -45,9 +96,119 @@ def _stable_prompt_cache_key(conversation_id: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _normalize_casual_text(message: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(message or "")).casefold()
+    normalized = normalized.replace("ё", "е").replace("_", " ")
+    normalized = re.sub(r"[^\w\sçğıöşü]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _casual_intent(message: str) -> Optional[Tuple[str, str]]:
+    normalized = _normalize_casual_text(message)
+    if not normalized or len(normalized) > 160:
+        return None
+
+    for language, greetings in _GREETING_PHRASES.items():
+        if normalized in greetings:
+            return language, "greeting"
+        for greeting in greetings:
+            for how_phrase in _HOW_ARE_YOU_PHRASES[language]:
+                if normalized in {
+                    f"{greeting} {how_phrase}",
+                    f"{how_phrase} {greeting}",
+                }:
+                    return language, "greeting_how"
+
+    collections = (
+        (_HOW_ARE_YOU_PHRASES, "how_are_you"),
+        (_THANKS_PHRASES, "thanks"),
+        (_ACKNOWLEDGEMENT_PHRASES, "acknowledgement"),
+        (_CONTEXT_ACK_PHRASES, "context_ack"),
+        (_BYE_PHRASES, "bye"),
+        (_IDENTITY_PHRASES, "identity"),
+        (_CAPABILITY_PHRASES, "capabilities"),
+    )
+    for phrases_by_language, intent in collections:
+        for language, phrases in phrases_by_language.items():
+            if normalized in phrases:
+                return language, intent
+    return None
+
+
 def _is_casual_message(message: str) -> bool:
-    normalized = re.sub(r"\s+", " ", str(message or "")).strip()
-    return bool(normalized and len(normalized) <= 160 and _CASUAL_MESSAGE.fullmatch(normalized))
+    return _casual_intent(message) is not None
+
+
+def _preferred_name(user_id: Optional[int]) -> str:
+    if user_id is None:
+        return ""
+    try:
+        from services.velia_user_profile_service import get_user_profile
+
+        profile = get_user_profile(int(user_id))
+        value = str(profile.get("preferred_name") or "").strip()
+        value = re.sub(r"[\r\n\t]+", " ", value)
+        return re.sub(r"\s+", " ", value)[:80].strip()
+    except Exception as exc:
+        logger.warning(
+            "VELIA_FAST_RESPONSE_PROFILE_SKIPPED user_id=%s error=%s",
+            int(user_id),
+            exc.__class__.__name__,
+        )
+        return ""
+
+
+def _instant_response_for_message(
+    message: str,
+    user_id: Optional[int],
+) -> Optional[Tuple[str, str, str]]:
+    route = _casual_intent(message)
+    if route is None:
+        return None
+    language, intent = route
+
+    # Yes/no and capability questions depend on prior context or current
+    # product state. Keep them on the real conversational path even though
+    # they can use low reasoning.
+    if intent in {"context_ack", "capabilities"}:
+        return None
+
+    name = _preferred_name(user_id) if intent in {"greeting", "greeting_how"} else ""
+    addressed = f", {name}" if name else ""
+
+    if language == "en":
+        responses = {
+            "greeting": f"Hello{addressed}! I’m here 🙂",
+            "greeting_how": f"Hello{addressed}! I’m doing great and ready to help 🙂 What shall we work on?",
+            "how_are_you": "I’m doing great and ready to help 🙂 How are you?",
+            "thanks": "You’re welcome 🙂",
+            "acknowledgement": "Got it 🙂",
+            "bye": "See you! 👋",
+            "identity": "I’m Velia, your personal AI assistant powered by Velyon Core.",
+        }
+    elif language == "tr":
+        responses = {
+            "greeting": f"Merhaba{addressed}! Buradayım 🙂",
+            "greeting_how": f"Merhaba{addressed}! Her şey harika, yardıma hazırım 🙂 Ne üzerinde çalışalım?",
+            "how_are_you": "Her şey harika, yardıma hazırım 🙂 Sen nasılsın?",
+            "thanks": "Rica ederim 🙂",
+            "acknowledgement": "Tamamdır 🙂",
+            "bye": "Görüşürüz! 👋",
+            "identity": "Ben Velia, Velyon Core üzerinde çalışan kişisel yapay zekâ asistanınım.",
+        }
+    else:
+        responses = {
+            "greeting": f"Привет{addressed}! Я на связи 🙂",
+            "greeting_how": f"Привет{addressed}! Всё отлично, я на связи 🙂 Чем займёмся?",
+            "how_are_you": "Всё отлично, я на связи 🙂 Как у тебя дела?",
+            "thanks": "Пожалуйста 🙂",
+            "acknowledgement": "Хорошо 🙂",
+            "bye": "До связи! 👋",
+            "identity": "Я Велия — твой персональный ИИ-помощник на Velyon Core.",
+        }
+
+    text = responses.get(intent)
+    return (text, language, intent) if text else None
 
 
 def _latest_request_user_message(request_id: str, user_id: Optional[int]) -> str:
@@ -99,7 +260,9 @@ def _selected_reasoning_effort(
         return default_effort
     if not _env_bool("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", True):
         return default_effort
-    message = _latest_request_user_message(request_id, user_id)
+    message = str(getattr(_CONTEXT, "user_message", "") or "")
+    if not message:
+        message = _latest_request_user_message(request_id, user_id)
     return "low" if _is_casual_message(message) else default_effort
 
 
@@ -260,23 +423,69 @@ def install(chat_module: Any, routes_module: Any = None) -> None:
         request_id: str = None,
     ) -> Dict[str, Any]:
         started = time.monotonic()
-        result = original_generate(
-            prompt,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            request_id=request_id,
-        )
+        previous_user_message = getattr(_CONTEXT, "user_message", None)
+        message = _latest_request_user_message(str(request_id or ""), user_id)
+        _CONTEXT.user_message = message
+        try:
+            fast_response = None
+            if _env_bool("VELIA_CHAT_INSTANT_CASUAL_ENABLED", True):
+                fast_response = _instant_response_for_message(message, user_id)
+
+            if fast_response is not None:
+                text, language, intent = fast_response
+                result: Dict[str, Any] = {
+                    "ok": True,
+                    "text": text,
+                    "provider": "velia",
+                    "model": "instant-response-v1",
+                    "finish_reason": "stop",
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "reasoning_tokens": 0,
+                    },
+                    "estimated_cost_usd": 0.0,
+                    "request_id": str(request_id or ""),
+                    "instant_response": True,
+                }
+                logger.info(
+                    "VELIA_FAST_RESPONSE request_id=%s user_id=%s conversation_id=%s language=%s intent=%s",
+                    str(request_id or ""),
+                    int(user_id),
+                    str(conversation_id),
+                    language,
+                    intent,
+                )
+            else:
+                result = original_generate(
+                    prompt,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                )
+        finally:
+            if previous_user_message is None:
+                try:
+                    delattr(_CONTEXT, "user_message")
+                except AttributeError:
+                    pass
+            else:
+                _CONTEXT.user_message = previous_user_message
+
         duration_ms = int((time.monotonic() - started) * 1000)
         if isinstance(result, dict):
             result.setdefault("generation_duration_ms", duration_ms)
         logger.info(
-            "VELIA_GENERATION_TIMING request_id=%s user_id=%s conversation_id=%s duration_ms=%s ok=%s reason=%s",
+            "VELIA_GENERATION_TIMING request_id=%s user_id=%s conversation_id=%s duration_ms=%s ok=%s reason=%s instant=%s",
             str(request_id or ""),
             int(user_id),
             str(conversation_id),
             duration_ms,
             bool(isinstance(result, dict) and result.get("ok")),
             str(result.get("reason") or "") if isinstance(result, dict) else "invalid_result",
+            bool(isinstance(result, dict) and result.get("instant_response")),
         )
         return result
 
