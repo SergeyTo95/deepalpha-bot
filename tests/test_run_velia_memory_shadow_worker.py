@@ -1,4 +1,6 @@
-from run_velia_memory_shadow_worker import worker_disabled_reason
+import logging
+
+from run_velia_memory_shadow_worker import configure_logging, worker_disabled_reason
 
 
 def test_worker_is_disabled_by_default():
@@ -44,3 +46,33 @@ def test_preview_override_is_explicit():
     }
 
     assert worker_disabled_reason(env) is None
+
+
+def test_worker_configures_info_logging_to_stdout_by_default(monkeypatch):
+    captured = {}
+
+    def fake_basic_config(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.setattr(logging, "basicConfig", fake_basic_config)
+
+    configure_logging()
+
+    assert captured["level"] == logging.INFO
+    assert captured["force"] is True
+    assert captured["format"] == "%(asctime)s %(levelname)s:%(name)s:%(message)s"
+
+
+def test_worker_honors_valid_log_level(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setattr(
+        logging,
+        "basicConfig",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    configure_logging()
+
+    assert captured["level"] == logging.DEBUG
