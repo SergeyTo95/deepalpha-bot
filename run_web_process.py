@@ -48,6 +48,7 @@ def main() -> None:
     from services.http_security_service import install_http_security
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
+    from services.velia_chat_streaming_runtime_patch import install as install_velia_chat_streaming
     from services.velia_conversation_quality_patch import install as install_velia_conversation_quality
     from services.velia_images_runtime_patch import install as install_velia_images
     from services.velia_images_service import ensure_velia_image_tables
@@ -56,6 +57,7 @@ def main() -> None:
     from services.velia_memory_shadow_service import ensure_velia_memory_shadow_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
+    from services.velia_mobile_streaming_service import setup_velia_mobile_streaming_route
     from services.velia_plugin_service import ensure_velia_plugin_tables
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
@@ -139,6 +141,14 @@ def main() -> None:
     # Install after every functional wrapper so timing covers the complete
     # production path and the mobile route keeps the final wrapped sender.
     install_velia_chat_latency(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+    # Streaming wraps only generation and calls the already hardened final
+    # sender, preserving idempotency, budget, shadow memory and persistence.
+    install_velia_chat_streaming(velia_chat_service_module)
+    setup_velia_mobile_streaming_route(
+        deepalpha_web.app,
         velia_chat_service_module,
         velia_mobile_routes_module,
     )
