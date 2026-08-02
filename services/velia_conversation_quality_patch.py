@@ -150,84 +150,92 @@ def _chronological_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
     )
 
 
-def install(velia_chat_service_module: Any) -> None:
-    if getattr(
-        velia_chat_service_module,
-        "_velia_conversation_quality_patch_installed",
-        False,
-    ):
-        return
-
-    original_build_prompt = velia_chat_service_module._build_prompt
-    original_list_messages = velia_chat_service_module.list_messages
-    original_generate = velia_chat_service_module.generate_velia_chat_result
-
-    def build_prompt_with_deterministic_turns(
-        user_id: int,
-        conversation_id: str,
-    ) -> str:
-        prompt = original_build_prompt(user_id, conversation_id)
-        if _CONVERSATION_MARKER not in prompt:
-            return prompt
-        prefix = prompt.split(_CONVERSATION_MARKER, 1)[0]
-        transcript = _deterministic_transcript(
+def install(
+    velia_chat_service_module: Any,
+    velia_mobile_routes_module: Any = None,
+) -> None:
+    already_installed = bool(
+        getattr(
             velia_chat_service_module,
-            int(user_id),
-            str(conversation_id),
+            "_velia_conversation_quality_patch_installed",
+            False,
         )
-        return prefix + _CONVERSATION_MARKER + transcript
+    )
 
-    def list_messages_chronologically(
-        user_id: int,
-        conversation_id: str,
-        *,
-        limit: int = 100,
-    ):
-        result = original_list_messages(
-            user_id,
-            conversation_id,
-            limit=limit,
-        )
-        if result is None:
-            return None
-        return _chronological_messages(result)
+    if not already_installed:
+        original_build_prompt = velia_chat_service_module._build_prompt
+        original_list_messages = velia_chat_service_module.list_messages
+        original_generate = velia_chat_service_module.generate_velia_chat_result
 
-    def generate_with_memory_note_ack(
-        prompt: str,
-        *,
-        user_id: int,
-        conversation_id: str,
-        request_id: str = None,
-    ) -> Dict[str, Any]:
-        latest_message = last_user_message_from_chat_prompt(prompt)
-        acknowledgement = memory_note_ack(latest_message)
-        if acknowledgement:
-            return {
-                "ok": True,
-                "text": acknowledgement,
-                "request_id": str(request_id or ""),
-                "provider": "velyon_core",
-                "model": "memory_note",
-                "finish_reason": "memory_note_ack",
-                "fallback_used": False,
-                "estimated_cost_usd": 0.0,
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                    "cached_input_tokens": 0,
-                    "reasoning_tokens": 0,
-                },
-            }
-        return original_generate(
-            prompt,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            request_id=request_id,
-        )
+        def build_prompt_with_deterministic_turns(
+            user_id: int,
+            conversation_id: str,
+        ) -> str:
+            prompt = original_build_prompt(user_id, conversation_id)
+            if _CONVERSATION_MARKER not in prompt:
+                return prompt
+            prefix = prompt.split(_CONVERSATION_MARKER, 1)[0]
+            transcript = _deterministic_transcript(
+                velia_chat_service_module,
+                int(user_id),
+                str(conversation_id),
+            )
+            return prefix + _CONVERSATION_MARKER + transcript
 
-    velia_chat_service_module._build_prompt = build_prompt_with_deterministic_turns
-    velia_chat_service_module.list_messages = list_messages_chronologically
-    velia_chat_service_module.generate_velia_chat_result = generate_with_memory_note_ack
-    velia_chat_service_module._velia_conversation_quality_patch_installed = True
-    logger.info("VELIA_CONVERSATION_QUALITY_PATCH_INSTALLED")
+        def list_messages_chronologically(
+            user_id: int,
+            conversation_id: str,
+            *,
+            limit: int = 100,
+        ):
+            result = original_list_messages(
+                user_id,
+                conversation_id,
+                limit=limit,
+            )
+            if result is None:
+                return None
+            return _chronological_messages(result)
+
+        def generate_with_memory_note_ack(
+            prompt: str,
+            *,
+            user_id: int,
+            conversation_id: str,
+            request_id: str = None,
+        ) -> Dict[str, Any]:
+            latest_message = last_user_message_from_chat_prompt(prompt)
+            acknowledgement = memory_note_ack(latest_message)
+            if acknowledgement:
+                return {
+                    "ok": True,
+                    "text": acknowledgement,
+                    "request_id": str(request_id or ""),
+                    "provider": "velyon_core",
+                    "model": "memory_note",
+                    "finish_reason": "memory_note_ack",
+                    "fallback_used": False,
+                    "estimated_cost_usd": 0.0,
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "reasoning_tokens": 0,
+                    },
+                }
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+
+        velia_chat_service_module._build_prompt = build_prompt_with_deterministic_turns
+        velia_chat_service_module.list_messages = list_messages_chronologically
+        velia_chat_service_module.generate_velia_chat_result = generate_with_memory_note_ack
+        velia_chat_service_module._velia_conversation_quality_patch_installed = True
+        logger.info("VELIA_CONVERSATION_QUALITY_PATCH_INSTALLED")
+
+    if velia_mobile_routes_module is not None:
+        velia_mobile_routes_module.list_messages = velia_chat_service_module.list_messages
