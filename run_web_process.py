@@ -50,6 +50,8 @@ def main() -> None:
     from services.velia_images_runtime_patch import install as install_velia_images
     from services.velia_images_service import ensure_velia_image_tables
     from services.velia_live_plugins_patch import install as install_velia_live_plugins
+    from services.velia_memory_shadow_runtime_patch import install as install_velia_memory_shadow
+    from services.velia_memory_shadow_service import ensure_velia_memory_shadow_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
     from services.velia_plugin_service import ensure_velia_plugin_tables
@@ -74,6 +76,10 @@ def main() -> None:
     install_velia_live_plugins(velia_chat_service_module)
     install_velia_user_profile(velia_chat_service_module)
     install_velia_images(velia_chat_service_module)
+    install_velia_memory_shadow(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
 
     from developer_api_admin_routes import setup_developer_api_admin_routes
     from developer_api_commercial_admin_routes_v2 import (
@@ -145,6 +151,7 @@ def main() -> None:
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
         ensure_velia_user_profile_table()
+        ensure_velia_memory_shadow_tables()
 
     try:
         run_serialized_developer_api_schema_bootstrap(
