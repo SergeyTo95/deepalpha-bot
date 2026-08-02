@@ -3,7 +3,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-from services import kimi_gateway
+from services import kimi_gateway, llm_service
 from services.kimi_streaming_gateway import call_kimi_stream
 from services.velia_chat_latency_runtime_patch import (
     _casual_intent,
@@ -13,7 +13,11 @@ from services.velia_chat_latency_runtime_patch import (
 )
 from services.velia_conversation_quality_patch import memory_note_ack
 from services.velia_image_intent_service import detect_image_intent
-from services.velia_llm_service import _env_int, resolve_velia_provider
+from services.velia_llm_service import (
+    _call_provider,
+    _env_int,
+    resolve_velia_provider,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +83,48 @@ def _reasoning_effort_for_message(message: str) -> str:
     if not _env_bool("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", True):
         return default_effort
     return "low" if _is_casual_message(message) else default_effort
+
+
+def _prompt_cache_key_for_conversation(conversation_id: str) -> str:
+    if not _env_bool("VELIA_CHAT_PROMPT_CACHE_KEY_ENABLED", True):
+        return ""
+    return _stable_prompt_cache_key(str(conversation_id))
+
+
+def _direct_fallback_result(
+    primary_provider: str,
+    primary_failure: Dict[str, Any],
+    prompt: str,
+    *,
+    user_id: int,
+    conversation_id: str,
+    request_id: Optional[str],
+) -> Dict[str, Any]:
+    fallback_provider = llm_service.resolve_fallback_provider(primary_provider)
+    if not fallback_provider or fallback_provider == primary_provider:
+        return primary_failure
+
+    fallback = _call_provider(
+        fallback_provider,
+        prompt,
+        user_id=int(user_id),
+        conversation_id=str(conversation_id),
+        request_id=str(request_id or ""),
+    )
+    if not isinstance(fallback, dict):
+        fallback = {
+            "ok": False,
+            "reason": "invalid_fallback_response",
+            "text": "",
+        }
+    fallback["request_id"] = str(request_id or "")
+    fallback["fallback_used"] = True
+    fallback["primary_failure_reason"] = str(primary_failure.get("reason") or "")
+    fallback["stream_fallback_used"] = True
+    fallback["stream_failure_reason"] = str(primary_failure.get("reason") or "")
+    if str(fallback.get("text") or "").strip():
+        fallback["ok"] = True
+    return fallback
 
 
 def run_streaming_send(
@@ -152,6 +198,7 @@ def install(chat_module: Any) -> None:
             )
 
         started = time.monotonic()
+        primary_provider = resolve_velia_provider()
         selected_reasoning = _reasoning_effort_for_message(message)
         result = call_kimi_stream(
             prompt=str(prompt),
@@ -164,7 +211,7 @@ def install(chat_module: Any) -> None:
             cycle_id=str(conversation_id),
             max_tokens=_env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192),
             user_id=int(user_id),
-            prompt_cache_key=_stable_prompt_cache_key(str(conversation_id)),
+            prompt_cache_key=_prompt_cache_key_for_conversation(str(conversation_id)),
             reasoning_effort=selected_reasoning,
         )
         result["request_id"] = str(request_id or "")
@@ -181,25 +228,25 @@ def install(chat_module: Any) -> None:
             )
             return result
 
-        # Preserve the existing provider/fallback path when streaming could not
-        # produce a final answer. Any already emitted partial text has been
-        # reset by the streaming gateway before this fallback starts.
+        # Streaming retries have already exhausted the primary provider. Move
+        # directly to the configured fallback instead of replaying the primary
+        # provider through the legacy generation path.
         if result.get("fallback_allowed"):
-            fallback = original_generate(
+            fallback = _direct_fallback_result(
+                primary_provider,
+                result,
                 prompt,
                 user_id=user_id,
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
-            if isinstance(fallback, dict):
-                fallback["stream_fallback_used"] = True
-                fallback["stream_failure_reason"] = str(result.get("reason") or "")
             logger.warning(
-                "VELIA_STREAM_FALLBACK request_id=%s user_id=%s conversation_id=%s reason=%s duration_ms=%s",
+                "VELIA_STREAM_FALLBACK request_id=%s user_id=%s conversation_id=%s reason=%s fallback_used=%s duration_ms=%s",
                 str(request_id or ""),
                 int(user_id),
                 str(conversation_id),
                 str(result.get("reason") or ""),
+                bool(fallback.get("fallback_used")),
                 int((time.monotonic() - started) * 1000),
             )
             return fallback
