@@ -28,6 +28,15 @@ def test_reasoning_effort_preserves_config_for_complex_and_can_reduce_casual(mon
     assert runtime._reasoning_effort_for_message("Да") == "max"
 
 
+def test_prompt_cache_key_honors_feature_flag(monkeypatch):
+    monkeypatch.setattr(runtime, "_stable_prompt_cache_key", lambda value: "cache")
+    monkeypatch.setenv("VELIA_CHAT_PROMPT_CACHE_KEY_ENABLED", "true")
+    assert runtime._prompt_cache_key_for_conversation("conversation") == "cache"
+
+    monkeypatch.setenv("VELIA_CHAT_PROMPT_CACHE_KEY_ENABLED", "false")
+    assert runtime._prompt_cache_key_for_conversation("conversation") == ""
+
+
 def test_run_streaming_send_scopes_callbacks_to_current_thread():
     events = []
 
@@ -56,7 +65,8 @@ def test_installed_generator_streams_substantive_request(monkeypatch):
     monkeypatch.setattr(runtime, "_latest_request_user_message", lambda *args: "Проведи анализ")
     monkeypatch.setattr(runtime, "_should_stream_message", lambda message: True)
     monkeypatch.setattr(runtime, "_reasoning_effort_for_message", lambda message: "high")
-    monkeypatch.setattr(runtime, "_stable_prompt_cache_key", lambda conversation_id: "cache")
+    monkeypatch.setattr(runtime, "_prompt_cache_key_for_conversation", lambda value: "cache")
+    monkeypatch.setattr(runtime, "resolve_velia_provider", lambda: "kimi")
 
     streamed = []
 
@@ -137,11 +147,12 @@ def test_installed_generator_preserves_original_for_special_request(monkeypatch)
     assert original_calls == ["prompt"]
 
 
-def test_stream_failure_uses_existing_fallback_after_reset(monkeypatch):
+def test_stream_failure_calls_fallback_directly_without_replaying_primary(monkeypatch):
     monkeypatch.setattr(runtime, "_latest_request_user_message", lambda *args: "Проведи анализ")
     monkeypatch.setattr(runtime, "_should_stream_message", lambda message: True)
     monkeypatch.setattr(runtime, "_reasoning_effort_for_message", lambda message: "high")
-    monkeypatch.setattr(runtime, "_stable_prompt_cache_key", lambda conversation_id: "cache")
+    monkeypatch.setattr(runtime, "_prompt_cache_key_for_conversation", lambda value: "cache")
+    monkeypatch.setattr(runtime, "resolve_velia_provider", lambda: "kimi")
     monkeypatch.setattr(
         runtime,
         "call_kimi_stream",
@@ -152,12 +163,22 @@ def test_stream_failure_uses_existing_fallback_after_reset(monkeypatch):
             "fallback_allowed": True,
         },
     )
+    monkeypatch.setattr(
+        runtime.llm_service,
+        "resolve_fallback_provider",
+        lambda primary: "gemini",
+    )
+    fallback_calls = []
 
+    def fake_fallback(provider, prompt, **kwargs):
+        fallback_calls.append((provider, prompt, kwargs))
+        return {"ok": True, "text": "Fallback answer"}
+
+    monkeypatch.setattr(runtime, "_call_provider", fake_fallback)
+    original_calls = []
     module = SimpleNamespace(
-        generate_velia_chat_result=lambda *args, **kwargs: {
-            "ok": True,
-            "text": "Fallback answer",
-        }
+        generate_velia_chat_result=lambda *args, **kwargs: original_calls.append((args, kwargs))
+        or {"ok": True, "text": "Primary replay"}
     )
     runtime.install(module)
 
@@ -179,3 +200,31 @@ def test_stream_failure_uses_existing_fallback_after_reset(monkeypatch):
     assert result["text"] == "Fallback answer"
     assert result["stream_fallback_used"] is True
     assert result["stream_failure_reason"] == "connection_error"
+    assert result["fallback_used"] is True
+    assert original_calls == []
+    assert len(fallback_calls) == 1
+    assert fallback_calls[0][0] == "gemini"
+
+
+def test_direct_fallback_returns_primary_failure_when_not_configured(monkeypatch):
+    monkeypatch.setattr(
+        runtime.llm_service,
+        "resolve_fallback_provider",
+        lambda primary: "",
+    )
+    primary = {
+        "ok": False,
+        "reason": "connection_error",
+        "fallback_allowed": True,
+    }
+
+    result = runtime._direct_fallback_result(
+        "kimi",
+        primary,
+        "prompt",
+        user_id=7,
+        conversation_id="conversation",
+        request_id="request-4",
+    )
+
+    assert result is primary
