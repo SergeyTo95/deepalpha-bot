@@ -11,6 +11,9 @@ from services.velia_chat_latency_runtime_patch import (
     _is_casual_message,
     _stable_prompt_cache_key,
 )
+from services.velia_client_request_id_service import (
+    install_client_request_id_serialization,
+)
 from services.velia_conversation_quality_patch import memory_note_ack
 from services.velia_image_intent_service import detect_image_intent
 from services.velia_llm_service import (
@@ -166,6 +169,7 @@ def run_streaming_send(
 
 
 def install(chat_module: Any) -> None:
+    install_client_request_id_serialization(chat_module)
     if getattr(chat_module, "_velia_chat_streaming_patch_installed", False):
         return
 
