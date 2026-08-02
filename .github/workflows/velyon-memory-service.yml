@@ -62,6 +62,7 @@ jobs:
               'model: "${TDAI_LLM_MODEL}"',
               "storeBackend: sqlite",
               "provider: none",
+              "language: en",
               "enabled: false",
           ]
           for value in required_config:

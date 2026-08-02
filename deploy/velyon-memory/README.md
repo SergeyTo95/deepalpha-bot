@@ -52,10 +52,25 @@ Binding to `::` supports Railway environments whose private DNS resolves to IPv6
 The standalone pilot uses:
 
 - local SQLite and local files on the Railway volume;
-- BM25 retrieval without a remote embedding service;
+- English BM25 parameters for Russian, English, and Turkish text instead of the upstream Chinese default;
+- no remote embedding service during the first shadow phase;
 - one service replica;
 - asynchronous L0 → L1 → L2 → L3 processing;
 - no Skill extraction.
+
+## Startup verification
+
+Before enabling shadow capture, inspect the first startup logs.
+
+They must show:
+
+```text
+Initialized BM25 local encoder (language=en)
+Creating StandaloneLLMRunner: model=<configured private model>
+Gateway listening on ...:8420
+```
+
+Do not enable capture if the log still shows the upstream fallback model. That means `TDAI_LLM_MODEL` or the other `TDAI_LLM_*` variables were not applied to the deployed service.
 
 ## Backend variables
 
@@ -86,11 +101,12 @@ The internal Railway endpoint uses HTTP inside the private project network. Do n
 
 1. Deploy `velyon-memory` with its volume and required variables.
 2. Confirm its Railway deployment is healthy and the runtime can write under `/data/tdai-memory`.
-3. Deploy `deepalpha-bot` with the memory variables while `VELIA_MEMORY_SHADOW_ENABLED=false`.
-4. Confirm logs contain `VELIA_MEMORY_SHADOW_RUNTIME_PATCH_INSTALLED` and that the worker remains healthy.
-5. Set `VELIA_MEMORY_SHADOW_ENABLED=true` only after both services are healthy.
-6. Keep `VELIA_MEMORY_SHADOW_USER_IDS=5811340792` and `VELIA_MEMORY_SHADOW_ALLOW_ALL=false` during the pilot.
-7. Send several normal VELIA messages and inspect delivery metadata in the backend logs and outbox table.
+3. Confirm startup logs show the configured private model and `BM25 language=en`.
+4. Deploy `deepalpha-bot` with the memory variables while `VELIA_MEMORY_SHADOW_ENABLED=false`.
+5. Confirm logs contain `VELIA_MEMORY_SHADOW_RUNTIME_PATCH_INSTALLED` and that the worker remains healthy.
+6. Set `VELIA_MEMORY_SHADOW_ENABLED=true` only after both services are healthy.
+7. Keep `VELIA_MEMORY_SHADOW_USER_IDS=5811340792` and `VELIA_MEMORY_SHADOW_ALLOW_ALL=false` during the pilot.
+8. Send several normal VELIA messages and inspect delivery metadata in the backend logs and outbox table.
 
 ## Expected logs
 
