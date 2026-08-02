@@ -1,10 +1,13 @@
+import logging
 from typing import Any, Dict
 
+from services.velia_image_intent_service import image_intent_from_chat_prompt
 from services.velia_images_service import (
-    image_intent_from_chat_prompt,
     image_metadata_for_request,
     generate_and_store_image,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def install(velia_chat_service_module: Any) -> None:
@@ -30,6 +33,13 @@ def install(velia_chat_service_module: Any) -> None:
                 request_id=request_id,
             )
 
+        logger.info(
+            "VELIA_IMAGE_INTENT_MATCHED user_id=%s conversation_id=%s request_id=%s prompt_chars=%s",
+            int(user_id),
+            str(conversation_id),
+            str(request_id or ""),
+            len(intent.prompt),
+        )
         original_message = velia_chat_service_module.re.findall(
             r"(?:^|\n\n)USER:\s*(.*?)(?=\n\n(?:USER|ASSISTANT):|\Z)",
             str(prompt or ""),
@@ -81,3 +91,4 @@ def install(velia_chat_service_module: Any) -> None:
     velia_chat_service_module.generate_velia_chat_result = generate_with_velia_images
     velia_chat_service_module._serialize_message = serialize_with_velia_image
     velia_chat_service_module._velia_images_patch_installed = True
+    logger.info("VELIA_IMAGES_RUNTIME_PATCH_INSTALLED")
