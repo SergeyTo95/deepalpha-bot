@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from aiohttp import web
 
@@ -209,7 +209,6 @@ def setup_velia_mobile_streaming_route(
                     _sse_event(
                         "error",
                         error=_stream_error_code(result),
-                        result=result if isinstance(result, dict) else None,
                     ),
                 )
         except asyncio.CancelledError:
