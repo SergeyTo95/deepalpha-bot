@@ -7,6 +7,8 @@ on:
     paths:
       - "run_bot_process.py"
       - "run_web_process.py"
+      - "run_velia_memory_shadow_worker.py"
+      - "supervisord.conf"
       - "velia_mobile_routes.py"
       - "velia_image_routes.py"
       - "velia_plugin_routes.py"
@@ -19,6 +21,8 @@ on:
       - "services/velia_images_service.py"
       - "services/velia_images_runtime_patch.py"
       - "services/velia_images_queue_runtime_patch.py"
+      - "services/velia_memory_shadow_service.py"
+      - "services/velia_memory_shadow_runtime_patch.py"
       - "services/velia_mobile_hardening_service.py"
       - "services/velia_plugin_service.py"
       - "services/velia_plugin_router.py"
@@ -34,6 +38,9 @@ on:
       - "tests/test_velia_image_intent_service.py"
       - "tests/test_velia_images_service.py"
       - "tests/test_velia_images_queue_runtime_patch.py"
+      - "tests/test_velia_memory_shadow_service.py"
+      - "tests/test_velia_memory_shadow_runtime_patch.py"
+      - "tests/test_run_velia_memory_shadow_worker.py"
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
       - "tests/test_velia_plugin_router_limits.py"
@@ -41,6 +48,7 @@ on:
       - "tests/test_velia_telegram_pairing.py"
       - "tests/test_velia_user_profile_service.py"
       - "docs/velia-mobile-chat-beta.md"
+      - "docs/velia-memory-shadow-pilot.md"
       - ".github/workflows/velia-mobile-chat.yml"
   workflow_dispatch:
 
@@ -77,6 +85,8 @@ jobs:
             services/velia_images_service.py \
             services/velia_images_runtime_patch.py \
             services/velia_images_queue_runtime_patch.py \
+            services/velia_memory_shadow_service.py \
+            services/velia_memory_shadow_runtime_patch.py \
             services/velia_mobile_hardening_service.py \
             services/velia_plugin_service.py \
             services/velia_plugin_router.py \
@@ -91,6 +101,7 @@ jobs:
             velia_plugin_routes.py \
             velia_profile_routes.py \
             run_bot_process.py \
+            run_velia_memory_shadow_worker.py \
             run_web_process.py
 
       - name: Run focused tests
@@ -104,6 +115,9 @@ jobs:
             tests/test_velia_image_intent_service.py \
             tests/test_velia_images_service.py \
             tests/test_velia_images_queue_runtime_patch.py \
+            tests/test_velia_memory_shadow_service.py \
+            tests/test_velia_memory_shadow_runtime_patch.py \
+            tests/test_run_velia_memory_shadow_worker.py \
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
             tests/test_velia_plugin_router_limits.py \
@@ -127,13 +141,20 @@ jobs:
               Path("services/velia_user_profile_runtime_patch.py"),
               Path("services/velia_telegram_connect_page_patch.py"),
               Path("docs/velia-mobile-chat-beta.md"),
+              Path("docs/velia-memory-shadow-pilot.md"),
           ]
           forbidden_literals = [
               "Authorization: Bearer <KIMI",
               "KIMI_API_KEY=sk-",
               "BRAVE_SEARCH_API_KEY=",
           ]
-          forbidden_provider_terms = ["reve", "fal.ai", "fal.run", "fal.media"]
+          forbidden_provider_terms = [
+              "reve",
+              "fal.ai",
+              "fal.run",
+              "fal.media",
+              "tencentdb",
+          ]
           for path in public_files:
               text = path.read_text(encoding="utf-8")
               for literal in forbidden_literals:
