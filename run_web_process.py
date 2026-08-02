@@ -83,10 +83,8 @@ def main() -> None:
     # Attachment-aware persistence must be the innermost chat sender so every
     # existing VELIA quality, profile, image, memory and hardening wrapper still
     # applies to file-backed turns.
-    install_velia_attachment_chat(
-        velia_chat_service_module,
-        velia_mobile_routes_module,
-    )
+    install_velia_attachment_chat(velia_chat_service_module)
+    velia_mobile_routes_module.send_message = velia_chat_service_module.send_message
     install_velia_live_plugins(velia_chat_service_module)
     install_velia_conversation_quality(
         velia_chat_service_module,
