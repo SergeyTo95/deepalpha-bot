@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import queue as thread_queue
 import threading
 import time
 from typing import Any, Optional, Tuple
@@ -17,6 +18,8 @@ _STREAM_ROUTE = "/mobile-api/v1/conversations/{conversation_id}/messages/stream"
 _DELTA_BATCH_CHARS = 48
 _DELTA_BATCH_SECONDS = 0.04
 _KEEPALIVE_SECONDS = 8.0
+_STREAM_QUEUE_MAX_EVENTS = 128
+_STREAM_QUEUE_PUT_TIMEOUT_SECONDS = 0.1
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -36,6 +39,23 @@ def _stream_error_code(result: Any) -> str:
     if isinstance(result, dict):
         return str(result.get("error") or result.get("reason") or "generation_failed")
     return "generation_failed"
+
+
+def _put_bounded_event(
+    queue: thread_queue.Queue[Tuple[str, str]],
+    connected: threading.Event,
+    event: Tuple[str, str],
+    *,
+    timeout_seconds: float = _STREAM_QUEUE_PUT_TIMEOUT_SECONDS,
+) -> bool:
+    """Apply bounded backpressure without trapping generation after disconnect."""
+    while connected.is_set():
+        try:
+            queue.put(event, timeout=max(0.001, float(timeout_seconds)))
+            return True
+        except thread_queue.Full:
+            continue
+    return False
 
 
 async def _write_if_connected(
@@ -105,18 +125,16 @@ def setup_velia_mobile_streaming_route(
         )
         await response.prepare(request)
 
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
+        queue: thread_queue.Queue[Tuple[str, str]] = thread_queue.Queue(
+            maxsize=_STREAM_QUEUE_MAX_EVENTS,
+        )
         connected = threading.Event()
         connected.set()
 
         def enqueue(event_type: str, text: str = "") -> None:
             if not connected.is_set():
                 return
-            try:
-                loop.call_soon_threadsafe(queue.put_nowait, (event_type, text))
-            except RuntimeError:
-                connected.clear()
+            _put_bounded_event(queue, connected, (event_type, text))
 
         worker = asyncio.create_task(
             asyncio.to_thread(
@@ -164,9 +182,9 @@ def setup_velia_mobile_streaming_route(
                     break
                 event: Optional[Tuple[str, str]] = None
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.05)
-                except asyncio.TimeoutError:
-                    pass
+                    event = queue.get_nowait()
+                except thread_queue.Empty:
+                    await asyncio.sleep(0.05)
 
                 now = time.monotonic()
                 if event is not None:
