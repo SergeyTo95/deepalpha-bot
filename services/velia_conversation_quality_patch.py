@@ -40,6 +40,23 @@ _MEMORY_NOTE_PATTERNS = (
         ),
     ),
 )
+_RU_PERSPECTIVE_REPLACEMENTS = {
+    "моими": "твоими",
+    "моего": "твоего",
+    "моему": "твоему",
+    "моих": "твоих",
+    "моей": "твоей",
+    "моим": "твоим",
+    "моё": "твоё",
+    "мое": "твое",
+    "мои": "твои",
+    "моя": "твоя",
+    "мой": "твой",
+}
+_EN_PERSPECTIVE_REPLACEMENTS = {
+    "mine": "yours",
+    "my": "your",
+}
 
 
 def _compact_note(value: str) -> str:
@@ -52,6 +69,49 @@ def _compact_note(value: str) -> str:
     return shortened + "…"
 
 
+def _match_case(source: str, replacement: str) -> str:
+    if source.isupper():
+        return replacement.upper()
+    if source[:1].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
+def _replace_words(text: str, replacements: Dict[str, str]) -> str:
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(word) for word in replacements) + r")\b",
+        re.IGNORECASE,
+    )
+
+    def replace(match: re.Match) -> str:
+        source = match.group(0)
+        replacement = replacements[source.lower()]
+        return _match_case(source, replacement)
+
+    return pattern.sub(replace, text)
+
+
+def _shift_note_perspective(note: str, language: str) -> str:
+    shifted = str(note or "")
+    if language == "ru":
+        shifted = re.sub(
+            r"\bя\s+сам\b",
+            lambda match: _match_case(match.group(0), "ты сам"),
+            shifted,
+            flags=re.IGNORECASE,
+        )
+        shifted = re.sub(
+            r"\bя\s+сама\b",
+            lambda match: _match_case(match.group(0), "ты сама"),
+            shifted,
+            flags=re.IGNORECASE,
+        )
+        return _replace_words(shifted, _RU_PERSPECTIVE_REPLACEMENTS)
+    if language == "en":
+        return _replace_words(shifted, _EN_PERSPECTIVE_REPLACEMENTS)
+    return shifted
+
+
 def memory_note_ack(message: str) -> Optional[str]:
     text = str(message or "")
     for language, pattern in _MEMORY_NOTE_PATTERNS:
@@ -61,7 +121,7 @@ def memory_note_ack(message: str) -> Optional[str]:
         note = _compact_note(match.group("note"))
         if not note:
             return None
-        note = note.rstrip(" .!?;:")
+        note = _shift_note_perspective(note, language).rstrip(" .!?;:")
         if language == "ru":
             return f"Приняла: {note}."
         if language == "tr":
