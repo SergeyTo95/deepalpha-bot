@@ -118,7 +118,7 @@ def submit_and_wait(prompt: str) -> Dict[str, Any]:
         "prompt": prompt,
         "aspect_ratio": "1:1",
         "num_images": 1,
-        "output_format": "png",
+        "output_format": "jpeg",
     }
 
     submitted = image_service._request_json(
