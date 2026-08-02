@@ -46,6 +46,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_chat_streaming_runtime_patch import install as install_velia_chat_streaming
@@ -63,6 +64,7 @@ def main() -> None:
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
     from services.velia_user_profile_service import ensure_velia_user_profile_table
     from velia_image_routes import setup_velia_image_routes
+    from velia_mobile_attachment_routes import setup_velia_mobile_attachment_routes
     from velia_plugin_routes import setup_velia_plugin_routes
     from velia_profile_routes import setup_velia_profile_routes
 
@@ -130,6 +132,7 @@ def main() -> None:
         deepalpha_web.app,
         web_user_resolver,
     )
+    setup_velia_mobile_attachment_routes(deepalpha_web.app)
     setup_velia_image_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
     setup_velia_profile_routes(deepalpha_web.app)
@@ -170,6 +173,7 @@ def main() -> None:
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
         ensure_velia_chat_tables()
+        ensure_velia_attachment_tables()
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
         ensure_velia_user_profile_table()
