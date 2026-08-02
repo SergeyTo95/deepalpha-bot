@@ -47,6 +47,7 @@ def main() -> None:
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
     from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
+    from services.velia_attachment_feature_flag_service import install as install_velia_attachment_feature_flag
     from services.velia_attachment_message_runtime_patch import install as install_velia_attachment_messages
     from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
@@ -141,6 +142,10 @@ def main() -> None:
     velia_mobile_routes_module.setup_velia_mobile_routes(
         deepalpha_web.app,
         web_user_resolver,
+    )
+    install_velia_attachment_feature_flag(
+        deepalpha_web.app,
+        velia_mobile_routes_module,
     )
     setup_velia_mobile_attachment_routes(deepalpha_web.app)
     setup_velia_image_routes(deepalpha_web.app)
