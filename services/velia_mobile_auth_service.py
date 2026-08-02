@@ -13,6 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover - minimal unit-test environment
 from db.database import get_connection
 
 
+PERSISTENT_REFRESH_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
+
+
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
     try:
         return max(minimum, int(os.getenv(name, str(default)) or default))
@@ -20,8 +23,29 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
         return max(minimum, default)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _resolve_refresh_expiry(
+    now: datetime,
+    current_expires_at: Optional[datetime] = None,
+) -> datetime:
+    if _env_bool("VELIA_MOBILE_PERSISTENT_SESSIONS", True):
+        return PERSISTENT_REFRESH_EXPIRES_AT
+
+    refresh_ttl_days = _env_int("VELIA_MOBILE_REFRESH_TTL_DAYS", 30, 1)
+    configured_expiry = now + timedelta(days=refresh_ttl_days)
+    if current_expires_at is None:
+        return configured_expiry
+    return min(current_expires_at, configured_expiry)
 
 
 def _hash_secret(value: str) -> str:
@@ -240,10 +264,9 @@ def exchange_pairing_code(
         return {"ok": False, "error": "invalid_device_id"}
 
     access_ttl = _env_int("VELIA_MOBILE_ACCESS_TTL_SECONDS", 900, 60)
-    refresh_ttl_days = _env_int("VELIA_MOBILE_REFRESH_TTL_DAYS", 30, 1)
     now = _utcnow()
     access_expires_at = now + timedelta(seconds=access_ttl)
-    refresh_expires_at = now + timedelta(days=refresh_ttl_days)
+    refresh_expires_at = _resolve_refresh_expiry(now)
     raw_access_token = _new_access_token()
     raw_refresh_token = _new_refresh_token()
     session_id = str(uuid.uuid4())
@@ -383,7 +406,6 @@ def rotate_refresh_token(
         return {"ok": False, "error": "invalid_device_id"}
 
     access_ttl = _env_int("VELIA_MOBILE_ACCESS_TTL_SECONDS", 900, 60)
-    refresh_ttl_days = _env_int("VELIA_MOBILE_REFRESH_TTL_DAYS", 30, 1)
     now = _utcnow()
     token_hash = _hash_secret(raw_refresh_token)
     conn = get_connection()
@@ -449,10 +471,7 @@ def rotate_refresh_token(
         new_refresh_token = _new_refresh_token()
         new_generation = generation + 1
         new_access_expires_at = now + timedelta(seconds=access_ttl)
-        new_refresh_expires_at = min(
-            refresh_expires_at,
-            now + timedelta(days=refresh_ttl_days),
-        )
+        new_refresh_expires_at = _resolve_refresh_expiry(now, refresh_expires_at)
         cursor.execute(
             """
             INSERT INTO velia_mobile_refresh_history (

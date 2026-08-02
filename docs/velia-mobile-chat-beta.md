@@ -18,6 +18,9 @@ LLM_PROVIDER_VELIA_CHAT=kimi
 
 # Short access tokens and rotating refresh tokens.
 VELIA_MOBILE_ACCESS_TTL_SECONDS=900
+
+# Finite-session rollout. Keep this explicit when a 30-day absolute limit is required.
+VELIA_MOBILE_PERSISTENT_SESSIONS=false
 VELIA_MOBILE_REFRESH_TTL_DAYS=30
 VELIA_MOBILE_PAIRING_TTL_SECONDS=600
 
@@ -41,6 +44,14 @@ VELIA_CHAT_PENDING_LEASE_SECONDS=600
 VELIA_MOBILE_DEBUG_USAGE=true
 VELIA_MOBILE_DEBUG_USER_IDS=
 ```
+
+For the Android product behavior where an authenticated device remains connected until explicit logout or security revocation, set:
+
+```env
+VELIA_MOBILE_PERSISTENT_SESSIONS=true
+```
+
+In persistent mode `VELIA_MOBILE_REFRESH_TTL_DAYS` is intentionally ignored. Access tokens remain short-lived, refresh tokens rotate, and logout, replay detection, device mismatch, or administrative revocation still terminate the server session.
 
 Existing Kimi transport configuration remains server-side:
 
