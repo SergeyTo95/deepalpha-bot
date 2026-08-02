@@ -46,6 +46,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_conversation_quality_patch import install as install_velia_conversation_quality
     from services.velia_images_runtime_patch import install as install_velia_images
@@ -132,6 +133,12 @@ def main() -> None:
     setup_velia_profile_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
         deepalpha_web.app,
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+    # Install after every functional wrapper so timing covers the complete
+    # production path and the mobile route keeps the final wrapped sender.
+    install_velia_chat_latency(
         velia_chat_service_module,
         velia_mobile_routes_module,
     )

@@ -72,12 +72,22 @@ def _run_selected_plugin(
 
 def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, Any]:
     message = plugins._safe_text(user_message, 12000)
+
+    # Intent checks must happen before any preference/database read. Ordinary
+    # chat messages should not open a PostgreSQL connection just to discover
+    # that no live tool is required.
+    weather_intent = bool(plugins._WEATHER_KEYWORDS.search(message))
+    explicit_search = bool(plugins._SEARCH_DIRECTIVE.search(message))
+    news_topic = bool(plugins._NEWS_TOPIC_KEYWORDS.search(message))
+    if not weather_intent and not explicit_search and not news_topic:
+        return _empty_result()
+
     preferences = plugins.get_user_plugins(user_id)
 
     # Intent precedence is deliberate. A weather question must never fall
     # through to generic web/news search just because it also contains a time
     # qualifier such as "сейчас", "today", or "current".
-    if plugins._WEATHER_KEYWORDS.search(message):
+    if weather_intent:
         if not preferences["weather"]["enabled"]:
             return _empty_result()
         return _run_selected_plugin(
@@ -86,10 +96,6 @@ def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, An
             lambda: plugins._weather_context(message),
         )
 
-    explicit_search = bool(plugins._SEARCH_DIRECTIVE.search(message))
-    news_topic = bool(plugins._NEWS_TOPIC_KEYWORDS.search(message))
-    if not explicit_search and not news_topic:
-        return _empty_result()
     if not preferences["web_search"]["enabled"]:
         return _empty_result()
 
