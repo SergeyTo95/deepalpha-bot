@@ -14,6 +14,7 @@ on:
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
       - "services/velia_llm_service.py"
+      - "services/velia_image_intent_service.py"
       - "services/velia_images_service.py"
       - "services/velia_images_runtime_patch.py"
       - "services/velia_mobile_hardening_service.py"
@@ -26,6 +27,7 @@ on:
       - "tests/test_velia_mobile_auth_service.py"
       - "tests/test_velia_chat_service.py"
       - "tests/test_velia_llm_service.py"
+      - "tests/test_velia_image_intent_service.py"
       - "tests/test_velia_images_service.py"
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
@@ -65,6 +67,7 @@ jobs:
             services/velia_mobile_auth_service.py \
             services/velia_chat_service.py \
             services/velia_llm_service.py \
+            services/velia_image_intent_service.py \
             services/velia_images_service.py \
             services/velia_images_runtime_patch.py \
             services/velia_mobile_hardening_service.py \
@@ -88,6 +91,7 @@ jobs:
             tests/test_velia_mobile_auth_service.py \
             tests/test_velia_chat_service.py \
             tests/test_velia_llm_service.py \
+            tests/test_velia_image_intent_service.py \
             tests/test_velia_images_service.py \
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
@@ -105,6 +109,7 @@ jobs:
               Path("velia_mobile_routes.py"),
               Path("velia_image_routes.py"),
               Path("velia_plugin_routes.py"),
+              Path("services/velia_image_intent_service.py"),
               Path("services/velia_images_runtime_patch.py"),
               Path("services/velia_telegram_connect_page_patch.py"),
               Path("docs/velia-mobile-chat-beta.md"),
