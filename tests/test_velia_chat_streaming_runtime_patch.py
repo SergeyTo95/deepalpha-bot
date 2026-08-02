@@ -17,6 +17,17 @@ def test_non_kimi_provider_keeps_existing_generation_path(monkeypatch):
     assert runtime._should_stream_message("Проведи глубокий анализ") is False
 
 
+def test_reasoning_effort_preserves_config_for_complex_and_can_reduce_casual(monkeypatch):
+    monkeypatch.setattr(runtime.kimi_gateway, "kimi_reasoning_effort", lambda: "max")
+    monkeypatch.setenv("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", "true")
+
+    assert runtime._reasoning_effort_for_message("Проведи глубокий анализ") == "max"
+    assert runtime._reasoning_effort_for_message("Да") == "low"
+
+    monkeypatch.setenv("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", "false")
+    assert runtime._reasoning_effort_for_message("Да") == "max"
+
+
 def test_run_streaming_send_scopes_callbacks_to_current_thread():
     events = []
 
@@ -44,7 +55,7 @@ def test_run_streaming_send_scopes_callbacks_to_current_thread():
 def test_installed_generator_streams_substantive_request(monkeypatch):
     monkeypatch.setattr(runtime, "_latest_request_user_message", lambda *args: "Проведи анализ")
     monkeypatch.setattr(runtime, "_should_stream_message", lambda message: True)
-    monkeypatch.setattr(runtime, "_selected_reasoning_effort", lambda **kwargs: "high")
+    monkeypatch.setattr(runtime, "_reasoning_effort_for_message", lambda message: "high")
     monkeypatch.setattr(runtime, "_stable_prompt_cache_key", lambda conversation_id: "cache")
 
     streamed = []
@@ -129,7 +140,7 @@ def test_installed_generator_preserves_original_for_special_request(monkeypatch)
 def test_stream_failure_uses_existing_fallback_after_reset(monkeypatch):
     monkeypatch.setattr(runtime, "_latest_request_user_message", lambda *args: "Проведи анализ")
     monkeypatch.setattr(runtime, "_should_stream_message", lambda message: True)
-    monkeypatch.setattr(runtime, "_selected_reasoning_effort", lambda **kwargs: "high")
+    monkeypatch.setattr(runtime, "_reasoning_effort_for_message", lambda message: "high")
     monkeypatch.setattr(runtime, "_stable_prompt_cache_key", lambda conversation_id: "cache")
     monkeypatch.setattr(
         runtime,
