@@ -17,6 +17,54 @@ def test_routes_exact_real_device_russian_request_with_modifier():
     assert "Рыжая пушистая белка" in intent.prompt
 
 
+def test_routes_conversational_russian_prefixes():
+    requests = [
+        "Можешь создать квадратное изображение белки в уютном баре?",
+        "Пожалуйста, можешь мне сгенерировать реалистичную картинку ночной Анталии",
+        "Давай нарисуем рыжую белку с кружкой пива",
+        "Хочу, чтобы ты создал изображение футуристического города",
+    ]
+
+    for message in requests:
+        intent = detect_image_intent(message)
+        assert intent.requested is True, message
+        assert intent.prompt
+
+
+def test_routes_strong_drawing_commands_without_image_noun():
+    russian = detect_image_intent(
+        "Нарисуй рыжую пушистую белку на высоком барном стуле"
+    )
+    english = detect_image_intent(
+        "Draw a fluffy red squirrel sitting at a pub counter"
+    )
+    turkish = detect_image_intent(
+        "Çiz bana barda oturan kırmızı bir sincap"
+    )
+
+    assert russian.requested is True
+    assert russian.prompt.startswith("рыжую пушистую белку")
+    assert english.requested is True
+    assert english.prompt.startswith("a fluffy red squirrel")
+    assert turkish.requested is True
+
+
+def test_routes_generic_generation_commands_without_image_noun_when_visual_cues_exist():
+    russian = detect_image_intent(
+        "Создай реалистичную квадратную сцену: белка пьёт пиво в уютном пабе"
+    )
+    english = detect_image_intent(
+        "Create a cinematic 4K scene of a squirrel in a pub"
+    )
+    turkish = detect_image_intent(
+        "Oluştur gerçekçi kare bir sahne: barda bir sincap"
+    )
+
+    assert russian.requested is True
+    assert english.requested is True
+    assert turkish.requested is True
+
+
 def test_routes_natural_russian_english_and_turkish_modifiers():
     russian = detect_image_intent(
         "Сгенерируй очень реалистичную вертикальную картинку ночной Анталии"
@@ -43,16 +91,21 @@ def test_keeps_clarification_for_modifier_only_request():
     assert intent.prompt == ""
 
 
-def test_does_not_route_prompt_or_description_requests():
-    assert detect_image_intent(
-        "Создай промпт для генератора изображений"
-    ).requested is False
-    assert detect_image_intent(
-        "Create a prompt for an image generator"
-    ).requested is False
-    assert detect_image_intent(
-        "Как лучше генерировать картинки для приложения?"
-    ).requested is False
+def test_does_not_route_prompt_description_or_nonvisual_creation_requests():
+    rejected = [
+        "Создай промпт для генератора изображений",
+        "Можешь создать текст для поста?",
+        "Создай план запуска приложения",
+        "Сделай анализ рынка",
+        "Сгенерируй код для Android",
+        "Create a prompt for an image generator",
+        "Could you create a launch plan?",
+        "Make an analysis of the market",
+        "Как лучше генерировать картинки для приложения?",
+    ]
+
+    for message in rejected:
+        assert detect_image_intent(message).requested is False, message
 
 
 def test_chat_router_uses_only_latest_user_turn():
@@ -60,7 +113,7 @@ def test_chat_router_uses_only_latest_user_turn():
         "SYSTEM\n\nConversation:\n"
         "USER: Создай изображение старого города\n\n"
         "ASSISTANT: Изображение готово.\n\n"
-        "USER: Создай квадратное изображение белки в баре"
+        "USER: Можешь создать квадратное изображение белки в баре"
     )
 
     intent = image_intent_from_chat_prompt(prompt)

@@ -1,10 +1,10 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional, Pattern
+from typing import Pattern
 
 
-_MAX_TARGET_OFFSET = 120
+_MAX_TARGET_OFFSET = 160
 _MAX_PROMPT_CHARS = 4000
 
 
@@ -18,55 +18,92 @@ class ImageIntent:
 class _CommandSpec:
     command: Pattern[str]
     target: Pattern[str]
-    reject_before_target: Optional[Pattern[str]] = None
+    reject: Pattern[str]
+    strong_verbs: Pattern[str]
+    visual_cues: Pattern[str]
 
 
 _RUSSIAN_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:пожалуйста[,.]?\s+)?"
-        r"(?:сгенерируй|создай|нарисуй|сделай)\s+"
+        r"^\s*(?:пожалуйста[,.]?\s*)?"
+        r"(?:(?:можешь(?:\s+ли)?|сможешь|давай|прошу|хочу(?:,?\s+чтобы\s+ты)?|нужно)\s+)?"
+        r"(?:мне\s+)?"
+        r"(?P<verb>сгенерируй|сгенерировать|сгенерируем|сгенерировал|"
+        r"создай|создать|создадим|создал|"
+        r"нарисуй|нарисовать|нарисуем|нарисовал|"
+        r"сделай|сделать|сделаем|сделал)\s+"
         r"(?:мне\s+)?(?P<body>.+)$",
         re.IGNORECASE | re.DOTALL,
     ),
     target=re.compile(
-        r"\b(?:картинк\w*|изображени\w*|фото(?:графи\w*)?|"
-        r"постер\w*|обложк\w*)\b",
+        r"\b(?:картинк\w*|изображени\w*|рисунк\w*|фото(?:графи\w*)?|"
+        r"постер\w*|обложк\w*|иллюстраци\w*|арт\w*)\b",
         re.IGNORECASE,
     ),
-    reject_before_target=re.compile(
-        r"\b(?:промпт|описание|инструкцию|инструкции|сценарий)\b",
+    reject=re.compile(
+        r"\b(?:промпт\w*|описани\w*|инструкци\w*|сценари\w*|"
+        r"план\w*|анализ\w*|код\w*)\b",
+        re.IGNORECASE,
+    ),
+    strong_verbs=re.compile(
+        r"^(?:нарисуй|нарисовать|нарисуем|нарисовал)$",
+        re.IGNORECASE,
+    ),
+    visual_cues=re.compile(
+        r"(?:\b(?:1\s*:\s*1|4k|8k|квадратн\w*|вертикальн\w*|горизонтальн\w*|"
+        r"реалистичн\w*|фотореалистичн\w*|мультяшн\w*|акварельн\w*|"
+        r"кинематографичн\w*|портрет\w*|пейзаж\w*|фон\w*|без\s+текста)\b|"
+        r"\bв\s+стиле\b)",
         re.IGNORECASE,
     ),
 )
 
 _ENGLISH_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:please\s+)?(?:generate|create|draw|make|render)\s+"
+        r"^\s*(?:please[,.]?\s*)?"
+        r"(?:(?:can|could|would)\s+you\s+|let(?:'s| us)\s+|i\s+want\s+you\s+to\s+)?"
+        r"(?P<verb>generate|create|draw|make|render)\s+"
         r"(?:me\s+)?(?P<body>.+)$",
         re.IGNORECASE | re.DOTALL,
     ),
     target=re.compile(
-        r"\b(?:image|picture|photo|poster|cover|artwork|illustration)s?\b",
+        r"\b(?:image|picture|photo|poster|cover|artwork|illustration|drawing)s?\b",
         re.IGNORECASE,
     ),
-    reject_before_target=re.compile(
-        r"\b(?:prompt|description|instructions|caption|scenario)\b",
+    reject=re.compile(
+        r"\b(?:prompt|description|instructions?|caption|scenario|plan|analysis|code)\b",
+        re.IGNORECASE,
+    ),
+    strong_verbs=re.compile(r"^(?:draw|render)$", re.IGNORECASE),
+    visual_cues=re.compile(
+        r"(?:\b(?:1\s*:\s*1|4k|8k|square|vertical|horizontal|realistic|"
+        r"photorealistic|cartoon|watercolor|cinematic|portrait|landscape|"
+        r"background|without\s+text)\b|\bin\s+the\s+style\s+of\b)",
         re.IGNORECASE,
     ),
 )
 
 _TURKISH_COMMAND_FIRST_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:lütfen\s+)?(?:oluştur|üret|çiz|hazırla)\s+"
-        r"(?P<body>.+)$",
+        r"^\s*(?:lütfen[,.]?\s*)?"
+        r"(?:(?:yapabilir\s+misin|oluşturabilir\s+misin|çizebilir\s+misin|hadi)\s+)?"
+        r"(?:bana\s+)?(?P<verb>oluştur|üret|çiz|hazırla)\s+"
+        r"(?:bana\s+)?(?P<body>.+)$",
         re.IGNORECASE | re.DOTALL,
     ),
     target=re.compile(
-        r"\b(?:görsel|resim|fotoğraf|poster|kapak|illüstrasyon)\w*\b",
+        r"\b(?:görsel|resim|fotoğraf|poster|kapak|illüstrasyon|çizim)\w*\b",
         re.IGNORECASE,
     ),
-    reject_before_target=re.compile(
-        r"\b(?:prompt|açıklama|talimat|senaryo)\b",
+    reject=re.compile(
+        r"\b(?:prompt|açıklama|talimat|senaryo|plan|analiz|kod)\b",
+        re.IGNORECASE,
+    ),
+    strong_verbs=re.compile(r"^(?:çiz)$", re.IGNORECASE),
+    visual_cues=re.compile(
+        r"(?:\b(?:1\s*:\s*1|4k|8k|kare|dikey|yatay|gerçekçi|fotogerçekçi|"
+        r"karikatür|suluboya|sinematik|portre|manzara|arka\s+plan|metinsiz)\b|"
+        r"\bstilinde\b)",
         re.IGNORECASE,
     ),
 )
@@ -79,12 +116,12 @@ _TURKISH_TARGET_FIRST = re.compile(
 )
 
 _TURKISH_TARGET = re.compile(
-    r"\b(?:görsel|resim|fotoğraf|poster|kapak|illüstrasyon)\w*\b",
+    r"\b(?:görsel|resim|fotoğraf|poster|kapak|illüstrasyon|çizim)\w*\b",
     re.IGNORECASE,
 )
 
 _TURKISH_REJECT = re.compile(
-    r"\b(?:prompt|açıklama|talimat|senaryo)\b",
+    r"\b(?:prompt|açıklama|talimat|senaryo|plan|analiz|kod)\b",
     re.IGNORECASE,
 )
 
@@ -109,20 +146,25 @@ def _last_user_message(chat_prompt: str) -> str:
     return str(matches[-1] if matches else "").strip()
 
 
-def _intent_from_body(body: str, spec: _CommandSpec) -> ImageIntent:
+def _intent_from_command(match: re.Match[str], spec: _CommandSpec) -> ImageIntent:
+    body = match.group("body").strip()
+    verb = str(match.group("verb") or "").strip()
     target = spec.target.search(body)
-    if not target or target.start() > _MAX_TARGET_OFFSET:
+
+    if target and target.start() <= _MAX_TARGET_OFFSET:
+        before_target = body[: target.start()]
+        if spec.reject.search(before_target):
+            return ImageIntent(False, "")
+        description_after_target = body[target.end() :].strip(" \t\r\n:—–-,.;")
+        if not description_after_target:
+            return ImageIntent(True, "")
+        return ImageIntent(True, body[:_MAX_PROMPT_CHARS])
+
+    if spec.reject.search(body):
         return ImageIntent(False, "")
-
-    before_target = body[: target.start()]
-    if spec.reject_before_target and spec.reject_before_target.search(before_target):
-        return ImageIntent(False, "")
-
-    description_after_target = body[target.end() :].strip(" \t\r\n:—–-,.;")
-    if not description_after_target:
-        return ImageIntent(True, "")
-
-    return ImageIntent(True, body[:_MAX_PROMPT_CHARS].strip())
+    if spec.strong_verbs.match(verb) or spec.visual_cues.search(body):
+        return ImageIntent(True, body[:_MAX_PROMPT_CHARS])
+    return ImageIntent(False, "")
 
 
 def detect_image_intent(message: str) -> ImageIntent:
@@ -133,7 +175,7 @@ def detect_image_intent(message: str) -> ImageIntent:
     for spec in _COMMAND_SPECS:
         command_match = spec.command.match(normalized)
         if command_match:
-            return _intent_from_body(command_match.group("body").strip(), spec)
+            return _intent_from_command(command_match, spec)
 
     target_first = _TURKISH_TARGET_FIRST.match(normalized)
     if target_first:
