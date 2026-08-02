@@ -3,7 +3,6 @@ import re
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
-from services.velia_image_intent_service import last_user_message_from_chat_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +68,32 @@ def memory_note_ack(message: str) -> Optional[str]:
             return f"Not aldım: {note}."
         return f"Noted: {note}."
     return None
+
+
+def _latest_completed_user_message(user_id: int, conversation_id: str) -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT content
+            FROM velia_messages
+            WHERE conversation_id=%s AND user_id=%s
+              AND role='user' AND status='completed' AND deleted_at IS NULL
+            ORDER BY created_at DESC, message_id DESC
+            LIMIT 1
+            """,
+            (str(conversation_id), int(user_id)),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return ""
+        if isinstance(row, dict):
+            return str(row.get("content") or "").strip()
+        return str(row[0] if row else "").strip()
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def _deterministic_transcript(
@@ -204,7 +229,10 @@ def install(
             conversation_id: str,
             request_id: str = None,
         ) -> Dict[str, Any]:
-            latest_message = last_user_message_from_chat_prompt(prompt)
+            latest_message = _latest_completed_user_message(
+                int(user_id),
+                str(conversation_id),
+            )
             acknowledgement = memory_note_ack(latest_message)
             if acknowledgement:
                 return {
