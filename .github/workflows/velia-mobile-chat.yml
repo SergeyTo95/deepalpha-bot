@@ -17,6 +17,7 @@ on:
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
       - "services/velia_llm_service.py"
+      - "services/velia_conversation_quality_patch.py"
       - "services/velia_image_intent_service.py"
       - "services/velia_images_service.py"
       - "services/velia_images_runtime_patch.py"
@@ -35,6 +36,7 @@ on:
       - "tests/test_velia_mobile_auth_service.py"
       - "tests/test_velia_chat_service.py"
       - "tests/test_velia_llm_service.py"
+      - "tests/test_velia_conversation_quality_patch.py"
       - "tests/test_velia_image_intent_service.py"
       - "tests/test_velia_images_service.py"
       - "tests/test_velia_images_queue_runtime_patch.py"
@@ -81,6 +83,7 @@ jobs:
             services/velia_mobile_auth_service.py \
             services/velia_chat_service.py \
             services/velia_llm_service.py \
+            services/velia_conversation_quality_patch.py \
             services/velia_image_intent_service.py \
             services/velia_images_service.py \
             services/velia_images_runtime_patch.py \
@@ -112,6 +115,7 @@ jobs:
             tests/test_velia_mobile_auth_service.py \
             tests/test_velia_chat_service.py \
             tests/test_velia_llm_service.py \
+            tests/test_velia_conversation_quality_patch.py \
             tests/test_velia_image_intent_service.py \
             tests/test_velia_images_service.py \
             tests/test_velia_images_queue_runtime_patch.py \
