@@ -17,6 +17,7 @@ on:
       - "services/velia_image_intent_service.py"
       - "services/velia_images_service.py"
       - "services/velia_images_runtime_patch.py"
+      - "services/velia_images_queue_runtime_patch.py"
       - "services/velia_mobile_hardening_service.py"
       - "services/velia_plugin_service.py"
       - "services/velia_plugin_router.py"
@@ -29,6 +30,7 @@ on:
       - "tests/test_velia_llm_service.py"
       - "tests/test_velia_image_intent_service.py"
       - "tests/test_velia_images_service.py"
+      - "tests/test_velia_images_queue_runtime_patch.py"
       - "tests/test_velia_mobile_hardening_service.py"
       - "tests/test_velia_plugin_service.py"
       - "tests/test_velia_plugin_router_limits.py"
@@ -70,6 +72,7 @@ jobs:
             services/velia_image_intent_service.py \
             services/velia_images_service.py \
             services/velia_images_runtime_patch.py \
+            services/velia_images_queue_runtime_patch.py \
             services/velia_mobile_hardening_service.py \
             services/velia_plugin_service.py \
             services/velia_plugin_router.py \
@@ -93,6 +96,7 @@ jobs:
             tests/test_velia_llm_service.py \
             tests/test_velia_image_intent_service.py \
             tests/test_velia_images_service.py \
+            tests/test_velia_images_queue_runtime_patch.py \
             tests/test_velia_mobile_hardening_service.py \
             tests/test_velia_plugin_service.py \
             tests/test_velia_plugin_router_limits.py \
