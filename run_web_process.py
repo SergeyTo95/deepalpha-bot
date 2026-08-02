@@ -47,6 +47,7 @@ def main() -> None:
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
     from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
+    from services.velia_attachment_message_runtime_patch import install as install_velia_attachment_messages
     from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
@@ -82,8 +83,11 @@ def main() -> None:
     install_commercial_runtime()
     # Attachment-aware persistence must be the innermost chat sender so every
     # existing VELIA quality, profile, image, memory and hardening wrapper still
-    # applies to file-backed turns.
+    # applies to file-backed turns. Restore the original prompt builder here;
+    # bounded attachment context is appended after the established wrappers.
+    original_velia_prompt_builder = velia_chat_service_module._build_prompt
     install_velia_attachment_chat(velia_chat_service_module)
+    velia_chat_service_module._build_prompt = original_velia_prompt_builder
     velia_mobile_routes_module.send_message = velia_chat_service_module.send_message
     install_velia_live_plugins(velia_chat_service_module)
     install_velia_conversation_quality(
@@ -144,6 +148,13 @@ def main() -> None:
     setup_velia_profile_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
         deepalpha_web.app,
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+    # Add safe attachment context and public metadata only after hardening has
+    # installed its final history reader, then let latency wrap the complete
+    # prompt path.
+    install_velia_attachment_messages(
         velia_chat_service_module,
         velia_mobile_routes_module,
     )
