@@ -46,6 +46,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
     from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
@@ -79,6 +80,13 @@ def main() -> None:
     install_opportunity_runtime()
     install_openapi_runtime()
     install_commercial_runtime()
+    # Attachment-aware persistence must be the innermost chat sender so every
+    # existing VELIA quality, profile, image, memory and hardening wrapper still
+    # applies to file-backed turns.
+    install_velia_attachment_chat(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
     install_velia_live_plugins(velia_chat_service_module)
     install_velia_conversation_quality(
         velia_chat_service_module,
