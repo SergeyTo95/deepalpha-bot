@@ -1,0 +1,106 @@
+name: Velyon memory service
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "deploy/velyon-memory/**"
+      - ".github/workflows/velyon-memory-service.yml"
+  workflow_dispatch:
+
+jobs:
+  validate-memory-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate private memory image wrapper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("deploy/velyon-memory")
+          dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+          config = (root / "tdai-gateway.yaml").read_text(encoding="utf-8")
+          readme = (root / "README.md").read_text(encoding="utf-8")
+          dockerignore = (root / ".dockerignore").read_text(encoding="utf-8")
+
+          assert re.search(r"(?m)^ARG VELYON_MEMORY_BASE_IMAGE=", dockerfile)
+          assert re.search(r"(?m)^FROM \$\{VELYON_MEMORY_BASE_IMAGE\}$", dockerfile)
+          assert "COPY --chown=10001:10001 tdai-gateway.yaml" in dockerfile
+          assert "TDAI_GATEWAY_HOST=0.0.0.0" in dockerfile
+          assert "TDAI_GATEWAY_PORT=8420" in dockerfile
+          assert "TDAI_DATA_DIR=/data/tdai-memory" in dockerfile
+          assert re.search(r"(?m)^USER 10001$", dockerfile)
+          assert re.search(r"(?m)^EXPOSE 8420$", dockerfile)
+          assert "http://127.0.0.1:8420/health" in dockerfile
+
+          top_level_instructions = [
+              line
+              for line in dockerfile.splitlines()
+              if line and not line[0].isspace() and not line.startswith("#")
+          ]
+          assert not any(
+              re.match(r"^(CMD|ENTRYPOINT)\b", line)
+              for line in top_level_instructions
+          ), "The upstream runtime command must remain inherited"
+
+          required_config = [
+              "deployMode: standalone",
+              "stateBackend: local",
+              'host: "0.0.0.0"',
+              "port: 8420",
+              'baseDir: "/data/tdai-memory"',
+              'baseUrl: "${TDAI_LLM_BASE_URL}"',
+              'apiKey: "${TDAI_LLM_API_KEY}"',
+              'model: "${TDAI_LLM_MODEL}"',
+              "storeBackend: sqlite",
+              "provider: none",
+              "enabled: false",
+          ]
+          for value in required_config:
+              assert value in config, f"missing memory config: {value}"
+
+          forbidden_secret_patterns = [
+              r"sk-[A-Za-z0-9_-]{12,}",
+              r"Bearer\s+[A-Za-z0-9._-]{12,}",
+              r"apiKey:\s*[\"']?(?!\$\{)[A-Za-z0-9_-]{12,}",
+          ]
+          combined = dockerfile + "\n" + config + "\n" + readme
+          for pattern in forbidden_secret_patterns:
+              assert not re.search(pattern, combined, flags=re.IGNORECASE), (
+                  f"credential-like value found: {pattern}"
+              )
+
+          assert "public domain: disabled" in readme.lower()
+          assert "replicas: `1`" in readme
+          assert "mount path: `/data/tdai-memory`" in readme
+          assert "VELIA_MEMORY_SHADOW_ENABLED=false" in readme
+          assert "VELIA_MEMORY_SHADOW_ALLOW_ALL=false" in readme
+          assert "http://velyon-memory.railway.internal:8420" in readme
+
+          ignored = {line.strip() for line in dockerignore.splitlines() if line.strip()}
+          for required in {".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3"}:
+              assert required in ignored, f"missing .dockerignore rule: {required}"
+          PY
+
+      - name: Verify deployment directory contains no local state
+        run: |
+          ! find deploy/velyon-memory -type f \
+            \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '.env' \) \
+            -print -quit | grep -q .
+
+      - name: Check Dockerfile syntax with BuildKit
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run Dockerfile static check
+        run: |
+          docker buildx build \
+            --check \
+            --file deploy/velyon-memory/Dockerfile \
+            deploy/velyon-memory
