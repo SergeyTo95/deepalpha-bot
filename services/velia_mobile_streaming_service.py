@@ -104,6 +104,7 @@ def setup_velia_mobile_streaming_route(
             )
 
         content = str(data.get("content") or "")
+        attachment_ids = data.get("attachment_ids")
         idempotency_key = str(
             request.headers.get("Idempotency-Key")
             or data.get("idempotency_key")
@@ -144,6 +145,7 @@ def setup_velia_mobile_streaming_route(
                 conversation_id=conversation_id,
                 content=content,
                 idempotency_key=idempotency_key,
+                attachment_ids=attachment_ids,
                 on_delta=lambda delta: enqueue("delta", delta),
                 on_reset=lambda: enqueue("reset"),
             )
