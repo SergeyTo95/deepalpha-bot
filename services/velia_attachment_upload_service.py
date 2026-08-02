@@ -167,6 +167,35 @@ def _reserve_attachment(
         conn.close()
 
 
+def _scrub_failed_attachment(attachment_id: str, user_id: int) -> None:
+    """Keep the quota ledger while deleting failed private file contents."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE velia_attachments
+            SET content_bytes=%s,
+                extracted_text='',
+                deleted_at=COALESCE(deleted_at, %s)
+            WHERE attachment_id=%s AND user_id=%s
+              AND extraction_status='failed'
+            """,
+            (
+                b"",
+                attachment_service._utcnow(),
+                str(attachment_id),
+                int(user_id),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def _complete_attachment(
     *,
     attachment_id: str,
@@ -257,15 +286,19 @@ def create_attachment_with_reservation(
         max_bytes=max_bytes,
     )
 
-    inspected = attachment_service.inspect_attachment(
-        raw,
-        str(preflight["mime_type"]),
-        user_id=int(user_id),
-        conversation_id=str(conversation_id),
-        attachment_id=attachment_id,
-    )
-    return _complete_attachment(
-        attachment_id=attachment_id,
-        user_id=int(user_id),
-        inspected=inspected,
-    )
+    try:
+        inspected = attachment_service.inspect_attachment(
+            raw,
+            str(preflight["mime_type"]),
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            attachment_id=attachment_id,
+        )
+        return _complete_attachment(
+            attachment_id=attachment_id,
+            user_id=int(user_id),
+            inspected=inspected,
+        )
+    except Exception:
+        _scrub_failed_attachment(attachment_id, int(user_id))
+        raise
