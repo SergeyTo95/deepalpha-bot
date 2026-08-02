@@ -6,6 +6,10 @@ from typing import Pattern
 
 _MAX_TARGET_OFFSET = 160
 _MAX_PROMPT_CHARS = 4000
+_USER_TURN_RE = re.compile(
+    r"^USER:\s*(.*?)(?=\n\n(?:USER|ASSISTANT):|\Z)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -137,12 +141,8 @@ def _normalize(message: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def _last_user_message(chat_prompt: str) -> str:
-    matches = re.findall(
-        r"(?:^|\n\n)USER:\s*(.*?)(?=\n\n(?:USER|ASSISTANT):|\Z)",
-        str(chat_prompt or ""),
-        flags=re.DOTALL,
-    )
+def last_user_message_from_chat_prompt(chat_prompt: str) -> str:
+    matches = _USER_TURN_RE.findall(str(chat_prompt or ""))
     return str(matches[-1] if matches else "").strip()
 
 
@@ -194,4 +194,4 @@ def detect_image_intent(message: str) -> ImageIntent:
 
 
 def image_intent_from_chat_prompt(chat_prompt: str) -> ImageIntent:
-    return detect_image_intent(_last_user_message(chat_prompt))
+    return detect_image_intent(last_user_message_from_chat_prompt(chat_prompt))
