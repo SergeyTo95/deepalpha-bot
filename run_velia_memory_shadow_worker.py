@@ -1,4 +1,6 @@
+import logging
 import os
+import sys
 import time
 from typing import Mapping, Optional
 
@@ -8,6 +10,17 @@ def env_true(value: Optional[str], default: bool = False) -> bool:
     if not raw:
         return bool(default)
     return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def configure_logging() -> None:
+    level_name = str(os.getenv("LOG_LEVEL") or "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
 
 
 def worker_disabled_reason(env: Mapping[str, str]) -> Optional[str]:
@@ -38,12 +51,16 @@ def worker_disabled_reason(env: Mapping[str, str]) -> Optional[str]:
 
 
 def idle_forever(reason: str) -> None:
-    print(f"ℹ️ Velyon memory shadow worker disabled reason={reason}; keeping process healthy")
+    print(
+        f"ℹ️ Velyon memory shadow worker disabled reason={reason}; keeping process healthy",
+        flush=True,
+    )
     while True:
         time.sleep(3600)
 
 
 def main() -> None:
+    configure_logging()
     reason = worker_disabled_reason(os.environ)
     if reason:
         idle_forever(reason)
