@@ -141,8 +141,9 @@ def test_install_rebuilds_prompt_order_and_short_circuits_memory_notes(monkeypat
         _dict_cursor=lambda conn: conn.cursor(),
         _row_value=row_value,
     )
+    routes = SimpleNamespace(list_messages=lambda *args, **kwargs: [])
 
-    quality_patch.install(module)
+    quality_patch.install(module, routes)
 
     prompt = module._build_prompt(1, "conversation")
     assert prompt.index("USER: Запомни") < prompt.index("ASSISTANT: Приняла")
@@ -150,6 +151,11 @@ def test_install_rebuilds_prompt_order_and_short_circuits_memory_notes(monkeypat
 
     messages = module.list_messages(1, "conversation")
     assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert routes.list_messages is module.list_messages
+    assert [message["role"] for message in routes.list_messages(1, "conversation")] == [
+        "user",
+        "assistant",
+    ]
 
     result = module.generate_velia_chat_result(
         "Base\n\nConversation:\nUSER: Запомни: основной проект — VELIA",
