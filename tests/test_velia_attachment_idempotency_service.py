@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -43,7 +43,13 @@ class _Connection:
         pass
 
 
-def _existing_row(*, status="ready", deleted_at=None, digest="digest"):
+def _existing_row(
+    *,
+    status="ready",
+    deleted_at=None,
+    digest="digest",
+    created_at=None,
+):
     return (
         "attachment-1",
         "conversation-1",
@@ -55,7 +61,7 @@ def _existing_row(*, status="ready", deleted_at=None, digest="digest"):
         None,
         None,
         status,
-        datetime.now(timezone.utc),
+        created_at or datetime.now(timezone.utc),
         deleted_at,
     )
 
@@ -92,7 +98,7 @@ def test_upload_idempotency_key_is_required_and_validated():
 
 
 def test_same_key_returns_existing_ready_attachment(monkeypatch):
-    cursor = _Cursor(fetchone_values=[_existing_row()])
+    cursor = _Cursor(fetchone_values=[(1,), _existing_row()])
     connection = _Connection(cursor)
     monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
     monkeypatch.setattr(
@@ -106,11 +112,15 @@ def test_same_key_returns_existing_ready_attachment(monkeypatch):
     assert result == {"id": "attachment-1", "status": "ready"}
     assert connection.commits == 1
     assert connection.rollbacks == 0
-    assert not any(query.startswith("INSERT INTO") for query, _ in cursor.calls)
+    queries = [query for query, _ in cursor.calls]
+    assert "FROM velia_conversations" in queries[1]
+    assert "FOR UPDATE" in queries[1]
+    assert "FROM velia_attachments" in queries[2]
+    assert not any(query.startswith("INSERT INTO") for query in queries)
 
 
 def test_parallel_same_key_reports_upload_in_progress(monkeypatch):
-    cursor = _Cursor(fetchone_values=[_existing_row(status="failed")])
+    cursor = _Cursor(fetchone_values=[(1,), _existing_row(status="failed")])
     connection = _Connection(cursor)
     monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
 
@@ -123,7 +133,7 @@ def test_parallel_same_key_reports_upload_in_progress(monkeypatch):
 
 
 def test_same_key_with_different_content_is_rejected(monkeypatch):
-    cursor = _Cursor(fetchone_values=[_existing_row(digest="other")])
+    cursor = _Cursor(fetchone_values=[(1,), _existing_row(digest="other")])
     connection = _Connection(cursor)
     monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
 
@@ -134,22 +144,69 @@ def test_same_key_with_different_content_is_rejected(monkeypatch):
     assert error.value.status == 409
 
 
-def test_known_ready_row_is_scrubbed_when_unlinked(monkeypatch):
-    cursor = _Cursor(fetchone_values=[("attachment-1",), None])
+def test_reviving_historical_key_reapplies_daily_quota(monkeypatch):
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    deleted = datetime.now(timezone.utc) - timedelta(days=1)
+    cursor = _Cursor(
+        fetchone_values=[
+            (1,),
+            _existing_row(status="failed", created_at=old, deleted_at=deleted),
+            (20, 0),
+        ]
+    )
     connection = _Connection(cursor)
     monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
 
-    assert idempotency.scrub_unlinked_known_attachment("attachment-1", 7) is True
+    with pytest.raises(attachment_service.AttachmentError) as error:
+        idempotency._existing_or_reserve(**_reserve_kwargs())
+
+    assert error.value.code == "attachment_daily_limit_exceeded"
+    queries = [query for query, _ in cursor.calls]
+    assert any("CURRENT_DATE" in query for query in queries)
+    assert connection.rollbacks == 1
+
+
+def test_ready_recovery_row_is_never_scrubbed(monkeypatch):
+    cursor = _Cursor(fetchone_values=[("ready",)])
+    connection = _Connection(cursor)
+    monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
+
+    assert idempotency.scrub_unlinked_known_attachment("attachment-1", 7) is False
 
     queries = [query for query, _ in cursor.calls]
-    assert "FOR UPDATE" in queries[0]
-    assert queries[1].startswith("SELECT 1 FROM velia_message_attachments")
-    assert "extraction_status='failed'" in queries[2]
-    assert "deleted_at=COALESCE" in queries[2]
+    assert "pg_advisory_xact_lock" in queries[0]
+    assert "SELECT extraction_status" in queries[1]
+    assert not any(query.startswith("UPDATE velia_attachments") for query in queries)
+    assert connection.rollbacks == 1
+
+
+def test_reconcile_returns_committed_ready_row_without_cleanup(monkeypatch):
+    cursor = _Cursor(fetchone_values=[_existing_row()])
+    connection = _Connection(cursor)
+    monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        attachment_service,
+        "_serialize_attachment",
+        lambda row: {"id": row[0], "status": row[9]},
+    )
+
+    result = idempotency._reconcile_completion_error(
+        attachment_id="8b07392d-7d71-4acf-a077-13e50aa0dcb5",
+        user_id=7,
+        conversation_id="conversation-1",
+        expected_size=5,
+        expected_digest="digest",
+    )
+
+    assert result == {"id": "attachment-1", "status": "ready"}
+    assert not any(
+        query.startswith("UPDATE velia_attachments")
+        for query, _ in cursor.calls
+    )
     assert connection.commits == 1
 
 
-def test_ambiguous_completion_failure_scrubs_known_id(monkeypatch):
+def test_ambiguous_completion_failure_returns_reconciled_ready_row(monkeypatch):
     monkeypatch.setattr(idempotency, "_existing_or_reserve", lambda **_kwargs: None)
     monkeypatch.setattr(
         upload_service,
@@ -177,25 +234,29 @@ def test_ambiguous_completion_failure_scrubs_known_id(monkeypatch):
         "_complete_attachment",
         lambda **_kwargs: (_ for _ in ()).throw(ConnectionError("commit ack lost")),
     )
-    scrubbed = []
+    reconciled = []
     monkeypatch.setattr(
         idempotency,
-        "scrub_unlinked_known_attachment",
-        lambda attachment_id, user_id: scrubbed.append((attachment_id, user_id)) or True,
+        "_reconcile_completion_error",
+        lambda **kwargs: reconciled.append(kwargs) or {
+            "id": kwargs["attachment_id"],
+            "status": "ready",
+        },
     )
 
-    with pytest.raises(ConnectionError):
-        idempotency.create_attachment_idempotently(
-            7,
-            "conversation-1",
-            idempotency_key="draft-12345678",
-            filename="report.txt",
-            mime_type="text/plain",
-            content=b"hello",
-        )
+    result = idempotency.create_attachment_idempotently(
+        7,
+        "conversation-1",
+        idempotency_key="draft-12345678",
+        filename="report.txt",
+        mime_type="text/plain",
+        content=b"hello",
+    )
 
-    assert len(scrubbed) == 1
-    assert scrubbed[0][1] == 7
+    assert result["status"] == "ready"
+    assert len(reconciled) == 1
+    assert reconciled[0]["user_id"] == 7
+    assert reconciled[0]["expected_size"] == 5
 
 
 def test_mobile_route_requires_upload_idempotency_header():
