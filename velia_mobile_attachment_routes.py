@@ -1,15 +1,19 @@
 import asyncio
 import json
+import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
 
 from services import gemini_gateway
+from services.velia_attachment_privacy_service import (
+    delete_attachment,
+    scrub_legacy_failed_attachment_payloads,
+)
 from services.velia_attachment_public_contract import public_attachment
 from services.velia_attachment_service import (
     AttachmentError,
-    delete_attachment,
     get_attachment,
 )
 from services.velia_attachment_upload_service import create_attachment_with_reservation
@@ -17,6 +21,7 @@ from services.velia_chat_service import get_conversation
 from services.velia_mobile_auth_service import authenticate_access_token
 
 
+logger = logging.getLogger(__name__)
 _ALLOWED_MIME_TYPES = {
     "image/jpeg",
     "image/png",
@@ -25,6 +30,7 @@ _ALLOWED_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
 }
+_PRIVACY_SCRUB_COMPLETE = False
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -90,6 +96,22 @@ def _error_response(error: AttachmentError) -> web.Response:
     )
 
 
+def _scrub_legacy_payloads_best_effort() -> None:
+    global _PRIVACY_SCRUB_COMPLETE
+    if _PRIVACY_SCRUB_COMPLETE:
+        return
+    try:
+        scrub_legacy_failed_attachment_payloads()
+        _PRIVACY_SCRUB_COMPLETE = True
+    except Exception as exc:
+        # Route registration precedes schema bootstrap. Retry on every file
+        # request until cleanup succeeds rather than blocking the web process.
+        logger.warning(
+            "VELIA_ATTACHMENT_LEGACY_SCRUB_DEFERRED error=%s",
+            exc.__class__.__name__,
+        )
+
+
 async def _read_single_upload(request: web.Request) -> Tuple[str, str, bytes]:
     max_bytes = _env_int(
         "VELIA_ATTACHMENTS_MAX_BYTES",
@@ -153,11 +175,13 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         "velia_file_vision",
         "VELIA_FILE_VISION_GEMINI_ENABLED",
     )
+    _scrub_legacy_payloads_best_effort()
 
     async def handle_attachment_create(request: web.Request) -> web.Response:
         unavailable_error = _attachment_api_unavailable_error()
         if unavailable_error:
             return _unavailable_response(unavailable_error)
+        _scrub_legacy_payloads_best_effort()
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -201,6 +225,7 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         unavailable_error = _attachment_api_unavailable_error()
         if unavailable_error:
             return _unavailable_response(unavailable_error)
+        _scrub_legacy_payloads_best_effort()
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -222,6 +247,7 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         unavailable_error = _attachment_api_unavailable_error()
         if unavailable_error:
             return _unavailable_response(unavailable_error)
+        _scrub_legacy_payloads_best_effort()
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
