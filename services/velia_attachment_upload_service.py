@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import uuid
 from typing import Any, Dict
@@ -7,6 +8,7 @@ from db.database import get_connection
 from services import velia_attachment_service as attachment_service
 
 
+logger = logging.getLogger(__name__)
 _USER_QUOTA_LOCK_NAMESPACE = 1_904_202_608
 _ALLOWED_DOCUMENT_MIME_TYPES = {
     "application/pdf",
@@ -151,7 +153,10 @@ def _reserve_attachment(
                 str(digest),
                 preflight.get("width"),
                 preflight.get("height"),
-                raw,
+                # The original upload is processed only in request memory.
+                # Persisting an empty payload makes failed-reservation cleanup
+                # privacy-safe even if every later cleanup transaction fails.
+                b"",
                 attachment_service._utcnow(),
             ),
         )
@@ -167,33 +172,56 @@ def _reserve_attachment(
         conn.close()
 
 
-def _scrub_failed_attachment(attachment_id: str, user_id: int) -> None:
-    """Keep the quota ledger while deleting failed private file contents."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            UPDATE velia_attachments
-            SET content_bytes=%s,
-                extracted_text='',
-                deleted_at=COALESCE(deleted_at, %s)
-            WHERE attachment_id=%s AND user_id=%s
-              AND extraction_status='failed'
-            """,
-            (
-                b"",
-                attachment_service._utcnow(),
-                str(attachment_id),
-                int(user_id),
-            ),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+def _scrub_failed_attachment(attachment_id: str, user_id: int) -> bool:
+    """Keep the quota ledger while scrubbing legacy failed payloads.
+
+    New reservations never persist raw bytes, but retries protect rows created
+    by older deployments and make transient database failures observable.
+    """
+    attempts = _env_int(
+        "VELIA_ATTACHMENTS_SCRUB_ATTEMPTS",
+        3,
+        1,
+        10,
+    )
+    for attempt in range(1, attempts + 1):
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE velia_attachments
+                SET content_bytes=%s,
+                    extracted_text='',
+                    sha256='',
+                    original_name='failed attachment',
+                    deleted_at=COALESCE(deleted_at, %s)
+                WHERE attachment_id=%s AND user_id=%s
+                  AND extraction_status='failed'
+                """,
+                (
+                    b"",
+                    attachment_service._utcnow(),
+                    str(attachment_id),
+                    int(user_id),
+                ),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            conn.rollback()
+            if attempt >= attempts:
+                logger.error(
+                    "VELIA_ATTACHMENT_FAILED_SCRUB_FAILED attachment_id=%s user_id=%s attempts=%s error=%s",
+                    str(attachment_id),
+                    int(user_id),
+                    attempts,
+                    exc.__class__.__name__,
+                )
+        finally:
+            cursor.close()
+            conn.close()
+    return False
 
 
 def _complete_attachment(
