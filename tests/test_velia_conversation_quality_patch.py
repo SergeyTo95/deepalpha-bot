@@ -112,6 +112,11 @@ def test_install_rebuilds_prompt_order_and_short_circuits_memory_notes(monkeypat
 
     connection = FakeConnection()
     monkeypatch.setattr(quality_patch, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        quality_patch,
+        "request_message_has_attachments",
+        lambda _request_id, _user_id: False,
+    )
 
     current_message = {"value": "Запомни: основной проект — VELIA"}
     monkeypatch.setattr(
