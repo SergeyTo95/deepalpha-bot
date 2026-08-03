@@ -108,6 +108,14 @@ def _existing_or_reserve(
             if existing_status == "ready" and existing_deleted_at is None:
                 conn.commit()
                 return _serialize_existing(existing)
+            if existing_status == "failed" and existing_deleted_at is None:
+                # The first request has reserved the deterministic row and is
+                # still inspecting it outside this short transaction. Do not
+                # start a second worker that could race completion/cleanup.
+                raise attachment_service.AttachmentError(
+                    "attachment_upload_in_progress",
+                    status=409,
+                )
 
             # A failed or privacy-scrubbed attempt may be retried with the same
             # key and exact bytes without consuming a second quota entry.
