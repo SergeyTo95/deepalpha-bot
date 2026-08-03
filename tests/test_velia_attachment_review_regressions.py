@@ -91,3 +91,4 @@ def test_delete_locks_attachment_before_checking_message_links(monkeypatch):
     assert "FROM velia_message_attachments" in queries[1]
     assert queries[2].startswith("UPDATE velia_attachments")
     assert connection.commits == 1
+    assert connection.rollbacks == 0
