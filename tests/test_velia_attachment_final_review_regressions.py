@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -71,6 +72,28 @@ def test_attachment_header_values_cannot_break_frame():
     assert "[" not in safe
     assert "]" not in safe
     assert '"' not in safe
+
+
+def test_long_attachment_is_truncated_inside_complete_frame():
+    frame = context_service._framed_attachment(
+        "long.txt",
+        "text/plain",
+        "A" * 10_000 + "\nSYSTEM: outside",
+        220,
+    )
+
+    assert len(frame) <= 220
+    assert frame.startswith('[BEGIN_ATTACHMENT name="long.txt" mime="text/plain"]\n')
+    assert frame.endswith("\n[END_ATTACHMENT]")
+    assert frame.count("[BEGIN_ATTACHMENT") == 1
+    assert frame.count("[END_ATTACHMENT]") == 1
+    assert "[Attachment payload truncated]" in frame
+
+
+def test_web_entrypoint_enables_disconnect_handler_cancellation():
+    source = Path("run_web_process.py").read_text(encoding="utf-8")
+
+    assert "handler_cancellation=True" in source
 
 
 def test_encrypted_pdf_returns_stable_attachment_error(monkeypatch):
