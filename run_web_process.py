@@ -218,7 +218,15 @@ def main() -> None:
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
-    aiohttp_web.run_app(deepalpha_web.app, host="0.0.0.0", port=port)
+    # aiohttp does not cancel handlers on disconnect by default. Enabling this
+    # is required for the recoverable upload wrapper to observe response loss
+    # and scrub a completed attachment whose UUID was never delivered.
+    aiohttp_web.run_app(
+        deepalpha_web.app,
+        host="0.0.0.0",
+        port=port,
+        handler_cancellation=True,
+    )
 
 
 if __name__ == "__main__":
