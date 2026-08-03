@@ -157,6 +157,13 @@ def _existing_or_reserve(
             existing_status = str(existing[9] or "")
             existing_created_at = existing[10]
             existing_deleted_at = existing[11]
+            if existing_status == "ready" and existing_deleted_at is not None:
+                # A privacy deletion is terminal for this deterministic upload
+                # key. Never resurrect scrubbed data through a delayed retry.
+                raise attachment_service.AttachmentError(
+                    "attachment_not_found",
+                    status=404,
+                )
             if (
                 existing_conversation_id != str(conversation_id)
                 or existing_size != len(raw)
@@ -379,9 +386,11 @@ def _reconcile_completion_error(
         10,
     )
     for attempt in range(1, attempts + 1):
-        conn = get_connection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
         try:
+            conn = get_connection()
+            cursor = conn.cursor()
             cursor.execute(
                 "SELECT pg_advisory_xact_lock(%s)",
                 (_idempotency_lock_key(attachment_id),),
@@ -447,7 +456,11 @@ def _reconcile_completion_error(
             conn.commit()
             return None
         except Exception as exc:
-            conn.rollback()
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             if attempt >= attempts:
                 logger.error(
                     "VELIA_ATTACHMENT_COMPLETION_RECONCILE_FAILED attachment_id=%s user_id=%s attempts=%s error=%s",
@@ -457,8 +470,16 @@ def _reconcile_completion_error(
                     exc.__class__.__name__,
                 )
         finally:
-            cursor.close()
-            conn.close()
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     return None
 
 
