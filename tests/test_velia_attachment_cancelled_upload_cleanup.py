@@ -5,21 +5,19 @@ import pytest
 import velia_mobile_attachment_routes as routes
 
 
-def test_cancelled_upload_is_scrubbed_after_worker_completes(monkeypatch):
+def test_cancelled_upload_remains_recoverable_after_worker_completes(monkeypatch):
     async def scenario():
         started = asyncio.Event()
         release = asyncio.Event()
-        deleted = []
+        completed = []
 
         async def fake_to_thread(function, *args, **kwargs):
-            if function is routes.create_attachment_with_reservation:
-                started.set()
-                await release.wait()
-                return {"id": "attachment-1"}
-            if function is routes.delete_attachment:
-                deleted.append((args, kwargs))
-                return True
-            raise AssertionError(f"unexpected function: {function}")
+            assert function is routes.create_attachment_idempotently
+            assert kwargs["idempotency_key"] == "draft-12345678"
+            started.set()
+            await release.wait()
+            completed.append((args, kwargs))
+            return {"id": "attachment-1"}
 
         monkeypatch.setattr(routes.asyncio, "to_thread", fake_to_thread)
 
@@ -27,6 +25,7 @@ def test_cancelled_upload_is_scrubbed_after_worker_completes(monkeypatch):
             routes._create_attachment_recoverably(
                 user_id=7,
                 conversation_id="conversation-1",
+                idempotency_key="draft-12345678",
                 filename="report.txt",
                 mime_type="text/plain",
                 content=b"hello",
@@ -38,35 +37,34 @@ def test_cancelled_upload_is_scrubbed_after_worker_completes(monkeypatch):
 
         with pytest.raises(asyncio.CancelledError):
             await request_task
+        await asyncio.sleep(0)
 
-        assert deleted == [((7, "attachment-1"), {})]
+        assert len(completed) == 1
 
     asyncio.run(scenario())
 
 
-def test_successful_upload_is_not_deleted(monkeypatch):
+def test_successful_upload_returns_idempotent_result(monkeypatch):
     async def scenario():
-        deleted = []
+        calls = []
 
         async def fake_to_thread(function, *args, **kwargs):
-            if function is routes.create_attachment_with_reservation:
-                return {"id": "attachment-2"}
-            if function is routes.delete_attachment:
-                deleted.append((args, kwargs))
-                return True
-            raise AssertionError(f"unexpected function: {function}")
+            assert function is routes.create_attachment_idempotently
+            calls.append((args, kwargs))
+            return {"id": "attachment-2"}
 
         monkeypatch.setattr(routes.asyncio, "to_thread", fake_to_thread)
 
         result = await routes._create_attachment_recoverably(
             user_id=7,
             conversation_id="conversation-1",
+            idempotency_key="draft-12345678",
             filename="report.txt",
             mime_type="text/plain",
             content=b"hello",
         )
 
         assert result["id"] == "attachment-2"
-        assert deleted == []
+        assert calls[0][1]["idempotency_key"] == "draft-12345678"
 
     asyncio.run(scenario())
