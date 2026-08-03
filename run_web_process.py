@@ -48,6 +48,7 @@ def main() -> None:
     from services.http_security_service import install_http_security
     from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
     from services.velia_attachment_feature_flag_service import install as install_velia_attachment_feature_flag
+    from services.velia_attachment_final_safety_patch import install as install_velia_attachment_final_safety
     from services.velia_attachment_message_runtime_patch import install as install_velia_attachment_messages
     from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
@@ -82,6 +83,10 @@ def main() -> None:
     install_opportunity_runtime()
     install_openapi_runtime()
     install_commercial_runtime()
+    install_velia_attachment_final_safety(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
     # Attachment-aware persistence must be the innermost chat sender so every
     # existing VELIA quality, profile, image, memory and hardening wrapper still
     # applies to file-backed turns. Restore the original prompt builder here;
