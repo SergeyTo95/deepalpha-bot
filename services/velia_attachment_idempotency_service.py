@@ -122,6 +122,22 @@ def _existing_or_reserve(
             "SELECT pg_advisory_xact_lock(%s)",
             (_idempotency_lock_key(attachment_id),),
         )
+        # Keep the same lock order as secure conversation deletion and the
+        # original reservation path: conversation, attachment, then quota.
+        cursor.execute(
+            """
+            SELECT 1
+            FROM velia_conversations
+            WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
+            FOR UPDATE
+            """,
+            (str(conversation_id), int(user_id)),
+        )
+        if not cursor.fetchone():
+            raise attachment_service.AttachmentError(
+                "conversation_not_found",
+                status=404,
+            )
         cursor.execute(
             """
             SELECT attachment_id, conversation_id, original_name, mime_type,
@@ -217,20 +233,6 @@ def _existing_or_reserve(
             daily_count_limit=daily_count_limit,
             daily_bytes_limit=daily_bytes_limit,
         )
-        cursor.execute(
-            """
-            SELECT 1
-            FROM velia_conversations
-            WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
-            FOR UPDATE
-            """,
-            (str(conversation_id), int(user_id)),
-        )
-        if not cursor.fetchone():
-            raise attachment_service.AttachmentError(
-                "conversation_not_found",
-                status=404,
-            )
         cursor.execute(
             """
             INSERT INTO velia_attachments (
