@@ -90,10 +90,11 @@ def test_long_attachment_is_truncated_inside_complete_frame():
     assert "[Attachment payload truncated]" in frame
 
 
-def test_web_entrypoint_enables_disconnect_handler_cancellation():
+def test_web_entrypoint_uses_compatible_disconnect_handler_cancellation():
     source = Path("run_web_process.py").read_text(encoding="utf-8")
 
-    assert "handler_cancellation=True" in source
+    assert "handler_cancellation_run_app_kwargs" in source
+    assert "handler_cancellation=True" not in source
 
 
 def test_encrypted_pdf_returns_stable_attachment_error(monkeypatch):
