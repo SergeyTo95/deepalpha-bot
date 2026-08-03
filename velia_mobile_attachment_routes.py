@@ -66,9 +66,19 @@ def _require_mobile_auth(request: web.Request) -> Optional[Dict[str, Any]]:
     return authenticate_access_token(token) if token else None
 
 
-def _disabled_response() -> web.Response:
+def _attachment_api_unavailable_error() -> str:
+    # The global mobile kill switch always takes precedence over the
+    # feature-specific switch, matching every other mobile API surface.
+    if not _env_bool("VELIA_MOBILE_API_ENABLED", False):
+        return "velia_mobile_api_disabled"
+    if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
+        return "velia_file_analyst_disabled"
+    return ""
+
+
+def _unavailable_response(error: str) -> web.Response:
     return _json_response(
-        {"ok": False, "error": "velia_file_analyst_disabled"},
+        {"ok": False, "error": str(error)},
         status=503,
     )
 
@@ -145,8 +155,9 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
     )
 
     async def handle_attachment_create(request: web.Request) -> web.Response:
-        if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
-            return _disabled_response()
+        unavailable_error = _attachment_api_unavailable_error()
+        if unavailable_error:
+            return _unavailable_response(unavailable_error)
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -187,8 +198,9 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         )
 
     async def handle_attachment_get(request: web.Request) -> web.Response:
-        if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
-            return _disabled_response()
+        unavailable_error = _attachment_api_unavailable_error()
+        if unavailable_error:
+            return _unavailable_response(unavailable_error)
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -207,8 +219,9 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
         )
 
     async def handle_attachment_delete(request: web.Request) -> web.Response:
-        if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
-            return _disabled_response()
+        unavailable_error = _attachment_api_unavailable_error()
+        if unavailable_error:
+            return _unavailable_response(unavailable_error)
         auth = _require_mobile_auth(request)
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
