@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from db.database import get_connection
+from services.velia_attachment_routing_service import request_message_has_attachments
 from services.velia_image_intent_service import (
     detect_image_intent,
     last_user_message_from_chat_prompt,
@@ -84,6 +85,18 @@ def install(velia_chat_service_module: Any) -> None:
         conversation_id: str,
         request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Reference-image generation is not implemented yet. Attachment-backed
+        # requests must stay in the normal File Analyst path so the attached
+        # image/document is actually analyzed rather than silently ignored by
+        # a paid text-to-image call. The lookup fails closed on database errors.
+        if request_message_has_attachments(request_id, int(user_id)):
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+
         latest_message = _image_intent_source_message(
             prompt,
             user_id=int(user_id),
