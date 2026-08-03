@@ -140,6 +140,11 @@ def install(chat_module: Any) -> None:
             normalized_attachment_ids = normalize_attachment_ids(attachment_ids)
         except AttachmentError as exc:
             return {"ok": False, "error": exc.code}
+        if (
+            normalized_attachment_ids
+            and not chat_module._env_bool("VELIA_FILE_ANALYST_ENABLED", False)
+        ):
+            return {"ok": False, "error": "velia_file_analyst_disabled"}
 
         normalized_content = str(content or "").strip()
         max_input_chars = chat_module._env_int(

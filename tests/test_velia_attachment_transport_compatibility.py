@@ -127,3 +127,33 @@ def test_streaming_sender_forwards_exact_attachment_set():
             },
         )
     ]
+
+
+def test_streaming_sender_forwards_explicit_empty_attachment_set():
+    calls = []
+
+    def sender(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True}
+
+    result = streaming.run_streaming_send(
+        sender,
+        user_id=7,
+        conversation_id="conversation",
+        content="analyze",
+        idempotency_key="request-123",
+        attachment_ids=[],
+        on_delta=lambda _text: None,
+        on_reset=lambda: None,
+    )
+
+    assert result == {"ok": True}
+    assert calls == [
+        (
+            (7, "conversation", "analyze"),
+            {
+                "idempotency_key": "request-123",
+                "attachment_ids": [],
+            },
+        )
+    ]

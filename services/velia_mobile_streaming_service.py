@@ -90,7 +90,8 @@ def _stream_send_kwargs(
     # Field presence is meaningful for idempotency. An explicit null means
     # an explicit empty attachment set, while omission preserves legacy calls.
     if "attachment_ids" in data:
-        kwargs["attachment_ids"] = data.get("attachment_ids")
+        value = data.get("attachment_ids")
+        kwargs["attachment_ids"] = [] if value is None else value
     return kwargs
 
 

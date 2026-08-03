@@ -238,6 +238,22 @@ def _route_canonical(route: Any) -> str:
     return str(info.get("formatter") or info.get("path") or "")
 
 
+def _blocking_send_kwargs(
+    data: Dict[str, Any],
+    *,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "idempotency_key": str(idempotency_key),
+    }
+    # Preserve the difference between an omitted legacy field and an explicit
+    # empty attachment set. JSON null is the explicit empty set at this edge.
+    if "attachment_ids" in data:
+        value = data.get("attachment_ids")
+        kwargs["attachment_ids"] = [] if value is None else value
+    return kwargs
+
+
 def replace_blocking_message_handler(app: web.Application, routes_module: Any) -> None:
     async def handle_messages_send(request: web.Request) -> web.Response:
         if not routes_module._mobile_api_available():
@@ -259,11 +275,10 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             or data.get("idempotency_key")
             or ""
         ).strip()
-        send_kwargs: Dict[str, Any] = {
-            "idempotency_key": idempotency_key,
-        }
-        if "attachment_ids" in data:
-            send_kwargs["attachment_ids"] = data.get("attachment_ids")
+        send_kwargs = _blocking_send_kwargs(
+            data,
+            idempotency_key=idempotency_key,
+        )
         result = await asyncio.to_thread(
             routes_module.send_message,
             int(auth["user_id"]),
@@ -287,7 +302,10 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             status = 409
         elif error.endswith("limit_exceeded"):
             status = 429
-        elif error == "velia_chat_disabled":
+        elif error in {
+            "velia_chat_disabled",
+            "velia_file_analyst_disabled",
+        }:
             status = 503
         elif error in {
             "timeout",

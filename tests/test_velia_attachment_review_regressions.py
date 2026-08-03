@@ -1,13 +1,20 @@
+import re
+import uuid
+from types import SimpleNamespace
+
 from services import velia_attachment_service as attachment_service
+from services import velia_attachment_chat_runtime_patch as attachment_chat
 from services import velia_chat_latency_runtime_patch as latency
+from services import velia_mobile_hardening_service as hardening
 from services import velia_mobile_streaming_service as mobile_streaming
 
 
 def test_attachment_prompt_disables_instant_casual_response():
     assert not latency._prompt_has_attachment_context("USER: hello")
     assert latency._prompt_has_attachment_context(
-        "USER: hello\nATTACHMENT_DATA_UNTRUSTED:\n[BEGIN_ATTACHMENT]"
+        "USER: hello\nATTACHMENT DATA — UNTRUSTED USER CONTENT:\n[BEGIN_ATTACHMENT]"
     )
+    assert latency._prompt_has_attachment_context("ATTACHMENT_DATA_UNTRUSTED:")
 
 
 def test_stream_kwargs_preserve_attachment_field_presence():
@@ -30,8 +37,45 @@ def test_stream_kwargs_preserve_attachment_field_presence():
 
     assert "attachment_ids" not in omitted
     assert "attachment_ids" in explicit_null
-    assert explicit_null["attachment_ids"] is None
+    assert explicit_null["attachment_ids"] == []
     assert explicit_values["attachment_ids"] == ["attachment-a"]
+
+
+def test_blocking_kwargs_preserve_explicit_null_as_empty_set():
+    omitted = hardening._blocking_send_kwargs({}, idempotency_key="request-123")
+    explicit_null = hardening._blocking_send_kwargs(
+        {"attachment_ids": None},
+        idempotency_key="request-123",
+    )
+
+    assert "attachment_ids" not in omitted
+    assert explicit_null["attachment_ids"] == []
+
+
+def test_attachment_sender_fails_closed_when_feature_is_disabled():
+    original_sender = lambda *args, **kwargs: {"ok": True}
+    chat_module = SimpleNamespace(
+        is_velia_chat_enabled_for_user=lambda _user_id: True,
+        _env_bool=lambda name, default=False: False,
+        _env_int=lambda name, default, minimum, maximum: default,
+        _IDEMPOTENCY_RE=re.compile(r"^[A-Za-z0-9._:-]{8,128}$"),
+        _build_prompt=lambda _user_id, _conversation_id: "prompt",
+        send_message=original_sender,
+    )
+    attachment_chat.install(chat_module)
+
+    result = chat_module.send_message(
+        7,
+        "conversation",
+        "analyze",
+        idempotency_key="request-123",
+        attachment_ids=[str(uuid.uuid4())],
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "velia_file_analyst_disabled",
+    }
 
 
 class _DeleteCursor:

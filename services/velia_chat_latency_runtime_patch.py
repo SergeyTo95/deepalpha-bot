@@ -140,7 +140,14 @@ def _is_casual_message(message: str) -> bool:
 
 
 def _prompt_has_attachment_context(prompt: str) -> bool:
-    return "ATTACHMENT_DATA_UNTRUSTED:" in str(prompt or "")
+    value = str(prompt or "")
+    return any(
+        marker in value
+        for marker in (
+            "ATTACHMENT DATA — UNTRUSTED USER CONTENT:",
+            "ATTACHMENT_DATA_UNTRUSTED:",
+        )
+    )
 
 
 def _preferred_name(user_id: Optional[int]) -> str:
