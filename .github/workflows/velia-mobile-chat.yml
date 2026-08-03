@@ -15,6 +15,7 @@ on:
       - "velia_image_routes.py"
       - "velia_plugin_routes.py"
       - "velia_profile_routes.py"
+      - "services/aiohttp_handler_cancellation_service.py"
       - "services/http_security_service.py"
       - "services/velia_mobile_auth_service.py"
       - "services/velia_chat_service.py"
@@ -91,6 +92,7 @@ jobs:
       - name: Compile VELIA mobile modules
         run: |
           python -m py_compile \
+            services/aiohttp_handler_cancellation_service.py \
             services/http_security_service.py \
             services/velia_mobile_auth_service.py \
             services/velia_chat_service.py \
