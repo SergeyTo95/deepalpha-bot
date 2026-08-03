@@ -30,14 +30,18 @@ def test_stream_kwargs_preserve_attachment_field_presence():
         {"attachment_ids": None},
         **base,
     )
+    explicit_empty = mobile_streaming._stream_send_kwargs(
+        {"attachment_ids": []},
+        **base,
+    )
     explicit_values = mobile_streaming._stream_send_kwargs(
         {"attachment_ids": ["attachment-a"]},
         **base,
     )
 
     assert "attachment_ids" not in omitted
-    assert "attachment_ids" in explicit_null
     assert explicit_null["attachment_ids"] == []
+    assert explicit_empty["attachment_ids"] == []
     assert explicit_values["attachment_ids"] == ["attachment-a"]
 
 
@@ -47,9 +51,14 @@ def test_blocking_kwargs_preserve_explicit_null_as_empty_set():
         {"attachment_ids": None},
         idempotency_key="request-123",
     )
+    explicit_empty = hardening._blocking_send_kwargs(
+        {"attachment_ids": []},
+        idempotency_key="request-123",
+    )
 
     assert "attachment_ids" not in omitted
     assert explicit_null["attachment_ids"] == []
+    assert explicit_empty["attachment_ids"] == []
 
 
 def test_attachment_sender_fails_closed_when_feature_is_disabled():
