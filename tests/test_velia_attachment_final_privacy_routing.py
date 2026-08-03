@@ -1,5 +1,9 @@
+import re
+import uuid
+from datetime import datetime
 from types import SimpleNamespace
 
+from services import velia_attachment_chat_runtime_patch as attachment_chat
 from services import velia_attachment_privacy_service as privacy
 from services import velia_attachment_upload_service as upload
 from services import velia_conversation_quality_patch as quality
@@ -7,8 +11,9 @@ from services import velia_images_runtime_patch as images
 
 
 class _Cursor:
-    def __init__(self, fetchone_values=None):
+    def __init__(self, fetchone_values=None, fetchall_values=None):
         self.fetchone_values = list(fetchone_values or [])
+        self.fetchall_values = list(fetchall_values or [])
         self.calls = []
         self.rowcount = 1
 
@@ -17,6 +22,9 @@ class _Cursor:
 
     def fetchone(self):
         return self.fetchone_values.pop(0) if self.fetchone_values else None
+
+    def fetchall(self):
+        return self.fetchall_values.pop(0) if self.fetchall_values else []
 
     def close(self):
         pass
@@ -163,3 +171,46 @@ def test_attachment_backed_image_request_bypasses_paid_generation(monkeypatch):
 
     assert result["provider"] == "chat"
     assert len(original_calls) == 1
+
+
+def test_attachment_duplicate_resolves_before_budget_gate(monkeypatch):
+    attachment_id = str(uuid.uuid4())
+    cursor = _Cursor(
+        fetchone_values=[("conversation-1", "Existing", "manual")],
+        fetchall_values=[[(attachment_id,)]],
+    )
+    connection = _Connection(cursor)
+    monkeypatch.setattr(attachment_chat, "get_connection", lambda: connection)
+
+    budget_calls = []
+    existing_result = {
+        "ok": True,
+        "duplicate": True,
+        "user_message": {"id": "user-message-1"},
+        "assistant_message": {"id": "assistant-message-1", "status": "completed"},
+    }
+    chat_module = SimpleNamespace(
+        is_velia_chat_enabled_for_user=lambda _user_id: True,
+        _env_bool=lambda _name, default=False: True,
+        _env_int=lambda _name, default, _minimum, _maximum: default,
+        _IDEMPOTENCY_RE=re.compile(r"^[A-Za-z0-9._:-]{8,128}$"),
+        _utcnow=lambda: datetime.utcnow(),
+        _dict_cursor=lambda conn: conn.cursor(),
+        _existing_request_result=lambda *_args, **_kwargs: dict(existing_result),
+        _budget_error=lambda user_id: budget_calls.append(user_id) or "daily_limit",
+    )
+    attachment_chat.install(chat_module)
+
+    result = chat_module.send_message(
+        7,
+        "conversation-1",
+        "analyze again",
+        idempotency_key="request-123",
+        attachment_ids=[attachment_id],
+    )
+
+    assert result["ok"] is True
+    assert result["duplicate"] is True
+    assert result["attachments"] == [attachment_id]
+    assert budget_calls == []
+    assert connection.rollbacks == 1
