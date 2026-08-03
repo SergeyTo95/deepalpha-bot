@@ -1,0 +1,36 @@
+name: Apply VELIA File Analyst review fixes
+
+on:
+  push:
+    branches:
+      - feature/velia-file-analyst-attachments
+    paths:
+      - .github/workflows/apply-velia-file-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/velia-file-analyst-attachments
+          fetch-depth: 0
+
+      - name: Apply review fixes
+        run: |
+          git apply --check .github/velia-file-review-fixes.patch
+          git apply .github/velia-file-review-fixes.patch
+          rm -f .github/velia-file-review-fixes.patch
+          rm -f .github/workflows/apply-velia-file-review-fixes.yml
+
+      - name: Commit review fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve VELIA File Analyst review races"
+          git push origin HEAD:feature/velia-file-analyst-attachments
