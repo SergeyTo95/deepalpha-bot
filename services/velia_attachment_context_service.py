@@ -10,6 +10,7 @@ _ATTACHMENT_FRAME_TOKEN_RE = re.compile(
     r"\[(?:BEGIN_ATTACHMENT\b[^\]\n]*|END_ATTACHMENT)\]",
     re.IGNORECASE,
 )
+_ATTACHMENT_TRUNCATED_MARKER = "\n[Attachment payload truncated]"
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -51,6 +52,32 @@ def _safe_attachment_header_value(value: str) -> str:
         .replace("\n", " ")
         .strip()
     )
+
+
+def _framed_attachment(
+    filename: str,
+    mime_type: str,
+    extracted_text: str,
+    max_chars: int,
+) -> str:
+    """Return one complete frame that never exceeds the supplied budget."""
+    safe_name = _safe_attachment_header_value(filename) or "attachment"
+    safe_mime_type = _safe_attachment_header_value(mime_type)
+    header = f'[BEGIN_ATTACHMENT name="{safe_name}" mime="{safe_mime_type}"]\n'
+    footer = "\n[END_ATTACHMENT]"
+    available_payload_chars = int(max_chars) - len(header) - len(footer)
+    if available_payload_chars <= 0:
+        return ""
+
+    payload = _escape_attachment_payload(extracted_text).strip()
+    if not payload:
+        return ""
+    if len(payload) > available_payload_chars:
+        marker = _ATTACHMENT_TRUNCATED_MARKER
+        if available_payload_chars <= len(marker):
+            return ""
+        payload = payload[: available_payload_chars - len(marker)] + marker
+    return header + payload + footer
 
 
 def public_attachment_metadata_for_messages(
@@ -164,34 +191,84 @@ def attachment_prompt_context(
         cursor.close()
         conn.close()
 
-    blocks: List[str] = []
-    current_message_id = ""
+    message_groups: List[Dict[str, Any]] = []
+    group_by_id: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         message_id = str(_row_value(row, "message_id", 0, ""))
-        user_content = str(_row_value(row, "content", 1, "") or "").strip()
-        filename = str(_row_value(row, "original_name", 2, "attachment"))
-        mime_type = str(_row_value(row, "mime_type", 3, ""))
         extracted_text = str(_row_value(row, "extracted_text", 4, "") or "").strip()
         if not message_id or not extracted_text:
             continue
-        if message_id != current_message_id:
-            current_message_id = message_id
-            blocks.append(
-                "ASSOCIATED_USER_MESSAGE:\n" + (user_content or "[attachment-only message]")
-            )
-        safe_name = _safe_attachment_header_value(filename) or "attachment"
-        safe_mime_type = _safe_attachment_header_value(mime_type)
-        safe_payload = _escape_attachment_payload(extracted_text)
-        blocks.append(
-            f'[BEGIN_ATTACHMENT name="{safe_name}" mime="{safe_mime_type}"]\n'
-            + safe_payload
-            + "\n[END_ATTACHMENT]"
+        group = group_by_id.get(message_id)
+        if group is None:
+            user_content = str(_row_value(row, "content", 1, "") or "").strip()
+            # The same user turn already exists in the ordinary transcript. A
+            # bounded copy here is only an association label for its files.
+            associated_text = (user_content or "[attachment-only message]")[:1000]
+            group = {
+                "message_id": message_id,
+                "associated": "ASSOCIATED_USER_MESSAGE:\n" + associated_text,
+                "attachments": [],
+            }
+            group_by_id[message_id] = group
+            message_groups.append(group)
+        group["attachments"].append(
+            {
+                "filename": str(_row_value(row, "original_name", 2, "attachment")),
+                "mime_type": str(_row_value(row, "mime_type", 3, "")),
+                "extracted_text": extracted_text,
+            }
         )
 
-    if not blocks:
+    if not message_groups:
         return ""
-    context = "\n\n".join(blocks)
-    if len(context) > max_chars:
-        context = context[-max_chars:]
-        context = "[Older attachment context truncated]\n" + context
+
+    # Spend the budget from newest to oldest. Every included document remains
+    # inside a complete BEGIN/END frame; older groups or extra attachments are
+    # omitted rather than slicing a previously framed context string.
+    selected_newest_first: List[str] = []
+    used_chars = 0
+    omitted = False
+    for group in reversed(message_groups):
+        separator_chars = 2 if selected_newest_first else 0
+        remaining = max_chars - used_chars - separator_chars
+        associated = str(group["associated"])
+        minimum_frame_budget = 128
+        if remaining <= len(associated) + 2 + minimum_frame_budget:
+            omitted = True
+            continue
+
+        frames: List[str] = []
+        frame_used = len(associated) + 2
+        for attachment in group["attachments"]:
+            frame_separator = 2 if frames else 0
+            frame_budget = remaining - frame_used - frame_separator
+            if frame_budget < minimum_frame_budget:
+                omitted = True
+                break
+            frame = _framed_attachment(
+                str(attachment["filename"]),
+                str(attachment["mime_type"]),
+                str(attachment["extracted_text"]),
+                frame_budget,
+            )
+            if not frame:
+                omitted = True
+                continue
+            frames.append(frame)
+            frame_used += frame_separator + len(frame)
+
+        if not frames:
+            omitted = True
+            continue
+        chunk = associated + "\n\n" + "\n\n".join(frames)
+        selected_newest_first.append(chunk)
+        used_chars += separator_chars + len(chunk)
+
+    if not selected_newest_first:
+        return ""
+    context = "\n\n".join(reversed(selected_newest_first))
+    if omitted:
+        notice = "[Older or excess attachment context omitted]\n"
+        if len(notice) + len(context) <= max_chars:
+            context = notice + context
     return context
