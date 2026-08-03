@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 from aiohttp import web
 
 from services import gemini_gateway
+from services.velia_attachment_public_contract import public_attachment
 from services.velia_attachment_service import (
     AttachmentError,
     delete_attachment,
@@ -181,7 +182,7 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
                 status=500,
             )
         return _json_response(
-            {"ok": True, "attachment": attachment},
+            {"ok": True, "attachment": public_attachment(attachment)},
             status=201,
         )
 
@@ -201,7 +202,9 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
                 {"ok": False, "error": "attachment_not_found"},
                 status=404,
             )
-        return _json_response({"ok": True, "attachment": attachment})
+        return _json_response(
+            {"ok": True, "attachment": public_attachment(attachment)}
+        )
 
     async def handle_attachment_delete(request: web.Request) -> web.Response:
         if not _env_bool("VELIA_FILE_ANALYST_ENABLED", False):
