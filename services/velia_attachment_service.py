@@ -578,16 +578,29 @@ def delete_attachment(user_id: int, attachment_id: str) -> bool:
     try:
         cursor.execute(
             """
-            SELECT 1
-            FROM velia_message_attachments ma
-            JOIN velia_attachments a ON a.attachment_id=ma.attachment_id
-            WHERE a.attachment_id=%s AND a.user_id=%s
-            LIMIT 1
+            SELECT attachment_id
+            FROM velia_attachments
+            WHERE attachment_id=%s AND user_id=%s AND deleted_at IS NULL
+            FOR UPDATE
             """,
             (str(attachment_id), int(user_id)),
         )
+        if not cursor.fetchone():
+            conn.rollback()
+            return False
+
+        cursor.execute(
+            """
+            SELECT 1
+            FROM velia_message_attachments ma
+            WHERE ma.attachment_id=%s
+            LIMIT 1
+            """,
+            (str(attachment_id),),
+        )
         if cursor.fetchone():
             raise AttachmentError("attachment_in_use", status=409)
+
         cursor.execute(
             """
             UPDATE velia_attachments
