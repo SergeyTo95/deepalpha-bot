@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from services import velia_attachment_service as attachment_service
 from services import velia_attachment_chat_runtime_patch as attachment_chat
+from services import velia_attachment_privacy_service as attachment_privacy
 from services import velia_chat_latency_runtime_patch as latency
 from services import velia_mobile_hardening_service as hardening
 from services import velia_mobile_streaming_service as mobile_streaming
@@ -122,7 +123,7 @@ class _DeleteConnection:
         pass
 
 
-def test_delete_locks_attachment_before_checking_message_links(monkeypatch):
+def test_delete_locks_attachment_before_checking_links_and_scrubs_payload(monkeypatch):
     cursor = _DeleteCursor(
         [
             ("attachment-a",),
@@ -131,17 +132,19 @@ def test_delete_locks_attachment_before_checking_message_links(monkeypatch):
     )
     connection = _DeleteConnection(cursor)
     monkeypatch.setattr(
-        attachment_service,
+        attachment_privacy,
         "get_connection",
         lambda: connection,
     )
 
-    assert attachment_service.delete_attachment(7, "attachment-a") is True
+    assert attachment_privacy.delete_attachment(7, "attachment-a") is True
 
     queries = [query for query, _params in cursor.calls]
     assert "FROM velia_attachments" in queries[0]
     assert "FOR UPDATE" in queries[0]
     assert "FROM velia_message_attachments" in queries[1]
     assert queries[2].startswith("UPDATE velia_attachments")
+    assert "content_bytes=%s" in queries[2]
+    assert "extracted_text=''" in queries[2]
     assert connection.commits == 1
     assert connection.rollbacks == 0
