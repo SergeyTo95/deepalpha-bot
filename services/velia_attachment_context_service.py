@@ -78,7 +78,10 @@ def attachment_prompt_context(
     user_id: int,
     conversation_id: str,
 ) -> str:
-    max_messages = _env_int(
+    # This limit is a window of recent conversation turns, not a count of
+    # attachment-bearing messages. Consequently old files age out naturally
+    # as the user continues the conversation with ordinary text turns.
+    max_recent_turns = _env_int(
         "VELIA_ATTACHMENT_CONTEXT_MESSAGES",
         8,
         1,
@@ -95,18 +98,20 @@ def attachment_prompt_context(
     try:
         cursor.execute(
             """
-            WITH recent_user_messages AS (
-                SELECT message_id, content, created_at
+            WITH recent_messages AS (
+                SELECT message_id, role, content, created_at
                 FROM velia_messages
                 WHERE conversation_id=%s AND user_id=%s
-                  AND role='user' AND status='completed'
+                  AND role IN ('user', 'assistant')
+                  AND status='completed'
                   AND deleted_at IS NULL
-                  AND EXISTS (
-                      SELECT 1 FROM velia_message_attachments ma
-                      WHERE ma.message_id=velia_messages.message_id
-                  )
                 ORDER BY created_at DESC, message_id DESC
                 LIMIT %s
+            ),
+            recent_user_messages AS (
+                SELECT message_id, content, created_at
+                FROM recent_messages
+                WHERE role='user'
             )
             SELECT rum.message_id, rum.content, a.original_name, a.mime_type,
                    a.extracted_text, ma.position, rum.created_at
@@ -120,7 +125,7 @@ def attachment_prompt_context(
             (
                 str(conversation_id),
                 int(user_id),
-                max_messages,
+                max_recent_turns,
                 int(user_id),
             ),
         )
