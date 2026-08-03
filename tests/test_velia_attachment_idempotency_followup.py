@@ -1,0 +1,137 @@
+from datetime import datetime, timezone
+
+import pytest
+
+from services import velia_attachment_idempotency_service as idempotency
+from services import velia_attachment_service as attachment_service
+from services import velia_attachment_upload_service as upload_service
+
+
+ATTACHMENT_ID = "8b07392d-7d71-4acf-a077-13e50aa0dcb5"
+
+
+class _Cursor:
+    def __init__(self, fetchone_values=None):
+        self.fetchone_values = list(fetchone_values or [])
+        self.calls = []
+        self.closed = False
+
+    def execute(self, query, params=None):
+        self.calls.append((" ".join(str(query).split()), params))
+
+    def fetchone(self):
+        return self.fetchone_values.pop(0) if self.fetchone_values else None
+
+    def close(self):
+        self.closed = True
+
+
+class _Connection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+
+    def cursor(self, *args, **kwargs):
+        return self._cursor
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def close(self):
+        self.closed = True
+
+
+def _existing_row(*, status="ready", deleted_at=None):
+    return (
+        ATTACHMENT_ID,
+        "conversation-1",
+        "report.txt",
+        "text/plain",
+        "document",
+        5,
+        "digest",
+        None,
+        None,
+        status,
+        datetime.now(timezone.utc),
+        deleted_at,
+    )
+
+
+def _reserve_kwargs():
+    return {
+        "attachment_id": ATTACHMENT_ID,
+        "user_id": 7,
+        "conversation_id": "conversation-1",
+        "filename": "report.txt",
+        "raw": b"hello",
+        "digest": "digest",
+        "preflight": {
+            "mime_type": "text/plain",
+            "kind": "document",
+            "width": None,
+            "height": None,
+        },
+        "max_bytes": 15 * 1024 * 1024,
+    }
+
+
+def test_deleted_ready_upload_key_is_terminal(monkeypatch):
+    cursor = _Cursor(
+        fetchone_values=[
+            (1,),
+            _existing_row(deleted_at=datetime.now(timezone.utc)),
+        ]
+    )
+    connection = _Connection(cursor)
+    monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
+
+    with pytest.raises(attachment_service.AttachmentError) as error:
+        idempotency._existing_or_reserve(**_reserve_kwargs())
+
+    assert error.value.code == "attachment_not_found"
+    assert error.value.status == 404
+    assert connection.rollbacks == 1
+    assert not any(
+        query.startswith("UPDATE velia_attachments")
+        for query, _ in cursor.calls
+    )
+
+
+def test_reconcile_retries_connection_acquisition(monkeypatch):
+    cursor = _Cursor(fetchone_values=[_existing_row()])
+    connection = _Connection(cursor)
+    attempts = []
+
+    def flaky_connection():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise ConnectionError("postgres temporarily unavailable")
+        return connection
+
+    monkeypatch.setattr(idempotency, "get_connection", flaky_connection)
+    monkeypatch.setattr(upload_service, "_env_int", lambda *_args: 3)
+    monkeypatch.setattr(
+        attachment_service,
+        "_serialize_attachment",
+        lambda row: {"id": row[0], "status": row[9]},
+    )
+
+    result = idempotency._reconcile_completion_error(
+        attachment_id=ATTACHMENT_ID,
+        user_id=7,
+        conversation_id="conversation-1",
+        expected_size=5,
+        expected_digest="digest",
+    )
+
+    assert len(attempts) == 2
+    assert result == {"id": ATTACHMENT_ID, "status": "ready"}
+    assert connection.commits == 1
+    assert connection.closed is True
+    assert cursor.closed is True
