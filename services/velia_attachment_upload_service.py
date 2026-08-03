@@ -99,8 +99,12 @@ def _reserve_attachment(
             (_quota_lock_key(user_id),),
         )
         cursor.execute(
-            "SELECT 1 FROM velia_conversations "
-            "WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL",
+            """
+            SELECT 1
+            FROM velia_conversations
+            WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
+            FOR UPDATE
+            """,
             (str(conversation_id), int(user_id)),
         )
         if not cursor.fetchone():
