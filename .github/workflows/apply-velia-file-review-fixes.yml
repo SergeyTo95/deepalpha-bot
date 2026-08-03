@@ -6,6 +6,7 @@ on:
       - feature/velia-file-analyst-attachments
     paths:
       - .github/workflows/apply-velia-file-review-fixes.yml
+      - .github/velia-file-review-fixes.patch
 
 permissions:
   contents: write
@@ -22,8 +23,8 @@ jobs:
 
       - name: Apply review fixes
         run: |
-          git apply --check .github/velia-file-review-fixes.patch
-          git apply .github/velia-file-review-fixes.patch
+          git apply --recount --check .github/velia-file-review-fixes.patch
+          git apply --recount .github/velia-file-review-fixes.patch
           rm -f .github/velia-file-review-fixes.patch
           rm -f .github/workflows/apply-velia-file-review-fixes.yml
 
