@@ -8,6 +8,9 @@ from services import velia_attachment_service as attachment_service
 from services import velia_attachment_upload_service as upload_service
 
 
+ATTACHMENT_ID = "8b07392d-7d71-4acf-a077-13e50aa0dcb5"
+
+
 class _Cursor:
     def __init__(self, fetchone_values=None):
         self.fetchone_values = list(fetchone_values or [])
@@ -51,7 +54,7 @@ def _existing_row(
     created_at=None,
 ):
     return (
-        "attachment-1",
+        ATTACHMENT_ID,
         "conversation-1",
         "report.txt",
         "text/plain",
@@ -68,7 +71,7 @@ def _existing_row(
 
 def _reserve_kwargs():
     return {
-        "attachment_id": "8b07392d-7d71-4acf-a077-13e50aa0dcb5",
+        "attachment_id": ATTACHMENT_ID,
         "user_id": 7,
         "conversation_id": "conversation-1",
         "filename": "report.txt",
@@ -109,7 +112,7 @@ def test_same_key_returns_existing_ready_attachment(monkeypatch):
 
     result = idempotency._existing_or_reserve(**_reserve_kwargs())
 
-    assert result == {"id": "attachment-1", "status": "ready"}
+    assert result == {"id": ATTACHMENT_ID, "status": "ready"}
     assert connection.commits == 1
     assert connection.rollbacks == 0
     queries = [query for query, _ in cursor.calls]
@@ -171,7 +174,7 @@ def test_ready_recovery_row_is_never_scrubbed(monkeypatch):
     connection = _Connection(cursor)
     monkeypatch.setattr(idempotency, "get_connection", lambda: connection)
 
-    assert idempotency.scrub_unlinked_known_attachment("attachment-1", 7) is False
+    assert idempotency.scrub_unlinked_known_attachment(ATTACHMENT_ID, 7) is False
 
     queries = [query for query, _ in cursor.calls]
     assert "pg_advisory_xact_lock" in queries[0]
@@ -191,14 +194,14 @@ def test_reconcile_returns_committed_ready_row_without_cleanup(monkeypatch):
     )
 
     result = idempotency._reconcile_completion_error(
-        attachment_id="8b07392d-7d71-4acf-a077-13e50aa0dcb5",
+        attachment_id=ATTACHMENT_ID,
         user_id=7,
         conversation_id="conversation-1",
         expected_size=5,
         expected_digest="digest",
     )
 
-    assert result == {"id": "attachment-1", "status": "ready"}
+    assert result == {"id": ATTACHMENT_ID, "status": "ready"}
     assert not any(
         query.startswith("UPDATE velia_attachments")
         for query, _ in cursor.calls
