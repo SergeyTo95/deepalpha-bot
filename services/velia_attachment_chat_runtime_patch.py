@@ -164,10 +164,6 @@ def install(chat_module: Any) -> None:
         if not chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or "")):
             return {"ok": False, "error": "invalid_idempotency_key"}
 
-        budget_error = chat_module._budget_error(user_id)
-        if budget_error:
-            return {"ok": False, "error": budget_error}
-
         now = chat_module._utcnow()
         user_message_id = str(uuid.uuid4())
         assistant_message_id = str(uuid.uuid4())
@@ -189,6 +185,9 @@ def install(chat_module: Any) -> None:
                 conn.rollback()
                 return {"ok": False, "error": "conversation_not_found"}
 
+            # Idempotent replays do not consume another generation and must be
+            # resolved before daily message/cost limits. The attachment-aware
+            # comparison also rejects a replay that changes the file set.
             existing = _existing_request_result(
                 chat_module,
                 cursor,
@@ -200,6 +199,11 @@ def install(chat_module: Any) -> None:
             if existing:
                 conn.rollback()
                 return existing
+
+            budget_error = chat_module._budget_error(user_id)
+            if budget_error:
+                conn.rollback()
+                return {"ok": False, "error": budget_error}
 
             cursor.execute(
                 """
