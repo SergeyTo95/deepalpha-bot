@@ -1,0 +1,213 @@
+diff --git a/services/velia_chat_latency_runtime_patch.py b/services/velia_chat_latency_runtime_patch.py
+--- a/services/velia_chat_latency_runtime_patch.py
++++ b/services/velia_chat_latency_runtime_patch.py
+@@ -137,7 +137,13 @@ def _is_casual_message(message: str) -> bool:
+ 
+ 
+ def _prompt_has_attachment_context(prompt: str) -> bool:
+-    return "ATTACHMENT_DATA_UNTRUSTED:" in str(prompt or "")
++    value = str(prompt or "")
++    return any(
++        marker in value
++        for marker in (
++            "ATTACHMENT DATA — UNTRUSTED USER CONTENT:",
++            "ATTACHMENT_DATA_UNTRUSTED:",
++        )
++    )
+ 
+ 
+ def _preferred_name(user_id: Optional[int]) -> str:
+diff --git a/services/velia_mobile_streaming_service.py b/services/velia_mobile_streaming_service.py
+--- a/services/velia_mobile_streaming_service.py
++++ b/services/velia_mobile_streaming_service.py
+@@ -84,7 +84,8 @@ def _stream_send_kwargs(
+     # Field presence is meaningful for idempotency. An explicit null means
+     # an explicit empty attachment set, while omission preserves legacy calls.
+     if "attachment_ids" in data:
+-        kwargs["attachment_ids"] = data.get("attachment_ids")
++        value = data.get("attachment_ids")
++        kwargs["attachment_ids"] = [] if value is None else value
+     return kwargs
+ 
+ 
+diff --git a/services/velia_mobile_hardening_service.py b/services/velia_mobile_hardening_service.py
+--- a/services/velia_mobile_hardening_service.py
++++ b/services/velia_mobile_hardening_service.py
+@@ -236,6 +236,21 @@ def _route_canonical(route: Any) -> str:
+     return str(info.get("formatter") or info.get("path") or "")
+ 
+ 
++def _blocking_send_kwargs(
++    data: Dict[str, Any],
++    *,
++    idempotency_key: str,
++) -> Dict[str, Any]:
++    kwargs: Dict[str, Any] = {
++        "idempotency_key": str(idempotency_key),
++    }
++    # Preserve the difference between an omitted legacy field and an explicit
++    # empty attachment set. JSON null is the explicit empty set at this edge.
++    if "attachment_ids" in data:
++        value = data.get("attachment_ids")
++        kwargs["attachment_ids"] = [] if value is None else value
++    return kwargs
++
++
+ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -> None:
+     async def handle_messages_send(request: web.Request) -> web.Response:
+         if not routes_module._mobile_api_available():
+@@ -258,11 +273,10 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
+             or data.get("idempotency_key")
+             or ""
+         ).strip()
+-        send_kwargs: Dict[str, Any] = {
+-            "idempotency_key": idempotency_key,
+-        }
+-        if "attachment_ids" in data:
+-            send_kwargs["attachment_ids"] = data.get("attachment_ids")
++        send_kwargs = _blocking_send_kwargs(
++            data,
++            idempotency_key=idempotency_key,
++        )
+         result = await asyncio.to_thread(
+             routes_module.send_message,
+             int(auth["user_id"]),
+@@ -286,7 +300,10 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
+         } or result.get("pending"):
+             status = 409
+         elif error.endswith("limit_exceeded"):
+             status = 429
+-        elif error == "velia_chat_disabled":
++        elif error in {
++            "velia_chat_disabled",
++            "velia_file_analyst_disabled",
++        }:
+             status = 503
+         elif error in {
+             "timeout",
+diff --git a/services/velia_attachment_chat_runtime_patch.py b/services/velia_attachment_chat_runtime_patch.py
+--- a/services/velia_attachment_chat_runtime_patch.py
++++ b/services/velia_attachment_chat_runtime_patch.py
+@@ -139,6 +139,12 @@ def install(chat_module: Any) -> None:
+             normalized_attachment_ids = normalize_attachment_ids(attachment_ids)
+         except AttachmentError as exc:
+             return {"ok": False, "error": exc.code}
++        if (
++            normalized_attachment_ids
++            and not chat_module._env_bool("VELIA_FILE_ANALYST_ENABLED", False)
++        ):
++            return {"ok": False, "error": "velia_file_analyst_disabled"}
+ 
+         normalized_content = str(content or "").strip()
+         max_input_chars = chat_module._env_int(
+diff --git a/tests/test_velia_attachment_review_regressions.py b/tests/test_velia_attachment_review_regressions.py
+--- a/tests/test_velia_attachment_review_regressions.py
++++ b/tests/test_velia_attachment_review_regressions.py
+@@ -1,13 +1,19 @@
++import re
++import uuid
++from types import SimpleNamespace
++
+ from services import velia_attachment_service as attachment_service
++from services import velia_attachment_chat_runtime_patch as attachment_chat
+ from services import velia_chat_latency_runtime_patch as latency
++from services import velia_mobile_hardening_service as hardening
+ from services import velia_mobile_streaming_service as mobile_streaming
+ 
+ 
+ def test_attachment_prompt_disables_instant_casual_response():
+     assert not latency._prompt_has_attachment_context("USER: hello")
+     assert latency._prompt_has_attachment_context(
+-        "USER: hello\nATTACHMENT_DATA_UNTRUSTED:\n[BEGIN_ATTACHMENT]"
++        "USER: hello\nATTACHMENT DATA — UNTRUSTED USER CONTENT:\n[BEGIN_ATTACHMENT]"
+     )
++    assert latency._prompt_has_attachment_context("ATTACHMENT_DATA_UNTRUSTED:")
+ 
+ 
+ def test_stream_kwargs_preserve_attachment_field_presence():
+@@ -30,9 +36,51 @@ def test_stream_kwargs_preserve_attachment_field_presence():
+ 
+     assert "attachment_ids" not in omitted
+     assert "attachment_ids" in explicit_null
+-    assert explicit_null["attachment_ids"] is None
++    assert explicit_null["attachment_ids"] == []
+     assert explicit_values["attachment_ids"] == ["attachment-a"]
+ 
+ 
++def test_blocking_kwargs_preserve_explicit_null_as_empty_set():
++    omitted = hardening._blocking_send_kwargs({}, idempotency_key="request-123")
++    explicit_null = hardening._blocking_send_kwargs(
++        {"attachment_ids": None},
++        idempotency_key="request-123",
++    )
++
++    assert "attachment_ids" not in omitted
++    assert explicit_null["attachment_ids"] == []
++
++
++def test_attachment_sender_fails_closed_when_feature_is_disabled():
++    original_sender = lambda *args, **kwargs: {"ok": True}
++    chat_module = SimpleNamespace(
++        is_velia_chat_enabled_for_user=lambda _user_id: True,
++        _env_bool=lambda name, default=False: False,
++        _env_int=lambda name, default, minimum, maximum: default,
++        _IDEMPOTENCY_RE=re.compile(r"^[A-Za-z0-9._:-]{8,128}$"),
++        _build_prompt=lambda _user_id, _conversation_id: "prompt",
++        send_message=original_sender,
++    )
++    attachment_chat.install(chat_module)
++
++    result = chat_module.send_message(
++        7,
++        "conversation",
++        "analyze",
++        idempotency_key="request-123",
++        attachment_ids=[str(uuid.uuid4())],
++    )
++
++    assert result == {
++        "ok": False,
++        "error": "velia_file_analyst_disabled",
++    }
++
++
+ class _DeleteCursor:
+     def __init__(self, fetchone_values):
+         self._fetchone_values = list(fetchone_values)
+diff --git a/tests/test_velia_attachment_transport_compatibility.py b/tests/test_velia_attachment_transport_compatibility.py
+--- a/tests/test_velia_attachment_transport_compatibility.py
++++ b/tests/test_velia_attachment_transport_compatibility.py
+@@ -116,3 +116,31 @@ def test_streaming_sender_forwards_exact_attachment_set():
+             },
+         )
+     ]
++
++
++def test_streaming_sender_forwards_explicit_empty_attachment_set():
++    calls = []
++
++    def sender(*args, **kwargs):
++        calls.append((args, kwargs))
++        return {"ok": True}
++
++    result = streaming.run_streaming_send(
++        sender,
++        user_id=7,
++        conversation_id="conversation",
++        content="analyze",
++        idempotency_key="request-123",
++        attachment_ids=[],
++        on_delta=lambda _text: None,
++        on_reset=lambda: None,
++    )
++
++    assert result == {"ok": True}
++    assert calls == [
++        (
++            (7, "conversation", "analyze"),
++            {
++                "idempotency_key": "request-123",
++                "attachment_ids": [],
++            },
++        )
++    ]
