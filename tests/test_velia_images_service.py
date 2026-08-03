@@ -114,6 +114,11 @@ def test_signature_verification_fails_closed_without_secret(monkeypatch):
 def test_runtime_patch_returns_only_velyon_public_identity(monkeypatch):
     monkeypatch.setattr(
         runtime_patch,
+        "request_message_has_attachments",
+        lambda request_id, user_id: False,
+    )
+    monkeypatch.setattr(
+        runtime_patch,
         "_persisted_request_user_message",
         lambda request_id, user_id: "Нарисуй картинку белого робота",
     )
