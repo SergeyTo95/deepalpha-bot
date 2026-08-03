@@ -3,6 +3,9 @@ import os
 
 from aiohttp import web as aiohttp_web
 
+from services.aiohttp_handler_cancellation_service import (
+    handler_cancellation_run_app_kwargs,
+)
 from services.public_domain_service import configure_public_urls
 
 logger = logging.getLogger(__name__)
@@ -218,14 +221,16 @@ def main() -> None:
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
-    # aiohttp does not cancel handlers on disconnect by default. Enabling this
-    # is required for the recoverable upload wrapper to observe response loss
-    # and scrub a completed attachment whose UUID was never delivered.
+    # aiohttp 3.9+ supports native handler cancellation. The production stack
+    # currently resolves aiohttp 3.8 through aiogram 2.x, where a focused
+    # protocol backport is installed instead and no unsupported run_app keyword
+    # is passed.
+    run_app_kwargs = handler_cancellation_run_app_kwargs(aiohttp_web)
     aiohttp_web.run_app(
         deepalpha_web.app,
         host="0.0.0.0",
         port=port,
-        handler_cancellation=True,
+        **run_app_kwargs,
     )
 
 
