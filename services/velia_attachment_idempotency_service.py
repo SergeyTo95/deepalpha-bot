@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import uuid
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 from db.database import get_connection
@@ -46,6 +47,49 @@ def _idempotency_lock_key(attachment_id: str) -> int:
 
 def _serialize_existing(row: Any) -> Dict[str, Any]:
     return attachment_service._serialize_attachment(tuple(row[:11]))
+
+
+def _created_today(value: Any) -> bool:
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value == attachment_service._utcnow().date()
+    return False
+
+
+def _enforce_daily_quota(
+    cursor: Any,
+    *,
+    user_id: int,
+    added_bytes: int,
+    daily_count_limit: int,
+    daily_bytes_limit: int,
+) -> None:
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(%s)",
+        (upload_service._quota_lock_key(user_id),),
+    )
+    cursor.execute(
+        """
+        SELECT COUNT(*), COALESCE(SUM(byte_size), 0)
+        FROM velia_attachments
+        WHERE user_id=%s AND created_at>=CURRENT_DATE
+        """,
+        (int(user_id),),
+    )
+    quota_row = cursor.fetchone() or (0, 0)
+    current_count = int(quota_row[0] or 0)
+    current_bytes = int(quota_row[1] or 0)
+    if current_count >= daily_count_limit:
+        raise attachment_service.AttachmentError(
+            "attachment_daily_limit_exceeded",
+            status=429,
+        )
+    if current_bytes + int(added_bytes) > daily_bytes_limit:
+        raise attachment_service.AttachmentError(
+            "attachment_daily_bytes_exceeded",
+            status=429,
+        )
 
 
 def _existing_or_reserve(
@@ -95,6 +139,7 @@ def _existing_or_reserve(
             existing_size = int(existing[5] or 0)
             existing_digest = str(existing[6] or "")
             existing_status = str(existing[9] or "")
+            existing_created_at = existing[10]
             existing_deleted_at = existing[11]
             if (
                 existing_conversation_id != str(conversation_id)
@@ -111,14 +156,24 @@ def _existing_or_reserve(
             if existing_status == "failed" and existing_deleted_at is None:
                 # The first request has reserved the deterministic row and is
                 # still inspecting it outside this short transaction. Do not
-                # start a second worker that could race completion/cleanup.
+                # start a second worker that could race completion/recovery.
                 raise attachment_service.AttachmentError(
                     "attachment_upload_in_progress",
                     status=409,
                 )
 
-            # A failed or privacy-scrubbed attempt may be retried with the same
-            # key and exact bytes without consuming a second quota entry.
+            # Rows already created today were counted by the original quota
+            # reservation. Reviving an older row moves it into today's ledger,
+            # so serialize and reapply today's count/byte limits first.
+            if not _created_today(existing_created_at):
+                _enforce_daily_quota(
+                    cursor,
+                    user_id=int(user_id),
+                    added_bytes=len(raw),
+                    daily_count_limit=daily_count_limit,
+                    daily_bytes_limit=daily_bytes_limit,
+                )
+
             cursor.execute(
                 """
                 UPDATE velia_attachments
@@ -155,9 +210,12 @@ def _existing_or_reserve(
             conn.commit()
             return None
 
-        cursor.execute(
-            "SELECT pg_advisory_xact_lock(%s)",
-            (upload_service._quota_lock_key(user_id),),
+        _enforce_daily_quota(
+            cursor,
+            user_id=int(user_id),
+            added_bytes=len(raw),
+            daily_count_limit=daily_count_limit,
+            daily_bytes_limit=daily_bytes_limit,
         )
         cursor.execute(
             """
@@ -172,27 +230,6 @@ def _existing_or_reserve(
             raise attachment_service.AttachmentError(
                 "conversation_not_found",
                 status=404,
-            )
-        cursor.execute(
-            """
-            SELECT COUNT(*), COALESCE(SUM(byte_size), 0)
-            FROM velia_attachments
-            WHERE user_id=%s AND created_at>=CURRENT_DATE
-            """,
-            (int(user_id),),
-        )
-        quota_row = cursor.fetchone() or (0, 0)
-        current_count = int(quota_row[0] or 0)
-        current_bytes = int(quota_row[1] or 0)
-        if current_count >= daily_count_limit:
-            raise attachment_service.AttachmentError(
-                "attachment_daily_limit_exceeded",
-                status=429,
-            )
-        if current_bytes + len(raw) > daily_bytes_limit:
-            raise attachment_service.AttachmentError(
-                "attachment_daily_bytes_exceeded",
-                status=429,
             )
         cursor.execute(
             """
@@ -237,11 +274,7 @@ def scrub_unlinked_known_attachment(
     attachment_id: str,
     user_id: int,
 ) -> bool:
-    """Scrub a known reservation even after an ambiguous ready commit.
-
-    The row is changed only while it is still unlinked, so a message that has
-    already accepted the attachment can never be damaged by recovery cleanup.
-    """
+    """Scrub a non-ready reservation while preserving recoverable ready rows."""
     attempts = upload_service._env_int(
         "VELIA_ATTACHMENTS_SCRUB_ATTEMPTS",
         3,
@@ -253,17 +286,28 @@ def scrub_unlinked_known_attachment(
         cursor = conn.cursor()
         try:
             cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_idempotency_lock_key(attachment_id),),
+            )
+            cursor.execute(
                 """
-                SELECT attachment_id
+                SELECT extraction_status
                 FROM velia_attachments
                 WHERE attachment_id=%s AND user_id=%s
                 FOR UPDATE
                 """,
                 (str(attachment_id), int(user_id)),
             )
-            if not cursor.fetchone():
+            row = cursor.fetchone()
+            if not row:
                 conn.rollback()
                 return True
+            if str(row[0] or "") == "ready":
+                # A ready deterministic row is the recovery record for every
+                # request that used this key. Never invalidate an ID another
+                # concurrent retry may already have received.
+                conn.rollback()
+                return False
             cursor.execute(
                 """
                 SELECT 1
@@ -311,6 +355,109 @@ def scrub_unlinked_known_attachment(
             cursor.close()
             conn.close()
     return False
+
+
+def _reconcile_completion_error(
+    *,
+    attachment_id: str,
+    user_id: int,
+    conversation_id: str,
+    expected_size: int,
+    expected_digest: str,
+) -> Optional[Dict[str, Any]]:
+    """Recover a committed ready row or scrub a rolled-back reservation.
+
+    The same advisory lock used by retries prevents cleanup from invalidating a
+    ready attachment already returned by a concurrent request.
+    """
+    attempts = upload_service._env_int(
+        "VELIA_ATTACHMENTS_SCRUB_ATTEMPTS",
+        3,
+        1,
+        10,
+    )
+    for attempt in range(1, attempts + 1):
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_idempotency_lock_key(attachment_id),),
+            )
+            cursor.execute(
+                """
+                SELECT attachment_id, conversation_id, original_name, mime_type,
+                       kind, byte_size, sha256, width, height,
+                       extraction_status, created_at, deleted_at
+                FROM velia_attachments
+                WHERE attachment_id=%s AND user_id=%s
+                FOR UPDATE
+                """,
+                (str(attachment_id), int(user_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return None
+            if (
+                str(row[1] or "") != str(conversation_id)
+                or int(row[5] or 0) != int(expected_size)
+                or (str(row[6] or "") and str(row[6]) != str(expected_digest))
+            ):
+                conn.rollback()
+                return None
+            if str(row[9] or "") == "ready" and row[11] is None:
+                recovered = _serialize_existing(row)
+                conn.commit()
+                return recovered
+
+            cursor.execute(
+                """
+                SELECT 1
+                FROM velia_message_attachments
+                WHERE attachment_id=%s
+                LIMIT 1
+                """,
+                (str(attachment_id),),
+            )
+            if cursor.fetchone():
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                UPDATE velia_attachments
+                SET content_bytes=%s,
+                    extracted_text='',
+                    original_name='failed attachment',
+                    width=NULL,
+                    height=NULL,
+                    extraction_status='failed',
+                    deleted_at=COALESCE(deleted_at, %s)
+                WHERE attachment_id=%s AND user_id=%s
+                """,
+                (
+                    b"",
+                    attachment_service._utcnow(),
+                    str(attachment_id),
+                    int(user_id),
+                ),
+            )
+            conn.commit()
+            return None
+        except Exception as exc:
+            conn.rollback()
+            if attempt >= attempts:
+                logger.error(
+                    "VELIA_ATTACHMENT_COMPLETION_RECONCILE_FAILED attachment_id=%s user_id=%s attempts=%s error=%s",
+                    str(attachment_id),
+                    int(user_id),
+                    attempts,
+                    exc.__class__.__name__,
+                )
+        finally:
+            cursor.close()
+            conn.close()
+    return None
 
 
 def create_attachment_idempotently(
@@ -367,5 +514,13 @@ def create_attachment_idempotently(
             inspected=inspected,
         )
     except Exception:
-        scrub_unlinked_known_attachment(attachment_id, int(user_id))
+        recovered = _reconcile_completion_error(
+            attachment_id=attachment_id,
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            expected_size=len(raw),
+            expected_digest=digest,
+        )
+        if recovered is not None:
+            return recovered
         raise
