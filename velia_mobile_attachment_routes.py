@@ -7,6 +7,10 @@ from typing import Any, Dict, Optional, Tuple
 from aiohttp import web
 
 from services import gemini_gateway
+from services.velia_attachment_idempotency_service import (
+    create_attachment_idempotently,
+    normalize_upload_idempotency_key,
+)
 from services.velia_attachment_privacy_service import (
     delete_attachment,
     scrub_legacy_failed_attachment_payloads,
@@ -16,7 +20,6 @@ from services.velia_attachment_service import (
     AttachmentError,
     get_attachment,
 )
-from services.velia_attachment_upload_service import create_attachment_with_reservation
 from services.velia_chat_service import get_conversation
 from services.velia_mobile_auth_service import authenticate_access_token
 
@@ -170,45 +173,20 @@ async def _read_single_upload(request: web.Request) -> Tuple[str, str, bytes]:
     return filename, mime_type, bytes(chunks)
 
 
-async def _cleanup_cancelled_upload(
-    upload_task: "asyncio.Task[Dict[str, Any]]",
-    *,
-    user_id: int,
+def _consume_detached_upload_result(
+    task: "asyncio.Task[Dict[str, Any]]",
 ) -> None:
-    """Wait for an offloaded upload and scrub it when its response was lost."""
     try:
-        attachment = await asyncio.shield(upload_task)
+        task.result()
     except asyncio.CancelledError:
-        # A second cancellation should not cancel the shielded worker. Keep a
-        # detached cleanup coroutine alive so the eventual row is still scrubbed.
-        async def finish_cleanup() -> None:
-            try:
-                completed = await asyncio.shield(upload_task)
-                attachment_id = str(completed.get("id") or "")
-                if attachment_id:
-                    await asyncio.to_thread(delete_attachment, int(user_id), attachment_id)
-            except Exception:
-                logger.exception(
-                    "VELIA_ATTACHMENT_CANCELLED_UPLOAD_CLEANUP_FAILED user_id=%s",
-                    int(user_id),
-                )
-
-        asyncio.create_task(finish_cleanup())
         return
-    except Exception:
-        # Failed uploads are already scrubbed by the reservation service.
-        return
-
-    attachment_id = str(attachment.get("id") or "")
-    if not attachment_id:
-        return
-    try:
-        await asyncio.to_thread(delete_attachment, int(user_id), attachment_id)
-    except Exception:
-        logger.exception(
-            "VELIA_ATTACHMENT_CANCELLED_UPLOAD_CLEANUP_FAILED attachment_id=%s user_id=%s",
-            attachment_id,
-            int(user_id),
+    except Exception as exc:
+        # The idempotent service has already scrubbed any ambiguous unlinked
+        # reservation. Consume the exception so the event loop does not report
+        # an unobserved task failure after a disconnected client.
+        logger.warning(
+            "VELIA_ATTACHMENT_DETACHED_UPLOAD_FAILED error=%s",
+            exc.__class__.__name__,
         )
 
 
@@ -216,17 +194,20 @@ async def _create_attachment_recoverably(
     *,
     user_id: int,
     conversation_id: str,
+    idempotency_key: str,
     filename: str,
     mime_type: str,
     content: bytes,
 ) -> Dict[str, Any]:
-    # Shield the worker so cancellation of the HTTP handler cannot discard the
-    # only future that knows the server-generated attachment UUID.
+    # The worker survives handler cancellation. A retry with the same key
+    # deterministically recovers the same ready attachment, including the
+    # response-loss window after processing but before delivery of HTTP 201.
     upload_task = asyncio.create_task(
         asyncio.to_thread(
-            create_attachment_with_reservation,
+            create_attachment_idempotently,
             int(user_id),
             str(conversation_id),
+            idempotency_key=str(idempotency_key),
             filename=filename,
             mime_type=mime_type,
             content=content,
@@ -234,9 +215,9 @@ async def _create_attachment_recoverably(
     )
     try:
         return await asyncio.shield(upload_task)
-    except asyncio.CancelledError as cancelled:
-        await _cleanup_cancelled_upload(upload_task, user_id=int(user_id))
-        raise cancelled
+    except asyncio.CancelledError:
+        upload_task.add_done_callback(_consume_detached_upload_result)
+        raise
 
 
 def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
@@ -267,10 +248,14 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
                 status=404,
             )
         try:
+            idempotency_key = normalize_upload_idempotency_key(
+                str(request.headers.get("Idempotency-Key") or "")
+            )
             filename, mime_type, content = await _read_single_upload(request)
             attachment = await _create_attachment_recoverably(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                idempotency_key=idempotency_key,
                 filename=filename,
                 mime_type=mime_type,
                 content=content,
