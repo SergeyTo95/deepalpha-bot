@@ -1,0 +1,141 @@
+diff --git a/services/velia_chat_latency_runtime_patch.py b/services/velia_chat_latency_runtime_patch.py
+index ce4f831..b0a5bb1 100644
+--- a/services/velia_chat_latency_runtime_patch.py
++++ b/services/velia_chat_latency_runtime_patch.py
+@@ -133,6 +133,10 @@ def _is_casual_message(message: str) -> bool:
+     return _casual_intent(message) is not None
+ 
+ 
++def _prompt_has_attachment_context(prompt: str) -> bool:
++    return "ATTACHMENT_DATA_UNTRUSTED:" in str(prompt or "")
++
++
+ def _preferred_name(user_id: Optional[int]) -> str:
+     if user_id is None:
+         return ""
+@@ -399,7 +403,10 @@ def install(chat_module: Any, routes_module: Any = None) -> None:
+         _CONTEXT.user_message = message
+         try:
+             fast_response = None
+-            if _env_bool("VELIA_CHAT_INSTANT_CASUAL_ENABLED", True):
++            if (
++                _env_bool("VELIA_CHAT_INSTANT_CASUAL_ENABLED", True)
++                and not _prompt_has_attachment_context(prompt)
++            ):
+                 fast_response = _instant_response_for_message(message, user_id)
+ 
+             if fast_response is not None:
+diff --git a/services/velia_mobile_streaming_service.py b/services/velia_mobile_streaming_service.py
+index e4bc54e..a6f386d 100644
+--- a/services/velia_mobile_streaming_service.py
++++ b/services/velia_mobile_streaming_service.py
+@@ -5,7 +5,7 @@ import queue as thread_queue
+ import threading
+ import time
+-from typing import Any, Optional, Tuple
++from typing import Any, Dict, Optional, Tuple
+ 
+ from aiohttp import web
+ 
+@@ -68,6 +68,27 @@ async def _write_if_connected(
+         return False
+ 
+ 
++def _stream_send_kwargs(
++    data: Dict[str, Any],
++    *,
++    user_id: int,
++    conversation_id: str,
++    content: str,
++    idempotency_key: str,
++) -> Dict[str, Any]:
++    kwargs: Dict[str, Any] = {
++        "user_id": int(user_id),
++        "conversation_id": str(conversation_id),
++        "content": str(content),
++        "idempotency_key": str(idempotency_key),
++    }
++    # Field presence is meaningful for idempotency. An explicit null means
++    # an explicit empty attachment set, while omission preserves legacy calls.
++    if "attachment_ids" in data:
++        kwargs["attachment_ids"] = data.get("attachment_ids")
++    return kwargs
++
++
+ def setup_velia_mobile_streaming_route(
+     app: web.Application,
+     chat_module: Any,
+@@ -101,7 +122,6 @@ def setup_velia_mobile_streaming_route(
+             )
+ 
+         content = str(data.get("content") or "")
+-        attachment_ids = data.get("attachment_ids")
+         idempotency_key = str(
+             request.headers.get("Idempotency-Key")
+             or data.get("idempotency_key")
+@@ -132,16 +152,24 @@ def setup_velia_mobile_streaming_route(
+                 return
+             _put_bounded_event(queue, connected, (event_type, text))
+ 
++        send_kwargs = _stream_send_kwargs(
++            data,
++            user_id=user_id,
++            conversation_id=conversation_id,
++            content=content,
++            idempotency_key=idempotency_key,
++        )
++        send_kwargs["on_delta"] = lambda delta: enqueue("delta", delta)
++        send_kwargs["on_reset"] = lambda: enqueue("reset")
++
+         worker = asyncio.create_task(
+             asyncio.to_thread(
+                 run_streaming_send,
+                 chat_module.send_message,
+-                user_id=user_id,
+-                conversation_id=conversation_id,
+-                content=content,
+-                idempotency_key=idempotency_key,
+-                attachment_ids=attachment_ids,
+-                on_delta=lambda delta: enqueue("delta", delta),
+-                on_reset=lambda: enqueue("reset"),
++                **send_kwargs,
+             )
+         )
+diff --git a/services/velia_attachment_service.py b/services/velia_attachment_service.py
+index dc2fa35..7637500 100644
+--- a/services/velia_attachment_service.py
++++ b/services/velia_attachment_service.py
+@@ -570,18 +570,29 @@ def delete_attachment(user_id: int, attachment_id: str) -> bool:
+     cursor = conn.cursor()
+     try:
+         cursor.execute(
++            """
++            SELECT attachment_id
++            FROM velia_attachments
++            WHERE attachment_id=%s AND user_id=%s AND deleted_at IS NULL
++            FOR UPDATE
++            """,
++            (str(attachment_id), int(user_id)),
++        )
++        if not cursor.fetchone():
++            conn.rollback()
++            return False
++
++        cursor.execute(
+             """
+             SELECT 1
+             FROM velia_message_attachments ma
+-            JOIN velia_attachments a ON a.attachment_id=ma.attachment_id
+-            WHERE a.attachment_id=%s AND a.user_id=%s
++            WHERE ma.attachment_id=%s
+             LIMIT 1
+             """,
+-            (str(attachment_id), int(user_id)),
++            (str(attachment_id),),
+         )
+         if cursor.fetchone():
+             raise AttachmentError("attachment_in_use", status=409)
++
+         cursor.execute(
+             """
+             UPDATE velia_attachments
