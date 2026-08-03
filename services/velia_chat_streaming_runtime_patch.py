@@ -137,6 +137,7 @@ def run_streaming_send(
     conversation_id: str,
     content: str,
     idempotency_key: str,
+    attachment_ids: Any = None,
     on_delta: Callable[[str], None],
     on_reset: Callable[[], None],
 ) -> Dict[str, Any]:
@@ -145,11 +146,18 @@ def run_streaming_send(
     _STREAM_CONTEXT.on_delta = on_delta
     _STREAM_CONTEXT.on_reset = on_reset
     try:
+        send_kwargs: Dict[str, Any] = {
+            "idempotency_key": str(idempotency_key),
+        }
+        # Preserve compatibility with legacy/test senders when no attachment
+        # field was supplied, while forwarding the exact list when it exists.
+        if attachment_ids is not None:
+            send_kwargs["attachment_ids"] = attachment_ids
         return send_message(
             int(user_id),
             str(conversation_id),
             str(content),
-            idempotency_key=str(idempotency_key),
+            **send_kwargs,
         )
     finally:
         if previous_delta is None:

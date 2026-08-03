@@ -19,12 +19,18 @@ def install(velia_chat_service_module: Any, velia_mobile_routes_module: Any) -> 
         content: str,
         *,
         idempotency_key: str,
+        attachment_ids: Any = None,
     ) -> Dict[str, Any]:
+        send_kwargs: Dict[str, Any] = {
+            "idempotency_key": idempotency_key,
+        }
+        if attachment_ids is not None:
+            send_kwargs["attachment_ids"] = attachment_ids
         result = original_send_message(
             user_id,
             conversation_id,
             content,
-            idempotency_key=idempotency_key,
+            **send_kwargs,
         )
         if not result.get("ok") or result.get("duplicate"):
             return result
@@ -44,6 +50,8 @@ def install(velia_chat_service_module: Any, velia_mobile_routes_module: Any) -> 
                 conversation_id=str(conversation_id),
                 user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
+                # Keep Memory Shadow text-only. Attachment bytes and extracted
+                # document content stay inside the private attachment subsystem.
                 user_content=str(content or ""),
                 assistant_content=assistant_content,
             )

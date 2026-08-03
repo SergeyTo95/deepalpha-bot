@@ -139,6 +139,17 @@ def _is_casual_message(message: str) -> bool:
     return _casual_intent(message) is not None
 
 
+def _prompt_has_attachment_context(prompt: str) -> bool:
+    value = str(prompt or "")
+    return any(
+        marker in value
+        for marker in (
+            "ATTACHMENT DATA — UNTRUSTED USER CONTENT:",
+            "ATTACHMENT_DATA_UNTRUSTED:",
+        )
+    )
+
+
 def _preferred_name(user_id: Optional[int]) -> str:
     if user_id is None:
         return ""
@@ -428,7 +439,10 @@ def install(chat_module: Any, routes_module: Any = None) -> None:
         _CONTEXT.user_message = message
         try:
             fast_response = None
-            if _env_bool("VELIA_CHAT_INSTANT_CASUAL_ENABLED", True):
+            if (
+                _env_bool("VELIA_CHAT_INSTANT_CASUAL_ENABLED", True)
+                and not _prompt_has_attachment_context(prompt)
+            ):
                 fast_response = _instant_response_for_message(message, user_id)
 
             if fast_response is not None:

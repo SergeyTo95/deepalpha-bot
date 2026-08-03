@@ -3,6 +3,9 @@ import os
 
 from aiohttp import web as aiohttp_web
 
+from services.aiohttp_handler_cancellation_service import (
+    handler_cancellation_run_app_kwargs,
+)
 from services.public_domain_service import configure_public_urls
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,11 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
+    from services.velia_attachment_feature_flag_service import install as install_velia_attachment_feature_flag
+    from services.velia_attachment_final_safety_patch import install as install_velia_attachment_final_safety
+    from services.velia_attachment_message_runtime_patch import install as install_velia_attachment_messages
+    from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_chat_streaming_runtime_patch import install as install_velia_chat_streaming
@@ -63,6 +71,7 @@ def main() -> None:
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
     from services.velia_user_profile_service import ensure_velia_user_profile_table
     from velia_image_routes import setup_velia_image_routes
+    from velia_mobile_attachment_routes import setup_velia_mobile_attachment_routes
     from velia_plugin_routes import setup_velia_plugin_routes
     from velia_profile_routes import setup_velia_profile_routes
 
@@ -77,6 +86,18 @@ def main() -> None:
     install_opportunity_runtime()
     install_openapi_runtime()
     install_commercial_runtime()
+    install_velia_attachment_final_safety(
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+    # Attachment-aware persistence must be the innermost chat sender so every
+    # existing VELIA quality, profile, image, memory and hardening wrapper still
+    # applies to file-backed turns. Restore the original prompt builder here;
+    # bounded attachment context is appended after the established wrappers.
+    original_velia_prompt_builder = velia_chat_service_module._build_prompt
+    install_velia_attachment_chat(velia_chat_service_module)
+    velia_chat_service_module._build_prompt = original_velia_prompt_builder
+    velia_mobile_routes_module.send_message = velia_chat_service_module.send_message
     install_velia_live_plugins(velia_chat_service_module)
     install_velia_conversation_quality(
         velia_chat_service_module,
@@ -130,11 +151,23 @@ def main() -> None:
         deepalpha_web.app,
         web_user_resolver,
     )
+    install_velia_attachment_feature_flag(
+        deepalpha_web.app,
+        velia_mobile_routes_module,
+    )
+    setup_velia_mobile_attachment_routes(deepalpha_web.app)
     setup_velia_image_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
     setup_velia_profile_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
         deepalpha_web.app,
+        velia_chat_service_module,
+        velia_mobile_routes_module,
+    )
+    # Add safe attachment context and public metadata only after hardening has
+    # installed its final history reader, then let latency wrap the complete
+    # prompt path.
+    install_velia_attachment_messages(
         velia_chat_service_module,
         velia_mobile_routes_module,
     )
@@ -170,6 +203,7 @@ def main() -> None:
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
         ensure_velia_chat_tables()
+        ensure_velia_attachment_tables()
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
         ensure_velia_user_profile_table()
@@ -187,7 +221,17 @@ def main() -> None:
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
     port = int(os.getenv("PORT", 3000))
-    aiohttp_web.run_app(deepalpha_web.app, host="0.0.0.0", port=port)
+    # aiohttp 3.9+ supports native handler cancellation. The production stack
+    # currently resolves aiohttp 3.8 through aiogram 2.x, where a focused
+    # protocol backport is installed instead and no unsupported run_app keyword
+    # is passed.
+    run_app_kwargs = handler_cancellation_run_app_kwargs(aiohttp_web)
+    aiohttp_web.run_app(
+        deepalpha_web.app,
+        host="0.0.0.0",
+        port=port,
+        **run_app_kwargs,
+    )
 
 
 if __name__ == "__main__":

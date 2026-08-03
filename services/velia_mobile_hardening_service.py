@@ -77,6 +77,7 @@ def build_hardened_send_message(
         content: str,
         *,
         idempotency_key: str,
+        attachment_ids: Any = None,
     ) -> Dict[str, Any]:
         lock_conn = chat_module.get_connection()
         lock_cursor = chat_module._dict_cursor(lock_conn)
@@ -86,8 +87,16 @@ def build_hardened_send_message(
             if not acquired:
                 return {"ok": False, "error": "generation_in_progress"}
 
+            # Preserve the proven legacy duplicate fast-path only when the
+            # caller did not send the File Analyst field at all. Explicit
+            # attachment lists, including [], must reach the attachment-aware
+            # sender so it can compare the exact linked set for this key.
+            use_legacy_idempotency = attachment_ids is None
             existing: Optional[Dict[str, Any]] = None
-            if chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or "")):
+            if (
+                use_legacy_idempotency
+                and chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or ""))
+            ):
                 existing = chat_module._existing_request_result(
                     lock_cursor,
                     user_id=int(user_id),
@@ -101,7 +110,10 @@ def build_hardened_send_message(
             _expire_abandoned_pending(lock_cursor, int(user_id))
             lock_conn.commit()
 
-            if chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or "")):
+            if (
+                use_legacy_idempotency
+                and chat_module._IDEMPOTENCY_RE.match(str(idempotency_key or ""))
+            ):
                 existing = chat_module._existing_request_result(
                     lock_cursor,
                     user_id=int(user_id),
@@ -115,11 +127,16 @@ def build_hardened_send_message(
             # Keep the session-level advisory lock for the complete provider call.
             # A second process cannot pass the per-user pending/spend gate while the
             # first physical request is still running.
+            send_kwargs: Dict[str, Any] = {
+                "idempotency_key": str(idempotency_key),
+            }
+            if attachment_ids is not None:
+                send_kwargs["attachment_ids"] = attachment_ids
             return original_send_message(
                 int(user_id),
                 str(conversation_id),
                 str(content),
-                idempotency_key=str(idempotency_key),
+                **send_kwargs,
             )
         finally:
             try:
@@ -221,6 +238,22 @@ def _route_canonical(route: Any) -> str:
     return str(info.get("formatter") or info.get("path") or "")
 
 
+def _blocking_send_kwargs(
+    data: Dict[str, Any],
+    *,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "idempotency_key": str(idempotency_key),
+    }
+    # Preserve the difference between an omitted legacy field and an explicit
+    # empty attachment set. JSON null is the explicit empty set at this edge.
+    if "attachment_ids" in data:
+        value = data.get("attachment_ids")
+        kwargs["attachment_ids"] = [] if value is None else value
+    return kwargs
+
+
 def replace_blocking_message_handler(app: web.Application, routes_module: Any) -> None:
     async def handle_messages_send(request: web.Request) -> web.Response:
         if not routes_module._mobile_api_available():
@@ -242,12 +275,16 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             or data.get("idempotency_key")
             or ""
         ).strip()
+        send_kwargs = _blocking_send_kwargs(
+            data,
+            idempotency_key=idempotency_key,
+        )
         result = await asyncio.to_thread(
             routes_module.send_message,
             int(auth["user_id"]),
             request.match_info["conversation_id"],
             str(data.get("content") or ""),
-            idempotency_key=idempotency_key,
+            **send_kwargs,
         )
         if result.get("ok"):
             return routes_module._json_response(
@@ -256,13 +293,19 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             )
         error = str(result.get("error") or "generation_failed")
         status = 400
-        if error == "conversation_not_found":
+        if error in {"conversation_not_found", "attachment_not_found"}:
             status = 404
-        elif error == "generation_in_progress" or result.get("pending"):
+        elif error in {
+            "generation_in_progress",
+            "idempotency_attachment_mismatch",
+        } or result.get("pending"):
             status = 409
         elif error.endswith("limit_exceeded"):
             status = 429
-        elif error == "velia_chat_disabled":
+        elif error in {
+            "velia_chat_disabled",
+            "velia_file_analyst_disabled",
+        }:
             status = 503
         elif error in {
             "timeout",

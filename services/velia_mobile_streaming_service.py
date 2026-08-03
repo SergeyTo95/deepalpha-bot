@@ -5,7 +5,7 @@ import os
 import queue as thread_queue
 import threading
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
 
@@ -73,6 +73,28 @@ async def _write_if_connected(
         return False
 
 
+def _stream_send_kwargs(
+    data: Dict[str, Any],
+    *,
+    user_id: int,
+    conversation_id: str,
+    content: str,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "user_id": int(user_id),
+        "conversation_id": str(conversation_id),
+        "content": str(content),
+        "idempotency_key": str(idempotency_key),
+    }
+    # Field presence is meaningful for idempotency. An explicit null means
+    # an explicit empty attachment set, while omission preserves legacy calls.
+    if "attachment_ids" in data:
+        value = data.get("attachment_ids")
+        kwargs["attachment_ids"] = [] if value is None else value
+    return kwargs
+
+
 def setup_velia_mobile_streaming_route(
     app: web.Application,
     chat_module: Any,
@@ -136,16 +158,21 @@ def setup_velia_mobile_streaming_route(
                 return
             _put_bounded_event(queue, connected, (event_type, text))
 
+        send_kwargs = _stream_send_kwargs(
+            data,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            content=content,
+            idempotency_key=idempotency_key,
+        )
+        send_kwargs["on_delta"] = lambda delta: enqueue("delta", delta)
+        send_kwargs["on_reset"] = lambda: enqueue("reset")
+
         worker = asyncio.create_task(
             asyncio.to_thread(
                 run_streaming_send,
                 chat_module.send_message,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                content=content,
-                idempotency_key=idempotency_key,
-                on_delta=lambda delta: enqueue("delta", delta),
-                on_reset=lambda: enqueue("reset"),
+                **send_kwargs,
             )
         )
 

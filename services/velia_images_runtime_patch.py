@@ -1,8 +1,10 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from db.database import get_connection
+from services.velia_attachment_routing_service import request_message_has_attachments
 from services.velia_image_intent_service import (
-    image_intent_from_chat_prompt,
+    detect_image_intent,
     last_user_message_from_chat_prompt,
 )
 from services.velia_images_queue_runtime_patch import install as install_queue_runtime
@@ -12,6 +14,60 @@ from services.velia_images_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _persisted_request_user_message(request_id: str, user_id: int) -> str:
+    """Read only the real submitted user text used by deterministic routers."""
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        return ""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT content
+                FROM velia_messages
+                WHERE request_id=%s AND user_id=%s AND role='user'
+                  AND status='completed' AND deleted_at IS NULL
+                ORDER BY created_at DESC, message_id DESC
+                LIMIT 1
+                """,
+                (normalized_request_id, int(user_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return ""
+            if isinstance(row, dict):
+                return str(row.get("content") or "").strip()
+            return str(row[0] or "").strip()
+        finally:
+            cursor.close()
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "VELIA_IMAGE_INTENT_MESSAGE_LOOKUP_FAILED request_id=%s user_id=%s error=%s",
+            normalized_request_id,
+            int(user_id),
+            exc.__class__.__name__,
+        )
+        return ""
+
+
+def _image_intent_source_message(
+    prompt: str,
+    *,
+    user_id: int,
+    request_id: Optional[str],
+) -> str:
+    # A persisted request id is the trust boundary: deterministic action
+    # routing must inspect only the actual submitted message, never extracted
+    # attachment text appended to the LLM prompt. Prompt parsing remains only
+    # as a compatibility fallback for legacy/internal calls without a request.
+    if str(request_id or "").strip():
+        return _persisted_request_user_message(str(request_id), int(user_id))
+    return last_user_message_from_chat_prompt(prompt)
 
 
 def install(velia_chat_service_module: Any) -> None:
@@ -27,9 +83,26 @@ def install(velia_chat_service_module: Any) -> None:
         *,
         user_id: int,
         conversation_id: str,
-        request_id: str = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        intent = image_intent_from_chat_prompt(prompt)
+        # Reference-image generation is not implemented yet. Attachment-backed
+        # requests must stay in the normal File Analyst path so the attached
+        # image/document is actually analyzed rather than silently ignored by
+        # a paid text-to-image call. The lookup fails closed on database errors.
+        if request_message_has_attachments(request_id, int(user_id)):
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+
+        latest_message = _image_intent_source_message(
+            prompt,
+            user_id=int(user_id),
+            request_id=request_id,
+        )
+        intent = detect_image_intent(latest_message)
         if not intent.requested:
             return original_generate(
                 prompt,
@@ -38,7 +111,6 @@ def install(velia_chat_service_module: Any) -> None:
                 request_id=request_id,
             )
 
-        latest_message = last_user_message_from_chat_prompt(prompt)
         logger.info(
             "VELIA_IMAGE_INTENT_MATCHED user_id=%s conversation_id=%s request_id=%s prompt_chars=%s",
             int(user_id),
