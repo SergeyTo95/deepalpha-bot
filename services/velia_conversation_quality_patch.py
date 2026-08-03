@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
+from services.velia_attachment_routing_service import request_message_has_attachments
 
 
 logger = logging.getLogger(__name__)
@@ -294,7 +295,15 @@ def install(
                 str(conversation_id),
             )
             acknowledgement = memory_note_ack(latest_message)
-            if acknowledgement:
+            # Memory Shadow intentionally stores text only. For an
+            # attachment-backed turn, a deterministic acknowledgement would
+            # falsely imply that the file contents were memorized. Route such
+            # requests through the normal attachment-aware model instead. The
+            # attachment lookup fails closed on database errors.
+            if acknowledgement and not request_message_has_attachments(
+                request_id,
+                int(user_id),
+            ):
                 return {
                     "ok": True,
                     "text": acknowledgement,
