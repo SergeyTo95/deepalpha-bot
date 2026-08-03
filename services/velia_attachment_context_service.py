@@ -1,8 +1,15 @@
 import os
+import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List
 
 from db.database import get_connection
+
+
+_ATTACHMENT_FRAME_TOKEN_RE = re.compile(
+    r"\[(?:BEGIN_ATTACHMENT\b[^\]\n]*|END_ATTACHMENT)\]",
+    re.IGNORECASE,
+)
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -21,6 +28,29 @@ def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
     except (IndexError, TypeError):
         return default
     return default if value is None else value
+
+
+def _escape_attachment_payload(value: str) -> str:
+    """Make frame delimiters impossible inside untrusted extracted content."""
+
+    def replace_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return "⟦" + token[1:-1] + "⟧"
+
+    return _ATTACHMENT_FRAME_TOKEN_RE.sub(replace_token, str(value or ""))
+
+
+def _safe_attachment_header_value(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "/")
+        .replace('"', "")
+        .replace("[", "(")
+        .replace("]", ")")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .strip()
+    )
 
 
 def public_attachment_metadata_for_messages(
@@ -149,10 +179,12 @@ def attachment_prompt_context(
             blocks.append(
                 "ASSOCIATED_USER_MESSAGE:\n" + (user_content or "[attachment-only message]")
             )
-        safe_name = filename.replace('"', "").replace("\n", " ")
+        safe_name = _safe_attachment_header_value(filename) or "attachment"
+        safe_mime_type = _safe_attachment_header_value(mime_type)
+        safe_payload = _escape_attachment_payload(extracted_text)
         blocks.append(
-            f'[BEGIN_ATTACHMENT name="{safe_name}" mime="{mime_type}"]\n'
-            + extracted_text
+            f'[BEGIN_ATTACHMENT name="{safe_name}" mime="{safe_mime_type}"]\n'
+            + safe_payload
             + "\n[END_ATTACHMENT]"
         )
 
