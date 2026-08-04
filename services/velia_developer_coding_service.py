@@ -17,6 +17,7 @@ from services import kimi_gateway
 from services import velia_developer_fast_path_service as fast_path
 from services import velia_developer_github_service as github_service
 from services import velia_developer_github_write_service as write_service
+from services import velia_developer_taste_skill_service as taste_skill
 
 
 class DeveloperCodingError(RuntimeError):
@@ -457,9 +458,32 @@ def _planning_evidence(project: Dict[str, Any], queries: List[str], candidates: 
     return evidence or "Only repository paths were available; inspect them during execution."
 
 
-def _plan_prompt(project: Dict[str, Any], goal: str, paths: List[str], evidence: str) -> str:
+def _plan_prompt(
+    project: Dict[str, Any],
+    goal: str,
+    paths: List[str],
+    evidence: str,
+    *,
+    taste_profile: Optional[Dict[str, Any]] = None,
+) -> str:
     repository = str(project.get("repository_full_name") or "")
     branch = str(project.get("selected_branch") or "")
+    profile = taste_profile if isinstance(taste_profile, dict) else {}
+    taste_guidance = taste_skill.planning_guidance(profile)
+    guidance_block = f"\n\n{taste_guidance}" if taste_guidance else ""
+    design_schema = ""
+    design_rule = ""
+    if profile.get("active"):
+        design_schema = (
+            '  "design": {"mode":"web-redesign|web-new-ui|mobile-android|mobile-ios|mobile-cross-platform|product-dashboard",'
+            '"platform":"web|android|ios|cross-platform-mobile",'
+            '"read":"one concise design read","system":"existing or verified design foundation",'
+            '"variance":1,"motion":1,"density":1},\n'
+        )
+        design_rule = (
+            "- Follow VELIA DESIGN TASTE. Include the design object, keep its dials between 1 and 10, "
+            "and make the first step an audit when audit-first guidance is present."
+        )
     return f"""You are the planning stage of VELIA Coding Agent.
 Create a small, ordered implementation plan for the user's request.
 Repository: {repository}
@@ -471,11 +495,11 @@ Candidate paths:
 {json.dumps(paths[:20], ensure_ascii=False)}
 
 Verified repository excerpts:
-{evidence}
+{evidence}{guidance_block}
 
 Return ONLY one compact JSON object with this schema:
 {{
-  "title": "short PR title",
+{design_schema}  "title": "short PR title",
   "summary": "what will be changed and why",
   "steps": [
     {{
@@ -494,11 +518,15 @@ Rules:
 - Include tests in the same step as the behavior they verify, or in the immediately following step.
 - Do not propose direct writes to the base branch, merging, secrets, credentials, .env files, or production deployment.
 - Prefer the smallest safe change.
+{design_rule}
 - No markdown outside JSON.
 """
 
-
-def _normalize_plan(value: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_plan(
+    value: Dict[str, Any],
+    *,
+    design_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     raw_steps = value.get("steps") if isinstance(value, dict) else []
     if not isinstance(raw_steps, list):
         raw_steps = []
@@ -521,7 +549,7 @@ def _normalize_plan(value: Dict[str, Any]) -> Dict[str, Any]:
             str(item).strip()[:300]
             for item in (raw.get("checks") if isinstance(raw.get("checks"), list) else [])
             if str(item or "").strip()
-        ][:6]
+        ][:8]
         title = str(raw.get("title") or f"Task {index}").strip()[:160]
         objective = str(raw.get("objective") or title).strip()[:1000]
         if not files:
@@ -542,13 +570,19 @@ def _normalize_plan(value: Dict[str, Any]) -> Dict[str, Any]:
         for item in (value.get("suggestions") if isinstance(value.get("suggestions"), list) else [])
         if str(item or "").strip()
     ][:6]
-    return {
+    result = {
         "title": str(value.get("title") or "VELIA Coding Agent changes").strip()[:200],
         "summary": str(value.get("summary") or "Implement the requested repository change.").strip()[:2000],
         "steps": steps,
         "suggestions": suggestions,
     }
-
+    design = taste_skill.normalize_design(
+        value.get("design") if isinstance(value, dict) else {},
+        design_profile if isinstance(design_profile, dict) else {},
+    )
+    if design:
+        result["design"] = design
+    return result
 
 def plan_job(
     *,
@@ -567,7 +601,14 @@ def plan_job(
     tree, queries, candidates = _candidate_files(project, normalized_goal)
     paths = [str(item.get("path") or "") for item in candidates]
     evidence = _planning_evidence(project, queries, candidates)
-    prompt = _plan_prompt(project, normalized_goal, paths, evidence)
+    design_profile = taste_skill.classify(normalized_goal, paths)
+    prompt = _plan_prompt(
+        project,
+        normalized_goal,
+        paths,
+        evidence,
+        taste_profile=design_profile,
+    )
     max_tokens = _env_int("VELIA_DEVELOPER_CODING_PLAN_OUTPUT_TOKENS", 1400, 600, 1800)
     estimated = fast_path._estimate_cost(prompt, max_tokens)
     budget = _env_float("VELIA_DEVELOPER_CODING_PLAN_MAX_COST_USD", 0.04, 0.01, 0.10)
@@ -581,7 +622,10 @@ def plan_job(
         max_tokens=max_tokens,
         timeout=_env_int("VELIA_DEVELOPER_CODING_MODEL_TIMEOUT_SECONDS", 100, 20, 120),
     )
-    plan = _normalize_plan(_extract_json(str(result.get("text") or "")))
+    plan = _normalize_plan(
+        _extract_json(str(result.get("text") or "")),
+        design_profile=design_profile,
+    )
     cost = float(result.get("estimated_cost_usd") or 0.0)
     job = _insert_job(
         user_id=user_id,
@@ -693,6 +737,15 @@ def _step_prompt(
     context: str,
 ) -> str:
     allowed = [str(path) for path in step.get("files") or []]
+    plan = job.get("plan") if isinstance(job.get("plan"), dict) else {}
+    design = plan.get("design") if isinstance(plan.get("design"), dict) else {}
+    required_checks = [str(item) for item in (step.get("checks") or []) if str(item).strip()]
+    for item in taste_skill.preflight_checks(design):
+        if item not in required_checks:
+            required_checks.append(item)
+    required_checks = required_checks[:12]
+    taste_guidance = taste_skill.execution_guidance(design, step)
+    guidance_block = f"\n\n{taste_guidance}" if taste_guidance else ""
     return f"""You are the execution stage of VELIA Coding Agent.
 Repository: {project.get('repository_full_name')}
 Base branch: {job.get('base_branch')}
@@ -701,10 +754,10 @@ Overall goal: {job.get('goal')}
 Current task {step.get('index')}/{job.get('total_steps')}: {step.get('title')}
 Objective: {step.get('objective')}
 Allowed files: {json.dumps(allowed, ensure_ascii=False)}
-Required checks: {json.dumps(step.get('checks') or [], ensure_ascii=False)}
+Required checks: {json.dumps(required_checks, ensure_ascii=False)}
 
 Relevant current source excerpts (line numbers are reference only):
-{context}
+{context}{guidance_block}
 
 Return ONLY one compact JSON object:
 {{
@@ -725,9 +778,9 @@ Rules:
 - Do not modify secrets, credentials, .env files, GitHub workflows, generated dependencies, or production configuration.
 - Do not merge, deploy, or claim tests passed.
 - Preserve existing style and public contracts unless the goal explicitly requires a change.
+- When DESIGN EXECUTION GUARD is present, follow it without adding unrelated redesign work.
 - No markdown outside JSON.
 """
-
 
 def _apply_patch_payload(
     payload: Dict[str, Any],
@@ -881,9 +934,21 @@ def _pr_body(job: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
         "## VELIA Coding Agent",
         "",
         str(plan.get("summary") or job.get("goal") or ""),
-        "",
-        "## Completed tasks",
     ]
+    design = plan.get("design") if isinstance(plan.get("design"), dict) else {}
+    if design.get("active"):
+        lines.extend(
+            [
+                "",
+                "## Design direction",
+                str(design.get("read") or ""),
+                (
+                    f"Mode: `{design.get('mode')}` · variance {design.get('variance')}/10 · "
+                    f"motion {design.get('motion')}/10 · density {design.get('density')}/10"
+                ),
+            ]
+        )
+    lines.extend(["", "## Completed tasks"])
     for item in results:
         lines.extend(
             [
@@ -904,7 +969,6 @@ def _pr_body(job: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
         ]
     )
     return "\n".join(lines)
-
 
 def execute_job(
     *,
@@ -1034,6 +1098,11 @@ def format_plan(job: Dict[str, Any], message: str) -> str:
         str(plan.get("summary") or ""),
         "",
     ]
+    design = plan.get("design") if isinstance(plan.get("design"), dict) else {}
+    design_lines = taste_skill.format_summary(design, russian=russian)
+    if design_lines:
+        lines.extend(design_lines)
+        lines.append("")
     for step in plan.get("steps") or []:
         lines.append(f"{step.get('index')}. **{step.get('title')}**")
         lines.append(f"   {step.get('objective')}")
@@ -1052,7 +1121,6 @@ def format_plan(job: Dict[str, Any], message: str) -> str:
         else "Reply **‘Execute the plan’**. After one approval I will create an isolated branch, execute tasks in order, and open a draft PR."
     )
     return "\n".join(lines)
-
 
 def format_execution(result: Dict[str, Any], message: str) -> str:
     russian = _russian(message)
