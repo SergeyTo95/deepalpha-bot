@@ -584,6 +584,49 @@ def _normalize_plan(
         result["design"] = design
     return result
 
+def _bounded_design_text(
+    value: str,
+    profile: Dict[str, Any],
+    *,
+    env_name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> str:
+    text = str(value or "")
+    if not isinstance(profile, dict) or not profile.get("active"):
+        return text
+    limit = _env_int(env_name, default, minimum, maximum)
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit]
+    boundary = clipped.rfind("\n")
+    if boundary >= max(1, limit // 2):
+        clipped = clipped[:boundary]
+    return clipped
+
+
+def _design_plan_evidence(evidence: str, profile: Dict[str, Any]) -> str:
+    return _bounded_design_text(
+        evidence,
+        profile,
+        env_name="VELIA_DEVELOPER_TASTE_PLAN_EVIDENCE_CHARS",
+        default=10000,
+        minimum=4000,
+        maximum=16000,
+    )
+
+
+def _design_step_context(context: str, profile: Dict[str, Any]) -> str:
+    return _bounded_design_text(
+        context,
+        profile,
+        env_name="VELIA_DEVELOPER_TASTE_STEP_CONTEXT_CHARS",
+        default=17000,
+        minimum=8000,
+        maximum=24000,
+    )
+
 def plan_job(
     *,
     user_id: int,
@@ -602,6 +645,7 @@ def plan_job(
     paths = [str(item.get("path") or "") for item in candidates]
     evidence = _planning_evidence(project, queries, candidates)
     design_profile = taste_skill.classify(normalized_goal, paths)
+    evidence = _design_plan_evidence(evidence, design_profile)
     prompt = _plan_prompt(
         project,
         normalized_goal,
@@ -860,6 +904,9 @@ def _execute_step(
     step_number: int,
 ) -> Dict[str, Any]:
     context, states = _step_context(project, str(job["work_branch"]), step, str(job["goal"]))
+    plan = job.get("plan") if isinstance(job.get("plan"), dict) else {}
+    design = plan.get("design") if isinstance(plan.get("design"), dict) else {}
+    context = _design_step_context(context, design)
     prompt = _step_prompt(project, job, step, context)
     max_tokens = _env_int("VELIA_DEVELOPER_CODING_STEP_OUTPUT_TOKENS", 2400, 800, 3200)
     per_step_budget = _env_float("VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD", 0.06, 0.02, 0.15)

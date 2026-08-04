@@ -171,8 +171,8 @@ def normalize_design(raw: Any, fallback: Dict[str, Any]) -> Dict[str, Any]:
         "active": True,
         "version": ADAPTATION_VERSION,
         "source": str(fallback.get("source") or f"{UPSTREAM_REPOSITORY}@{UPSTREAM_COMMIT}"),
-        "mode": str(value.get("mode") or fallback.get("mode") or "web-new-ui")[:80],
-        "platform": str(value.get("platform") or fallback.get("platform") or "web")[:80],
+        "mode": str(fallback.get("mode") or "web-new-ui")[:80],
+        "platform": str(fallback.get("platform") or "web")[:80],
         "audit_first": bool(fallback.get("audit_first")),
         "read": str(value.get("read") or value.get("design_read") or fallback.get("design_read") or "")[:600],
         "system": str(value.get("system") or fallback.get("system") or "existing project stack")[:400],
@@ -270,7 +270,7 @@ def format_summary(profile: Dict[str, Any], *, russian: bool = True) -> List[str
     density = profile.get("density") or profile.get("visual_density")
     if russian:
         return [
-            "### Design direction",
+            "### Направление дизайна",
             read,
             f"Режим: `{profile.get('mode')}` · вариативность {variance}/10 · движение {motion}/10 · плотность {density}/10",
         ]
