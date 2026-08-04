@@ -1,0 +1,77 @@
+name: VELIA Design Taste cost hardening
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'services/velia_developer_coding_service.py'
+      - 'services/velia_developer_taste_skill_service.py'
+      - 'tests/test_velia_developer_taste_integration.py'
+      - '.github/scripts/harden_velia_design_taste_cost.py'
+      - '.github/workflows/velia-design-taste-cost-hardening.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: velia-design-taste-cost-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  harden-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Apply cost hardening
+        run: python .github/scripts/harden_velia_design_taste_cost.py
+      - name: Compile Developer modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_taste_skill_service.py \
+            services/velia_developer_coding_service.py
+      - name: Run Design Taste and Developer regressions
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_taste_skill_service.py \
+            tests/test_velia_developer_taste_integration.py \
+            tests/test_velia_developer_coding_service.py \
+            tests/test_velia_developer_coding_chat_gate.py \
+            tests/test_velia_developer_coding_intent_classifier.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_mobile_streaming_service.py
+      - name: Verify bounded prompt contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_TASTE_PLAN_EVIDENCE_CHARS' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_TASTE_STEP_CONTEXT_CHARS' services/velia_developer_coding_service.py
+          grep -q 'evidence = _design_plan_evidence(evidence, design_profile)' services/velia_developer_coding_service.py
+          grep -q 'context = _design_step_context(context, design)' services/velia_developer_coding_service.py
+          grep -q 'test_taste_context_caps_keep_default_prompts_under_cost_limits' tests/test_velia_developer_taste_integration.py
+          test "$(grep -c '_model_call(' services/velia_developer_coding_service.py)" -eq 3
+      - name: Commit product hardening
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --quiet -- services/velia_developer_coding_service.py services/velia_developer_taste_skill_service.py; then
+            echo 'Cost hardening already committed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add services/velia_developer_coding_service.py services/velia_developer_taste_skill_service.py
+          git commit -m 'Keep Design Taste prompts within coding cost caps'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
