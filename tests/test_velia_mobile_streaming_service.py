@@ -60,3 +60,10 @@ def test_bounded_event_queue_stops_waiting_after_disconnect():
     ) is False
     assert queue.qsize() == 1
     assert queue.get_nowait() == ("delta", "already-full")
+
+def test_worker_exception_code_is_stable_and_does_not_leak_details():
+    class PublicError(RuntimeError):
+        code = "developer_deadline_exceeded"
+
+    assert service._worker_exception_code(PublicError("secret detail")) == "developer_deadline_exceeded"
+    assert service._worker_exception_code(RuntimeError("database password leaked")) == "stream_worker_failed"
