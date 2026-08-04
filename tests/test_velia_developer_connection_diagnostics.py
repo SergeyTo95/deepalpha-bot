@@ -36,6 +36,25 @@ def test_app_validation_rejects_wrong_app_id(monkeypatch):
         assert exc.status == 503
 
 
+def test_app_validation_rejects_wrong_slug(monkeypatch):
+    monkeypatch.setattr(github, "github_app_configured", lambda: True)
+    monkeypatch.setattr(github, "github_app_id", lambda: "4484249")
+    monkeypatch.setattr(github, "github_app_slug", lambda: "velia-developer-beta")
+    monkeypatch.setattr(github, "_app_jwt", lambda: "app-jwt")
+    monkeypatch.setattr(
+        github,
+        "_request",
+        lambda *args, **kwargs: {"id": 4484249, "slug": "different-app"},
+    )
+
+    try:
+        github.validate_github_app_configuration()
+        assert False
+    except github.DeveloperGithubError as exc:
+        assert exc.code == "github_app_slug_mismatch"
+        assert exc.status == 503
+
+
 def test_recent_callback_error_is_user_scoped_and_expires(monkeypatch):
     routes._CONNECTION_ERRORS.clear()
     monkeypatch.setenv("VELIA_DEVELOPER_CONNECTION_ERROR_TTL_SECONDS", "60")
