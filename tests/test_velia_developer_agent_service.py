@@ -195,12 +195,72 @@ def test_agent_forces_bounded_finalization_and_emits_progress(monkeypatch):
     )
 
     assert result["answer"] == "Подтверждено [a.py:L1-L5]."
-    assert calls[0]["max_attempts"] == 1
-    assert calls[0]["reasoning_effort"] == "medium"
+    assert calls[0]["max_attempts"] == 2
+    assert calls[0]["reasoning_effort"] == "low"
     assert calls[0]["max_tokens"] == 1024
-    assert calls[1]["max_attempts"] == 1
+    assert calls[1]["max_attempts"] == 2
     assert calls[1]["reasoning_effort"] == "high"
     assert "TIME_BUDGET" in calls[1]["prompt"]
     assert all(5 <= call["timeout"] <= 75 for call in calls)
     assert any(phase == "tool_start" for phase, _ in progress)
     assert progress[-1][0] == "completed"
+
+
+def test_agent_recovers_from_empty_200_with_compact_repair(monkeypatch):
+    responses = iter(
+        [
+            {"ok": False, "text": "", "reason": "empty_200"},
+            {
+                "ok": True,
+                "text": '{"action":"read_file","path":"a.py","start_line":1,"end_line":5}',
+            },
+            {
+                "ok": True,
+                "text": '{"action":"final","answer":"Подтверждено [a.py:L1-L5]."}',
+            },
+        ]
+    )
+    calls = []
+    monkeypatch.setenv("VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS", "180")
+    monkeypatch.setenv("VELIA_DEVELOPER_FINALIZE_RESERVE_SECONDS", "30")
+    monkeypatch.setattr(
+        agent.kimi_gateway,
+        "call_kimi",
+        lambda **kwargs: (calls.append(kwargs) or next(responses)),
+    )
+    monkeypatch.setattr(
+        agent.github_service,
+        "read_file",
+        lambda **kwargs: {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": 5,
+            "total_lines": 5,
+            "size": 40,
+            "content": "1: value = 1",
+        },
+    )
+    monkeypatch.setattr(agent.project_service, "record_tool_event", lambda **kwargs: None)
+
+    result = agent.run_developer_agent(
+        user_id=1,
+        project={
+            "id": "p",
+            "installation_id": 1,
+            "repository_id": 2,
+            "repository_full_name": "o/r",
+            "default_branch": "main",
+            "selected_branch": "main",
+        },
+        question="Что здесь?",
+        run_id="empty-200-repair",
+    )
+
+    assert result["answer"] == "Подтверждено [a.py:L1-L5]."
+    assert len(calls) == 3
+    assert calls[0]["max_attempts"] == 2
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[1]["max_attempts"] == 2
+    assert "PROVIDER_REPAIR" in calls[1]["prompt"]
+    assert calls[2]["reasoning_effort"] == "low"
+
