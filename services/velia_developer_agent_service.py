@@ -210,11 +210,23 @@ def run_developer_agent(
         15,
         120,
     )
+    action_timeout = _env_int(
+        "VELIA_DEVELOPER_ACTION_TIMEOUT_SECONDS",
+        45,
+        10,
+        75,
+    )
+    model_attempts = _env_int(
+        "VELIA_DEVELOPER_MODEL_ATTEMPTS",
+        2,
+        1,
+        2,
+    )
     action_reasoning = str(
-        os.getenv("VELIA_DEVELOPER_ACTION_REASONING_EFFORT", "medium") or "medium"
+        os.getenv("VELIA_DEVELOPER_ACTION_REASONING_EFFORT", "low") or "low"
     ).strip().lower()
-    if action_reasoning not in {"low", "medium", "high"}:
-        action_reasoning = "medium"
+    if action_reasoning not in {"low", "high", "max"}:
+        action_reasoning = "low"
     model = str(os.getenv("VELIA_DEVELOPER_MODEL", "") or "").strip() or None
     transcript: List[str] = []
     read_ranges: Dict[str, List[Tuple[int, int]]] = {}
@@ -228,6 +240,7 @@ def run_developer_agent(
     }
     tool_calls = 0
     protocol_repairs = 0
+    provider_repairs = 0
     deadline_at = time.monotonic() + wall_timeout
 
     for iteration in range(max_tools + 4):
@@ -252,7 +265,9 @@ def run_developer_agent(
             tool_calls=tool_calls,
             remaining_seconds=remaining,
         )
-        call_timeout = max(5, min(model_timeout, remaining - 3))
+        phase_timeout = model_timeout if force_final else action_timeout
+        per_attempt_budget = max(5, (remaining - 5) // model_attempts)
+        call_timeout = max(5, min(phase_timeout, per_attempt_budget))
         result = kimi_gateway.call_kimi(
             prompt=prompt,
             feature="velia_developer",
@@ -263,12 +278,25 @@ def run_developer_agent(
             user_id=int(user_id),
             model=model,
             max_tokens=max_output if read_ranges else action_output,
-            max_attempts=1,
+            max_attempts=model_attempts,
             timeout=call_timeout,
             reasoning_effort="high" if force_final else action_reasoning,
         )
         if not isinstance(result, dict) or not str(result.get("text") or "").strip():
-            raise DeveloperAgentError(str((result or {}).get("reason") or "developer_generation_failed"))
+            reason = str((result or {}).get("reason") or "developer_generation_failed")
+            if (
+                reason in {"empty_200", "json_parse_error"}
+                and provider_repairs < 2
+                and remaining > 20
+            ):
+                provider_repairs += 1
+                transcript.append(
+                    "PROVIDER_REPAIR: The previous provider response contained no visible "
+                    "JSON action. Return exactly one compact JSON action object now, with "
+                    "no prose and no markdown."
+                )
+                continue
+            raise DeveloperAgentError(reason)
         total_cost += float(result.get("estimated_cost_usd") or 0.0)
         usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
         for key in total_usage:
