@@ -211,7 +211,7 @@ def test_fast_path_cache_avoids_github_and_kimi_on_repeat(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["estimated_cost_usd"] == 0.0
-    assert counters == {"tree": 1, "model": 1}
+    assert counters == {"tree": 2, "model": 1}
 
 
 def test_fast_path_blocks_request_before_model_when_cost_cap_is_too_low(monkeypatch):
@@ -255,3 +255,66 @@ def test_fast_path_never_uses_third_model_call(monkeypatch):
 
     assert exc_info.value.code == "developer_citations_invalid"
     assert len(calls) == 2
+
+
+def test_fast_cache_is_invalidated_when_tree_sha_changes(monkeypatch):
+    trees = iter([_tree(), {**_tree(), "entries": [{**item, "sha": item["sha"] + "-new"} for item in _tree()["entries"]]}])
+    model_calls = []
+    monkeypatch.setattr(fast.github_service, "list_tree", lambda **kwargs: next(trees))
+    monkeypatch.setattr(
+        fast.kimi_gateway,
+        "call_kimi",
+        lambda **kwargs: (model_calls.append(kwargs) or {
+            "ok": True,
+            "text": "Подтверждено [services/velia_developer_chat_runtime_patch.py:L467-L470].",
+            "estimated_cost_usd": 0.01,
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        }),
+    )
+    first = fast.run_developer_agent(user_id=7, project=PROJECT, question="Где обычный чат подключает VELIA Developer?", run_id="sha-1")
+    second = fast.run_developer_agent(user_id=7, project=PROJECT, question="Где обычный чат подключает VELIA Developer?", run_id="sha-2")
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is False
+    assert len(model_calls) == 2
+
+
+def test_fast_search_is_constrained_to_ranked_tree_paths(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        fast.github_service,
+        "search_code",
+        lambda *args, **kwargs: (captured.append(kwargs) or [{
+            "path": "services/velia_developer_chat_runtime_patch.py",
+            "sha": "s",
+            "score": 2.0,
+            "fragments": ["467: def install_velia_developer_chat(module):"],
+        }]),
+    )
+    monkeypatch.setattr(
+        fast.kimi_gateway,
+        "call_kimi",
+        lambda **kwargs: {
+            "ok": True,
+            "text": "Подтверждено [services/velia_developer_chat_runtime_patch.py:L467-L470].",
+            "estimated_cost_usd": 0.01,
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        },
+    )
+    fast.run_developer_agent(user_id=7, project=PROJECT, question="Где install_velia_developer_chat?", run_id="constrained")
+    assert captured
+    assert captured[0]["candidate_paths"]
+    assert "services/velia_developer_chat_runtime_patch.py" in captured[0]["candidate_paths"]
+
+
+def test_packed_evidence_only_allows_visible_numbered_lines():
+    evidence, items, ranges = fast._pack_evidence(
+        [{"path": "a.py", "start_line": 1, "end_line": 99, "content": "1: one\n2: two\n3: three"}],
+        80,
+    )
+    assert evidence
+    assert items
+    visible_end = items[0]["end_line"]
+    assert visible_end <= 3
+    assert ranges == {"a.py": [(1, visible_end)]}
+    _, invalid = fast._validate_citations(f"claim [a.py:L1-L{visible_end + 1}]", ranges)
+    assert invalid

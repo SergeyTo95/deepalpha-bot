@@ -15,3 +15,9 @@ def test_ordinary_chat_and_developer_route_use_fast_path():
 def test_fast_path_completion_default_is_bounded():
     assert kimi_gateway._feature_default_completion_tokens("velia_developer_fast") == 2048
     assert kimi_gateway._initial_completion_limit("velia_developer_fast", 512) == 2048
+
+
+def test_fast_completion_cap_ignores_higher_global_kimi_limit(monkeypatch):
+    monkeypatch.setenv("KIMI_MAX_COMPLETION_TOKENS", "8192")
+    monkeypatch.setenv("VELIA_DEVELOPER_FAST_MAX_COMPLETION_TOKENS", "2048")
+    assert kimi_gateway._initial_completion_limit("velia_developer_fast", 2048) == 2048

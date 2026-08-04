@@ -86,6 +86,9 @@ def _feature_default_completion_tokens(feature: str) -> int:
 
 def _initial_completion_limit(feature: str, requested_tokens: Optional[int]) -> int:
     requested = max(1, int(requested_tokens or 0))
+    if feature == "velia_developer_fast":
+        fast_cap = max(2048, env_int("VELIA_DEVELOPER_FAST_MAX_COMPLETION_TOKENS", 2048) or 2048)
+        return min(fast_cap, max(2048, requested))
     explicit = env_int("KIMI_MAX_COMPLETION_TOKENS", 0)
     legacy = env_int("KIMI_MAX_OUTPUT_TOKENS", 0)
 

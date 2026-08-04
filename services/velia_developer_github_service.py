@@ -597,6 +597,7 @@ def _search_selected_branch(
     full_name: str,
     branch: str,
     normalized: str,
+    candidate_paths: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     owner, name = _validate_full_name(full_name)
     selected_branch = validate_branch(branch)
@@ -614,6 +615,16 @@ def _search_selected_branch(
         and str(item.get("type") or "") == "blob"
         and _searchable_branch_path(str(item.get("path") or ""), int(item.get("size") or 0), max_bytes)
     ]
+    allowed_paths = {
+        validate_path(path)
+        for path in (candidate_paths or [])
+        if str(path or "").strip()
+    }
+    if allowed_paths:
+        entries = [
+            item for item in entries
+            if str(item.get("path") or "") in allowed_paths
+        ]
     entries.sort(
         key=lambda item: (
             0 if any(term in str(item.get("path") or "").casefold() for term in terms) else 1,
@@ -670,6 +681,7 @@ def search_code(
     *,
     branch: str = "",
     default_branch: str = "",
+    candidate_paths: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     owner, name = _validate_full_name(full_name)
     normalized = re.sub(r"\s+", " ", str(query or "").strip())[:200]
@@ -684,6 +696,7 @@ def search_code(
             full_name,
             selected_branch,
             normalized,
+            candidate_paths=candidate_paths,
         )
     token = _installation_token(installation_id, [repository_id])
     data = _request(

@@ -127,16 +127,16 @@ def _query_candidates(question: str, project: Dict[str, Any], limit: int) -> Lis
     for path in _PATH_RE.findall(question):
         values.extend((path, path.rsplit("/", 1)[-1]))
 
+    for markers, mapped in _QUERY_MAPPINGS:
+        if any(marker in folded for marker in markers):
+            values.extend(mapped)
+
     identifiers = _IDENTIFIER_RE.findall(question)
     specific = [
         value for value in identifiers
         if "_" in value or any(char.isupper() for char in value[1:])
     ]
     values.extend(sorted(specific, key=lambda item: (-len(item), item.casefold())))
-
-    for markers, mapped in _QUERY_MAPPINGS:
-        if any(marker in folded for marker in markers):
-            values.extend(mapped)
 
     repository_name = str(project.get("repository_full_name") or "").rsplit("/", 1)[-1].casefold()
     words = []
@@ -297,23 +297,54 @@ def _estimate_cost(prompt: str, completion_tokens: int) -> float:
     return (prompt_tokens * input_rate + completion_tokens * output_rate) / 1_000_000.0
 
 
-def _evidence_text(items: List[Dict[str, Any]], limit: int) -> str:
+def _pack_evidence(
+    items: List[Dict[str, Any]],
+    limit: int,
+) -> Tuple[str, List[Dict[str, Any]], Dict[str, List[Tuple[int, int]]]]:
     chunks: List[str] = []
+    visible_items: List[Dict[str, Any]] = []
+    ranges: Dict[str, List[Tuple[int, int]]] = {}
     used = 0
-    for item in items:
-        header = f"FILE {item['path']} [L{item['start_line']}-L{item['end_line']}]\n"
-        content = str(item.get("content") or "")
-        chunk = header + content + "\nEND FILE\n"
-        remaining = limit - used
-        if remaining <= len(header) + 32:
+    for source in items:
+        path = str(source.get("path") or "")
+        start_line = int(source.get("start_line") or 1)
+        raw_lines = str(source.get("content") or "").splitlines()
+        if not path or not raw_lines:
+            continue
+        header_reserve = len(f"FILE {path} [L{start_line}-L999999]\n") + len("\nEND FILE\n")
+        remaining = limit - used - header_reserve
+        if remaining <= 8:
             break
-        if len(chunk) > remaining:
-            chunk = chunk[:remaining]
+        selected_lines: List[str] = []
+        selected_chars = 0
+        last_number = start_line - 1
+        for raw_line in raw_lines:
+            line = str(raw_line)
+            addition = len(line) + 1
+            if selected_lines and selected_chars + addition > remaining:
+                break
+            if not selected_lines and addition > remaining:
+                break
+            selected_lines.append(line)
+            selected_chars += addition
+            match = _NUMBERED_LINE_RE.match(line)
+            if match:
+                last_number = int(match.group(1))
+        if not selected_lines or last_number < start_line:
+            continue
+        content = "\n".join(selected_lines)
+        header = f"FILE {path} [L{start_line}-L{last_number}]\n"
+        chunk = header + content + "\nEND FILE\n"
+        if used + len(chunk) > limit:
+            break
+        item = dict(source)
+        item["content"] = content
+        item["end_line"] = last_number
+        visible_items.append(item)
+        ranges.setdefault(path, []).append((start_line, last_number))
         chunks.append(chunk)
         used += len(chunk)
-        if used >= limit:
-            break
-    return "\n".join(chunks)
+    return "\n".join(chunks), visible_items, ranges
 
 
 def _final_prompt(project: Dict[str, Any], question: str, evidence: str, deep: bool) -> str:
@@ -361,13 +392,29 @@ EVIDENCE:
 """
 
 
-def _cache_key(user_id: int, project: Dict[str, Any], question: str) -> str:
+def _tree_fingerprint(tree: Dict[str, Any]) -> str:
+    values = []
+    for item in tree.get("entries", []) if isinstance(tree, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        values.append(f"{item.get('path') or ''}:{item.get('sha') or ''}")
+    values.sort()
+    return hashlib.sha256("\n".join(values).encode("utf-8")).hexdigest()
+
+
+def _cache_key(
+    user_id: int,
+    project: Dict[str, Any],
+    question: str,
+    tree_fingerprint: str,
+) -> str:
     raw = "|".join(
         (
             str(int(user_id)),
             str(project.get("id") or ""),
             str(project.get("repository_id") or ""),
             str(project.get("selected_branch") or ""),
+            str(tree_fingerprint),
             question.casefold(),
         )
     )
@@ -450,12 +497,7 @@ def run_developer_agent(
             on_progress=on_progress,
         )
 
-    cache_key = _cache_key(user_id, project, normalized_question)
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        _safe_progress(on_progress, "completed", cache_hit=True, tool_calls=0, model_calls=0)
-        return cached
-
+    cache_key = ""
     deep = _is_deep_question(normalized_question)
     query_limit = _env_int("VELIA_DEVELOPER_FAST_QUERY_LIMIT", 8 if deep else 6, 2, 12)
     max_reads = _env_int("VELIA_DEVELOPER_FAST_MAX_READS", 6 if deep else 4, 1, 8)
@@ -510,13 +552,29 @@ def run_developer_agent(
         duration_ms=int((time.monotonic() - started) * 1000),
     )
 
+    cache_key = _cache_key(
+        user_id,
+        project,
+        normalized_question,
+        _tree_fingerprint(tree),
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        cached["tool_calls"] = 1
+        _safe_progress(on_progress, "completed", cache_hit=True, tool_calls=1, model_calls=0)
+        return cached
+
     tree_items = _tree_candidates(tree, queries, normalized_question, max_reads * 3)
     search_items: List[Dict[str, Any]] = []
     specific_queries = [
         query for query in queries
         if "_" in query or "/" in query or "." in query or any(char.isupper() for char in query[1:])
     ]
-    should_search = max_searches > 0 and (specific_queries or not tree_items or float(tree_items[0].get("score") or 0.0) < 8.0)
+    should_search = max_searches > 0 and (
+        bool(specific_queries)
+        or not tree_items
+        or float(tree_items[0].get("score") or 0.0) < 8.0
+    )
     if should_search:
         for query in (specific_queries or queries)[:max_searches]:
             started = time.monotonic()
@@ -528,6 +586,11 @@ def run_developer_agent(
                     query,
                     branch=common["branch"],
                     default_branch=str(project.get("default_branch") or common["branch"]),
+                    candidate_paths=[
+                        str(item.get("path") or "")
+                        for item in tree_items[: max_reads * 2]
+                        if str(item.get("path") or "")
+                    ],
                 )
                 ok = True
             except github_service.DeveloperGithubError as exc:
@@ -561,10 +624,8 @@ def run_developer_agent(
 
     candidates = _merge_candidates(tree_items, search_items, max_reads * 2)
     evidence_items: List[Dict[str, Any]] = []
-    read_ranges: Dict[str, List[Tuple[int, int]]] = {}
-    used_chars = 0
     for candidate in candidates:
-        if len(evidence_items) >= max_reads or used_chars >= evidence_limit:
+        if len(evidence_items) >= max_reads:
             break
         path = str(candidate.get("path") or "")
         line = max(1, int(candidate.get("line") or 1))
@@ -604,14 +665,7 @@ def run_developer_agent(
             "end_line": int(file_data.get("end_line") or end_line),
             "content": content,
         }
-        remaining = evidence_limit - used_chars
-        if remaining <= 256:
-            break
-        if len(item["content"]) > remaining:
-            item["content"] = item["content"][:remaining]
-        used_chars += len(item["content"])
         evidence_items.append(item)
-        read_ranges.setdefault(item["path"], []).append((item["start_line"], item["end_line"]))
         _record_tool(
             run_id=run_id,
             user_id=user_id,
@@ -631,11 +685,15 @@ def run_developer_agent(
     if not evidence_items:
         raise DeveloperAgentError("developer_evidence_missing")
 
-    evidence = _evidence_text(evidence_items, evidence_limit)
+    evidence, visible_items, read_ranges = _pack_evidence(evidence_items, evidence_limit)
+    if not visible_items:
+        raise DeveloperAgentError("developer_evidence_missing")
     prompt = _final_prompt(project, normalized_question, evidence, deep)
     while _estimate_cost(prompt, completion_tokens) > max_cost and evidence_limit > 4000:
         evidence_limit = max(4000, int(evidence_limit * 0.8))
-        evidence = _evidence_text(evidence_items, evidence_limit)
+        evidence, visible_items, read_ranges = _pack_evidence(evidence_items, evidence_limit)
+        if not visible_items:
+            raise DeveloperAgentError("developer_evidence_missing")
         prompt = _final_prompt(project, normalized_question, evidence, deep)
     if _estimate_cost(prompt, completion_tokens) > max_cost:
         raise DeveloperAgentError("developer_cost_limit_reached")
@@ -655,7 +713,7 @@ def run_developer_agent(
         current_prompt = prompt if call_index == 0 else _repair_prompt(
             project,
             normalized_question,
-            _evidence_text(evidence_items, min(evidence_limit, 16000)),
+            evidence,
             answer,
             invalid,
         )
@@ -709,7 +767,7 @@ def run_developer_agent(
         "fast_path": True,
         "deep_mode": deep,
         "cache_hit": False,
-        "evidence_files": len(evidence_items),
+        "evidence_files": len(visible_items),
     }
     _cache_put(cache_key, result_payload)
     _safe_progress(
