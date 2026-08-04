@@ -248,7 +248,7 @@ def _validate_full_name(full_name: str) -> Tuple[str, str]:
 
 def validate_branch(branch: str) -> str:
     normalized = str(branch or "").strip()
-    if not _BRANCH_RE.fullmatch(normalized) or ".." in normalized or normalized.startswith("/") or normalized.endswith("/"):
+    if not _BRANCH_RE.fullmatch(normalized) or ".." in normalized or normalized.startswith("/") or normalized.endswith("/") or "//" in normalized:
         raise DeveloperGithubError("invalid_branch", status=400)
     return normalized
 
