@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
-from services import velia_developer_agent_service as agent_service
+from services import velia_developer_fast_path_service as agent_service
 from services import velia_developer_project_service as project_service
 from services import velia_chat_streaming_runtime_patch as streaming_patch
 

@@ -79,7 +79,7 @@ def _api_key() -> str:
 
 
 def _feature_default_completion_tokens(feature: str) -> int:
-    if feature == "velia_file_vision":
+    if feature in {"velia_file_vision", "velia_developer_fast"}:
         return 2048
     return 8192 if feature in _HIGH_REASONING_FEATURES else 4096
 
