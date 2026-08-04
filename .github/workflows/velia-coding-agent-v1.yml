@@ -11,8 +11,10 @@ on:
       - 'tests/test_velia_developer_coding_service.py'
       - 'tests/test_velia_developer_github_write_service.py'
       - 'tests/test_velia_developer_coding_chat_gate.py'
+      - 'tests/test_velia_developer_coding_intent_classifier.py'
       - '.github/scripts/apply_velia_coding_agent_v1.py'
       - '.github/scripts/fix_velia_coding_agent_routing.py'
+      - '.github/scripts/fix_velia_coding_intent_classifier.py'
       - '.github/workflows/velia-coding-agent-v1.yml'
   workflow_dispatch:
 
@@ -44,6 +46,7 @@ jobs:
         run: |
           python .github/scripts/apply_velia_coding_agent_v1.py
           python .github/scripts/fix_velia_coding_agent_routing.py
+          python .github/scripts/fix_velia_coding_intent_classifier.py
       - name: Compile Coding Agent modules
         run: |
           python -m py_compile \
@@ -61,6 +64,7 @@ jobs:
             tests/test_velia_developer_github_write_service.py \
             tests/test_velia_developer_coding_service.py \
             tests/test_velia_developer_coding_chat_gate.py \
+            tests/test_velia_developer_coding_intent_classifier.py \
             tests/test_velia_developer_github_service.py \
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_fast_path_service.py \
@@ -82,15 +86,21 @@ jobs:
           grep -q 'Выполняй план' services/velia_developer_coding_service.py
           grep -q 'coding_result = _coding_chat_result' services/velia_developer_chat_runtime_patch.py
           grep -q 'if not coding_intent:' services/velia_developer_chat_runtime_patch.py
-      - name: Commit runtime integration
+          grep -q 'создай' services/velia_developer_coding_service.py
+          ! grep -q 'созда|' services/velia_developer_coding_service.py
+      - name: Commit product integration
         if: github.event_name == 'pull_request'
         run: |
-          if git diff --quiet -- services/velia_developer_chat_runtime_patch.py; then
-            echo 'Runtime integration already committed.'
+          if git diff --quiet -- \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_developer_coding_service.py; then
+            echo 'Product integration already committed.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add services/velia_developer_chat_runtime_patch.py
+          git add \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_developer_coding_service.py
           git commit -m 'Integrate VELIA Coding Agent into ordinary chat'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
