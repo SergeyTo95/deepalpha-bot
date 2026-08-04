@@ -24,7 +24,7 @@ class _Response:
         }
 
 
-def test_call_kimi_sends_multimodal_content_to_chat_completions(monkeypatch):
+def _enable_test_kimi(monkeypatch):
     from db import database
 
     monkeypatch.setenv("KIMI_ENABLED", "true")
@@ -32,6 +32,10 @@ def test_call_kimi_sends_multimodal_content_to_chat_completions(monkeypatch):
     monkeypatch.setenv("KIMI_MAX_RETRIES", "0")
     monkeypatch.setattr(database, "reserve_gemini_attempt", lambda **_kwargs: 123)
     monkeypatch.setattr(database, "finalize_gemini_attempt", lambda *_args, **_kwargs: None)
+
+
+def test_call_kimi_sends_multimodal_content_to_chat_completions(monkeypatch):
+    _enable_test_kimi(monkeypatch)
     captured = {}
 
     def fake_post(url, *, headers, json, timeout):
@@ -61,6 +65,30 @@ def test_call_kimi_sends_multimodal_content_to_chat_completions(monkeypatch):
     assert captured["json"]["model"] == "kimi-k3"
     assert captured["json"]["messages"][0]["content"] == content
     assert captured["json"]["reasoning_effort"] == "low"
+
+
+def test_non_k3_vision_model_omits_k3_reasoning_effort(monkeypatch):
+    _enable_test_kimi(monkeypatch)
+    captured = {}
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.update(url=url, headers=headers, json=json, timeout=timeout)
+        return _Response()
+
+    monkeypatch.setattr(kimi_gateway.requests, "post", fake_post)
+
+    result = kimi_gateway.call_kimi(
+        prompt="Describe this image",
+        content=[{"type": "text", "text": "Describe this image"}],
+        reasoning_effort="low",
+        feature="velia_file_vision",
+        model="kimi-k2.5",
+        max_attempts=1,
+    )
+
+    assert result["ok"] is True
+    assert captured["json"]["model"] == "kimi-k2.5"
+    assert "reasoning_effort" not in captured["json"]
 
 
 def test_call_kimi_vision_builds_a_base64_data_url(monkeypatch):
