@@ -1,6 +1,7 @@
-from pathlib import Path
+from aiohttp import web
 
 from services import velia_developer_github_service as github
+from services import velia_developer_routes as routes
 
 
 def test_list_branches_paginates_until_selected_branch_can_be_found(monkeypatch):
@@ -32,7 +33,10 @@ def test_list_branches_paginates_until_selected_branch_can_be_found(monkeypatch)
     assert any(item["name"] == "feature/turbo-short-term-btc" for item in branches)
 
 
-def test_repository_branch_route_is_registered():
-    source = Path("services/velia_developer_routes.py").read_text(encoding="utf-8")
-    assert '/repositories/{repository_id}/branches' in source
-    assert 'async def repository_branches' in source
+def test_repository_branch_route_registration_executes_at_runtime():
+    app = web.Application()
+
+    routes.setup_velia_developer_routes(app, object())
+
+    registered_paths = {resource.canonical for resource in app.router.resources()}
+    assert "/mobile-api/v1/developer/repositories/{repository_id}/branches" in registered_paths
