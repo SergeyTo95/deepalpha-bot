@@ -1,0 +1,61 @@
+name: VELIA Developer read-only
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_developer_*.py'
+      - 'tests/test_velia_developer_*.py'
+      - '.github/workflows/velia-developer-readonly.yml'
+      - 'run_web_process.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  developer-readonly-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Developer modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_github_service.py \
+            services/velia_developer_project_service.py \
+            services/velia_developer_agent_service.py \
+            services/velia_developer_routes.py \
+            run_web_process.py
+      - name: Run focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_project_service.py \
+            tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_bootstrap.py
+      - name: Verify read-only boundary and secret handling
+        run: |
+          ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
+          ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
+          ! grep -R -nE 'INSERT.*access_token|UPDATE.*access_token|authorized_user_token' services/velia_developer_*.py
+          ! grep -R -nE 'print\(.*client_secret|logger\..*client_secret|logging\..*client_secret' services/velia_developer_*.py
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo "Generated Python bytecode was added by this PR."
+            exit 1
+          fi
