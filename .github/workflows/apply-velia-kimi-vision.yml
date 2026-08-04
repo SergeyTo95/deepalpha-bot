@@ -21,6 +21,8 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v4
