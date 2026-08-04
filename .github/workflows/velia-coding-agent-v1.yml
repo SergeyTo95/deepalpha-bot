@@ -10,7 +10,9 @@ on:
       - 'services/velia_developer_chat_runtime_patch.py'
       - 'tests/test_velia_developer_coding_service.py'
       - 'tests/test_velia_developer_github_write_service.py'
+      - 'tests/test_velia_developer_coding_chat_gate.py'
       - '.github/scripts/apply_velia_coding_agent_v1.py'
+      - '.github/scripts/fix_velia_coding_agent_routing.py'
       - '.github/workflows/velia-coding-agent-v1.yml'
   workflow_dispatch:
 
@@ -39,7 +41,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
       - name: Apply runtime integration
-        run: python .github/scripts/apply_velia_coding_agent_v1.py
+        run: |
+          python .github/scripts/apply_velia_coding_agent_v1.py
+          python .github/scripts/fix_velia_coding_agent_routing.py
       - name: Compile Coding Agent modules
         run: |
           python -m py_compile \
@@ -56,6 +60,7 @@ jobs:
           pytest -q \
             tests/test_velia_developer_github_write_service.py \
             tests/test_velia_developer_coding_service.py \
+            tests/test_velia_developer_coding_chat_gate.py \
             tests/test_velia_developer_github_service.py \
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_fast_path_service.py \
@@ -76,6 +81,7 @@ jobs:
           grep -q 'developer_coding_path_outside_plan' services/velia_developer_coding_service.py
           grep -q 'Выполняй план' services/velia_developer_coding_service.py
           grep -q 'coding_result = _coding_chat_result' services/velia_developer_chat_runtime_patch.py
+          grep -q 'if not coding_intent:' services/velia_developer_chat_runtime_patch.py
       - name: Commit runtime integration
         if: github.event_name == 'pull_request'
         run: |
