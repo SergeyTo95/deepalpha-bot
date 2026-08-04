@@ -35,6 +35,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/restore-base-bytecode-scope.yml
           git add -u
-          git add $(cat /tmp/base-bytecode.txt || true)
+          if test -s /tmp/base-bytecode.txt; then
+            git add -f --pathspec-from-file=/tmp/base-bytecode.txt
+          fi
           git commit -m 'Restore pre-existing bytecode outside Developer scope'
           git push origin HEAD:feature/velia-developer-readonly
