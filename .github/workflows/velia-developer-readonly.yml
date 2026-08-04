@@ -82,8 +82,8 @@ jobs:
           grep -q 'github_pull_requests_write_permission_required' services/velia_developer_github_write_service.py
           grep -q '"draft": True' services/velia_developer_github_write_service.py
           ! grep -qE 'merge_pull|/merges|deploy' services/velia_developer_github_write_service.py
-          grep -q 'VELIA_DEVELOPER_CODING_MAX_PLAN_COST_USD' services/velia_developer_coding_service.py
-          grep -q 'VELIA_DEVELOPER_CODING_MAX_STEP_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_PLAN_MAX_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD' services/velia_developer_coding_service.py
           grep -q 'VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD' services/velia_developer_coding_service.py
           grep -q 'developer_coding_path_outside_plan' services/velia_developer_coding_service.py
           grep -q 'Выполняй план' services/velia_developer_coding_service.py
