@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/velia-developer-repair-budget
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
 
 permissions:
   contents: write
