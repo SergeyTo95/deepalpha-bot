@@ -1,0 +1,61 @@
+name: Apply VELIA Developer review fixes
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'tools/apply_velia_developer_review_fixes.py'
+      - '.github/workflows/apply-velia-developer-review-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-and-clean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/velia-developer-readonly
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Apply review fixes
+        run: python tools/apply_velia_developer_review_fixes.py
+      - name: Compile Developer modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_github_service.py \
+            services/velia_developer_project_service.py \
+            services/velia_developer_agent_service.py \
+            services/velia_developer_routes.py \
+            run_web_process.py
+      - name: Run focused Developer tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_project_service.py \
+            tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_bootstrap.py
+      - name: Verify read-only boundary
+        run: |
+          ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
+          ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
+      - name: Commit clean product fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply-velia-developer-review-fixes.yml tools/apply_velia_developer_review_fixes.py
+          git add -A
+          git commit -m 'Address VELIA Developer evidence and lease review'
+          git push origin HEAD:feature/velia-developer-readonly
