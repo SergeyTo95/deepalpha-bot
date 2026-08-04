@@ -206,3 +206,41 @@ def test_explicit_project_matching_prefers_named_repository():
     )
 
     assert [item["id"] for item in matches] == ["project-android"]
+
+
+def test_repository_question_without_project_is_fail_closed(monkeypatch):
+    module = _chat_module(lambda *args, **kwargs: pytest.fail("ordinary model must not run"))
+    monkeypatch.setattr(patch.project_service, "developer_enabled", lambda: True)
+    monkeypatch.setattr(patch.project_service, "list_projects", lambda user_id: [])
+    monkeypatch.setattr(
+        patch,
+        "_latest_request_user_message",
+        lambda request_id, user_id: "Проверь код в deepalpha-bot",
+    )
+
+    patch.install(module)
+    result = _call(module)
+
+    assert result["reason"] == "developer_project_missing"
+    assert "Developer-проект" in result["text"]
+
+
+def test_repository_router_storage_failure_does_not_hallucinate(monkeypatch):
+    module = _chat_module(lambda *args, **kwargs: pytest.fail("ordinary model must not run"))
+    monkeypatch.setattr(patch.project_service, "developer_enabled", lambda: True)
+    monkeypatch.setattr(
+        patch,
+        "_latest_request_user_message",
+        lambda request_id, user_id: "Проверь в нашем репозитории этот endpoint",
+    )
+    monkeypatch.setattr(
+        patch.project_service,
+        "list_projects",
+        lambda user_id: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    patch.install(module)
+    result = _call(module)
+
+    assert result["reason"] == "developer_router_unavailable"
+    assert "developer_router_unavailable" in result["text"]

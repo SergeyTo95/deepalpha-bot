@@ -213,6 +213,11 @@ def _looks_scoped_repository_question(message: str) -> bool:
     )
 
 
+def _looks_repository_request(message: str) -> bool:
+    normalized = str(message or "").strip()
+    return _looks_scoped_repository_question(normalized) or "deepalpha-" in normalized.lower()
+
+
 def _looks_engineering_follow_up(message: str) -> bool:
     normalized = str(message or "").strip()
     if not normalized:
@@ -267,6 +272,12 @@ def _language_text(message: str, *, kind: str, projects: Optional[List[Dict[str,
             if russian
             else "You have multiple Developer projects. Name the repository in your message: " + available
         )
+    if kind == "connect":
+        return (
+            "Сначала создай Developer-проект из подключённого репозитория, затем спроси о коде в любом чате."
+            if russian
+            else "Create a Developer project from the connected repository first, then ask about its code in any chat."
+        )
     if kind == "failure":
         return (
             f"Не удалось прочитать подключённый репозиторий ({code or 'developer_failed'}). Я не буду придумывать ответ без кода — повтори запрос после проверки GitHub-подключения."
@@ -317,6 +328,19 @@ def _conversation_question(user_id: int, conversation_id: str, current_message: 
         cursor.close()
         conn.close()
 
+    current = str(current_message).strip()
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
+        if isinstance(row, dict):
+            role = str(row.get("role") or "")
+            content = str(row.get("content") or "").strip()
+        else:
+            role = str(row[0] or "")
+            content = str(row[1] or "").strip()
+        if role == "user" and content == current:
+            del rows[index]
+            break
+
     history: List[str] = []
     for row in rows:
         if isinstance(row, dict):
@@ -326,8 +350,6 @@ def _conversation_question(user_id: int, conversation_id: str, current_message: 
             role = str(row[0] or "")
             content = str(row[1] or "").strip()
         if not content:
-            continue
-        if role == "user" and content == str(current_message).strip() and not history:
             continue
         label = "USER" if role == "user" else "ASSISTANT"
         history.append(f"{label}: {content}")
@@ -432,6 +454,7 @@ def install(chat_module: Any) -> None:
                 request_id=request_id,
             )
 
+        message = ""
         try:
             message = _latest_request_user_message(str(request_id or ""), int(user_id))
             if not message:
@@ -443,6 +466,12 @@ def install(chat_module: Any) -> None:
                 )
             projects = project_service.list_projects(int(user_id))
             if not projects:
+                if _looks_repository_request(message):
+                    return _deterministic_result(
+                        _language_text(message, kind="connect"),
+                        request_id,
+                        reason="developer_project_missing",
+                    )
                 return original_generate(
                     prompt,
                     user_id=user_id,
@@ -503,6 +532,12 @@ def install(chat_module: Any) -> None:
                 str(conversation_id),
                 exc.__class__.__name__,
             )
+            if _looks_repository_request(message):
+                return _deterministic_result(
+                    _language_text(message, kind="failure", code="developer_router_unavailable"),
+                    request_id,
+                    reason="developer_router_unavailable",
+                )
             return original_generate(
                 prompt,
                 user_id=user_id,
