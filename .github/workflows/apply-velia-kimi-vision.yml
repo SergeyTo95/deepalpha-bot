@@ -7,6 +7,12 @@ on:
     paths:
       - "tools/apply_velia_kimi_vision.py"
       - ".github/workflows/apply-velia-kimi-vision.yml"
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "tools/apply_velia_kimi_vision.py"
+      - ".github/workflows/apply-velia-kimi-vision.yml"
 
 permissions:
   contents: write
