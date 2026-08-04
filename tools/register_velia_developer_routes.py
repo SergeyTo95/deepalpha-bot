@@ -16,7 +16,20 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
+def _harden_branch_validator() -> None:
+    path = Path("services/velia_developer_github_service.py")
+    text = path.read_text(encoding="utf-8")
+    old = 'or normalized.endswith("/"):'
+    new = 'or normalized.endswith("/") or "//" in normalized:'
+    if new in text:
+        return
+    if old not in text:
+        raise SystemExit("Developer branch validation anchor not found")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 def main() -> None:
+    _harden_branch_validator()
     matches: list[tuple[Path, ast.Call, str]] = []
     for path in Path(".").rglob("*.py"):
         if any(part in {".git", ".venv", "venv", "tests", "tools"} for part in path.parts):
