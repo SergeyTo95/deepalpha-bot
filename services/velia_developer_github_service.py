@@ -307,6 +307,9 @@ def authorize_user_installation(code: str, installation_id: int) -> Dict[str, An
 
 
 def list_installation_repositories(installation_id: int) -> List[Dict[str, Any]]:
+    details = installation_details(installation_id)
+    if str(details.get("contents_permission") or "").lower() not in {"read", "write"}:
+        raise DeveloperGithubError("github_contents_permission_required", status=403)
     token = _installation_token(installation_id)
     repositories: List[Dict[str, Any]] = []
     for page in range(1, 11):
@@ -322,7 +325,6 @@ def list_installation_repositories(installation_id: int) -> List[Dict[str, Any]]
         for repo in items:
             if not isinstance(repo, dict):
                 continue
-            permissions = repo.get("permissions") or {}
             repositories.append(
                 {
                     "id": int(repo.get("id") or 0),
@@ -332,7 +334,7 @@ def list_installation_repositories(installation_id: int) -> List[Dict[str, Any]]
                     "private": bool(repo.get("private")),
                     "default_branch": str(repo.get("default_branch") or "main"),
                     "archived": bool(repo.get("archived")),
-                    "contents_read": bool(permissions.get("pull") or permissions.get("push") or permissions.get("admin")),
+                    "contents_read": True,
                 }
             )
         if len(items) < 100:
