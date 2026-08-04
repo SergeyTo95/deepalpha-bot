@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import os
 import socket
@@ -128,6 +129,31 @@ def _usage(data: Any) -> Dict[str, Optional[int]]:
     }
 
 
+def _decode_json_response(response: Any) -> Any:
+    raw = getattr(response, "content", None)
+    if isinstance(raw, (bytes, bytearray, memoryview)) and raw:
+        try:
+            return json.loads(bytes(raw).decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return response.json()
+
+
+def _repair_utf8_mojibake(value: str) -> str:
+    text = str(value or "")
+    suspicious = sum(text.count(marker) for marker in ("Ð", "Ñ", "Ã", "Â"))
+    if suspicious < 2:
+        return text
+    try:
+        repaired = text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    repaired_suspicious = sum(
+        repaired.count(marker) for marker in ("Ð", "Ñ", "Ã", "Â")
+    )
+    return repaired if repaired_suspicious < suspicious else text
+
+
 def _extract_final_text(data: Any) -> str:
     if not isinstance(data, dict):
         return ""
@@ -141,7 +167,7 @@ def _extract_final_text(data: Any) -> str:
     # Never expose hidden reasoning fields to Telegram users.
     content = message.get("content")
     if isinstance(content, str):
-        return content.strip()
+        return _repair_utf8_mojibake(content).strip()
     if isinstance(content, list):
         chunks = []
         for part in content:
@@ -151,7 +177,7 @@ def _extract_final_text(data: Any) -> str:
                 text = part.get("text")
                 if isinstance(text, str):
                     chunks.append(text)
-        return "".join(chunks).strip()
+        return _repair_utf8_mojibake("".join(chunks)).strip()
     return ""
 
 
@@ -314,7 +340,7 @@ def call_kimi(
 
             if status_code == 200:
                 try:
-                    data = response.json()
+                    data = _decode_json_response(response)
                 except Exception:
                     data = {}
                     reason = "json_parse_error"

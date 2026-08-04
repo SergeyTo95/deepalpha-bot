@@ -19,16 +19,19 @@ from services.velia_attachment_public_contract import public_attachment
 from services.velia_attachment_service import (
     AttachmentError,
     get_attachment,
+    get_attachment_content,
 )
 from services.velia_chat_service import get_conversation
 from services.velia_mobile_auth_service import authenticate_access_token
 
 
 logger = logging.getLogger(__name__)
-_ALLOWED_MIME_TYPES = {
+_ALLOWED_IMAGE_MIME_TYPES = {
     "image/jpeg",
     "image/png",
     "image/webp",
+}
+_ALLOWED_MIME_TYPES = _ALLOWED_IMAGE_MIME_TYPES | {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
@@ -296,6 +299,39 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
             {"ok": True, "attachment": public_attachment(attachment)}
         )
 
+    async def handle_attachment_content(request: web.Request) -> web.Response:
+        unavailable_error = _attachment_api_unavailable_error()
+        if unavailable_error:
+            return _unavailable_response(unavailable_error)
+        _scrub_legacy_payloads_best_effort()
+        auth = _require_mobile_auth(request)
+        if not auth:
+            return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+        attachment = await asyncio.to_thread(
+            get_attachment_content,
+            int(auth["user_id"]),
+            str(request.match_info.get("attachment_id") or ""),
+        )
+        if not attachment:
+            return _json_response(
+                {"ok": False, "error": "attachment_not_found"},
+                status=404,
+            )
+        mime_type = str(attachment.get("mime_type") or "").strip().lower()
+        content = bytes(attachment.get("content_bytes") or b"")
+        if mime_type not in _ALLOWED_IMAGE_MIME_TYPES or not content:
+            return _json_response(
+                {"ok": False, "error": "attachment_not_found"},
+                status=404,
+            )
+        response = web.Response(body=content, status=200, content_type=mime_type)
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Disposition"] = "inline"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        return response
+
     async def handle_attachment_delete(request: web.Request) -> web.Response:
         unavailable_error = _attachment_api_unavailable_error()
         if unavailable_error:
@@ -326,6 +362,10 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
     app.router.add_get(
         "/mobile-api/v1/attachments/{attachment_id}",
         handle_attachment_get,
+    )
+    app.router.add_get(
+        "/mobile-api/v1/attachments/{attachment_id}/content",
+        handle_attachment_content,
     )
     app.router.add_delete(
         "/mobile-api/v1/attachments/{attachment_id}",
