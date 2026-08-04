@@ -406,20 +406,33 @@ def repository_metadata(installation_id: int, repository_id: int, full_name: str
 def list_branches(installation_id: int, repository_id: int, full_name: str) -> List[Dict[str, Any]]:
     owner, name = _validate_full_name(full_name)
     token = _installation_token(installation_id, [repository_id])
-    data = _request(
-        "GET",
-        f"/repos/{quote(owner)}/{quote(name)}/branches",
-        token=token,
-        params={"per_page": 100},
-    )
-    result = []
-    for item in data if isinstance(data, list) else []:
-        if not isinstance(item, dict):
-            continue
-        branch_name = str(item.get("name") or "")
-        commit = item.get("commit") or {}
-        if branch_name:
-            result.append({"name": branch_name, "sha": str(commit.get("sha") or ""), "protected": bool(item.get("protected"))})
+    result: List[Dict[str, Any]] = []
+    seen = set()
+    for page in range(1, 11):
+        data = _request(
+            "GET",
+            f"/repos/{quote(owner)}/{quote(name)}/branches",
+            token=token,
+            params={"per_page": 100, "page": page},
+        )
+        items = data if isinstance(data, list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            branch_name = str(item.get("name") or "")
+            if not branch_name or branch_name in seen:
+                continue
+            seen.add(branch_name)
+            commit = item.get("commit") or {}
+            result.append(
+                {
+                    "name": branch_name,
+                    "sha": str(commit.get("sha") or ""),
+                    "protected": bool(item.get("protected")),
+                }
+            )
+        if len(items) < 100:
+            break
     return result
 
 
