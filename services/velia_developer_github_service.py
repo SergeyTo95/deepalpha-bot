@@ -55,8 +55,25 @@ def github_app_slug() -> str:
     return str(os.getenv("VELIA_GITHUB_APP_SLUG", "") or "").strip()
 
 
+def github_client_id() -> str:
+    return str(os.getenv("VELIA_GITHUB_APP_CLIENT_ID", "") or "").strip()
+
+
+def _github_client_secret() -> str:
+    value = str(os.getenv("VELIA_GITHUB_APP_CLIENT_SECRET", "") or "").strip()
+    if not value:
+        raise DeveloperGithubError("github_oauth_not_configured", status=503)
+    return value
+
+
 def github_app_configured() -> bool:
-    return bool(github_app_id() and github_app_slug() and os.getenv("VELIA_GITHUB_APP_PRIVATE_KEY"))
+    return bool(
+        github_app_id()
+        and github_app_slug()
+        and github_client_id()
+        and os.getenv("VELIA_GITHUB_APP_CLIENT_SECRET")
+        and os.getenv("VELIA_GITHUB_APP_PRIVATE_KEY")
+    )
 
 
 def _app_jwt(*, now: Optional[int] = None) -> str:
@@ -202,6 +219,72 @@ def installation_details(installation_id: int) -> Dict[str, Any]:
         "repository_selection": str(data.get("repository_selection") or ""),
         "contents_permission": contents_permission,
     }
+
+
+def _exchange_user_code(code: str) -> str:
+    normalized = str(code or "").strip()
+    if not normalized:
+        raise DeveloperGithubError("github_user_authorization_required", status=400)
+    client_id = github_client_id()
+    if not client_id:
+        raise DeveloperGithubError("github_oauth_not_configured", status=503)
+    timeout = _env_int("VELIA_DEVELOPER_GITHUB_TIMEOUT_SECONDS", 20, 3, 60)
+    try:
+        response = HTTP.post(
+            "https://github.com/login/oauth/access_token",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "VELIA-Developer/1.0",
+            },
+            data={
+                "client_id": client_id,
+                "client_secret": _github_client_secret(),
+                "code": normalized,
+            },
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise DeveloperGithubError("github_oauth_unavailable", detail=exc.__class__.__name__) from exc
+    if int(getattr(response, "status_code", 0) or 0) != 200:
+        raise DeveloperGithubError("github_oauth_failed", status=401)
+    data = _json_response(response)
+    if not isinstance(data, dict):
+        raise DeveloperGithubError("github_oauth_failed", status=401)
+    error = str(data.get("error") or "").strip()
+    token = str(data.get("access_token") or "").strip()
+    if error or not token:
+        raise DeveloperGithubError("github_oauth_failed", status=401, detail=error)
+    return token
+
+
+def authorize_user_installation(code: str, installation_id: int) -> Dict[str, Any]:
+    target = int(installation_id)
+    if target <= 0:
+        raise DeveloperGithubError("invalid_installation", status=400)
+    user_token = _exchange_user_code(code)
+    authorized = False
+    for page in range(1, 11):
+        data = _request(
+            "GET",
+            "/user/installations",
+            token=user_token,
+            params={"per_page": 100, "page": page},
+        )
+        installations = data.get("installations") if isinstance(data, dict) else []
+        if not isinstance(installations, list):
+            installations = []
+        if any(int(item.get("id") or 0) == target for item in installations if isinstance(item, dict)):
+            authorized = True
+            break
+        if len(installations) < 100:
+            break
+    if not authorized:
+        raise DeveloperGithubError("github_installation_not_authorized", status=403)
+    user = _request("GET", "/user", token=user_token)
+    details = installation_details(target)
+    details["authorized_user_id"] = int(user.get("id") or 0) if isinstance(user, dict) else 0
+    details["authorized_user_login"] = str(user.get("login") or "") if isinstance(user, dict) else ""
+    return details
 
 
 def list_installation_repositories(installation_id: int) -> List[Dict[str, Any]]:

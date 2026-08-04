@@ -117,11 +117,16 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
     async def github_callback(request: web.Request) -> web.StreamResponse:
         state = str(request.query.get("state") or "")
         installation_id = _int(request.query.get("installation_id"))
+        code = str(request.query.get("code") or "")
         try:
             payload = project_service.verify_install_state(state)
             if installation_id <= 0:
                 raise project_service.DeveloperProjectError("invalid_installation", status=400)
-            details = await asyncio.to_thread(github_service.installation_details, installation_id)
+            details = await asyncio.to_thread(
+                github_service.authorize_user_installation,
+                code,
+                installation_id,
+            )
             await asyncio.to_thread(project_service.record_installation, int(payload["user_id"]), details)
             separator = "&" if "?" in _safe_redirect_url() else "?"
             location = _safe_redirect_url() + separator + urlencode({"connected": "true", "installation_id": installation_id})

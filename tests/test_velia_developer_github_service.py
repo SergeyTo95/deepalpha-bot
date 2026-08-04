@@ -140,3 +140,68 @@ def test_non_default_branch_search_reads_exact_branch_tree_and_blobs(monkeypatch
     assert "refresh_session" in results[0]["fragments"][0]
     assert not any(path == "/search/code" for _, path, _ in calls)
     assert any("feature%2Fnew-auth" in path for _, path, _ in calls)
+
+def test_user_oauth_binding_rejects_unowned_installation(monkeypatch):
+    monkeypatch.setattr(github, "_exchange_user_code", lambda code: "user-token")
+    monkeypatch.setattr(
+        github,
+        "_request",
+        lambda method, path, **kwargs: {
+            "installations": [{"id": 999}],
+            "total_count": 1,
+        },
+    )
+
+    try:
+        github.authorize_user_installation("oauth-code", 123)
+        assert False
+    except github.DeveloperGithubError as exc:
+        assert exc.code == "github_installation_not_authorized"
+        assert exc.status == 403
+
+
+def test_user_oauth_binding_verifies_installation_and_user(monkeypatch):
+    calls = []
+    monkeypatch.setattr(github, "_exchange_user_code", lambda code: "user-token")
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("token")))
+        if path == "/user/installations":
+            return {"installations": [{"id": 123}], "total_count": 1}
+        if path == "/user":
+            return {"id": 77, "login": "octocat"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(github, "_request", fake_request)
+    monkeypatch.setattr(
+        github,
+        "installation_details",
+        lambda installation_id: {
+            "installation_id": installation_id,
+            "account_login": "owner",
+            "contents_permission": "read",
+        },
+    )
+
+    result = github.authorize_user_installation("oauth-code", 123)
+
+    assert result["installation_id"] == 123
+    assert result["authorized_user_id"] == 77
+    assert result["authorized_user_login"] == "octocat"
+    assert calls == [
+        ("GET", "/user/installations", "user-token"),
+        ("GET", "/user", "user-token"),
+    ]
+
+
+def test_github_app_configuration_requires_oauth_credentials(monkeypatch):
+    monkeypatch.setenv("VELIA_GITHUB_APP_ID", "1")
+    monkeypatch.setenv("VELIA_GITHUB_APP_SLUG", "velia-developer")
+    monkeypatch.setenv("VELIA_GITHUB_APP_PRIVATE_KEY", "private")
+    monkeypatch.delenv("VELIA_GITHUB_APP_CLIENT_ID", raising=False)
+    monkeypatch.delenv("VELIA_GITHUB_APP_CLIENT_SECRET", raising=False)
+    assert github.github_app_configured() is False
+
+    monkeypatch.setenv("VELIA_GITHUB_APP_CLIENT_ID", "client")
+    monkeypatch.setenv("VELIA_GITHUB_APP_CLIENT_SECRET", "secret")
+    assert github.github_app_configured() is True

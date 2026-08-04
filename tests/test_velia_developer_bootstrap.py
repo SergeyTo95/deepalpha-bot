@@ -49,3 +49,10 @@ def test_developer_ask_cancellation_has_cleanup_path():
     assert "except asyncio.CancelledError:" in source
     assert "developer_run_cancelled" in source
     assert "await asyncio.shield(" in source
+
+def test_github_callback_requires_user_authorization_code():
+    source = Path("services/velia_developer_routes.py").read_text(encoding="utf-8")
+
+    assert 'request.query.get("code")' in source
+    assert "github_service.authorize_user_installation" in source
+    assert "github_service.installation_details, installation_id" not in source
