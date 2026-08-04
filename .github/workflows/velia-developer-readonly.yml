@@ -36,9 +36,11 @@ jobs:
           python -m py_compile \
             services/kimi_gateway.py \
             services/velia_developer_github_service.py \
+            services/velia_developer_github_write_service.py \
             services/velia_developer_project_service.py \
             services/velia_developer_agent_service.py \
             services/velia_developer_fast_path_service.py \
+            services/velia_developer_coding_service.py \
             services/velia_developer_chat_runtime_patch.py \
             services/velia_developer_routes.py \
             services/velia_mobile_streaming_service.py \
@@ -49,20 +51,46 @@ jobs:
         run: |
           pytest -q \
             tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_github_write_service.py \
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_agent_service.py \
             tests/test_velia_developer_fast_path_service.py \
             tests/test_velia_developer_fast_path_bootstrap.py \
+            tests/test_velia_developer_coding_service.py \
+            tests/test_velia_developer_coding_chat_gate.py \
+            tests/test_velia_developer_coding_intent_classifier.py \
             tests/test_velia_developer_chat_runtime_patch.py \
             tests/test_velia_developer_branch_selection.py \
             tests/test_velia_developer_bootstrap.py \
             tests/test_velia_mobile_streaming_service.py
-      - name: Verify read-only boundary and secret handling
+      - name: Verify read-only service boundary and secret handling
         run: |
-          ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
+          ! grep -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' \
+            services/velia_developer_github_service.py \
+            services/velia_developer_project_service.py \
+            services/velia_developer_agent_service.py \
+            services/velia_developer_fast_path_service.py \
+            services/velia_developer_routes.py
           ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
           ! grep -R -nE 'INSERT.*access_token|UPDATE.*access_token|authorized_user_token' services/velia_developer_*.py
           ! grep -R -nE 'print\(.*client_secret|logger\..*client_secret|logging\..*client_secret' services/velia_developer_*.py
+      - name: Verify Coding Agent guarded write boundary
+        run: |
+          grep -q 'VELIA_DEVELOPER_WRITE_ENABLED' services/velia_developer_github_write_service.py
+          grep -q 'developer_unsafe_write_branch' services/velia_developer_github_write_service.py
+          grep -q 'github_contents_write_permission_required' services/velia_developer_github_write_service.py
+          grep -q 'github_pull_requests_write_permission_required' services/velia_developer_github_write_service.py
+          grep -q '"draft": True' services/velia_developer_github_write_service.py
+          ! grep -qE 'merge_pull|/merges|deploy' services/velia_developer_github_write_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_MAX_PLAN_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_MAX_STEP_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'developer_coding_path_outside_plan' services/velia_developer_coding_service.py
+          grep -q 'Выполняй план' services/velia_developer_coding_service.py
+          grep -q 'coding_result = _coding_chat_result' services/velia_developer_chat_runtime_patch.py
+          grep -q 'if not coding_intent:' services/velia_developer_chat_runtime_patch.py
+          grep -q 'test_read_only_repository_questions_are_not_coding_requests' tests/test_velia_developer_coding_intent_classifier.py
+          grep -q 'test_explicit_mutation_requests_are_coding_requests' tests/test_velia_developer_coding_intent_classifier.py
       - name: Verify Developer stream resilience contracts
         run: |
           grep -q 'VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS' services/velia_developer_agent_service.py
