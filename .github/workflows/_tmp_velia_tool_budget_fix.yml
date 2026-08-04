@@ -1,0 +1,67 @@
+name: Temporary VELIA Developer tool budget fix
+
+on:
+  push:
+    branches:
+      - fix/velia-developer-tool-budget
+    paths:
+      - '.github/scripts/_tmp_apply_velia_tool_budget_fix.py'
+      - '.github/workflows/_tmp_velia_tool_budget_fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-clean:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/velia-developer-tool-budget
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Apply focused patch
+        run: python .github/scripts/_tmp_apply_velia_tool_budget_fix.py
+      - name: Compile affected modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_agent_service.py \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_mobile_streaming_service.py
+      - name: Run Developer and streaming tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_mobile_streaming_service.py
+      - name: Verify budget contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_MAX_TOOL_CALLS", 10' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_DISCOVERY_CALLS' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_READ_CALLS' services/velia_developer_agent_service.py
+          grep -q 'developer_tool_loop_detected' services/velia_developer_agent_service.py
+          grep -q 'tool_calls >= max_tools' services/velia_developer_agent_service.py
+          grep -q 'read_calls >= max_reads' services/velia_developer_agent_service.py
+      - name: Remove temporary automation
+        run: |
+          rm -f .github/scripts/_tmp_apply_velia_tool_budget_fix.py
+          rm -f .github/workflows/_tmp_velia_tool_budget_fix.yml
+      - name: Commit clean product patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add services/velia_developer_agent_service.py tests/test_velia_developer_agent_service.py .github/scripts .github/workflows
+          git commit -m 'Fix VELIA Developer tool budget finalization'
+          git push origin HEAD:fix/velia-developer-tool-budget
