@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import socket
@@ -77,6 +78,8 @@ def _api_key() -> str:
 
 
 def _feature_default_completion_tokens(feature: str) -> int:
+    if feature == "velia_file_vision":
+        return 2048
     return 8192 if feature in _HIGH_REASONING_FEATURES else 4096
 
 
@@ -211,9 +214,16 @@ def call_kimi(
     timeout: Optional[int] = None,
     user_id: Optional[int] = None,
     chat_id: Optional[int] = None,
+    content: Optional[Any] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
     request_id = request_id or str(uuid.uuid4())
     selected_model = (model or kimi_model()).strip()
+    selected_reasoning_effort = str(
+        reasoning_effort or kimi_reasoning_effort()
+    ).strip().lower()
+    if selected_reasoning_effort not in _ALLOWED_REASONING_EFFORTS:
+        selected_reasoning_effort = kimi_reasoning_effort()
     completion_limit = _initial_completion_limit(feature, max_tokens)
     completion_cap = max(completion_limit, env_int("KIMI_MAX_COMPLETION_TOKENS_CAP", 32768) or 32768)
     timeout_seconds = max(1, int(timeout or env_int("KIMI_TIMEOUT_SECONDS", 120) or 120))
@@ -237,15 +247,18 @@ def call_kimi(
     block_reason = _precheck(is_background)
     if block_reason:
         return _record_block(block_reason, **common)
-    if not prompt or not str(prompt).strip():
+    normalized_prompt = str(prompt or "").strip()
+    if not normalized_prompt and content is None:
         return _record_block("empty_request", **common)
 
+    user_content = content if content is not None else normalized_prompt
     payload = {
         "model": selected_model,
-        "messages": [{"role": "user", "content": str(prompt)}],
+        "messages": [{"role": "user", "content": user_content}],
         "max_completion_tokens": completion_limit,
-        "reasoning_effort": kimi_reasoning_effort(),
     }
+    if selected_model.lower().startswith("kimi-k3"):
+        payload["reasoning_effort"] = selected_reasoning_effort
     headers = {
         "Authorization": f"Bearer {_api_key()}",
         "Content-Type": "application/json",
@@ -290,7 +303,7 @@ def call_kimi(
             selected_model,
             attempt_index + 1,
             current_limit,
-            payload["reasoning_effort"],
+            payload.get("reasoning_effort", "provider_default"),
         )
 
         try:
@@ -446,3 +459,92 @@ def call_kimi(
         time.sleep(min(2 ** attempt_index, 8))
 
     return last
+
+
+_KIMI_VISION_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def call_kimi_vision(
+    *,
+    prompt: str,
+    image: bytes,
+    mime_type: str,
+    feature: str = "velia_file_vision",
+    origin: str = "",
+    is_background: bool = False,
+    request_id: Optional[str] = None,
+    cycle_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    max_attempts: Optional[int] = None,
+    timeout: Optional[int] = None,
+    user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    request_id = request_id or str(uuid.uuid4())
+    selected_model = (
+        model
+        or os.getenv("VELIA_FILE_VISION_MODEL", "")
+        or kimi_model()
+    ).strip()
+    normalized_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    common = {
+        "request_id": request_id,
+        "cycle_id": cycle_id,
+        "job_id": job_id,
+        "feature": feature,
+        "origin": origin,
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "is_background": is_background,
+        "worker_id": WORKER_ID,
+        "model": f"kimi:{selected_model}",
+    }
+
+    def blocked(reason: str) -> Dict[str, Any]:
+        result = _record_block(reason, **common)
+        result["model"] = selected_model
+        return result
+
+    if not env_bool("VELIA_FILE_VISION_KIMI_ENABLED", False):
+        return blocked("blocked_feature")
+    if normalized_mime not in _KIMI_VISION_MIME_TYPES:
+        return blocked("invalid_image_type")
+    raw = bytes(image or b"")
+    if not raw:
+        return blocked("empty_request")
+    normalized_prompt = str(prompt or "").strip()
+    if not normalized_prompt:
+        return blocked("empty_request")
+
+    encoded = base64.b64encode(raw).decode("ascii")
+    multimodal_content = [
+        {"type": "text", "text": normalized_prompt},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{normalized_mime};base64,{encoded}",
+            },
+        },
+    ]
+    return call_kimi(
+        prompt=normalized_prompt,
+        content=multimodal_content,
+        reasoning_effort=os.getenv(
+            "VELIA_FILE_VISION_KIMI_REASONING_EFFORT",
+            "low",
+        ),
+        feature=feature,
+        origin=origin,
+        is_background=is_background,
+        request_id=request_id,
+        cycle_id=cycle_id,
+        job_id=job_id,
+        model=selected_model,
+        max_tokens=max_tokens,
+        max_attempts=max_attempts,
+        timeout=timeout,
+        user_id=user_id,
+        chat_id=chat_id,
+    )
