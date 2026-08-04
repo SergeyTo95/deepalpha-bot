@@ -1,0 +1,90 @@
+name: VELIA Coding Agent v1 integration
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'services/velia_developer_coding_service.py'
+      - 'services/velia_developer_github_write_service.py'
+      - 'services/velia_developer_chat_runtime_patch.py'
+      - 'tests/test_velia_developer_coding_service.py'
+      - 'tests/test_velia_developer_github_write_service.py'
+      - '.github/scripts/apply_velia_coding_agent_v1.py'
+      - '.github/workflows/velia-coding-agent-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: velia-coding-agent-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Apply runtime integration
+        run: python .github/scripts/apply_velia_coding_agent_v1.py
+      - name: Compile Coding Agent modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_github_write_service.py \
+            services/velia_developer_coding_service.py \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_developer_fast_path_service.py \
+            services/kimi_gateway.py \
+            run_web_process.py
+      - name: Run Coding Agent and Developer regression tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_github_write_service.py \
+            tests/test_velia_developer_coding_service.py \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_project_service.py \
+            tests/test_velia_developer_fast_path_service.py \
+            tests/test_velia_developer_fast_path_bootstrap.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_developer_branch_selection.py \
+            tests/test_velia_developer_bootstrap.py \
+            tests/test_velia_mobile_streaming_service.py
+      - name: Verify Coding Agent safety contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_WRITE_ENABLED' services/velia_developer_github_write_service.py
+          grep -q 'developer_unsafe_write_branch' services/velia_developer_github_write_service.py
+          grep -q 'github_contents_write_permission_required' services/velia_developer_github_write_service.py
+          grep -q 'github_pull_requests_write_permission_required' services/velia_developer_github_write_service.py
+          grep -q '"draft": True' services/velia_developer_github_write_service.py
+          ! grep -qE 'merge_pull|/merges|deploy' services/velia_developer_github_write_service.py
+          grep -q 'VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD' services/velia_developer_coding_service.py
+          grep -q 'developer_coding_path_outside_plan' services/velia_developer_coding_service.py
+          grep -q 'Выполняй план' services/velia_developer_coding_service.py
+          grep -q 'coding_result = _coding_chat_result' services/velia_developer_chat_runtime_patch.py
+      - name: Commit runtime integration
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --quiet -- services/velia_developer_chat_runtime_patch.py; then
+            echo 'Runtime integration already committed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add services/velia_developer_chat_runtime_patch.py
+          git commit -m 'Integrate VELIA Coding Agent into ordinary chat'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
