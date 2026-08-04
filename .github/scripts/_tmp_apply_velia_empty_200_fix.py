@@ -110,7 +110,8 @@ assert old_call in agent, "developer provider call block changed"
 agent = agent.replace(old_call, new_call, 1)
 agent_path.write_text(agent, encoding="utf-8")
 
-tests = test_path.read_text(encoding="utf-8")ntests = tests.replace('assert calls[0]["max_attempts"] == 1', 'assert calls[0]["max_attempts"] == 2', 1)
+tests = test_path.read_text(encoding="utf-8")
+tests = tests.replace('assert calls[0]["max_attempts"] == 1', 'assert calls[0]["max_attempts"] == 2', 1)
 tests = tests.replace('assert calls[0]["reasoning_effort"] == "medium"', 'assert calls[0]["reasoning_effort"] == "low"', 1)
 tests = tests.replace('assert calls[1]["max_attempts"] == 1', 'assert calls[1]["max_attempts"] == 2', 1)
 addition = r'''
