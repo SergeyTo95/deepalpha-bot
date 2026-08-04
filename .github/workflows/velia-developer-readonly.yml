@@ -45,10 +45,12 @@ jobs:
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_agent_service.py \
             tests/test_velia_developer_bootstrap.py
-      - name: Verify read-only boundary
+      - name: Verify read-only boundary and secret handling
         run: |
           ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
           ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
+          ! grep -R -nE 'INSERT.*access_token|UPDATE.*access_token|authorized_user_token' services/velia_developer_*.py
+          ! grep -R -nE 'print\(.*client_secret|logger\..*client_secret|logging\..*client_secret' services/velia_developer_*.py
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
