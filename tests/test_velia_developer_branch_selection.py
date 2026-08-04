@@ -34,6 +34,7 @@ def test_list_branches_paginates_until_selected_branch_can_be_found(monkeypatch)
 
 
 def test_repository_branch_route_registration_executes_at_runtime():
+    # Execute the real setup function so undefined f-string placeholders fail in CI.
     app = web.Application()
 
     routes.setup_velia_developer_routes(app, object())
