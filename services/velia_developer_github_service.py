@@ -76,6 +76,23 @@ def github_app_configured() -> bool:
     )
 
 
+def validate_github_app_configuration() -> Dict[str, Any]:
+    if not github_app_configured():
+        raise DeveloperGithubError("github_app_not_configured", status=503)
+    data = _request("GET", "/app", token=_app_jwt())
+    if not isinstance(data, dict):
+        raise DeveloperGithubError("github_app_validation_failed", status=503)
+    configured_id = github_app_id()
+    actual_id = str(data.get("id") or "")
+    if actual_id != configured_id:
+        raise DeveloperGithubError("github_app_id_mismatch", status=503)
+    configured_slug = github_app_slug().lower()
+    actual_slug = str(data.get("slug") or "").strip().lower()
+    if actual_slug != configured_slug:
+        raise DeveloperGithubError("github_app_slug_mismatch", status=503)
+    return {"id": actual_id, "slug": actual_slug}
+
+
 def _app_jwt(*, now: Optional[int] = None) -> str:
     app_id = github_app_id()
     if not app_id:

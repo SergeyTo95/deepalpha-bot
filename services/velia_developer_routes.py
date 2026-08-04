@@ -2,6 +2,8 @@ import asyncio
 import html
 import logging
 import os
+import threading
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlencode
 
@@ -14,6 +16,35 @@ from services import velia_developer_project_service as project_service
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/mobile-api/v1/developer"
+_CONNECTION_ERRORS: Dict[int, tuple[str, float]] = {}
+_CONNECTION_ERRORS_LOCK = threading.Lock()
+
+
+def _remember_connection_error(user_id: int, code: str) -> None:
+    normalized_user_id = int(user_id or 0)
+    normalized_code = str(code or "github_connection_failed")[:120]
+    if normalized_user_id <= 0:
+        return
+    with _CONNECTION_ERRORS_LOCK:
+        _CONNECTION_ERRORS[normalized_user_id] = (normalized_code, time.time())
+
+
+def _clear_connection_error(user_id: int) -> None:
+    with _CONNECTION_ERRORS_LOCK:
+        _CONNECTION_ERRORS.pop(int(user_id or 0), None)
+
+
+def _recent_connection_error(user_id: int) -> str:
+    ttl = _env_int("VELIA_DEVELOPER_CONNECTION_ERROR_TTL_SECONDS", 900, 60, 3600)
+    with _CONNECTION_ERRORS_LOCK:
+        item = _CONNECTION_ERRORS.get(int(user_id or 0))
+        if not item:
+            return ""
+        code, created_at = item
+        if time.time() - created_at > ttl:
+            _CONNECTION_ERRORS.pop(int(user_id or 0), None)
+            return ""
+        return code
 
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 1000) -> int:
@@ -125,6 +156,9 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
+            await asyncio.to_thread(project_service.ensure_developer_tables)
+            await asyncio.to_thread(github_service.validate_github_app_configuration)
+            _clear_connection_error(int(auth["user_id"]))
             state = project_service.create_install_state(int(auth["user_id"]))
             return routes_module._json_response(
                 {
@@ -141,8 +175,10 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         state = str(request.query.get("state") or "")
         installation_id = _int(request.query.get("installation_id"))
         code = str(request.query.get("code") or "")
+        callback_user_id = 0
         try:
             payload = project_service.verify_install_state(state)
+            callback_user_id = int(payload["user_id"])
             details_list = await asyncio.to_thread(
                 github_service.authorize_user_installations,
                 code,
@@ -151,9 +187,10 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             for details in details_list:
                 await asyncio.to_thread(
                     project_service.record_installation,
-                    int(payload["user_id"]),
+                    callback_user_id,
                     details,
                 )
+            _clear_connection_error(callback_user_id)
             primary_installation_id = int(details_list[0]["installation_id"])
             separator = "&" if "?" in _safe_redirect_url() else "?"
             location = _safe_redirect_url() + separator + urlencode(
@@ -169,6 +206,8 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         except github_service.DeveloperGithubError as exc:
             if exc.code == "github_installation_not_found":
                 raise web.HTTPFound(location=_github_install_url(state))
+            _remember_connection_error(callback_user_id, exc.code)
+            logger.warning("VELIA_DEVELOPER_GITHUB_CALLBACK_FAILED user_id=%s code=%s detail=%s", callback_user_id, exc.code, exc.detail)
             code = exc.code
             redirect = _safe_redirect_url()
             separator = "&" if "?" in redirect else "?"
@@ -176,6 +215,8 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             raise web.HTTPFound(location=location)
         except Exception as exc:
             code = getattr(exc, "code", "github_connection_failed")
+            _remember_connection_error(callback_user_id, str(code))
+            logger.exception("VELIA_DEVELOPER_GITHUB_CALLBACK_UNEXPECTED user_id=%s code=%s", callback_user_id, code)
             redirect = _safe_redirect_url()
             separator = "&" if "?" in redirect else "?"
             location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
@@ -192,7 +233,15 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
-            items = await asyncio.to_thread(project_service.list_installations, int(auth["user_id"]))
+            user_id = int(auth["user_id"])
+            items = await asyncio.to_thread(project_service.list_installations, user_id)
+            if not items:
+                connection_error = _recent_connection_error(user_id)
+                if connection_error:
+                    return routes_module._json_response(
+                        {"ok": False, "error": connection_error, "installations": []},
+                        status=409,
+                    )
             return routes_module._json_response({"ok": True, "installations": items})
         except Exception as exc:
             return _error_response(routes_module, exc)
