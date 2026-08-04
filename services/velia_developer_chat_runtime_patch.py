@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
 from services import velia_developer_fast_path_service as agent_service
+from services import velia_developer_coding_service as coding_service
 from services import velia_developer_project_service as project_service
 from services import velia_chat_streaming_runtime_patch as streaming_patch
 
@@ -70,6 +71,7 @@ def ensure_velia_developer_chat_tables() -> None:
         if _SCHEMA_READY:
             return
         project_service.ensure_developer_tables()
+        coding_service.ensure_coding_tables()
         conn = get_connection()
         cursor = conn.cursor()
         try:
@@ -368,6 +370,172 @@ def _conversation_question(user_id: int, conversation_id: str, current_message: 
     )
 
 
+
+def _coding_language_text(message: str, code: str) -> str:
+    russian = bool(re.search(r"[А-Яа-яЁё]", str(message or "")))
+    mapping_ru = {
+        "developer_coding_disabled": "VELIA Coding Agent пока выключен на сервере.",
+        "developer_write_disabled": "План готов, но запись в GitHub пока выключена серверным флагом.",
+        "github_contents_write_permission_required": "Для выполнения плана GitHub App нужен доступ Contents: Read and write.",
+        "github_pull_requests_write_permission_required": "Для создания draft PR GitHub App нужен доступ Pull requests: Read and write.",
+        "developer_coding_plan_missing": "В этом чате нет активного плана. Сначала опиши изменение, которое нужно реализовать.",
+        "developer_coding_job_running": "План уже выполняется — отменить его во время записи нельзя.",
+    }
+    mapping_en = {
+        "developer_coding_disabled": "VELIA Coding Agent is currently disabled on the server.",
+        "developer_write_disabled": "The plan is ready, but GitHub writes are disabled by the server flag.",
+        "github_contents_write_permission_required": "The GitHub App needs Contents: Read and write to execute the plan.",
+        "github_pull_requests_write_permission_required": "The GitHub App needs Pull requests: Read and write to create a draft PR.",
+        "developer_coding_plan_missing": "There is no active plan in this chat. Describe the change first.",
+        "developer_coding_job_running": "The plan is already running and cannot be cancelled during a write.",
+    }
+    fallback = (
+        f"Не удалось выполнить Coding Agent ({code}). Изменения не были смержены или задеплоены."
+        if russian
+        else f"Coding Agent failed ({code}). No changes were merged or deployed."
+    )
+    return (mapping_ru if russian else mapping_en).get(str(code), fallback)
+
+
+def _coding_chat_result(
+    *,
+    user_id: int,
+    conversation_id: str,
+    request_id: Optional[str],
+    message: str,
+    project: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    coding_intent = (
+        coding_service.is_coding_request(message)
+        or coding_service.is_approval(message)
+        or coding_service.is_cancel(message)
+        or coding_service.is_status_request(message)
+    )
+    if not coding_intent:
+        return None
+
+    active = coding_service.active_job(int(user_id), str(conversation_id))
+    if not coding_service.should_handle(message, has_active_job=bool(active)):
+        return None
+
+    on_delta = getattr(streaming_patch._STREAM_CONTEXT, "on_delta", None)
+    on_reset = getattr(streaming_patch._STREAM_CONTEXT, "on_reset", None)
+    progress_sent = False
+
+    def progress(phase: str, details: Dict[str, Any]) -> None:
+        nonlocal progress_sent
+        text = str(details.get("message") or "").strip()
+        if not text or not callable(on_delta):
+            return
+        try:
+            on_delta(("\n" if progress_sent else "") + text)
+            progress_sent = True
+        except Exception:
+            return
+
+    def clear_progress() -> None:
+        if progress_sent and callable(on_reset):
+            try:
+                on_reset()
+            except Exception:
+                return
+
+    try:
+        if not coding_service.coding_enabled():
+            return _deterministic_result(
+                _coding_language_text(message, "developer_coding_disabled"),
+                request_id,
+                reason="developer_coding_disabled",
+            )
+        if coding_service.is_cancel(message):
+            cancelled = coding_service.cancel_active_job(int(user_id), str(conversation_id))
+            text = (
+                "План отменён. GitHub не изменён."
+                if cancelled and re.search(r"[А-Яа-яЁё]", message)
+                else "Plan cancelled. GitHub was not changed."
+                if cancelled
+                else "Активного плана нет."
+                if re.search(r"[А-Яа-яЁё]", message)
+                else "There is no active plan."
+            )
+            return _deterministic_result(text, request_id, reason="developer_coding_cancelled")
+        if coding_service.is_status_request(message):
+            return _deterministic_result(
+                coding_service.status_text(active, message),
+                request_id,
+                reason="developer_coding_status",
+            )
+        if coding_service.is_approval(message):
+            result = coding_service.execute_job(
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+                project=project,
+                on_progress=progress,
+            )
+            clear_progress()
+            return {
+                "ok": True,
+                "text": coding_service.format_execution(result, message),
+                "provider": "velia_coding_agent",
+                "model": "coding-agent-v1",
+                "reason": "developer_coding_completed",
+                "request_id": str(request_id or ""),
+                "finish_reason": "stop",
+                "usage": result.get("usage") if isinstance(result.get("usage"), dict) else {},
+                "estimated_cost_usd": float(result.get("estimated_cost_usd") or 0.0),
+                "developer_context": {
+                    "project_id": str(project.get("id") or ""),
+                    "repository_full_name": str(project.get("repository_full_name") or ""),
+                    "selected_branch": str(project.get("selected_branch") or ""),
+                    "work_branch": str(result.get("work_branch") or ""),
+                    "read_only": False,
+                    "write_scope": "isolated_branch_and_draft_pr",
+                    "pull_request": result.get("pull_request") or {},
+                },
+            }
+        job = coding_service.plan_job(
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            project=project,
+            goal=message,
+            on_progress=progress,
+        )
+        clear_progress()
+        return {
+            "ok": True,
+            "text": coding_service.format_plan(job, message),
+            "provider": "velia_coding_agent",
+            "model": "coding-planner-v1",
+            "reason": "developer_coding_plan_ready",
+            "request_id": str(request_id or ""),
+            "finish_reason": "stop",
+            "usage": job.get("usage") if isinstance(job.get("usage"), dict) else {},
+            "estimated_cost_usd": float(job.get("estimated_cost_usd") or 0.0),
+            "developer_context": {
+                "project_id": str(project.get("id") or ""),
+                "repository_full_name": str(project.get("repository_full_name") or ""),
+                "selected_branch": str(project.get("selected_branch") or ""),
+                "read_only": True,
+                "write_pending_approval": True,
+                "coding_job_id": str(job.get("job_id") or ""),
+            },
+        }
+    except Exception as exc:
+        code = str(getattr(exc, "code", "developer_coding_failed") or "developer_coding_failed")[:120]
+        logger.warning(
+            "VELIA_CODING_AGENT_FAILED user_id=%s conversation_id=%s project_id=%s code=%s",
+            int(user_id),
+            str(conversation_id),
+            str(project.get("id") or ""),
+            code,
+        )
+        clear_progress()
+        return _deterministic_result(
+            _coding_language_text(message, code),
+            request_id,
+            reason=code,
+        )
+
 def _developer_result(
     *,
     user_id: int,
@@ -497,7 +665,7 @@ def install(chat_module: Any) -> None:
                 )
             projects = project_service.list_projects(int(user_id))
             if not projects:
-                if _looks_repository_request(message):
+                if _looks_repository_request(message) or coding_service.is_coding_request(message):
                     return _deterministic_result(
                         _language_text(message, kind="connect"),
                         request_id,
@@ -529,12 +697,23 @@ def install(chat_module: Any) -> None:
                     request_id,
                     reason="developer_project_ambiguous",
                 )
-            elif bound and _looks_engineering_follow_up(message):
+            elif bound and (
+                _looks_engineering_follow_up(message)
+                or coding_service.is_approval(message)
+                or coding_service.is_cancel(message)
+                or coding_service.is_status_request(message)
+            ):
                 project = bound
-            elif len(projects) == 1 and _looks_scoped_repository_question(message):
+            elif len(projects) == 1 and (
+                _looks_scoped_repository_question(message)
+                or coding_service.is_coding_request(message)
+            ):
                 project = projects[0]
                 _bind_project(int(user_id), str(conversation_id), str(project["id"]))
-            elif len(projects) > 1 and _looks_scoped_repository_question(message):
+            elif len(projects) > 1 and (
+                _looks_scoped_repository_question(message)
+                or coding_service.is_coding_request(message)
+            ):
                 return _deterministic_result(
                     _language_text(message, kind="choose", projects=projects),
                     request_id,
@@ -548,6 +727,16 @@ def install(chat_module: Any) -> None:
                     conversation_id=conversation_id,
                     request_id=request_id,
                 )
+
+            coding_result = _coding_chat_result(
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+                request_id=request_id,
+                message=message,
+                project=project,
+            )
+            if coding_result is not None:
+                return coding_result
 
             return _developer_result(
                 user_id=int(user_id),
@@ -563,7 +752,7 @@ def install(chat_module: Any) -> None:
                 str(conversation_id),
                 exc.__class__.__name__,
             )
-            if _looks_repository_request(message):
+            if _looks_repository_request(message) or coding_service.is_coding_request(message):
                 return _deterministic_result(
                     _language_text(message, kind="failure", code="developer_router_unavailable"),
                     request_id,
