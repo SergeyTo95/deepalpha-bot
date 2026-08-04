@@ -41,6 +41,15 @@ def _stream_error_code(result: Any) -> str:
     return "generation_failed"
 
 
+def _worker_exception_code(exc: BaseException) -> str:
+    candidate = str(getattr(exc, "code", "") or "").strip()
+    if candidate and len(candidate) <= 120 and all(
+        char.isalnum() or char in {"_", "-", "."} for char in candidate
+    ):
+        return candidate
+    return "stream_worker_failed"
+
+
 def _put_bounded_event(
     queue: thread_queue.Queue[Tuple[str, str]],
     connected: threading.Event,
@@ -265,13 +274,20 @@ def setup_velia_mobile_streaming_route(
             )
             raise
         except Exception as exc:
-            connected.clear()
-            logger.warning(
-                "VELIA_STREAM_CLIENT_DISCONNECTED user_id=%s conversation_id=%s error=%s",
+            error_code = _worker_exception_code(exc)
+            logger.exception(
+                "VELIA_STREAM_WORKER_FAILED user_id=%s conversation_id=%s code=%s error=%s",
                 user_id,
                 conversation_id,
+                error_code,
                 exc.__class__.__name__,
             )
+            await _write_if_connected(
+                response,
+                connected,
+                _sse_event("error", error=error_code),
+            )
+            connected.clear()
         finally:
             connected.clear()
             try:

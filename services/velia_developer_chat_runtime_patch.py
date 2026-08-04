@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from db.database import get_connection
 from services import velia_developer_agent_service as agent_service
 from services import velia_developer_project_service as project_service
+from services import velia_chat_streaming_runtime_patch as streaming_patch
 
 
 logger = logging.getLogger(__name__)
@@ -376,6 +377,33 @@ def _developer_result(
     project: Dict[str, Any],
 ) -> Dict[str, Any]:
     run_id = ""
+    on_delta = getattr(streaming_patch._STREAM_CONTEXT, "on_delta", None)
+    on_reset = getattr(streaming_patch._STREAM_CONTEXT, "on_reset", None)
+    progress_sent = False
+
+    def progress(phase: str, details: Dict[str, Any]) -> None:
+        nonlocal progress_sent
+        if progress_sent or not callable(on_delta):
+            return
+        russian = bool(re.search(r"[А-Яа-яЁё]", str(message or "")))
+        text = (
+            "Изучаю подключённый репозиторий и проверяю файлы…"
+            if russian
+            else "Inspecting the connected repository and verifying files…"
+        )
+        try:
+            on_delta(text)
+            progress_sent = True
+        except Exception:
+            return
+
+    def clear_progress() -> None:
+        if progress_sent and callable(on_reset):
+            try:
+                on_reset()
+            except Exception:
+                return
+
     try:
         run_id = project_service.start_run(int(user_id), str(project["id"]), str(message))
         result = agent_service.run_developer_agent(
@@ -383,6 +411,7 @@ def _developer_result(
             project=project,
             question=_conversation_question(int(user_id), str(conversation_id), str(message)),
             run_id=run_id,
+            on_progress=progress,
         )
         answer = str(result.get("answer") or "").strip()
         if not answer:
@@ -394,6 +423,7 @@ def _developer_result(
             tool_calls=int(result.get("tool_calls") or 0),
             estimated_cost_usd=float(result.get("estimated_cost_usd") or 0.0),
         )
+        clear_progress()
         return {
             "ok": True,
             "text": answer,
@@ -426,6 +456,7 @@ def _developer_result(
             str(project.get("id") or ""),
             code,
         )
+        clear_progress()
         return _deterministic_result(
             _language_text(message, kind="failure", code=code),
             request_id,

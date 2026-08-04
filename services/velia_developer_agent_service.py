@@ -2,7 +2,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services import kimi_gateway
 from services import velia_developer_github_service as github_service
@@ -25,6 +25,20 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         value = default
     return min(maximum, max(minimum, value))
+
+
+def _safe_progress(
+    callback: Optional[Callable[[str, Dict[str, Any]], None]],
+    phase: str,
+    **details: Any,
+) -> None:
+    if not callable(callback):
+        return
+    try:
+        callback(str(phase), dict(details))
+    except Exception:
+        # Progress is best-effort and must never fail the repository run.
+        return
 
 
 def _extract_action(text: str) -> Dict[str, Any]:
@@ -161,6 +175,7 @@ def run_developer_agent(
     project: Dict[str, Any],
     question: str,
     run_id: str,
+    on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     normalized_question = re.sub(r"\s+", " ", str(question or "").strip())
     if not normalized_question:
@@ -169,8 +184,37 @@ def run_developer_agent(
     if len(normalized_question) > max_question:
         raise DeveloperAgentError("developer_question_too_long", status=413)
 
-    max_tools = _env_int("VELIA_DEVELOPER_MAX_TOOL_CALLS", 12, 1, 30)
+    max_tools = _env_int("VELIA_DEVELOPER_MAX_TOOL_CALLS", 8, 1, 20)
     max_output = _env_int("VELIA_DEVELOPER_MAX_OUTPUT_TOKENS", 4096, 512, 8192)
+    action_output = _env_int(
+        "VELIA_DEVELOPER_ACTION_OUTPUT_TOKENS",
+        1024,
+        256,
+        max_output,
+    )
+    wall_timeout = _env_int(
+        "VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS",
+        300,
+        60,
+        360,
+    )
+    finalize_reserve = _env_int(
+        "VELIA_DEVELOPER_FINALIZE_RESERVE_SECONDS",
+        75,
+        20,
+        150,
+    )
+    model_timeout = _env_int(
+        "VELIA_DEVELOPER_MODEL_TIMEOUT_SECONDS",
+        75,
+        15,
+        120,
+    )
+    action_reasoning = str(
+        os.getenv("VELIA_DEVELOPER_ACTION_REASONING_EFFORT", "medium") or "medium"
+    ).strip().lower()
+    if action_reasoning not in {"low", "medium", "high"}:
+        action_reasoning = "medium"
     model = str(os.getenv("VELIA_DEVELOPER_MODEL", "") or "").strip() or None
     transcript: List[str] = []
     read_ranges: Dict[str, List[Tuple[int, int]]] = {}
@@ -184,11 +228,31 @@ def run_developer_agent(
     }
     tool_calls = 0
     protocol_repairs = 0
+    deadline_at = time.monotonic() + wall_timeout
 
     for iteration in range(max_tools + 4):
+        remaining = int(deadline_at - time.monotonic())
+        if remaining <= 5:
+            raise DeveloperAgentError("developer_deadline_exceeded", status=504)
+        force_final = bool(read_ranges) and remaining <= finalize_reserve
         prompt = _system_prompt(project, normalized_question)
         if transcript:
             prompt += "\nPrevious actions and tool results:\n" + "\n".join(transcript)
+        if force_final:
+            prompt += (
+                "\nTIME_BUDGET: No more tools. Return action=final now using only "
+                "the evidence already returned by read_file. State any remaining "
+                "uncertainty explicitly."
+            )
+        phase = "finalizing" if force_final else "planning"
+        _safe_progress(
+            on_progress,
+            phase,
+            iteration=iteration + 1,
+            tool_calls=tool_calls,
+            remaining_seconds=remaining,
+        )
+        call_timeout = max(5, min(model_timeout, remaining - 3))
         result = kimi_gateway.call_kimi(
             prompt=prompt,
             feature="velia_developer",
@@ -198,8 +262,10 @@ def run_developer_agent(
             cycle_id=str(run_id),
             user_id=int(user_id),
             model=model,
-            max_tokens=max_output,
-            reasoning_effort="high",
+            max_tokens=max_output if read_ranges else action_output,
+            max_attempts=1,
+            timeout=call_timeout,
+            reasoning_effort="high" if force_final else action_reasoning,
         )
         if not isinstance(result, dict) or not str(result.get("text") or "").strip():
             raise DeveloperAgentError(str((result or {}).get("reason") or "developer_generation_failed"))
@@ -218,6 +284,11 @@ def run_developer_agent(
             continue
 
         action_name = str(action.get("action") or "").strip()
+        if force_final and action_name != "final":
+            transcript.append(
+                "TIME_BUDGET: Return action=final now. Do not request another tool."
+            )
+            continue
         if action_name == "final":
             answer = str(action.get("answer") or "").strip()
             citations, invalid_citations = _validate_citations(answer, read_ranges)
@@ -246,6 +317,12 @@ def run_developer_agent(
                     raise DeveloperAgentError("developer_evidence_missing")
                 transcript.append("PROTOCOL_ERROR: Read at least one relevant file before finalizing.")
                 continue
+            _safe_progress(
+                on_progress,
+                "completed",
+                tool_calls=tool_calls,
+                remaining_seconds=max(0, int(deadline_at - time.monotonic())),
+            )
             return {
                 "ok": True,
                 "answer": answer,
@@ -258,6 +335,12 @@ def run_developer_agent(
 
         if tool_calls >= max_tools:
             raise DeveloperAgentError("developer_tool_limit_reached")
+        _safe_progress(
+            on_progress,
+            "tool_start",
+            tool=action_name,
+            tool_calls=tool_calls,
+        )
         started = time.monotonic()
         ok = False
         tool_name = action_name
@@ -293,6 +376,14 @@ def run_developer_agent(
             arguments={key: value for key, value in action.items() if key != "action"},
             result_summary=summary,
             ok=ok,
+            duration_ms=duration_ms,
+        )
+        _safe_progress(
+            on_progress,
+            "tool_done",
+            tool=tool_name,
+            ok=ok,
+            tool_calls=tool_calls,
             duration_ms=duration_ms,
         )
         transcript.append("ASSISTANT_ACTION: " + _compact(action, 8000))

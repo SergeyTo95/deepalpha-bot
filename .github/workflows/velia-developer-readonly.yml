@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - 'services/velia_developer_*.py'
+      - 'services/velia_mobile_streaming_service.py'
       - 'tests/test_velia_developer_*.py'
+      - 'tests/test_velia_mobile_streaming_service.py'
       - '.github/workflows/velia-developer-readonly.yml'
       - 'run_web_process.py'
   workflow_dispatch:
@@ -36,6 +38,7 @@ jobs:
             services/velia_developer_agent_service.py \
             services/velia_developer_chat_runtime_patch.py \
             services/velia_developer_routes.py \
+            services/velia_mobile_streaming_service.py \
             run_web_process.py
       - name: Run focused tests
         env:
@@ -47,13 +50,21 @@ jobs:
             tests/test_velia_developer_agent_service.py \
             tests/test_velia_developer_chat_runtime_patch.py \
             tests/test_velia_developer_branch_selection.py \
-            tests/test_velia_developer_bootstrap.py
+            tests/test_velia_developer_bootstrap.py \
+            tests/test_velia_mobile_streaming_service.py
       - name: Verify read-only boundary and secret handling
         run: |
           ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
           ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
           ! grep -R -nE 'INSERT.*access_token|UPDATE.*access_token|authorized_user_token' services/velia_developer_*.py
           ! grep -R -nE 'print\(.*client_secret|logger\..*client_secret|logging\..*client_secret' services/velia_developer_*.py
+      - name: Verify Developer stream resilience contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS' services/velia_developer_agent_service.py
+          grep -q 'max_attempts=1' services/velia_developer_agent_service.py
+          grep -q 'developer_deadline_exceeded' services/velia_developer_agent_service.py
+          grep -q '_worker_exception_code' services/velia_mobile_streaming_service.py
+          grep -q '_sse_event("error", error=error_code)' services/velia_mobile_streaming_service.py
       - name: Verify ordinary chat integration order
         run: |
           python - <<'PY'

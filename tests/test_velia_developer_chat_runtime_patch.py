@@ -244,3 +244,43 @@ def test_repository_router_storage_failure_does_not_hallucinate(monkeypatch):
 
     assert result["reason"] == "developer_router_unavailable"
     assert "developer_router_unavailable" in result["text"]
+
+def test_developer_result_emits_and_clears_stream_progress(monkeypatch):
+    deltas = []
+    resets = []
+    finished = []
+    monkeypatch.setattr(patch.project_service, "start_run", lambda *args, **kwargs: "run-progress")
+    monkeypatch.setattr(
+        patch.project_service,
+        "finish_run",
+        lambda run_id, **kwargs: finished.append((run_id, kwargs)),
+    )
+    monkeypatch.setattr(patch, "_conversation_question", lambda *args, **kwargs: "Проверь код")
+
+    def run_agent(**kwargs):
+        kwargs["on_progress"]("planning", {"iteration": 1})
+        kwargs["on_progress"]("tool_start", {"tool": "search_code"})
+        return {
+            "answer": "Ответ [a.py:L1-L2].",
+            "citations": [{"path": "a.py", "start_line": 1, "end_line": 2}],
+            "tool_calls": 1,
+            "usage": {},
+            "estimated_cost_usd": 0.0,
+        }
+
+    monkeypatch.setattr(patch.agent_service, "run_developer_agent", run_agent)
+    monkeypatch.setattr(patch.streaming_patch._STREAM_CONTEXT, "on_delta", deltas.append, raising=False)
+    monkeypatch.setattr(patch.streaming_patch._STREAM_CONTEXT, "on_reset", lambda: resets.append(True), raising=False)
+
+    result = patch._developer_result(
+        user_id=7,
+        conversation_id="conversation-1",
+        request_id="request-1",
+        message="Проверь код в нашем репозитории",
+        project=PROJECT_BOT,
+    )
+
+    assert result["text"].startswith("Ответ")
+    assert deltas == ["Изучаю подключённый репозиторий и проверяю файлы…"]
+    assert resets == [True]
+    assert finished[0][1]["ok"] is True
