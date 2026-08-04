@@ -15,6 +15,11 @@ replace_once(
     '        header_reserve = len(path) + 80\n',
     '        header_reserve = len(f"FILE {path} [L{start_line}-L999999]\\n") + len("\\nEND FILE\\n")\n',
 )
+replace_once(
+    fast_path,
+    '        if remaining <= 64:\n',
+    '        if remaining <= 8:\n',
+)
 
 gateway = Path("services/kimi_gateway.py")
 replace_once(
