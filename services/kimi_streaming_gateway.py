@@ -194,6 +194,7 @@ def call_kimi_stream(
         reason = "exception"
         finish_reason = ""
         done_received = False
+        invalid_utf8_frame = False
         current_limit = int(payload["max_completion_tokens"])
         text_parts = []
         usage: Dict[str, Optional[int]] = {
@@ -233,8 +234,9 @@ def call_kimi_stream(
                     try:
                         line = _decode_stream_line(raw_line).strip()
                     except UnicodeDecodeError:
+                        invalid_utf8_frame = True
                         reason = "stream_parse_error"
-                        continue
+                        break
                     if not line or not line.startswith("data:"):
                         continue
                     raw_data = line[5:].strip()
@@ -259,7 +261,9 @@ def call_kimi_stream(
                         _safe_emit(on_delta, delta)
 
                 text = "".join(text_parts).strip()
-                if finish_reason == "length":
+                if invalid_utf8_frame:
+                    reason = "stream_parse_error"
+                elif finish_reason == "length":
                     reason = "completion_length"
                 elif text and (done_received or finish_reason):
                     prompt_tokens = usage.get("prompt_tokens")
