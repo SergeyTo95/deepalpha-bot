@@ -120,16 +120,26 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         code = str(request.query.get("code") or "")
         try:
             payload = project_service.verify_install_state(state)
-            if installation_id <= 0:
-                raise project_service.DeveloperProjectError("invalid_installation", status=400)
-            details = await asyncio.to_thread(
-                github_service.authorize_user_installation,
+            details_list = await asyncio.to_thread(
+                github_service.authorize_user_installations,
                 code,
                 installation_id,
             )
-            await asyncio.to_thread(project_service.record_installation, int(payload["user_id"]), details)
+            for details in details_list:
+                await asyncio.to_thread(
+                    project_service.record_installation,
+                    int(payload["user_id"]),
+                    details,
+                )
+            primary_installation_id = int(details_list[0]["installation_id"])
             separator = "&" if "?" in _safe_redirect_url() else "?"
-            location = _safe_redirect_url() + separator + urlencode({"connected": "true", "installation_id": installation_id})
+            location = _safe_redirect_url() + separator + urlencode(
+                {
+                    "connected": "true",
+                    "installation_id": primary_installation_id,
+                    "installation_count": len(details_list),
+                }
+            )
             raise web.HTTPFound(location=location)
         except web.HTTPException:
             raise

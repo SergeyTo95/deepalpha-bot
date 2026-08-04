@@ -257,12 +257,10 @@ def _exchange_user_code(code: str) -> str:
     return token
 
 
-def authorize_user_installation(code: str, installation_id: int) -> Dict[str, Any]:
-    target = int(installation_id)
-    if target <= 0:
-        raise DeveloperGithubError("invalid_installation", status=400)
+def authorize_user_installations(code: str, installation_id: int = 0) -> List[Dict[str, Any]]:
+    target = int(installation_id or 0)
     user_token = _exchange_user_code(code)
-    authorized = False
+    accessible: List[Dict[str, Any]] = []
     for page in range(1, 11):
         data = _request(
             "GET",
@@ -273,18 +271,39 @@ def authorize_user_installation(code: str, installation_id: int) -> Dict[str, An
         installations = data.get("installations") if isinstance(data, dict) else []
         if not isinstance(installations, list):
             installations = []
-        if any(int(item.get("id") or 0) == target for item in installations if isinstance(item, dict)):
-            authorized = True
-            break
+        accessible.extend(item for item in installations if isinstance(item, dict))
         if len(installations) < 100:
             break
-    if not authorized:
-        raise DeveloperGithubError("github_installation_not_authorized", status=403)
+
+    selected = [
+        item for item in accessible
+        if target <= 0 or int(item.get("id") or 0) == target
+    ]
+    if not selected:
+        code = "github_installation_not_authorized" if target > 0 else "github_installation_not_found"
+        raise DeveloperGithubError(code, status=403 if target > 0 else 404)
+
     user = _request("GET", "/user", token=user_token)
-    details = installation_details(target)
-    details["authorized_user_id"] = int(user.get("id") or 0) if isinstance(user, dict) else 0
-    details["authorized_user_login"] = str(user.get("login") or "") if isinstance(user, dict) else ""
-    return details
+    user_id = int(user.get("id") or 0) if isinstance(user, dict) else 0
+    user_login = str(user.get("login") or "") if isinstance(user, dict) else ""
+    details_list: List[Dict[str, Any]] = []
+    seen = set()
+    for item in selected:
+        current_id = int(item.get("id") or 0)
+        if current_id <= 0 or current_id in seen:
+            continue
+        seen.add(current_id)
+        details = installation_details(current_id)
+        details["authorized_user_id"] = user_id
+        details["authorized_user_login"] = user_login
+        details_list.append(details)
+    if not details_list:
+        raise DeveloperGithubError("github_installation_not_found", status=404)
+    return details_list
+
+
+def authorize_user_installation(code: str, installation_id: int) -> Dict[str, Any]:
+    return authorize_user_installations(code, installation_id)[0]
 
 
 def list_installation_repositories(installation_id: int) -> List[Dict[str, Any]]:

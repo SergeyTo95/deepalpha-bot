@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -205,3 +206,41 @@ def test_github_app_configuration_requires_oauth_credentials(monkeypatch):
     monkeypatch.setenv("VELIA_GITHUB_APP_CLIENT_ID", "client")
     monkeypatch.setenv("VELIA_GITHUB_APP_CLIENT_SECRET", "secret")
     assert github.github_app_configured() is True
+
+
+def test_user_oauth_callback_discovers_installations_without_redirect_id(monkeypatch):
+    monkeypatch.setattr(github, "_exchange_user_code", lambda code: "user-token")
+
+    def fake_request(method, path, **kwargs):
+        if path == "/user/installations":
+            return {
+                "installations": [{"id": 123}, {"id": 456}, {"id": 123}],
+                "total_count": 3,
+            }
+        if path == "/user":
+            return {"id": 77, "login": "octocat"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(github, "_request", fake_request)
+    monkeypatch.setattr(
+        github,
+        "installation_details",
+        lambda installation_id: {
+            "installation_id": installation_id,
+            "account_login": f"account-{installation_id}",
+            "contents_permission": "read",
+        },
+    )
+
+    result = github.authorize_user_installations("oauth-code", 0)
+
+    assert [item["installation_id"] for item in result] == [123, 456]
+    assert all(item["authorized_user_id"] == 77 for item in result)
+    assert all(item["authorized_user_login"] == "octocat" for item in result)
+
+
+def test_callback_contract_does_not_require_installation_id():
+    source = Path("services/velia_developer_routes.py").read_text(encoding="utf-8")
+    callback = source.split("async def github_callback", 1)[1].split("async def installations", 1)[0]
+    assert "authorize_user_installations" in callback
+    assert "if installation_id <= 0" not in callback
