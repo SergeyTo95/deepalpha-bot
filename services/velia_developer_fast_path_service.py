@@ -390,7 +390,7 @@ Return a complete corrected answer in the user's language. Use only the evidence
 Do not add unsupported claims.
 
 PREVIOUS ANSWER:
-{previous[:8000]}
+{previous[:5000]}
 
 EVIDENCE:
 {evidence}
@@ -515,6 +515,15 @@ def run_developer_agent(
     max_model_calls = _env_int("VELIA_DEVELOPER_MAX_MODEL_CALLS", 2, 1, 2)
     max_cost = _env_float("VELIA_DEVELOPER_MAX_COST_USD", 0.08, 0.02, 1.0)
     completion_tokens = _env_int("VELIA_DEVELOPER_FAST_MAX_OUTPUT_TOKENS", 2048, 512, 2048)
+    repair_completion_tokens = _env_int(
+        "VELIA_DEVELOPER_FAST_REPAIR_OUTPUT_TOKENS", 1024, 512, 1536
+    )
+    repair_evidence_limit = _env_int(
+        "VELIA_DEVELOPER_FAST_REPAIR_EVIDENCE_CHARS", 10000, 4000, 16000
+    )
+    repair_reserve = _env_float(
+        "VELIA_DEVELOPER_FAST_REPAIR_RESERVE_USD", 0.025, 0.0, 0.06
+    ) if max_model_calls > 1 else 0.0
     reasoning = str(os.getenv("VELIA_DEVELOPER_FAST_REASONING_EFFORT", "low") or "low").strip().lower()
     if reasoning not in {"low", "high", "max"}:
         reasoning = "low"
@@ -676,13 +685,16 @@ def run_developer_agent(
     if not visible_items:
         raise DeveloperAgentError("developer_evidence_missing")
     prompt = _final_prompt(project, normalized_question, evidence, deep)
-    while _estimate_cost(prompt, completion_tokens) > max_cost and evidence_limit > 4000:
+    first_budget = max_cost - min(repair_reserve, max(0.0, max_cost - 0.02))
+    if first_budget < 0.02:
+        first_budget = max_cost
+    while _estimate_cost(prompt, completion_tokens) > first_budget and evidence_limit > 4000:
         evidence_limit = max(4000, int(evidence_limit * 0.8))
         evidence, visible_items, read_ranges = _pack_evidence(evidence_items, evidence_limit)
         if not visible_items:
             raise DeveloperAgentError("developer_evidence_missing")
         prompt = _final_prompt(project, normalized_question, evidence, deep)
-    if _estimate_cost(prompt, completion_tokens) > max_cost:
+    if _estimate_cost(prompt, completion_tokens) > first_budget:
         raise DeveloperAgentError("developer_cost_limit_reached")
 
     _safe_progress(
@@ -697,28 +709,55 @@ def run_developer_agent(
     invalid: List[str] = []
     citations: List[Dict[str, Any]] = []
     for call_index in range(max_model_calls):
-        current_prompt = prompt if call_index == 0 else _repair_prompt(
-            project,
-            normalized_question,
-            evidence,
-            answer,
-            invalid,
-        )
+        if call_index == 0:
+            current_prompt = prompt
+            current_ranges = read_ranges
+            current_completion_tokens = completion_tokens
+            current_feature = "velia_developer_fast"
+        else:
+            remaining_budget = max_cost - total_cost
+            current_limit = min(repair_evidence_limit, evidence_limit)
+            repair_evidence = ""
+            repair_ranges: Dict[str, List[Tuple[int, int]]] = {}
+            repair_visible: List[Dict[str, Any]] = []
+            while True:
+                repair_evidence, repair_visible, repair_ranges = _pack_evidence(
+                    evidence_items, current_limit
+                )
+                if not repair_visible:
+                    raise DeveloperAgentError("developer_evidence_missing")
+                current_prompt = _repair_prompt(
+                    project,
+                    normalized_question,
+                    repair_evidence,
+                    answer,
+                    invalid,
+                )
+                if (
+                    _estimate_cost(current_prompt, repair_completion_tokens) <= remaining_budget
+                    or current_limit <= 4000
+                ):
+                    break
+                current_limit = max(4000, int(current_limit * 0.75))
+            current_ranges = repair_ranges
+            current_completion_tokens = repair_completion_tokens
+            current_feature = "velia_developer_fast_repair"
+
         remaining_budget = max_cost - total_cost
-        if _estimate_cost(current_prompt, completion_tokens) > remaining_budget:
+        if _estimate_cost(current_prompt, current_completion_tokens) > remaining_budget:
             if answer and citations and not invalid:
                 break
             raise DeveloperAgentError("developer_cost_limit_reached")
         result = kimi_gateway.call_kimi(
             prompt=current_prompt,
-            feature="velia_developer_fast",
+            feature=current_feature,
             origin="velia_developer_fast_path",
             is_background=False,
             request_id=f"{run_id}:fast:{call_index + 1}",
             cycle_id=str(run_id),
             user_id=int(user_id),
             model=str(os.getenv("VELIA_DEVELOPER_MODEL", "") or "").strip() or None,
-            max_tokens=completion_tokens,
+            max_tokens=current_completion_tokens,
             max_attempts=1,
             timeout=_env_int("VELIA_DEVELOPER_FAST_MODEL_TIMEOUT_SECONDS", 90, 15, 120),
             reasoning_effort=reasoning,
@@ -732,9 +771,10 @@ def run_developer_agent(
         if not answer:
             invalid = [str(result.get("reason") or "developer_generation_failed")]
             continue
-        citations, invalid = _validate_citations(answer, read_ranges)
+        citations, invalid = _validate_citations(answer, current_ranges)
         if citations and not invalid:
             break
+
     if not answer:
         raise DeveloperAgentError("developer_generation_failed")
     if invalid:

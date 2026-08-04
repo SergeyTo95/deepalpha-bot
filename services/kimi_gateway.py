@@ -79,6 +79,8 @@ def _api_key() -> str:
 
 
 def _feature_default_completion_tokens(feature: str) -> int:
+    if feature == "velia_developer_fast_repair":
+        return 1024
     if feature in {"velia_file_vision", "velia_developer_fast"}:
         return 2048
     return 8192 if feature in _HIGH_REASONING_FEATURES else 4096
@@ -89,6 +91,10 @@ def _initial_completion_limit(feature: str, requested_tokens: Optional[int]) -> 
     if feature == "velia_developer_fast":
         fast_cap = max(2048, env_int("VELIA_DEVELOPER_FAST_MAX_COMPLETION_TOKENS", 2048) or 2048)
         return min(fast_cap, max(2048, requested))
+    if feature == "velia_developer_fast_repair":
+        configured = env_int("VELIA_DEVELOPER_FAST_REPAIR_MAX_COMPLETION_TOKENS", 1024) or 1024
+        repair_cap = min(1536, max(512, configured))
+        return min(repair_cap, max(512, requested))
     explicit = env_int("KIMI_MAX_COMPLETION_TOKENS", 0)
     legacy = env_int("KIMI_MAX_OUTPUT_TOKENS", 0)
 
