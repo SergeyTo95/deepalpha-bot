@@ -1,0 +1,58 @@
+name: Apply Kimi invalid UTF-8 frame fix
+
+on:
+  push:
+    branches:
+      - fix/kimi-stream-invalid-utf8-frame
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/kimi-stream-invalid-utf8-frame
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply follow-up patch
+        run: python tools/apply_kimi_invalid_utf8_frame_fix.py
+
+      - name: Compile changed gateway
+        run: python -m py_compile services/kimi_streaming_gateway.py
+
+      - name: Run focused streaming regressions
+        run: |
+          pytest -q \
+            tests/test_kimi_streaming_gateway.py \
+            tests/test_velia_mobile_streaming_service.py
+
+      - name: Commit verified product changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm tools/apply_kimi_invalid_utf8_frame_fix.py
+          git rm .github/workflows/apply-kimi-invalid-utf8-frame-fix.yml
+          git add services/kimi_streaming_gateway.py tests/test_kimi_streaming_gateway.py
+          git commit -m 'Fail Kimi stream attempts on invalid UTF-8 frames'
+          git push origin HEAD:fix/kimi-stream-invalid-utf8-frame
