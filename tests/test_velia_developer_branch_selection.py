@@ -19,6 +19,7 @@ def test_list_branches_paginates_until_selected_branch_can_be_found(monkeypatch)
             return [
                 {"name": "main", "commit": {"sha": "main-sha"}, "protected": True},
                 {"name": "feature/turbo-short-term-btc", "commit": {"sha": "prod-sha"}},
+                {"name": "main", "commit": {"sha": "duplicate-main"}},
             ]
         raise AssertionError(page)
 
@@ -26,7 +27,8 @@ def test_list_branches_paginates_until_selected_branch_can_be_found(monkeypatch)
     branches = github.list_branches(1, 2, "owner/repo")
 
     assert calls == [1, 2]
-    assert any(item["name"] == "main" for item in branches)
+    assert [item["name"] for item in branches].count("main") == 1
+    assert any(item["name"] == "main" and item["protected"] is True for item in branches)
     assert any(item["name"] == "feature/turbo-short-term-btc" for item in branches)
 
 
