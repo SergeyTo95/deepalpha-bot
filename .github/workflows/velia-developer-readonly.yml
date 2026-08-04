@@ -61,7 +61,12 @@ jobs:
       - name: Verify Developer stream resilience contracts
         run: |
           grep -q 'VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS' services/velia_developer_agent_service.py
-          grep -q 'max_attempts=1' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MODEL_ATTEMPTS' services/velia_developer_agent_service.py
+          grep -q 'max_attempts=model_attempts' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_ACTION_REASONING_EFFORT", "low"' services/velia_developer_agent_service.py
+          grep -q 'reason in {"empty_200", "json_parse_error"}' services/velia_developer_agent_service.py
+          grep -q 'PROVIDER_REPAIR:' services/velia_developer_agent_service.py
+          ! grep -q 'max_attempts=1' services/velia_developer_agent_service.py
           grep -q 'developer_deadline_exceeded' services/velia_developer_agent_service.py
           grep -q '_worker_exception_code' services/velia_mobile_streaming_service.py
           grep -q '_sse_event("error", error=error_code)' services/velia_mobile_streaming_service.py
