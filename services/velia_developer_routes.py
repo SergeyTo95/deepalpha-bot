@@ -510,7 +510,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
     app.router.add_get(
-        f"{_PREFIX}/repositories/{repository_id}/branches",
+        f"{_PREFIX}/repositories/{{repository_id}}/branches",
         repository_branches,
     )
     app.router.add_get(f"{_PREFIX}/projects", list_projects)
