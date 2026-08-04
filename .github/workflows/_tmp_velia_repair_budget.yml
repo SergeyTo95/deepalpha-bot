@@ -36,9 +36,12 @@ jobs:
         run: python .github/scripts/_tmp_apply_velia_repair_budget.py
       - name: Compile affected modules
         run: |
-          python -m py_compile \
+          if ! python -m py_compile \
             services/kimi_gateway.py \
-            services/velia_developer_fast_path_service.py
+            services/velia_developer_fast_path_service.py; then
+            nl -ba services/velia_developer_fast_path_service.py | sed -n '730,810p'
+            exit 1
+          fi
       - name: Run complete Developer regressions
         env:
           PYTHONPATH: .
