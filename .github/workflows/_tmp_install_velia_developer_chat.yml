@@ -1,0 +1,111 @@
+name: Install VELIA Developer in every chat
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - '.github/workflows/_tmp_install_velia_developer_chat.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-clean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Install Developer chat runtime in bootstrap
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('run_web_process.py')
+          source = path.read_text(encoding='utf-8')
+
+          import_anchor = '    from services.velia_conversation_quality_patch import install as install_velia_conversation_quality\n'
+          import_block = (
+              import_anchor
+              + '    from services.velia_developer_chat_runtime_patch import (\n'
+              + '        ensure_velia_developer_chat_tables,\n'
+              + '        install as install_velia_developer_chat,\n'
+              + '    )\n'
+          )
+          if source.count(import_anchor) != 1:
+              raise SystemExit('developer chat import anchor missing or duplicated')
+          source = source.replace(import_anchor, import_block, 1)
+
+          install_anchor = '    install_velia_chat_streaming(velia_chat_service_module)\n'
+          install_block = (
+              install_anchor
+              + '    # Developer repository routing is the outermost generation layer.\n'
+              + '    # It intercepts repository questions before ordinary streaming can\n'
+              + '    # bypass the read-only GitHub tools.\n'
+              + '    install_velia_developer_chat(velia_chat_service_module)\n'
+          )
+          if source.count(install_anchor) != 1:
+              raise SystemExit('streaming install anchor missing or duplicated')
+          source = source.replace(install_anchor, install_block, 1)
+
+          schema_anchor = '        ensure_velia_chat_tables()\n'
+          schema_block = schema_anchor + '        ensure_velia_developer_chat_tables()\n'
+          if source.count(schema_anchor) != 1:
+              raise SystemExit('schema anchor missing or duplicated')
+          source = source.replace(schema_anchor, schema_block, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+      - name: Compile Developer and web bootstrap modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_github_service.py \
+            services/velia_developer_project_service.py \
+            services/velia_developer_agent_service.py \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_developer_routes.py \
+            run_web_process.py
+      - name: Run complete Developer focused suite
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_project_service.py \
+            tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_developer_branch_selection.py \
+            tests/test_velia_developer_bootstrap.py
+      - name: Verify bootstrap order and read-only boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('run_web_process.py').read_text(encoding='utf-8')
+          streaming = source.index('install_velia_chat_streaming(velia_chat_service_module)')
+          developer = source.index('install_velia_developer_chat(velia_chat_service_module)')
+          route = source.index('setup_velia_mobile_streaming_route(')
+          assert streaming < developer < route
+          assert source.count('ensure_velia_developer_chat_tables()') == 1
+          PY
+          ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_*.py
+      - name: Remove one-shot workflow and commit product bootstrap
+        run: |
+          rm -f .github/workflows/_tmp_install_velia_developer_chat.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add run_web_process.py
+          git add -u .github/workflows/_tmp_install_velia_developer_chat.yml
+          git commit -m "Install VELIA Developer in ordinary chats"
+          git push origin HEAD:feature/velia-developer-in-every-chat
