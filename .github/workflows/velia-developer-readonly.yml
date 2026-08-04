@@ -6,6 +6,8 @@ on:
       - 'services/kimi_gateway.py'
       - 'services/velia_developer_*.py'
       - 'services/velia_mobile_streaming_service.py'
+      - 'skills/velia-design-taste/SKILL.md'
+      - 'third_party/taste-skill/**'
       - 'tests/test_velia_developer_*.py'
       - 'tests/test_velia_mobile_streaming_service.py'
       - '.github/workflows/velia-developer-readonly.yml'
@@ -40,6 +42,7 @@ jobs:
             services/velia_developer_project_service.py \
             services/velia_developer_agent_service.py \
             services/velia_developer_fast_path_service.py \
+            services/velia_developer_taste_skill_service.py \
             services/velia_developer_coding_service.py \
             services/velia_developer_chat_runtime_patch.py \
             services/velia_developer_routes.py \
@@ -56,6 +59,8 @@ jobs:
             tests/test_velia_developer_agent_service.py \
             tests/test_velia_developer_fast_path_service.py \
             tests/test_velia_developer_fast_path_bootstrap.py \
+            tests/test_velia_developer_taste_skill_service.py \
+            tests/test_velia_developer_taste_integration.py \
             tests/test_velia_developer_coding_service.py \
             tests/test_velia_developer_coding_chat_gate.py \
             tests/test_velia_developer_coding_intent_classifier.py \
@@ -91,6 +96,32 @@ jobs:
           grep -q 'if not coding_intent:' services/velia_developer_chat_runtime_patch.py
           grep -q 'test_read_only_repository_questions_are_not_coding_requests' tests/test_velia_developer_coding_intent_classifier.py
           grep -q 'test_explicit_mutation_requests_are_coding_requests' tests/test_velia_developer_coding_intent_classifier.py
+      - name: Verify Design Taste adaptation contracts
+        run: |
+          grep -q 'UPSTREAM_COMMIT = "e988add20dab0fa97d7a76781c48961c8184288e"' services/velia_developer_taste_skill_service.py
+          grep -q 'VELIA_DEVELOPER_TASTE_SKILL_ENABLED' services/velia_developer_taste_skill_service.py
+          grep -q 'VELIA_DEVELOPER_TASTE_PLAN_EVIDENCE_CHARS' services/velia_developer_coding_service.py
+          grep -q 'VELIA_DEVELOPER_TASTE_STEP_CONTEXT_CHARS' services/velia_developer_coding_service.py
+          grep -q 'taste_skill.classify(normalized_goal, paths)' services/velia_developer_coding_service.py
+          grep -q 'evidence = _design_plan_evidence(evidence, design_profile)' services/velia_developer_coding_service.py
+          grep -q 'context = _design_step_context(context, design)' services/velia_developer_coding_service.py
+          grep -q 'taste_skill.planning_guidance' services/velia_developer_coding_service.py
+          grep -q 'taste_skill.execution_guidance' services/velia_developer_coding_service.py
+          grep -q 'taste_skill.preflight_checks' services/velia_developer_coding_service.py
+          grep -q 'test_backend_only_request_bypasses_taste_layer' tests/test_velia_developer_taste_skill_service.py
+          grep -q 'test_android_screen_uses_android_native_mode' tests/test_velia_developer_taste_skill_service.py
+          grep -q 'test_ui_plan_prompt_includes_compact_taste_guidance' tests/test_velia_developer_taste_integration.py
+          grep -q 'test_taste_context_caps_keep_default_prompts_under_cost_limits' tests/test_velia_developer_taste_integration.py
+          grep -q 'test_backend_context_is_not_truncated' tests/test_velia_developer_taste_integration.py
+          grep -q 'Leonxlnx/taste-skill' third_party/taste-skill/UPSTREAM.md
+          grep -q 'MIT License' third_party/taste-skill/LICENSE
+          grep -q 'This skill adds prompt guidance only' skills/velia-design-taste/SKILL.md
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('services/velia_developer_coding_service.py').read_text(encoding='utf-8')
+          assert source.count('_model_call(') == 3
+          PY
       - name: Verify Developer stream resilience contracts
         run: |
           grep -q 'VELIA_DEVELOPER_WALL_TIMEOUT_SECONDS' services/velia_developer_agent_service.py
