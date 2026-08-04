@@ -34,6 +34,7 @@ jobs:
             services/velia_developer_github_service.py \
             services/velia_developer_project_service.py \
             services/velia_developer_agent_service.py \
+            services/velia_developer_chat_runtime_patch.py \
             services/velia_developer_routes.py \
             run_web_process.py
       - name: Run focused tests
@@ -44,6 +45,8 @@ jobs:
             tests/test_velia_developer_github_service.py \
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_developer_branch_selection.py \
             tests/test_velia_developer_bootstrap.py
       - name: Verify read-only boundary and secret handling
         run: |
@@ -51,6 +54,17 @@ jobs:
           ! grep -R -nE 'VELIA_GITHUB_APP_PRIVATE_KEY\s*=' services tests
           ! grep -R -nE 'INSERT.*access_token|UPDATE.*access_token|authorized_user_token' services/velia_developer_*.py
           ! grep -R -nE 'print\(.*client_secret|logger\..*client_secret|logging\..*client_secret' services/velia_developer_*.py
+      - name: Verify ordinary chat integration order
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('run_web_process.py').read_text(encoding='utf-8')
+          streaming = source.index('install_velia_chat_streaming(velia_chat_service_module)')
+          developer_chat = source.index('install_velia_developer_chat(velia_chat_service_module)')
+          assert developer_chat > streaming
+          assert 'ensure_velia_developer_chat_tables()' in source
+          PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
