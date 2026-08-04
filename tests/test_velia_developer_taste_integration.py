@@ -1,4 +1,5 @@
 from services import velia_developer_coding_service as coding
+from services import velia_developer_fast_path_service as fast_path
 from services import velia_developer_taste_skill_service as taste
 
 
@@ -55,6 +56,8 @@ def test_normalized_plan_keeps_server_bounded_design_profile(monkeypatch):
             "title": "Settings polish",
             "summary": "Improve settings hierarchy",
             "design": {
+                "mode": "backend-admin",
+                "platform": "server",
                 "read": "Premium Android settings for existing users",
                 "system": "Material 3",
                 "variance": 100,
@@ -76,6 +79,7 @@ def test_normalized_plan_keeps_server_bounded_design_profile(monkeypatch):
     assert plan["design"]["variance"] == 10
     assert plan["design"]["motion"] == 1
     assert plan["design"]["platform"] == "android"
+    assert plan["design"]["mode"] == "mobile-android"
 
 
 def test_step_prompt_adds_preflight_without_extra_model_stage(monkeypatch):
@@ -105,6 +109,56 @@ def test_step_prompt_adds_preflight_without_extra_model_stage(monkeypatch):
     assert prompt.count("Return ONLY one compact JSON object") == 1
 
 
+def test_taste_context_caps_keep_default_prompts_under_cost_limits(monkeypatch):
+    for name in (
+        "VELIA_DEVELOPER_TASTE_PLAN_EVIDENCE_CHARS",
+        "VELIA_DEVELOPER_TASTE_STEP_CONTEXT_CHARS",
+        "KIMI_INPUT_USD_PER_MTOK",
+        "KIMI_OUTPUT_USD_PER_MTOK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    fallback = taste.classify(
+        "Сделай премиальный редизайн Android экрана чата",
+        ["app/src/main/java/com/velia/chat/ChatScreen.kt"],
+    )
+    evidence = coding._design_plan_evidence(("1: @Composable chat content\n" * 1500), fallback)
+    plan_prompt = coding._plan_prompt(
+        _project(),
+        "Сделай премиальный редизайн Android экрана чата",
+        ["app/src/main/java/com/velia/chat/ChatScreen.kt"],
+        evidence,
+        taste_profile=fallback,
+    )
+    assert len(evidence) <= 10000
+    assert fast_path._estimate_cost(plan_prompt, 1400) <= 0.04
+
+    design = taste.normalize_design({}, fallback)
+    job = {
+        "goal": "Сделай премиальный редизайн Android экрана чата",
+        "base_branch": "main",
+        "work_branch": "velia/chat-redesign",
+        "total_steps": 1,
+        "plan": {"design": design},
+    }
+    step = {
+        "index": 1,
+        "title": "Polish chat screen",
+        "objective": "Improve hierarchy and interaction states",
+        "files": ["app/src/main/java/com/velia/chat/ChatScreen.kt"],
+        "checks": ["Run Compose tests"],
+    }
+    context = coding._design_step_context(("1: @Composable chat content\n" * 2500), design)
+    step_prompt = coding._step_prompt(_project(), job, step, context)
+    assert len(context) <= 17000
+    assert fast_path._estimate_cost(step_prompt, 2400) <= 0.06
+
+
+def test_backend_context_is_not_truncated(monkeypatch):
+    monkeypatch.delenv("VELIA_DEVELOPER_TASTE_STEP_CONTEXT_CHARS", raising=False)
+    raw = "backend-context-" * 3000
+    assert coding._design_step_context(raw, {"active": False}) == raw
+
+
 def test_formatted_plan_surfaces_design_read(monkeypatch):
     monkeypatch.delenv("VELIA_DEVELOPER_TASTE_SKILL_ENABLED", raising=False)
     fallback = taste.classify(
@@ -131,6 +185,6 @@ def test_formatted_plan_surfaces_design_read(monkeypatch):
         },
         "Сделай редизайн",
     )
-    assert "### Design direction" in text
+    assert "### Направление дизайна" in text
     assert "вариативность" in text
     assert "Выполняй план" in text
