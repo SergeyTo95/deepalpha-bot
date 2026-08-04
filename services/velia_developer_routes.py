@@ -261,6 +261,46 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         except Exception as exc:
             return _error_response(routes_module, exc)
 
+    async def repository_branches(request: web.Request) -> web.Response:
+        blocked = _require_feature(routes_module, request)
+        if blocked:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        installation_id = _int(request.query.get("installation_id"))
+        repository_id = _int(request.match_info.get("repository_id"))
+        try:
+            await asyncio.to_thread(project_service.get_installation, int(auth["user_id"]), installation_id)
+            repositories_list = await asyncio.to_thread(github_service.list_installation_repositories, installation_id)
+            repository = next(
+                (item for item in repositories_list if int(item.get("id") or 0) == repository_id),
+                None,
+            )
+            if not repository:
+                raise project_service.DeveloperProjectError("repository_not_accessible", status=404)
+            metadata = await asyncio.to_thread(
+                github_service.repository_metadata,
+                installation_id,
+                repository_id,
+                str(repository["full_name"]),
+            )
+            items = await asyncio.to_thread(
+                github_service.list_branches,
+                installation_id,
+                repository_id,
+                str(metadata["full_name"]),
+            )
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "default_branch": str(metadata["default_branch"]),
+                    "branches": items,
+                }
+            )
+        except Exception as exc:
+            return _error_response(routes_module, exc)
+
     async def list_projects(request: web.Request) -> web.Response:
         blocked = _require_feature(routes_module, request)
         if blocked:
@@ -469,6 +509,10 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
     app.router.add_get(f"{_PREFIX}/github/callback", github_callback)
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
+    app.router.add_get(
+        f"{_PREFIX}/repositories/{repository_id}/branches",
+        repository_branches,
+    )
     app.router.add_get(f"{_PREFIX}/projects", list_projects)
     app.router.add_post(f"{_PREFIX}/projects", create_project)
     app.router.add_delete(f"{_PREFIX}/projects/{{project_id}}", remove_project)
