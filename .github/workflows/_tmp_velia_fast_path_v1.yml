@@ -1,9 +1,6 @@
 name: Temporary VELIA Developer Fast Path v1
 
 on:
-  push:
-    branches:
-      - feature/velia-developer-fast-path-v1
   pull_request:
     branches:
       - feature/turbo-short-term-btc
@@ -14,7 +11,7 @@ on:
       - '.github/workflows/_tmp_velia_fast_path_v1.yml'
 
 concurrency:
-  group: velia-fast-path-v1-${{ github.ref }}
+  group: velia-fast-path-v1
   cancel-in-progress: true
 
 permissions:
@@ -78,7 +75,6 @@ jobs:
           rm .github/scripts/_tmp_apply_velia_fast_path_v1.py
           rm .github/workflows/_tmp_velia_fast_path_v1.yml
       - name: Commit clean product patch
-        if: github.event_name == 'push'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
