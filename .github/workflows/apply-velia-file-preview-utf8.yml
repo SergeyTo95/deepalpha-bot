@@ -1,0 +1,73 @@
+name: Apply VELIA file preview and UTF-8 fix
+
+on:
+  push:
+    branches:
+      - fix/velia-file-preview-utf8
+    paths:
+      - "tools/apply_velia_file_preview_utf8.py"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/velia-file-preview-utf8
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply implementation
+        run: python tools/apply_velia_file_preview_utf8.py
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            services/kimi_gateway.py \
+            services/velia_attachment_service.py \
+            velia_mobile_attachment_routes.py \
+            tests/test_velia_attachment_utf8_preview.py
+
+      - name: Run focused tests
+        run: |
+          pytest -q \
+            tests/test_velia_attachment_utf8_preview.py \
+            tests/test_velia_attachment_kimi_vision.py \
+            tests/test_velia_attachment_service.py \
+            tests/test_velia_attachment_public_contract.py
+
+      - name: Remove one-shot machinery
+        run: |
+          rm tools/apply_velia_file_preview_utf8.py
+          rm .github/workflows/apply-velia-file-preview-utf8.yml
+
+      - name: Commit verified product change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/kimi_gateway.py \
+                  services/velia_attachment_service.py \
+                  velia_mobile_attachment_routes.py \
+                  tests/test_velia_attachment_utf8_preview.py \
+                  tools/apply_velia_file_preview_utf8.py \
+                  .github/workflows/apply-velia-file-preview-utf8.yml
+          git diff --cached --check
+          git commit -m "fix VELIA attachment UTF-8 and image preview transport"
+          git push origin HEAD:fix/velia-file-preview-utf8
