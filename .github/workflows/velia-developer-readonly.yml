@@ -74,7 +74,7 @@ jobs:
           ! grep -q 'max_attempts=1' services/velia_developer_agent_service.py
           grep -q 'VELIA_DEVELOPER_MAX_MODEL_CALLS' services/velia_developer_fast_path_service.py
           grep -q 'VELIA_DEVELOPER_MAX_COST_USD' services/velia_developer_fast_path_service.py
-          grep -q 'feature="velia_developer_fast"' services/velia_developer_fast_path_service.py
+          grep -q 'current_feature = "velia_developer_fast"' services/velia_developer_fast_path_service.py
           grep -q 'max_attempts=1' services/velia_developer_fast_path_service.py
           grep -q 'VELIA_DEVELOPER_RESULT_CACHE_TTL_SECONDS' services/velia_developer_fast_path_service.py
           grep -q 'feature == "velia_developer_fast_repair"' services/kimi_gateway.py
