@@ -61,6 +61,16 @@ def _read_file(**kwargs):
     }
 
 
+def _read_relevant_windows(**kwargs):
+    result = []
+    for candidate in kwargs.get("candidates", [])[: int(kwargs.get("max_files") or 4)]:
+        path = str(candidate.get("path") or "")
+        line = max(1, int(candidate.get("line") or 1))
+        start = max(1, line - 60) if line > 1 else 1
+        result.append(_read_file(path=path, start_line=start, end_line=start + 259))
+    return result
+
+
 @pytest.fixture(autouse=True)
 def clear_cache(monkeypatch):
     fast._clear_cache_for_tests()
@@ -84,6 +94,7 @@ def clear_cache(monkeypatch):
         ],
     )
     monkeypatch.setattr(fast.github_service, "read_file", _read_file)
+    monkeypatch.setattr(fast.github_service, "read_relevant_windows", _read_relevant_windows)
 
 
 def test_fast_path_uses_one_model_call_and_verified_citations(monkeypatch):
@@ -318,3 +329,56 @@ def test_packed_evidence_only_allows_visible_numbered_lines():
     assert ranges == {"a.py": [(1, visible_end)]}
     _, invalid = fast._validate_citations(f"claim [a.py:L1-L{visible_end + 1}]", ranges)
     assert invalid
+
+
+
+def test_symbol_windows_prefer_definition_over_import_and_file_start():
+    lines = ["value = None"] * 520
+    lines[0] = "from services.runtime import install_velia_developer_chat"
+    lines[466] = "def install_velia_developer_chat(module):"
+    lines[467] = "    module.generate = wrapped"
+    windows = fast.github_service._relevant_line_windows(
+        "services/runtime.py",
+        "\n".join(lines),
+        ["install_velia_developer_chat"],
+        160,
+        1,
+    )
+    assert windows
+    start, end = windows[0]
+    assert start > 1
+    assert start <= 467 <= end
+
+
+def test_symbol_windows_prefer_relevant_test_function_over_import():
+    lines = ["value = None"] * 260
+    lines[0] = "from services.runtime import install_velia_developer_chat"
+    lines[119] = "def test_install_wraps_ordinary_chat():"
+    lines[120] = "    install_velia_developer_chat(module)"
+    windows = fast.github_service._relevant_line_windows(
+        "tests/test_runtime.py",
+        "\n".join(lines),
+        ["install_velia_developer_chat"],
+        120,
+        1,
+    )
+    assert windows
+    start, end = windows[0]
+    assert start > 1
+    assert start <= 120 <= end
+
+
+def test_packed_evidence_fairly_keeps_multiple_files():
+    first = "\n".join(f"{line}: first {'x' * 60}" for line in range(1, 100))
+    second = "\n".join(f"{line}: second {'y' * 60}" for line in range(1, 100))
+    evidence, items, ranges = fast._pack_evidence(
+        [
+            {"path": "first.py", "start_line": 1, "content": first},
+            {"path": "second.py", "start_line": 1, "content": second},
+        ],
+        5000,
+    )
+    assert "FILE first.py" in evidence
+    assert "FILE second.py" in evidence
+    assert {item["path"] for item in items} == {"first.py", "second.py"}
+    assert set(ranges) == {"first.py", "second.py"}

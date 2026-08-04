@@ -36,7 +36,9 @@ _STOPWORDS = {
 
 _QUERY_MAPPINGS: Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...] = (
     (("velia developer", "обычный чат", "ordinary chat"),
-     ("install_velia_developer_chat", "velia_developer_chat_runtime_patch", "run_web_process")),
+     ("install_velia_developer_chat", "generate_with_developer_context",
+      "_looks_repository_request", "_developer_result",
+      "velia_developer_chat_runtime_patch", "run_web_process")),
     (("подключ", "connect", "install"), ("install_", "setup_", "run_web_process")),
     (("маршрут", "route", "endpoint", "эндпоинт"), ("route", "setup_", "add_")),
     (("стрим", "stream", "sse"), ("stream", "on_delta", "generate_velia_chat_result")),
@@ -305,6 +307,9 @@ def _pack_evidence(
     visible_items: List[Dict[str, Any]] = []
     ranges: Dict[str, List[Tuple[int, int]]] = {}
     used = 0
+    valid_count = max(1, sum(1 for item in items if str(item.get("path") or "") and str(item.get("content") or "").strip()))
+    configured_cap = _env_int("VELIA_DEVELOPER_FAST_EVIDENCE_CHARS_PER_WINDOW", 7000, 800, 20000)
+    fair_cap = max(800, min(configured_cap, limit // valid_count))
     for source in items:
         path = str(source.get("path") or "")
         start_line = int(source.get("start_line") or 1)
@@ -312,7 +317,7 @@ def _pack_evidence(
         if not path or not raw_lines:
             continue
         header_reserve = len(f"FILE {path} [L{start_line}-L999999]\n") + len("\nEND FILE\n")
-        remaining = limit - used - header_reserve
+        remaining = min(limit - used - header_reserve, fair_cap)
         if remaining <= 8:
             break
         selected_lines: List[str] = []
@@ -503,6 +508,9 @@ def run_developer_agent(
     max_reads = _env_int("VELIA_DEVELOPER_FAST_MAX_READS", 6 if deep else 4, 1, 8)
     max_searches = _env_int("VELIA_DEVELOPER_FAST_MAX_SEARCHES", 2 if deep else 1, 0, 2)
     read_lines = _env_int("VELIA_DEVELOPER_FAST_READ_LINES", 260, 80, 400)
+    max_windows_per_file = _env_int(
+        "VELIA_DEVELOPER_FAST_MAX_WINDOWS_PER_FILE", 2 if deep else 1, 1, 3
+    )
     evidence_limit = _env_int("VELIA_DEVELOPER_EVIDENCE_CHARS", 24000, 4000, 60000)
     max_model_calls = _env_int("VELIA_DEVELOPER_MAX_MODEL_CALLS", 2, 1, 2)
     max_cost = _env_float("VELIA_DEVELOPER_MAX_COST_USD", 0.08, 0.02, 1.0)
@@ -623,63 +631,42 @@ def run_developer_agent(
                 )
 
     candidates = _merge_candidates(tree_items, search_items, max_reads * 2)
-    evidence_items: List[Dict[str, Any]] = []
-    for candidate in candidates:
-        if len(evidence_items) >= max_reads:
-            break
-        path = str(candidate.get("path") or "")
-        line = max(1, int(candidate.get("line") or 1))
-        start_line = max(1, line - 60) if line > 1 else 1
-        end_line = start_line + read_lines - 1
-        started = time.monotonic()
-        try:
-            file_data = github_service.read_file(
-                **common,
-                path=path,
-                start_line=start_line,
-                end_line=end_line,
-            )
-            ok = True
-        except github_service.DeveloperGithubError as exc:
-            ok = False
-            _record_tool(
-                run_id=run_id,
-                user_id=user_id,
-                project=project,
-                name="read_file",
-                arguments={"path": path, "start_line": start_line, "end_line": end_line},
-                summary={"error": exc.code},
-                ok=False,
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
-            tool_calls += 1
-            continue
-        tool_calls += 1
-        content = str(file_data.get("content") or "")
-        if not content.strip():
-            continue
-        item = {
-            "path": str(file_data.get("path") or path),
-            "sha": str(file_data.get("sha") or ""),
-            "start_line": int(file_data.get("start_line") or start_line),
-            "end_line": int(file_data.get("end_line") or end_line),
-            "content": content,
-        }
-        evidence_items.append(item)
+    selected_candidates = candidates[:max_reads]
+    started = time.monotonic()
+    try:
+        evidence_items = github_service.read_relevant_windows(
+            **common,
+            candidates=selected_candidates,
+            terms=queries,
+            window_lines=read_lines,
+            max_files=max_reads,
+            max_windows_per_file=max_windows_per_file,
+        )
+    except github_service.DeveloperGithubError as exc:
+        raise DeveloperAgentError(exc.code, status=exc.status) from exc
+    unique_paths = sorted({str(item.get("path") or "") for item in evidence_items if str(item.get("path") or "")})
+    tool_calls += len(unique_paths)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    for item in evidence_items:
         _record_tool(
             run_id=run_id,
             user_id=user_id,
             project=project,
             name="read_file",
-            arguments={"path": path, "start_line": start_line, "end_line": end_line},
-            summary={
-                "path": item["path"],
-                "start_line": item["start_line"],
-                "end_line": item["end_line"],
-                "size": int(file_data.get("size") or 0),
+            arguments={
+                "path": str(item.get("path") or ""),
+                "start_line": int(item.get("start_line") or 1),
+                "end_line": int(item.get("end_line") or 1),
+                "symbol_window": True,
             },
-            ok=ok,
-            duration_ms=int((time.monotonic() - started) * 1000),
+            summary={
+                "path": str(item.get("path") or ""),
+                "start_line": int(item.get("start_line") or 1),
+                "end_line": int(item.get("end_line") or 1),
+                "size": int(item.get("size") or 0),
+            },
+            ok=True,
+            duration_ms=elapsed_ms,
         )
 
     if not evidence_items:
@@ -703,7 +690,7 @@ def run_developer_agent(
         "finalizing",
         tool_calls=tool_calls,
         model_calls=model_calls,
-        evidence_files=len(evidence_items),
+        evidence_files=len({str(item.get("path") or "") for item in evidence_items}),
     )
 
     answer = ""
