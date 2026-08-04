@@ -7,6 +7,12 @@ on:
     paths:
       - 'tools/register_velia_developer_routes.py'
       - '.github/workflows/apply-velia-developer-registration.yml'
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'tools/register_velia_developer_routes.py'
+      - '.github/workflows/apply-velia-developer-registration.yml'
 
 permissions:
   contents: write
