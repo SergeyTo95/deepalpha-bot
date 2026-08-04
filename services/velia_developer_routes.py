@@ -34,6 +34,23 @@ def _safe_redirect_url() -> str:
     return "velia://developer/github-connected"
 
 
+def _github_oauth_url(state: str) -> str:
+    return "https://github.com/login/oauth/authorize?" + urlencode(
+        {
+            "client_id": github_service.github_client_id(),
+            "state": str(state),
+            "prompt": "select_account",
+        }
+    )
+
+
+def _github_install_url(state: str) -> str:
+    return (
+        f"https://github.com/apps/{quote(github_service.github_app_slug(), safe='')}"
+        f"/installations/new?{urlencode({'state': str(state)})}"
+    )
+
+
 def _error_response(routes_module: Any, exc: Exception) -> web.Response:
     if isinstance(exc, project_service.DeveloperProjectError):
         return routes_module._json_response({"ok": False, "error": exc.code}, status=exc.status)
@@ -109,8 +126,14 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
             state = project_service.create_install_state(int(auth["user_id"]))
-            url = f"https://github.com/apps/{quote(github_service.github_app_slug(), safe='')}/installations/new?{urlencode({'state': state})}"
-            return routes_module._json_response({"ok": True, "url": url, "expires_in": 600})
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "url": _github_oauth_url(state),
+                    "expires_in": 600,
+                    "flow": "oauth_first",
+                }
+            )
         except Exception as exc:
             return _error_response(routes_module, exc)
 
@@ -143,6 +166,14 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             raise web.HTTPFound(location=location)
         except web.HTTPException:
             raise
+        except github_service.DeveloperGithubError as exc:
+            if exc.code == "github_installation_not_found":
+                raise web.HTTPFound(location=_github_install_url(state))
+            code = exc.code
+            redirect = _safe_redirect_url()
+            separator = "&" if "?" in redirect else "?"
+            location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
+            raise web.HTTPFound(location=location)
         except Exception as exc:
             code = getattr(exc, "code", "github_connection_failed")
             redirect = _safe_redirect_url()
