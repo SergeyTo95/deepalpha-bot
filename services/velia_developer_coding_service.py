@@ -31,8 +31,13 @@ _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
 
 _WRITE_INTENT_RE = re.compile(
-    r"(?:\b(?:implement|fix|add|create|write|change|update|delete|remove|refactor|build)\b|"
-    r"(?:реализу|исправ|добав|созда|напиш|измени|обнови|удали|отрефактор|сделай))",
+    r"(?:\b(?:implement|fix|add|create|write|change|update|delete|remove|refactor|build|modify)\b|"
+    r"\b(?:реализуй(?:те)?|исправь(?:те)?|добавь(?:те)?|создай(?:те)?|напиши(?:те)?|"
+    r"измени(?:те)?|обнови(?:те)?|удали(?:те)?|сделай(?:те)?|внедри(?:те)?|"
+    r"перепиши(?:те)?|отрефакторируй(?:те)?)\b|"
+    r"\b(?:нужно|надо|хочу|требуется|можно)\s+(?:реализовать|исправить|добавить|"
+    r"создать|написать|изменить|обновить|удалить|сделать|внедрить|переписать|"
+    r"отрефакторить)\b)",
     re.IGNORECASE,
 )
 _CODE_SCOPE_RE = re.compile(
