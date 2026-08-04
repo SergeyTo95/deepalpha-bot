@@ -1,0 +1,65 @@
+name: Apply VELIA Developer connection diagnostics
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - scripts/_apply_velia_developer_connection_diagnostics.py
+      - .github/workflows/_apply-velia-developer-connection-diagnostics.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-clean:
+    if: github.head_ref == 'fix/velia-developer-connection-diagnostics'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply product patch
+        run: python scripts/_apply_velia_developer_connection_diagnostics.py
+
+      - name: Install focused dependencies
+        run: python -m pip install --upgrade pip pytest requests cryptography psycopg2-binary aiohttp
+
+      - name: Compile affected modules
+        run: |
+          python -m py_compile \
+            services/velia_developer_github_service.py \
+            services/velia_developer_routes.py \
+            tests/test_velia_developer_connection_diagnostics.py
+
+      - name: Run focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_connection_diagnostics.py \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_routes.py \
+            tests/test_velia_developer_repository_visibility.py
+
+      - name: Remove one-shot files and commit product source
+        run: |
+          rm scripts/_apply_velia_developer_connection_diagnostics.py
+          rm .github/workflows/_apply-velia-developer-connection-diagnostics.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/velia_developer_github_service.py \
+                  services/velia_developer_routes.py \
+                  tests/test_velia_developer_connection_diagnostics.py \
+                  scripts/_apply_velia_developer_connection_diagnostics.py \
+                  .github/workflows/_apply-velia-developer-connection-diagnostics.yml
+          git commit -m "Add VELIA Developer connection diagnostics"
+          git push origin HEAD:${{ github.head_ref }}
