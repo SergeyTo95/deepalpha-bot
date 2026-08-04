@@ -59,6 +59,10 @@ def main() -> None:
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_chat_streaming_runtime_patch import install as install_velia_chat_streaming
     from services.velia_conversation_quality_patch import install as install_velia_conversation_quality
+    from services.velia_developer_chat_runtime_patch import (
+        ensure_velia_developer_chat_tables,
+        install as install_velia_developer_chat,
+    )
     from services.velia_images_runtime_patch import install as install_velia_images
     from services.velia_images_service import ensure_velia_image_tables
     from services.velia_live_plugins_patch import install as install_velia_live_plugins
@@ -181,6 +185,10 @@ def main() -> None:
     # Streaming wraps only generation and calls the already hardened final
     # sender, preserving idempotency, budget, shadow memory and persistence.
     install_velia_chat_streaming(velia_chat_service_module)
+    # Developer repository routing is the outermost generation layer.
+    # It intercepts repository questions before ordinary streaming can
+    # bypass the read-only GitHub tools.
+    install_velia_developer_chat(velia_chat_service_module)
     setup_velia_mobile_streaming_route(
         deepalpha_web.app,
         velia_chat_service_module,
@@ -205,6 +213,7 @@ def main() -> None:
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
         ensure_velia_chat_tables()
+        ensure_velia_developer_chat_tables()
         ensure_velia_attachment_tables()
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
