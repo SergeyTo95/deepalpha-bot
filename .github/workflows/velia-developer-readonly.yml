@@ -36,6 +36,7 @@ jobs:
             services/velia_developer_github_service.py \
             services/velia_developer_project_service.py \
             services/velia_developer_agent_service.py \
+            services/velia_developer_fast_path_service.py \
             services/velia_developer_chat_runtime_patch.py \
             services/velia_developer_routes.py \
             services/velia_mobile_streaming_service.py \
@@ -48,6 +49,8 @@ jobs:
             tests/test_velia_developer_github_service.py \
             tests/test_velia_developer_project_service.py \
             tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_fast_path_service.py \
+            tests/test_velia_developer_fast_path_bootstrap.py \
             tests/test_velia_developer_chat_runtime_patch.py \
             tests/test_velia_developer_branch_selection.py \
             tests/test_velia_developer_bootstrap.py \
@@ -67,6 +70,13 @@ jobs:
           grep -q 'reason in {"empty_200", "json_parse_error"}' services/velia_developer_agent_service.py
           grep -q 'PROVIDER_REPAIR:' services/velia_developer_agent_service.py
           ! grep -q 'max_attempts=1' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_MODEL_CALLS' services/velia_developer_fast_path_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_COST_USD' services/velia_developer_fast_path_service.py
+          grep -q 'feature="velia_developer_fast"' services/velia_developer_fast_path_service.py
+          grep -q 'max_attempts=1' services/velia_developer_fast_path_service.py
+          grep -q 'VELIA_DEVELOPER_RESULT_CACHE_TTL_SECONDS' services/velia_developer_fast_path_service.py
+          grep -q 'velia_developer_fast_path_service as agent_service' services/velia_developer_chat_runtime_patch.py
+          grep -q 'velia_developer_fast_path_service as agent_service' services/velia_developer_routes.py
           grep -q 'developer_deadline_exceeded' services/velia_developer_agent_service.py
           grep -q '_worker_exception_code' services/velia_mobile_streaming_service.py
           grep -q '_sse_event("error", error=error_code)' services/velia_mobile_streaming_service.py

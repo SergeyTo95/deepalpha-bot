@@ -9,7 +9,7 @@ from urllib.parse import quote, urlencode
 
 from aiohttp import web
 
-from services import velia_developer_agent_service as agent_service
+from services import velia_developer_fast_path_service as agent_service
 from services import velia_developer_github_service as github_service
 from services import velia_developer_project_service as project_service
 
