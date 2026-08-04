@@ -609,6 +609,64 @@ def get_attachment(user_id: int, attachment_id: str) -> Optional[Dict[str, Any]]
         conn.close()
 
 
+def get_attachment_content(
+    user_id: int,
+    attachment_id: str,
+) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT attachment_id, mime_type, kind, byte_size, content_bytes,
+                   width, height
+            FROM velia_attachments
+            WHERE attachment_id=%s AND user_id=%s
+              AND kind='image'
+              AND extraction_status='ready'
+              AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (str(attachment_id), int(user_id)),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if isinstance(row, dict):
+            attachment_value = row.get("attachment_id")
+            mime_type = row.get("mime_type")
+            kind = row.get("kind")
+            byte_size = row.get("byte_size")
+            content_bytes = row.get("content_bytes")
+            width = row.get("width")
+            height = row.get("height")
+        else:
+            (
+                attachment_value,
+                mime_type,
+                kind,
+                byte_size,
+                content_bytes,
+                width,
+                height,
+            ) = row
+        raw = bytes(content_bytes or b"")
+        if not raw or str(kind or "") != "image":
+            return None
+        return {
+            "id": str(attachment_value or ""),
+            "mime_type": str(mime_type or ""),
+            "kind": "image",
+            "byte_size": int(byte_size or len(raw)),
+            "content_bytes": raw,
+            "width": int(width or 0) or None,
+            "height": int(height or 0) or None,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def delete_attachment(user_id: int, attachment_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
