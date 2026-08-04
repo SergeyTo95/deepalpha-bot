@@ -1,0 +1,86 @@
+name: Temporary VELIA Fast Path hardening v2
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - '.github/scripts/_tmp_fix_velia_fast_path_hardening.py'
+      - '.github/workflows/_tmp_harden_velia_fast_path_v1_v2.yml'
+
+concurrency:
+  group: velia-fast-path-hardening-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  harden-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/velia-developer-fast-path-v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Apply hardening patches
+        run: |
+          python .github/scripts/_tmp_harden_velia_fast_path_v1.py
+          python .github/scripts/_tmp_fix_velia_fast_path_hardening.py
+      - name: Compile affected modules
+        run: |
+          python -m py_compile \
+            services/kimi_gateway.py \
+            services/velia_developer_github_service.py \
+            services/velia_developer_fast_path_service.py \
+            services/velia_developer_chat_runtime_patch.py \
+            services/velia_developer_routes.py
+      - name: Run complete Developer regressions
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/test_velia_developer_fast_path_service.py \
+            tests/test_velia_developer_fast_path_bootstrap.py \
+            tests/test_velia_developer_agent_service.py \
+            tests/test_velia_developer_github_service.py \
+            tests/test_velia_developer_project_service.py \
+            tests/test_velia_developer_chat_runtime_patch.py \
+            tests/test_velia_developer_branch_selection.py \
+            tests/test_velia_developer_bootstrap.py \
+            tests/test_velia_mobile_streaming_service.py
+      - name: Verify hardening contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_FAST_MAX_COMPLETION_TOKENS' services/kimi_gateway.py
+          grep -q 'candidate_paths=candidate_paths' services/velia_developer_github_service.py
+          grep -q '_tree_fingerprint' services/velia_developer_fast_path_service.py
+          grep -q '_pack_evidence' services/velia_developer_fast_path_service.py
+          grep -q 'candidate_paths=\[' services/velia_developer_fast_path_service.py
+          ! grep -R -nE 'create_branch|open_pull_request|apply_patch|run_command|contents.:.?write' services/velia_developer_fast_path_service.py
+      - name: Prepare code-only commit
+        run: |
+          rm .github/scripts/_tmp_harden_velia_fast_path_v1.py
+          rm .github/scripts/_tmp_fix_velia_fast_path_hardening.py
+      - name: Commit hardened product code
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            services/kimi_gateway.py \
+            services/velia_developer_github_service.py \
+            services/velia_developer_fast_path_service.py \
+            tests/test_velia_developer_fast_path_service.py \
+            tests/test_velia_developer_fast_path_bootstrap.py \
+            .github/scripts/_tmp_harden_velia_fast_path_v1.py \
+            .github/scripts/_tmp_fix_velia_fast_path_hardening.py
+          git commit -m 'Harden VELIA Developer Fast Path v1'
+          git push origin HEAD:feature/velia-developer-fast-path-v1
