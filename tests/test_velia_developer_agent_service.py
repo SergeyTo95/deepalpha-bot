@@ -264,3 +264,162 @@ def test_agent_recovers_from_empty_200_with_compact_repair(monkeypatch):
     assert "PROVIDER_REPAIR" in calls[1]["prompt"]
     assert calls[2]["reasoning_effort"] == "low"
 
+
+
+
+def test_agent_forces_final_after_tool_budget_when_evidence_exists(monkeypatch):
+    responses = iter(
+        [
+            {"ok": True, "text": '{"action":"read_file","path":"a.py","start_line":1,"end_line":5}'},
+            {"ok": True, "text": '{"action":"search_code","query":"more"}'},
+            {"ok": True, "text": '{"action":"final","answer":"Подтверждено [a.py:L1-L5]."}'},
+        ]
+    )
+    calls = []
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_TOOL_CALLS", "1")
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_READ_CALLS", "4")
+    monkeypatch.setattr(
+        agent.kimi_gateway,
+        "call_kimi",
+        lambda **kwargs: (calls.append(kwargs) or next(responses)),
+    )
+    monkeypatch.setattr(
+        agent.github_service,
+        "read_file",
+        lambda **kwargs: {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": 5,
+            "total_lines": 5,
+            "size": 40,
+            "content": "1: value = 1",
+        },
+    )
+    monkeypatch.setattr(agent.project_service, "record_tool_event", lambda **kwargs: None)
+
+    result = agent.run_developer_agent(
+        user_id=1,
+        project={
+            "id": "p",
+            "installation_id": 1,
+            "repository_id": 2,
+            "repository_full_name": "o/r",
+            "default_branch": "main",
+            "selected_branch": "main",
+        },
+        question="Объясни поток",
+        run_id="budget-final",
+    )
+
+    assert result["answer"] == "Подтверждено [a.py:L1-L5]."
+    assert result["tool_calls"] == 1
+    assert "TIME_BUDGET" in calls[1]["prompt"]
+    assert "TIME_BUDGET" in calls[2]["prompt"]
+
+
+def test_agent_requires_read_after_discovery_budget(monkeypatch):
+    responses = iter(
+        [
+            {"ok": True, "text": '{"action":"search_code","query":"route"}'},
+            {"ok": True, "text": '{"action":"search_code","query":"another"}'},
+            {"ok": True, "text": '{"action":"read_file","path":"a.py","start_line":1,"end_line":5}'},
+            {"ok": True, "text": '{"action":"final","answer":"Подтверждено [a.py:L1-L5]."}'},
+        ]
+    )
+    calls = []
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_TOOL_CALLS", "5")
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_DISCOVERY_CALLS", "1")
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_READ_CALLS", "1")
+    monkeypatch.setattr(
+        agent.kimi_gateway,
+        "call_kimi",
+        lambda **kwargs: (calls.append(kwargs) or next(responses)),
+    )
+    monkeypatch.setattr(
+        agent.github_service,
+        "search_code",
+        lambda *args, **kwargs: [{"path": "a.py", "line": 1, "fragment": "route"}],
+    )
+    monkeypatch.setattr(
+        agent.github_service,
+        "read_file",
+        lambda **kwargs: {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": 5,
+            "total_lines": 5,
+            "size": 40,
+            "content": "1: route = True",
+        },
+    )
+    monkeypatch.setattr(agent.project_service, "record_tool_event", lambda **kwargs: None)
+
+    result = agent.run_developer_agent(
+        user_id=1,
+        project={
+            "id": "p",
+            "installation_id": 1,
+            "repository_id": 2,
+            "repository_full_name": "o/r",
+            "default_branch": "main",
+            "selected_branch": "main",
+        },
+        question="Где route?",
+        run_id="discovery-budget",
+    )
+
+    assert result["answer"] == "Подтверждено [a.py:L1-L5]."
+    assert result["tool_calls"] == 2
+    assert "TOOL_BUDGET" in calls[1]["prompt"]
+    assert "TOOL_BUDGET" in calls[2]["prompt"]
+
+
+def test_duplicate_tool_action_does_not_consume_budget(monkeypatch):
+    responses = iter(
+        [
+            {"ok": True, "text": '{"action":"search_code","query":"route"}'},
+            {"ok": True, "text": '{"action":"search_code","query":"route"}'},
+            {"ok": True, "text": '{"action":"read_file","path":"a.py","start_line":1,"end_line":5}'},
+            {"ok": True, "text": '{"action":"final","answer":"Подтверждено [a.py:L1-L5]."}'},
+        ]
+    )
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_DISCOVERY_CALLS", "3")
+    monkeypatch.setenv("VELIA_DEVELOPER_MAX_READ_CALLS", "1")
+    monkeypatch.setattr(agent.kimi_gateway, "call_kimi", lambda **kwargs: next(responses))
+    search_calls = []
+    monkeypatch.setattr(
+        agent.github_service,
+        "search_code",
+        lambda *args, **kwargs: (search_calls.append(True) or [{"path": "a.py", "line": 1}]),
+    )
+    monkeypatch.setattr(
+        agent.github_service,
+        "read_file",
+        lambda **kwargs: {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": 5,
+            "total_lines": 5,
+            "size": 40,
+            "content": "1: route = True",
+        },
+    )
+    monkeypatch.setattr(agent.project_service, "record_tool_event", lambda **kwargs: None)
+
+    result = agent.run_developer_agent(
+        user_id=1,
+        project={
+            "id": "p",
+            "installation_id": 1,
+            "repository_id": 2,
+            "repository_full_name": "o/r",
+            "default_branch": "main",
+            "selected_branch": "main",
+        },
+        question="Где route?",
+        run_id="duplicate-budget",
+    )
+
+    assert result["tool_calls"] == 2
+    assert len(search_calls) == 1

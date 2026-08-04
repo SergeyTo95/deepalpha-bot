@@ -91,6 +91,8 @@ Available actions:
 Rules:
 - Use tools before finalizing.
 - Prefer precise searches, then read the relevant implementation and tests.
+- Use at most four discovery actions (list_tree/search_code) before reading files.
+- Never repeat an identical tool action. Once enough files are read, finalize instead of exploring indefinitely.
 - Every non-trivial repository claim in the final answer must cite a file range exactly as [path/to/file:L10-L30].
 - Cite only ranges actually returned by read_file during this run.
 - Explain uncertainty explicitly.
@@ -184,7 +186,19 @@ def run_developer_agent(
     if len(normalized_question) > max_question:
         raise DeveloperAgentError("developer_question_too_long", status=413)
 
-    max_tools = _env_int("VELIA_DEVELOPER_MAX_TOOL_CALLS", 8, 1, 20)
+    max_tools = _env_int("VELIA_DEVELOPER_MAX_TOOL_CALLS", 10, 1, 20)
+    max_discovery = _env_int(
+        "VELIA_DEVELOPER_MAX_DISCOVERY_CALLS",
+        4,
+        1,
+        max_tools,
+    )
+    max_reads = _env_int(
+        "VELIA_DEVELOPER_MAX_READ_CALLS",
+        4,
+        1,
+        max_tools,
+    )
     max_output = _env_int("VELIA_DEVELOPER_MAX_OUTPUT_TOKENS", 4096, 512, 8192)
     action_output = _env_int(
         "VELIA_DEVELOPER_ACTION_OUTPUT_TOKENS",
@@ -239,18 +253,36 @@ def run_developer_agent(
         "reasoning_tokens": 0,
     }
     tool_calls = 0
+    discovery_calls = 0
+    read_calls = 0
     protocol_repairs = 0
     provider_repairs = 0
+    budget_repairs = 0
+    finalization_repairs = 0
+    tool_action_fingerprints: set[str] = set()
     deadline_at = time.monotonic() + wall_timeout
 
     for iteration in range(max_tools + 4):
         remaining = int(deadline_at - time.monotonic())
         if remaining <= 5:
             raise DeveloperAgentError("developer_deadline_exceeded", status=504)
-        force_final = bool(read_ranges) and remaining <= finalize_reserve
+        force_read = not read_ranges and (
+            discovery_calls >= max_discovery or tool_calls >= max(1, max_tools - 2)
+        )
+        force_final = bool(read_ranges) and (
+            remaining <= finalize_reserve
+            or tool_calls >= max_tools
+            or read_calls >= max_reads
+        )
         prompt = _system_prompt(project, normalized_question)
         if transcript:
             prompt += "\nPrevious actions and tool results:\n" + "\n".join(transcript)
+        if force_read:
+            prompt += (
+                "\nTOOL_BUDGET: Discovery is finished. Return one read_file action "
+                "for the most relevant path already found. Do not call list_tree or "
+                "search_code again."
+            )
         if force_final:
             prompt += (
                 "\nTIME_BUDGET: No more tools. Return action=final now using only "
@@ -312,7 +344,19 @@ def run_developer_agent(
             continue
 
         action_name = str(action.get("action") or "").strip()
+        if force_read and action_name != "read_file":
+            budget_repairs += 1
+            if budget_repairs > 2:
+                raise DeveloperAgentError("developer_evidence_missing")
+            transcript.append(
+                "TOOL_BUDGET: Discovery is exhausted. Use read_file on a path already "
+                "returned by list_tree or search_code."
+            )
+            continue
         if force_final and action_name != "final":
+            finalization_repairs += 1
+            if finalization_repairs > 2:
+                raise DeveloperAgentError("developer_finalization_failed")
             transcript.append(
                 "TIME_BUDGET: Return action=final now. Do not request another tool."
             )
@@ -361,8 +405,25 @@ def run_developer_agent(
                 "read_only": True,
             }
 
+        fingerprint = _compact(action, 8000)
+        if fingerprint in tool_action_fingerprints:
+            budget_repairs += 1
+            if budget_repairs > 3:
+                raise DeveloperAgentError("developer_tool_loop_detected")
+            transcript.append(
+                "TOOL_BUDGET: This exact tool action already ran. Choose a different "
+                "path/query, read a discovered file, or finalize from existing evidence."
+            )
+            continue
         if tool_calls >= max_tools:
-            raise DeveloperAgentError("developer_tool_limit_reached")
+            if read_ranges:
+                transcript.append(
+                    "TOOL_BUDGET: Tool limit reached. Return action=final now using only "
+                    "the evidence already read."
+                )
+                continue
+            raise DeveloperAgentError("developer_evidence_missing")
+        tool_action_fingerprints.add(fingerprint)
         _safe_progress(
             on_progress,
             "tool_start",
@@ -393,6 +454,10 @@ def run_developer_agent(
             tool_result = {"ok": False, "error": error_code, "detail": exc.__class__.__name__}
         duration_ms = int((time.monotonic() - started) * 1000)
         tool_calls += 1
+        if tool_name in {"list_tree", "search_code"}:
+            discovery_calls += 1
+        elif tool_name == "read_file":
+            read_calls += 1
         summary = _tool_summary(tool_name, tool_result)
         if error_code:
             summary["error"] = error_code

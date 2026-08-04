@@ -70,6 +70,18 @@ jobs:
           grep -q 'developer_deadline_exceeded' services/velia_developer_agent_service.py
           grep -q '_worker_exception_code' services/velia_mobile_streaming_service.py
           grep -q '_sse_event("error", error=error_code)' services/velia_mobile_streaming_service.py
+      - name: Verify Developer tool budget contracts
+        run: |
+          grep -q 'VELIA_DEVELOPER_MAX_TOOL_CALLS", 10' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_DISCOVERY_CALLS' services/velia_developer_agent_service.py
+          grep -q 'VELIA_DEVELOPER_MAX_READ_CALLS' services/velia_developer_agent_service.py
+          grep -q 'discovery_calls >= max_discovery' services/velia_developer_agent_service.py
+          grep -q 'read_calls >= max_reads' services/velia_developer_agent_service.py
+          grep -q 'tool_calls >= max_tools' services/velia_developer_agent_service.py
+          grep -q 'developer_tool_loop_detected' services/velia_developer_agent_service.py
+          grep -q 'test_agent_forces_final_after_tool_budget_when_evidence_exists' tests/test_velia_developer_agent_service.py
+          grep -q 'test_agent_requires_read_after_discovery_budget' tests/test_velia_developer_agent_service.py
+          grep -q 'test_duplicate_tool_action_does_not_consume_budget' tests/test_velia_developer_agent_service.py
       - name: Verify ordinary chat integration order
         run: |
           python - <<'PY'
