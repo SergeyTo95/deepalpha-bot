@@ -62,8 +62,9 @@ jobs:
           source = Path('run_web_process.py').read_text(encoding='utf-8')
           streaming = source.index('install_velia_chat_streaming(velia_chat_service_module)')
           developer_chat = source.index('install_velia_developer_chat(velia_chat_service_module)')
-          assert developer_chat > streaming
-          assert 'ensure_velia_developer_chat_tables()' in source
+          streaming_route = source.index('setup_velia_mobile_streaming_route(')
+          assert streaming < developer_chat < streaming_route
+          assert source.count('ensure_velia_developer_chat_tables()') == 1
           PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
