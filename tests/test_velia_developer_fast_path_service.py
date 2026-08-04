@@ -382,3 +382,56 @@ def test_packed_evidence_fairly_keeps_multiple_files():
     assert "FILE second.py" in evidence
     assert {item["path"] for item in items} == {"first.py", "second.py"}
     assert set(ranges) == {"first.py", "second.py"}
+
+
+
+def test_repair_budget_survives_real_first_call_cost(monkeypatch):
+    calls = []
+    responses = iter(
+        [
+            {
+                "ok": True,
+                "text": "Ответ с неверной ссылкой [missing.py:L1-L2].",
+                "estimated_cost_usd": 0.044,
+                "usage": {"prompt_tokens": 8000, "completion_tokens": 1300, "total_tokens": 9300},
+            },
+            {
+                "ok": True,
+                "text": (
+                    "Подключение подтверждено "
+                    "[services/velia_developer_chat_runtime_patch.py:L467-L470]."
+                ),
+                "estimated_cost_usd": 0.019,
+                "usage": {"prompt_tokens": 3000, "completion_tokens": 650, "total_tokens": 3650},
+            },
+        ]
+    )
+
+    def call_kimi(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(fast.kimi_gateway, "call_kimi", call_kimi)
+    result = fast.run_developer_agent(
+        user_id=7,
+        project=PROJECT,
+        question="Где обычный чат подключает VELIA Developer?",
+        run_id="repair-real-cost",
+    )
+
+    assert result["model_calls"] == 2
+    assert result["estimated_cost_usd"] == pytest.approx(0.063)
+    assert result["estimated_cost_usd"] < 0.08
+    assert calls[0]["feature"] == "velia_developer_fast"
+    assert calls[0]["max_tokens"] == 2048
+    assert calls[1]["feature"] == "velia_developer_fast_repair"
+    assert calls[1]["max_tokens"] == 1024
+    assert len(calls[1]["prompt"]) < len(calls[0]["prompt"]) + 5000
+
+
+def test_gateway_uses_compact_completion_cap_for_developer_repair(monkeypatch):
+    monkeypatch.delenv("VELIA_DEVELOPER_FAST_REPAIR_MAX_COMPLETION_TOKENS", raising=False)
+    assert fast.kimi_gateway._initial_completion_limit("velia_developer_fast", 1024) == 2048
+    assert fast.kimi_gateway._initial_completion_limit("velia_developer_fast_repair", 1024) == 1024
+    monkeypatch.setenv("VELIA_DEVELOPER_FAST_REPAIR_MAX_COMPLETION_TOKENS", "768")
+    assert fast.kimi_gateway._initial_completion_limit("velia_developer_fast_repair", 768) == 768

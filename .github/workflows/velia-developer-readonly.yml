@@ -3,6 +3,7 @@ name: VELIA Developer read-only
 on:
   pull_request:
     paths:
+      - 'services/kimi_gateway.py'
       - 'services/velia_developer_*.py'
       - 'services/velia_mobile_streaming_service.py'
       - 'tests/test_velia_developer_*.py'
@@ -33,6 +34,7 @@ jobs:
       - name: Compile Developer modules
         run: |
           python -m py_compile \
+            services/kimi_gateway.py \
             services/velia_developer_github_service.py \
             services/velia_developer_project_service.py \
             services/velia_developer_agent_service.py \
@@ -72,9 +74,16 @@ jobs:
           ! grep -q 'max_attempts=1' services/velia_developer_agent_service.py
           grep -q 'VELIA_DEVELOPER_MAX_MODEL_CALLS' services/velia_developer_fast_path_service.py
           grep -q 'VELIA_DEVELOPER_MAX_COST_USD' services/velia_developer_fast_path_service.py
-          grep -q 'feature="velia_developer_fast"' services/velia_developer_fast_path_service.py
+          grep -q 'current_feature = "velia_developer_fast"' services/velia_developer_fast_path_service.py
           grep -q 'max_attempts=1' services/velia_developer_fast_path_service.py
           grep -q 'VELIA_DEVELOPER_RESULT_CACHE_TTL_SECONDS' services/velia_developer_fast_path_service.py
+          grep -q 'feature == "velia_developer_fast_repair"' services/kimi_gateway.py
+          grep -q 'VELIA_DEVELOPER_FAST_REPAIR_MAX_COMPLETION_TOKENS' services/kimi_gateway.py
+          grep -q 'VELIA_DEVELOPER_FAST_REPAIR_OUTPUT_TOKENS' services/velia_developer_fast_path_service.py
+          grep -q 'VELIA_DEVELOPER_FAST_REPAIR_RESERVE_USD' services/velia_developer_fast_path_service.py
+          grep -q 'current_feature = "velia_developer_fast_repair"' services/velia_developer_fast_path_service.py
+          grep -q 'test_repair_budget_survives_real_first_call_cost' tests/test_velia_developer_fast_path_service.py
+          grep -q 'test_gateway_uses_compact_completion_cap_for_developer_repair' tests/test_velia_developer_fast_path_service.py
           grep -q 'velia_developer_fast_path_service as agent_service' services/velia_developer_chat_runtime_patch.py
           grep -q 'velia_developer_fast_path_service as agent_service' services/velia_developer_routes.py
           grep -q 'developer_deadline_exceeded' services/velia_developer_agent_service.py
