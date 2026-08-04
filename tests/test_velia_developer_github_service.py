@@ -105,3 +105,38 @@ def test_read_file_returns_numbered_utf8_range(monkeypatch):
     assert result["end_line"] == 3
     assert result["content"] == "2: два\n3: three"
     assert fake.calls[0][2]["params"] == {"ref": "main"}
+
+def test_non_default_branch_search_reads_exact_branch_tree_and_blobs(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, *, token, params=None, body=None, expected=(200,), text_matches=False):
+        calls.append((method, path, params))
+        if "/git/trees/feature%2Fnew-auth" in path:
+            return {
+                "tree": [
+                    {"path": "src/auth.py", "type": "blob", "size": 80, "sha": "blob-auth"},
+                    {"path": "build/generated.py", "type": "blob", "size": 80, "sha": "blob-generated"},
+                ],
+                "truncated": False,
+            }
+        if path.endswith("/git/blobs/blob-auth"):
+            content = base64.b64encode(b"def refresh_session():\n    return True\n").decode("ascii")
+            return {"encoding": "base64", "content": content}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(github, "_request", fake_request)
+    monkeypatch.setattr(github, "_installation_token", lambda *args, **kwargs: "token")
+
+    results = github.search_code(
+        10,
+        20,
+        "owner/repo",
+        "refresh_session",
+        branch="feature/new-auth",
+        default_branch="main",
+    )
+
+    assert [item["path"] for item in results] == ["src/auth.py"]
+    assert "refresh_session" in results[0]["fragments"][0]
+    assert not any(path == "/search/code" for _, path, _ in calls)
+    assert any("feature%2Fnew-auth" in path for _, path, _ in calls)

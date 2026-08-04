@@ -120,6 +120,8 @@ def _run_tool(project: Dict[str, Any], action: Dict[str, Any]) -> Tuple[str, Any
             common["repository_id"],
             common["full_name"],
             str(action.get("query") or ""),
+            branch=common["branch"],
+            default_branch=str(project.get("default_branch") or common["branch"]),
         )
     if name == "read_file":
         return name, github_service.read_file(
@@ -131,18 +133,26 @@ def _run_tool(project: Dict[str, Any], action: Dict[str, Any]) -> Tuple[str, Any
     raise DeveloperAgentError("developer_tool_not_allowed", status=400)
 
 
-def _valid_citations(answer: str, read_ranges: Dict[str, List[Tuple[int, int]]]) -> List[Dict[str, Any]]:
+def _validate_citations(
+    answer: str,
+    read_ranges: Dict[str, List[Tuple[int, int]]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     citations: List[Dict[str, Any]] = []
+    invalid: List[str] = []
     for match in _CITATION_RE.finditer(str(answer or "")):
+        rendered = match.group(0)
         path = match.group(1).strip()
         start = int(match.group(2))
         end = int(match.group(3) or start)
-        if end < start:
+        allowed = (
+            end >= start
+            and any(start >= low and end <= high for low, high in read_ranges.get(path, []))
+        )
+        if not allowed:
+            invalid.append(rendered)
             continue
-        allowed = any(start >= low and end <= high for low, high in read_ranges.get(path, []))
-        if allowed:
-            citations.append({"path": path, "start_line": start, "end_line": end})
-    return citations
+        citations.append({"path": path, "start_line": start, "end_line": end})
+    return citations, invalid
 
 
 def run_developer_agent(
@@ -210,9 +220,17 @@ def run_developer_agent(
         action_name = str(action.get("action") or "").strip()
         if action_name == "final":
             answer = str(action.get("answer") or "").strip()
-            citations = _valid_citations(answer, read_ranges)
+            citations, invalid_citations = _validate_citations(answer, read_ranges)
             if not answer:
                 transcript.append("PROTOCOL_ERROR: final.answer must not be empty.")
+                continue
+            if invalid_citations:
+                protocol_repairs += 1
+                if protocol_repairs > 2:
+                    raise DeveloperAgentError("developer_citations_invalid")
+                transcript.append(
+                    "PROTOCOL_ERROR: Every citation must be fully contained in a file range returned by read_file during this run. Remove or replace invalid citations."
+                )
                 continue
             if read_ranges and not citations:
                 protocol_repairs += 1

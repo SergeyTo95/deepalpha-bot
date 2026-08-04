@@ -394,16 +394,163 @@ def read_file(
     }
 
 
+_SEARCHABLE_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cs", ".css", ".dart", ".go", ".gradle", ".graphql",
+    ".h", ".hpp", ".html", ".java", ".js", ".json", ".jsx", ".kt", ".kts",
+    ".md", ".php", ".proto", ".py", ".rb", ".rs", ".scss", ".sh", ".sql",
+    ".swift", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
+}
+_SEARCH_SKIP_PARTS = {
+    ".git", ".gradle", ".idea", ".next", ".venv", "build", "coverage", "dist",
+    "generated", "node_modules", "target", "vendor", "venv",
+}
+
+
+def _searchable_branch_path(path: str, size: int, max_bytes: int) -> bool:
+    normalized = str(path or "").replace("\\", "/")
+    parts = {part.lower() for part in normalized.split("/")}
+    if parts & _SEARCH_SKIP_PARTS or size <= 0 or size > max_bytes:
+        return False
+    lowered = normalized.lower()
+    if lowered.endswith((".lock", ".min.js", ".min.css", ".map")):
+        return False
+    name = lowered.rsplit("/", 1)[-1]
+    return name in {"dockerfile", "makefile", "gradle.properties"} or any(
+        lowered.endswith(suffix) for suffix in _SEARCHABLE_SUFFIXES
+    )
+
+
+def _decode_search_blob(data: Any, max_bytes: int) -> Optional[str]:
+    if not isinstance(data, dict) or str(data.get("encoding") or "").lower() != "base64":
+        return None
+    try:
+        raw = base64.b64decode(str(data.get("content") or "").replace("\n", ""), validate=False)
+    except Exception:
+        return None
+    if not raw or len(raw) > max_bytes or b"\x00" in raw[:8192]:
+        return None
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+
+
+def _branch_search_fragments(text: str, terms: List[str]) -> List[str]:
+    lines = text.splitlines()
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if any(term in line.casefold() for term in terms)
+    ]
+    fragments: List[str] = []
+    used: set[Tuple[int, int]] = set()
+    for index in matches:
+        start = max(0, index - 1)
+        end = min(len(lines), index + 2)
+        key = (start, end)
+        if key in used:
+            continue
+        used.add(key)
+        fragments.append("\n".join(f"{line_number + 1}: {lines[line_number]}" for line_number in range(start, end))[:1200])
+        if len(fragments) >= 3:
+            break
+    return fragments
+
+
+def _search_selected_branch(
+    installation_id: int,
+    repository_id: int,
+    full_name: str,
+    branch: str,
+    normalized: str,
+) -> List[Dict[str, Any]]:
+    owner, name = _validate_full_name(full_name)
+    selected_branch = validate_branch(branch)
+    token = _installation_token(installation_id, [repository_id])
+    tree = list_tree(installation_id, repository_id, full_name, selected_branch)
+    terms = [part.casefold() for part in re.findall(r"[\w.-]+", normalized) if len(part) >= 2]
+    if not terms:
+        terms = [normalized.casefold()]
+    max_files = _env_int("VELIA_DEVELOPER_BRANCH_SEARCH_MAX_FILES", 60, 5, 300)
+    max_bytes = _env_int("VELIA_DEVELOPER_BRANCH_SEARCH_MAX_FILE_BYTES", 262144, 1024, 1048576)
+    result_limit = _env_int("VELIA_DEVELOPER_SEARCH_RESULT_LIMIT", 20, 1, 50)
+    entries = [
+        item for item in (tree.get("entries") or [])
+        if isinstance(item, dict)
+        and str(item.get("type") or "") == "blob"
+        and _searchable_branch_path(str(item.get("path") or ""), int(item.get("size") or 0), max_bytes)
+    ]
+    entries.sort(
+        key=lambda item: (
+            0 if any(term in str(item.get("path") or "").casefold() for term in terms) else 1,
+            int(item.get("size") or 0),
+            str(item.get("path") or ""),
+        )
+    )
+    results: Dict[str, Dict[str, Any]] = {}
+    scanned = 0
+    for item in entries:
+        path = str(item.get("path") or "")
+        path_folded = path.casefold()
+        path_match = all(term in path_folded for term in terms)
+        if path_match:
+            results[path] = {
+                "path": path,
+                "sha": str(item.get("sha") or ""),
+                "score": 2.0,
+                "fragments": [],
+            }
+        if scanned >= max_files:
+            continue
+        scanned += 1
+        data = _request(
+            "GET",
+            f"/repos/{quote(owner)}/{quote(name)}/git/blobs/{quote(str(item.get('sha') or ''), safe='')}",
+            token=token,
+        )
+        text = _decode_search_blob(data, max_bytes)
+        if text is None:
+            continue
+        folded = text.casefold()
+        if not all(term in folded for term in terms):
+            continue
+        existing = results.get(path) or {
+            "path": path,
+            "sha": str(item.get("sha") or ""),
+            "score": 1.0,
+            "fragments": [],
+        }
+        existing["score"] = max(float(existing.get("score") or 0.0), 1.5 if path_match else 1.0)
+        existing["fragments"] = _branch_search_fragments(text, terms)
+        results[path] = existing
+        if len(results) >= result_limit and scanned >= max_files:
+            break
+    return sorted(results.values(), key=lambda item: (-float(item.get("score") or 0.0), str(item.get("path") or "")))[:result_limit]
+
+
 def search_code(
     installation_id: int,
     repository_id: int,
     full_name: str,
     query: str,
+    *,
+    branch: str = "",
+    default_branch: str = "",
 ) -> List[Dict[str, Any]]:
     owner, name = _validate_full_name(full_name)
     normalized = re.sub(r"\s+", " ", str(query or "").strip())[:200]
     if len(normalized) < 2 or re.search(r"\b(repo|org|user):", normalized, flags=re.IGNORECASE):
         raise DeveloperGithubError("invalid_search_query", status=400)
+    selected_branch = validate_branch(branch or default_branch or "main")
+    repository_default = validate_branch(default_branch or selected_branch)
+    if selected_branch != repository_default:
+        return _search_selected_branch(
+            installation_id,
+            repository_id,
+            full_name,
+            selected_branch,
+            normalized,
+        )
     token = _installation_token(installation_id, [repository_id])
     data = _request(
         "GET",

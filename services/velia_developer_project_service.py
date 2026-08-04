@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 try:
@@ -34,6 +34,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
 
 
 def developer_enabled() -> bool:
@@ -485,16 +493,27 @@ def delete_project(user_id: int, project_id: str) -> None:
 def start_run(user_id: int, project_id: str, question: str) -> str:
     ensure_developer_tables()
     run_id = str(uuid.uuid4())
+    now = _utcnow()
+    lease_seconds = _env_int("VELIA_DEVELOPER_RUN_LEASE_SECONDS", 1800, 60, 7200)
+    stale_before = now - timedelta(seconds=lease_seconds)
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute(
+            """
+            UPDATE velia_developer_runs
+            SET status='error', error_code='developer_run_expired', updated_at=%s
+            WHERE user_id=%s AND status='pending' AND updated_at < %s
+            """,
+            (now, int(user_id), stale_before),
+        )
         cursor.execute(
             """
             INSERT INTO velia_developer_runs (
                 run_id, project_id, user_id, question, status, created_at, updated_at
             ) VALUES (%s, %s, %s, %s, 'pending', %s, %s)
             """,
-            (run_id, str(project_id), int(user_id), str(question)[:12000], _utcnow(), _utcnow()),
+            (run_id, str(project_id), int(user_id), str(question)[:12000], now, now),
         )
         conn.commit()
         return run_id

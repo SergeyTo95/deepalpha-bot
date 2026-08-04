@@ -42,3 +42,10 @@ def test_developer_api_surface_stays_read_only():
     assert "commit_changes" not in source
     assert "open_pull_request" not in source
     assert "run_command" not in source
+
+def test_developer_ask_cancellation_has_cleanup_path():
+    source = Path("services/velia_developer_routes.py").read_text(encoding="utf-8")
+
+    assert "except asyncio.CancelledError:" in source
+    assert "developer_run_cancelled" in source
+    assert "await asyncio.shield(" in source

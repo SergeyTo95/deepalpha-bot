@@ -37,3 +37,48 @@ def test_state_secret_is_required(monkeypatch):
     except projects.DeveloperProjectError as exc:
         assert exc.code == "developer_state_secret_missing"
         assert exc.status == 503
+
+def test_start_run_expires_stale_pending_before_insert(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params):
+            self.calls.append((" ".join(sql.split()), params))
+
+        def close(self):
+            pass
+
+    class Connection:
+        def __init__(self):
+            self.cursor_value = Cursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_value
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setattr(projects, "_SCHEMA_READY", True)
+    monkeypatch.setattr(projects, "get_connection", lambda: connection)
+    monkeypatch.setenv("VELIA_DEVELOPER_RUN_LEASE_SECONDS", "300")
+
+    run_id = projects.start_run(7, "project-1", "question")
+
+    assert run_id
+    assert connection.committed is True
+    assert len(connection.cursor_value.calls) == 2
+    expire_sql, expire_params = connection.cursor_value.calls[0]
+    insert_sql, _ = connection.cursor_value.calls[1]
+    assert "developer_run_expired" in expire_sql
+    assert "status='pending'" in expire_sql
+    assert expire_params[1] == 7
+    assert "INSERT INTO velia_developer_runs" in insert_sql

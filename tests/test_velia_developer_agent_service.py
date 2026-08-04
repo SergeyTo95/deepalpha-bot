@@ -106,3 +106,45 @@ def test_agent_rejects_unread_citations(monkeypatch):
     )
 
     assert result["citations"] == [{"path": "a.py", "start_line": 1, "end_line": 5}]
+
+def test_agent_rejects_mixed_valid_and_unread_citations(monkeypatch):
+    responses = iter(
+        [
+            {"ok": True, "text": '{"action":"read_file","path":"a.py","start_line":1,"end_line":5}'},
+            {"ok": True, "text": '{"action":"final","answer":"Верно [a.py:L1-L5], но выдумано [b.py:L1-L2]."}'},
+            {"ok": True, "text": '{"action":"final","answer":"Подтверждено [a.py:L1-L5]."}'},
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(agent.kimi_gateway, "call_kimi", lambda **kwargs: (calls.append(kwargs) or next(responses)))
+    monkeypatch.setattr(
+        agent.github_service,
+        "read_file",
+        lambda **kwargs: {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": 5,
+            "total_lines": 5,
+            "size": 40,
+            "content": "1: value = 1",
+        },
+    )
+    monkeypatch.setattr(agent.project_service, "record_tool_event", lambda **kwargs: None)
+
+    result = agent.run_developer_agent(
+        user_id=1,
+        project={
+            "id": "p",
+            "installation_id": 1,
+            "repository_id": 2,
+            "repository_full_name": "o/r",
+            "default_branch": "main",
+            "selected_branch": "main",
+        },
+        question="Что здесь?",
+        run_id="r-mixed",
+    )
+
+    assert len(calls) == 3
+    assert result["answer"] == "Подтверждено [a.py:L1-L5]."
+    assert result["citations"] == [{"path": "a.py", "start_line": 1, "end_line": 5}]

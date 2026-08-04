@@ -304,6 +304,8 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 common[1],
                 common[2],
                 query,
+                branch=common[3],
+                default_branch=str(project.get("default_branch") or common[3]),
             )
             return routes_module._json_response({"ok": True, "matches": result})
         except Exception as exc:
@@ -340,6 +342,20 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 estimated_cost_usd=float(result.get("estimated_cost_usd") or 0.0),
             )
             return routes_module._json_response({"ok": True, "run_id": run_id, **result})
+        except asyncio.CancelledError:
+            if run_id:
+                try:
+                    await asyncio.shield(
+                        asyncio.to_thread(
+                            project_service.finish_run,
+                            run_id,
+                            ok=False,
+                            error_code="developer_run_cancelled",
+                        )
+                    )
+                except Exception:
+                    logger.exception("VELIA_DEVELOPER_CANCEL_FINALIZE_FAILED run_id=%s", run_id)
+            raise
         except Exception as exc:
             if run_id:
                 try:
