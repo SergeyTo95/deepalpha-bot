@@ -15,6 +15,14 @@ _STREAM_RETRYABLE_REASONS = set(kimi_gateway._RETRYABLE_REASONS) | {
 }
 
 
+def _decode_stream_line(raw_line: Any) -> str:
+    if raw_line is None:
+        return ""
+    if isinstance(raw_line, (bytes, bytearray, memoryview)):
+        return bytes(raw_line).decode("utf-8-sig")
+    return str(raw_line)
+
+
 def _stream_delta(data: Any) -> str:
     if not isinstance(data, dict):
         return ""
@@ -221,14 +229,12 @@ def call_kimi_stream(
             )
 
             if status_code == 200:
-                for raw_line in response.iter_lines(decode_unicode=True):
-                    if raw_line is None:
+                for raw_line in response.iter_lines(decode_unicode=False):
+                    try:
+                        line = _decode_stream_line(raw_line).strip()
+                    except UnicodeDecodeError:
+                        reason = "stream_parse_error"
                         continue
-                    if isinstance(raw_line, bytes):
-                        line = raw_line.decode("utf-8", errors="replace")
-                    else:
-                        line = str(raw_line)
-                    line = line.strip()
                     if not line or not line.startswith("data:"):
                         continue
                     raw_data = line[5:].strip()
@@ -243,7 +249,9 @@ def call_kimi_stream(
 
                     finish_reason = kimi_gateway._finish_reason(data) or finish_reason
                     usage = _merge_usage(usage, _stream_usage(data))
-                    delta = _stream_delta(data)
+                    delta = kimi_gateway._repair_utf8_mojibake(
+                        _stream_delta(data)
+                    )
                     if delta:
                         if first_delta_ms is None:
                             first_delta_ms = int((time.monotonic() - started) * 1000)

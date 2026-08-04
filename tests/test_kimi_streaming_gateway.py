@@ -7,8 +7,10 @@ class FakeResponse:
         self.status_code = status_code
         self.headers = headers or {"x-request-id": "provider-request-1"}
         self.closed = False
+        self.decode_unicode_calls = []
 
     def iter_lines(self, decode_unicode=True):
+        self.decode_unicode_calls.append(decode_unicode)
         return iter(self._lines)
 
     def close(self):
@@ -82,6 +84,7 @@ def test_streaming_gateway_emits_only_final_content_and_records_usage(monkeypatc
     assert finalized[-1][1]["status"] == "success"
     assert finalized[-1][1]["prompt_tokens"] == 10
     assert response.closed is True
+    assert response.decode_unicode_calls == [False]
     payload = streaming.kimi_gateway.requests.calls[0][1]["json"]
     assert payload["stream"] is True
     assert payload["prompt_cache_key"] == "cache-1"
@@ -150,3 +153,75 @@ def test_streaming_gateway_accepts_usage_nested_in_final_choice(monkeypatch):
     assert result["usage"]["prompt_tokens"] == 2
     assert result["usage"]["completion_tokens"] == 1
     assert result["usage"]["total_tokens"] == 3
+
+
+
+def test_streaming_gateway_decodes_utf8_bytes_without_response_charset(monkeypatch):
+    import json
+
+    russian = "На картинке белка держит кружку пива."
+    response = FakeResponse(
+        [
+            b"data: " + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": russian},
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            b"data: [DONE]",
+        ],
+        headers={"Content-Type": "text/event-stream"},
+    )
+    _patch_gateway(monkeypatch, [response])
+    deltas = []
+
+    result = streaming.call_kimi_stream(
+        prompt="USER: Что изображено?",
+        feature="velia_chat",
+        on_delta=deltas.append,
+        request_id="request-utf8-bytes",
+        user_id=7,
+        max_tokens=512,
+    )
+
+    assert result["ok"] is True
+    assert result["text"] == russian
+    assert deltas == [russian]
+    assert response.decode_unicode_calls == [False]
+
+
+def test_streaming_gateway_repairs_legacy_mojibake_delta(monkeypatch):
+    import json
+
+    correct = "Белка сидит на табурете."
+    broken = correct.encode("utf-8").decode("latin-1")
+    response = FakeResponse(
+        [
+            'data: {"choices":[{"delta":{"content":' +
+            json.dumps(broken, ensure_ascii=False) +
+            '},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            "data: [DONE]",
+        ]
+    )
+    _patch_gateway(monkeypatch, [response])
+    deltas = []
+
+    result = streaming.call_kimi_stream(
+        prompt="USER: test",
+        feature="velia_chat",
+        on_delta=deltas.append,
+        request_id="request-mojibake",
+        user_id=7,
+        max_tokens=512,
+    )
+
+    assert result["ok"] is True
+    assert result["text"] == correct
+    assert deltas == [correct]
