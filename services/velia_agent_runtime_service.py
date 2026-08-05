@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date, datetime
 from typing import Any, Dict, List, Mapping
 
 from services import velia_agent_job_service as jobs
@@ -40,8 +41,27 @@ def _create_task_draft(user_id: int, arguments: Mapping[str, Any]) -> Dict[str, 
     return jobs.create_task_draft(int(user_id), str(arguments.get("title") or ""), str(arguments.get("notes") or ""))
 
 
+def _public_task_draft(item: Mapping[str, Any]) -> Dict[str, Any]:
+    result = {
+        "draft_id": str(item.get("draft_id") or ""),
+        "title": str(item.get("title") or "")[:300],
+        "notes": str(item.get("notes") or "")[:4000],
+        "completed": bool(item.get("completed")),
+    }
+    for field in ("created_at", "updated_at"):
+        value = item.get(field)
+        if isinstance(value, (datetime, date)):
+            result[field] = value.isoformat()
+        elif value is None:
+            result[field] = None
+        else:
+            result[field] = str(value)[:64]
+    return result
+
+
 def _list_task_drafts(user_id: int, arguments: Mapping[str, Any]) -> Dict[str, Any]:
-    return {"items": jobs.list_task_drafts(int(user_id), int(arguments.get("limit") or 50))}
+    items = jobs.list_task_drafts(int(user_id), int(arguments.get("limit") or 50))
+    return {"items": [_public_task_draft(item) for item in items if isinstance(item, Mapping)]}
 
 
 def ensure_builtin_tools() -> None:
