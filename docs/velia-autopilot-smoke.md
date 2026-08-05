@@ -1,77 +1,30 @@
 # VELIA Coding Autopilot — Smoke Overview
 
-> Smoke-test reference for the VELIA Coding Autopilot running in the
-> `turbo-short-term-btc` branch. Behavior described here mirrors
-> `services/velia_agent_coding_autopilot_routes.py` (API/status fields) and
-> `services/velia_agent_coding_autopilot_service.py` (mission/task lifecycle).
+Short smoke-level description of VELIA Coding Autopilot as implemented in the `turbo-short-term-btc` branch. For the complete specification see [VELIA Coding Autopilot v1](VELIA_CODING_AUTOPILOT_V1.md).
 
-## Purpose
+## What it is
 
-VELIA Coding Autopilot is an agent execution layer that takes a high-level
-coding goal, decomposes it into ordered tasks, executes them against a
-repository work branch, and opens a **draft pull request** with the results.
-It is designed for supervised automation: humans review every change before
-it can land anywhere.
+Autopilot turns the guarded VELIA Coding Agent into a persistent background queue. A mission owns one connected Developer project and an immutable base-branch snapshot. Tasks are processed sequentially and may create only isolated `velia/` branches and draft pull requests. The release stops at `ready_for_review` — it never merges, deploys, or repairs CI.
 
-## Mission / Task Model
+## Modes and limits
 
-- **Mission** — a top-level unit of work created from a goal description plus
-  repository/branch context. A mission is decomposed into an ordered list of
-  tasks (e.g. `1/2`, `2/2`).
-- **Task** — a single executable step with its own objective and an explicit
-  allowlist of files it may touch. Tasks run sequentially within a mission.
-- **Statuses** — missions and tasks progress through the lifecycle states
-  defined in `services/velia_agent_coding_autopilot_service.py`
-  (pending → running → completed/failed, with tasks additionally skippable
-  when their objective is already satisfied). Status responses expose the
-  current state, progress counters (current task index / total), and the
-  active work branch.
+- Planning and execution run inside the existing guarded Coding Agent pipeline; there are no additional execution modes beyond the standard plan → execute flow.
+- Planning limits: `max_steps` is constrained to 1–5, `max_files` to 1–12.
+- One active run is allowed per repository; queue claims use PostgreSQL advisory locking and `FOR UPDATE SKIP LOCKED`.
+- Existing Coding Agent cost, file-size and GitHub write limits remain authoritative.
 
-## Mode: `draft_pr_only`
+## Safety boundaries (summary)
 
-The autopilot operates in **`draft_pr_only`** mode:
+- Feature and worker flags default to disabled; every mission starts paused.
+- An explicit non-empty path allowlist is required; `.github`, `.env`, secrets, credentials, auth, billing, migrations and infrastructure paths are protected.
+- Pull requests remain draft; no merge or deployment operation exists in the Autopilot service or routes.
+- Failure after GitHub writes have started is never automatically retried; a stale run is marked `blocked` for human inspection.
 
-- All changes are delivered exclusively as a **draft pull request**.
-- **No auto-merge** — the agent never merges pull requests.
-- **No deployment** — the agent never triggers deploys or touches production
-  configuration.
-- Every run ends in a reviewable artifact; merging is a human decision.
+## Smoke check
 
-## Concurrency: One Active Run per Repository
+1. Enable flags: `VELIA_DEVELOPER_ENABLED`, `VELIA_DEVELOPER_CODING_ENABLED`, `VELIA_DEVELOPER_WRITE_ENABLED`, plus `VELIA_DEVELOPER_AUTOPILOT_ENABLED` and `VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED`.
+2. Create a mission with a path allowlist covering `docs/` only, then activate it.
+3. Queue a single small documentation task and wait for the worker tick.
+4. Verify a `velia/` branch and a draft pull request appear, and the mission reports `ready_for_review`.
 
-At most **one active autopilot run per repository** is allowed. A request to
-start a new mission while another run is active for the same repository is
-rejected, guaranteeing a single work branch and a single draft PR in flight
-at any time.
-
-## Protected Path Policy
-
-Each task declares an explicit list of **allowed files**. The autopilot
-refuses to modify anything outside that allowlist. In addition, the
-following are always protected, regardless of allowlists:
-
-- secrets, credentials, and `.env` files;
-- CI/CD and GitHub workflow definitions;
-- generated dependency manifests/lockfiles;
-- production configuration.
-
-Violating operations are rejected before execution.
-
-## Key API Endpoints
-
-Defined in `services/velia_agent_coding_autopilot_routes.py`:
-
-| Endpoint | Description |
-| --- | --- |
-| `GET .../status` | Current autopilot status: mode (`draft_pr_only`), active run (if any), repository, work branch, mission/task progress, and lifecycle state. |
-| `GET .../missions` | List of missions with their statuses, task breakdowns, and results (draft PR references where available). |
-
-## Smoke Check
-
-1. `GET` the status endpoint and confirm `mode` is `draft_pr_only` and no
-   unexpected active run exists.
-2. `GET` the missions endpoint and confirm previously recorded missions are
-   listed with valid statuses.
-3. Attempt to start a second run for the same repository while one is
-   active — it must be rejected.
-4. Confirm no merge or deployment side effects occur as a result of any run.
+See [VELIA_CODING_AUTOPILOT_V1.md](VELIA_CODING_AUTOPILOT_V1.md) for lifecycle details, feature flags, worker controls and the Mobile API.
