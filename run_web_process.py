@@ -1,3 +1,4 @@
+from services.velia_agent_routes import setup_velia_agent_routes
 from services.velia_developer_routes import setup_velia_developer_routes
 import logging
 import os
@@ -50,6 +51,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_agent_job_service import ensure_velia_agent_tables
     from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
     from services.velia_attachment_feature_flag_service import install as install_velia_attachment_feature_flag
     from services.velia_attachment_final_safety_patch import install as install_velia_attachment_final_safety
@@ -195,6 +197,7 @@ def main() -> None:
         velia_mobile_routes_module,
     )
     setup_velia_developer_routes(deepalpha_web.app, velia_mobile_routes_module)
+    setup_velia_agent_routes(deepalpha_web.app, velia_mobile_routes_module)
     install_velia_telegram_connect_page(
         deepalpha_web.app,
         web_user_resolver,
@@ -214,6 +217,7 @@ def main() -> None:
         ensure_velia_mobile_auth_tables()
         ensure_velia_chat_tables()
         ensure_velia_developer_chat_tables()
+        ensure_velia_agent_tables()
         ensure_velia_attachment_tables()
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
