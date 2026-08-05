@@ -1,0 +1,83 @@
+name: VELIA Agent Core
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_agent_*.py'
+      - 'tests/test_velia_agent_*.py'
+      - 'third_party/openworker/**'
+      - '.github/workflows/velia-agent-core.yml'
+      - 'run_web_process.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-core-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile VELIA Agent modules
+        run: |
+          python - <<'PY'
+          import glob
+          import py_compile
+
+          paths = sorted(glob.glob('services/velia_agent_*.py')) + ['run_web_process.py']
+          for path in paths:
+              py_compile.compile(path, doraise=True)
+          print(f'compiled {len(paths)} files')
+          PY
+      - name: Run VELIA Agent tests
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests/test_velia_agent_*.py
+      - name: Verify fail-closed action boundary
+        env:
+          PYTHONPATH: .
+        run: |
+          grep -q 'VELIA_AGENT_CORE_ENABLED' services/velia_agent_runtime_service.py
+          grep -q 'jobs.claim_job_for_execution' services/velia_agent_runtime_service.py
+          grep -q 'FOR UPDATE OF a, j' services/velia_agent_job_service.py
+          grep -q '"_velia_idempotency_key"' services/velia_agent_runtime_service.py
+          ! grep -qE 'subprocess|os\.system|run_shell' \
+            services/velia_agent_runtime_service.py \
+            services/velia_agent_permission_service.py \
+            services/velia_agent_tool_registry_service.py
+          python - <<'PY'
+          from services.velia_agent_permission_service import (
+              PermissionDecisionType,
+              evaluate_action,
+          )
+          from services.velia_agent_protocol_service import ActionRisk
+
+          for risk in (
+              ActionRisk.DESTRUCTIVE,
+              ActionRisk.FINANCIAL,
+              ActionRisk.CODE_EXECUTION,
+          ):
+              decision = evaluate_action(risk)
+              assert decision.decision is PermissionDecisionType.DENY, (risk, decision)
+          PY
+      - name: Verify attribution
+        run: |
+          grep -q 'andrewyng/openworker' third_party/openworker/UPSTREAM.md
+          grep -q 'MIT License' third_party/openworker/LICENSE
+      - name: Reject generated Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo "Generated Python bytecode was added by this PR."
+            exit 1
+          fi
