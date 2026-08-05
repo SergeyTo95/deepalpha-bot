@@ -143,3 +143,38 @@ def test_agent_execution_uses_atomic_job_claim_and_locked_approval_transition():
     claim_index = runtime_source.index("jobs.claim_job_for_execution")
     read_index = runtime_source.index("job = jobs.get_job")
     assert claim_index < read_index
+
+
+def test_agent_reserved_metadata_cannot_be_forged_and_is_injected_server_side():
+    try:
+        agent_protocol.validate_arguments({"_velia_idempotency_key": "forged"})
+        raise AssertionError("reserved argument accepted")
+    except agent_protocol.AgentProtocolError as exc:
+        assert exc.code == "velia_agent_argument_reserved"
+
+    runtime_source = Path("services/velia_agent_runtime_service.py").read_text(encoding="utf-8")
+    assert '"_velia_action_id": active_action_id' in runtime_source
+    assert '"_velia_job_id": str(job_id)' in runtime_source
+    assert '"_velia_idempotency_key": str(action.get("idempotency_key") or "")' in runtime_source
+
+
+def test_google_calendar_connector_is_encrypted_feature_gated_and_approval_gated():
+    service = Path("services/velia_agent_google_calendar_service.py").read_text(encoding="utf-8")
+    crypto = Path("services/velia_agent_connector_crypto_service.py").read_text(encoding="utf-8")
+    routes = Path("services/velia_agent_google_calendar_routes.py").read_text(encoding="utf-8")
+    agent_routes = Path("services/velia_agent_routes.py").read_text(encoding="utf-8")
+
+    assert 'VELIA_GOOGLE_CALENDAR_ENABLED' in service
+    assert 'VELIA_GOOGLE_OAUTH_CLIENT_ID' in service
+    assert 'VELIA_GOOGLE_OAUTH_CLIENT_SECRET' in service
+    assert 'VELIA_GOOGLE_OAUTH_CALLBACK_URL' in service
+    assert '"access_type": "offline"' in service
+    assert '"prompt": "consent"' in service
+    assert 'ActionRisk.WRITE_EXTERNAL' in service
+    assert '_event_id(str(arguments.get("_velia_idempotency_key") or ""))' in service
+    assert 'VELIA_CONNECTOR_FERNET_KEY' in crypto
+    assert '.encrypt(' in crypto and '.decrypt(' in crypto
+    assert 'request.query.get("state")' in routes
+    assert 'request.query.get("code")' in routes
+    assert 'javascript:' not in routes
+    assert 'setup_velia_google_calendar_routes(app, routes_module)' in agent_routes
