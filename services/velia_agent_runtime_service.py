@@ -59,6 +59,10 @@ def ensure_builtin_tools() -> None:
         except AgentProtocolError as exc:
             if exc.code != "velia_agent_tool_duplicate":
                 raise
+    if _env_bool("VELIA_GOOGLE_CALENDAR_ENABLED", False):
+        from services import velia_agent_google_calendar_service as google_calendar
+
+        google_calendar.register_tools()
     _BUILTINS_READY = True
 
 
