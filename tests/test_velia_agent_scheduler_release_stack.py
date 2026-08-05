@@ -14,7 +14,7 @@ def test_scheduler_coexists_with_chat_and_calendar_extensions():
     )
 
 
-def test_scheduler_remains_explicitly_disabled_by_default():
+def test_scheduler_remains_explicitly_disabled_and_fail_closed():
     service = Path("services/velia_agent_scheduler_service.py").read_text(
         encoding="utf-8"
     )
@@ -22,6 +22,6 @@ def test_scheduler_remains_explicitly_disabled_by_default():
     assert '_env_bool("VELIA_AGENT_SCHEDULER_ENABLED", False)' in service
     assert ") VALUES (%s,%s,%s,%s,%s,FALSE,%s,%s,NULL,%s,%s)" in service
     assert 'payload={"schedule_id": schedule_id, "enabled": False}' in service
-    assert "ActionRisk.DESTRUCTIVE" in service
-    assert "ActionRisk.FINANCIAL" in service
-    assert "ActionRisk.CODE_EXECUTION" in service
+    assert "permissions.evaluate_action(definition.risk)" in service
+    assert "PermissionDecisionType.DENY" in service
+    assert "velia_agent_schedule_action_denied" in service
