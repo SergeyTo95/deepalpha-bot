@@ -64,3 +64,24 @@ async def test_create_job_uses_authenticated_user(monkeypatch):
         assert response.status == 201
         assert captured["user_id"] == 77
         assert captured["mode"] == "interactive"
+
+
+@pytest.mark.asyncio
+async def test_disabled_agent_route_returns_503_without_calling_runtime(monkeypatch):
+    monkeypatch.setattr(runtime, "agent_core_enabled", lambda: False)
+    monkeypatch.setattr(
+        runtime,
+        "plan_job",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+    )
+    app = web.Application()
+    routes.setup_velia_agent_routes(app, RoutesModule)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/mobile-api/v1/agent/jobs",
+            headers={"Authorization": "Bearer ok"},
+            json={"goal": "Create draft", "actions": [{"tool_name": "velia.tasks.create_draft"}]},
+        )
+        payload = await response.json()
+        assert response.status == 503
+        assert payload["error"] == "velia_agent_core_disabled"
