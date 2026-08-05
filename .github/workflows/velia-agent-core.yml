@@ -43,10 +43,10 @@ jobs:
           PYTHONPATH: .
         run: pytest -q tests/test_velia_agent_*.py
       - name: Verify fail-closed action boundary
+        env:
+          PYTHONPATH: .
         run: |
           grep -q 'VELIA_AGENT_CORE_ENABLED' services/velia_agent_runtime_service.py
-          grep -q 'ActionRisk.FINANCIAL' services/velia_agent_permission_service.py
-          grep -q 'ActionRisk.CODE_EXECUTION' services/velia_agent_permission_service.py
           grep -q 'jobs.claim_job_for_execution' services/velia_agent_runtime_service.py
           grep -q 'FOR UPDATE OF a, j' services/velia_agent_job_service.py
           grep -q '"_velia_idempotency_key"' services/velia_agent_runtime_service.py
@@ -54,6 +54,21 @@ jobs:
             services/velia_agent_runtime_service.py \
             services/velia_agent_permission_service.py \
             services/velia_agent_tool_registry_service.py
+          python - <<'PY'
+          from services.velia_agent_permission_service import (
+              PermissionDecisionType,
+              evaluate_action,
+          )
+          from services.velia_agent_protocol_service import ActionRisk
+
+          for risk in (
+              ActionRisk.DESTRUCTIVE,
+              ActionRisk.FINANCIAL,
+              ActionRisk.CODE_EXECUTION,
+          ):
+              decision = evaluate_action(risk)
+              assert decision.decision is PermissionDecisionType.DENY, (risk, decision)
+          PY
       - name: Verify attribution
         run: |
           grep -q 'andrewyng/openworker' third_party/openworker/UPSTREAM.md
