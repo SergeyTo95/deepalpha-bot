@@ -51,6 +51,9 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_agent_chat_conflict_patch import install as install_velia_agent_chat_conflict
+    from services.velia_agent_chat_planner_service import ensure_velia_agent_chat_tables
+    from services.velia_agent_chat_runtime_patch import install as install_velia_agent_chat
     from services.velia_agent_job_service import ensure_velia_agent_tables
     from services.velia_attachment_chat_runtime_patch import install as install_velia_attachment_chat
     from services.velia_attachment_feature_flag_service import install as install_velia_attachment_feature_flag
@@ -187,10 +190,12 @@ def main() -> None:
     # Streaming wraps only generation and calls the already hardened final
     # sender, preserving idempotency, budget, shadow memory and persistence.
     install_velia_chat_streaming(velia_chat_service_module)
-    # Developer repository routing is the outermost generation layer.
-    # It intercepts repository questions before ordinary streaming can
-    # bypass the read-only GitHub tools.
+    # Developer handles repository requests. Agent Chat is installed after it
+    # as the outer personal-action layer; the conflict guard is outermost and
+    # prevents two active plans from sharing one conversation.
     install_velia_developer_chat(velia_chat_service_module)
+    install_velia_agent_chat(velia_chat_service_module)
+    install_velia_agent_chat_conflict(velia_chat_service_module)
     setup_velia_mobile_streaming_route(
         deepalpha_web.app,
         velia_chat_service_module,
@@ -218,6 +223,7 @@ def main() -> None:
         ensure_velia_chat_tables()
         ensure_velia_developer_chat_tables()
         ensure_velia_agent_tables()
+        ensure_velia_agent_chat_tables()
         ensure_velia_attachment_tables()
         ensure_velia_image_tables()
         ensure_velia_plugin_tables()
