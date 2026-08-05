@@ -38,10 +38,15 @@ def test_review_repair_never_merges_deploys_or_resolves_threads():
     github = Path("services/velia_agent_coding_autopilot_review_github_service.py").read_text(
         encoding="utf-8"
     )
+    routes = Path("services/velia_agent_coding_autopilot_review_routes.py").read_text(
+        encoding="utf-8"
+    )
     assert "merge_pull_request" not in service
     assert "enable_auto_merge" not in service
     assert "resolve_review_thread" not in service
-    assert "deploy" not in github.casefold()
+    assert "app.router.add_post" not in routes
+    assert "app.router.add_patch" not in routes
+    assert "app.router.add_delete" not in routes
     assert "VELIA did not merge or deploy" in github
 
 
