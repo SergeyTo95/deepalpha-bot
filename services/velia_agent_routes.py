@@ -9,6 +9,7 @@ from aiohttp import web
 from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
 from services.velia_agent_protocol_service import AgentProtocolError
+from services.velia_agent_scheduler_routes import setup_velia_agent_scheduler_routes
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/mobile-api/v1/agent"
@@ -48,6 +49,7 @@ async def _body(request: web.Request) -> Dict[str, Any]:
 
 def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
     if app.get("velia_agent_routes_installed"):
+        setup_velia_agent_scheduler_routes(app, routes_module)
         return
 
     async def status(request: web.Request) -> web.Response:
@@ -157,3 +159,4 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
     app.router.add_post(f"{_PREFIX}/jobs/{{job_id}}/actions/{{action_id}}/reject", reject)
     app.router.add_post(f"{_PREFIX}/jobs/{{job_id}}/run", run_job)
     app["velia_agent_routes_installed"] = True
+    setup_velia_agent_scheduler_routes(app, routes_module)
