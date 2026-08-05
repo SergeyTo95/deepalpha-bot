@@ -20,11 +20,13 @@ Autopilot turns the guarded VELIA Coding Agent into a persistent background queu
 - Pull requests remain draft; no merge or deployment operation exists in the Autopilot service or routes.
 - Failure after GitHub writes have started is never automatically retried; a stale run is marked `blocked` for human inspection.
 
-## Smoke check
+## Staged smoke check
 
-1. Enable flags: `VELIA_DEVELOPER_ENABLED`, `VELIA_DEVELOPER_CODING_ENABLED`, `VELIA_DEVELOPER_WRITE_ENABLED`, plus `VELIA_DEVELOPER_AUTOPILOT_ENABLED` and `VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED`.
-2. Create a mission with a path allowlist covering `docs/` only, then activate it.
-3. Queue a single small documentation task and wait for the worker tick.
-4. Verify a `velia/` branch and a draft pull request appear, and the mission reports `ready_for_review`.
+1. Keep `VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED=false` and enable only the Autopilot API together with the existing Developer/Coding/write prerequisites.
+2. Create a mission with a path allowlist covering `docs/` only. Confirm that the mission is returned with status `paused`.
+3. Queue one small documentation task. Wait longer than one worker interval and verify that no `velia/` branch or pull request appears while the mission is paused and the worker flag is false.
+4. Enable `VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED=true`, wait for the production deployment, and then explicitly activate the mission.
+5. Verify that exactly one `velia/` branch and one draft pull request appear and that the run reaches `ready_for_review`.
+6. Confirm that Autopilot did not merge or deploy anything. Disable the worker again after the disposable smoke if no further queued tasks should run.
 
 See [VELIA_CODING_AUTOPILOT_V1.md](VELIA_CODING_AUTOPILOT_V1.md) for lifecycle details, feature flags, worker controls and the Mobile API.
