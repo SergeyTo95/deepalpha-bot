@@ -10,6 +10,7 @@ from services import velia_agent_coding_autopilot_policy_service as policy_servi
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_coding_service as coding_service
 from services import velia_developer_github_service as github_service
+from services import velia_developer_github_write_service as write_service
 from services import velia_developer_project_service as project_service
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ def _json_error(routes_module: Any, exc: Exception) -> web.Response:
             coding_service.DeveloperCodingError,
             project_service.DeveloperProjectError,
             github_service.DeveloperGithubError,
+            write_service.DeveloperWriteError,
         ),
     ):
         return routes_module._json_response(
@@ -100,12 +102,18 @@ def setup_velia_coding_autopilot_routes(app: web.Application, routes_module: Any
         auth = _auth(routes_module, request)
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        enabled = autopilot.autopilot_enabled()
+        worker = autopilot.worker_enabled()
+        coding = coding_service.coding_enabled()
+        write = write_service.write_enabled()
         return routes_module._json_response(
             {
                 "ok": True,
-                "enabled": autopilot.autopilot_enabled(),
-                "worker_enabled": autopilot.worker_enabled(),
-                "coding_enabled": coding_service.coding_enabled(),
+                "enabled": enabled,
+                "worker_enabled": worker,
+                "coding_enabled": coding,
+                "write_enabled": write,
+                "worker_ready": enabled and worker and coding and write,
                 "mode": "draft_pr_only",
                 "auto_merge": False,
                 "deployment": False,
