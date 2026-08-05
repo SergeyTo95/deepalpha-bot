@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from typing import Any, Dict, Optional
 
 from db.database import get_connection
 from services import velia_agent_chat_planner_service as planner
+from services import velia_agent_chat_presentation_service as presentation
 from services import velia_chat_streaming_runtime_patch as streaming_patch
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,8 @@ def _result(
     request_id: Optional[str],
     *,
     reason: str,
+    user_id: int = 0,
+    conversation_id: str = "",
     usage: Optional[Dict[str, Any]] = None,
     estimated_cost_usd: float = 0.0,
     job: Optional[Dict[str, Any]] = None,
@@ -70,6 +74,18 @@ def _result(
                     if isinstance(item, dict)
                 ],
             }
+        )
+    context["presentation"] = presentation.build_presentation(
+        reason=str(reason),
+        text=str(text),
+        job=job,
+    )
+    if int(user_id or 0) > 0 and str(request_id or "").strip() and str(conversation_id or "").strip():
+        presentation.persist_context_best_effort(
+            request_id=str(request_id),
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            context=context,
         )
     return {
         "ok": True,
@@ -189,13 +205,21 @@ def install(chat_module: Any) -> None:
                     if cancelled
                     else planner.format_status(None, message)
                 )
-                return _result(text, request_id, reason="velia_agent_chat_cancelled")
+                return _result(
+                    text,
+                    request_id,
+                    reason="velia_agent_chat_cancelled",
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                )
 
             if planner.is_status(message):
                 return _result(
                     planner.format_status(active, message),
                     request_id,
                     reason="velia_agent_chat_status",
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
                     job=active,
                 )
 
@@ -211,6 +235,8 @@ def install(chat_module: Any) -> None:
                     planner.format_execution(result, message),
                     request_id,
                     reason="velia_agent_chat_completed",
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
                     job=result,
                 )
 
@@ -229,6 +255,8 @@ def install(chat_module: Any) -> None:
                 planner.format_plan(job, message),
                 request_id,
                 reason="velia_agent_chat_plan_ready",
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
                 usage=job.get("usage") if isinstance(job.get("usage"), dict) else None,
                 estimated_cost_usd=float(job.get("estimated_cost_usd") or 0.0),
                 job=job,
@@ -246,8 +274,14 @@ def install(chat_module: Any) -> None:
                 _language_error(message, code),
                 request_id,
                 reason=code,
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
                 job=active,
             )
 
     chat_module.generate_velia_chat_result = generate_with_agent
     chat_module._velia_agent_chat_patch_installed = True
+
+    routes_module = sys.modules.get("velia_mobile_routes")
+    if routes_module is not None:
+        presentation.install_mobile_routes(routes_module)
