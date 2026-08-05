@@ -1,6 +1,7 @@
 import base64
 import os
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -331,27 +332,103 @@ def create_draft_pull_request(
     }
 
 
+def _commit_state_fields(state: str) -> Tuple[str, str]:
+    normalized = str(state or "").strip().lower()
+    if normalized == "pending":
+        return "in_progress", ""
+    if normalized in {"success", "failure", "error"}:
+        return "completed", normalized
+    return normalized, ""
+
+
+def _combined_commit_checks(
+    check_runs_data: Any,
+    commit_status_data: Any,
+) -> List[Dict[str, str]]:
+    check_runs = (
+        check_runs_data.get("check_runs")
+        if isinstance(check_runs_data, dict)
+        else []
+    )
+    statuses = (
+        commit_status_data.get("statuses")
+        if isinstance(commit_status_data, dict)
+        else []
+    )
+    if not isinstance(check_runs, list):
+        check_runs = []
+    if not isinstance(statuses, list):
+        statuses = []
+
+    checks: List[Dict[str, str]] = []
+    seen = set()
+    for item in check_runs:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        url = str(item.get("html_url") or "").strip()
+        key = (name.casefold(), url)
+        if key in seen:
+            continue
+        seen.add(key)
+        checks.append(
+            {
+                "name": name,
+                "status": str(item.get("status") or ""),
+                "conclusion": str(item.get("conclusion") or ""),
+                "url": url,
+                "source": "check_run",
+            }
+        )
+    for item in statuses:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("context") or "").strip()
+        url = str(item.get("target_url") or "").strip()
+        key = (name.casefold(), url)
+        if key in seen:
+            continue
+        seen.add(key)
+        status, conclusion = _commit_state_fields(str(item.get("state") or ""))
+        checks.append(
+            {
+                "name": name,
+                "status": status,
+                "conclusion": conclusion,
+                "url": url,
+                "source": "commit_status",
+            }
+        )
+    return checks[:30]
+
+
 def commit_status(project: Dict[str, Any], sha: str) -> Dict[str, Any]:
     _, _, full_name, _ = _project_values(project)
     owner, name = _owner_name(full_name)
-    data = _request(
-        "GET",
-        f"/repos/{quote(owner)}/{quote(name)}/commits/{quote(str(sha or ''))}/check-runs",
-        token=_token(project),
-    )
-    runs = data.get("check_runs") if isinstance(data, dict) else []
-    if not isinstance(runs, list):
-        runs = []
+    commit_sha = quote(str(sha or ""))
+    token = _token(project)
+    attempts = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_ATTEMPTS", 5, 1, 10)
+    interval_ms = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_INTERVAL_MS", 800, 0, 5000)
+
+    checks: List[Dict[str, str]] = []
+    for attempt in range(attempts):
+        check_runs_data = _request(
+            "GET",
+            f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/check-runs",
+            token=token,
+        )
+        commit_status_data = _request(
+            "GET",
+            f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/status",
+            token=token,
+        )
+        checks = _combined_commit_checks(check_runs_data, commit_status_data)
+        if checks or attempt + 1 >= attempts:
+            break
+        if interval_ms > 0:
+            time.sleep(interval_ms / 1000.0)
+
     return {
-        "total": len(runs),
-        "checks": [
-            {
-                "name": str(item.get("name") or ""),
-                "status": str(item.get("status") or ""),
-                "conclusion": str(item.get("conclusion") or ""),
-                "url": str(item.get("html_url") or ""),
-            }
-            for item in runs[:30]
-            if isinstance(item, dict)
-        ],
+        "total": len(checks),
+        "checks": checks,
     }
