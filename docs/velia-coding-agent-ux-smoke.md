@@ -2,6 +2,24 @@
 
 This document describes how to smoke-test the user-facing behavior of the VELIA Coding Agent ("coding autopilot") feature. It is a documentation-only reference; it does not change any code.
 
+## What is VELIA Coding Agent
+
+VELIA Coding Agent is an opt-in "coding autopilot" for this repository. Given a mission (a goal plus a set of allowed path prefixes), it plans changes, applies them on a dedicated work branch, and opens a **draft pull request** for human review. It never pushes to protected branches, never merges, and never deploys on its own — a human reviews and merges every change.
+
+### Safety rails at a glance
+
+- **Draft PRs only.** All output is delivered as a draft pull request on a separate work branch; the agent cannot merge, approve, or bypass review.
+- **Protected paths.** Missions must declare `allowed_paths`; protected paths (secrets, credentials, `.env` files, CI/workflow definitions, generated dependency manifests, production configuration) are rejected by the policy layer and may only be referenced by name in documentation such as this file.
+- **Paused by default.** The autopilot API surface and its background worker are disabled unless the `VELIA_DEVELOPER_AUTOPILOT_ENABLED` / `VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED` flags are explicitly set, and missions are created in a paused state that requires an explicit start/resume action before any work runs.
+
+### Minimal UX smoke checklist (manual verification)
+
+1. With feature flags unset, every `/mobile-api/v1/developer/autopilot` endpoint returns a clean `503` JSON error — no 500s, no hangs, no stack traces.
+2. With flags enabled, creating a mission without `allowed_paths` is rejected with `velia_coding_autopilot_allowed_paths_required`; a mission targeting a protected path is rejected by the policy layer.
+3. A newly created mission starts paused and does not execute until explicitly started/resumed by the user.
+4. A completed mission produces a **draft** pull request on a work branch (never the base branch), and no merge/deploy action is taken automatically.
+5. Error responses always match the `{ok: false, error, detail}` contract and never leak internals, secrets, or `.env` content.
+
 Every behavioral claim below is mapped to a concrete code path in the current source. Items that could not be verified from code are listed under [Open verification items](#open-verification-items) and must be confirmed before being documented as fact.
 
 ## Prerequisites and feature gating
