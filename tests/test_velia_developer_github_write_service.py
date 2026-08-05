@@ -80,7 +80,7 @@ def test_commit_operations_creates_one_atomic_commit(monkeypatch):
     assert calls[-1][2] == {"sha": "commit-sha", "force": False}
 
 
-def test_commit_status_combines_check_runs_and_commit_statuses_with_bounded_polling(monkeypatch):
+def test_commit_status_combines_partial_check_runs_and_commit_statuses_across_polling(monkeypatch):
     monkeypatch.setenv("VELIA_DEVELOPER_CI_STATUS_POLL_ATTEMPTS", "2")
     monkeypatch.setenv("VELIA_DEVELOPER_CI_STATUS_POLL_INTERVAL_MS", "1")
     monkeypatch.setattr(write_service, "_token", lambda project: "token")
@@ -107,14 +107,27 @@ def test_commit_status_combines_check_runs_and_commit_statuses_with_bounded_poll
         if path.endswith("/status"):
             rounds["statuses"] += 1
             if rounds["statuses"] == 1:
-                return {"statuses": []}
+                return {
+                    "statuses": [
+                        {
+                            "context": "melodious-radiance - velyon-memory",
+                            "state": "pending",
+                            "target_url": "https://railway.app/deployment/memory",
+                        }
+                    ]
+                }
             return {
                 "statuses": [
                     {
+                        "context": "melodious-radiance - velyon-memory",
+                        "state": "success",
+                        "target_url": "https://railway.app/deployment/memory",
+                    },
+                    {
                         "context": "melodious-radiance - deepalpha-bot",
                         "state": "pending",
-                        "target_url": "https://railway.app/deployment/1",
-                    }
+                        "target_url": "https://railway.app/deployment/backend",
+                    },
                 ]
             }
         raise AssertionError(path)
@@ -122,19 +135,26 @@ def test_commit_status_combines_check_runs_and_commit_statuses_with_bounded_poll
     monkeypatch.setattr(write_service, "_request", fake_request)
     result = write_service.commit_status(PROJECT, "abc123")
 
-    assert result["total"] == 2
+    assert result["total"] == 3
     assert result["checks"][0] == {
+        "name": "melodious-radiance - velyon-memory",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://railway.app/deployment/memory",
+        "source": "commit_status",
+    }
+    assert result["checks"][1] == {
         "name": "Unit tests",
         "status": "completed",
         "conclusion": "success",
         "url": "https://github.com/owner/repo/actions/runs/1",
         "source": "check_run",
     }
-    assert result["checks"][1] == {
+    assert result["checks"][2] == {
         "name": "melodious-radiance - deepalpha-bot",
         "status": "in_progress",
         "conclusion": "",
-        "url": "https://railway.app/deployment/1",
+        "url": "https://railway.app/deployment/backend",
         "source": "commit_status",
     }
     assert rounds == {"check_runs": 2, "statuses": 2}
