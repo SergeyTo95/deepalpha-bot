@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
+from services import velia_agent_coding_autopilot_ci_reliability_patch as ci_reliability
 from services import velia_agent_coding_autopilot_ci_service as ci_service
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_project_service as project_service
@@ -60,9 +61,9 @@ def setup_velia_coding_autopilot_ci_routes(
     routes_module: Any,
 ) -> None:
     # Disabled features must be completely inert: route registration cannot
-    # require DATABASE_URL or mutate schema. Enabling CI requires a redeploy,
-    # and that startup installs the patch and schema before the worker runs.
+    # require DATABASE_URL or mutate schema. Enabling CI requires a redeploy.
     if ci_service.ci_watch_enabled():
+        ci_reliability.install()
         ci_service.install_ci_repair_loop()
     if app.get("velia_coding_autopilot_ci_routes_installed"):
         return
@@ -88,6 +89,7 @@ def setup_velia_coding_autopilot_ci_routes(
                 "deployment": False,
                 "approved_plan_files_only": True,
                 "infrastructure_failures_change_code": False,
+                "db_lease_claims": True,
             }
         )
 
