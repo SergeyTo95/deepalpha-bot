@@ -32,6 +32,18 @@ def _json_error(routes_module: Any, exc: Exception) -> web.Response:
     )
 
 
+def _public_connection_status(value: Dict[str, Any]) -> Dict[str, Any]:
+    allowed = {
+        "enabled",
+        "configured",
+        "connected",
+        "connector_account_id",
+        "summary",
+        "time_zone",
+    }
+    return {key: value[key] for key in allowed if key in value}
+
+
 def _app_redirect(status: str, error: str = "") -> str:
     base = str(
         os.getenv("VELIA_GOOGLE_CALENDAR_APP_REDIRECT")
@@ -58,7 +70,7 @@ def setup_velia_google_calendar_routes(app: web.Application, routes_module: Any)
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
             value = await asyncio.to_thread(calendar.connection_status, int(auth["user_id"]))
-            return routes_module._json_response({"ok": True, **value})
+            return routes_module._json_response({"ok": True, **_public_connection_status(value)})
         except Exception as exc:
             return _json_error(routes_module, exc)
 
