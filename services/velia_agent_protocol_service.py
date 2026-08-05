@@ -9,6 +9,8 @@ from typing import Any, Dict, Mapping
 
 _TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){1,5}$")
 _MAX_ARGUMENT_BYTES = 32_000
+_MAX_ARGUMENT_NAME_CHARS = 120
+_RESERVED_ARGUMENT_PREFIX = "_velia_"
 
 
 class AgentProtocolError(ValueError):
@@ -82,6 +84,14 @@ def validate_arguments(value: Any) -> Dict[str, Any]:
     if not isinstance(value, Mapping):
         raise AgentProtocolError("velia_agent_arguments_invalid")
     normalized = dict(value)
+    for raw_name in normalized:
+        if not isinstance(raw_name, str):
+            raise AgentProtocolError("velia_agent_argument_name_invalid")
+        name = raw_name.strip()
+        if not name or len(name) > _MAX_ARGUMENT_NAME_CHARS:
+            raise AgentProtocolError("velia_agent_argument_name_invalid", detail=name)
+        if name.startswith(_RESERVED_ARGUMENT_PREFIX):
+            raise AgentProtocolError("velia_agent_argument_reserved", detail=name)
     try:
         encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError) as exc:
