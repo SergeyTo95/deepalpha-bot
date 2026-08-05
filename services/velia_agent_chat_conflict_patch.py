@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from services import velia_agent_chat_planner_service as agent_planner
 from services import velia_agent_chat_runtime_patch as agent_patch
+from services import velia_developer_chat_presentation_service as developer_presentation
 from services import velia_developer_coding_service as coding_service
 
 _REPOSITORY_SCOPE_RE = re.compile(
@@ -103,6 +104,65 @@ def install(chat_module: Any) -> None:
     _install_mobile_approval_aliases()
     original_generate = chat_module.generate_velia_chat_result
 
+    def call_inner_with_developer_presentation(
+        prompt: str,
+        *,
+        user_id: int,
+        conversation_id: str,
+        request_id: Optional[str],
+        message: str,
+    ) -> Dict[str, Any]:
+        stream_context = agent_patch.streaming_patch._STREAM_CONTEXT
+        had_delta = hasattr(stream_context, "on_delta")
+        had_reset = hasattr(stream_context, "on_reset")
+        original_delta = getattr(stream_context, "on_delta", None)
+        original_reset = getattr(stream_context, "on_reset", None)
+        coding_scope = bool(
+            _REPOSITORY_SCOPE_RE.search(message)
+            or coding_service.is_coding_request(message)
+            or coding_service.is_approval(message)
+            or coding_service.is_cancel(message)
+            or coding_service.is_status_request(message)
+        )
+
+        if coding_scope and callable(original_delta):
+            def compact_delta(value: str) -> None:
+                compact = developer_presentation.compact_progress_text(value)
+                if callable(original_reset):
+                    try:
+                        original_reset()
+                    except Exception:
+                        pass
+                if compact:
+                    original_delta(compact)
+
+            stream_context.on_delta = compact_delta
+
+        try:
+            result = original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+        finally:
+            if had_delta:
+                stream_context.on_delta = original_delta
+            elif hasattr(stream_context, "on_delta"):
+                delattr(stream_context, "on_delta")
+            if had_reset:
+                stream_context.on_reset = original_reset
+            elif hasattr(stream_context, "on_reset"):
+                delattr(stream_context, "on_reset")
+
+        return developer_presentation.enrich_result_best_effort(
+            result,
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            request_id=str(request_id or ""),
+            message=str(message or ""),
+        )
+
     def generate_without_plan_conflicts(
         prompt: str,
         *,
@@ -110,13 +170,6 @@ def install(chat_module: Any) -> None:
         conversation_id: str,
         request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        if not agent_planner.chat_agent_enabled():
-            return original_generate(
-                prompt,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                request_id=request_id,
-            )
         message = agent_patch._latest_request_user_message(str(request_id or ""), int(user_id))
         if not message:
             return original_generate(
@@ -125,6 +178,15 @@ def install(chat_module: Any) -> None:
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
+        if not agent_planner.chat_agent_enabled():
+            return call_inner_with_developer_presentation(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+                message=message,
+            )
+
         agent_job = agent_planner.active_chat_job(int(user_id), str(conversation_id))
         coding_job = coding_service.active_job(int(user_id), str(conversation_id))
         is_approval = agent_planner.is_approval(message)
@@ -136,11 +198,12 @@ def install(chat_module: Any) -> None:
         if coding_job and agent_planner.is_agent_request(message):
             return _result(_text(message, "coding_active"), request_id, "velia_agent_chat_coding_job_active")
         if not agent_job and _REPOSITORY_SCOPE_RE.search(message):
-            return original_generate(
+            return call_inner_with_developer_presentation(
                 prompt,
                 user_id=user_id,
                 conversation_id=conversation_id,
                 request_id=request_id,
+                message=message,
             )
         if not agent_job and not coding_job and (is_approval or is_cancel or is_status):
             return agent_patch._result(
@@ -172,11 +235,12 @@ def install(chat_module: Any) -> None:
                 conversation_id=str(conversation_id),
                 job=display_job,
             )
-        return original_generate(
+        return call_inner_with_developer_presentation(
             prompt,
             user_id=user_id,
             conversation_id=conversation_id,
             request_id=request_id,
+            message=message,
         )
 
     chat_module.generate_velia_chat_result = generate_without_plan_conflicts
