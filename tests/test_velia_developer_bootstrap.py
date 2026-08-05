@@ -129,3 +129,17 @@ def test_agent_mobile_surface_is_provider_neutral_and_has_no_shell_tool():
     assert "Liquid" not in source
     assert "run_shell" not in runtime_source
     assert "subprocess" not in runtime_source
+
+
+def test_agent_execution_uses_atomic_job_claim_and_locked_approval_transition():
+    job_source = Path("services/velia_agent_job_service.py").read_text(encoding="utf-8")
+    runtime_source = Path("services/velia_agent_runtime_service.py").read_text(encoding="utf-8")
+
+    assert "def claim_job_for_execution" in job_source
+    assert "UPDATE velia_agent_jobs AS j" in job_source
+    assert "AND j.status=%s" in job_source
+    assert "RETURNING j.job_id" in job_source
+    assert "FOR UPDATE OF a, j" in job_source
+    claim_index = runtime_source.index("jobs.claim_job_for_execution")
+    read_index = runtime_source.index("job = jobs.get_job")
+    assert claim_index < read_index
