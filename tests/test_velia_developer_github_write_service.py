@@ -78,3 +78,64 @@ def test_commit_operations_creates_one_atomic_commit(monkeypatch):
     assert result["files"] == ["services/example.py"]
     assert [item[0] for item in calls] == ["GET", "POST", "POST", "POST", "PATCH"]
     assert calls[-1][2] == {"sha": "commit-sha", "force": False}
+
+
+def test_commit_status_combines_check_runs_and_commit_statuses_with_bounded_polling(monkeypatch):
+    monkeypatch.setenv("VELIA_DEVELOPER_CI_STATUS_POLL_ATTEMPTS", "2")
+    monkeypatch.setenv("VELIA_DEVELOPER_CI_STATUS_POLL_INTERVAL_MS", "1")
+    monkeypatch.setattr(write_service, "_token", lambda project: "token")
+    sleeps = []
+    monkeypatch.setattr(write_service.time, "sleep", lambda seconds: sleeps.append(seconds))
+    rounds = {"check_runs": 0, "statuses": 0}
+
+    def fake_request(method, path, **kwargs):
+        assert method == "GET"
+        if path.endswith("/check-runs"):
+            rounds["check_runs"] += 1
+            if rounds["check_runs"] == 1:
+                return {"check_runs": []}
+            return {
+                "check_runs": [
+                    {
+                        "name": "Unit tests",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "html_url": "https://github.com/owner/repo/actions/runs/1",
+                    }
+                ]
+            }
+        if path.endswith("/status"):
+            rounds["statuses"] += 1
+            if rounds["statuses"] == 1:
+                return {"statuses": []}
+            return {
+                "statuses": [
+                    {
+                        "context": "melodious-radiance - deepalpha-bot",
+                        "state": "pending",
+                        "target_url": "https://railway.app/deployment/1",
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(write_service, "_request", fake_request)
+    result = write_service.commit_status(PROJECT, "abc123")
+
+    assert result["total"] == 2
+    assert result["checks"][0] == {
+        "name": "Unit tests",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/owner/repo/actions/runs/1",
+        "source": "check_run",
+    }
+    assert result["checks"][1] == {
+        "name": "melodious-radiance - deepalpha-bot",
+        "status": "in_progress",
+        "conclusion": "",
+        "url": "https://railway.app/deployment/1",
+        "source": "commit_status",
+    }
+    assert rounds == {"check_runs": 2, "statuses": 2}
+    assert sleeps == [0.001]
