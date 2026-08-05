@@ -8,6 +8,9 @@ from aiohttp import web
 
 from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
+from services.velia_agent_coding_autopilot_ci_routes import (
+    setup_velia_coding_autopilot_ci_routes,
+)
 from services.velia_agent_coding_autopilot_routes import setup_velia_coding_autopilot_routes
 from services.velia_agent_google_calendar_routes import setup_velia_google_calendar_routes
 from services.velia_agent_protocol_service import AgentProtocolError
@@ -41,6 +44,10 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
 
 def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
     setup_velia_google_calendar_routes(app, routes_module)
+    # Install the CI patch before the Autopilot route module registers its
+    # background worker. The cleanup context starts only after app setup, but
+    # keeping this order makes the dependency explicit and regression-testable.
+    setup_velia_coding_autopilot_ci_routes(app, routes_module)
     setup_velia_coding_autopilot_routes(app, routes_module)
     if runtime.agent_core_enabled():
         setup_velia_agent_scheduler_routes(app, routes_module)
