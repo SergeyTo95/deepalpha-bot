@@ -8,6 +8,7 @@ from aiohttp import web
 
 from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
+from services.velia_agent_google_calendar_routes import setup_velia_google_calendar_routes
 from services.velia_agent_protocol_service import AgentProtocolError
 from services.velia_agent_scheduler_routes import setup_velia_agent_scheduler_routes
 
@@ -38,6 +39,7 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
 
 
 def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
+    setup_velia_google_calendar_routes(app, routes_module)
     if runtime.agent_core_enabled():
         setup_velia_agent_scheduler_routes(app, routes_module)
 
