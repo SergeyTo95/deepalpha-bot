@@ -14,9 +14,10 @@ def test_agent_chat_is_outer_action_layer_after_developer():
     source = Path("run_web_process.py").read_text(encoding="utf-8")
     developer_index = source.index("install_velia_developer_chat(velia_chat_service_module)")
     agent_index = source.index("install_velia_agent_chat(velia_chat_service_module)")
+    conflict_index = source.index("install_velia_agent_chat_conflict(velia_chat_service_module)")
     streaming_route_index = source.index("setup_velia_mobile_streaming_route(")
 
-    assert developer_index < agent_index < streaming_route_index
+    assert developer_index < agent_index < conflict_index < streaming_route_index
 
 
 def test_agent_chat_schema_and_install_are_registered_once():
@@ -27,6 +28,11 @@ def test_agent_chat_schema_and_install_are_registered_once():
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and _call_name(node) == "install_velia_agent_chat"
     ]
+    conflict_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _call_name(node) == "install_velia_agent_chat_conflict"
+    ]
     schema_calls = [
         node
         for node in ast.walk(tree)
@@ -34,14 +40,15 @@ def test_agent_chat_schema_and_install_are_registered_once():
     ]
 
     assert len(install_calls) == 1
+    assert len(conflict_calls) == 1
     assert len(schema_calls) == 1
 
 
 def test_agent_chat_repository_guard_preserves_developer_requests():
-    source = Path("services/velia_agent_chat_runtime_patch.py").read_text(encoding="utf-8")
+    source = Path("services/velia_agent_chat_conflict_patch.py").read_text(encoding="utf-8")
 
     assert "_REPOSITORY_SCOPE_RE" in source
-    assert "if not active and _REPOSITORY_SCOPE_RE.search(message):" in source
+    assert "if not agent_job and _REPOSITORY_SCOPE_RE.search(message):" in source
     assert "return original_generate(" in source
 
 
