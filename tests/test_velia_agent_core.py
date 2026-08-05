@@ -18,11 +18,17 @@ def test_protocol_builds_bounded_action():
     assert action.to_dict()["risk"] == "read"
 
 
-def test_protocol_rejects_invalid_tool_and_non_json_arguments():
+def test_protocol_rejects_invalid_tool_non_json_and_reserved_arguments():
     with pytest.raises(protocol.AgentProtocolError):
         protocol.validate_tool_name("shell")
     with pytest.raises(protocol.AgentProtocolError):
         protocol.validate_arguments({"bad": object()})
+    with pytest.raises(protocol.AgentProtocolError) as exc:
+        protocol.validate_arguments({"_velia_idempotency_key": "forged"})
+    assert exc.value.code == "velia_agent_argument_reserved"
+    with pytest.raises(protocol.AgentProtocolError) as exc:
+        protocol.validate_arguments({1: "invalid-name"})
+    assert exc.value.code == "velia_agent_argument_name_invalid"
 
 
 def test_permission_policy_is_fail_closed():
