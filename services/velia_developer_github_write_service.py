@@ -407,27 +407,39 @@ def commit_status(project: Dict[str, Any], sha: str) -> Dict[str, Any]:
     owner, name = _owner_name(full_name)
     commit_sha = quote(str(sha or ""))
     token = _token(project)
-    attempts = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_ATTEMPTS", 5, 1, 10)
-    interval_ms = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_INTERVAL_MS", 800, 0, 5000)
+    attempts = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_ATTEMPTS", 6, 1, 12)
+    interval_ms = _env_int("VELIA_DEVELOPER_CI_STATUS_POLL_INTERVAL_MS", 700, 0, 5000)
 
-    checks: List[Dict[str, str]] = []
+    observed: Dict[Tuple[str, str], Dict[str, str]] = {}
+    order: List[Tuple[str, str]] = []
     for attempt in range(attempts):
-        check_runs_data = _request(
-            "GET",
-            f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/check-runs",
-            token=token,
-        )
-        commit_status_data = _request(
-            "GET",
-            f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/status",
-            token=token,
-        )
-        checks = _combined_commit_checks(check_runs_data, commit_status_data)
-        if checks or attempt + 1 >= attempts:
-            break
-        if interval_ms > 0:
+        try:
+            check_runs_data = _request(
+                "GET",
+                f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/check-runs",
+                token=token,
+            )
+            commit_status_data = _request(
+                "GET",
+                f"/repos/{quote(owner)}/{quote(name)}/commits/{commit_sha}/status",
+                token=token,
+            )
+        except DeveloperWriteError:
+            if observed:
+                break
+            raise
+        for check in _combined_commit_checks(check_runs_data, commit_status_data):
+            key = (
+                str(check.get("source") or ""),
+                str(check.get("name") or "").casefold(),
+            )
+            if key not in observed:
+                order.append(key)
+            observed[key] = check
+        if attempt + 1 < attempts and interval_ms > 0:
             time.sleep(interval_ms / 1000.0)
 
+    checks = [observed[key] for key in order]
     return {
         "total": len(checks),
         "checks": checks,
