@@ -34,7 +34,9 @@ def install() -> None:
             error_code=error_code,
             finished=finished,
         )
-        if status not in {"waiting_ci", "repairing"}:
+        payload = result if isinstance(result, dict) else {}
+        estimated_cost = float(payload.get("estimated_cost_usd") or 0.0)
+        if status not in {"waiting_ci", "repairing"} and estimated_cost <= 0:
             return
         now = ci._utcnow()
         if status == "waiting_ci":
@@ -42,10 +44,13 @@ def install() -> None:
                 "VELIA_DEVELOPER_AUTOPILOT_CI_POLL_SECONDS", 60, 15, 600
             )
             claimed_by = ""
-        else:
+        elif status == "repairing":
             seconds = ci._env_int(
                 "VELIA_DEVELOPER_AUTOPILOT_LEASE_SECONDS", 3600, 300, 7200
             )
+            claimed_by = str(run.get("claimed_by") or "")[:120]
+        else:
+            seconds = 0
             claimed_by = str(run.get("claimed_by") or "")[:120]
         conn = get_connection()
         cursor = conn.cursor()
@@ -53,12 +58,19 @@ def install() -> None:
             cursor.execute(
                 """
                 UPDATE velia_developer_autopilot_runs
-                SET claimed_by=%s,claimed_until=%s,updated_at=%s
+                SET claimed_by=CASE WHEN %s THEN %s ELSE claimed_by END,
+                    claimed_until=CASE WHEN %s THEN %s ELSE claimed_until END,
+                    estimated_cost_usd=CASE WHEN %s>0 THEN %s ELSE estimated_cost_usd END,
+                    updated_at=%s
                 WHERE run_id=%s AND status=%s
                 """,
                 (
+                    status in {"waiting_ci", "repairing"},
                     claimed_by,
+                    status in {"waiting_ci", "repairing"},
                     now + timedelta(seconds=seconds),
+                    estimated_cost,
+                    estimated_cost,
                     now,
                     str(run.get("run_id") or ""),
                     status,
