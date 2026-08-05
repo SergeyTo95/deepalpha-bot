@@ -78,7 +78,7 @@ def setup_velia_agent_scheduler_routes(app: web.Application, routes_module: Any)
 
     async def list_all(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -91,7 +91,7 @@ def setup_velia_agent_scheduler_routes(app: web.Application, routes_module: Any)
 
     async def create(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -112,7 +112,7 @@ def setup_velia_agent_scheduler_routes(app: web.Application, routes_module: Any)
 
     async def get_one(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -129,7 +129,7 @@ def setup_velia_agent_scheduler_routes(app: web.Application, routes_module: Any)
 
     async def toggle(request: web.Request, enabled: bool) -> web.Response:
         blocked = _require_available(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -153,7 +153,7 @@ def setup_velia_agent_scheduler_routes(app: web.Application, routes_module: Any)
 
     async def delete(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
