@@ -17,6 +17,8 @@ def test_autopilot_routes_are_installed_through_agent_extensions():
     assert '"auto_merge": False' in autopilot_routes
     assert '"deployment": False' in autopilot_routes
     assert '"ci_repair": False' in autopilot_routes
+    assert '"write_enabled": write' in autopilot_routes
+    assert '"worker_ready": enabled and worker and coding and write' in autopilot_routes
 
 
 def test_autopilot_routes_require_all_write_boundaries():
@@ -28,6 +30,7 @@ def test_autopilot_routes_require_all_write_boundaries():
     assert "coding_service.coding_enabled()" in source
     assert "autopilot.autopilot_enabled()" in source
     assert "github_service.github_app_configured()" in source
+    assert "write_service.write_enabled()" in source
     assert "routes_module._require_mobile_auth" in source
     assert "run_autopilot_once" not in source
     assert "/tick" not in source
