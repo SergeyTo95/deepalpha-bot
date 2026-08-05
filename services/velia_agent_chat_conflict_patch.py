@@ -7,6 +7,14 @@ from services import velia_agent_chat_planner_service as agent_planner
 from services import velia_agent_chat_runtime_patch as agent_patch
 from services import velia_developer_coding_service as coding_service
 
+_REPOSITORY_SCOPE_RE = re.compile(
+    r"(?:\b(?:repository|repo|github|branch|commit|pull\s+request|source\s+code|"
+    r"backend|frontend|android|kotlin|python|file|function|class|endpoint|database)\b|"
+    r"(?:репозитор|гитхаб|ветк|коммит|пулл\s*реквест|исходник|бэкенд|фронтенд|"
+    r"андроид|котлин|питон|код(?:е|а|ом)?|файл|функц|класс|эндпоинт|баз[аеы]))",
+    re.IGNORECASE,
+)
+
 
 def _result(text: str, request_id: Optional[str], reason: str) -> Dict[str, Any]:
     return {
@@ -87,9 +95,16 @@ def install(chat_module: Any) -> None:
             return _result(_text(message, "both"), request_id, "velia_agent_chat_plan_conflict")
         if coding_job and agent_planner.is_agent_request(message):
             return _result(_text(message, "coding_active"), request_id, "velia_agent_chat_coding_job_active")
+        if not agent_job and _REPOSITORY_SCOPE_RE.search(message):
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
         if (
             agent_job
-            and agent_patch._REPOSITORY_SCOPE_RE.search(message)
+            and _REPOSITORY_SCOPE_RE.search(message)
             and not (
                 agent_planner.is_approval(message)
                 or agent_planner.is_cancel(message)
