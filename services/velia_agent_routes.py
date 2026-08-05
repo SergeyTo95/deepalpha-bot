@@ -71,7 +71,7 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
 
     async def tools_list(request: web.Request) -> web.Response:
         blocked = _require_enabled(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -80,7 +80,7 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
 
     async def create_job(request: web.Request) -> web.Response:
         blocked = _require_enabled(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -100,7 +100,7 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
 
     async def get_job(request: web.Request) -> web.Response:
         blocked = _require_enabled(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -113,7 +113,7 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
 
     async def decide(request: web.Request, decision: str) -> web.Response:
         blocked = _require_enabled(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
@@ -138,7 +138,7 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
 
     async def run_job(request: web.Request) -> web.Response:
         blocked = _require_enabled(routes_module)
-        if blocked:
+        if blocked is not None:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
