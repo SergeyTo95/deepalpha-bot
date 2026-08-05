@@ -12,8 +12,9 @@ from services import velia_developer_github_write_service as write_service
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
+_AUTH_RE = re.compile(r"(?i)authorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+")
 _SECRET_RE = re.compile(
-    r"(?i)(authorization|bearer|token|secret|password|api[_-]?key)\s*[:=]\s*([^\s,;]+)"
+    r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
 _URL_SECRET_RE = re.compile(r"(?i)(https?://)[^\s/@]+@")
 _MAX_RUNS = 8
@@ -48,18 +49,22 @@ def _access(project: Mapping[str, Any]) -> Tuple[str, str, str]:
 
 def _scrub(value: Any, limit: int) -> str:
     text = ci._bounded_text(value, limit * 2)
+    text = _AUTH_RE.sub("Authorization=[REDACTED]", text)
     text = _SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _URL_SECRET_RE.sub(r"\1[REDACTED]@", text)
     text = re.sub(r"(?i)x-access-token:[^@\s]+", "x-access-token:[REDACTED]", text)
     lines = []
+    size = 0
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line:
             continue
         if line.startswith("##[group]") or line.startswith("##[endgroup]"):
             continue
-        lines.append(line[:2000])
-        if sum(len(item) + 1 for item in lines) >= limit:
+        bounded = line[:2000]
+        lines.append(bounded)
+        size += len(bounded) + 1
+        if size >= limit:
             break
     return "\n".join(lines)[:limit]
 
