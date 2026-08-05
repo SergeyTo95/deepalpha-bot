@@ -34,6 +34,11 @@ async def test_calendar_status_is_authenticated_and_provider_neutral(monkeypatch
             "configured": True,
             "connected": True,
             "connector_account_id": "account-1",
+            "calendar_id": "private-calendar@example.com",
+            "summary": "Primary",
+            "time_zone": "Europe/Istanbul",
+            "access_token": "must-not-leak",
+            "refresh_token": "must-not-leak",
         },
     )
     app = web.Application()
@@ -48,8 +53,13 @@ async def test_calendar_status_is_authenticated_and_provider_neutral(monkeypatch
         payload = await response.json()
         assert response.status == 200
         assert payload["connected"] is True
+        assert payload["connector_account_id"] == "account-1"
+        assert payload["summary"] == "Primary"
+        assert payload["time_zone"] == "Europe/Istanbul"
+        assert "calendar_id" not in payload
         assert "access_token" not in payload
         assert "refresh_token" not in payload
+        assert "private-calendar@example.com" not in str(payload)
 
 
 @pytest.mark.asyncio
