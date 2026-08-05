@@ -10,6 +10,7 @@ from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
 from services.velia_agent_google_calendar_routes import setup_velia_google_calendar_routes
 from services.velia_agent_protocol_service import AgentProtocolError
+from services.velia_agent_scheduler_routes import setup_velia_agent_scheduler_routes
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/mobile-api/v1/agent"
@@ -37,6 +38,12 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
     return None
 
 
+def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
+    setup_velia_google_calendar_routes(app, routes_module)
+    if runtime.agent_core_enabled():
+        setup_velia_agent_scheduler_routes(app, routes_module)
+
+
 async def _body(request: web.Request) -> Dict[str, Any]:
     try:
         value = await request.json()
@@ -49,7 +56,7 @@ async def _body(request: web.Request) -> Dict[str, Any]:
 
 def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
     if app.get("velia_agent_routes_installed"):
-        setup_velia_google_calendar_routes(app, routes_module)
+        _setup_agent_extensions(app, routes_module)
         return
 
     async def status(request: web.Request) -> web.Response:
@@ -159,4 +166,4 @@ def setup_velia_agent_routes(app: web.Application, routes_module: Any) -> None:
     app.router.add_post(f"{_PREFIX}/jobs/{{job_id}}/actions/{{action_id}}/reject", reject)
     app.router.add_post(f"{_PREFIX}/jobs/{{job_id}}/run", run_job)
     app["velia_agent_routes_installed"] = True
-    setup_velia_google_calendar_routes(app, routes_module)
+    _setup_agent_extensions(app, routes_module)
