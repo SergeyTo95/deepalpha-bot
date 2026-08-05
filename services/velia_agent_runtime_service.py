@@ -76,7 +76,7 @@ def plan_job(user_id: int, goal: str, raw_actions: Any, *, mode: str = "interact
     except ValueError as exc:
         raise AgentRuntimeError("velia_agent_mode_invalid") from exc
     actions = []
-    for index, raw in enumerate(raw_actions, start=1):
+    for raw in raw_actions:
         if not isinstance(raw, dict):
             raise AgentRuntimeError("velia_agent_action_invalid")
         definition = tools.get_tool(str(raw.get("tool_name") or ""))
@@ -89,7 +89,7 @@ def plan_job(user_id: int, goal: str, raw_actions: Any, *, mode: str = "interact
                 arguments=raw.get("arguments") or {},
                 risk=definition.risk,
                 requires_approval=decision.requires_approval,
-                idempotency_key=raw.get("idempotency_key") or f"action-{index}",
+                idempotency_key=raw.get("idempotency_key") or "",
             )
         )
     return jobs.create_job(int(user_id), str(goal or "")[:4000], permission_mode.value, actions)
