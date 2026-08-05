@@ -134,7 +134,15 @@ def execute_job(user_id: int, job_id: str) -> Dict[str, Any]:
             active_action_id = str(action["action_id"])
             jobs.update_action(normalized_user_id, job_id, active_action_id, ActionStatus.RUNNING)
             definition = tools.get_tool(str(action["tool_name"]))
-            result = definition.handler(normalized_user_id, action.get("arguments") or {})
+            handler_arguments = dict(action.get("arguments") or {})
+            handler_arguments.update(
+                {
+                    "_velia_action_id": active_action_id,
+                    "_velia_job_id": str(job_id),
+                    "_velia_idempotency_key": str(action.get("idempotency_key") or ""),
+                }
+            )
+            result = definition.handler(normalized_user_id, handler_arguments)
             jobs.update_action(
                 normalized_user_id,
                 job_id,
