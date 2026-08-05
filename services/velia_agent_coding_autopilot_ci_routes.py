@@ -59,7 +59,11 @@ def setup_velia_coding_autopilot_ci_routes(
     app: web.Application,
     routes_module: Any,
 ) -> None:
-    ci_service.install_ci_repair_loop()
+    # Disabled features must be completely inert: route registration cannot
+    # require DATABASE_URL or mutate schema. Enabling CI requires a redeploy,
+    # and that startup installs the patch and schema before the worker runs.
+    if ci_service.ci_watch_enabled():
+        ci_service.install_ci_repair_loop()
     if app.get("velia_coding_autopilot_ci_routes_installed"):
         return
 
