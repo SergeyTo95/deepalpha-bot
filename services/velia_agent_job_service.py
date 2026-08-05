@@ -41,6 +41,17 @@ def _row(row: Any, columns: Iterable[str]) -> Dict[str, Any]:
     return {name: row[index] if index < len(row) else None for index, name in enumerate(names)}
 
 
+def _value(row: Any, key: str, index: int = 0, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    if row is None:
+        return default
+    try:
+        return row[index]
+    except (IndexError, TypeError):
+        return default
+
+
 def ensure_velia_agent_tables() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY:
@@ -201,6 +212,10 @@ def create_job(user_id: int, goal: str, mode: str, actions: List[ActionRequest])
                 "INSERT INTO velia_agent_actions (action_id,job_id,user_id,sequence_no,tool_name,arguments_json,risk,status,requires_approval,idempotency_key,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (action.action_id, job_id, int(user_id), index, action.tool_name, _json(action.arguments), action.risk.value, action.status.value, action.requires_approval, action.idempotency_key, now, now),
             )
+        cursor.execute(
+            "INSERT INTO velia_agent_audit_events (event_id,user_id,job_id,action_id,event_type,payload_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (str(uuid.uuid4()), int(user_id), job_id, "", "job_created", _json({"mode": mode, "action_count": len(actions)}), now),
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -208,7 +223,6 @@ def create_job(user_id: int, goal: str, mode: str, actions: List[ActionRequest])
     finally:
         cursor.close()
         conn.close()
-    audit(user_id, "job_created", job_id=job_id, payload={"mode": mode, "action_count": len(actions)})
     return get_job(user_id, job_id)
 
 
@@ -257,24 +271,53 @@ def set_job_status(user_id: int, job_id: str, status: JobStatus) -> None:
         conn.close()
 
 
-def decide_action(user_id: int, job_id: str, action_id: str, decision: str) -> Dict[str, Any]:
+def claim_job_for_execution(user_id: int, job_id: str) -> None:
+    """Atomically claim one executable job so duplicate `/run` requests cannot race."""
     ensure_velia_agent_tables()
-    normalized = str(decision).strip().lower()
-    if normalized not in {"approved", "rejected"}:
-        raise AgentJobError("velia_agent_approval_invalid")
-    next_status = ActionStatus.APPROVED if normalized == "approved" else ActionStatus.REJECTED
+    now = datetime.utcnow()
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT a.status FROM velia_agent_actions a JOIN velia_agent_jobs j ON j.job_id=a.job_id WHERE a.action_id=%s AND a.job_id=%s AND j.user_id=%s", (str(action_id), str(job_id), int(user_id)))
-        row = cursor.fetchone()
-        if not row:
-            raise AgentJobError("velia_agent_action_not_found", status=404)
-        current = str(row.get("status") if isinstance(row, dict) else row[0])
-        if current != ActionStatus.AWAITING_APPROVAL.value:
-            raise AgentJobError("velia_agent_action_not_awaiting_approval", status=409)
-        cursor.execute("UPDATE velia_agent_actions SET status=%s,updated_at=%s WHERE action_id=%s", (next_status.value, datetime.utcnow(), str(action_id)))
-        cursor.execute("INSERT INTO velia_agent_approvals (approval_id,job_id,action_id,user_id,decision,created_at) VALUES (%s,%s,%s,%s,%s,%s)", (str(uuid.uuid4()), str(job_id), str(action_id), int(user_id), normalized, datetime.utcnow()))
+        cursor.execute(
+            """
+            UPDATE velia_agent_jobs AS j
+            SET status=%s, updated_at=%s
+            WHERE j.job_id=%s
+              AND j.user_id=%s
+              AND j.status=%s
+              AND NOT EXISTS (
+                  SELECT 1 FROM velia_agent_actions AS a
+                  WHERE a.job_id=j.job_id
+                    AND a.status NOT IN (%s,%s,%s)
+              )
+            RETURNING j.job_id
+            """,
+            (
+                JobStatus.RUNNING.value,
+                now,
+                str(job_id),
+                int(user_id),
+                JobStatus.PLANNED.value,
+                ActionStatus.PROPOSED.value,
+                ActionStatus.APPROVED.value,
+                ActionStatus.COMPLETED.value,
+            ),
+        )
+        claimed = cursor.fetchone()
+        if not claimed:
+            cursor.execute("SELECT status FROM velia_agent_jobs WHERE job_id=%s AND user_id=%s", (str(job_id), int(user_id)))
+            current = cursor.fetchone()
+            if not current:
+                raise AgentJobError("velia_agent_job_not_found", status=404)
+            raise AgentJobError(
+                "velia_agent_job_not_executable",
+                status=409,
+                detail=str(_value(current, "status", 0, "unknown")),
+            )
+        cursor.execute(
+            "INSERT INTO velia_agent_audit_events (event_id,user_id,job_id,action_id,event_type,payload_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (str(uuid.uuid4()), int(user_id), str(job_id), "", "job_execution_claimed", "{}", now),
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -282,7 +325,77 @@ def decide_action(user_id: int, job_id: str, action_id: str, decision: str) -> D
     finally:
         cursor.close()
         conn.close()
-    audit(user_id, f"action_{normalized}", job_id=job_id, action_id=action_id)
+
+
+def decide_action(user_id: int, job_id: str, action_id: str, decision: str) -> Dict[str, Any]:
+    ensure_velia_agent_tables()
+    normalized = str(decision).strip().lower()
+    if normalized not in {"approved", "rejected"}:
+        raise AgentJobError("velia_agent_approval_invalid")
+    next_status = ActionStatus.APPROVED if normalized == "approved" else ActionStatus.REJECTED
+    now = datetime.utcnow()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT a.status AS action_status, j.status AS job_status
+            FROM velia_agent_actions AS a
+            JOIN velia_agent_jobs AS j ON j.job_id=a.job_id
+            WHERE a.action_id=%s AND a.job_id=%s AND j.user_id=%s
+            FOR UPDATE OF a, j
+            """,
+            (str(action_id), str(job_id), int(user_id)),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise AgentJobError("velia_agent_action_not_found", status=404)
+        current_action = str(_value(row, "action_status", 0, ""))
+        current_job = str(_value(row, "job_status", 1, ""))
+        if current_action != ActionStatus.AWAITING_APPROVAL.value:
+            raise AgentJobError("velia_agent_action_not_awaiting_approval", status=409)
+        if current_job != JobStatus.AWAITING_APPROVAL.value:
+            raise AgentJobError("velia_agent_job_not_awaiting_approval", status=409, detail=current_job)
+
+        cursor.execute("UPDATE velia_agent_actions SET status=%s,updated_at=%s WHERE action_id=%s", (next_status.value, now, str(action_id)))
+        cursor.execute(
+            "INSERT INTO velia_agent_approvals (approval_id,job_id,action_id,user_id,decision,created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+            (str(uuid.uuid4()), str(job_id), str(action_id), int(user_id), normalized, now),
+        )
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status=%s) AS pending_count,
+                COUNT(*) FILTER (WHERE status=%s) AS rejected_count
+            FROM velia_agent_actions
+            WHERE job_id=%s
+            """,
+            (ActionStatus.AWAITING_APPROVAL.value, ActionStatus.REJECTED.value, str(job_id)),
+        )
+        counts = cursor.fetchone()
+        pending_count = int(_value(counts, "pending_count", 0, 0) or 0)
+        rejected_count = int(_value(counts, "rejected_count", 1, 0) or 0)
+        if rejected_count > 0:
+            job_status = JobStatus.CANCELLED
+        elif pending_count > 0:
+            job_status = JobStatus.AWAITING_APPROVAL
+        else:
+            job_status = JobStatus.PLANNED
+        cursor.execute(
+            "UPDATE velia_agent_jobs SET status=%s,updated_at=%s WHERE job_id=%s AND user_id=%s",
+            (job_status.value, now, str(job_id), int(user_id)),
+        )
+        cursor.execute(
+            "INSERT INTO velia_agent_audit_events (event_id,user_id,job_id,action_id,event_type,payload_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (str(uuid.uuid4()), int(user_id), str(job_id), str(action_id), f"action_{normalized}", _json({"job_status": job_status.value}), now),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
     return get_job(user_id, job_id)
 
 
