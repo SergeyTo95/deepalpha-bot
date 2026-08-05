@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List, Mapping
 
@@ -8,6 +9,7 @@ from services import velia_agent_permission_service as permissions
 from services import velia_agent_tool_registry_service as tools
 from services.velia_agent_protocol_service import ActionRisk, ActionStatus, AgentProtocolError, JobStatus, build_action_request
 
+logger = logging.getLogger(__name__)
 _BUILTINS_READY = False
 
 
@@ -103,15 +105,25 @@ def reject_action(user_id: int, job_id: str, action_id: str) -> Dict[str, Any]:
     return jobs.decide_action(int(user_id), job_id, action_id, "rejected")
 
 
+def _safe_audit(user_id: int, event_type: str, *, job_id: str, action_id: str = "", payload: Any = None) -> None:
+    try:
+        jobs.audit(int(user_id), event_type, job_id=job_id, action_id=action_id, payload=payload)
+    except Exception:
+        logger.exception(
+            "VELIA_AGENT_AUDIT_WRITE_FAILED user_id=%s job_id=%s action_id=%s event_type=%s",
+            int(user_id),
+            str(job_id),
+            str(action_id),
+            str(event_type),
+        )
+
+
 def execute_job(user_id: int, job_id: str) -> Dict[str, Any]:
     ensure_builtin_tools()
-    job = jobs.get_job(int(user_id), job_id)
-    if any(str(item.get("status")) == ActionStatus.REJECTED.value for item in job["actions"]):
-        jobs.set_job_status(int(user_id), job_id, JobStatus.CANCELLED)
-        raise AgentRuntimeError("velia_agent_job_rejected", status=409)
-    if any(str(item.get("status")) == ActionStatus.AWAITING_APPROVAL.value for item in job["actions"]):
-        raise AgentRuntimeError("velia_agent_approval_required", status=409)
-    jobs.set_job_status(int(user_id), job_id, JobStatus.RUNNING)
+    normalized_user_id = int(user_id)
+    jobs.claim_job_for_execution(normalized_user_id, job_id)
+    job = jobs.get_job(normalized_user_id, job_id)
+    active_action_id = ""
     try:
         for action in job["actions"]:
             status = str(action.get("status") or "")
@@ -119,16 +131,45 @@ def execute_job(user_id: int, job_id: str) -> Dict[str, Any]:
                 continue
             if status not in {ActionStatus.PROPOSED.value, ActionStatus.APPROVED.value}:
                 raise AgentRuntimeError("velia_agent_action_not_executable", status=409, detail=status)
-            action_id = str(action["action_id"])
-            jobs.update_action(int(user_id), job_id, action_id, ActionStatus.RUNNING)
+            active_action_id = str(action["action_id"])
+            jobs.update_action(normalized_user_id, job_id, active_action_id, ActionStatus.RUNNING)
             definition = tools.get_tool(str(action["tool_name"]))
-            result = definition.handler(int(user_id), action.get("arguments") or {})
-            jobs.update_action(int(user_id), job_id, action_id, ActionStatus.COMPLETED, result=result)
-            jobs.audit(int(user_id), "action_completed", job_id=job_id, action_id=action_id, payload={"tool": definition.name})
-        jobs.set_job_status(int(user_id), job_id, JobStatus.COMPLETED)
+            result = definition.handler(normalized_user_id, action.get("arguments") or {})
+            jobs.update_action(
+                normalized_user_id,
+                job_id,
+                active_action_id,
+                ActionStatus.COMPLETED,
+                result=result,
+            )
+            _safe_audit(
+                normalized_user_id,
+                "action_completed",
+                job_id=job_id,
+                action_id=active_action_id,
+                payload={"tool": definition.name},
+            )
+            active_action_id = ""
+        jobs.set_job_status(normalized_user_id, job_id, JobStatus.COMPLETED)
     except Exception as exc:
         code = str(getattr(exc, "code", "velia_agent_execution_failed"))[:120]
-        jobs.set_job_status(int(user_id), job_id, JobStatus.FAILED)
-        jobs.audit(int(user_id), "job_failed", job_id=job_id, payload={"error": code})
+        if active_action_id:
+            try:
+                jobs.update_action(
+                    normalized_user_id,
+                    job_id,
+                    active_action_id,
+                    ActionStatus.FAILED,
+                    error_code=code,
+                )
+            except Exception:
+                logger.exception(
+                    "VELIA_AGENT_ACTION_FAILURE_PERSIST_FAILED user_id=%s job_id=%s action_id=%s",
+                    normalized_user_id,
+                    str(job_id),
+                    active_action_id,
+                )
+        jobs.set_job_status(normalized_user_id, job_id, JobStatus.FAILED)
+        _safe_audit(normalized_user_id, "job_failed", job_id=job_id, payload={"error": code})
         raise
-    return jobs.get_job(int(user_id), job_id)
+    return jobs.get_job(normalized_user_id, job_id)
