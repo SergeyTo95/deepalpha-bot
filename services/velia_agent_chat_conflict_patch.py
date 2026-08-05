@@ -14,6 +14,29 @@ _REPOSITORY_SCOPE_RE = re.compile(
     r"андроид|котлин|питон|код(?:е|а|ом)?|файл|функц|класс|эндпоинт|баз[аеы]))",
     re.IGNORECASE,
 )
+_MOBILE_APPROVAL_RE = re.compile(
+    r"^\s*(?:"
+    r"выполни(?:\s+план)?|выполнить(?:\s+план)?|запускай(?:\s+план)?|"
+    r"подтверждаю(?:\s+план)?|"
+    r"execute(?:\s+the\s+plan|\s+plan)?|run(?:\s+the\s+plan|\s+plan)?|"
+    r"approve(?:\s+the\s+plan|\s+plan)?|"
+    r"uygula|planı\s+uygula|onaylıyorum|planı\s+onaylıyorum"
+    r")\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _install_mobile_approval_aliases() -> None:
+    if getattr(agent_planner, "_velia_mobile_approval_aliases_installed", False):
+        return
+    original_is_approval = agent_planner.is_approval
+
+    def is_approval_with_mobile_aliases(message: str) -> bool:
+        normalized = str(message or "").strip()
+        return bool(original_is_approval(normalized) or _MOBILE_APPROVAL_RE.fullmatch(normalized))
+
+    agent_planner.is_approval = is_approval_with_mobile_aliases
+    agent_planner._velia_mobile_approval_aliases_installed = True
 
 
 def _result(text: str, request_id: Optional[str], reason: str) -> Dict[str, Any]:
@@ -54,6 +77,18 @@ def _text(message: str, kind: str) -> str:
             if russian
             else "This chat already has an active personal VELIA plan. Execute or cancel it before starting repository work."
         )
+    if kind == "agent_request_active":
+        return (
+            "Сначала заверши или отмени текущий план Велии. После этого можно создать новый план."
+            if russian
+            else "Complete or cancel the current VELIA plan before creating another one."
+        )
+    if kind == "plan_missing":
+        return (
+            "Активного плана Велии нет. Сначала опиши действие, которое нужно выполнить."
+            if russian
+            else "There is no active VELIA plan. Describe the action first."
+        )
     return (
         "В этом чате одновременно обнаружены два активных плана. Выполнение заблокировано; отмени один из планов."
         if russian
@@ -65,6 +100,7 @@ def install(chat_module: Any) -> None:
     if getattr(chat_module, "_velia_agent_chat_conflict_patch_installed", False):
         return
 
+    _install_mobile_approval_aliases()
     original_generate = chat_module.generate_velia_chat_result
 
     def generate_without_plan_conflicts(
@@ -91,6 +127,10 @@ def install(chat_module: Any) -> None:
             )
         agent_job = agent_planner.active_chat_job(int(user_id), str(conversation_id))
         coding_job = coding_service.active_job(int(user_id), str(conversation_id))
+        is_approval = agent_planner.is_approval(message)
+        is_cancel = agent_planner.is_cancel(message)
+        is_status = agent_planner.is_status(message)
+
         if agent_job and coding_job:
             return _result(_text(message, "both"), request_id, "velia_agent_chat_plan_conflict")
         if coding_job and agent_planner.is_agent_request(message):
@@ -102,16 +142,36 @@ def install(chat_module: Any) -> None:
                 conversation_id=conversation_id,
                 request_id=request_id,
             )
+        if not agent_job and not coding_job and (is_approval or is_cancel or is_status):
+            return agent_patch._result(
+                _text(message, "plan_missing"),
+                request_id,
+                reason="velia_agent_chat_plan_missing",
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+            )
         if (
             agent_job
             and _REPOSITORY_SCOPE_RE.search(message)
-            and not (
-                agent_planner.is_approval(message)
-                or agent_planner.is_cancel(message)
-                or agent_planner.is_status(message)
-            )
+            and not (is_approval or is_cancel or is_status)
         ):
             return _result(_text(message, "agent_active"), request_id, "velia_agent_chat_job_active")
+        if (
+            agent_job
+            and agent_planner.is_agent_request(message)
+            and not (is_approval or is_cancel or is_status)
+        ):
+            display_job = dict(agent_job)
+            reminder = _text(message, "agent_request_active")
+            display_job["planner_summary"] = reminder
+            return agent_patch._result(
+                reminder,
+                request_id,
+                reason="velia_agent_chat_plan_ready",
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+                job=display_job,
+            )
         return original_generate(
             prompt,
             user_id=user_id,
