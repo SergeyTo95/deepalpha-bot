@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "velia_repowise_
 SPEC = importlib.util.spec_from_file_location("velia_repowise_spike", MODULE_PATH)
 assert SPEC and SPEC.loader
 spike = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = spike
 SPEC.loader.exec_module(spike)
 
 
