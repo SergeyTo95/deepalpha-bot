@@ -1,0 +1,66 @@
+name: VELIA Repowise Spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/velia-repowise-spike.yml'
+      - 'requirements-repowise.txt'
+      - 'scripts/velia_repowise_spike.py'
+      - 'tests/test_velia_repowise_spike.py'
+      - 'docs/velia-repowise-spike.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repowise-spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      REPOWISE_TELEMETRY_DISABLED: '1'
+      DO_NOT_TRACK: '1'
+      VELIA_REPOWISE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VELIA_REPOWISE_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-repowise.txt
+
+      - name: Install isolated Repowise dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements-repowise.txt pytest
+
+      - name: Validate spike runner
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m py_compile scripts/velia_repowise_spike.py
+          pytest -q tests/test_velia_repowise_spike.py
+
+      - name: Build exact-head index and benchmark
+        run: python scripts/velia_repowise_spike.py
+
+      - name: Confirm tracked repository files were not mutated
+        run: git diff --exit-code
+
+      - name: Upload Repowise spike evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velia-repowise-spike-${{ github.run_id }}
+          path: artifacts/velia-repowise-spike/
+          if-no-files-found: warn
+          retention-days: 7
