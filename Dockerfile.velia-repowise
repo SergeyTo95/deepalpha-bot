@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    REPOWISE_TELEMETRY_DISABLED=1 \
+    REPOWISE_SKIP_EDITOR_SETUP=1 \
+    DO_NOT_TRACK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-repowise.txt requirements-velia-repowise-service.txt ./
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -r requirements-velia-repowise-service.txt
+
+COPY velia_repowise_service ./velia_repowise_service
+
+EXPOSE 7337
+
+CMD ["python", "-m", "velia_repowise_service.app"]
