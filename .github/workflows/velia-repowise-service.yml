@@ -25,6 +25,7 @@ jobs:
       REPOWISE_SKIP_EDITOR_SETUP: '1'
       DO_NOT_TRACK: '1'
       VELIA_REPOWISE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHONPATH: ${{ github.workspace }}
       PYTHONUNBUFFERED: '1'
     steps:
       - name: Checkout exact PR head
