@@ -86,7 +86,7 @@ def test_settings_require_long_token_and_confined_mirrors(
         json.dumps({"owner/repo": str(outside)}),
     )
 
-    with pytest.raises(ConfigurationError, match="token"):
+    with pytest.raises(ConfigurationError, match="SERVICE_TOKEN"):
         Settings.load()
 
     monkeypatch.setenv("VELIA_REPOWISE_SERVICE_TOKEN", TOKEN)
