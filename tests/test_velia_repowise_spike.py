@@ -56,6 +56,48 @@ def test_risk_revspec_uses_head_when_base_is_missing_or_equal():
     assert spike._risk_revspec(sha, sha) == "HEAD"
 
 
+def test_dead_code_list_summary_is_compact_and_actionable():
+    summary = spike._dead_code_summary(
+        [
+            {
+                "kind": "unused_export",
+                "safe_to_delete": True,
+                "lines": 12,
+            },
+            {
+                "kind": "unused_export",
+                "safe_to_delete": False,
+                "lines": 8,
+            },
+            {
+                "kind": "unreachable_file",
+                "safe_to_delete": True,
+                "lines": 20,
+            },
+        ]
+    )
+
+    assert summary == {
+        "finding_count": 3,
+        "safe_to_delete_count": 2,
+        "estimated_safe_lines": 32,
+        "by_kind": {"unreachable_file": 1, "unused_export": 2},
+    }
+
+
+def test_init_disables_editor_and_agent_file_side_effects():
+    source = MODULE_PATH.read_text(encoding="utf-8")
+
+    assert 'env["REPOWISE_SKIP_EDITOR_SETUP"] = "1"' in source
+    for flag in (
+        "--no-editor-setup",
+        "--no-claude-md",
+        "--no-agents",
+        "--no-codex",
+    ):
+        assert f'"{flag}"' in source
+
+
 def test_summary_is_bounded_and_records_acceptance_fields():
     summary = spike._render_summary(
         {
