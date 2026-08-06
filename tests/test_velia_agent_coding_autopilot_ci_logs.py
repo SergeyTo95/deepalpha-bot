@@ -51,6 +51,81 @@ def test_actionable_failed_job_log_makes_evidence_repairable(monkeypatch):
     assert result["failures"][0]["source"] == "actions_job_log"
 
 
+def test_runner_boilerplate_does_not_mask_actionable_test_failure(monkeypatch):
+    monkeypatch.setattr(logs, "logs_enabled", lambda: True)
+    monkeypatch.setattr(
+        logs,
+        "_actions_job_logs",
+        lambda project, sha: {
+            "available": True,
+            "logs": [
+                {
+                    "source": "actions_job_log",
+                    "workflow": "VELIA Agent Core",
+                    "name": "agent-core-tests",
+                    "conclusion": "failure",
+                    "text": (
+                        "Current runner version: '2.336.0'\n"
+                        "Runner Image Provisioner\n"
+                        "Hosted Compute Agent\n"
+                        "FAILED tests/test_fixture.py::test_marker - AssertionError: "
+                        "replace PENDING with OK\n"
+                        "1 failed, 125 passed"
+                    ),
+                }
+            ],
+        },
+    )
+
+    result = logs.enrich_failure(
+        {},
+        "a" * 40,
+        {"failures": [], "repairable": False, "infrastructure": False},
+    )
+
+    assert result["repairable"] is True
+    assert result["infrastructure"] is False
+
+
+def test_fallback_logs_are_retained_when_failure_list_is_full(monkeypatch):
+    monkeypatch.setattr(logs, "logs_enabled", lambda: True)
+    monkeypatch.setattr(
+        logs,
+        "_actions_job_logs",
+        lambda project, sha: {
+            "available": True,
+            "logs": [
+                {
+                    "source": "actions_job_log",
+                    "workflow": "Agent CI",
+                    "name": "tests",
+                    "conclusion": "failure",
+                    "text": "FAILED tests/test_demo.py::test_value - assert 1 == 2",
+                }
+            ],
+        },
+    )
+    original_failures = [
+        {"source": "check_run", "name": f"check-{index}"}
+        for index in range(20)
+    ]
+
+    result = logs.enrich_failure(
+        {},
+        "a" * 40,
+        {
+            "failures": original_failures,
+            "repairable": False,
+            "infrastructure": False,
+        },
+    )
+
+    assert len(result["failures"]) == 20
+    assert result["failures"][0]["source"] == "actions_job_log"
+    assert result["failures"][1]["name"] == "check-0"
+    assert result["repairable"] is True
+
+
 def test_cancelled_or_infrastructure_logs_never_repair_code(monkeypatch):
     monkeypatch.setattr(logs, "logs_enabled", lambda: True)
     monkeypatch.setattr(
@@ -110,6 +185,10 @@ def test_existing_annotations_are_not_replaced_by_logs(monkeypatch):
         "_actions_job_logs",
         lambda project, sha: (_ for _ in ()).throw(AssertionError("must not fetch logs")),
     )
-    original = {"failures": [{"source": "check_run"}], "repairable": True, "infrastructure": False}
+    original = {
+        "failures": [{"source": "check_run"}],
+        "repairable": True,
+        "infrastructure": False,
+    }
 
     assert logs.enrich_failure({}, "a" * 40, original) == original
