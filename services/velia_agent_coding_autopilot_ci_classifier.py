@@ -35,6 +35,21 @@ _STRICT_INFRA_FAILURE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_STRONG_FAILURE_EVIDENCE_RE = re.compile(
+    r"(?:"
+    r"\bFAILED\b"
+    r"|\bAssertionError\b"
+    r"|Traceback \(most recent call last\)"
+    r"|\b(?:Syntax|Name|Type|Value|Import|ModuleNotFound|Attribute|Key|Index|Runtime)Error\b"
+    r"|(?:^|\s)[\w./-]+\.(?:py|kt|kts|java|js|jsx|ts|tsx|go|rs|rb|php|cs|cpp|c|h):\d+"
+    r"|\berror(?:\[[A-Z0-9_-]+\])?\s*:"
+    r"|\bassert\b[^\n]{0,500}=="
+    r"|\bexpected\b[^\n]{0,500}\b(?:actual|received|got)\b"
+    r"|\breplace\b[^\n]{0,1000}\bwith\b"
+    r"|\b\d+\s+failed\b"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _failure_text(item: Mapping[str, Any]) -> str:
@@ -66,12 +81,18 @@ def failure_item_is_infrastructure(item: Mapping[str, Any]) -> bool:
     return bool(_STRICT_INFRA_FAILURE_RE.search(_failure_text(item)))
 
 
-def _item_has_actionable_evidence(item: Mapping[str, Any]) -> bool:
+def failure_item_has_strong_evidence(item: Mapping[str, Any]) -> bool:
     if str(item.get("source") or "") not in _ACTIONABLE_SOURCES:
         return False
-    if item.get("annotations"):
-        return True
-    return bool(str(item.get("summary") or "").strip() or str(item.get("text") or "").strip())
+    return bool(_STRONG_FAILURE_EVIDENCE_RE.search(_failure_text(item)))
+
+
+def failure_payload_has_strong_evidence(payload: Mapping[str, Any]) -> bool:
+    return any(
+        failure_item_has_strong_evidence(item)
+        for item in (payload.get("failures") or [])
+        if isinstance(item, Mapping)
+    )
 
 
 def classify_failure_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -82,10 +103,11 @@ def classify_failure_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         if isinstance(item, Mapping)
     ]
     infrastructure = any(failure_item_is_infrastructure(item) for item in failures)
-    actionable = any(_item_has_actionable_evidence(item) for item in failures)
+    strong_evidence = any(failure_item_has_strong_evidence(item) for item in failures)
     result["failures"] = failures[:20]
     result["infrastructure"] = infrastructure
-    result["repairable"] = bool(failures and actionable and not infrastructure)
+    result["evidence_quality"] = "strong" if strong_evidence else ("weak" if failures else "none")
+    result["repairable"] = bool(failures and strong_evidence and not infrastructure)
     return result
 
 
