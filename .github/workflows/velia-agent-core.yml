@@ -5,6 +5,7 @@ on:
     paths:
       - 'services/velia_agent_*.py'
       - 'tests/test_velia_agent_*.py'
+      - 'docs/velia-autopilot-controlled-repair-smoke.txt'
       - 'third_party/openworker/**'
       - '.github/workflows/velia-agent-core.yml'
       - 'run_web_process.py'
