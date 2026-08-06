@@ -51,7 +51,7 @@ def test_actionable_failed_job_log_makes_evidence_repairable(monkeypatch):
     assert result["failures"][0]["source"] == "actions_job_log"
 
 
-def test_runner_boilerplate_does_not_mask_actionable_test_failure(monkeypatch):
+def test_runner_and_timeout_dependency_boilerplate_do_not_mask_test_failure(monkeypatch):
     monkeypatch.setattr(logs, "logs_enabled", lambda: True)
     monkeypatch.setattr(
         logs,
@@ -68,9 +68,13 @@ def test_runner_boilerplate_does_not_mask_actionable_test_failure(monkeypatch):
                         "Current runner version: '2.336.0'\n"
                         "Runner Image Provisioner\n"
                         "Hosted Compute Agent\n"
+                        "If you need to temporarily use Node 20, set an environment variable.\n"
+                        "Collecting async-timeout<5.0,>=4.0.0a3\n"
+                        "Downloading async_timeout-4.0.3-py3-none-any.whl\n"
+                        "timeout=20\n"
                         "FAILED tests/test_fixture.py::test_marker - AssertionError: "
                         "replace PENDING with OK\n"
-                        "1 failed, 125 passed"
+                        "1 failed, 127 passed"
                     ),
                 }
             ],
@@ -85,6 +89,35 @@ def test_runner_boilerplate_does_not_mask_actionable_test_failure(monkeypatch):
 
     assert result["repairable"] is True
     assert result["infrastructure"] is False
+
+
+def test_explicit_connection_timeout_remains_infrastructure(monkeypatch):
+    monkeypatch.setattr(logs, "logs_enabled", lambda: True)
+    monkeypatch.setattr(
+        logs,
+        "_actions_job_logs",
+        lambda project, sha: {
+            "available": True,
+            "logs": [
+                {
+                    "source": "actions_job_log",
+                    "workflow": "Agent CI",
+                    "name": "checkout",
+                    "conclusion": "failure",
+                    "text": "GitHub API request timed out while fetching the repository.",
+                }
+            ],
+        },
+    )
+
+    result = logs.enrich_failure(
+        {},
+        "a" * 40,
+        {"failures": [], "repairable": False, "infrastructure": False},
+    )
+
+    assert result["repairable"] is False
+    assert result["infrastructure"] is True
 
 
 def test_fallback_logs_are_retained_when_failure_list_is_full(monkeypatch):
