@@ -13,6 +13,8 @@ from services import velia_agent_coding_autopilot_ci_repair_evidence_patch as ci
 from services import velia_agent_coding_autopilot_ci_service as ci_service
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_project_service as project_service
+from services import velia_developer_repowise_context_patch as repowise_patch
+from services import velia_developer_repowise_context_service as repowise_context
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/mobile-api/v1/developer/autopilot"
@@ -65,6 +67,8 @@ def setup_velia_coding_autopilot_ci_routes(
 ) -> None:
     # Disabled features must be completely inert: route registration cannot
     # require DATABASE_URL or mutate schema. Enabling CI requires a redeploy.
+    if repowise_context.context_enabled():
+        repowise_patch.install()
     if ci_service.ci_watch_enabled():
         ci_classifier.install()
         ci_reliability.install()
@@ -83,12 +87,18 @@ def setup_velia_coding_autopilot_ci_routes(
             return routes_module._json_response(
                 {"ok": False, "error": "unauthorized"}, status=401
             )
+        repowise_status = repowise_context.status()
         return routes_module._json_response(
             {
                 "ok": True,
                 "ci_watch_enabled": ci_service.ci_watch_enabled(),
                 "ci_repair_enabled": ci_service.ci_repair_enabled(),
                 "ci_logs_enabled": ci_logs.logs_enabled(),
+                "repowise_context_enabled": bool(repowise_status["enabled"]),
+                "repowise_context_configured": bool(repowise_status["configured"]),
+                "repowise_context_read_only": True,
+                "repowise_context_fail_open": True,
+                "repowise_context_exact_sha_required": True,
                 "structured_infrastructure_classifier": True,
                 "strong_evidence_required": True,
                 "literal_evidence_guard": True,
