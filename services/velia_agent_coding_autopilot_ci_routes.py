@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
+from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
 from services import velia_agent_coding_autopilot_ci_log_service as ci_logs
 from services import velia_agent_coding_autopilot_ci_reliability_patch as ci_reliability
 from services import velia_agent_coding_autopilot_ci_service as ci_service
@@ -64,6 +65,7 @@ def setup_velia_coding_autopilot_ci_routes(
     # Disabled features must be completely inert: route registration cannot
     # require DATABASE_URL or mutate schema. Enabling CI requires a redeploy.
     if ci_service.ci_watch_enabled():
+        ci_classifier.install()
         ci_reliability.install()
         if ci_logs.logs_enabled():
             ci_logs.install()
@@ -85,6 +87,7 @@ def setup_velia_coding_autopilot_ci_routes(
                 "ci_watch_enabled": ci_service.ci_watch_enabled(),
                 "ci_repair_enabled": ci_service.ci_repair_enabled(),
                 "ci_logs_enabled": ci_logs.logs_enabled(),
+                "structured_infrastructure_classifier": True,
                 "max_repairs": ci_service._env_int(
                     "VELIA_DEVELOPER_AUTOPILOT_CI_MAX_REPAIRS", 2, 0, 2
                 ),
