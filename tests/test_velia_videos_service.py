@@ -141,3 +141,26 @@ def test_language_selection_does_not_treat_english_video_as_turkish():
     assert service._success_text("Create a video of a raccoon") == "The video is ready."
     assert service._success_text("Видео про енота") == "Видео готово."
     assert service._success_text("Bir klip oluştur") == "Video hazır."
+
+
+def test_disabled_feature_never_reserves_capacity_or_calls_provider(monkeypatch):
+    monkeypatch.delenv("VELYON_VIDEOS_ENABLED", raising=False)
+    monkeypatch.setattr(service, "_existing_video_for_request", lambda *args: False)
+    monkeypatch.setattr(service, "_request_image_attachment", lambda *args: (None, None))
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("paid path must stay unreachable while disabled")
+
+    monkeypatch.setattr(service, "_reserve_capacity", unexpected_call)
+    monkeypatch.setattr(service, "_submit_and_wait", unexpected_call)
+
+    result = service.generate_and_store_video(
+        user_id=1,
+        conversation_id="conversation",
+        request_id="request",
+        original_message="Создай видео про енота",
+        requested_mode="t2v",
+        prompt="енот ужинает",
+    )
+
+    assert result["video_created"] is False
