@@ -1,0 +1,100 @@
+name: VELIA Repowise Spike
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/velia-repowise-spike.yml'
+      - 'requirements-repowise.txt'
+      - 'scripts/velia_repowise_spike.py'
+      - 'tests/test_velia_repowise_spike.py'
+      - 'docs/velia-repowise-spike.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repowise-spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      REPOWISE_TELEMETRY_DISABLED: '1'
+      REPOWISE_SKIP_EDITOR_SETUP: '1'
+      DO_NOT_TRACK: '1'
+      VELIA_REPOWISE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VELIA_REPOWISE_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-repowise.txt
+
+      - name: Install isolated Repowise dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements-repowise.txt pytest
+
+      - name: Validate spike runner
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m py_compile scripts/velia_repowise_spike.py
+          pytest -q tests/test_velia_repowise_spike.py
+
+      - name: Create isolated exact-head worktree
+        run: |
+          worktree="$RUNNER_TEMP/velia-repowise-worktree"
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$VELIA_REPOWISE_EXPECTED_HEAD_SHA"
+          echo "VELIA_REPOWISE_WORKTREE=$worktree" >> "$GITHUB_ENV"
+
+      - name: Build exact-head index and benchmark
+        run: |
+          cd "$VELIA_REPOWISE_WORKTREE"
+          python scripts/velia_repowise_spike.py
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          rm -rf "$GITHUB_WORKSPACE/artifacts/velia-repowise-spike"
+          cp -R artifacts/velia-repowise-spike "$GITHUB_WORKSPACE/artifacts/"
+
+      - name: Confirm side effects are contained
+        run: |
+          root_status="$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all)"
+          if [ -n "$root_status" ]; then
+            echo "Primary checkout was changed:"
+            printf '%s\n' "$root_status"
+            exit 1
+          fi
+
+          worktree_status="$(git -C "$VELIA_REPOWISE_WORKTREE" status --porcelain --untracked-files=all)"
+          unexpected="$(
+            printf '%s\n' "$worktree_status" |
+              grep -vE '^\?\? (\.mcp\.json|\.vscode/extensions\.json|\.vscode/mcp\.json)$' || true
+          )"
+          if [ -n "$unexpected" ]; then
+            echo "Repowise created unexpected files in its disposable worktree:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+
+          echo "Contained Repowise project-file side effects:"
+          printf '%s\n' "$worktree_status"
+          git worktree remove --force "$VELIA_REPOWISE_WORKTREE"
+
+      - name: Upload Repowise spike evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velia-repowise-spike-${{ github.run_id }}
+          path: artifacts/velia-repowise-spike/
+          if-no-files-found: warn
+          retention-days: 7
