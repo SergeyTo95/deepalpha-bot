@@ -11,12 +11,15 @@ def test_actions_log_fallback_is_optional_and_installed_before_ci_worker():
 
     assert '"VELIA_DEVELOPER_AUTOPILOT_CI_LOGS_ENABLED", False' in service
     assert routes.index("ci_classifier.install()") < routes.index("ci_logs.install()")
-    assert routes.index("ci_logs.install()") < routes.index(
+    assert routes.index("ci_logs.install()") < routes.index("ci_evidence.install()")
+    assert routes.index("ci_evidence.install()") < routes.index(
         "ci_service.install_ci_repair_loop()"
     )
     assert "if ci_logs.logs_enabled():" in routes
     assert '"ci_logs_enabled": ci_logs.logs_enabled()' in routes
     assert '"structured_infrastructure_classifier": True' in routes
+    assert '"strong_evidence_required": True' in routes
+    assert '"literal_evidence_guard": True' in routes
 
 
 def test_log_ingestion_is_bounded_redacted_and_read_only():
@@ -52,7 +55,10 @@ def test_logs_only_enrich_missing_evidence_and_keep_infra_fail_closed():
         "action_required",
     ):
         assert f'"{conclusion}"' in classifier
+    assert "_STRONG_FAILURE_EVIDENCE_RE" in classifier
+    assert "failure_payload_has_strong_evidence" in classifier
+    assert 'result["evidence_quality"]' in classifier
     assert (
-        'result["repairable"] = bool(failures and actionable and not infrastructure)'
+        'result["repairable"] = bool(failures and strong_evidence and not infrastructure)'
         in classifier
     )
