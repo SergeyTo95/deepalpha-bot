@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 35
     env:
       REPOWISE_TELEMETRY_DISABLED: '1'
+      REPOWISE_SKIP_EDITOR_SETUP: '1'
       DO_NOT_TRACK: '1'
       VELIA_REPOWISE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VELIA_REPOWISE_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
@@ -53,8 +54,14 @@ jobs:
       - name: Build exact-head index and benchmark
         run: python scripts/velia_repowise_spike.py
 
-      - name: Confirm tracked repository files were not mutated
-        run: git diff --exit-code
+      - name: Confirm repository checkout has no side effects
+        run: |
+          status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$status" ]; then
+            echo "Repowise changed or created repository files outside ignored index artifacts:"
+            printf '%s\n' "$status"
+            exit 1
+          fi
 
       - name: Upload Repowise spike evidence
         if: always()
