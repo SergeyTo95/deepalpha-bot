@@ -9,6 +9,7 @@ from aiohttp import web
 from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
 from services import velia_agent_coding_autopilot_ci_log_service as ci_logs
 from services import velia_agent_coding_autopilot_ci_reliability_patch as ci_reliability
+from services import velia_agent_coding_autopilot_ci_repair_evidence_patch as ci_evidence
 from services import velia_agent_coding_autopilot_ci_service as ci_service
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_project_service as project_service
@@ -69,6 +70,7 @@ def setup_velia_coding_autopilot_ci_routes(
         ci_reliability.install()
         if ci_logs.logs_enabled():
             ci_logs.install()
+        ci_evidence.install()
         ci_service.install_ci_repair_loop()
     if app.get("velia_coding_autopilot_ci_routes_installed"):
         return
@@ -88,6 +90,8 @@ def setup_velia_coding_autopilot_ci_routes(
                 "ci_repair_enabled": ci_service.ci_repair_enabled(),
                 "ci_logs_enabled": ci_logs.logs_enabled(),
                 "structured_infrastructure_classifier": True,
+                "strong_evidence_required": True,
+                "literal_evidence_guard": True,
                 "max_repairs": ci_service._env_int(
                     "VELIA_DEVELOPER_AUTOPILOT_CI_MAX_REPAIRS", 2, 0, 2
                 ),
