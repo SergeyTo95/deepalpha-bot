@@ -1,0 +1,75 @@
+name: VELIA Repowise Service
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/velia-repowise-service.yml'
+      - 'Dockerfile.velia-repowise'
+      - 'requirements-repowise.txt'
+      - 'requirements-velia-repowise-service.txt'
+      - 'velia_repowise_service/**'
+      - 'scripts/velia_repowise_service_smoke.py'
+      - 'tests/test_velia_repowise_service.py'
+      - 'docs/velia-repowise-service.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  service-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      REPOWISE_TELEMETRY_DISABLED: '1'
+      REPOWISE_SKIP_EDITOR_SETUP: '1'
+      DO_NOT_TRACK: '1'
+      VELIA_REPOWISE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-velia-repowise-service.txt
+
+      - name: Install standalone service dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements-velia-repowise-service.txt pytest pytest-asyncio
+
+      - name: Compile service and smoke runner
+        run: |
+          python -m compileall -q velia_repowise_service
+          python -m py_compile scripts/velia_repowise_service_smoke.py
+
+      - name: Run service boundary tests
+        run: pytest -q tests/test_velia_repowise_service.py
+
+      - name: Run exact-head index, MCP and HTTP smoke
+        run: python scripts/velia_repowise_service_smoke.py
+
+      - name: Build standalone service image
+        run: docker build -f Dockerfile.velia-repowise -t velia-repowise:${{ github.sha }} .
+
+      - name: Verify source boundary
+        run: |
+          ! grep -RniE 'git[[:space:]]+push|git[[:space:]]+commit|merge_pull_request|enable_auto_merge|railway[[:space:]]+up' velia_repowise_service
+          grep -Rni 'REPOWISE_TELEMETRY_DISABLED' velia_repowise_service
+          grep -Rni 'read_only' velia_repowise_service
+
+      - name: Upload service smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velia-repowise-service-${{ github.run_id }}
+          path: artifacts/velia-repowise-service/
+          if-no-files-found: warn
+          retention-days: 7
