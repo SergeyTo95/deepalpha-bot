@@ -6,788 +6,537 @@ sdk: docker
 
 # VELIA / DeepAlpha backend
 
-> Внутренний инженерный README. Он описывает фактическую архитектуру, production-путь, безопасность, текущий статус Android/backend и обязательные acceptance-проверки. Не считать функцию готовой только потому, что код смержен: нужны exact-head CI, Railway deployment и реальный тест.
+> Внутренний инженерный README. Источник фактического статуса backend, Android-клиента, VELIA Developer, Coding Agent и Coding Autopilot. Не считать функцию работающей только потому, что код написан или смержен: нужны exact-head CI, deployment и реальный acceptance.
 
-**Последнее обновление:** 2026-08-05  
-**Backend repository:** `SergeyTo95/deepalpha-bot`  
-**Android repository:** `SergeyTo95/deepalpha-android`  
-**Production branch:** `feature/turbo-short-term-btc`  
-**Public domain:** `https://deepalpha-ai.com`  
+**Последнее обновление:** 2026-08-06  
+**Backend:** `SergeyTo95/deepalpha-bot`  
+**Android:** `SergeyTo95/deepalpha-android`  
+**Backend production branch:** `feature/turbo-short-term-btc`  
+**Android integration branch:** `develop`  
+**Public backend:** `https://deepalpha-ai.com`  
 **Railway project:** `melodious-radiance`  
 **Railway services:** `deepalpha-bot`, `velyon-memory`
 
-## 1. Текущий подтверждённый статус
+## 1. Актуальный подтверждённый baseline
 
 ### Backend production
 
-Текущий подтверждённый application baseline после VELIA Design Taste:
+Последний проверенный production commit на момент обновления:
 
 ```text
-4bcf1f3426fdc9ca244536c782b41a0ea64cc245
+8497c3709a825c4f3cf14d63dc74db5dc5905ca8
 ```
 
-Для этого commit подтверждено:
+Commit добавляет controlled Autopilot smoke-файл в path-filter workflow `VELIA Agent Core`.
 
-- PR `#393` (`Add VELIA Design Taste layer`) закрыт как merged;
+Для commit подтверждено:
+
 - Railway `deepalpha-bot` — `success`;
 - Railway `velyon-memory` — `success`;
-- Design Taste интегрирован без дополнительного Kimi-вызова;
-- Coding Agent v1 уже находится в production из PR `#392`;
-- read-only VELIA Developer продолжает работать через обычный чат.
+- controlled acceptance-файл теперь реально запускает Agent Core CI;
+- production runtime Autopilot не выполняет merge или deployment.
 
-### Реальный Android acceptance read-only Developer
+В новой сессии всё равно сначала повторно проверить текущий head branch и combined status: SHA выше является baseline этого README, а не вечной константой.
 
-На реальном устройстве подтверждён полный путь:
+### Android
+
+Последний подтверждённый Android Autopilot Center merge commit:
 
 ```text
-Android ordinary chat
+fdc7c9e151df0accf56c25d0655a584ad5ea7cdb
+```
+
+Подтверждено:
+
+- merge в `develop`;
+- post-merge Android CI — `success`;
+- lint, unit tests и `assembleDebug` прошли;
+- APK установлена на реальное устройство;
+- экран `Coding Autopilot` подключился к production backend;
+- на устройстве показано `Worker готов`;
+- CI Watch, CI Repair, Actions logs fallback, Review Loop и merge dry-run отображаются как включённые;
+- UI явно показывает `draft_pr_only`, `auto_merge=false`, `deployment=false`.
+
+## 2. Что такое VELIA
+
+VELIA — персональный ИИ-помощник и AI-среда, а не только чат.
+
+Публичные названия:
+
+- продукт и приложение: **VELIA**;
+- помощник: **Velia / Велия**;
+- интеллектуальное ядро: **Velyon Core**;
+- генерация изображений: **Velia Images / Velyon Core Images**;
+- prediction-market модуль: **DeepAlpha**.
+
+Backend исторически вырос из `deepalpha-bot`, поэтому старые DeepAlpha-названия в инфраструктуре и коде допустимы. Новые пользовательские AI-возможности развиваются как VELIA.
+
+## 3. Высокоуровневая архитектура
+
+```text
+Android VELIA
+  ├─ ordinary chat / SSE
+  ├─ Agent cards
+  ├─ Coding Agent cards
+  └─ Coding Autopilot Center
+        ├─ missions
+        ├─ queue
+        ├─ runs
+        ├─ CI attempts
+        ├─ review actions
+        └─ merge-policy dry-run
+
+Authenticated mobile API
+  └─ run_web_process.py
+       ├─ ordinary VELIA chat
+       ├─ VELIA Agent Core
+       ├─ VELIA Developer read-only Fast Path
+       ├─ guarded Coding Agent
+       └─ Coding Autopilot workers
+            ├─ task worker
+            ├─ exact-head CI watch
+            ├─ bounded CI repair
+            ├─ bounded Actions logs
+            ├─ Review Loop
+            └─ merge recommendation dry-run
+
+GitHub
+  ├─ GitHub App installation tokens
+  ├─ read-only repository retrieval
+  ├─ isolated velia/... branches
+  ├─ atomic commits
+  └─ draft PR only
+```
+
+## 4. Реально принятые функции
+
+### 4.1 VELIA Developer read-only
+
+На реальном Android подтверждён путь:
+
+```text
+ordinary chat
 → mobile SSE
-→ VELIA Developer router
-→ GitHub read-only retrieval
+→ Developer router
+→ connected GitHub repository
+→ deterministic Fast Path retrieval
 → Kimi final answer
 → verified file:Lx-Ly citations
 ```
 
-Последний успешный production-замер:
+Реальный замер:
 
 ```text
 Стоимость: $0.03721
 Время: 47.1 s
 ```
 
-Ответ корректно нашёл `services/velia_developer_chat_runtime_patch.py`, описал маршрутизацию, выбор проекта, fallback и `_developer_result`, привёл подтверждённые диапазоны строк и не выдумывал недоступный код.
-
-### Coding Agent v1
-
-Код, CI и Railway deployment подтверждены. GitHub App permissions и Railway flags, по сообщению владельца проекта, настроены. **Реальный write-smoke на пользовательском аккаунте ещё не выполнен. Это главная задача следующей сессии.**
-
-До успешного smoke нельзя утверждать, что production-цепочка GitHub App write permissions → branch → commit → draft PR работает end-to-end.
-
-### Design Taste layer
-
-Код, tests, merge и Railway подтверждены. **Реальный frontend/UI план с активированным Taste Layer ещё нужно проверить.**
-
-## 2. Что такое VELIA
-
-VELIA — персональный ИИ-помощник и полноценная AI-среда, а не только экран чата.
-
-Публичные названия:
-
-- приложение и продукт: **VELIA**;
-- помощник: **Velia / Велия**;
-- публичное интеллектуальное ядро: **Velyon Core**;
-- генерация изображений: **Velia Images / Velyon Core Images**;
-- prediction-market модуль: **DeepAlpha**.
-
-Исторически backend вырос из `deepalpha-bot`, поэтому в коде и инфраструктуре остаются DeepAlpha-названия. Новые пользовательские поверхности и AI-функции развиваются под брендом VELIA.
-
-## 3. Репозитории и ветки
-
-### Backend
-
-```text
-SergeyTo95/deepalpha-bot
-```
-
-Production/deploy branch:
-
-```text
-feature/turbo-short-term-btc
-```
-
-Нельзя считать `main` или другую ветку production без фактической проверки Railway source branch.
-
-### Android
-
-```text
-SergeyTo95/deepalpha-android
-```
-
-Актуальные stacked PR на момент обновления:
-
-- PR `#18` — `Add VELIA File Analyst attachments and secure image previews`;
-  - base: `develop`;
-  - head: `feature/velia-file-analyst`;
-  - open, mergeable, не draft;
-  - Android `0.9.1` (`versionCode 14`);
-  - backend и CI подтверждены;
-  - финальный real-device acceptance перед merge остаётся обязательным.
-- PR `#22` — `Add VELIA Developer read-only Android mode`;
-  - base: `feature/velia-file-analyst`;
-  - head: `feature/velia-developer-readonly`;
-  - open, mergeable, draft;
-  - Android `0.10.1` (`versionCode 16`);
-  - exact-head: `e1ad1e97bbe42ef13a43024673fd7c1e6f18214b`;
-  - lint, unit tests, assembleDebug и APK artifact ранее прошли;
-  - PR stacked поверх File Analyst и не должен бездумно merge-иться раньше базовой интеграции.
-
-Backend-функции Fast Path, Coding Agent и Taste Layer серверные; отдельное APK-обновление для их базового ordinary-chat UX не требуется.
-
-## 4. Высокоуровневая архитектура
-
-```text
-Android app
-  └─ authenticated mobile API / SSE
-       └─ run_web_process.py
-            ├─ ordinary VELIA chat layers
-            ├─ mobile streaming layer
-            ├─ outer VELIA Developer chat router
-            │    ├─ read-only Fast Path
-            │    └─ guarded Coding Agent
-            │          └─ optional Design Taste context
-            ├─ Developer HTTP routes
-            └─ schema bootstrap
-
-VELIA Developer
-  ├─ project / GitHub installation context
-  ├─ GitHub App installation tokens
-  ├─ read-only repository retrieval
-  ├─ Kimi gateway
-  ├─ verified citations
-  └─ guarded write service for Coding Agent only
-```
-
-## 5. Bootstrap и ordinary-chat integration
-
-Главная точка интеграции — `run_web_process.py`.
-
-Критический порядок:
-
-```text
-ordinary chat patches
-→ install_velia_chat_streaming(...)
-→ install_velia_developer_chat(...)
-→ setup_velia_mobile_streaming_route(...)
-```
-
-Developer router должен оставаться внешним generation layer. Он обязан перехватить repository-scoped запрос до того, как обычный streaming/generation путь сможет обойти GitHub tools.
-
 Основные файлы:
 
 ```text
-run_web_process.py
 services/velia_developer_chat_runtime_patch.py
-services/velia_mobile_streaming_service.py
-services/velia_developer_routes.py
-services/velia_developer_project_service.py
-```
-
-`ensure_velia_developer_chat_tables()` и coding schema bootstrap должны вызываться ровно один раз в web-process schema initialization.
-
-## 6. VELIA Developer: read-only режим
-
-### 6.1 Назначение
-
-Read-only Developer отвечает на вопросы по подключённым приватным и публичным GitHub-репозиториям:
-
-- найти функцию, route, service или bug;
-- объяснить поток запроса;
-- проверить архитектуру;
-- назвать подтверждённые файлы и строки;
-- выполнить безопасный code review без записи.
-
-### 6.2 Ordinary-chat router
-
-Основной файл:
-
-```text
-services/velia_developer_chat_runtime_patch.py
-```
-
-Router:
-
-1. сохраняет исходный `generate_velia_chat_result`;
-2. подменяет его outer wrapper;
-3. читает последнее user message по `request_id`;
-4. определяет repository scope;
-5. загружает доступные Developer projects;
-6. выбирает явно названный или привязанный к conversation project;
-7. для обычного вопроса вызывает read-only Fast Path;
-8. для явной команды изменения передаёт управление Coding Agent;
-9. для нерепозиторного запроса вызывает исходный ordinary chat;
-10. при сбое не должен придумывать ответ без кода.
-
-Conversation binding хранится в:
-
-```text
-velia_developer_chat_contexts
-```
-
-### 6.3 Read-only Fast Path
-
-Основной файл:
-
-```text
 services/velia_developer_fast_path_service.py
-```
-
-Fast Path заменил дорогой многошаговый model-driven tool loop.
-
-Текущий подход:
-
-1. сервер детерминированно извлекает terms/symbols из вопроса;
-2. получает repository tree;
-3. ранжирует пути без Kimi;
-4. читает релевантные symbol-aware windows;
-5. справедливо распределяет evidence budget между файлами;
-6. делает один финальный Kimi-вызов;
-7. второй вызов допускается только как bounded repair;
-8. citations валидируются только внутри реально переданных строк;
-9. одинаковый вопрос на том же repository state может использовать краткоживущий cache.
-
-Ключевые ограничения:
-
-```env
-VELIA_DEVELOPER_MAX_MODEL_CALLS=2
-VELIA_DEVELOPER_MAX_COST_USD=0.08
-VELIA_DEVELOPER_EVIDENCE_CHARS=24000
-VELIA_DEVELOPER_RESULT_CACHE_TTL_SECONDS=300
-VELIA_DEVELOPER_FAST_REPAIR_RESERVE_USD=0.025
-VELIA_DEVELOPER_FAST_REPAIR_OUTPUT_TOKENS=1024
-```
-
-Значения могут быть переопределены environment variables, поэтому перед расследованием стоимости проверять runtime config.
-
-### 6.4 Реальная оптимизация стоимости
-
-До Fast Path один архитектурный вопрос стоил примерно:
-
-```text
-$0.39672 / 225.1 s
-```
-
-После Fast Path и retrieval fixes:
-
-```text
-$0.04403 / 47.3 s
-$0.03721 / 47.1 s
-```
-
-Это реальные Android measurements, а не synthetic benchmark.
-
-### 6.5 Исправленные production-дефекты
-
-В ходе acceptance были последовательно обнаружены и исправлены:
-
-- `stream_network_error` — SSE worker закрывал socket без структурированного server error;
-- `empty_200` — Kimi возвращал HTTP 200 без пригодного visible payload;
-- `developer_tool_limit_reached` — legacy agent расходовал весь tool budget без финализации;
-- неполные evidence windows — читалось начало файла вместо определения символа;
-- evidence starvation — первый большой файл забирал весь context budget;
-- `developer_cost_limit_reached` — repair оценивался как второй полный 2048-token вызов.
-
-Нельзя возвращать старую архитектуру без соответствующих regression tests.
-
-## 7. Mobile SSE resilience
-
-Основной файл:
-
-```text
+services/velia_developer_github_service.py
 services/velia_mobile_streaming_service.py
 ```
 
-Требования:
+### 4.2 VELIA Agent Core
 
-- keepalive во время долгой repository операции;
-- progress deltas до финального ответа;
-- worker exception должен превращаться в SSE `error` с устойчивым code;
-- socket нельзя молча закрывать, если клиент ещё подключён;
-- progress text не должен сохраняться как финальный assistant message;
-- перед финальным answer/error transient progress сбрасывается.
-
-Android transport раньше отображал generic `stream_network_error`; после backend fixes конкретные server codes стали видимыми и пригодными для диагностики.
-
-## 8. VELIA Coding Agent v1
-
-### 8.1 Назначение
-
-Coding Agent расширяет Developer от чтения до безопасного выполнения изменений:
+На реальном Android подтверждено:
 
 ```text
-user change request
-→ ordered plan
-→ one explicit approval
-→ isolated velia/... branch
-→ sequential small tasks
-→ one atomic commit per task
-→ draft pull request
-→ CI snapshot
-→ suggestions
+естественная команда
+→ structured plan
+→ approval
+→ tool execution
+→ persistence
+→ subsequent read
 ```
 
-Основные файлы:
+Проверены инструменты:
 
 ```text
-services/velia_developer_coding_service.py
-services/velia_developer_github_write_service.py
-services/velia_developer_chat_runtime_patch.py
-tests/test_velia_developer_coding_service.py
-tests/test_velia_developer_coding_chat_gate.py
-tests/test_velia_developer_coding_intent_classifier.py
-tests/test_velia_developer_github_write_service.py
+velia.tasks.create_draft
+velia.tasks.list
 ```
 
-### 8.2 UX-команды
+Проверены:
 
-Явная команда изменения, например:
+- write ждёт подтверждения;
+- read-plan тоже выполняется через защищённый Agent Core;
+- повторное выполнение не создаёт дубль;
+- данные сохраняются между планами;
+- Android показывает нативные карточки плана и результата.
+
+### 4.3 VELIA Coding Agent
+
+На реальном Android подтверждено:
 
 ```text
-В репозитории deepalpha-bot создай файл docs/example.md...
-Исправь bug в ...
-Добавь test для ...
-Реализуй ...
+repository change request
+→ Coding Agent plan card
+→ explicit approval
+→ velia/... branch
+→ sequential commits
+→ draft PR
+→ structured result card
 ```
 
-должна вернуть план, но ничего не менять.
+Проверено:
 
-Подтверждение:
+- план ничего не меняет до approval;
+- создаётся отдельная ветка;
+- commits атомарны по шагам;
+- PR создаётся как draft;
+- Android показывает repository, base/work branch, steps, files, commits и ссылку на draft PR;
+- merge и deployment не выполняются.
+
+### 4.4 Android Autopilot Center connectivity
+
+На реальном устройстве подтверждено:
+
+- production API доступен;
+- список проектов загружается;
+- форма создания paused-миссии отображается;
+- worker сообщает готовность;
+- все автономные capability flags читаются с backend;
+- merge/deploy actions в UI отсутствуют.
+
+Это подтверждает transport и конфигурацию, но не заменяет полный autonomous run acceptance.
+
+## 5. VELIA Coding Autopilot
+
+### 5.1 Цель
+
+Autopilot должен работать без постоянного ручного подтверждения каждого шага внутри заранее утверждённой миссии:
 
 ```text
-Выполняй план
+paused mission
+→ queue
+→ activation
+→ autonomous planning
+→ isolated branch
+→ commits
+→ draft PR
+→ exact-head CI
+→ bounded repair
+→ review repair
+→ merge recommendation dry-run
 ```
 
-Статус:
+### 5.2 Foundation
+
+Реализовано:
+
+- missions создаются в статусе `paused`;
+- обязательный `allowed_paths`;
+- protected paths;
+- очередь с приоритетом и idempotency;
+- один active run на repository;
+- PostgreSQL advisory locks;
+- `FOR UPDATE SKIP LOCKED`;
+- DB leases и heartbeat/recovery;
+- worker вызывает существующий Coding Agent, а не второй write-engine;
+- результат первого write-этапа — только draft PR.
+
+Основные файлы имеют префикс:
 
 ```text
-Статус
+services/velia_developer_coding_autopilot_*.py
+services/velia_developer_autopilot_*.py
 ```
 
-Отмена planned job:
+Перед изменением кода в новой сессии нужно найти точные актуальные имена через repository search, а не угадывать их по README.
+
+### 5.3 CI Watch и bounded repair
+
+Реализован lifecycle:
 
 ```text
-Отмени план
+queued
+→ planning
+→ executing
+→ waiting_ci
+→ repairing
+→ waiting_ci
+→ ready_for_review
 ```
 
-Read-only вопросы `где создаётся`, `найди`, `проверь`, `объясни` не должны ошибочно запускать write-контур.
-
-### 8.3 Планирование
-
-Plan stage:
-
-- использует repository tree и несколько релевантных windows;
-- делает один low-reasoning Kimi call;
-- возвращает compact JSON;
-- допускает от 1 до 6 small ordered steps;
-- каждая задача должна быть отдельно committable;
-- tests должны идти в том же или следующем шаге;
-- план записывается в `velia_developer_coding_jobs`;
-- пользователь видит summary, files, checks и suggestions;
-- выполнение не начинается без явной команды подтверждения.
-
-### 8.4 Execution
-
-На каждом шаге Coding Agent:
-
-1. публикует progress `Задача N/M`;
-2. читает только разрешённые планом файлы;
-3. формирует compact source context;
-4. просит модель вернуть JSON operations;
-5. сервер валидирует `replace/create/delete`;
-6. `replace.old` обязан существовать ровно один раз;
-7. операции преобразуются в атомарный Git tree commit;
-8. commit записывается в рабочую ветку;
-9. результат и стоимость сохраняются в job;
-10. agent переходит к следующему шагу только после успешного commit.
-
-После всех задач создаётся draft PR и считывается snapshot check-runs последнего commit.
-
-### 8.5 Write safety boundary
-
-Запись изолирована в:
+Terminal states:
 
 ```text
-services/velia_developer_github_write_service.py
+blocked
+failed
+cancelled
+budget_exhausted
 ```
 
-Обязательные гарантии:
+Гарантии:
 
-- `VELIA_DEVELOPER_WRITE_ENABLED=true`;
-- GitHub App `Contents: Read and write`;
-- GitHub App `Pull requests: Read and write`;
-- `Workflows` не требуется и должен оставаться без write access;
-- запись только в branch prefix `velia/`;
-- base/selected branch блокируется;
-- ref update выполняется с `force=False`;
-- secrets, `.env`, private keys, credentials и secret-like paths блокируются;
-- `.github/workflows/*` блокируется по умолчанию;
-- ограничены files и bytes на step;
-- PR создаётся только с `draft=true`;
-- merge и deploy functions в write-layer отсутствуют.
+- анализируется exact-head SHA рабочей ветки;
+- учитываются GitHub checks и Railway commit statuses;
+- максимум две repair-итерации;
+- repair только внутри файлов исходного approved plan;
+- второй branch/PR не создаётся;
+- branch-head drift блокирует run;
+- cancelled, timeout, network, permission и infrastructure failures не исправляются изменением product-кода;
+- недостаточные evidence дают `evidence_insufficient`, а не слепой patch.
 
-Coding Agent не должен самостоятельно merge-ить или deploy-ить изменения.
+### 5.4 Bounded Actions logs
 
-### 8.6 Cost caps
+Реализован opt-in fallback для failed GitHub Actions jobs:
 
-Рекомендуемые production limits:
+- exact-head jobs only;
+- bounded количество jobs;
+- bounded размер текста;
+- очистка токенов и секретов;
+- используется только при недостаточных check output/annotations;
+- отсутствие `Actions: Read` должно завершаться fail-closed ошибкой, а не угадыванием.
+
+### 5.5 Review Loop
+
+Реализовано:
+
+- чтение review submissions и threads существующего draft PR;
+- code change запускается только для явного `CHANGES_REQUESTED`;
+- обычные comments/questions не меняют код;
+- изменение только approved-plan files;
+- один bounded review repair commit;
+- после commit run возвращается в exact-head CI;
+- Autopilot не resolve-ит спорный thread автоматически;
+- `APPROVED` не запускает merge.
+
+### 5.6 Merge policy dry-run
+
+Реализована только read-only оценка:
+
+- exact-head CI state;
+- branch freshness;
+- PR mergeability;
+- approved file scope;
+- protected paths;
+- deletion/rename/binary boundaries;
+- changed-lines limit;
+- актуальные requested changes;
+- requirement manual approval.
+
+Результат может быть:
+
+```text
+not_ready
+ready_to_mark_ready
+eligible
+```
+
+Даже `eligible` не выполняет merge.
+
+## 6. Жёсткая граница безопасности
+
+Autopilot не должен:
+
+- писать в production/base branch;
+- force-push;
+- merge-ить PR;
+- deploy-ить;
+- выполнять shell на Railway host;
+- менять `.env`, secrets, credentials или private keys;
+- менять auth, billing, financial code, migrations или infrastructure без отдельной новой политики;
+- менять собственные safety rules;
+- расширять `allowed_paths` самостоятельно;
+- делать бесконечные CI repairs;
+- создавать второй PR для того же run;
+- считать обычный review comment разрешением менять код.
+
+Текущий режим:
+
+```text
+draft_pr_only=true
+auto_merge=false
+deployment=false
+merge_policy=dry_run
+```
+
+## 7. Feature flags
+
+Основные production flags:
 
 ```env
-VELIA_DEVELOPER_CODING_PLAN_MAX_COST_USD=0.04
-VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD=0.06
-VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD=0.24
-```
-
-Дополнительно:
-
-```env
+VELIA_DEVELOPER_ENABLED=true
 VELIA_DEVELOPER_CODING_ENABLED=true
 VELIA_DEVELOPER_WRITE_ENABLED=true
-VELIA_DEVELOPER_CODING_MAX_STEPS=5
-VELIA_DEVELOPER_CODING_PATCH_ATTEMPTS=2
-VELIA_DEVELOPER_CODING_PLAN_OUTPUT_TOKENS=1400
-VELIA_DEVELOPER_CODING_STEP_OUTPUT_TOKENS=2400
-VELIA_DEVELOPER_CODING_REPAIR_OUTPUT_TOKENS=1200
+
+VELIA_DEVELOPER_AUTOPILOT_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_CI_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_CI_REPAIR_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_CI_LOGS_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_REVIEW_ENABLED=true
+VELIA_DEVELOPER_AUTOPILOT_MERGE_POLICY_ENABLED=true
 ```
 
-Не увеличивать limits без реального анализа billing и regression coverage.
+Владелец включил эти возможности, а Android Center показал их как активные. Не выводить реальные secrets или installation tokens.
 
-## 9. VELIA Design Taste layer
+В новой сессии проверять status endpoints и deployment, а не полагаться только на это утверждение.
 
-### 9.1 Upstream
+## 8. Android Autopilot Center
 
-Адаптация основана на:
+Экран доступен из раздела инструментов/возможностей.
+
+Он умеет:
+
+- выбрать connected project;
+- создать mission на паузе;
+- указать mission name;
+- задать allowed paths;
+- задать max steps/files;
+- активировать или приостановить mission;
+- добавить task в queue;
+- показать runs;
+- показать CI attempts;
+- показать Actions logs capability;
+- показать Review Loop history;
+- показать merge-policy recommendation и reasons;
+- открыть draft PR.
+
+В нём нет кнопок merge/deploy.
+
+Последний проверенный UI commit:
 
 ```text
-Repository: Leonxlnx/taste-skill
-Reviewed commit: e988add20dab0fa97d7a76781c48961c8184288e
-License: MIT
+fdc7c9e151df0accf56c25d0655a584ad5ea7cdb
 ```
 
-Attribution хранится в:
+## 9. Controlled end-to-end acceptance
+
+### 9.1 Fixture
+
+В production существует dormant fixture:
 
 ```text
-third_party/taste-skill/LICENSE
-third_party/taste-skill/UPSTREAM.md
+tests/test_velia_agent_coding_autopilot_controlled_repair_fixture.py
 ```
 
-### 9.2 Почему не скопирован весь upstream
-
-Upstream содержит большой набор skills, images, examples и экспериментальных правил. Полное копирование:
-
-- увеличило бы repository size;
-- раздуло бы prompt context;
-- повысило бы стоимость;
-- навязало бы несвязанные инструкции backend-задачам;
-- создало бы конфликт с существующим Android/Web stack.
-
-В VELIA перенесён compact context-aware layer.
-
-### 9.3 Основные файлы
+Он ничего не делает, пока в PR branch отсутствует:
 
 ```text
-services/velia_developer_taste_skill_service.py
-skills/velia-design-taste/SKILL.md
-tests/test_velia_developer_taste_skill_service.py
-tests/test_velia_developer_taste_integration.py
+docs/velia-autopilot-controlled-repair-smoke.txt
 ```
 
-### 9.4 Активация
-
-Taste Layer должен активироваться только для задач, связанных с:
-
-- frontend;
-- UI/UX;
-- web pages;
-- redesign;
-- Android/iOS/mobile interface;
-- dashboard/product surfaces;
-- typography, spacing, motion, visual hierarchy.
-
-Backend-only, database, infrastructure и non-UI bugfix задачи должны обходить слой и не платить за лишний context.
-
-### 9.5 Что добавляет слой
-
-- `Design Read` по brief, audience и existing stack;
-- три contextual dials: variance, motion, density;
-- audit-first для существующего UI;
-- сохранение текущего framework и design system;
-- отдельные web, dashboard, Android, iOS и cross-platform правила;
-- anti-slop проверки generic layouts, purple-gradient defaults, weak hierarchy и placeholder copy;
-- dependency verification до import;
-- accessibility, focus, contrast и semantic checks;
-- responsive and safe-area checks;
-- loading, empty, error, active и pressed states;
-- reduced-motion behavior;
-- pre-flight checklist до commit.
-
-### 9.6 Что сознательно удалено из upstream
-
-- обязательный GSAP для любой страницы;
-- simulated Python randomness;
-- жёсткий запрет конкретных icon libraries независимо от проекта;
-- принудительная миграция stack;
-- image-generation-only instructions;
-- правила, противоречащие Material/Compose или существующему design system.
-
-### 9.7 Стоимость
-
-Taste Layer не добавляет новый `_model_call`. Он добавляет bounded guidance в уже существующие plan/step prompts Coding Agent.
-
-Если после изменения число Kimi-вызовов увеличивается — это regression.
-
-## 10. GitHub App configuration
-
-GitHub App:
+Первая строка файла должна быть строго:
 
 ```text
-VELIA Developer Beta
+VELIA_AUTOPILOT_REPAIR_OK
 ```
 
-Repository permissions:
+Опциональная вторая строка:
 
 ```text
-Contents      → Read and write
-Pull requests → Read and write
-Workflows     → No access
+review-note: initial
 ```
 
-После изменения permissions GitHub может потребовать approval updated permissions у существующей installation. Также installation должна иметь доступ к тестируемому repository.
-
-Никогда не логировать:
-
-- GitHub App private key;
-- client secret;
-- installation token;
-- authorized user token;
-- Railway secrets.
-
-## 11. Railway configuration
-
-Минимальные flags для Coding Agent:
-
-```env
-VELIA_DEVELOPER_CODING_ENABLED=true
-VELIA_DEVELOPER_WRITE_ENABLED=true
-```
-
-Рекомендуемые cost variables:
-
-```env
-VELIA_DEVELOPER_CODING_PLAN_MAX_COST_USD=0.04
-VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD=0.06
-VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD=0.24
-```
-
-Владелец сообщил, что permissions и variables добавлены. Это ещё не заменяет реальный smoke. Connector/README не подтверждают фактические Railway secret values.
-
-## 12. Обязательный тест следующей сессии
-
-### 12.1 Coding Agent safe write-smoke
-
-Создать новый ordinary chat, выбрать `deepalpha-bot` и отправить:
+Workflow `VELIA Agent Core` теперь запускается при изменении этого exact docs-path. Fix находится в production commit:
 
 ```text
-В репозитории deepalpha-bot создай файл docs/velia-coding-agent-smoke.md с кратким описанием VELIA Coding Agent. Сначала составь план и ничего не меняй без моего подтверждения.
+8497c3709a825c4f3cf14d63dc74db5dc5905ca8
 ```
 
-Ожидается:
+### 9.2 Что ещё не принято
 
-1. ответ `План VELIA Coding Agent`;
-2. один небольшой step;
-3. no branch / no commit / no PR до approval;
-4. предложение написать `Выполняй план`.
-
-После ручной проверки плана отправить:
+Полная единая цепочка пока не подтверждена реальным run:
 
 ```text
-Выполняй план
+paused mission
+→ queued task без выполнения
+→ activation
+→ autonomous draft PR
+→ controlled failed CI
+→ automatic repair commit
+→ new green exact-head CI
+→ explicit REQUEST_CHANGES
+→ review repair commit
+→ new green CI
+→ merge-policy dry-run
+→ no merge/deploy
 ```
 
-Ожидается:
+До этого нельзя объявлять Autopilot полностью production-accepted.
 
-1. progress о создании branch;
-2. branch начинается с `velia/`;
-3. progress `Задача 1/1`;
-4. один commit;
-5. создан только `docs/velia-coding-agent-smoke.md`;
-6. открыт draft PR;
-7. merge и deploy не выполняются;
-8. final response содержит branch, commit, draft PR, CI snapshot, cost и suggestions.
+### 9.3 Правила smoke
 
-После smoke:
+- repository: `SergeyTo95/deepalpha-bot`;
+- base branch: фактическая production branch;
+- `allowed_paths`: только `docs/`;
+- задача создаёт только dedicated smoke-файл;
+- первая строка намеренно неправильная;
+- вторая строка `review-note: initial`;
+- PR остаётся draft;
+- smoke PR не merge-ить;
+- после acceptance PR закрыть без merge;
+- не использовать unrelated product files.
 
-- открыть draft PR;
-- проверить diff;
-- проверить, что base branch — `feature/turbo-short-term-btc`;
-- проверить отсутствие лишних файлов;
-- дождаться CI;
-- не merge-ить тестовый PR автоматически;
-- после подтверждения можно закрыть PR и удалить ветку либо оставить как acceptance artifact.
+## 10. Ключевые PR и commits
 
-### 12.2 Taste Layer plan-smoke
-
-Для безопасной первой проверки достаточно plan-only запроса. Лучше использовать `deepalpha-android` и конкретный UI-screen после подключения repository:
-
-```text
-В репозитории deepalpha-android предложи небольшое улучшение визуальной иерархии экрана VELIA Developer, сохрани существующий Jetpack Compose и Material-подход. Сначала составь план, ничего не меняй.
-```
-
-Ожидается:
-
-- Taste Layer активирован;
-- plan содержит design read или эквивалентный design context;
-- учитываются Android safe areas, readability, states и accessibility;
-- нет предложения мигрировать framework;
-- backend files не попадают в UI plan без причины;
-- новых model calls сверх Coding Agent plan не появляется.
-
-Выполнение UI-плана делать только после проверки файлов и scope.
-
-## 13. Диагностика Coding Agent
-
-Основные codes:
-
-```text
-developer_coding_disabled
-developer_write_disabled
-github_contents_write_permission_required
-github_pull_requests_write_permission_required
-developer_unsafe_write_branch
-developer_protected_path
-developer_coding_plan_empty
-developer_coding_plan_cost_limit
-developer_coding_step_cost_limit
-developer_coding_job_cost_limit
-developer_coding_path_outside_plan
-developer_coding_replace_not_unique
-developer_coding_patch_empty
-developer_coding_patch_no_change
-developer_coding_plan_missing
-developer_coding_project_mismatch
-```
-
-Интерпретация:
-
-- permission errors → проверить updated GitHub App installation approval;
-- `developer_write_disabled` → проверить Railway flag и новый deployment;
-- cost-limit → не повышать сразу; сначала измерить prompt size и actual usage;
-- replace-not-unique → улучшить context/patch repair, не обходить server validation;
-- protected-path → это security boundary, а не случайная ошибка;
-- plan missing → approval отправлен не в conversation с активным planned job;
-- project mismatch → conversation связан с другим project.
-
-## 14. CI
-
-Главный workflow:
-
-```text
-.github/workflows/velia-developer-readonly.yml
-```
-
-Несмотря на историческое имя, он проверяет и read-only Developer, и guarded Coding Agent, и Design Taste.
-
-Обязательные группы проверок:
-
-- Python compilation;
-- GitHub read-only service tests;
-- GitHub write service safety tests;
-- Fast Path tests;
-- Coding Agent planning/execution tests;
-- coding intent classifier;
-- ordinary-chat router gate;
-- Taste Layer activation/bypass/integration;
-- streaming resilience;
-- secret handling;
-- branch/write boundaries;
-- cost contracts;
-- bootstrap order;
-- no generated bytecode.
-
-Также используется общий runtime smoke:
-
-```text
-TON Wallet Runtime Smoke
-```
-
-Нельзя merge-ить product change только потому, что focused tests зелёные; exact-head workflow status должен быть `success`.
-
-## 15. Deployment acceptance
-
-После merge backend change:
-
-1. зафиксировать merge commit SHA;
-2. проверить combined status именно этого commit;
-3. дождаться:
-   - `melodious-radiance - deepalpha-bot = success`;
-   - `melodious-radiance - velyon-memory = success`;
-4. не принимать только memory-service за успешный backend deploy;
-5. затем выполнить внешний/API или real-device acceptance;
-6. не утверждать, что функция работает, до последнего шага.
-
-## 16. История ключевых VELIA Developer изменений
-
-| PR | Production commit | Результат |
+| Область | PR / commit | Статус |
 |---|---|---|
-| `#383` | `0e2330f65b536c666db9b679371fac59c633cdc7` | ordinary chat может использовать VELIA Developer |
-| `#385` | `d090d94de1530423a3a97c9a45afc631e78fc4b1` | SSE resilience и structured worker errors |
-| `#387` | `05f3f7d8ac034b87df4178da02601454e206550a` | `empty_200` recovery, low reasoning for tool choice |
-| `#388` | `91bf15e9d28e46844314c9f4c9cf2aa169350d28` | forced finalization и tool-budget controls |
-| `#389` | `d0b42799c1c2eae45fa5e268c80031ccac49b327` | Fast Path v1, one-call default, cache and cost cap |
-| `#390` | `5cdac290d360c3ffaecfa2630b96012b88db1f48` | symbol-aware retrieval и fair evidence packing |
-| `#391` | `bfb5ceb16d1848463e394a73fe8d2a3046767b60` | compact repair budget below `$0.08` |
-| `#392` | `a66957c1a0f60f1a73a2f6bff5ed63f9ae5b1405` | guarded VELIA Coding Agent v1 |
-| `#393` | `4bcf1f3426fdc9ca244536c782b41a0ea64cc245` | context-aware Design Taste layer |
+| Coding Agent v1 | `#392` / `a66957c1...` | production |
+| Design Taste | `#393` / `4bcf1f34...` | production |
+| Agent presentation backend | `#403` | production |
+| Mobile command routing hotfix | `#404` | production |
+| Autopilot Foundation | `#405` / `de243018...` | production |
+| Coding Agent structured cards | backend `#407`, Android `#28` | production/develop |
+| CI Watch + Repair | `#409` / `1df98ebe...` | production |
+| Review Loop | `#410` / `c5a5f930...` | production |
+| Merge-policy dry-run | `#411` / `478f53e9...` | production |
+| Actions logs fallback | `#412` / `29171207...` | production |
+| Controlled fixture | `#413` / `961aca34...` | production |
+| Android Autopilot Center | Android `#29`, `#30` / `fdc7c9e1...` | develop, device opened |
+| Smoke path-filter fix | `8497c370...` | production, Railway success |
 
-## 17. Known open gates and risks
+Перед использованием SHA обязательно повторно проверить repository state.
 
-### Immediate gates
+## 11. Известные незавершённые ветки
 
-- real GitHub write-smoke Coding Agent;
-- real draft PR creation;
-- verify actual installed GitHub App permissions end-to-end;
-- real Taste Layer plan on Android/Web UI task;
-- decide lifecycle of test branch/PR after smoke.
+Не использовать как основу:
 
-### Android gates
+```text
+fix/velia-autopilot-controlled-smoke-trigger
+```
 
-- PR `#18` real-device File Analyst acceptance;
-- resolve stacked integration before PR `#22` merge;
-- do not claim current Android `develop/main` includes these features until merge is verified.
+Это stale branch без PR; production уже содержит соответствующий fix другим commit.
 
-### File Analyst prior review risks
+Также не merge-ить старые test/draft PR без отдельной проверки их актуальности и diff.
 
-Two previously identified P2 issues must be re-verified before declaring File Analyst broadly production-ready:
+## 12. Порядок следующей сессии
 
-- attachment tombstone resurrection;
-- DB connection retry during reconciliation.
+1. Прочитать этот README и `docs/VELIA_NEW_CHAT_HANDOFF.md` через GitHub connector.
+2. Проверить текущий backend production head и оба Railway statuses.
+3. Проверить Android `develop` head и последний CI.
+4. Не продолжать stale branch `fix/velia-autopilot-controlled-smoke-trigger`.
+5. Провести один controlled Autopilot end-to-end acceptance по разделу 9.
+6. Не merge-ить smoke PR.
+7. После acceptance обновить README фактическими run id, PR, commits, CI attempts, cost и итогом.
+8. Только затем обсуждать следующий найденный пользователем GitHub-проект и его интеграцию в VELIA.
 
-Не считать их исправленными без нового code/CI evidence.
+## 13. Инженерный рабочий контракт
 
-### Coding Agent v1 limitations by design
+- Общаться с владельцем по-русски, прямо и практично.
+- Работать как ведущий инженер, а не давать общие советы.
+- Во время долгой работы регулярно писать статус: проверено, найдено, изменено, проверки, осталось, блокеры.
+- Использовать GitHub connector для private/project repositories.
+- Не придумывать CI, merge, deploy, Railway или device results.
+- Проверять exact-head SHA.
+- Backend production принимать только после обоих Railway `success`.
+- Не раскрывать secrets.
+- Не менять safety boundaries ради прохождения теста.
+- При failure читать конкретный code/log и исправлять root cause.
+- Не объявлять Autopilot принятым до полного controlled acceptance.
 
-- no merge;
-- no deploy;
-- no shell/command runner;
-- no direct production branch writes;
-- no workflow writes by default;
-- CI snapshot после PR может быть `pending`;
-- сложный multi-step job ограничен total cost и планом;
-- server validates text patch operations, но реальный quality acceptance всё равно требует review diff и CI.
+## 14. Новый чат
 
-## 18. Инженерный рабочий контракт
-
-При продолжении разработки:
-
-- общаться с владельцем по-русски, прямо и практично;
-- работать как ведущий инженер, а не выдавать общие советы;
-- во время долгой работы регулярно писать короткий статус;
-- фиксировать: что проверено, найдено, изменено, какие проверки идут, что осталось, блокеры;
-- использовать GitHub connector для private repositories;
-- не придумывать результаты CI, merge, deploy или device test;
-- защищать merge exact-head SHA;
-- не разрешать review threads без анализа;
-- не merge-ить unrelated PR;
-- не писать secrets в код, logs, README или chat;
-- production status проверять по merge commit;
-- после backend deploy проводить real-device acceptance;
-- при ошибке расследовать конкретный code, а не скрывать его generic сообщением;
-- сохранять cost caps и read-only/write security boundaries.
-
-## 19. Новый чат
-
-Полный handoff-промт находится здесь:
+Полный handoff-промт:
 
 ```text
 docs/VELIA_NEW_CHAT_HANDOFF.md
 ```
 
-В новом чате сначала отправить содержимое этого файла, затем попросить ассистента прочитать текущий README и проверить актуальное состояние GitHub/CI/Railway перед любыми изменениями.
+Первым сообщением нового чата отправить содержимое этого файла. Затем дать ссылку или название найденного GitHub-проекта, который предлагается добавить в VELIA.
