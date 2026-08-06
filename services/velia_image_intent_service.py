@@ -127,7 +127,7 @@ _TURKISH_COMMAND_FIRST_SPEC = _CommandSpec(
 
 _TURKISH_TARGET_FIRST = re.compile(
     rf"^\s*{_TURKISH_SOCIAL_PREFIX}(?:lütfen\s+)?(?P<body>.+?)\s+"
-    r"(?:oluştur|üret|çiz|hazırla)\s*"
+    r"(?:oluştur|üret|çiz|hazırla)(?=\s|:|—|–|-|$)\s*"
     r"(?:[:—–-]\s*)?(?P<tail>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
