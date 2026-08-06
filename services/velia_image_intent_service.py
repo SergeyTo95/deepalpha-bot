@@ -11,6 +11,19 @@ _USER_TURN_RE = re.compile(
     re.IGNORECASE | re.DOTALL | re.MULTILINE,
 )
 
+_RUSSIAN_SOCIAL_PREFIX = (
+    r"(?:(?:привет(?:ик)?|здравствуй(?:те)?|доброе\s+утро|"
+    r"добрый\s+(?:день|вечер)|велия|слушай)\s*[,.!?:—–-]*\s*){0,2}"
+)
+_ENGLISH_SOCIAL_PREFIX = (
+    r"(?:(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|velia)"
+    r"\s*[,.!?:—–-]*\s*){0,2}"
+)
+_TURKISH_SOCIAL_PREFIX = (
+    r"(?:(?:merhaba|selam|günaydın|iyi\s+akşamlar|velia)"
+    r"\s*[,.!?:—–-]*\s*){0,2}"
+)
+
 
 @dataclass(frozen=True)
 class ImageIntent:
@@ -29,7 +42,7 @@ class _CommandSpec:
 
 _RUSSIAN_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:пожалуйста[,.]?\s*)?"
+        rf"^\s*{_RUSSIAN_SOCIAL_PREFIX}(?:пожалуйста[,.]?\s*)?"
         r"(?:(?:можешь(?:\s+ли)?|сможешь|давай|прошу|хочу(?:,?\s+чтобы\s+ты)?|нужно)\s+)?"
         r"(?:мне\s+)?"
         r"(?P<verb>сгенерируй|сгенерировать|сгенерируем|сгенерировал|"
@@ -64,7 +77,7 @@ _RUSSIAN_SPEC = _CommandSpec(
 
 _ENGLISH_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:please[,.]?\s*)?"
+        rf"^\s*{_ENGLISH_SOCIAL_PREFIX}(?:please[,.]?\s*)?"
         r"(?:(?:can|could|would)\s+you\s+|let(?:'s| us)\s+|i\s+want\s+you\s+to\s+)?"
         r"(?P<verb>generate|create|draw|make|render)\s+"
         r"(?:me\s+)?(?P<body>.+)$",
@@ -89,7 +102,7 @@ _ENGLISH_SPEC = _CommandSpec(
 
 _TURKISH_COMMAND_FIRST_SPEC = _CommandSpec(
     command=re.compile(
-        r"^\s*(?:lütfen[,.]?\s*)?"
+        rf"^\s*{_TURKISH_SOCIAL_PREFIX}(?:lütfen[,.]?\s*)?"
         r"(?:(?:yapabilir\s+misin|oluşturabilir\s+misin|çizebilir\s+misin|hadi)\s+)?"
         r"(?:bana\s+)?(?P<verb>oluştur|üret|çiz|hazırla)\s+"
         r"(?:bana\s+)?(?P<body>.+)$",
@@ -113,7 +126,7 @@ _TURKISH_COMMAND_FIRST_SPEC = _CommandSpec(
 )
 
 _TURKISH_TARGET_FIRST = re.compile(
-    r"^\s*(?:lütfen\s+)?(?P<body>.+?)\s+"
+    rf"^\s*{_TURKISH_SOCIAL_PREFIX}(?:lütfen\s+)?(?P<body>.+?)\s+"
     r"(?:oluştur|üret|çiz|hazırla)\s*"
     r"(?:[:—–-]\s*)?(?P<tail>.*)$",
     re.IGNORECASE | re.DOTALL,
