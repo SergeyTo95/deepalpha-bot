@@ -178,6 +178,27 @@ def _health_summary(payload: Any) -> dict[str, Any]:
 
 
 def _dead_code_summary(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, list):
+        by_kind: dict[str, int] = {}
+        safe_to_delete = 0
+        estimated_lines = 0
+        for item in payload:
+            if not isinstance(item, Mapping):
+                continue
+            kind = str(item.get("kind") or "unknown")
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if bool(item.get("safe_to_delete")):
+                safe_to_delete += 1
+                try:
+                    estimated_lines += max(0, int(item.get("lines") or 0))
+                except (TypeError, ValueError):
+                    pass
+        return {
+            "finding_count": len(payload),
+            "safe_to_delete_count": safe_to_delete,
+            "estimated_safe_lines": estimated_lines,
+            "by_kind": dict(sorted(by_kind.items())),
+        }
     if not isinstance(payload, Mapping):
         return {}
     summary: dict[str, Any] = {}
@@ -194,7 +215,14 @@ def _risk_summary(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
     summary: dict[str, Any] = {}
-    for key in ("score", "level", "percentile", "priority", "risk", "features"):
+    for key in (
+        "score",
+        "level",
+        "risk_percentile",
+        "review_priority",
+        "classification",
+        "features",
+    ):
         if key in payload:
             summary[key] = payload[key]
     return summary
@@ -207,7 +235,11 @@ def _write_json(path: Path, value: Any) -> None:
 
 def _render_summary(report: Mapping[str, Any]) -> str:
     commands = report.get("commands") if isinstance(report.get("commands"), list) else []
-    durations = {str(item.get("name")): item.get("duration_seconds") for item in commands if isinstance(item, Mapping)}
+    durations = {
+        str(item.get("name")): item.get("duration_seconds")
+        for item in commands
+        if isinstance(item, Mapping)
+    }
     index = report.get("index") if isinstance(report.get("index"), Mapping) else {}
     lines = [
         "# VELIA Repowise spike",
@@ -225,19 +257,34 @@ def _render_summary(report: Mapping[str, Any]) -> str:
         "## Health summary",
         "",
         "```json",
-        json.dumps(report.get("health_summary", {}), ensure_ascii=False, indent=2, default=str)[:12000],
+        json.dumps(
+            report.get("health_summary", {}),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )[:12000],
         "```",
         "",
         "## Dead-code summary",
         "",
         "```json",
-        json.dumps(report.get("dead_code_summary", {}), ensure_ascii=False, indent=2, default=str)[:12000],
+        json.dumps(
+            report.get("dead_code_summary", {}),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )[:12000],
         "```",
         "",
         "## Change-risk summary",
         "",
         "```json",
-        json.dumps(report.get("risk_summary", {}), ensure_ascii=False, indent=2, default=str)[:12000],
+        json.dumps(
+            report.get("risk_summary", {}),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )[:12000],
         "```",
     ]
     if report.get("error"):
@@ -264,6 +311,7 @@ def main() -> int:
         base_sha = str(os.getenv("VELIA_REPOWISE_BASE_SHA") or "").strip()
         env = dict(os.environ)
         env["REPOWISE_TELEMETRY_DISABLED"] = "1"
+        env["REPOWISE_SKIP_EDITOR_SETUP"] = "1"
         env["DO_NOT_TRACK"] = "1"
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("OPENAI_API_KEY", None)
@@ -280,7 +328,16 @@ def main() -> int:
 
         init_result, _, _ = run_command(
             "repowise-init",
-            ["repowise", "init", "--yes", "--no-prose"],
+            [
+                "repowise",
+                "init",
+                "--yes",
+                "--no-prose",
+                "--no-editor-setup",
+                "--no-claude-md",
+                "--no-agents",
+                "--no-codex",
+            ],
             timeout_seconds=int(os.getenv("VELIA_REPOWISE_INIT_TIMEOUT_SECONDS", "1200")),
             env=env,
         )
