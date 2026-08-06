@@ -1,0 +1,3 @@
+# Isolated VELIA intelligence spike only.
+# Do not add this dependency set to the production deepalpha-bot container.
+repowise==0.39.0
