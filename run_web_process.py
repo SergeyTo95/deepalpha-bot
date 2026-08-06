@@ -19,6 +19,13 @@ def main() -> None:
     public_origin = configure_public_urls(os.environ)
     os.environ.setdefault("VELYON_IMAGES_DAILY_GLOBAL_LIMIT", "20")
     os.environ.setdefault("VELYON_IMAGES_ESTIMATED_COST_USD", "0.25")
+    # FLUX 3 Stage 1 remains fail-closed until a server-side BFL key and the
+    # explicit feature flag are configured. The defaults cap each request to a
+    # five-second Draft HD clip and the global daily exposure to five clips.
+    os.environ.setdefault("VELYON_VIDEOS_ENABLED", "false")
+    os.environ.setdefault("VELYON_VIDEOS_DAILY_GLOBAL_LIMIT", "5")
+    os.environ.setdefault("VELYON_VIDEOS_DURATION_SECONDS", "5")
+    os.environ.setdefault("VELYON_VIDEOS_GENERATE_AUDIO", "true")
     logger.info("DEEPALPHA_PUBLIC_ORIGIN origin=%s", public_origin)
 
     import admin_routes as admin_routes_module
@@ -80,10 +87,13 @@ def main() -> None:
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
     from services.velia_user_profile_service import ensure_velia_user_profile_table
+    from services.velia_videos_runtime_patch import install as install_velia_videos
+    from services.velia_videos_service import ensure_velia_video_tables
     from velia_image_routes import setup_velia_image_routes
     from velia_mobile_attachment_routes import setup_velia_mobile_attachment_routes
     from velia_plugin_routes import setup_velia_plugin_routes
     from velia_profile_routes import setup_velia_profile_routes
+    from velia_video_routes import setup_velia_video_routes
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
@@ -101,8 +111,8 @@ def main() -> None:
         velia_mobile_routes_module,
     )
     # Attachment-aware persistence must be the innermost chat sender so every
-    # existing VELIA quality, profile, image, memory and hardening wrapper still
-    # applies to file-backed turns. Restore the original prompt builder here;
+    # existing VELIA quality, profile, image, video, memory and hardening wrapper
+    # still applies to file-backed turns. Restore the original prompt builder;
     # bounded attachment context is appended after the established wrappers.
     original_velia_prompt_builder = velia_chat_service_module._build_prompt
     install_velia_attachment_chat(velia_chat_service_module)
@@ -115,6 +125,10 @@ def main() -> None:
     )
     install_velia_user_profile(velia_chat_service_module)
     install_velia_images(velia_chat_service_module)
+    # Video is outer to image routing. It can intentionally consume one linked
+    # image for i2v while delegating every non-video request to the unchanged
+    # image/File Analyst path.
+    install_velia_videos(velia_chat_service_module)
     install_velia_memory_shadow(
         velia_chat_service_module,
         velia_mobile_routes_module,
@@ -167,6 +181,7 @@ def main() -> None:
     )
     setup_velia_mobile_attachment_routes(deepalpha_web.app)
     setup_velia_image_routes(deepalpha_web.app)
+    setup_velia_video_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
     setup_velia_profile_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
@@ -226,6 +241,7 @@ def main() -> None:
         ensure_velia_agent_chat_tables()
         ensure_velia_attachment_tables()
         ensure_velia_image_tables()
+        ensure_velia_video_tables()
         ensure_velia_plugin_tables()
         ensure_velia_user_profile_table()
         ensure_velia_memory_shadow_tables()
