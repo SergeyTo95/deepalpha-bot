@@ -49,6 +49,33 @@ def test_routes_conversational_russian_prefixes():
         assert intent.prompt
 
 
+def test_routes_bounded_social_greetings_before_image_commands():
+    requests = [
+        "Привет, сгенерируй картинку ужин енота",
+        "Привет, Велия, создай реалистичное изображение ночной Анталии",
+        "Добрый вечер! Нарисуй енота за ужином",
+        "Hello, Velia, create an image of a raccoon having dinner",
+        "Merhaba Velia, gerçekçi bir görsel oluştur: akşam yemeği yiyen rakun",
+    ]
+
+    for message in requests:
+        intent = detect_image_intent(message)
+        assert intent.requested is True, message
+        assert intent.prompt
+
+
+def test_greetings_do_not_turn_explanations_or_prompt_writing_into_paid_generation():
+    rejected = [
+        "Привет, расскажи, как сгенерировать картинку",
+        "Велия, создай промпт для генератора изображений",
+        "Hello, explain how to create an image",
+        "Merhaba, görsel oluşturmak için bir prompt hazırla",
+    ]
+
+    for message in rejected:
+        assert detect_image_intent(message).requested is False, message
+
+
 def test_routes_strong_drawing_commands_without_image_noun():
     russian = detect_image_intent(
         "Нарисуй рыжую пушистую белку на высоком барном стуле"
