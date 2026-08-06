@@ -196,7 +196,7 @@ def detect_image_intent(message: str) -> ImageIntent:
         tail = target_first.group("tail").strip()
         target = _TURKISH_TARGET.search(body)
         if target and target.start() <= _MAX_TARGET_OFFSET:
-            if _TURKISH_REJECT.search(body[: target.start()]):
+            if _TURKISH_REJECT.search(body):
                 return ImageIntent(False, "")
             if not tail:
                 return ImageIntent(True, "")
