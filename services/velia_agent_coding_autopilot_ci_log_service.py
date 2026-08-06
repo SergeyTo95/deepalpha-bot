@@ -17,6 +17,25 @@ _SECRET_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
 _URL_SECRET_RE = re.compile(r"(?i)(https?://)[^\s/@]+@")
+_LOG_INFRA_FAILURE_RE = re.compile(
+    r"(?:"
+    r"(?:hosted|self-hosted)?\s*runner\s+(?:lost communication|is offline|is unavailable|failed to start|was terminated)"
+    r"|infrastructure"
+    r"|service unavailable"
+    r"|rate limit"
+    r"|network(?: error| failure| unavailable)"
+    r"|unable to resolve"
+    r"|temporary failure"
+    r"|connection reset"
+    r"|no space left"
+    r"|artifact upload(?: failed| failure)"
+    r"|checkout failed"
+    r"|cancelled|canceled|timed out|timeout"
+    r"|billing"
+    r"|permission denied"
+    r")",
+    re.IGNORECASE,
+)
 _MAX_RUNS = 8
 _MAX_JOBS = 4
 
@@ -163,6 +182,13 @@ def _actions_job_logs(project: Mapping[str, Any], sha: str) -> Dict[str, Any]:
     return {"available": True, "logs": logs}
 
 
+def _job_log_is_infrastructure(item: Mapping[str, Any]) -> bool:
+    conclusion = str(item.get("conclusion") or "").lower()
+    if conclusion in {"cancelled", "timed_out", "startup_failure", "action_required"}:
+        return True
+    return bool(_LOG_INFRA_FAILURE_RE.search(str(item.get("text") or "")))
+
+
 def enrich_failure(project: Mapping[str, Any], sha: str, failure: Mapping[str, Any]) -> Dict[str, Any]:
     result = dict(failure)
     if not logs_enabled() or bool(result.get("repairable")) or bool(result.get("infrastructure")):
@@ -179,15 +205,9 @@ def enrich_failure(project: Mapping[str, Any], sha: str, failure: Mapping[str, A
     if not logs:
         return result
     failures = list(result.get("failures") or [])
-    failures.extend(logs)
-    rendered = ci._json(logs, 24000)
-    infrastructure = bool(ci._INFRA_FAILURE_RE.search(rendered)) or any(
-        str(item.get("conclusion") or "").lower()
-        in {"cancelled", "timed_out", "startup_failure", "action_required"}
-        for item in logs
-    )
+    infrastructure = any(_job_log_is_infrastructure(item) for item in logs)
     actionable = any(str(item.get("text") or "").strip() for item in logs)
-    result["failures"] = failures[:20]
+    result["failures"] = (logs + failures)[:20]
     result["infrastructure"] = infrastructure
     result["repairable"] = bool(actionable and not infrastructure)
     return result
