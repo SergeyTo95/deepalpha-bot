@@ -1,0 +1,4 @@
+# Standalone velia-repowise service only.
+# Do not install this dependency set in the production deepalpha-bot container.
+-r requirements-repowise.txt
+aiohttp>=3.10,<4
