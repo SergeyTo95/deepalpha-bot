@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
 from urllib.parse import urlparse
@@ -131,20 +131,20 @@ class Settings:
     mirror_root: Path
     workspace_root: Path
     repositories: Dict[str, Path]
-    sync_repositories: Dict[str, SyncRepository]
-    github_read_token: str
     service_token: str
     port: int
     command_timeout_seconds: int
     index_timeout_seconds: int
     mcp_timeout_seconds: int
-    sync_interval_seconds: int
-    sync_timeout_seconds: int
     max_workspaces_per_repo: int
     max_request_bytes: int
     max_context_chars: int
     max_candidate_paths: int
     max_concurrency: int
+    sync_repositories: Dict[str, SyncRepository] = field(default_factory=dict)
+    github_read_token: str = ""
+    sync_interval_seconds: int = 60
+    sync_timeout_seconds: int = 600
 
     @classmethod
     def load(cls) -> "Settings":
@@ -184,8 +184,6 @@ class Settings:
             mirror_root=mirror_root,
             workspace_root=workspace_root,
             repositories=repositories,
-            sync_repositories=sync_repositories,
-            github_read_token=github_read_token,
             service_token=service_token,
             port=_env_int("PORT", 7337, 1, 65535),
             command_timeout_seconds=_env_int(
@@ -196,12 +194,6 @@ class Settings:
             ),
             mcp_timeout_seconds=_env_int(
                 "VELIA_REPOWISE_MCP_TIMEOUT_SECONDS", 30, 5, 120
-            ),
-            sync_interval_seconds=_env_int(
-                "VELIA_REPOWISE_SYNC_INTERVAL_SECONDS", 60, 30, 3600
-            ),
-            sync_timeout_seconds=_env_int(
-                "VELIA_REPOWISE_SYNC_TIMEOUT_SECONDS", 600, 60, 1800
             ),
             max_workspaces_per_repo=_env_int(
                 "VELIA_REPOWISE_MAX_WORKSPACES_PER_REPO", 3, 1, 8
@@ -216,4 +208,12 @@ class Settings:
                 "VELIA_REPOWISE_MAX_CANDIDATE_PATHS", 20, 1, 40
             ),
             max_concurrency=_env_int("VELIA_REPOWISE_MAX_CONCURRENCY", 2, 1, 8),
+            sync_repositories=sync_repositories,
+            github_read_token=github_read_token,
+            sync_interval_seconds=_env_int(
+                "VELIA_REPOWISE_SYNC_INTERVAL_SECONDS", 60, 30, 3600
+            ),
+            sync_timeout_seconds=_env_int(
+                "VELIA_REPOWISE_SYNC_TIMEOUT_SECONDS", 600, 60, 1800
+            ),
         )
