@@ -51,17 +51,44 @@ jobs:
           python -m py_compile scripts/velia_repowise_spike.py
           pytest -q tests/test_velia_repowise_spike.py
 
-      - name: Build exact-head index and benchmark
-        run: python scripts/velia_repowise_spike.py
-
-      - name: Confirm repository checkout has no side effects
+      - name: Create isolated exact-head worktree
         run: |
-          status="$(git status --porcelain --untracked-files=all)"
-          if [ -n "$status" ]; then
-            echo "Repowise changed or created repository files outside ignored index artifacts:"
-            printf '%s\n' "$status"
+          worktree="$RUNNER_TEMP/velia-repowise-worktree"
+          rm -rf "$worktree"
+          git worktree add --detach "$worktree" "$VELIA_REPOWISE_EXPECTED_HEAD_SHA"
+          echo "VELIA_REPOWISE_WORKTREE=$worktree" >> "$GITHUB_ENV"
+
+      - name: Build exact-head index and benchmark
+        run: |
+          cd "$VELIA_REPOWISE_WORKTREE"
+          python scripts/velia_repowise_spike.py
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          rm -rf "$GITHUB_WORKSPACE/artifacts/velia-repowise-spike"
+          cp -R artifacts/velia-repowise-spike "$GITHUB_WORKSPACE/artifacts/"
+
+      - name: Confirm side effects are contained
+        run: |
+          root_status="$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all)"
+          if [ -n "$root_status" ]; then
+            echo "Primary checkout was changed:"
+            printf '%s\n' "$root_status"
             exit 1
           fi
+
+          worktree_status="$(git -C "$VELIA_REPOWISE_WORKTREE" status --porcelain --untracked-files=all)"
+          unexpected="$(
+            printf '%s\n' "$worktree_status" |
+              grep -vE '^\?\? (\.mcp\.json|\.vscode/extensions\.json|\.vscode/mcp\.json)$' || true
+          )"
+          if [ -n "$unexpected" ]; then
+            echo "Repowise created unexpected files in its disposable worktree:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+
+          echo "Contained Repowise project-file side effects:"
+          printf '%s\n' "$worktree_status"
+          git worktree remove --force "$VELIA_REPOWISE_WORKTREE"
 
       - name: Upload Repowise spike evidence
         if: always()
