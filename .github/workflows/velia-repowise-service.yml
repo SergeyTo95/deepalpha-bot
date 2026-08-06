@@ -60,6 +60,49 @@ jobs:
       - name: Build standalone service image
         run: docker build -f Dockerfile.velia-repowise -t velia-repowise:${{ github.sha }} .
 
+      - name: Run standalone container health smoke
+        env:
+          VELIA_REPOWISE_CONTAINER_TOKEN: velia-repowise-container-health-token-2026
+        run: |
+          container="velia-repowise-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker logs "$container" 2>/dev/null || true
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d \
+            --name "$container" \
+            -e VELIA_REPOWISE_SERVICE_TOKEN="$VELIA_REPOWISE_CONTAINER_TOKEN" \
+            -p 127.0.0.1:17337:7337 \
+            "velia-repowise:${GITHUB_SHA}"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:17337/health > /tmp/velia-repowise-health.json; then
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "Container did not become healthy"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:17337/v1/license > /tmp/velia-repowise-license.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          health = json.loads(Path('/tmp/velia-repowise-health.json').read_text())
+          license_info = json.loads(Path('/tmp/velia-repowise-license.json').read_text())
+          assert health['ok'] is True
+          assert health['service'] == 'velia-repowise'
+          assert health['mode'] == 'read_only'
+          assert health['telemetry'] is False
+          assert health['llm_generation'] is False
+          assert license_info['license'] == 'AGPL-3.0-or-later'
+          assert license_info['modified'] is False
+          PY
+
       - name: Verify source boundary
         run: |
           ! grep -RniE 'git[[:space:]]+push|git[[:space:]]+commit|merge_pull_request|enable_auto_merge|railway[[:space:]]+up' velia_repowise_service
