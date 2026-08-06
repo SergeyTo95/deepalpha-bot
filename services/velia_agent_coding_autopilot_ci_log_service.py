@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, List, Mapping, Tuple
 from urllib.parse import quote
 
+from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
 from services import velia_agent_coding_autopilot_ci_service as ci
 from services import velia_developer_github_service as github_service
 from services import velia_developer_github_write_service as write_service
@@ -17,27 +18,6 @@ _SECRET_RE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
 _URL_SECRET_RE = re.compile(r"(?i)(https?://)[^\s/@]+@")
-_LOG_INFRA_FAILURE_RE = re.compile(
-    r"(?:"
-    r"(?:hosted|self-hosted)?\s*runner\s+(?:lost communication|is offline|is unavailable|failed to start|was terminated)"
-    r"|(?:job|workflow|step|operation)\s+(?:was\s+)?(?:cancelled|canceled|timed out)"
-    r"|(?:request|connection|operation)\s+(?:was\s+)?timed out"
-    r"|(?:request|connection|operation)\s+timeout"
-    r"|infrastructure(?: error| failure| unavailable)"
-    r"|service unavailable"
-    r"|rate limit(?:ed| exceeded)?"
-    r"|(?:network|dns)(?: error| failure| unavailable)"
-    r"|unable to resolve(?: host| hostname)?"
-    r"|temporary failure in name resolution"
-    r"|connection (?:reset|refused|timed out)"
-    r"|no space left on device"
-    r"|artifact upload(?: failed| failure)"
-    r"|checkout failed"
-    r"|billing(?: problem| issue| limit| disabled)"
-    r"|permission denied"
-    r")",
-    re.IGNORECASE,
-)
 _MAX_RUNS = 8
 _MAX_JOBS = 4
 
@@ -184,13 +164,6 @@ def _actions_job_logs(project: Mapping[str, Any], sha: str) -> Dict[str, Any]:
     return {"available": True, "logs": logs}
 
 
-def _job_log_is_infrastructure(item: Mapping[str, Any]) -> bool:
-    conclusion = str(item.get("conclusion") or "").lower()
-    if conclusion in {"cancelled", "timed_out", "startup_failure", "action_required"}:
-        return True
-    return bool(_LOG_INFRA_FAILURE_RE.search(str(item.get("text") or "")))
-
-
 def enrich_failure(project: Mapping[str, Any], sha: str, failure: Mapping[str, Any]) -> Dict[str, Any]:
     result = dict(failure)
     if not logs_enabled() or bool(result.get("repairable")) or bool(result.get("infrastructure")):
@@ -207,12 +180,8 @@ def enrich_failure(project: Mapping[str, Any], sha: str, failure: Mapping[str, A
     if not logs:
         return result
     failures = list(result.get("failures") or [])
-    infrastructure = any(_job_log_is_infrastructure(item) for item in logs)
-    actionable = any(str(item.get("text") or "").strip() for item in logs)
     result["failures"] = (logs + failures)[:20]
-    result["infrastructure"] = infrastructure
-    result["repairable"] = bool(actionable and not infrastructure)
-    return result
+    return ci_classifier.classify_failure_payload(result)
 
 
 def install() -> None:
