@@ -10,7 +10,9 @@ on:
       - 'velia_repowise_service/**'
       - 'scripts/velia_repowise_service_smoke.py'
       - 'tests/test_velia_repowise_service.py'
+      - 'tests/test_velia_repowise_mirror_sync.py'
       - 'docs/velia-repowise-service.md'
+      - 'docs/velia-repowise-mirror-sync.md'
   workflow_dispatch:
 
 permissions:
@@ -51,8 +53,11 @@ jobs:
           python -m compileall -q velia_repowise_service
           python -m py_compile scripts/velia_repowise_service_smoke.py
 
-      - name: Run service boundary tests
-        run: pytest -q tests/test_velia_repowise_service.py
+      - name: Run service and mirror-sync boundary tests
+        run: |
+          pytest -q \
+            tests/test_velia_repowise_service.py \
+            tests/test_velia_repowise_mirror_sync.py
 
       - name: Run exact-head index, MCP and HTTP smoke
         run: python scripts/velia_repowise_service_smoke.py
@@ -99,6 +104,8 @@ jobs:
           assert health['mode'] == 'read_only'
           assert health['telemetry'] is False
           assert health['llm_generation'] is False
+          assert health['mirror_sync']['configured'] is False
+          assert health['mirror_sync']['enabled'] is False
           assert license_info['license'] == 'AGPL-3.0-or-later'
           assert license_info['modified'] is False
           PY
@@ -108,6 +115,7 @@ jobs:
           ! grep -RniE 'git[[:space:]]+push|git[[:space:]]+commit|merge_pull_request|enable_auto_merge|railway[[:space:]]+up' velia_repowise_service
           grep -Rni 'REPOWISE_TELEMETRY_DISABLED' velia_repowise_service
           grep -Rni 'read_only' velia_repowise_service
+          grep -Rni 'GIT_ASKPASS' velia_repowise_service/mirror_sync.py
 
       - name: Upload service smoke evidence
         if: always()
