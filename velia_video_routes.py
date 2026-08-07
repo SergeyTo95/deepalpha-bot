@@ -6,6 +6,7 @@ from services.velia_videos_service import (
     get_video_content,
     verify_video_signature,
 )
+from velia_studio_routes import setup_velia_studio_routes
 
 
 def parse_single_byte_range(
@@ -105,3 +106,4 @@ def setup_velia_video_routes(app) -> None:
         video_content,
         name="velia_video_content",
     )
+    setup_velia_studio_routes(app)
