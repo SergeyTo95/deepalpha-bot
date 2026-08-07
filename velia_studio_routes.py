@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from aiohttp import web
 
 from services.velia_mobile_auth_service import authenticate_access_token
+from services.velia_studio_recovery_service import generation_for_client_request
 from services.velia_studio_service import (
     StudioError,
     create_reference_asset,
@@ -17,6 +18,7 @@ from services.velia_studio_service import (
     studio_enabled,
     verify_reference_signature,
 )
+from services.velia_studio_upload_quota import assert_studio_upload_capacity
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -135,6 +137,23 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             return _json_response({"ok": False, "error": "invalid_limit"}, status=400)
         return _json_response({"ok": True, "messages": values})
 
+    async def recover(request: web.Request) -> web.Response:
+        auth = _require_auth(request)
+        if not auth:
+            return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if not studio_enabled():
+            return _json_response({"ok": False, "error": "studio_disabled"}, status=503)
+        client_request_id = str(request.query.get("client_request_id") or "").strip()
+        if not client_request_id or len(client_request_id) > 200:
+            return _json_response({"ok": False, "error": "studio_invalid_idempotency_key"}, status=400)
+        generation = await asyncio.to_thread(
+            generation_for_client_request,
+            int(auth["user_id"]),
+            str(request.match_info.get("session_id") or ""),
+            client_request_id,
+        )
+        return _json_response({"ok": True, "generation": generation})
+
     async def asset_upload(request: web.Request) -> web.Response:
         auth = _require_auth(request)
         if not auth:
@@ -158,6 +177,11 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 buffer.extend(chunk)
                 if len(buffer) > MAX_UPLOAD_BYTES:
                     return _json_response({"ok": False, "error": "studio_reference_too_large"}, status=413)
+            await asyncio.to_thread(
+                assert_studio_upload_capacity,
+                int(auth["user_id"]),
+                len(buffer),
+            )
             asset = await asyncio.to_thread(
                 create_reference_asset,
                 int(auth["user_id"]),
@@ -221,6 +245,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
     app.router.add_post("/mobile-api/v1/studio/sessions", sessions_create)
     app.router.add_get("/mobile-api/v1/studio/sessions/{session_id}", session_get)
     app.router.add_get("/mobile-api/v1/studio/sessions/{session_id}/messages", messages)
+    app.router.add_get("/mobile-api/v1/studio/sessions/{session_id}/recover", recover)
     app.router.add_post("/mobile-api/v1/studio/sessions/{session_id}/assets", asset_upload)
     app.router.add_post("/mobile-api/v1/studio/sessions/{session_id}/generate", generate)
     app.router.add_get("/api/mobile/studio/assets/{asset_id}/content", asset_content)
