@@ -13,6 +13,8 @@ on:
       - "velia_mobile_routes.py"
       - "velia_mobile_attachment_routes.py"
       - "velia_image_routes.py"
+      - "velia_video_routes.py"
+      - "velia_studio_routes.py"
       - "velia_plugin_routes.py"
       - "velia_profile_routes.py"
       - "services/aiohttp_handler_cancellation_service.py"
@@ -30,6 +32,10 @@ on:
       - "services/velia_images_service.py"
       - "services/velia_images_runtime_patch.py"
       - "services/velia_images_queue_runtime_patch.py"
+      - "services/velia_video_intent_service.py"
+      - "services/velia_videos_service.py"
+      - "services/velia_videos_runtime_patch.py"
+      - "services/velia_studio_*.py"
       - "services/velia_memory_shadow_service.py"
       - "services/velia_memory_shadow_runtime_patch.py"
       - "services/velia_mobile_hardening_service.py"
@@ -53,6 +59,9 @@ on:
       - "tests/test_velia_image_intent_service.py"
       - "tests/test_velia_images_service.py"
       - "tests/test_velia_images_queue_runtime_patch.py"
+      - "tests/test_velia_video_*.py"
+      - "tests/test_velia_videos_service.py"
+      - "tests/test_velia_studio_*.py"
       - "tests/test_velia_memory_shadow_service.py"
       - "tests/test_velia_memory_shadow_runtime_patch.py"
       - "tests/test_run_velia_memory_shadow_worker.py"
@@ -107,6 +116,10 @@ jobs:
             services/velia_images_service.py \
             services/velia_images_runtime_patch.py \
             services/velia_images_queue_runtime_patch.py \
+            services/velia_video_intent_service.py \
+            services/velia_videos_service.py \
+            services/velia_videos_runtime_patch.py \
+            services/velia_studio_*.py \
             services/velia_memory_shadow_service.py \
             services/velia_memory_shadow_runtime_patch.py \
             services/velia_mobile_hardening_service.py \
@@ -121,6 +134,8 @@ jobs:
             velia_mobile_routes.py \
             velia_mobile_attachment_routes.py \
             velia_image_routes.py \
+            velia_video_routes.py \
+            velia_studio_routes.py \
             velia_plugin_routes.py \
             velia_profile_routes.py \
             run_bot_process.py \
@@ -144,6 +159,9 @@ jobs:
             tests/test_velia_image_intent_service.py \
             tests/test_velia_images_service.py \
             tests/test_velia_images_queue_runtime_patch.py \
+            tests/test_velia_video_*.py \
+            tests/test_velia_videos_service.py \
+            tests/test_velia_studio_*.py \
             tests/test_velia_memory_shadow_service.py \
             tests/test_velia_memory_shadow_runtime_patch.py \
             tests/test_run_velia_memory_shadow_worker.py \
@@ -164,11 +182,15 @@ jobs:
               Path("velia_mobile_routes.py"),
               Path("velia_mobile_attachment_routes.py"),
               Path("velia_image_routes.py"),
+              Path("velia_video_routes.py"),
+              Path("velia_studio_routes.py"),
               Path("velia_plugin_routes.py"),
               Path("velia_profile_routes.py"),
               Path("services/velia_attachment_public_contract.py"),
               Path("services/velia_image_intent_service.py"),
               Path("services/velia_images_runtime_patch.py"),
+              Path("services/velia_video_intent_service.py"),
+              Path("services/velia_videos_runtime_patch.py"),
               Path("services/velia_user_profile_runtime_patch.py"),
               Path("services/velia_telegram_connect_page_patch.py"),
               Path("docs/velia-mobile-chat-beta.md"),
@@ -178,12 +200,15 @@ jobs:
               "Authorization: Bearer <KIMI",
               "KIMI_API_KEY=sk-",
               "BRAVE_SEARCH_API_KEY=",
+              "BFL_API_KEY=",
           ]
           forbidden_provider_terms = [
               "reve",
               "fal.ai",
               "fal.run",
               "fal.media",
+              "api.bfl.ai",
+              "flux-3-video",
               "tencentdb",
           ]
           for path in public_files:
