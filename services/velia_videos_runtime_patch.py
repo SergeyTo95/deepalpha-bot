@@ -113,7 +113,7 @@ def install(velia_chat_service_module: Any) -> None:
             "text": str(result.get("text") or ""),
             "request_id": str(request_id or ""),
             "provider": "velyon_videos",
-            "model": "flux-3-video-draft-hd",
+            "model": "draft_hd",
             "finish_reason": (
                 "video_created" if result.get("video_created") else "video_not_created"
             ),
