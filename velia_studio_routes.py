@@ -5,12 +5,12 @@ from typing import Any, Dict, Optional
 from aiohttp import web
 
 from services.velia_mobile_auth_service import authenticate_access_token
+from services.velia_studio_generation_service import generate_studio_turn
 from services.velia_studio_recovery_service import generation_for_client_request
 from services.velia_studio_service import (
     StudioError,
     create_reference_asset,
     create_session,
-    generate_turn,
     get_reference_content,
     get_session,
     list_messages,
@@ -68,7 +68,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             "ok": True,
             "enabled": studio_enabled(),
             "modes": ["image", "video"],
-            "image": {"max_references": 0, "reference_editing": False},
+            "image": {"max_references": 4, "reference_editing": True},
             "video": {
                 "draft": True,
                 "duration_seconds": 5,
@@ -208,7 +208,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
         key = str(request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "").strip()
         try:
             result = await asyncio.to_thread(
-                generate_turn,
+                generate_studio_turn,
                 user_id=int(auth["user_id"]),
                 session_id=str(request.match_info.get("session_id") or ""),
                 prompt=str(data.get("prompt") or ""),
