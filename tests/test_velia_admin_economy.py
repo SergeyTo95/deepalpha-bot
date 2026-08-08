@@ -2,6 +2,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+import services.velia_admin_economy_bootstrap_service as bootstrap
 import services.velia_admin_economy_routes as routes
 import services.velia_admin_economy_service as economy
 
@@ -136,9 +137,28 @@ def test_economy_routes_are_owner_admin_routes_and_nav_is_inserted():
 
 def test_security_installer_registers_economy_without_exempting_mutations():
     source = Path("services/http_security_service.py").read_text(encoding="utf-8")
-    assert "setup_velia_admin_economy_routes(app, admin_routes_module)" in source
+    assert "setup_velia_admin_economy(app, admin_routes_module)" in source
     assert 'normalized != "/admin/login"' in source
     assert '"/admin/economy"' not in source.split("def _admin_mutation_requires_origin", 1)[1].split("async def", 1)[0]
+
+
+def test_economy_bootstrap_is_production_only(monkeypatch):
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    assert bootstrap._is_production_runtime() is True
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "deepalpha-bot-pr-437")
+    assert bootstrap._is_production_runtime() is False
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
+    assert bootstrap._is_production_runtime() is False
+
+
+def test_economy_bootstrap_uses_advisory_lock_and_never_raises_from_startup():
+    source = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
+    assert "pg_advisory_lock" in source
+    assert "pg_advisory_unlock" in source
+    assert "await asyncio.to_thread(_ensure_economy_tables_serialized)" in source
+    assert 'app["velia_admin_economy_bootstrap"] = "failed"' in source
+    assert "logger.exception" in source
 
 
 def test_economy_service_never_changes_runtime_prices_or_balances_directly():
