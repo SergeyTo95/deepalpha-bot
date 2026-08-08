@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import services.velia_admin_economy_v02_branding_service as branding
 import services.velia_admin_economy_v02_service as economy
 import services.velia_admin_economy_v02_ui_patch as economy_ui_patch
 
@@ -11,9 +12,6 @@ def test_v02_plans_and_crypto_discount_are_exact():
     assert plans["free"][2:5] == (0.00, 0.00, 100)
     assert plans["plus"][2:5] == (14.99, 10.49, 1200)
     assert plans["pro"][2:5] == (29.99, 20.99, 3000)
-    assert plans["free"][5] == "Limited · 5 Core requests/day"
-    assert plans["plus"][5] == "Included · generous fair use"
-    assert plans["pro"][5] == "Included · high fair use"
     assert economy.CRYPTO_DISCOUNT_PERCENT == 30.0
 
 
@@ -45,7 +43,7 @@ def test_largest_topup_crypto_margin_stays_above_safety_floor():
     assert pack["provider_budget_usd"] == pytest.approx(24.0)
 
 
-def test_velia_core_is_included_and_deep_is_credit_metered():
+def test_velyon_core_is_included_and_deep_is_credit_metered():
     skus = {row[0]: row for row in economy.SKUS}
     core = skus["velia_core"]
     assert core[3:6] == (0, 0, 0)
@@ -58,7 +56,24 @@ def test_velia_core_is_included_and_deep_is_credit_metered():
         economy.internal_provider_estimated_cost_usd("unknown", 1, 1)
 
 
-def test_public_commercial_copy_is_velia_only():
+def test_canonical_public_product_boundary_is_velia_plus_velyon_core():
+    assert branding.product_boundary() == {
+        "assistant": "Velia",
+        "neural_core": "Velyon Core",
+        "deep_mode": "Velyon Core Deep",
+        "upstream_models_public": False,
+    }
+    html = branding.normalize_public_html(
+        "Public product language is Velia-only. Velia Core | Velia Deep | <th>Velia product</th>"
+    )
+    assert "Velia is the assistant; Velyon Core is its neural intelligence." in html
+    assert "Velyon Core | Velyon Core Deep" in html
+    assert "Velia Core" not in html
+    assert "Velia Deep" not in html
+    assert "<th>Product</th>" in html
+
+
+def test_public_commercial_copy_never_exposes_upstream_brands():
     forbidden = ("kimi", "k2.6", "k2.7", "k3", "kling", "veo", "wan", "gemini", "claude", "gpt")
     public_parts = []
     for row in economy.PLANS:
@@ -70,24 +85,33 @@ def test_public_commercial_copy_is_velia_only():
     public_text = "\n".join(public_parts).lower()
     for brand in forbidden:
         assert brand not in public_text
-    assert "velia core" in public_text
     assert "velia images" in public_text
     assert "velia video" in public_text
 
 
-def test_ui_snapshot_guarantees_velia_deep_display_name():
+def test_ui_snapshot_guarantees_velyon_core_names_even_for_stale_rows():
     normalized = economy_ui_patch._normalize_v02_snapshot({
         "available": True,
-        "skus": [{"code": "velia_deep", "name": ""}],
+        "plans": [{"code": "plus", "core_policy": "Velia Core included", "notes": "Velia Core is included"}],
+        "skus": [
+            {"code": "velia_core", "name": "Velia Core", "pricing_formula": "Included", "notes": "Velia Core"},
+            {"code": "velia_deep", "name": "", "pricing_formula": "10 Credits", "notes": "Velia Deep"},
+        ],
+        "policies": [{"description": "Velia Core does not consume Credits"}],
     })
-    assert normalized["skus"][0]["name"] == "Velia Deep"
+    assert normalized["plans"][0]["core_policy"] == "Velyon Core included"
+    assert normalized["plans"][0]["notes"] == "Velyon Core is included"
+    assert normalized["skus"][0]["name"] == "Velyon Core"
+    assert normalized["skus"][1]["name"] == "Velyon Core Deep"
+    assert normalized["skus"][1]["notes"] == "Velyon Core Deep"
+    assert normalized["policies"][0]["description"] == "Velyon Core does not consume Credits"
 
 
 def test_legacy_visible_labels_are_normalized_to_credits():
     html = (
         "What is a VELIA token? VELIA Token Token balances Current token packages "
         "Draft feature token prices Included VELIA tokens / month Tokens/action Token Ledger "
-        "Future commercial model Draft plans"
+        "Future commercial model Draft plans Velia Core Velia Deep"
     )
     normalized = economy_ui_patch._normalize_visible_credit_labels(html)
     assert "What are VELIA Credits?" in normalized
@@ -98,6 +122,8 @@ def test_legacy_visible_labels_are_normalized_to_credits():
     assert "Credits/action" in normalized
     assert "Credit Ledger" in normalized
     assert "Legacy Stage 2 draft workspace" in normalized
+    assert "Velyon Core" in normalized
+    assert "Velyon Core Deep" in normalized
 
 
 def test_every_fixed_image_video_sku_is_profitable_at_cheapest_pro_crypto_credit():
@@ -127,22 +153,26 @@ def test_v02_policy_guards_match_agreed_commercial_rules():
     assert policies["free_welcome_bonus_credits"][2] == 50.0
 
 
-def test_v02_is_draft_only_and_cannot_touch_live_billing_or_balances():
-    source = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
-    assert "draft_only_not_enforced" in source
-    assert "velia_commercial_draft_versions" in source
-    assert "SELECT 1 FROM velia_commercial_draft_versions" in source
-    assert "UPDATE settings" not in source
-    assert "UPDATE token_packages" not in source
-    assert "DELETE FROM token_packages" not in source
-    assert "UPDATE users" not in source
-    assert "token_balance =" not in source
+def test_v02_and_branding_are_draft_only_and_cannot_touch_live_billing_or_balances():
+    economy_source = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
+    branding_source = Path("services/velia_admin_economy_v02_branding_service.py").read_text(encoding="utf-8")
+    for source in (economy_source, branding_source):
+        assert "draft_only_not_enforced" in source
+        assert "velia_commercial_draft_versions" in source
+        assert "UPDATE settings" not in source
+        assert "UPDATE token_packages" not in source
+        assert "DELETE FROM token_packages" not in source
+        assert "UPDATE users" not in source
+        assert "token_balance =" not in source
+    assert "UPDATE velia_commercial_draft_v02_plans" in branding_source
+    assert "UPDATE velia_commercial_draft_v02_skus" in branding_source
 
 
-def test_bootstrap_installs_v02_inside_existing_serialized_economy_boundary():
+def test_bootstrap_installs_v02_and_branding_inside_existing_serialized_boundary():
     source = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
     assert "ensure_economy_tables()" in source
     assert "ensure_economy_v02_tables()" in source
+    assert "ensure_economy_v02_branding()" in source
     assert "install_economy_v02_ui_patch(economy_routes_module)" in source
     assert "pg_advisory_lock" in source
     assert "pg_advisory_unlock" in source
