@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from services.velia_admin_economy_v02_branding_service import (
+    DEEP_NAME,
+    NEURAL_CORE_NAME,
+    normalize_public_html,
+)
 from services.velia_admin_economy_v02_service import economy_v02_snapshot, render_economy_v02
 
 
@@ -21,7 +26,8 @@ _VISIBLE_LABEL_REPLACEMENTS = (
 )
 
 _PUBLIC_SKU_NAME_OVERRIDES = {
-    "velia_deep": "Velia Deep",
+    "velia_core": NEURAL_CORE_NAME,
+    "velia_deep": DEEP_NAME,
 }
 
 
@@ -29,19 +35,38 @@ def _normalize_visible_credit_labels(html: str) -> str:
     result = str(html or "")
     for before, after in _VISIBLE_LABEL_REPLACEMENTS:
         result = result.replace(before, after)
-    return result
+    return normalize_public_html(result)
 
 
 def _normalize_v02_snapshot(data: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(data or {})
+
+    normalized_plans = []
+    for item in result.get("plans") or []:
+        row = dict(item or {})
+        row["core_policy"] = normalize_public_html(str(row.get("core_policy") or ""))
+        row["notes"] = normalize_public_html(str(row.get("notes") or ""))
+        normalized_plans.append(row)
+    result["plans"] = normalized_plans
+
     normalized_skus = []
     for item in result.get("skus") or []:
         row = dict(item or {})
-        override = _PUBLIC_SKU_NAME_OVERRIDES.get(str(row.get("code") or ""))
-        if override and not str(row.get("name") or "").strip():
+        code = str(row.get("code") or "")
+        override = _PUBLIC_SKU_NAME_OVERRIDES.get(code)
+        if override:
             row["name"] = override
+        row["pricing_formula"] = normalize_public_html(str(row.get("pricing_formula") or ""))
+        row["notes"] = normalize_public_html(str(row.get("notes") or ""))
         normalized_skus.append(row)
     result["skus"] = normalized_skus
+
+    normalized_policies = []
+    for item in result.get("policies") or []:
+        row = dict(item or {})
+        row["description"] = normalize_public_html(str(row.get("description") or ""))
+        normalized_policies.append(row)
+    result["policies"] = normalized_policies
     return result
 
 
@@ -80,7 +105,8 @@ def install_economy_v02_ui_patch(economy_routes_module: Any) -> None:
             "Economy v0.2 above is the current commercial source of truth and remains read-only/not enforced. "
             "Editing legacy cards does not activate or rewrite v0.2.</div></div>"
         )
-        return render_economy_v02(admin, v02) + compatibility_note + legacy_body
+        current_body = normalize_public_html(render_economy_v02(admin, v02))
+        return current_body + compatibility_note + legacy_body
 
     economy_routes_module.economy_snapshot = wrapped_snapshot
     economy_routes_module._economy_body = wrapped_body
