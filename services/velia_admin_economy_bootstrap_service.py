@@ -12,6 +12,7 @@ from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
 from services.velia_admin_economy_v02_branding_service import ensure_economy_v02_branding
 from services.velia_admin_economy_v02_service import ensure_economy_v02_tables
+from services.velia_admin_economy_v02_topups_service import ensure_economy_v02_topups
 from services.velia_admin_economy_v02_ui_patch import install_economy_v02_ui_patch
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
@@ -42,6 +43,9 @@ def _ensure_economy_tables_serialized() -> None:
         # Canonical public product boundary, also versioned and draft-only:
         # Velia = assistant/chatbot; Velyon Core = neural intelligence.
         ensure_economy_v02_branding()
+        # Entry top-up is versioned separately so it can be added safely even if
+        # the original v0.2 seed was already applied. Draft tables only.
+        ensure_economy_v02_topups()
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_LOCK_ID,))
