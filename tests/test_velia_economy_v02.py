@@ -4,6 +4,7 @@ import pytest
 
 import services.velia_admin_economy_v02_branding_service as branding
 import services.velia_admin_economy_v02_service as economy
+import services.velia_admin_economy_v02_topups_service as topups
 import services.velia_admin_economy_v02_ui_patch as economy_ui_patch
 
 
@@ -17,11 +18,24 @@ def test_v02_plans_and_crypto_discount_are_exact():
 
 def test_v02_credit_packs_are_exact():
     packs = {row[0]: row for row in economy.CREDIT_PACKS}
+    assert topups.MINI_PACK_CODE == "pack_100"
+    assert topups.MINI_PACK_NAME == "100 Credits"
+    assert topups.MINI_PACK_CREDITS == 100
+    assert topups.MINI_PACK_STORE_USD == 2.49
+    assert topups.MINI_PACK_CRYPTO_USD == 1.74
     assert packs["pack_250"][1:] == ("250 Credits", 250, 4.99, 3.49)
     assert packs["pack_800"][1:] == ("800 Credits", 800, 12.99, 9.09)
     assert packs["pack_2000"][1:] == ("2,000 Credits", 2000, 27.99, 19.59)
     assert packs["pack_5000"][1:] == ("5,000 Credits", 5000, 59.99, 41.99)
     assert packs["pack_10000"][1:] == ("10,000 Credits", 10000, 109.99, 76.99)
+
+
+def test_100_credit_topup_margin_is_well_above_safety_floor():
+    values = topups.mini_pack_economics()
+    assert values["provider_budget_usd"] == pytest.approx(0.24)
+    assert values["store_margin_percent"] == pytest.approx(88.66, abs=0.05)
+    assert values["crypto_margin_percent"] == pytest.approx(86.07, abs=0.05)
+    assert (topups.MINI_PACK_CRYPTO_USD * 0.99 / topups.MINI_PACK_CREDITS) > economy._plan_economics(29.99, 20.99, 3000, 1.00)["crypto_net_per_credit_usd"]
 
 
 def test_included_core_reserve_is_counted_in_paid_plan_worst_case_margin():
@@ -78,6 +92,7 @@ def test_public_commercial_copy_never_exposes_upstream_brands():
     public_parts = []
     for row in economy.PLANS:
         public_parts.extend((row[1], row[5], row[7]))
+    public_parts.append(topups.MINI_PACK_NAME)
     for row in economy.CREDIT_PACKS:
         public_parts.append(row[1])
     for row in economy.SKUS:
@@ -153,10 +168,11 @@ def test_v02_policy_guards_match_agreed_commercial_rules():
     assert policies["free_welcome_bonus_credits"][2] == 50.0
 
 
-def test_v02_and_branding_are_draft_only_and_cannot_touch_live_billing_or_balances():
+def test_v02_migrations_are_draft_only_and_cannot_touch_live_billing_or_balances():
     economy_source = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
     branding_source = Path("services/velia_admin_economy_v02_branding_service.py").read_text(encoding="utf-8")
-    for source in (economy_source, branding_source):
+    topups_source = Path("services/velia_admin_economy_v02_topups_service.py").read_text(encoding="utf-8")
+    for source in (economy_source, branding_source, topups_source):
         assert "draft_only_not_enforced" in source
         assert "velia_commercial_draft_versions" in source
         assert "UPDATE settings" not in source
@@ -166,13 +182,16 @@ def test_v02_and_branding_are_draft_only_and_cannot_touch_live_billing_or_balanc
         assert "token_balance =" not in source
     assert "UPDATE velia_commercial_draft_v02_plans" in branding_source
     assert "UPDATE velia_commercial_draft_v02_skus" in branding_source
+    assert "INSERT INTO velia_commercial_draft_v02_credit_packs" in topups_source
+    assert "ON CONFLICT (code) DO NOTHING" in topups_source
 
 
-def test_bootstrap_installs_v02_and_branding_inside_existing_serialized_boundary():
+def test_bootstrap_installs_v02_branding_and_topups_inside_existing_serialized_boundary():
     source = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
     assert "ensure_economy_tables()" in source
     assert "ensure_economy_v02_tables()" in source
     assert "ensure_economy_v02_branding()" in source
+    assert "ensure_economy_v02_topups()" in source
     assert "install_economy_v02_ui_patch(economy_routes_module)" in source
     assert "pg_advisory_lock" in source
     assert "pg_advisory_unlock" in source
