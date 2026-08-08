@@ -58,6 +58,18 @@ def test_mobile_patch_is_idempotent_and_presentation_only():
         assert forbidden not in source
 
 
+def test_mobile_root_preserves_native_vertical_touch_scroll():
+    module = SimpleNamespace(_layout=lambda: _layout_html(), _login_page=lambda: _login_html())
+    mobile.install_admin_mobile_ui_patch(module)
+    rendered = module._layout()
+    # Android Chrome can turn root elements into nested scroll containers when
+    # overflow-x:hidden is applied; keep root/main overflow native instead.
+    assert "overflow-x:hidden" not in rendered
+    assert "overscroll-behavior-y:contain" not in rendered
+    assert "body{width:100%;max-width:100%;min-width:0}" in rendered
+    assert ".main{width:100%;max-width:100vw;min-width:0;" in rendered
+
+
 def test_login_gets_touch_and_safe_area_layout_without_table_processing():
     module = SimpleNamespace(_layout=lambda: _layout_html(), _login_page=lambda: _login_html())
     mobile.install_admin_mobile_ui_patch(module)
