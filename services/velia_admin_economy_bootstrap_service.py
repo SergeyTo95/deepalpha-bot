@@ -15,6 +15,7 @@ from services.velia_admin_economy_v02_service import ensure_economy_v02_tables
 from services.velia_admin_economy_v02_topups_service import ensure_economy_v02_topups
 from services.velia_admin_economy_v02_video_pricing_service import ensure_economy_v02_video_pricing
 from services.velia_admin_economy_v02_ui_patch import install_economy_v02_ui_patch
+from services.velia_admin_mobile_ui_patch import install_admin_mobile_ui_patch
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
 
@@ -92,9 +93,12 @@ async def _production_economy_startup(app: Any) -> None:
 
 
 def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
-    """Register Economy/Payments routes and production-only additive schemas."""
-    # The UI patch wraps the already-threaded Economy snapshot, so all v0.2 DB
-    # reads stay off the aiohttp event loop. It is still read-only/draft-only.
+    """Register Control Center UI, Economy/Payments routes and additive schemas."""
+    # Presentation-only global patch: mobile navigation, touch targets, stacked
+    # forms and server-labelled card tables. Auth/CSRF/routes/data stay unchanged.
+    install_admin_mobile_ui_patch(admin_routes_module)
+    # The Economy UI patch wraps the already-threaded Economy snapshot, so all
+    # v0.2 DB reads stay off the aiohttp event loop. It is still read-only/draft-only.
     install_economy_v02_ui_patch(economy_routes_module)
     setup_velia_admin_economy_routes(app, admin_routes_module)
     setup_velia_admin_payments_routes(app, admin_routes_module)
