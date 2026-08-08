@@ -56,6 +56,10 @@ jobs:
             services/velia_admin_observability_service.py \
             services/velia_admin_telegram_auth_service.py \
             services/velia_admin_telegram_bridge.py \
+            services/developer_api_admin_observability_patch.py \
+            services/developer_api_admin_opportunity_patch.py \
+            services/developer_api_admin_webhook_patch.py \
+            developer_api_commercial_admin_routes_v2.py \
             run_bot_process.py \
             run_web_process.py
 
@@ -90,12 +94,17 @@ jobs:
           assert "session_token_hash" in auth
           assert "Legacy admin URL secrets are disabled" in security
 
-          # Legacy Developer API admin pages can reveal raw keys and are not a
-          # Stage 1 Control Center surface. Public Developer API stays mounted.
+          # Legacy Developer API patch modules may remain initialized for
+          # compatibility, but their secret-bearing admin HTTP routes must not
+          # be attached to the aiohttp application. Public Developer API stays.
+          assert "install_admin_observability()" in web_process
+          assert "install_admin_webhooks()" in web_process
+          assert "install_admin_opportunity()" in web_process
+          assert "install_admin_commercial()" in web_process
           assert "setup_developer_api_admin_routes(deepalpha_web.app)" not in web_process
           assert "setup_developer_api_commercial_admin_routes(deepalpha_web.app)" not in web_process
-          assert "from developer_api_admin_routes import" not in web_process
           assert "setup_developer_api_routes(deepalpha_web.app)" in web_process
+          assert "setup_developer_api_commercial_routes(deepalpha_web.app)" in web_process
           PY
 
       - name: Upload focused test log
