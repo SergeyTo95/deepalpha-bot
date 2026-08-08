@@ -17,6 +17,10 @@ def main() -> None:
     # Install public URL and CORS defaults before importing modules that read
     # environment settings at import/runtime initialization.
     public_origin = configure_public_urls(os.environ)
+    # Railway web endpoints are HTTPS in both production and PR environments.
+    # Fail secure for the new admin cookies even when an environment name is not
+    # literally "production"; local HTTP development can explicitly opt out.
+    os.environ.setdefault("COOKIE_SECURE", "true")
     os.environ.setdefault("VELYON_IMAGES_DAILY_GLOBAL_LIMIT", "20")
     os.environ.setdefault("VELYON_IMAGES_ESTIMATED_COST_USD", "0.25")
     # FLUX 3 Stage 1 remains fail-closed until a server-side BFL key and the
