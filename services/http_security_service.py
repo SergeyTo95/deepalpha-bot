@@ -102,6 +102,22 @@ def _is_detailed_admin_audit_path(path: str) -> bool:
     return normalized.startswith("/admin/users/") and "/actions/" in normalized
 
 
+def _admin_mutation_requires_origin(path: str) -> bool:
+    """Return whether an admin mutation must pass the browser Origin gate.
+
+    `/admin/login` consumes a high-entropy, owner-issued, one-time Telegram OTP
+    and has no ambient authenticated authority yet. Railway may present an
+    internal Host to aiohttp behind its reverse proxy while the browser sends
+    the public custom-domain Origin, so applying the generic Origin gate here
+    can reject a legitimate owner login before the OTP handler executes.
+
+    Every authenticated Control Center mutation remains origin-gated and also
+    requires the session-bound CSRF token in `admin_routes._guard`.
+    """
+    normalized = str(path or "")
+    return normalized.startswith("/admin") and normalized != "/admin/login"
+
+
 async def _record_generic_admin_mutation(request: web.Request, response: web.StreamResponse) -> None:
     if request.method not in {"POST", "PATCH", "PUT", "DELETE"}:
         return
@@ -153,7 +169,12 @@ async def deepalpha_security_middleware(request: web.Request, handler):
     origin_allowed = _origin_allowed(request, origin, configured_origins) if origin else False
     if origin and _is_api_path(request.path) and not origin_allowed:
         return _json_response({"ok": False, "error": "origin_not_allowed"}, 403)
-    if request.method in {"POST", "PATCH", "PUT", "DELETE"} and request.path.startswith("/admin") and origin and not origin_allowed:
+    if (
+        request.method in {"POST", "PATCH", "PUT", "DELETE"}
+        and _admin_mutation_requires_origin(request.path)
+        and origin
+        and not origin_allowed
+    ):
         return web.Response(text="Forbidden", status=403)
 
     protected = _protect_legacy_user_api(request)
