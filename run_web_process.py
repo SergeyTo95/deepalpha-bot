@@ -86,6 +86,8 @@ def main() -> None:
     from services.velia_memory_shadow_runtime_patch import install as install_velia_memory_shadow
     from services.velia_memory_shadow_service import ensure_velia_memory_shadow_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
+    from services.velia_mobile_commercial_routes import setup_velia_mobile_commercial_routes
+    from services.velia_mobile_commercial_service import ensure_commercial_runtime_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
     from services.velia_mobile_streaming_service import setup_velia_mobile_streaming_route
     from services.velia_plugin_service import ensure_velia_plugin_tables
@@ -188,6 +190,10 @@ def main() -> None:
         deepalpha_web.app,
         web_user_resolver,
     )
+    setup_velia_mobile_commercial_routes(
+        deepalpha_web.app,
+        velia_mobile_routes_module,
+    )
     install_velia_attachment_feature_flag(
         deepalpha_web.app,
         velia_mobile_routes_module,
@@ -248,6 +254,7 @@ def main() -> None:
         ensure_api_commercial_tables()
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
+        ensure_commercial_runtime_tables()
         ensure_velia_chat_tables()
         ensure_velia_developer_chat_tables()
         ensure_velia_agent_tables()
