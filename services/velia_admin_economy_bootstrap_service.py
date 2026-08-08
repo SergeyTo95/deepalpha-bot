@@ -7,8 +7,13 @@ from typing import Any
 
 from db.database import get_connection
 from services.payments.schema import ensure_payment_tables_serialized
+from services import velia_admin_economy_routes as economy_routes_module
 from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
+from services.velia_admin_economy_v02_branding_service import ensure_economy_v02_branding
+from services.velia_admin_economy_v02_service import ensure_economy_v02_tables
+from services.velia_admin_economy_v02_topups_service import ensure_economy_v02_topups
+from services.velia_admin_economy_v02_ui_patch import install_economy_v02_ui_patch
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
 
@@ -32,6 +37,15 @@ def _ensure_economy_tables_serialized() -> None:
     try:
         cursor.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_LOCK_ID,))
         ensure_economy_tables()
+        # Economy v0.2 is a versioned draft-only migration. It seeds the agreed
+        # commercial model once and never mutates runtime billing.
+        ensure_economy_v02_tables()
+        # Canonical public product boundary, also versioned and draft-only:
+        # Velia = assistant/chatbot; Velyon Core = neural intelligence.
+        ensure_economy_v02_branding()
+        # Entry top-up is versioned separately so it can be added safely even if
+        # the original v0.2 seed was already applied. Draft tables only.
+        ensure_economy_v02_topups()
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_LOCK_ID,))
@@ -74,6 +88,9 @@ async def _production_economy_startup(app: Any) -> None:
 
 def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
     """Register Economy/Payments routes and production-only additive schemas."""
+    # The UI patch wraps the already-threaded Economy snapshot, so all v0.2 DB
+    # reads stay off the aiohttp event loop. It is still read-only/draft-only.
+    install_economy_v02_ui_patch(economy_routes_module)
     setup_velia_admin_economy_routes(app, admin_routes_module)
     setup_velia_admin_payments_routes(app, admin_routes_module)
     if not app.get("velia_admin_economy_bootstrap_installed"):
