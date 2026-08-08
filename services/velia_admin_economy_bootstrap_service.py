@@ -7,8 +7,13 @@ from typing import Any
 
 from db.database import get_connection
 from services.payments.schema import ensure_payment_tables_serialized
+from services import velia_admin_economy_routes as economy_routes_module
 from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
+from services.velia_admin_economy_v01_service import (
+    ensure_economy_v01_tables,
+    install_economy_v01_ui_patch,
+)
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
 
@@ -32,6 +37,9 @@ def _ensure_economy_tables_serialized() -> None:
     try:
         cursor.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_LOCK_ID,))
         ensure_economy_tables()
+        # Economy v0.1 is a versioned draft-only migration. It seeds the agreed
+        # commercial model exactly once and never mutates runtime billing.
+        ensure_economy_v01_tables()
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_LOCK_ID,))
@@ -74,6 +82,9 @@ async def _production_economy_startup(app: Any) -> None:
 
 def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
     """Register Economy/Payments routes and production-only additive schemas."""
+    # Patch only the Economy rendering layer. The v0.1 model remains read-only
+    # and draft-only; existing guarded mutation routes keep their security model.
+    install_economy_v01_ui_patch(economy_routes_module)
     setup_velia_admin_economy_routes(app, admin_routes_module)
     setup_velia_admin_payments_routes(app, admin_routes_module)
     if not app.get("velia_admin_economy_bootstrap_installed"):
