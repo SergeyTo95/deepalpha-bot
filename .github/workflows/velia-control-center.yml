@@ -8,10 +8,13 @@ on:
       - "admin_routes.py"
       - "run_bot_process.py"
       - "run_web_process.py"
+      - "run_payment_worker.py"
       - "services/http_security_service.py"
       - "services/velia_admin_*.py"
+      - "services/payments/**"
       - "tests/test_velia_control_center*.py"
       - "tests/test_velia_admin_*.py"
+      - "tests/test_velia_payment_foundation.py"
       - ".github/workflows/velia-control-center.yml"
   workflow_dispatch:
 
@@ -61,12 +64,28 @@ jobs:
             services/velia_admin_economy_service.py \
             services/velia_admin_economy_routes.py \
             services/velia_admin_economy_bootstrap_service.py \
+            services/velia_admin_payments_service.py \
+            services/velia_admin_payments_routes.py \
+            services/payments/__init__.py \
+            services/payments/config.py \
+            services/payments/models.py \
+            services/payments/schema.py \
+            services/payments/repository.py \
+            services/payments/worker.py \
+            services/payments/chains/__init__.py \
+            services/payments/chains/base.py \
+            services/payments/chains/tron.py \
+            services/payments/chains/solana.py \
+            services/payments/chains/ton.py \
+            services/payments/chains/bnb.py \
+            services/payments/chains/polygon.py \
             services/developer_api_admin_observability_patch.py \
             services/developer_api_admin_opportunity_patch.py \
             services/developer_api_admin_webhook_patch.py \
             developer_api_commercial_admin_routes_v2.py \
             run_bot_process.py \
-            run_web_process.py
+            run_web_process.py \
+            run_payment_worker.py
 
       - name: Run focused security tests
         shell: bash
@@ -77,10 +96,11 @@ jobs:
             tests/test_velia_control_center_login_origin.py \
             tests/test_velia_admin_user_display.py \
             tests/test_velia_admin_economy.py \
+            tests/test_velia_payment_foundation.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-control-center-pytest.log
 
-      - name: Verify admin credential and commercial boundaries
+      - name: Verify admin credential, commercial and payment boundaries
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -91,6 +111,10 @@ jobs:
           auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
           economy = Path("services/velia_admin_economy_service.py").read_text(encoding="utf-8")
           bootstrap = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
+          payment_repo = Path("services/payments/repository.py").read_text(encoding="utf-8")
+          payment_worker = Path("services/payments/worker.py").read_text(encoding="utf-8")
+          payment_schema = Path("services/payments/schema.py").read_text(encoding="utf-8")
+          payment_entry = Path("run_payment_worker.py").read_text(encoding="utf-8")
           web_process = Path("run_web_process.py").read_text(encoding="utf-8")
 
           assert "ADMIN_SECRET_KEY" not in admin
@@ -107,18 +131,36 @@ jobs:
           assert 'normalized != "/admin/login"' in security
           assert "setup_velia_admin_economy(app, admin_routes_module)" in security
 
-          # Economy drafts are deliberately isolated from live billing/runtime balances.
+          # Economy drafts remain isolated from live billing/runtime balances.
           assert "UPDATE settings" not in economy
           assert "UPDATE token_packages" not in economy
           assert "DELETE FROM token_packages" not in economy
           assert "UPDATE users SET token_balance" not in economy
           assert "EXCEPTION WHEN OTHERS THEN" in economy
 
-          # Ledger/bootstrap is production-only and serialized across replicas.
+          # Economy/token ledger bootstrap remains production-only and serialized.
           assert 'environment in {"production", "prod"}' in bootstrap
           assert "pg_advisory_lock" in bootstrap
           assert "pg_advisory_unlock" in bootstrap
           assert "await asyncio.to_thread(_ensure_economy_tables_serialized)" in bootstrap
+          assert "ensure_payment_tables_serialized" in bootstrap
+          assert "setup_velia_admin_payments_routes(app, admin_routes_module)" in bootstrap
+
+          # Payment foundation is additive, watch-only and fail-closed.
+          payment_text = "\n".join((payment_repo, payment_worker, payment_schema, payment_entry))
+          assert "UPDATE users SET token_balance" not in payment_text
+          assert "seed_encrypted" not in payment_text
+          assert "send_transaction" not in payment_text
+          assert "sign_transaction" not in payment_text
+          assert 'os.getenv("PRIVATE_KEY' not in payment_text
+          assert '"private_key"' in payment_repo  # redaction key only
+          assert "_redact_payload" in payment_repo
+          assert "ALTER TABLE payment_intents" not in payment_schema
+          assert "UPDATE payment_intents" not in payment_schema
+          assert '"live_money_acceptance": False' in payment_worker
+          assert '"signing_capability": False' in payment_worker
+          assert "foundation_live_polling_disabled" in payment_worker
+          assert "VELIA_PAYMENT_ALLOW_NONPROD_SCHEMA_BOOTSTRAP" in payment_entry
 
           # Legacy Developer API patch modules may remain initialized for
           # compatibility, but their secret-bearing admin HTTP routes must not

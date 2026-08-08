@@ -6,8 +6,10 @@ import os
 from typing import Any
 
 from db.database import get_connection
+from services.payments.schema import ensure_payment_tables_serialized
 from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
+from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ def _is_production_runtime() -> bool:
 
 
 def _ensure_economy_tables_serialized() -> None:
-    """Serialize production bootstrap across replicas before installing ledger DDL."""
+    """Serialize production Economy bootstrap across replicas."""
     lock_conn = get_connection()
     cursor = lock_conn.cursor()
     try:
@@ -44,21 +46,36 @@ def _ensure_economy_tables_serialized() -> None:
 async def _production_economy_startup(app: Any) -> None:
     if not _is_production_runtime():
         app["velia_admin_economy_bootstrap"] = "skipped_non_production"
+        app["velia_payment_bootstrap"] = "skipped_non_production"
         return
+
     try:
         await asyncio.to_thread(_ensure_economy_tables_serialized)
         app["velia_admin_economy_bootstrap"] = "ready"
         logger.info("VELIA_ADMIN_ECONOMY_BOOTSTRAP_READY")
     except Exception:
-        # Economy observability must never take the main web process down. The
-        # Economy page will report unavailable until a later successful retry.
+        # Economy observability must never take the main web process down.
         app["velia_admin_economy_bootstrap"] = "failed"
         logger.exception("VELIA_ADMIN_ECONOMY_BOOTSTRAP_FAILED")
 
+    try:
+        # Payment DDL owns a separate advisory lock shared with the independent
+        # payment worker. This keeps web/worker startup safe across replicas.
+        await asyncio.to_thread(ensure_payment_tables_serialized)
+        app["velia_payment_bootstrap"] = "ready"
+        logger.info("VELIA_PAYMENT_FOUNDATION_BOOTSTRAP_READY")
+    except Exception:
+        # Payment foundation is additive and must never take the main WebApp
+        # down. Payments page degrades to unavailable and live acceptance stays
+        # disabled.
+        app["velia_payment_bootstrap"] = "failed"
+        logger.exception("VELIA_PAYMENT_FOUNDATION_BOOTSTRAP_FAILED")
+
 
 def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
-    """Register owner-only economy routes and production-only ledger bootstrap."""
+    """Register Economy/Payments routes and production-only additive schemas."""
     setup_velia_admin_economy_routes(app, admin_routes_module)
+    setup_velia_admin_payments_routes(app, admin_routes_module)
     if not app.get("velia_admin_economy_bootstrap_installed"):
         app.on_startup.append(_production_economy_startup)
         app["velia_admin_economy_bootstrap_installed"] = True

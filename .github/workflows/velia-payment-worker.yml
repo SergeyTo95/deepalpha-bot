@@ -1,0 +1,91 @@
+name: VELIA Payment Worker
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "run_payment_worker.py"
+      - "services/payments/**"
+      - "services/velia_admin_payments_*.py"
+      - "services/velia_admin_economy_bootstrap_service.py"
+      - "tests/test_velia_payment_foundation.py"
+      - ".github/workflows/velia-payment-worker.yml"
+  workflow_dispatch:
+
+jobs:
+  payment-foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile payment boundary
+        run: |
+          python -m py_compile \
+            run_payment_worker.py \
+            services/payments/__init__.py \
+            services/payments/config.py \
+            services/payments/models.py \
+            services/payments/schema.py \
+            services/payments/repository.py \
+            services/payments/worker.py \
+            services/payments/chains/__init__.py \
+            services/payments/chains/base.py \
+            services/payments/chains/tron.py \
+            services/payments/chains/solana.py \
+            services/payments/chains/ton.py \
+            services/payments/chains/bnb.py \
+            services/payments/chains/polygon.py \
+            services/velia_admin_payments_service.py \
+            services/velia_admin_payments_routes.py
+
+      - name: Run payment foundation tests
+        run: pytest -q tests/test_velia_payment_foundation.py
+
+      - name: Verify watch-only boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          files = [
+              Path("run_payment_worker.py"),
+              Path("services/payments/config.py"),
+              Path("services/payments/repository.py"),
+              Path("services/payments/worker.py"),
+              Path("services/payments/chains/base.py"),
+          ]
+          text = "\n".join(p.read_text(encoding="utf-8") for p in files)
+          assert "UPDATE users SET token_balance" not in text
+          assert "seed_encrypted" not in text
+          assert "send_transaction" not in text
+          assert "sign_transaction" not in text
+          assert 'os.getenv("PRIVATE_KEY' not in text
+          assert "live_chain_polling_not_implemented" in text
+          assert "foundation_live_polling_disabled" in text
+          assert '"live_money_acceptance": False' in text
+          assert '"signing_capability": False' in text
+          PY
