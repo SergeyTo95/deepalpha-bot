@@ -20,6 +20,7 @@ from services.payments.config import (
 
 CRYPTO_DISCOUNT_PERCENT = 30
 QUOTE_EXPIRY_MINUTES = 30
+MAX_OPEN_INTENTS_PER_USER = 5
 _AMOUNT_SCALE = 10 ** USDT_DECIMALS
 _QUOTE_LOCK_NAMESPACE = "velia-usdt-quote-v1"
 _OPEN_STATUSES = ("created", "awaiting_payment", "detected", "confirming")
@@ -191,6 +192,8 @@ def create_usdt_payment_intent(
         lock_key = f"{_QUOTE_LOCK_NAMESPACE}:{network_name}:{config.deposit_address}"
         cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
 
+        # Retries with the same idempotency key remain safe even after the user
+        # reaches the active-invoice cap.
         cur.execute(
             "SELECT * FROM velia_payment_intents WHERE idempotency_key=%s LIMIT 1",
             (idem,),
@@ -208,6 +211,43 @@ def create_usdt_payment_intent(
         if not cur.fetchone():
             conn.rollback()
             return {"ok": False, "error": "user_not_found"}
+
+        # Prevent one account from exhausting the 999-value fingerprint space or
+        # creating a large set of abandoned watch targets.
+        cur.execute(
+            """
+            SELECT COUNT(*) AS active_count
+            FROM velia_payment_intents
+            WHERE user_id=%s
+              AND channel='crypto'
+              AND status = ANY(%s)
+              AND (expires_at IS NULL OR expires_at > NOW())
+            """,
+            (uid, list(_OPEN_STATUSES)),
+        )
+        active_row = cur.fetchone() or {}
+        if int(active_row.get("active_count") or 0) >= MAX_OPEN_INTENTS_PER_USER:
+            conn.rollback()
+            return {"ok": False, "error": "too_many_open_payment_intents"}
+
+        # An active Pro subscriber must not be able to buy cheaper Plus and use
+        # it as a discounted Pro renewal. A same-plan renewal or Plus->Pro
+        # upgrade remains allowed.
+        if product.plan_code == "plus":
+            cur.execute(
+                """
+                SELECT 1
+                FROM velia_user_commercial_state
+                WHERE user_id=%s
+                  AND plan_code='pro'
+                  AND subscription_until > NOW()
+                LIMIT 1
+                """,
+                (uid,),
+            )
+            if cur.fetchone():
+                conn.rollback()
+                return {"ok": False, "error": "active_plan_downgrade_not_supported"}
 
         # Reserve one of 999 micro-USDT fingerprints. A collision query includes
         # expiry so old completed/expired invoices never consume the namespace.
