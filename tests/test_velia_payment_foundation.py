@@ -3,6 +3,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+import run_payment_worker as payment_entry
 import services.payments.config as payment_config
 import services.payments.repository as payment_repository
 import services.payments.schema as payment_schema
@@ -116,6 +117,18 @@ def test_worker_remains_foundation_blocked_even_if_tron_is_configured(monkeypatc
     assert worker.health_snapshot()["signing_capability"] is False
 
 
+def test_disabled_worker_does_not_start_background_poll_loop(monkeypatch):
+    monkeypatch.setattr(payment_entry, "_schema_bootstrap_allowed", lambda: True)
+    monkeypatch.setattr(payment_entry, "worker_enabled", lambda: False)
+    monkeypatch.setattr(payment_entry, "ensure_payment_tables_serialized", lambda: None)
+
+    app = web.Application()
+    asyncio.run(payment_entry._startup(app))
+
+    assert app["velia_payment_schema"] == "ready"
+    assert app["velia_payment_worker_task"] is None
+
+
 def test_payment_intent_validation_fails_before_database(monkeypatch):
     monkeypatch.setattr(
         payment_repository,
@@ -140,19 +153,49 @@ def test_payment_intent_validation_fails_before_database(monkeypatch):
         channel="google_play",
         idempotency_key="test",
     )["error"] == "invalid_user"
+    assert payment_repository.create_payment_intent(
+        user_id=1,
+        product_code="plus",
+        channel="google_play",
+        idempotency_key="test",
+        expected_amount_usd=-1,
+    )["error"] == "invalid_expected_amount"
+    assert payment_repository.create_payment_intent(
+        user_id=1,
+        product_code="plus",
+        channel="crypto",
+        network="tron",
+        asset="USDT",
+        idempotency_key="test",
+        expected_amount_asset=float("nan"),
+    )["error"] == "invalid_expected_amount"
+    assert payment_repository.create_payment_intent(
+        user_id=1,
+        product_code="plus",
+        channel="crypto",
+        network="tron",
+        asset="USDT",
+        idempotency_key="test",
+        asset_decimals=37,
+    )["error"] == "invalid_asset_decimals"
 
 
 def test_payment_payload_redaction_preserves_noncredential_token_fields():
     redacted = payment_repository._redact_payload(
         {
             "access_token": "secret-value",
+            "client_secret": "store-secret",
+            "bearer-token": "bearer-secret",
             "token_balance": 123,
-            "nested": {"private_key": "secret-key", "tx_hash": "abc"},
+            "nested": {"private_key": "secret-key", "webhook_secret": "hook", "tx_hash": "abc"},
         }
     )
     assert redacted["access_token"] == "[REDACTED]"
+    assert redacted["client_secret"] == "[REDACTED]"
+    assert redacted["bearer-token"] == "[REDACTED]"
     assert redacted["token_balance"] == 123
     assert redacted["nested"]["private_key"] == "[REDACTED]"
+    assert redacted["nested"]["webhook_secret"] == "[REDACTED]"
     assert redacted["nested"]["tx_hash"] == "abc"
 
 
@@ -202,6 +245,7 @@ def test_nonprod_worker_schema_bootstrap_is_explicitly_fail_closed():
     assert "VELIA_PAYMENT_ALLOW_NONPROD_SCHEMA_BOOTSTRAP" in source
     assert "skipped_non_production" in source
     assert '"live_money_acceptance": False' in source
+    assert "if not worker_enabled():" in source
 
 
 def test_economy_bootstrap_registers_payments_and_uses_serialized_schema():
