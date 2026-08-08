@@ -35,7 +35,9 @@ def test_mobile_patch_is_idempotent_and_presentation_only():
     assert ".logout button{display:inline-flex!important" in rendered
     assert "min-height:48px" in rendered
     assert "font-size:16px!important" in rendered
+    assert "max-width:100vw" in rendered
     assert "mobile-card-table" in rendered
+    assert "mobile-kv-table" in rendered
     assert "data-label='User'" in rendered
     assert "data-label='Balance'" in rendered
     assert "data-label='Action'" in rendered
@@ -77,7 +79,19 @@ def test_table_enhancement_preserves_existing_classes_and_escapes_header_labels(
     assert "data-label='State'" in rendered
 
 
-def test_tables_without_headers_are_left_unchanged():
+def test_two_column_headerless_table_becomes_mobile_key_value_cards():
+    document = """<div class='table-wrap'><table><tbody>
+    <tr><td>Railway service</td><td><code>deepalpha-bot</code></td></tr>
+    <tr><td>Deployed commit SHA</td><td><code>41f74f44964d3aa3cb8a06134aeefd64cd060d18</code></td></tr>
+    </tbody></table></div>"""
+    rendered = mobile._enhance_tables(document)
+    assert "class='mobile-kv-table'" in rendered
+    assert "Railway service" in rendered
+    assert "deepalpha-bot" in rendered
+    assert "41f74f44964d3aa3cb8a06134aeefd64cd060d18" in rendered
+
+
+def test_non_key_value_headerless_table_is_left_unchanged():
     document = "<div class='table-wrap'><table><tbody><tr><td>A</td></tr></tbody></table></div>"
     assert mobile._enhance_tables(document) == document
 
