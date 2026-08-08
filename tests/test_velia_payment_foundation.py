@@ -175,7 +175,8 @@ def test_payment_foundation_has_no_signing_or_direct_user_credit_boundary():
 def test_fulfillment_requires_confirmed_intent_by_contract():
     source = Path("services/payments/repository.py").read_text(encoding="utf-8")
     assert "intent_not_confirmed" in source
-    assert "status") if False else True
+    assert "FOR UPDATE" in source
+    assert '!= "confirmed"' in source
     assert "ON CONFLICT (intent_id) DO NOTHING" in source
     assert "never mutates the user itself" in source
 
