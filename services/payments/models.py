@@ -30,6 +30,7 @@ class ObservedTransfer:
     amount_atomic: int
     sender_address: Optional[str] = None
     block_ref: Optional[str] = None
+    block_timestamp: Optional[int] = None
     confirmations: int = 0
     finality: str = "detected"
 
