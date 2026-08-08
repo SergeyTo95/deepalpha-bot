@@ -11,6 +11,22 @@ from services.payments.models import ObservedTransfer
 
 
 _OPEN_INTENT_STATUSES = ("created", "awaiting_payment", "detected", "confirming")
+_SENSITIVE_KEYS = {
+    "access_token",
+    "refresh_token",
+    "authorization",
+    "auth",
+    "cookie",
+    "set_cookie",
+    "api_key",
+    "apikey",
+    "secret",
+    "password",
+    "seed",
+    "seed_phrase",
+    "private_key",
+    "session_token",
+}
 
 
 def _dict_row(row: Any) -> Dict[str, Any]:
@@ -22,6 +38,20 @@ def _dict_row(row: Any) -> Dict[str, Any]:
         return dict(row)
     except Exception:
         return {}
+
+
+def _redact_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: Dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = str(key or "").strip().lower().replace("-", "_")
+            result[str(key)] = "[REDACTED]" if normalized in _SENSITIVE_KEYS else _redact_payload(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_redact_payload(item) for item in value]
+    if isinstance(value, bytes):
+        return "[BINARY]"
+    return value
 
 
 def create_payment_intent(
@@ -64,15 +94,6 @@ def create_payment_intent(
     conn = get_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        cur.execute(
-            "SELECT * FROM velia_payment_intents WHERE idempotency_key=%s LIMIT 1",
-            (key,),
-        )
-        existing = cur.fetchone()
-        if existing:
-            conn.rollback()
-            return {"ok": True, "created": False, "intent": _dict_row(existing)}
-
         public_reference = "vpay_" + uuid.uuid4().hex
         cur.execute(
             """
@@ -83,8 +104,9 @@ def create_payment_intent(
                 expires_at,metadata_json
             ) VALUES (
                 %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,
-                NOW() + (%s || ' minutes')::interval,%s
+                NOW() + (%s * INTERVAL '1 minute'),%s
             )
+            ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             """,
             (
@@ -102,12 +124,23 @@ def create_payment_intent(
                 str(payment_memo or "").strip() or None,
                 key,
                 expires,
-                json.dumps(metadata or {}, ensure_ascii=False),
+                json.dumps(_redact_payload(metadata or {}), ensure_ascii=False),
             ),
         )
         row = cur.fetchone()
+        if row:
+            conn.commit()
+            return {"ok": True, "created": True, "intent": _dict_row(row)}
+
+        cur.execute(
+            "SELECT * FROM velia_payment_intents WHERE idempotency_key=%s LIMIT 1",
+            (key,),
+        )
+        existing = cur.fetchone()
         conn.commit()
-        return {"ok": True, "created": True, "intent": _dict_row(row)}
+        if not existing:
+            return {"ok": False, "error": "idempotency_conflict_without_row"}
+        return {"ok": True, "created": False, "intent": _dict_row(existing)}
     except Exception as exc:
         conn.rollback()
         return {"ok": False, "error": exc.__class__.__name__}
@@ -164,7 +197,7 @@ def record_payment_event(
                 None if intent_id is None else int(intent_id),
                 str(source or "unknown")[:80],
                 str(event_type or "unknown")[:80],
-                json.dumps(payload or {}, ensure_ascii=False),
+                json.dumps(_redact_payload(payload or {}), ensure_ascii=False),
             ),
         )
         inserted = cur.rowcount == 1
@@ -224,7 +257,7 @@ def record_observed_transfer(transfer: ObservedTransfer, intent_id: Optional[int
             ),
         )
         existing = cur.fetchone()
-        conn.rollback()
+        conn.commit()
         return {"ok": True, "created": False, "transaction": _dict_row(existing)}
     except Exception as exc:
         conn.rollback()
