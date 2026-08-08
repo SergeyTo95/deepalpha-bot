@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from services.payments.chains import (
     BnbUSDTAdapter,
@@ -12,6 +12,7 @@ from services.payments.chains import (
     TronUSDTAdapter,
 )
 from services.payments.config import all_network_configs, poll_interval_seconds, worker_enabled
+from services.payments.live_runtime import process_finalized_transfer
 from services.payments.models import WorkerNetworkHealth
 from services.payments.repository import update_worker_state
 
@@ -20,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class PaymentWorker:
-    """Watch-only payment worker orchestrator.
+    """Watch-only VELIA USDT worker.
 
-    Foundation mode never invokes a live chain poll. Adapter implementations are
-    deliberately blocked until each network gets its own reviewed implementation
-    and canonical asset/finality tests.
+    Phase 1 can observe finalized transfers on TRON, Solana and TON. The worker
+    has no signing, sending, seed, private-key or sweep capability. BNB/Polygon
+    remain structurally present but fail closed until a separate reviewed rail.
     """
 
     def __init__(self) -> None:
@@ -37,15 +38,23 @@ class PaymentWorker:
             "polygon": PolygonUSDTAdapter(configs["polygon"]),
         }
         self._stopping = asyncio.Event()
+        self._cursors: Dict[str, Optional[str]] = {name: None for name in self.adapters}
 
     def health_snapshot(self) -> Dict[str, object]:
+        global_enabled = worker_enabled()
         networks = {name: adapter.health().__dict__ for name, adapter in self.adapters.items()}
+        ready_networks = [
+            name
+            for name, health in networks.items()
+            if global_enabled and health.get("status") == "ready"
+        ]
         return {
             "service": "velia-payment-worker",
-            "mode": "foundation_watch_only",
-            "worker_enabled": worker_enabled(),
-            "live_money_acceptance": False,
+            "mode": "usdt_watch_only_v1",
+            "worker_enabled": global_enabled,
+            "live_money_acceptance": bool(ready_networks),
             "signing_capability": False,
+            "ready_networks": ready_networks,
             "networks": networks,
         }
 
@@ -63,28 +72,72 @@ class PaymentWorker:
                     status="disabled",
                     reason="worker_flag_off",
                 )
+                results[name] = health
+                continue
+
             results[name] = health
+            if health.status != "ready":
+                try:
+                    await asyncio.to_thread(
+                        update_worker_state,
+                        name,
+                        enabled=bool(health.enabled),
+                        mode="usdt_watch_only_v1",
+                        status=health.status,
+                        error_code=health.reason or None,
+                        success=False,
+                    )
+                except Exception:
+                    logger.exception("VELIA_PAYMENT_WORKER_STATE_WRITE_FAILED network=%s", name)
+                continue
+
             try:
+                poll_result = await adapter.poll(self._cursors.get(name))
+                matched = 0
+                failures = 0
+                for transfer in poll_result.transfers:
+                    outcome = await asyncio.to_thread(process_finalized_transfer, transfer)
+                    if outcome.get("ok") and outcome.get("matched"):
+                        matched += 1
+                    elif not outcome.get("ok"):
+                        failures += 1
+                self._cursors[name] = poll_result.next_cursor or self._cursors.get(name)
                 await asyncio.to_thread(
                     update_worker_state,
                     name,
-                    enabled=bool(global_enabled and health.enabled),
-                    mode="foundation_watch_only",
-                    status=health.status,
-                    error_code=health.reason or None,
-                    success=health.status == "disabled",
+                    enabled=True,
+                    mode="usdt_watch_only_v1",
+                    status="running",
+                    cursor_value=self._cursors.get(name),
+                    chain_height=poll_result.chain_height,
+                    error_code=None if failures == 0 else "transfer_processing_failed",
+                    success=failures == 0,
                 )
-            except Exception:
-                logger.exception("VELIA_PAYMENT_WORKER_STATE_WRITE_FAILED network=%s", name)
-
-            # Critical safety boundary: Stage 1 never calls adapter.poll(). A
-            # network-specific PR must explicitly remove this guard only after
-            # canonical asset verification/finality/idempotency tests exist.
-            if global_enabled and health.configured:
-                logger.warning(
-                    "VELIA_PAYMENT_NETWORK_BLOCKED network=%s reason=foundation_live_polling_disabled",
+                logger.info(
+                    "VELIA_PAYMENT_POLL_OK network=%s observed=%s matched=%s failures=%s",
                     name,
+                    len(poll_result.transfers),
+                    matched,
+                    failures,
                 )
+            except Exception as exc:
+                logger.warning(
+                    "VELIA_PAYMENT_POLL_FAILED network=%s error=%s",
+                    name,
+                    exc.__class__.__name__,
+                )
+                try:
+                    await asyncio.to_thread(
+                        update_worker_state,
+                        name,
+                        enabled=True,
+                        mode="usdt_watch_only_v1",
+                        status="error",
+                        error_code=exc.__class__.__name__,
+                        success=False,
+                    )
+                except Exception:
+                    logger.exception("VELIA_PAYMENT_WORKER_STATE_WRITE_FAILED network=%s", name)
         return results
 
     async def run_forever(self) -> None:
