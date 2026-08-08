@@ -58,6 +58,9 @@ jobs:
             services/velia_admin_telegram_auth_service.py \
             services/velia_admin_telegram_bridge.py \
             services/velia_admin_user_display_service.py \
+            services/velia_admin_economy_service.py \
+            services/velia_admin_economy_routes.py \
+            services/velia_admin_economy_bootstrap_service.py \
             services/developer_api_admin_observability_patch.py \
             services/developer_api_admin_opportunity_patch.py \
             services/developer_api_admin_webhook_patch.py \
@@ -73,10 +76,11 @@ jobs:
             tests/test_velia_control_center.py \
             tests/test_velia_control_center_login_origin.py \
             tests/test_velia_admin_user_display.py \
+            tests/test_velia_admin_economy.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-control-center-pytest.log
 
-      - name: Verify admin credential boundary
+      - name: Verify admin credential and commercial boundaries
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -85,6 +89,8 @@ jobs:
           security = Path("services/http_security_service.py").read_text(encoding="utf-8")
           telegram = Path("services/velia_admin_telegram_auth_service.py").read_text(encoding="utf-8")
           auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
+          economy = Path("services/velia_admin_economy_service.py").read_text(encoding="utf-8")
+          bootstrap = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
           web_process = Path("run_web_process.py").read_text(encoding="utf-8")
 
           assert "ADMIN_SECRET_KEY" not in admin
@@ -99,6 +105,20 @@ jobs:
           assert "Legacy admin URL secrets are disabled" in security
           assert '_admin_mutation_requires_origin(request.path)' in security
           assert 'normalized != "/admin/login"' in security
+          assert "setup_velia_admin_economy(app, admin_routes_module)" in security
+
+          # Economy drafts are deliberately isolated from live billing/runtime balances.
+          assert "UPDATE settings" not in economy
+          assert "UPDATE token_packages" not in economy
+          assert "DELETE FROM token_packages" not in economy
+          assert "UPDATE users SET token_balance" not in economy
+          assert "EXCEPTION WHEN OTHERS THEN" in economy
+
+          # Ledger/bootstrap is production-only and serialized across replicas.
+          assert 'environment in {"production", "prod"}' in bootstrap
+          assert "pg_advisory_lock" in bootstrap
+          assert "pg_advisory_unlock" in bootstrap
+          assert "await asyncio.to_thread(_ensure_economy_tables_serialized)" in bootstrap
 
           # Legacy Developer API patch modules may remain initialized for
           # compatibility, but their secret-bearing admin HTTP routes must not

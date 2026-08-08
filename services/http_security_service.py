@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from db.database import get_user_by_session
+from services.velia_admin_economy_bootstrap_service import setup_velia_admin_economy
 from services.velia_admin_user_display_service import apply_admin_users_display_fallback
 
 
@@ -222,6 +223,10 @@ def install_http_security(app: web.Application, admin_routes_module: Any) -> Non
         return
     if not bool(getattr(admin_routes_module, "CONTROL_CENTER_AUTH_V2", False)):
         raise RuntimeError("VELIA Control Center identity auth is required")
+    # Stage 2 is registered inside the same owner-only /admin security boundary.
+    # Production installs the ledger schema before accepting requests; preview
+    # startup skips that database bootstrap.
+    setup_velia_admin_economy(app, admin_routes_module)
     # Stage 1 owns /admin/login and /admin/logout inside admin_routes.py.
     # Do not monkeypatch the guard/key and do not expose legacy shared-secret auth.
     app.middlewares.append(deepalpha_security_middleware)
