@@ -7,7 +7,7 @@ on:
     paths:
       - "run_web_process.py"
       - "services/velia_mobile_commercial_*.py"
-      - "tests/test_velia_mobile_commercial.py"
+      - "tests/test_velia_mobile_commercial*.py"
       - ".github/workflows/velia-mobile-commercial.yml"
   workflow_dispatch:
 
@@ -51,11 +51,15 @@ jobs:
         run: |
           python -m py_compile \
             services/velia_mobile_commercial_service.py \
+            services/velia_mobile_commercial_period_service.py \
             services/velia_mobile_commercial_routes.py \
             run_web_process.py
 
       - name: Run commercial tests
-        run: pytest -q tests/test_velia_mobile_commercial.py
+        run: |
+          pytest -q \
+            tests/test_velia_mobile_commercial.py \
+            tests/test_velia_mobile_commercial_period.py
 
       - name: Verify money and secret boundaries
         run: |
@@ -63,23 +67,30 @@ jobs:
           from pathlib import Path
 
           service = Path("services/velia_mobile_commercial_service.py").read_text(encoding="utf-8")
+          period = Path("services/velia_mobile_commercial_period_service.py").read_text(encoding="utf-8")
           routes = Path("services/velia_mobile_commercial_routes.py").read_text(encoding="utf-8")
           web = Path("run_web_process.py").read_text(encoding="utf-8")
 
           assert 'VELIA_GOOGLE_PLAY_BILLING_ENABLED' in service
           assert 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON' in service
-          assert 'google_play_billing_ready()' in service
+          assert 'google_play_billing_ready()' in period
           assert 'purchase_token_hash' in service
           assert 'purchase_token TEXT' not in service
+          assert 'purchase_token TEXT' not in period
           assert 'purchase_token TEXT' not in routes
           assert 'logger.' not in service
+          assert 'logger.' not in period
           assert 'print(' not in service
+          assert 'print(' not in period
           assert 'private_key' not in routes
           assert 'UPDATE users SET token_balance=COALESCE(token_balance,0)+%s' in service
           assert 'purchaseState' in service
-          assert 'subscriptionState' in service
+          assert 'subscriptionState' in period
+          assert 'latestSuccessfulOrderId' in period
+          assert 'google_play:sub-order:' in period
           assert 'purchase_claimed_by_another_user' in service
           assert 'setup_velia_mobile_commercial_routes(' in web
           assert 'ensure_commercial_runtime_tables()' in web
           assert '/mobile-api/v1/economy/google-play/verify' in routes
+          assert 'velia_mobile_commercial_period_service import verify_google_play_purchase' in routes
           PY
