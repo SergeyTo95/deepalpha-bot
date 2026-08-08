@@ -26,6 +26,8 @@ class WatchOnlyUSDTAdapter(ABC):
     no signing/sending/sweep method and receives no wallet secret material.
     """
 
+    live_polling_implemented = False
+
     def __init__(self, config: NetworkConfig):
         self.config = config
 
@@ -46,15 +48,24 @@ class WatchOnlyUSDTAdapter(ABC):
                 enabled=True,
                 configured=False,
                 status="unconfigured",
-                reason="rpc_or_asset_identifier_missing",
+                reason="rpc_asset_or_deposit_configuration_invalid",
+            )
+        if not self.live_polling_implemented:
+            return WorkerNetworkHealth(
+                network=self.config.network,
+                asset=self.config.asset,
+                enabled=True,
+                configured=True,
+                status="blocked",
+                reason="live_chain_polling_not_implemented",
             )
         return WorkerNetworkHealth(
             network=self.config.network,
             asset=self.config.asset,
             enabled=True,
             configured=True,
-            status="foundation_blocked",
-            reason="live_chain_polling_not_implemented",
+            status="ready",
+            reason="",
         )
 
     @abstractmethod

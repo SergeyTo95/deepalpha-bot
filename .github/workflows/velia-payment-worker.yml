@@ -4,12 +4,17 @@ on:
   pull_request:
     branches:
       - feature/turbo-short-term-btc
+      - feature/velia-google-play-billing-v1
     paths:
+      - "run_web_process.py"
       - "run_payment_worker.py"
       - "services/payments/**"
+      - "services/velia_usdt_checkout_*.py"
+      - "services/velia_mobile_commercial_*.py"
       - "services/velia_admin_payments_*.py"
       - "services/velia_admin_economy_bootstrap_service.py"
       - "tests/test_velia_payment_foundation.py"
+      - "tests/test_velia_usdt_checkout.py"
       - ".github/workflows/velia-payment-worker.yml"
   workflow_dispatch:
 
@@ -47,12 +52,14 @@ jobs:
       - name: Compile payment boundary
         run: |
           python -m py_compile \
+            run_web_process.py \
             run_payment_worker.py \
             services/payments/__init__.py \
             services/payments/config.py \
             services/payments/models.py \
             services/payments/schema.py \
             services/payments/repository.py \
+            services/payments/live_runtime.py \
             services/payments/worker.py \
             services/payments/chains/__init__.py \
             services/payments/chains/base.py \
@@ -61,31 +68,65 @@ jobs:
             services/payments/chains/ton.py \
             services/payments/chains/bnb.py \
             services/payments/chains/polygon.py \
+            services/velia_usdt_checkout_service.py \
+            services/velia_usdt_checkout_routes.py \
             services/velia_admin_payments_service.py \
             services/velia_admin_payments_routes.py
 
-      - name: Run payment foundation tests
-        run: pytest -q tests/test_velia_payment_foundation.py
+      - name: Run payment tests
+        run: |
+          pytest -q \
+            tests/test_velia_payment_foundation.py \
+            tests/test_velia_usdt_checkout.py
 
-      - name: Verify watch-only boundary
+      - name: Verify live watch-only boundary
         run: |
           python - <<'PY'
           from pathlib import Path
-          files = [
-              Path("run_payment_worker.py"),
-              Path("services/payments/config.py"),
-              Path("services/payments/repository.py"),
-              Path("services/payments/worker.py"),
-              Path("services/payments/chains/base.py"),
-          ]
-          text = "\n".join(p.read_text(encoding="utf-8") for p in files)
-          assert "UPDATE users SET token_balance" not in text
-          assert "seed_encrypted" not in text
-          assert "send_transaction" not in text
-          assert "sign_transaction" not in text
-          assert 'os.getenv("PRIVATE_KEY' not in text
-          assert "live_chain_polling_not_implemented" in text
-          assert "foundation_live_polling_disabled" in text
-          assert '"live_money_acceptance": False' in text
-          assert '"signing_capability": False' in text
+
+          config = Path("services/payments/config.py").read_text(encoding="utf-8")
+          worker = Path("services/payments/worker.py").read_text(encoding="utf-8")
+          runtime = Path("services/payments/live_runtime.py").read_text(encoding="utf-8")
+          checkout = Path("services/velia_usdt_checkout_service.py").read_text(encoding="utf-8")
+          routes = Path("services/velia_usdt_checkout_routes.py").read_text(encoding="utf-8")
+          chains = "\n".join(
+              p.read_text(encoding="utf-8")
+              for p in Path("services/payments/chains").glob("*.py")
+          )
+          payment_tree = "\n".join(
+              p.read_text(encoding="utf-8")
+              for p in Path("services/payments").rglob("*.py")
+          )
+
+          assert 'PHASE1_USDT_NETWORKS = ("tron", "solana", "ton")' in config
+          assert '"bnb": None' in config
+          assert '"polygon": None' in config
+          assert "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" in config
+          assert "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" in config
+          assert "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs" in config
+          assert "USDT_DECIMALS = 6" in config
+          assert "VELIA_USDT_CHECKOUT_ENABLED" in config
+          assert 'discount_label": "USDT -30%"' in checkout
+          assert "pg_advisory_xact_lock" in checkout
+          assert "expected_amount_atomic" in checkout
+          assert 'transfer.finality != "finalized"' in runtime
+          assert "expected_amount_atomic=%s" in runtime
+          assert "status='fulfilled'" in runtime
+          assert "UPDATE users SET token_balance" in runtime
+          assert "UPDATE users SET token_balance" not in chains
+          assert "UPDATE users SET token_balance" not in Path("services/payments/repository.py").read_text(encoding="utf-8")
+          assert "live_polling_implemented = True" in Path("services/payments/chains/tron.py").read_text(encoding="utf-8")
+          assert "live_polling_implemented = True" in Path("services/payments/chains/solana.py").read_text(encoding="utf-8")
+          assert "live_polling_implemented = True" in Path("services/payments/chains/ton.py").read_text(encoding="utf-8")
+          assert "PaymentChainNotImplemented" in Path("services/payments/chains/bnb.py").read_text(encoding="utf-8")
+          assert "PaymentChainNotImplemented" in Path("services/payments/chains/polygon.py").read_text(encoding="utf-8")
+          assert '"signing_capability": False' in worker
+          assert "seed_encrypted" not in payment_tree
+          assert "mnemonic" not in payment_tree.lower()
+          assert "sign_transaction" not in payment_tree
+          assert 'os.getenv("PRIVATE_KEY' not in payment_tree
+          assert "send_raw_transaction" not in payment_tree.lower()
+          assert "USDT −30%" in routes
+          assert "/velia/pay" in routes
+          assert "/mobile-api/v1/economy/usdt/intents" in routes
           PY
