@@ -62,6 +62,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.payments.schema import ensure_payment_tables
     from services.velia_admin_observability_service import install as install_velia_admin_observability
     from services.velia_agent_chat_conflict_patch import install as install_velia_agent_chat_conflict
     from services.velia_agent_chat_planner_service import ensure_velia_agent_chat_tables
@@ -92,6 +93,7 @@ def main() -> None:
     from services.velia_mobile_streaming_service import setup_velia_mobile_streaming_route
     from services.velia_plugin_service import ensure_velia_plugin_tables
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
+    from services.velia_usdt_checkout_routes import setup_velia_usdt_checkout_routes
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
     from services.velia_user_profile_service import ensure_velia_user_profile_table
     from services.velia_videos_runtime_patch import install as install_velia_videos
@@ -194,6 +196,11 @@ def main() -> None:
         deepalpha_web.app,
         velia_mobile_routes_module,
     )
+    setup_velia_usdt_checkout_routes(
+        deepalpha_web.app,
+        velia_mobile_routes_module,
+        web_user_resolver,
+    )
     install_velia_attachment_feature_flag(
         deepalpha_web.app,
         velia_mobile_routes_module,
@@ -255,6 +262,7 @@ def main() -> None:
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
         ensure_commercial_runtime_tables()
+        ensure_payment_tables()
         ensure_velia_chat_tables()
         ensure_velia_developer_chat_tables()
         ensure_velia_agent_tables()
