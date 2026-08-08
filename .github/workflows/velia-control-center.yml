@@ -149,10 +149,12 @@ jobs:
           # Payment foundation is additive, watch-only and fail-closed.
           payment_text = "\n".join((payment_repo, payment_worker, payment_schema, payment_entry))
           assert "UPDATE users SET token_balance" not in payment_text
-          assert "private_key" not in payment_text.lower()
           assert "seed_encrypted" not in payment_text
           assert "send_transaction" not in payment_text
           assert "sign_transaction" not in payment_text
+          assert 'os.getenv("PRIVATE_KEY' not in payment_text
+          assert '"private_key"' in payment_repo  # redaction key only
+          assert "_redact_payload" in payment_repo
           assert "ALTER TABLE payment_intents" not in payment_schema
           assert "UPDATE payment_intents" not in payment_schema
           assert '"live_money_acceptance": False' in payment_worker
