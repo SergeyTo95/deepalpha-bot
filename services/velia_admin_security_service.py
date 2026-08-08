@@ -14,14 +14,23 @@ ADMIN_CSRF_COOKIE = "velia_admin_csrf"
 ADMIN_LOGIN_TTL_SECONDS = 5 * 60
 ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
 _ADMIN_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-_REDACT_MARKERS = (
-    "password",
-    "secret",
+_SENSITIVE_EXACT_KEYS = {
     "token",
-    "api_key",
-    "apikey",
+    "access_token",
+    "refresh_token",
+    "session_token",
+    "csrf_token",
+    "bot_token",
+    "api_token",
     "authorization",
     "cookie",
+    "set-cookie",
+}
+_SENSITIVE_KEY_MARKERS = (
+    "password",
+    "secret",
+    "api_key",
+    "apikey",
     "private_key",
     "seed",
 )
@@ -350,6 +359,13 @@ def revoke_admin_session(raw_session_token: str) -> bool:
         conn.close()
 
 
+def _is_sensitive_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower().replace("-", "_")
+    if normalized in _SENSITIVE_EXACT_KEYS:
+        return True
+    return any(marker in normalized for marker in _SENSITIVE_KEY_MARKERS)
+
+
 def _sanitize(value: Any, *, depth: int = 0) -> Any:
     if depth > 5:
         return "[truncated]"
@@ -357,8 +373,7 @@ def _sanitize(value: Any, *, depth: int = 0) -> Any:
         result: Dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            lowered = key_text.lower()
-            if any(marker in lowered for marker in _REDACT_MARKERS):
+            if _is_sensitive_key(key_text):
                 result[key_text] = "[REDACTED]"
             else:
                 result[key_text] = _sanitize(item, depth=depth + 1)
