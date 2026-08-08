@@ -6,7 +6,7 @@ import services.velia_admin_mobile_ui_patch as mobile
 def _layout_html() -> str:
     return """<!doctype html><html><head><style>.x{}</style></head><body>
     <div class='shell'><aside class='side'><div class='brand'>VELIA</div>
-    <nav class='navs'><a class='nav active'>Users</a></nav>
+    <nav class='navs'><a class='nav'>Overview</a><a class='nav active'>Users</a></nav>
     <div class='logout'><form method='post'><button>Sign out</button></form></div></aside>
     <main class='main'><div class='topline'><h1>Users</h1><span class='pill'>Owner session</span></div>
     <div class='table-wrap'><table><thead><tr><th>User</th><th>Balance</th><th>Action</th></tr></thead>
@@ -30,6 +30,8 @@ def test_mobile_patch_is_idempotent_and_presentation_only():
     assert "id='velia-mobile-first-ui'" in rendered
     assert "position:fixed!important" in rendered
     assert "env(safe-area-inset-bottom)" in rendered
+    assert ".nav.active{order:-1" in rendered
+    assert "class='nav active' aria-current='page'" in rendered
     assert ".logout button{display:inline-flex!important" in rendered
     assert "min-height:48px" in rendered
     assert "font-size:16px!important" in rendered
