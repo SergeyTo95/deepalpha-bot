@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from pathlib import Path
 
 from aiohttp import web
@@ -130,7 +131,7 @@ def test_completed_topup_is_server_verified_then_granted_and_consumed(monkeypatc
     assert result["credits_granted"] == 100
     assert grants[0]["product_id"] == "velia_credits_100"
     assert grants[0]["credits"] == 100
-    assert grants[0]["purchase_token_hash"] if "purchase_token_hash" in grants[0] else True
+    assert grants[0]["token_hash"] == hashlib.sha256(b"purchase-token").hexdigest()
     assert any(method == "POST" and path.endswith(":consume") for method, path, _body in calls)
     assert all("purchase-token" not in repr(grant) for grant in grants)
 
