@@ -93,3 +93,15 @@ def overview_snapshot() -> Dict[str, Any]:
             },
             "recent_errors": recent_errors(limit=10),
         }
+
+
+def install(admin_routes_module: Any) -> None:
+    """Rebind only the web Control Center read-side telemetry functions."""
+    if getattr(admin_routes_module, "_velia_admin_observability_installed", False):
+        return
+    admin_routes_module.overview_snapshot = overview_snapshot
+    admin_routes_module.ai_snapshot = ai_snapshot
+    admin_routes_module.recent_errors = recent_errors
+    admin_routes_module.memory_queue_snapshot = memory_queue_snapshot
+    admin_routes_module.velyon_memory_health = velyon_memory_health
+    admin_routes_module._velia_admin_observability_installed = True
