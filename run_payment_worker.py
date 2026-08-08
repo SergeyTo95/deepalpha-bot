@@ -7,6 +7,7 @@ from typing import Any
 
 from aiohttp import web
 
+from services.payments.config import worker_enabled
 from services.payments.schema import ensure_payment_tables_serialized
 from services.payments.worker import PaymentWorker
 
@@ -46,6 +47,12 @@ async def _startup(app: web.Application) -> None:
         logger.exception("VELIA_PAYMENT_SCHEMA_BOOTSTRAP_FAILED")
         return
 
+    # A disabled foundation service remains a health/readiness endpoint only.
+    # It must not write fake last_poll timestamps or imply chain activity.
+    if not worker_enabled():
+        logger.info("VELIA_PAYMENT_WORKER_IDLE reason=worker_flag_off")
+        return
+
     app["velia_payment_worker_task"] = asyncio.create_task(worker.run_forever())
     logger.info("VELIA_PAYMENT_WORKER_READY mode=foundation_watch_only")
 
@@ -73,6 +80,7 @@ async def health(request: web.Request) -> web.Response:
         "networks": {},
     }
     payload["schema_bootstrap"] = request.app.get("velia_payment_schema", "starting")
+    payload["background_task_running"] = bool(request.app.get("velia_payment_worker_task"))
     return web.json_response(payload, headers={"Cache-Control": "no-store"})
 
 
@@ -86,6 +94,7 @@ async def ready(request: web.Request) -> web.Response:
         {
             "ok": True,
             "schema_bootstrap": state,
+            "worker_enabled": worker_enabled(),
             "live_money_acceptance": False,
         },
         headers={"Cache-Control": "no-store"},
