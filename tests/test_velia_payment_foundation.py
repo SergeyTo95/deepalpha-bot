@@ -142,6 +142,20 @@ def test_payment_intent_validation_fails_before_database(monkeypatch):
     )["error"] == "invalid_user"
 
 
+def test_payment_payload_redaction_preserves_noncredential_token_fields():
+    redacted = payment_repository._redact_payload(
+        {
+            "access_token": "secret-value",
+            "token_balance": 123,
+            "nested": {"private_key": "secret-key", "tx_hash": "abc"},
+        }
+    )
+    assert redacted["access_token"] == "[REDACTED]"
+    assert redacted["token_balance"] == 123
+    assert redacted["nested"]["private_key"] == "[REDACTED]"
+    assert redacted["nested"]["tx_hash"] == "abc"
+
+
 def test_payments_admin_route_is_registered_after_economy():
     app = web.Application()
     admin = type("Admin", (), {"SECTIONS": list(_AdminStub.SECTIONS)})
@@ -165,11 +179,13 @@ def test_payment_foundation_has_no_signing_or_direct_user_credit_boundary():
     text = "\n".join(path.read_text(encoding="utf-8") for path in payment_files)
     assert "UPDATE users SET token_balance" not in text
     assert "seed_encrypted" not in text
-    assert "private_key" not in text.lower()
     assert "send_transaction" not in text
     assert "sign_transaction" not in text
+    assert 'os.getenv("PRIVATE_KEY' not in text
     assert "bot.admin" not in text
     assert "velia_chat" not in text
+    # Credential field names may exist only so event/metadata sanitizers can redact them.
+    assert '"private_key"' in Path("services/payments/repository.py").read_text(encoding="utf-8")
 
 
 def test_fulfillment_requires_confirmed_intent_by_contract():
