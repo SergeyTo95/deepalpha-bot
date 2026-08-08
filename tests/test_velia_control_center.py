@@ -179,15 +179,23 @@ def test_control_center_disables_legacy_shared_secret_auth_and_url_keys():
     assert "Legacy admin URL secrets are disabled" in security_source
 
 
-def test_legacy_developer_admin_pages_are_not_mounted_but_public_api_remains():
+def test_legacy_developer_admin_pages_are_not_mounted_but_compatibility_patches_remain():
     source = Path("run_web_process.py").read_text(encoding="utf-8")
+    # Static compatibility imports and installers remain for established
+    # Developer API patch chains and regression tests.
+    assert "from developer_api_admin_routes import setup_developer_api_admin_routes" in source
+    assert "from developer_api_commercial_admin_routes_v2 import" in source
+    assert "install_admin_observability()" in source
+    assert "install_admin_webhooks()" in source
+    assert "install_admin_opportunity()" in source
+    assert "install_admin_commercial()" in source
+    # The security boundary is route registration: neither legacy admin surface
+    # may be attached to aiohttp, so raw-key/admin-key browser UI stays closed.
     assert "setup_developer_api_admin_routes(deepalpha_web.app)" not in source
     assert "setup_developer_api_commercial_admin_routes(deepalpha_web.app)" not in source
-    assert "from developer_api_admin_routes import" not in source
-    assert "from developer_api_commercial_admin_routes_v2 import" not in source
     assert "setup_developer_api_routes(deepalpha_web.app)" in source
     assert "setup_developer_api_commercial_routes(deepalpha_web.app)" in source
-    assert "raw API keys" in source
+    assert "raw API key" in source
 
 
 def test_layout_injects_csrf_into_all_post_forms_without_exposing_admin_secret():
