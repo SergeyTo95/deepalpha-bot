@@ -58,6 +58,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_admin_observability_service import install as install_velia_admin_observability
     from services.velia_agent_chat_conflict_patch import install as install_velia_agent_chat_conflict
     from services.velia_agent_chat_planner_service import ensure_velia_agent_chat_tables
     from services.velia_agent_chat_runtime_patch import install as install_velia_agent_chat
@@ -96,6 +97,7 @@ def main() -> None:
     from velia_video_routes import setup_velia_video_routes
 
     install_http_security(deepalpha_web.app, admin_routes_module)
+    install_velia_admin_observability(admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
     install_portal_quick_analysis()
     install_portal_webhook_scope()
@@ -134,11 +136,12 @@ def main() -> None:
         velia_mobile_routes_module,
     )
 
-    from developer_api_admin_routes import setup_developer_api_admin_routes
-    from developer_api_commercial_admin_routes_v2 import (
-        install as install_admin_commercial,
-        setup_developer_api_commercial_admin_routes,
-    )
+    # IMPORTANT: Legacy Developer API admin pages are intentionally NOT mounted
+    # into VELIA Control Center Stage 1. Some of those legacy owner pages can
+    # create and reveal raw API keys in the browser and use historical admin-key
+    # compatibility shims. Public Developer API and Developer Portal routes below
+    # remain unchanged. A future Control Center API section needs a separate
+    # secret-safe read/write design before it can be reintroduced.
     from developer_api_commercial_routes_v2 import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
@@ -146,21 +149,11 @@ def main() -> None:
     from developer_portal_jobs_routes import setup_developer_portal_jobs_routes
     from developer_portal_opportunity_routes import setup_developer_portal_opportunity_routes
     from developer_portal_routes import setup_developer_portal_routes
-    from services.developer_api_admin_observability_patch import install as install_admin_observability
-    from services.developer_api_admin_opportunity_patch import install as install_admin_opportunity
-    from services.developer_api_admin_webhook_patch import install as install_admin_webhooks
-
-    install_admin_observability()
-    install_admin_webhooks()
-    install_admin_opportunity()
-    install_admin_commercial()
 
     setup_developer_api_openapi_routes(deepalpha_web.app)
     setup_developer_api_routes(deepalpha_web.app)
     setup_developer_api_opportunity_routes(deepalpha_web.app)
     setup_developer_api_webhook_routes(deepalpha_web.app)
-    setup_developer_api_admin_routes(deepalpha_web.app)
-    setup_developer_api_commercial_admin_routes(deepalpha_web.app)
     setup_developer_portal_routes(deepalpha_web.app)
     setup_developer_portal_jobs_routes(deepalpha_web.app)
     setup_developer_portal_opportunity_routes(deepalpha_web.app)
