@@ -10,6 +10,7 @@ from aiohttp import web
 from services.payments.config import worker_enabled
 from services.payments.schema import ensure_payment_tables_serialized
 from services.payments.worker import PaymentWorker
+from services.velia_mobile_commercial_service import ensure_commercial_runtime_tables_serialized
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -41,20 +42,19 @@ async def _startup(app: web.Application) -> None:
 
     try:
         await asyncio.to_thread(ensure_payment_tables_serialized)
+        await asyncio.to_thread(ensure_commercial_runtime_tables_serialized)
         app["velia_payment_schema"] = "ready"
     except Exception:
         app["velia_payment_schema"] = "failed"
         logger.exception("VELIA_PAYMENT_SCHEMA_BOOTSTRAP_FAILED")
         return
 
-    # A disabled foundation service remains a health/readiness endpoint only.
-    # It must not write fake last_poll timestamps or imply chain activity.
     if not worker_enabled():
         logger.info("VELIA_PAYMENT_WORKER_IDLE reason=worker_flag_off")
         return
 
     app["velia_payment_worker_task"] = asyncio.create_task(worker.run_forever())
-    logger.info("VELIA_PAYMENT_WORKER_READY mode=foundation_watch_only")
+    logger.info("VELIA_PAYMENT_WORKER_READY mode=usdt_watch_only_v1")
 
 
 async def _cleanup(app: web.Application) -> None:
@@ -73,10 +73,11 @@ async def health(request: web.Request) -> web.Response:
     worker: Any = request.app.get("velia_payment_worker")
     payload = worker.health_snapshot() if worker is not None else {
         "service": "velia-payment-worker",
-        "mode": "foundation_watch_only",
+        "mode": "usdt_watch_only_v1",
         "worker_enabled": False,
         "live_money_acceptance": False,
         "signing_capability": False,
+        "ready_networks": [],
         "networks": {},
     }
     payload["schema_bootstrap"] = request.app.get("velia_payment_schema", "starting")
@@ -86,16 +87,17 @@ async def health(request: web.Request) -> web.Response:
 
 async def ready(request: web.Request) -> web.Response:
     state = str(request.app.get("velia_payment_schema", "starting"))
+    worker: Any = request.app.get("velia_payment_worker")
+    snapshot = worker.health_snapshot() if worker is not None else {}
     if state == "failed":
         return web.json_response({"ok": False, "schema_bootstrap": state}, status=503)
-    # Non-production intentionally does not touch DB; the service process itself
-    # may still be previewed safely and must not be mistaken for live acceptance.
     return web.json_response(
         {
             "ok": True,
             "schema_bootstrap": state,
             "worker_enabled": worker_enabled(),
-            "live_money_acceptance": False,
+            "live_money_acceptance": bool(snapshot.get("live_money_acceptance")),
+            "ready_networks": snapshot.get("ready_networks") or [],
         },
         headers={"Cache-Control": "no-store"},
     )
