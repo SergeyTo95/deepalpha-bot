@@ -68,13 +68,18 @@ def test_checkout_page_visibly_says_usdt_minus_30_and_hides_address_without_inte
     assert "Google" not in html
 
 
-def test_quote_source_uses_locked_unique_micro_usdt_fingerprint():
+def test_quote_source_uses_locked_unique_micro_usdt_fingerprint_and_abuse_guards():
     source = Path("services/velia_usdt_checkout_service.py").read_text(encoding="utf-8")
     assert "pg_advisory_xact_lock" in source
     assert "secrets.randbelow(999) + 1" in source
     assert "expected_amount_atomic=%s" in source
     assert "amount_fingerprint_atomic" in source
     assert "QUOTE_EXPIRY_MINUTES = 30" in source
+    assert "MAX_OPEN_INTENTS_PER_USER = 5" in source
+    assert "too_many_open_payment_intents" in source
+    assert "active_plan_downgrade_not_supported" in source
+    assert "plan_code='pro'" in source
+    assert "subscription_until > NOW()" in source
 
 
 def test_tron_adapter_accepts_only_canonical_confirmed_recipient(monkeypatch):
