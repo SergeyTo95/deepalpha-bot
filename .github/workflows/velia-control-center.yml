@@ -14,7 +14,7 @@ on:
       - "services/payments/**"
       - "tests/test_velia_control_center*.py"
       - "tests/test_velia_admin_*.py"
-      - "tests/test_velia_economy_v01.py"
+      - "tests/test_velia_economy_v02.py"
       - "tests/test_velia_payment_foundation.py"
       - ".github/workflows/velia-control-center.yml"
   workflow_dispatch:
@@ -65,7 +65,8 @@ jobs:
             services/velia_admin_economy_service.py \
             services/velia_admin_economy_routes.py \
             services/velia_admin_economy_bootstrap_service.py \
-            services/velia_admin_economy_v01_service.py \
+            services/velia_admin_economy_v02_service.py \
+            services/velia_admin_economy_v02_ui_patch.py \
             services/velia_admin_payments_service.py \
             services/velia_admin_payments_routes.py \
             services/payments/__init__.py \
@@ -98,7 +99,7 @@ jobs:
             tests/test_velia_control_center_login_origin.py \
             tests/test_velia_admin_user_display.py \
             tests/test_velia_admin_economy.py \
-            tests/test_velia_economy_v01.py \
+            tests/test_velia_economy_v02.py \
             tests/test_velia_payment_foundation.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-control-center-pytest.log
@@ -113,7 +114,8 @@ jobs:
           telegram = Path("services/velia_admin_telegram_auth_service.py").read_text(encoding="utf-8")
           auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
           economy = Path("services/velia_admin_economy_service.py").read_text(encoding="utf-8")
-          economy_v01 = Path("services/velia_admin_economy_v01_service.py").read_text(encoding="utf-8")
+          economy_v02 = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
+          economy_v02_ui = Path("services/velia_admin_economy_v02_ui_patch.py").read_text(encoding="utf-8")
           bootstrap = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
           payment_repo = Path("services/payments/repository.py").read_text(encoding="utf-8")
           payment_worker = Path("services/payments/worker.py").read_text(encoding="utf-8")
@@ -142,24 +144,27 @@ jobs:
           assert "UPDATE users SET token_balance" not in economy
           assert "EXCEPTION WHEN OTHERS THEN" in economy
 
-          # Economy v0.1 is versioned draft data only. It may mirror into the
-          # existing commercial draft tables but cannot touch live billing.
-          assert "velia_commercial_draft_versions" in economy_v01
-          assert "draft_only_not_enforced" in economy_v01
-          assert "UPDATE settings" not in economy_v01
-          assert "UPDATE token_packages" not in economy_v01
-          assert "DELETE FROM token_packages" not in economy_v01
-          assert "UPDATE users" not in economy_v01
-          assert "MAX_PROVIDER_COST_PER_VELIA_TOKEN_USD = 0.0024" in economy_v01
-          assert "CRYPTO_DISCOUNT_PERCENT = 30.0" in economy_v01
+          # Economy v0.2 is Velia-first versioned draft data only. It may mirror
+          # into the old draft workspace but cannot touch live billing.
+          assert "velia_commercial_draft_versions" in economy_v02
+          assert "draft_only_not_enforced" in economy_v02
+          assert "UPDATE settings" not in economy_v02
+          assert "UPDATE token_packages" not in economy_v02
+          assert "DELETE FROM token_packages" not in economy_v02
+          assert "UPDATE users" not in economy_v02
+          assert "MAX_PROVIDER_COST_PER_VELIA_CREDIT_USD = 0.0024" in economy_v02
+          assert "CRYPTO_DISCOUNT_PERCENT = 30.0" in economy_v02
+          assert '("public_usage_unit", "VELIA Credits"' in economy_v02
+          assert '("upstream_models_public", "false"' in economy_v02
+          assert "economy_v02_snapshot()" in economy_v02_ui
 
           # Economy/token ledger bootstrap remains production-only and serialized.
           assert 'environment in {"production", "prod"}' in bootstrap
           assert "pg_advisory_lock" in bootstrap
           assert "pg_advisory_unlock" in bootstrap
           assert "await asyncio.to_thread(_ensure_economy_tables_serialized)" in bootstrap
-          assert "ensure_economy_v01_tables()" in bootstrap
-          assert "install_economy_v01_ui_patch(economy_routes_module)" in bootstrap
+          assert "ensure_economy_v02_tables()" in bootstrap
+          assert "install_economy_v02_ui_patch(economy_routes_module)" in bootstrap
           assert "ensure_payment_tables_serialized" in bootstrap
           assert "setup_velia_admin_payments_routes(app, admin_routes_module)" in bootstrap
 
