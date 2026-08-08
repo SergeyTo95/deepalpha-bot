@@ -60,8 +60,12 @@ def main() -> None:
     from services.free_opportunity_menu_patch import install as install_free_opportunity_menu
     from services.profile_api_button_patch import install as install_profile_api_button
     from services.simplified_navigation_patch import install as install_simplified_navigation
+    from services.velia_admin_telegram_auth_service import install as install_velia_admin_telegram_auth
     from services.velia_telegram_pairing_service import install as install_velia_telegram_pairing
 
+    # Admin login is a pre-handler identity boundary. Install it before ordinary
+    # pairing/navigation patches so /start velia_admin_login cannot fall through.
+    install_velia_admin_telegram_auth(app.telegram_bot)
     install_velia_telegram_pairing(app.telegram_bot)
     install_decision_renderer(app.telegram_bot)
     install_free_opportunity_renderer(app.telegram_bot)
