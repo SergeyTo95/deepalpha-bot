@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import psycopg2.extras
@@ -14,17 +15,22 @@ _OPEN_INTENT_STATUSES = ("created", "awaiting_payment", "detected", "confirming"
 _SENSITIVE_KEYS = {
     "access_token",
     "refresh_token",
+    "bearer_token",
     "authorization",
     "auth",
     "cookie",
     "set_cookie",
     "api_key",
     "apikey",
+    "rpc_api_key",
     "secret",
+    "client_secret",
+    "webhook_secret",
     "password",
     "seed",
     "seed_phrase",
     "private_key",
+    "signing_key",
     "session_token",
 }
 
@@ -52,6 +58,16 @@ def _redact_payload(value: Any) -> Any:
     if isinstance(value, bytes):
         return "[BINARY]"
     return value
+
+
+def _is_nonnegative_finite(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    return parsed.is_finite() and parsed >= 0
 
 
 def create_payment_intent(
@@ -84,12 +100,34 @@ def create_payment_intent(
         return {"ok": False, "error": "invalid_channel"}
     if int(user_id or 0) <= 0:
         return {"ok": False, "error": "invalid_user"}
-    if normalized_channel == "crypto":
-        if not network or not asset:
-            return {"ok": False, "error": "crypto_network_asset_required"}
-        if expected_amount_atomic is not None and int(expected_amount_atomic) < 0:
+    if not _is_nonnegative_finite(expected_amount_usd) or not _is_nonnegative_finite(expected_amount_asset):
+        return {"ok": False, "error": "invalid_expected_amount"}
+
+    normalized_atomic: Optional[int] = None
+    if expected_amount_atomic is not None:
+        try:
+            normalized_atomic = int(expected_amount_atomic)
+        except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "invalid_expected_amount"}
-    expires = max(5, min(int(expires_minutes or 30), 24 * 60))
+        if normalized_atomic < 0:
+            return {"ok": False, "error": "invalid_expected_amount"}
+
+    normalized_decimals: Optional[int] = None
+    if asset_decimals is not None:
+        try:
+            normalized_decimals = int(asset_decimals)
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "invalid_asset_decimals"}
+        if normalized_decimals < 0 or normalized_decimals > 36:
+            return {"ok": False, "error": "invalid_asset_decimals"}
+
+    if normalized_channel == "crypto" and (not network or not asset):
+        return {"ok": False, "error": "crypto_network_asset_required"}
+
+    try:
+        expires = max(5, min(int(expires_minutes or 30), 24 * 60))
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "error": "invalid_expiry"}
 
     conn = get_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -118,8 +156,8 @@ def create_payment_intent(
                 str(asset or "").strip().upper() or None,
                 expected_amount_usd,
                 expected_amount_asset,
-                None if expected_amount_atomic is None else int(expected_amount_atomic),
-                None if asset_decimals is None else int(asset_decimals),
+                normalized_atomic,
+                normalized_decimals,
                 str(deposit_address or "").strip() or None,
                 str(payment_memo or "").strip() or None,
                 key,
