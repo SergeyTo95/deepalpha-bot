@@ -1,0 +1,100 @@
+name: VELIA Control Center
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "admin_routes.py"
+      - "developer_api_admin_routes.py"
+      - "run_bot_process.py"
+      - "run_web_process.py"
+      - "services/http_security_service.py"
+      - "services/velia_admin_*.py"
+      - "tests/test_velia_control_center.py"
+      - ".github/workflows/velia-control-center.yml"
+  workflow_dispatch:
+
+jobs:
+  control-center-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      ADMIN_ID: "123456789"
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile Control Center boundary
+        run: |
+          python -m py_compile \
+            admin_routes.py \
+            developer_api_admin_routes.py \
+            services/http_security_service.py \
+            services/velia_admin_security_service.py \
+            services/velia_admin_control_service.py \
+            services/velia_admin_telegram_auth_service.py \
+            services/velia_admin_telegram_bridge.py \
+            run_bot_process.py \
+            run_web_process.py
+
+      - name: Run focused security tests
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q \
+            tests/test_velia_control_center.py \
+            tests/test_velia_telegram_pairing.py \
+            2>&1 | tee velia-control-center-pytest.log
+
+      - name: Verify admin credential boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          admin = Path("admin_routes.py").read_text(encoding="utf-8")
+          security = Path("services/http_security_service.py").read_text(encoding="utf-8")
+          telegram = Path("services/velia_admin_telegram_auth_service.py").read_text(encoding="utf-8")
+          auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
+
+          assert "ADMIN_SECRET_KEY" not in admin
+          assert "ADMIN_SECRET_KEY" not in security
+          assert "?key=" not in admin
+          assert "deepalpha_admin_session" not in security
+          assert "BOT_TOKEN" not in admin
+          assert "BOT_TOKEN" not in telegram
+          assert "velia_admin_session" in auth
+          assert "csrf_token_hash" in auth
+          assert "session_token_hash" in auth
+          assert "Legacy admin URL secrets are disabled" in security
+          PY
+
+      - name: Upload focused test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velia-control-center-pytest-log
+          path: velia-control-center-pytest.log
+          if-no-files-found: warn
