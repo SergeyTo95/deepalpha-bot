@@ -20,11 +20,28 @@ _VISIBLE_LABEL_REPLACEMENTS = (
     ("Tokens are separate from TON", "Credits are separate from TON"),
 )
 
+_PUBLIC_SKU_NAME_OVERRIDES = {
+    "velia_deep": "Velia Deep",
+}
+
 
 def _normalize_visible_credit_labels(html: str) -> str:
     result = str(html or "")
     for before, after in _VISIBLE_LABEL_REPLACEMENTS:
         result = result.replace(before, after)
+    return result
+
+
+def _normalize_v02_snapshot(data: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(data or {})
+    normalized_skus = []
+    for item in result.get("skus") or []:
+        row = dict(item or {})
+        override = _PUBLIC_SKU_NAME_OVERRIDES.get(str(row.get("code") or ""))
+        if override and not str(row.get("name") or "").strip():
+            row["name"] = override
+        normalized_skus.append(row)
+    result["skus"] = normalized_skus
     return result
 
 
@@ -48,7 +65,7 @@ def install_economy_v02_ui_patch(economy_routes_module: Any) -> None:
             base = {"available": False, "reason": "invalid_economy_snapshot"}
         else:
             base = dict(base)
-        base["economy_v02"] = economy_v02_snapshot()
+        base["economy_v02"] = _normalize_v02_snapshot(economy_v02_snapshot())
         return base
 
     def wrapped_body(admin: Any, data: Dict[str, Any]) -> str:
