@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import admin_routes
 from services import http_security_service
 from services import velia_admin_control_service
+from services import velia_admin_observability_service
 from services import velia_admin_security_service
 from services import velia_admin_telegram_auth_service
 from services import velia_admin_telegram_bridge
@@ -178,6 +179,17 @@ def test_control_center_disables_legacy_shared_secret_auth_and_url_keys():
     assert "Legacy admin URL secrets are disabled" in security_source
 
 
+def test_legacy_developer_admin_pages_are_not_mounted_but_public_api_remains():
+    source = Path("run_web_process.py").read_text(encoding="utf-8")
+    assert "setup_developer_api_admin_routes(deepalpha_web.app)" not in source
+    assert "setup_developer_api_commercial_admin_routes(deepalpha_web.app)" not in source
+    assert "from developer_api_admin_routes import" not in source
+    assert "from developer_api_commercial_admin_routes_v2 import" not in source
+    assert "setup_developer_api_routes(deepalpha_web.app)" in source
+    assert "setup_developer_api_commercial_routes(deepalpha_web.app)" in source
+    assert "raw API keys" in source
+
+
 def test_layout_injects_csrf_into_all_post_forms_without_exposing_admin_secret():
     page = admin_routes._layout("Test", "Overview", "csrf-test-value", "<form method='post' action='/admin/x'></form>")
     assert "velia-csrf" in page
@@ -215,6 +227,43 @@ def test_memory_health_is_explicitly_unavailable_without_runtime_endpoint(monkey
     monkeypatch.delenv("VELIA_MEMORY_ENDPOINT", raising=False)
     result = velia_admin_control_service.velyon_memory_health()
     assert result == {"status": "unavailable", "reason": "endpoint_not_configured"}
+
+
+def test_observability_degrades_to_unavailable_instead_of_raising(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(velia_admin_observability_service.control, "memory_queue_snapshot", fail)
+    monkeypatch.setattr(velia_admin_observability_service.control, "ai_snapshot", fail)
+    monkeypatch.setattr(velia_admin_observability_service.control, "recent_errors", fail)
+
+    assert velia_admin_observability_service.memory_queue_snapshot() == {
+        "available": False,
+        "reason": "RuntimeError",
+    }
+    ai = velia_admin_observability_service.ai_snapshot()
+    assert ai["usage"]["available"] is False
+    assert ai["usage"]["reason"] == "RuntimeError"
+    errors = velia_admin_observability_service.recent_errors()
+    assert errors[0]["error"] == "persisted_error_store_unavailable:RuntimeError"
+
+
+def test_observability_install_rebinds_only_read_side_functions():
+    target = SimpleNamespace(
+        overview_snapshot=object(),
+        ai_snapshot=object(),
+        recent_errors=object(),
+        memory_queue_snapshot=object(),
+        velyon_memory_health=object(),
+        set_user_banned="must-not-change",
+    )
+    velia_admin_observability_service.install(target)
+    assert target.overview_snapshot is velia_admin_observability_service.overview_snapshot
+    assert target.ai_snapshot is velia_admin_observability_service.ai_snapshot
+    assert target.recent_errors is velia_admin_observability_service.recent_errors
+    assert target.memory_queue_snapshot is velia_admin_observability_service.memory_queue_snapshot
+    assert target.velyon_memory_health is velia_admin_observability_service.velyon_memory_health
+    assert target.set_user_banned == "must-not-change"
 
 
 def test_telegram_admin_bridge_rebinds_only_admin_module_names():
