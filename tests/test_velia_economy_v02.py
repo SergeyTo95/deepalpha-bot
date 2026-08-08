@@ -5,6 +5,7 @@ import pytest
 import services.velia_admin_economy_v02_branding_service as branding
 import services.velia_admin_economy_v02_service as economy
 import services.velia_admin_economy_v02_topups_service as topups
+import services.velia_admin_economy_v02_video_pricing_service as video_pricing
 import services.velia_admin_economy_v02_ui_patch as economy_ui_patch
 
 
@@ -36,6 +37,14 @@ def test_100_credit_topup_margin_is_well_above_safety_floor():
     assert values["store_margin_percent"] == pytest.approx(88.66, abs=0.05)
     assert values["crypto_margin_percent"] == pytest.approx(86.07, abs=0.05)
     assert (topups.MINI_PACK_CRYPTO_USD * 0.99 / topups.MINI_PACK_CREDITS) > economy._plan_economics(29.99, 20.99, 3000, 1.00)["crypto_net_per_credit_usd"]
+
+
+def test_standard_video_is_100_credits_and_keeps_safe_margin():
+    assert video_pricing.VIDEO_PRICING_VERSION == "v0.2-video-standard-100-v1"
+    assert video_pricing.STANDARD_VIDEO_CODE == "video_standard_5s"
+    assert video_pricing.STANDARD_VIDEO_CREDITS == 100
+    assert video_pricing.STANDARD_VIDEO_PROVIDER_CEILING_USD == pytest.approx(0.25)
+    assert video_pricing.standard_video_margin_at_pro_crypto() == pytest.approx(63.90, abs=0.05)
 
 
 def test_included_core_reserve_is_counted_in_paid_plan_worst_case_margin():
@@ -148,7 +157,10 @@ def test_every_fixed_image_video_sku_is_profitable_at_cheapest_pro_crypto_credit
         _code, category, _name, _default, min_credits, _max_credits, _unit, ceiling, _formula, _notes = sku
         if category not in {"Images", "Video"} or min_credits is None or ceiling is None:
             continue
-        net_value = min_credits * cheapest_net_credit
+        # The base v0.2 seed is historical; the Standard 5s video is corrected
+        # by a later versioned migration and therefore uses 100 Credits here.
+        effective_min_credits = video_pricing.STANDARD_VIDEO_CREDITS if _code == video_pricing.STANDARD_VIDEO_CODE else min_credits
+        net_value = effective_min_credits * cheapest_net_credit
         margin = economy._margin_percent(net_value, ceiling)
         assert margin is not None
         assert margin >= 50.0, sku[0]
@@ -172,7 +184,8 @@ def test_v02_migrations_are_draft_only_and_cannot_touch_live_billing_or_balances
     economy_source = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
     branding_source = Path("services/velia_admin_economy_v02_branding_service.py").read_text(encoding="utf-8")
     topups_source = Path("services/velia_admin_economy_v02_topups_service.py").read_text(encoding="utf-8")
-    for source in (economy_source, branding_source, topups_source):
+    video_source = Path("services/velia_admin_economy_v02_video_pricing_service.py").read_text(encoding="utf-8")
+    for source in (economy_source, branding_source, topups_source, video_source):
         assert "draft_only_not_enforced" in source
         assert "velia_commercial_draft_versions" in source
         assert "UPDATE settings" not in source
@@ -184,14 +197,21 @@ def test_v02_migrations_are_draft_only_and_cannot_touch_live_billing_or_balances
     assert "UPDATE velia_commercial_draft_v02_skus" in branding_source
     assert "INSERT INTO velia_commercial_draft_v02_credit_packs" in topups_source
     assert "ON CONFLICT (code) DO NOTHING" in topups_source
+    assert "UPDATE velia_commercial_draft_v02_skus" in video_source
+    assert "AND default_credits=110" in video_source
+    assert "AND min_credits=110" in video_source
+    assert "AND max_credits=110" in video_source
+    assert "UPDATE velia_commercial_draft_features" in video_source
+    assert "AND tokens_per_action=110" in video_source
 
 
-def test_bootstrap_installs_v02_branding_and_topups_inside_existing_serialized_boundary():
+def test_bootstrap_installs_v02_branding_topups_and_video_pricing_inside_existing_serialized_boundary():
     source = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
     assert "ensure_economy_tables()" in source
     assert "ensure_economy_v02_tables()" in source
     assert "ensure_economy_v02_branding()" in source
     assert "ensure_economy_v02_topups()" in source
+    assert "ensure_economy_v02_video_pricing()" in source
     assert "install_economy_v02_ui_patch(economy_routes_module)" in source
     assert "pg_advisory_lock" in source
     assert "pg_advisory_unlock" in source
