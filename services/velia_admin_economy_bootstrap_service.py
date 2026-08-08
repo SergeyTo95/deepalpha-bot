@@ -38,6 +38,16 @@ def _ensure_economy_tables_serialized() -> None:
         # Economy v0.2 is a versioned draft-only migration. It seeds the agreed
         # Velia-first commercial model once and never mutates runtime billing.
         ensure_economy_v02_tables()
+        # Canonical product naming hardening. This only repairs an empty draft
+        # display name and never changes runtime pricing or user state.
+        cursor.execute(
+            """
+            UPDATE velia_commercial_draft_v02_skus
+            SET name='Velia Deep', updated_at=NOW()
+            WHERE code='velia_deep' AND COALESCE(name,'')=''
+            """
+        )
+        lock_conn.commit()
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_LOCK_ID,))
