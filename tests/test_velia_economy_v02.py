@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 import services.velia_admin_economy_v02_service as economy
+import services.velia_admin_economy_v02_ui_patch as economy_ui_patch
 
 
 def test_v02_plans_and_crypto_discount_are_exact():
@@ -74,6 +75,31 @@ def test_public_commercial_copy_is_velia_only():
     assert "velia video" in public_text
 
 
+def test_ui_snapshot_guarantees_velia_deep_display_name():
+    normalized = economy_ui_patch._normalize_v02_snapshot({
+        "available": True,
+        "skus": [{"code": "velia_deep", "name": ""}],
+    })
+    assert normalized["skus"][0]["name"] == "Velia Deep"
+
+
+def test_legacy_visible_labels_are_normalized_to_credits():
+    html = (
+        "What is a VELIA token? VELIA Token Token balances Current token packages "
+        "Draft feature token prices Included VELIA tokens / month Tokens/action Token Ledger "
+        "Future commercial model Draft plans"
+    )
+    normalized = economy_ui_patch._normalize_visible_credit_labels(html)
+    assert "What are VELIA Credits?" in normalized
+    assert "VELIA Token" not in normalized
+    assert "Credit balances" in normalized
+    assert "Current runtime Credit packages" in normalized
+    assert "Included VELIA Credits / month" in normalized
+    assert "Credits/action" in normalized
+    assert "Credit Ledger" in normalized
+    assert "Legacy Stage 2 draft workspace" in normalized
+
+
 def test_every_fixed_image_video_sku_is_profitable_at_cheapest_pro_crypto_credit():
     cheapest_net_credit = economy._plan_economics(29.99, 20.99, 3000, 1.00)["crypto_net_per_credit_usd"]
     checked = 0
@@ -125,6 +151,6 @@ def test_bootstrap_installs_v02_inside_existing_serialized_economy_boundary():
 def test_v02_ui_patch_keeps_db_snapshot_inside_existing_worker_thread():
     source = Path("services/velia_admin_economy_v02_ui_patch.py").read_text(encoding="utf-8")
     assert "original_snapshot = economy_routes_module.economy_snapshot" in source
-    assert 'base["economy_v02"] = economy_v02_snapshot()' in source
+    assert 'base["economy_v02"] = _normalize_v02_snapshot(economy_v02_snapshot())' in source
     assert "original_body = economy_routes_module._economy_body" in source
     assert "economy_v02_snapshot()" not in source.split("def wrapped_body", 1)[1]
