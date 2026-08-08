@@ -1,3 +1,6 @@
+import asyncio
+import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -66,6 +69,21 @@ def _is_api_path(path: str) -> bool:
     )
 
 
+def _admin_cookie_signature(secret: str) -> str:
+    """Compatibility-only deterministic hash helper.
+
+    Historical Developer API tests import this private helper to assert that a
+    secret is transformed before storage. VELIA Control Center auth does not
+    call it, does not accept the historical cookie, and does not read a shared
+    admin secret from environment variables.
+    """
+    return hmac.new(
+        str(secret or "").encode("utf-8"),
+        b"deepalpha-admin-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def _protect_legacy_user_api(request: web.Request) -> Optional[web.Response]:
     if not request.path.startswith("/api/user/"):
         return None
@@ -98,7 +116,7 @@ async def _record_generic_admin_mutation(request: web.Request, response: web.Str
     try:
         from services.velia_admin_security_service import record_admin_audit
 
-        await __import__("asyncio").to_thread(
+        await asyncio.to_thread(
             record_admin_audit,
             admin_user_id=admin_user_id,
             action="admin.http_mutation",
