@@ -1,8 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import services.velia_admin_economy_v01_service as economy
+import services.velia_admin_economy_v01_ui_patch as economy_ui_patch
 
 
 def test_v01_plans_and_crypto_discount_are_exact():
@@ -82,10 +84,46 @@ def test_v01_is_draft_only_and_cannot_touch_live_billing_or_balances():
     assert "SELECT 1 FROM velia_commercial_draft_versions" in source
 
 
+def test_v01_ui_attaches_snapshot_before_render_in_threaded_snapshot_path(monkeypatch):
+    calls = []
+    module = SimpleNamespace()
+    module._velia_economy_v01_ui_installed = False
+
+    def base_snapshot():
+        calls.append("base_snapshot")
+        return {"available": True}
+
+    def base_body(_admin, data):
+        calls.append(("base_body", "economy_v01" in data))
+        return "BASE"
+
+    module.economy_snapshot = base_snapshot
+    module._economy_body = base_body
+
+    monkeypatch.setattr(
+        economy_ui_patch,
+        "economy_v01_snapshot",
+        lambda: calls.append("v01_snapshot") or {"available": True, "version": "v0.1"},
+    )
+    monkeypatch.setattr(economy_ui_patch, "render_economy_v01", lambda _admin, data: f"V01:{data['version']}|")
+
+    economy_ui_patch.install_economy_v01_ui_patch(module)
+    snapshot = module.economy_snapshot()
+    html = module._economy_body(object(), snapshot)
+
+    assert calls[:2] == ["base_snapshot", "v01_snapshot"]
+    assert calls[2] == ("base_body", True)
+    assert html == "V01:v0.1|BASE"
+    assert module._velia_economy_v01_ui_installed is True
+
+
 def test_bootstrap_installs_v01_inside_existing_serialized_economy_boundary():
     source = Path("services/velia_admin_economy_bootstrap_service.py").read_text(encoding="utf-8")
+    patch = Path("services/velia_admin_economy_v01_ui_patch.py").read_text(encoding="utf-8")
     assert "ensure_economy_tables()" in source
     assert "ensure_economy_v01_tables()" in source
     assert "install_economy_v01_ui_patch(economy_routes_module)" in source
     assert "pg_advisory_lock" in source
     assert "pg_advisory_unlock" in source
+    assert "original_snapshot = economy_routes_module.economy_snapshot" in patch
+    assert 'base["economy_v01"] = economy_v01_snapshot()' in patch
