@@ -13,6 +13,7 @@ from services.velia_admin_economy_service import ensure_economy_tables
 from services.velia_admin_economy_v02_branding_service import ensure_economy_v02_branding
 from services.velia_admin_economy_v02_service import ensure_economy_v02_tables
 from services.velia_admin_economy_v02_topups_service import ensure_economy_v02_topups
+from services.velia_admin_economy_v02_video_pricing_service import ensure_economy_v02_video_pricing
 from services.velia_admin_economy_v02_ui_patch import install_economy_v02_ui_patch
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
@@ -46,6 +47,10 @@ def _ensure_economy_tables_serialized() -> None:
         # Entry top-up is versioned separately so it can be added safely even if
         # the original v0.2 seed was already applied. Draft tables only.
         ensure_economy_v02_topups()
+        # Pricing deltas are also versioned separately. This makes the agreed
+        # 100-Credit Standard 5s video price apply to an already-seeded v0.2 DB
+        # without changing live billing or overwriting later manual draft edits.
+        ensure_economy_v02_video_pricing()
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_LOCK_ID,))
