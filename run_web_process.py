@@ -136,12 +136,17 @@ def main() -> None:
         velia_mobile_routes_module,
     )
 
-    # IMPORTANT: Legacy Developer API admin pages are intentionally NOT mounted
-    # into VELIA Control Center Stage 1. Some of those legacy owner pages can
-    # create and reveal raw API keys in the browser and use historical admin-key
-    # compatibility shims. Public Developer API and Developer Portal routes below
-    # remain unchanged. A future Control Center API section needs a separate
-    # secret-safe read/write design before it can be reintroduced.
+    # Compatibility-only legacy admin imports/patches. Existing Developer API
+    # regression suites and patch chains expect these modules to be initialized,
+    # but VELIA Control Center Stage 1 intentionally DOES NOT register either
+    # legacy admin route set below. In particular, developer_api_admin_routes can
+    # create and reveal a raw API key in browser HTML, so setup_*admin_routes(app)
+    # must stay absent until a separate secret-safe Control Center design exists.
+    from developer_api_admin_routes import setup_developer_api_admin_routes  # noqa: F401
+    from developer_api_commercial_admin_routes_v2 import (
+        install as install_admin_commercial,
+        setup_developer_api_commercial_admin_routes,  # noqa: F401
+    )
     from developer_api_commercial_routes_v2 import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
     from developer_api_opportunity_routes import setup_developer_api_opportunity_routes
@@ -149,6 +154,17 @@ def main() -> None:
     from developer_portal_jobs_routes import setup_developer_portal_jobs_routes
     from developer_portal_opportunity_routes import setup_developer_portal_opportunity_routes
     from developer_portal_routes import setup_developer_portal_routes
+    from services.developer_api_admin_observability_patch import install as install_admin_observability
+    from services.developer_api_admin_opportunity_patch import install as install_admin_opportunity
+    from services.developer_api_admin_webhook_patch import install as install_admin_webhooks
+
+    # These wrap functions in the unmounted legacy admin module only; they do not
+    # register routes. Keeping them preserves the established runtime/test patch
+    # chain without reopening /admin/api or legacy query-key authentication.
+    install_admin_observability()
+    install_admin_webhooks()
+    install_admin_opportunity()
+    install_admin_commercial()
 
     setup_developer_api_openapi_routes(deepalpha_web.app)
     setup_developer_api_routes(deepalpha_web.app)
