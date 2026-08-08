@@ -10,10 +10,8 @@ from services.payments.schema import ensure_payment_tables_serialized
 from services import velia_admin_economy_routes as economy_routes_module
 from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
-from services.velia_admin_economy_v01_service import (
-    ensure_economy_v01_tables,
-    install_economy_v01_ui_patch,
-)
+from services.velia_admin_economy_v01_service import ensure_economy_v01_tables
+from services.velia_admin_economy_v01_ui_patch import install_economy_v01_ui_patch
 from services.velia_admin_payments_routes import setup_velia_admin_payments_routes
 
 
@@ -82,8 +80,8 @@ async def _production_economy_startup(app: Any) -> None:
 
 def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
     """Register Economy/Payments routes and production-only additive schemas."""
-    # Patch only the Economy rendering layer. The v0.1 model remains read-only
-    # and draft-only; existing guarded mutation routes keep their security model.
+    # The UI patch wraps the already-threaded Economy snapshot, so all v0.1 DB
+    # reads stay off the aiohttp event loop. It is still read-only/draft-only.
     install_economy_v01_ui_patch(economy_routes_module)
     setup_velia_admin_economy_routes(app, admin_routes_module)
     setup_velia_admin_payments_routes(app, admin_routes_module)
