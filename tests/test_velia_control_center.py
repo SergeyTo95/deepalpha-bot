@@ -153,7 +153,7 @@ def test_consumed_admin_code_creates_hashed_session_and_csrf(monkeypatch):
     assert hashlib.sha256(result["csrf_token"].encode()).hexdigest() in stored
 
 
-def test_audit_sanitizer_redacts_credentials_and_seeds():
+def test_audit_sanitizer_redacts_credentials_and_keeps_safe_balance():
     value = {
         "api_key": "secret-key",
         "Authorization": "Bearer dangerous",
@@ -165,7 +165,7 @@ def test_audit_sanitizer_redacts_credentials_and_seeds():
     assert sanitized["Authorization"] == "[REDACTED]"
     assert sanitized["nested"]["seed_encrypted"] == "[REDACTED]"
     assert sanitized["nested"]["safe"] == "visible"
-    assert sanitized["token_balance"] == "[REDACTED]"
+    assert sanitized["token_balance"] == 100
 
 
 def test_control_center_disables_legacy_shared_secret_auth_and_url_keys():
