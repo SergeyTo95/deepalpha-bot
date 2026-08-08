@@ -54,14 +54,23 @@ def main() -> None:
     print(f"🌐 DeepAlpha public origin={public_origin}")
 
     import app
+    from bot import admin as telegram_admin_module
     from services.decision_first_renderer_patch import install as install_decision_renderer
     from services.edge_watch_runtime_patch import install as install_edge_watch
     from services.free_opportunity_runtime_patch import install as install_free_opportunity_renderer
     from services.free_opportunity_menu_patch import install as install_free_opportunity_menu
     from services.profile_api_button_patch import install as install_profile_api_button
     from services.simplified_navigation_patch import install as install_simplified_navigation
+    from services.velia_admin_telegram_auth_service import install as install_velia_admin_telegram_auth
+    from services.velia_admin_telegram_bridge import install as install_velia_admin_telegram_bridge
     from services.velia_telegram_pairing_service import install as install_velia_telegram_pairing
 
+    # Admin login is a pre-handler identity boundary. Install it before ordinary
+    # pairing/navigation patches so /start velia_admin_login cannot fall through.
+    install_velia_admin_telegram_auth(app.telegram_bot)
+    # Rebind only bot.admin's imported mutation functions to the common audited
+    # service. The rest of the application keeps its existing DB call sites.
+    install_velia_admin_telegram_bridge(telegram_admin_module)
     install_velia_telegram_pairing(app.telegram_bot)
     install_decision_renderer(app.telegram_bot)
     install_free_opportunity_renderer(app.telegram_bot)

@@ -17,6 +17,10 @@ def main() -> None:
     # Install public URL and CORS defaults before importing modules that read
     # environment settings at import/runtime initialization.
     public_origin = configure_public_urls(os.environ)
+    # Railway web endpoints are HTTPS in both production and PR environments.
+    # Fail secure for the new admin cookies even when an environment name is not
+    # literally "production"; local HTTP development can explicitly opt out.
+    os.environ.setdefault("COOKIE_SECURE", "true")
     os.environ.setdefault("VELYON_IMAGES_DAILY_GLOBAL_LIMIT", "20")
     os.environ.setdefault("VELYON_IMAGES_ESTIMATED_COST_USD", "0.25")
     # FLUX 3 Stage 1 remains fail-closed until a server-side BFL key and the
@@ -58,6 +62,7 @@ def main() -> None:
     from services.developer_portal_service import ensure_developer_portal_tables
     from services.developer_portal_webhook_scope_patch import install as install_portal_webhook_scope
     from services.http_security_service import install_http_security
+    from services.velia_admin_observability_service import install as install_velia_admin_observability
     from services.velia_agent_chat_conflict_patch import install as install_velia_agent_chat_conflict
     from services.velia_agent_chat_planner_service import ensure_velia_agent_chat_tables
     from services.velia_agent_chat_runtime_patch import install as install_velia_agent_chat
@@ -96,6 +101,7 @@ def main() -> None:
     from velia_video_routes import setup_velia_video_routes
 
     install_http_security(deepalpha_web.app, admin_routes_module)
+    install_velia_admin_observability(admin_routes_module)
     install_webhook_cors(deepalpha_web.app)
     install_portal_quick_analysis()
     install_portal_webhook_scope()
@@ -134,10 +140,16 @@ def main() -> None:
         velia_mobile_routes_module,
     )
 
-    from developer_api_admin_routes import setup_developer_api_admin_routes
+    # Compatibility-only legacy admin imports/patches. Existing Developer API
+    # regression suites and patch chains expect these modules to be initialized,
+    # but VELIA Control Center Stage 1 intentionally DOES NOT register either
+    # legacy admin route set below. In particular, developer_api_admin_routes can
+    # create and reveal a raw API key in browser HTML, so setup_*admin_routes(app)
+    # must stay absent until a separate secret-safe Control Center design exists.
+    from developer_api_admin_routes import setup_developer_api_admin_routes  # noqa: F401
     from developer_api_commercial_admin_routes_v2 import (
         install as install_admin_commercial,
-        setup_developer_api_commercial_admin_routes,
+        setup_developer_api_commercial_admin_routes,  # noqa: F401
     )
     from developer_api_commercial_routes_v2 import setup_developer_api_commercial_routes
     from developer_api_openapi_routes import setup_developer_api_openapi_routes
@@ -150,6 +162,9 @@ def main() -> None:
     from services.developer_api_admin_opportunity_patch import install as install_admin_opportunity
     from services.developer_api_admin_webhook_patch import install as install_admin_webhooks
 
+    # These wrap functions in the unmounted legacy admin module only; they do not
+    # register routes. Keeping them preserves the established runtime/test patch
+    # chain without reopening /admin/api or legacy query-key authentication.
     install_admin_observability()
     install_admin_webhooks()
     install_admin_opportunity()
@@ -159,8 +174,6 @@ def main() -> None:
     setup_developer_api_routes(deepalpha_web.app)
     setup_developer_api_opportunity_routes(deepalpha_web.app)
     setup_developer_api_webhook_routes(deepalpha_web.app)
-    setup_developer_api_admin_routes(deepalpha_web.app)
-    setup_developer_api_commercial_admin_routes(deepalpha_web.app)
     setup_developer_portal_routes(deepalpha_web.app)
     setup_developer_portal_jobs_routes(deepalpha_web.app)
     setup_developer_portal_opportunity_routes(deepalpha_web.app)
