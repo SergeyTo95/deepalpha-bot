@@ -6,10 +6,10 @@ from typing import Any, Dict
 
 from aiohttp import web
 
+from services.velia_mobile_commercial_period_service import verify_google_play_purchase
 from services.velia_mobile_commercial_service import (
     commercial_state_for_user,
     mobile_catalog,
-    verify_google_play_purchase,
 )
 
 
