@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from db.database import get_user_by_session
+from services.velia_admin_user_display_service import apply_admin_users_display_fallback
 
 
 def _json_response(payload: dict, status: int) -> web.Response:
@@ -182,6 +183,8 @@ async def deepalpha_security_middleware(request: web.Request, handler):
         response = protected
     else:
         response = await handler(request)
+
+    response = apply_admin_users_display_fallback(request, response)
 
     if request.path.startswith("/admin"):
         await _record_generic_admin_mutation(request, response)
