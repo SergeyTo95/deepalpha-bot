@@ -14,7 +14,7 @@ a,button,input,select,textarea,.button{touch-action:manipulation}
 .shell{display:block!important;min-height:100dvh;padding-bottom:calc(74px + env(safe-area-inset-bottom))}
 .side{position:fixed!important;z-index:40!important;inset:auto 0 0!important;top:auto!important;height:auto!important;display:flex;align-items:center;gap:6px;padding:7px 8px calc(7px + env(safe-area-inset-bottom))!important;border:0!important;border-top:1px solid var(--line)!important;background:rgba(5,7,11,.94)!important;box-shadow:0 -14px 38px rgba(0,0,0,.42);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%)}
 .brand{display:none!important}.navs{min-width:0;flex:1 1 auto;display:flex!important;gap:6px!important;overflow-x:auto!important;overflow-y:hidden;padding:0!important;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch}.navs::-webkit-scrollbar{display:none}
-.nav{min-width:max-content;min-height:48px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;padding:0 13px!important;border-radius:13px!important;white-space:nowrap;scroll-snap-align:center;font-size:12px;font-weight:650}.nav.active{box-shadow:inset 0 0 0 1px rgba(138,125,255,.16)}
+.nav{min-width:max-content;min-height:48px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;padding:0 13px!important;border-radius:13px!important;white-space:nowrap;scroll-snap-align:center;font-size:12px;font-weight:650}.nav.active{order:-1;box-shadow:inset 0 0 0 1px rgba(138,125,255,.16)}
 .logout{position:static!important;inset:auto!important;flex:0 0 auto;margin:0!important}.logout form{margin:0}.logout button{display:inline-flex!important;min-width:58px;min-height:48px;align-items:center;justify-content:center;margin:0;padding:0 10px!important;border-radius:13px!important;font-size:11px;color:#c7d0dc;background:#101620}
 .main{width:100%;min-width:0;padding:max(16px,env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom))!important}.topline{gap:10px;align-items:center!important;margin-bottom:16px!important}h1{font-size:clamp(21px,6vw,26px)!important;line-height:1.12}h2{font-size:16px;line-height:1.25}.subtitle{max-width:72vw;margin-top:4px;font-size:11px;line-height:1.35}.topline>.pill{flex:0 0 auto;padding:5px 8px;font-size:10px}
 .grid{gap:10px!important}.card,.card.wide,.card.full{grid-column:1/-1!important;width:100%;min-width:0;padding:14px!important;border-radius:14px!important}.value{font-size:clamp(22px,7vw,28px);overflow-wrap:anywhere}.label{font-size:10px}.hint,.muted{overflow-wrap:anywhere}.pill,.status{max-width:100%;white-space:normal}.flash{margin-bottom:10px;border-radius:12px}
@@ -96,6 +96,10 @@ def _enhance_tables(document: str) -> str:
     return _TABLE_RE.sub(_mobile_table, str(document or ""))
 
 
+def _enhance_navigation(document: str) -> str:
+    return str(document or "").replace("class='nav active'", "class='nav active' aria-current='page'", 1)
+
+
 def _inject(document: str, marker: str, fragment: str) -> str:
     text = str(document or "")
     if fragment.strip() in text:
@@ -107,7 +111,7 @@ def _wrap(renderer: Callable[..., str], *, login: bool) -> Callable[..., str]:
     def wrapped(*args: Any, **kwargs: Any) -> str:
         document = renderer(*args, **kwargs)
         if not login:
-            document = _enhance_tables(document)
+            document = _enhance_navigation(_enhance_tables(document))
         return _inject(document, "</head>", _LOGIN_STYLE if login else _MOBILE_STYLE)
     return wrapped
 
