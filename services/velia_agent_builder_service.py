@@ -12,6 +12,8 @@ from db.database import get_connection
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
+_CONVERSATION_RECONCILE_LOCK = threading.Lock()
+_CONVERSATION_RECONCILED_USERS: set[int] = set()
 _ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
@@ -516,6 +518,69 @@ def _get_profile_row(cursor, user_id: int, agent_id: str, *, active_only: bool =
     return row
 
 
+def _archive_conversations_for_archived_agents(
+    cursor: Any,
+    user_id: int,
+    *,
+    agent_id: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> int:
+    timestamp = now or _now()
+    agent_clause = "AND p.agent_id=%s" if agent_id else ""
+    params: List[Any] = [timestamp, int(user_id), int(user_id)]
+    if agent_id:
+        params.append(str(agent_id))
+    cursor.execute(
+        """
+        UPDATE velia_conversations AS c
+        SET is_archived=TRUE, updated_at=%s
+        WHERE c.user_id=%s
+          AND c.deleted_at IS NULL
+          AND c.is_archived=FALSE
+          AND EXISTS (
+              SELECT 1
+              FROM velia_agent_sessions AS s
+              JOIN velia_agent_profiles AS p
+                ON p.agent_id=s.agent_id AND p.user_id=s.user_id
+              WHERE s.conversation_id=c.conversation_id
+                AND s.user_id=%s
+                AND p.status='archived'
+                """
+        + agent_clause
+        + """
+          )
+        """,
+        tuple(params),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def reconcile_archived_agent_conversations(user_id: int) -> int:
+    uid = int(user_id)
+    if uid in _CONVERSATION_RECONCILED_USERS:
+        return 0
+    with _CONVERSATION_RECONCILE_LOCK:
+        if uid in _CONVERSATION_RECONCILED_USERS:
+            return 0
+        ensure_velia_agent_builder_tables()
+        from services import velia_chat_service as chat_service
+
+        chat_service.ensure_velia_chat_tables()
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            changed = _archive_conversations_for_archived_agents(cursor, uid)
+            conn.commit()
+            _CONVERSATION_RECONCILED_USERS.add(uid)
+            return changed
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+
 def create_agent(
     user_id: int,
     name: str,
@@ -589,6 +654,7 @@ def get_agent(user_id: int, agent_id: str, *, active_only: bool = True) -> Dict[
 
 def list_agents(user_id: int, *, include_archived: bool = False, limit: int = 50) -> List[Dict[str, Any]]:
     ensure_velia_agent_builder_tables()
+    reconcile_archived_agent_conversations(int(user_id))
     maximum = min(100, max(1, int(limit or 50)))
     conn = get_connection()
     cursor = conn.cursor()
@@ -669,22 +735,35 @@ def update_agent(user_id: int, agent_id: str, changes: Mapping[str, Any]) -> Dic
 
 def archive_agent(user_id: int, agent_id: str) -> None:
     ensure_velia_agent_builder_tables()
+    from services import velia_chat_service as chat_service
+
+    chat_service.ensure_velia_chat_tables()
+    uid = int(user_id)
+    normalized_agent_id = str(agent_id)
+    now = _now()
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
             "UPDATE velia_agent_profiles SET status='archived',updated_at=%s "
             "WHERE agent_id=%s AND user_id=%s AND status='active'",
-            (_now(), str(agent_id), int(user_id)),
+            (now, normalized_agent_id, uid),
         )
         if cursor.rowcount != 1:
             raise AgentBuilderError("velia_agent_builder_agent_not_found", status=404)
+        _archive_conversations_for_archived_agents(
+            cursor,
+            uid,
+            agent_id=normalized_agent_id,
+            now=now,
+        )
         cursor.execute(
             "UPDATE velia_agent_sessions SET status='closed',updated_at=%s "
             "WHERE agent_id=%s AND user_id=%s AND status='active'",
-            (_now(), str(agent_id), int(user_id)),
+            (now, normalized_agent_id, uid),
         )
         conn.commit()
+        _CONVERSATION_RECONCILED_USERS.add(uid)
     except Exception:
         conn.rollback()
         raise
