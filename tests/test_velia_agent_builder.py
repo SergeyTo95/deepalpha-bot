@@ -57,20 +57,48 @@ def test_public_capability_does_not_expose_hidden_guidance_or_private_metadata()
     assert "source" not in public
 
 
-def test_public_agent_contract_uses_conversation_scope_not_internal_memory_mode():
-    public = builder_routes._public_agent(
-        {
-            "id": "agent-1",
-            "name": "Atlas",
-            "memory_mode": "isolated",
-            "brain": "Velyon Core",
-        }
-    )
-    assert public["id"] == "agent-1"
-    assert public["name"] == "Atlas"
-    assert public["brain"] == "Velyon Core"
-    assert public["context_scope"] == "conversation"
-    assert "memory_mode" not in public
+def test_public_agent_contract_reports_memory_only_when_available():
+    value = {
+        "id": "agent-1",
+        "name": "Atlas",
+        "memory_mode": "isolated",
+        "brain": "Velyon Core",
+    }
+    unavailable = builder_routes._public_agent(value, memory_available=False)
+    assert unavailable["context_scope"] == "conversation"
+    assert unavailable["memory_scope"] == "unavailable"
+    assert unavailable["dedicated_long_term_agent_memory"] is False
+    assert "memory_mode" not in unavailable
+
+    available = builder_routes._public_agent(value, memory_available=True)
+    assert available["id"] == "agent-1"
+    assert available["name"] == "Atlas"
+    assert available["brain"] == "Velyon Core"
+    assert available["context_scope"] == "conversation"
+    assert available["memory_scope"] == "agent"
+    assert available["dedicated_long_term_agent_memory"] is True
+    assert "memory_mode" not in available
+
+
+def test_agent_memory_availability_requires_capture_and_recall_for_user(monkeypatch):
+    monkeypatch.delenv("VELIA_AGENT_BUILDER_ENABLED", raising=False)
+    monkeypatch.delenv("VELIA_AGENT_MEMORY_RECALL_ENABLED", raising=False)
+    monkeypatch.setattr(builder_routes, "owner_access_enabled", lambda user_id: int(user_id) == 7)
+    monkeypatch.setattr(builder_routes, "shadow_capture_enabled_for_user", lambda user_id: int(user_id) == 7)
+    assert builder_routes._agent_memory_available(7) is True
+    assert builder_routes._agent_memory_available(8) is False
+
+    monkeypatch.setattr(builder_routes, "shadow_capture_enabled_for_user", lambda user_id: False)
+    assert builder_routes._agent_memory_available(7) is False
+
+
+def test_agent_memory_availability_supports_global_rollout(monkeypatch):
+    monkeypatch.setenv("VELIA_AGENT_BUILDER_ENABLED", "true")
+    monkeypatch.setenv("VELIA_AGENT_MEMORY_RECALL_ENABLED", "true")
+    monkeypatch.setattr(builder_routes, "owner_access_enabled", lambda user_id: False)
+    monkeypatch.setattr(builder_routes, "shadow_capture_enabled_for_user", lambda user_id: int(user_id) == 9)
+    assert builder_routes._agent_memory_available(9) is True
+    assert builder_routes._agent_memory_available(10) is False
 
 
 def test_text_normalization_is_bounded_and_required_values_fail_closed():
@@ -242,7 +270,8 @@ def test_public_builder_source_keeps_hidden_origins_out_of_mobile_contract():
     agent_routes_source = open("services/velia_agent_routes.py", encoding="utf-8").read()
     assert '"brain": "Velyon Core"' in routes_source
     assert '"product": "VELIA"' in routes_source
-    assert '"dedicated_long_term_agent_memory": False' in routes_source
+    assert '"dedicated_long_term_agent_memory": memory_available' in routes_source
+    assert '"memory_scope": "agent" if memory_available else "unavailable"' in routes_source
     assert '"conversation_scoped_agent_context": True' in routes_source
     assert "private_provenance_json" in service_source
     assert "private_provenance_json" not in routes_source
