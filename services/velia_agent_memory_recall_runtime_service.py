@@ -3,7 +3,10 @@ from __future__ import annotations
 import logging
 
 from services import velia_agent_builder_service as builder
-from services.velia_agent_memory_recall_service import recall_context_for_conversation as _recall_context
+from services.velia_agent_memory_recall_service import (
+    recall_context_for_conversation as _recall_context,
+    recall_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +18,11 @@ def recall_context_for_conversation(user_id: int, conversation_id: str) -> str:
     feature disablement. Prompt recall is stricter: both the Agent Builder and
     recall flags must be enabled, and the conversation must still be an active
     Agent session. Ordinary/archived conversations remain on the normal VELIA
-    chat path.
+    chat path. When recall is disabled this function performs no DB or network
+    lookup at all.
     """
 
-    if not builder.builder_enabled():
+    if not recall_enabled() or not builder.builder_enabled():
         return ""
     try:
         session = builder.session_for_conversation(int(user_id), str(conversation_id))
