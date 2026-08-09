@@ -168,9 +168,43 @@ def link_conversations(
     conn = get_connection()
     cursor = _dict_cursor(conn)
     try:
-        titles = _active_conversation_titles(cursor, uid, [target_id] + source_ids)
-        if target_id not in titles or any(source_id not in titles for source_id in source_ids):
+        # Serialize all link mutations for this target on a stable row. Locking
+        # the link rows alone is insufficient when a target has zero links.
+        cursor.execute(
+            """
+            SELECT conversation_id
+            FROM velia_conversations
+            WHERE user_id=%s AND conversation_id=%s
+              AND deleted_at IS NULL AND is_archived=FALSE
+            FOR UPDATE
+            """,
+            (uid, target_id),
+        )
+        if not cursor.fetchone():
             raise ConversationUxError("conversation_not_found", status=404)
+
+        source_titles = _active_conversation_titles(cursor, uid, source_ids)
+        if any(source_id not in source_titles for source_id in source_ids):
+            raise ConversationUxError("conversation_not_found", status=404)
+
+        # An archived/deleted source must not consume an invisible slot. Remove
+        # stale links while the target lock is held so later unarchive cannot
+        # resurrect a hidden fifth source.
+        cursor.execute(
+            """
+            DELETE FROM velia_conversation_links AS l
+            WHERE l.user_id=%s AND l.target_conversation_id=%s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM velia_conversations AS c
+                WHERE c.conversation_id=l.source_conversation_id
+                  AND c.user_id=l.user_id
+                  AND c.deleted_at IS NULL
+                  AND c.is_archived=FALSE
+              )
+            """,
+            (uid, target_id),
+        )
 
         cursor.execute(
             """
