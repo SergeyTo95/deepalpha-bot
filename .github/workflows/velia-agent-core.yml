@@ -9,6 +9,7 @@ on:
       - 'third_party/openworker/**'
       - '.github/workflows/velia-agent-core.yml'
       - 'run_web_process.py'
+      - 'run_velia_memory_shadow_worker.py'
   workflow_dispatch:
 
 permissions:
@@ -44,7 +45,10 @@ jobs:
           import glob
           import py_compile
 
-          paths = sorted(glob.glob('services/velia_agent_*.py')) + ['run_web_process.py']
+          paths = sorted(glob.glob('services/velia_agent_*.py')) + [
+              'run_web_process.py',
+              'run_velia_memory_shadow_worker.py',
+          ]
           for path in paths:
               py_compile.compile(path, doraise=True)
           print(f'compiled {len(paths)} files')

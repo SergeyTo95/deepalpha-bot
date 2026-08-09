@@ -69,16 +69,18 @@ def main() -> None:
     from services.developer_api_schema_bootstrap import (
         run_serialized_developer_api_schema_bootstrap,
     )
-    from services.velia_memory_shadow_service import (
-        ensure_velia_memory_shadow_tables,
-        run_shadow_worker_forever,
-    )
+    from services import velia_memory_shadow_service as memory_shadow
+    from services.velia_agent_memory_shadow_patch import install as install_agent_memory_namespace
+
+    # Namespace routing is a private delivery concern. Install it in the worker
+    # before any queued event is sent to Velyon Memory.
+    install_agent_memory_namespace(memory_shadow)
 
     run_serialized_developer_api_schema_bootstrap(
         "velia-memory-shadow-worker",
-        ensure_velia_memory_shadow_tables,
+        memory_shadow.ensure_velia_memory_shadow_tables,
     )
-    run_shadow_worker_forever()
+    memory_shadow.run_shadow_worker_forever()
 
 
 if __name__ == "__main__":
