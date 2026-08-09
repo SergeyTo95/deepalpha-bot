@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 from typing import Any, Dict, Optional
 
 from aiohttp import web
 
 from services import velia_agent_builder_service as builder
+from services.velia_agent_owner_rollout_service import owner_access_enabled
+from services.velia_memory_shadow_service import shadow_capture_enabled_for_user
 
 logger = logging.getLogger(__name__)
 _PREFIX = "/mobile-api/v1/agents"
@@ -16,11 +19,28 @@ def _auth(routes_module: Any, request: web.Request) -> Optional[Dict[str, Any]]:
     return routes_module._require_mobile_auth(request)
 
 
-def _public_agent(value: Any) -> Dict[str, Any]:
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _agent_memory_available(user_id: int) -> bool:
+    global_recall = (
+        _env_bool("VELIA_AGENT_BUILDER_ENABLED", False)
+        and _env_bool("VELIA_AGENT_MEMORY_RECALL_ENABLED", False)
+    )
+    recall_available = global_recall or owner_access_enabled(int(user_id))
+    return bool(recall_available) and shadow_capture_enabled_for_user(int(user_id))
+
+
+def _public_agent(value: Any, *, memory_available: bool = False) -> Dict[str, Any]:
     item = dict(value or {}) if isinstance(value, dict) else {}
     item.pop("memory_mode", None)
     item["context_scope"] = "conversation"
-    item["memory_scope"] = "agent"
+    item["memory_scope"] = "agent" if memory_available else "unavailable"
+    item["dedicated_long_term_agent_memory"] = bool(memory_available)
     return item
 
 
@@ -74,6 +94,8 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
         auth = _auth(routes_module, request)
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        user_id = int(auth["user_id"])
+        memory_available = _agent_memory_available(user_id)
         return routes_module._json_response(
             {
                 "ok": True,
@@ -82,8 +104,8 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 "brain": "Velyon Core",
                 "custom_agents": True,
                 "conversation_scoped_agent_context": True,
-                "dedicated_long_term_agent_memory": True,
-                "memory_scope": "agent",
+                "dedicated_long_term_agent_memory": memory_available,
+                "memory_scope": "agent" if memory_available else "unavailable",
                 "child_conversations": True,
                 "external_actions_still_permission_gated": True,
             }
@@ -121,8 +143,15 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
-            items = await asyncio.to_thread(builder.list_agents, int(auth["user_id"]))
-            return routes_module._json_response({"ok": True, "agents": [_public_agent(item) for item in items]})
+            user_id = int(auth["user_id"])
+            memory_available = _agent_memory_available(user_id)
+            items = await asyncio.to_thread(builder.list_agents, user_id)
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "agents": [_public_agent(item, memory_available=memory_available) for item in items],
+                }
+            )
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -134,17 +163,27 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
+            user_id = int(auth["user_id"])
             payload = await _body(request)
             item = await asyncio.to_thread(
                 builder.create_agent,
-                int(auth["user_id"]),
+                user_id,
                 str(payload.get("name") or ""),
                 description=str(payload.get("description") or ""),
                 instructions=str(payload.get("instructions") or ""),
                 capability_ids=payload.get("capability_ids"),
                 can_create_chats=bool(payload.get("can_create_chats", False)),
             )
-            return routes_module._json_response({"ok": True, "agent": _public_agent(item)}, status=201)
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "agent": _public_agent(
+                        item,
+                        memory_available=_agent_memory_available(user_id),
+                    ),
+                },
+                status=201,
+            )
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -156,12 +195,21 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
+            user_id = int(auth["user_id"])
             item = await asyncio.to_thread(
                 builder.get_agent,
-                int(auth["user_id"]),
+                user_id,
                 request.match_info["agent_id"],
             )
-            return routes_module._json_response({"ok": True, "agent": _public_agent(item)})
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "agent": _public_agent(
+                        item,
+                        memory_available=_agent_memory_available(user_id),
+                    ),
+                }
+            )
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -173,14 +221,23 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
+            user_id = int(auth["user_id"])
             payload = await _body(request)
             item = await asyncio.to_thread(
                 builder.update_agent,
-                int(auth["user_id"]),
+                user_id,
                 request.match_info["agent_id"],
                 payload,
             )
-            return routes_module._json_response({"ok": True, "agent": _public_agent(item)})
+            return routes_module._json_response(
+                {
+                    "ok": True,
+                    "agent": _public_agent(
+                        item,
+                        memory_available=_agent_memory_available(user_id),
+                    ),
+                }
+            )
         except Exception as exc:
             return _json_error(routes_module, exc)
 
