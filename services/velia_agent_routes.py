@@ -8,6 +8,7 @@ from aiohttp import web
 
 from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
+from services.velia_agent_builder_guarded_service import install as install_agent_builder_guard
 from services.velia_agent_builder_routes import setup_velia_agent_builder_routes
 from services.velia_agent_coding_autopilot_ci_routes import (
     setup_velia_coding_autopilot_ci_routes,
@@ -50,6 +51,7 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
 
 
 def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
+    install_agent_builder_guard()
     setup_velia_agent_builder_routes(app, routes_module)
     setup_velia_google_calendar_routes(app, routes_module)
     # Install background-worker patches before Autopilot registers its cleanup
