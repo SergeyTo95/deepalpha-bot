@@ -38,6 +38,30 @@ def test_admin_memory_patch_adds_safe_read_only_recall_diagnostic(monkeypatch):
     }
 
 
+def test_admin_memory_patch_supports_snapshot_only_module_without_layout(monkeypatch):
+    module = SimpleNamespace(memory_queue_snapshot=lambda: {"available": True, "pending": 1})
+    monkeypatch.setattr(admin_patch, "recall_enabled", lambda: False)
+    monkeypatch.setattr(
+        admin_patch,
+        "probe_atomic_search_support",
+        lambda: {
+            "status": "online",
+            "supported": True,
+            "http_status": 200,
+            "latency_ms": 5,
+            "result_shape": "v3_atomic_search",
+        },
+    )
+
+    admin_patch.install(module)
+    snapshot = module.memory_queue_snapshot()
+
+    assert snapshot["pending"] == 1
+    assert snapshot["agent_recall"]["api_supported"] is True
+    assert not hasattr(module, "_layout")
+    assert getattr(module, "_velia_admin_agent_memory_recall_installed", False) is True
+
+
 def test_admin_memory_patch_relabels_memory_card_and_is_idempotent(monkeypatch):
     module = SimpleNamespace(
         memory_queue_snapshot=lambda: {"available": True},
@@ -66,6 +90,35 @@ def test_admin_memory_patch_relabels_memory_card_and_is_idempotent(monkeypatch):
     assert "<h2>Recall safety</h2>" in rendered
     assert "read-only" in rendered
     assert "does not create memory" in rendered
+
+
+def test_admin_memory_patch_rewraps_snapshot_after_later_rebinding(monkeypatch):
+    module = SimpleNamespace(
+        memory_queue_snapshot=lambda: {"available": True, "source": "first"},
+        _layout=lambda title, active, key, body, flash="": body,
+    )
+    monkeypatch.setattr(admin_patch, "recall_enabled", lambda: False)
+    monkeypatch.setattr(
+        admin_patch,
+        "probe_atomic_search_support",
+        lambda: {
+            "status": "online",
+            "supported": True,
+            "http_status": 200,
+            "latency_ms": 7,
+            "result_shape": "v3_atomic_search",
+        },
+    )
+
+    admin_patch.install(module)
+    wrapped_layout = module._layout
+    module.memory_queue_snapshot = lambda: {"available": True, "source": "rebound"}
+    admin_patch.install(module)
+
+    snapshot = module.memory_queue_snapshot()
+    assert snapshot["source"] == "rebound"
+    assert snapshot["agent_recall"]["api_supported"] is True
+    assert module._layout is wrapped_layout
 
 
 def test_observability_rebinding_installs_recall_patch_last(monkeypatch):
