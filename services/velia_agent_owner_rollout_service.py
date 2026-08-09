@@ -75,6 +75,8 @@ def install(app: web.Application, routes_module: Any) -> None:
     if app.get("velia_agent_owner_rollout_installed"):
         return
 
+    from services import velia_admin_agent_memory_recall_patch as admin_recall_patch
+    from services import velia_agent_builder_chat_patch as builder_chat_patch
     from services import velia_agent_builder_service as builder
     from services import velia_agent_memory_recall_chat_patch as recall_chat_patch
     from services import velia_agent_memory_recall_runtime_service as recall_runtime
@@ -132,9 +134,11 @@ def install(app: web.Application, routes_module: Any) -> None:
     recall_runtime.recall_enabled = recall_infrastructure_enabled
     recall_runtime.recall_context_for_conversation = recall_context_for_user
 
-    # recall_chat_patch imported the runtime function by value at module import
-    # time, so update that bound reference before its chat wrapper is installed.
+    # These modules import function objects by value. Rebind their module globals
+    # as well so rollout security does not depend on Python import order.
+    builder_chat_patch.prompt_context_for_conversation = prompt_context_for_user
     recall_chat_patch.recall_context_for_conversation = recall_context_for_user
+    admin_recall_patch.recall_enabled = recall_infrastructure_enabled
 
     @web.middleware
     async def owner_rollout_middleware(request: web.Request, handler):
