@@ -1,0 +1,38 @@
+name: Gram Treasury Diagnostics Codemod
+
+on:
+  push:
+    branches:
+      - fix/gram-treasury-diagnostics-v1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/gram-treasury-diagnostics-v1
+          fetch-depth: 0
+
+      - name: Apply diagnostics codemod
+        run: python scripts/apply_gram_treasury_diagnostics.py
+
+      - name: Compile admin module
+        run: python -m py_compile bot/admin.py
+
+      - name: Commit generated admin changes
+        shell: bash
+        run: |
+          if git diff --quiet -- bot/admin.py; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot/admin.py
+          git commit -m "fix: expose safe Gram Treasury diagnostics"
+          git push origin HEAD:fix/gram-treasury-diagnostics-v1
