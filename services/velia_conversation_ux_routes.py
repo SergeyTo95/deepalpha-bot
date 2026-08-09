@@ -47,11 +47,14 @@ def _smart_open_url(token: str, user_agent: str) -> str:
     platform = _platform(user_agent)
     store = _store_url(user_agent)
     deep_link = f"velia://share/{token}"
-    if platform == "android" and store:
-        encoded_fallback = quote(store, safe="")
+    if platform == "android":
+        fallback = ""
+        if store:
+            encoded_fallback = quote(store, safe="")
+            fallback = f"S.browser_fallback_url={encoded_fallback};"
         return (
             f"intent://share/{token}#Intent;scheme=velia;package={ANDROID_PACKAGE};"
-            f"S.browser_fallback_url={encoded_fallback};end"
+            f"{fallback}end"
         )
     return deep_link
 
