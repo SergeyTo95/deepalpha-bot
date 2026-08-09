@@ -8,7 +8,7 @@ from services import velia_conversation_links_service as service
 class FakeCursor:
     def __init__(self, *, active_titles=None, existing_links=None):
         self.active_titles = active_titles or {}
-        self.existing_links = existing_links or []
+        self.existing_links = list(existing_links or [])
         self.calls = []
         self._rows = []
         self._row = None
@@ -22,17 +22,32 @@ class FakeCursor:
         self._row = None
         self.rowcount = 0
 
-        if normalized.startswith("SELECT conversation_id, title FROM velia_conversations"):
+        if (
+            normalized.startswith("SELECT conversation_id FROM velia_conversations")
+            and "FOR UPDATE" in normalized
+        ):
+            target_id = str(params[1])
+            if target_id in self.active_titles:
+                self._row = {"conversation_id": target_id}
+        elif normalized.startswith("SELECT conversation_id, title FROM velia_conversations"):
             requested = [str(value) for value in params[1:]]
             self._rows = [
                 {"conversation_id": value, "title": self.active_titles[value]}
                 for value in requested
                 if value in self.active_titles
             ]
+        elif normalized.startswith("DELETE FROM velia_conversation_links AS l"):
+            active = {value for value in self.existing_links if value in self.active_titles}
+            removed = len(self.existing_links) - len(active)
+            self.existing_links = list(active)
+            self.rowcount = removed
         elif normalized.startswith("SELECT source_conversation_id FROM velia_conversation_links"):
             self._rows = [(value,) for value in self.existing_links]
         elif normalized.startswith("INSERT INTO velia_conversation_links"):
-            self.rowcount = 1
+            source_id = str(params[2])
+            if source_id not in self.existing_links:
+                self.existing_links.append(source_id)
+                self.rowcount = 1
 
     def fetchall(self):
         return list(self._rows)
@@ -110,13 +125,21 @@ def test_link_requires_owned_active_target_and_source(monkeypatch):
     assert not any("INSERT INTO velia_conversation_links" in query for query, _ in cursor.calls)
 
 
-def test_link_rejects_self_and_total_source_limit(monkeypatch):
+def test_link_rejects_self_and_total_active_source_limit(monkeypatch):
     with pytest.raises(service.ConversationUxError) as caught:
         service.link_conversations(5, "same", ["same"])
     assert caught.value.code == "cannot_link_conversation_to_itself"
 
+    active_titles = {
+        "target": "Main",
+        "source-1": "One",
+        "source-2": "Two",
+        "source-3": "Three",
+        "other": "Other",
+        "source-4": "Fourth",
+    }
     cursor = FakeCursor(
-        active_titles={"target": "Main", "source-4": "Fourth"},
+        active_titles=active_titles,
         existing_links=["source-1", "source-2", "source-3", "other"],
     )
     connection = FakeConnection(cursor)
@@ -126,6 +149,62 @@ def test_link_rejects_self_and_total_source_limit(monkeypatch):
         service.link_conversations(5, "target", ["source-4"])
     assert caught.value.code == "too_many_linked_conversations"
     assert caught.value.status == 409
+
+
+def test_stale_inactive_links_are_removed_before_slot_limit(monkeypatch):
+    cursor = FakeCursor(
+        active_titles={"target": "Main", "replacement": "Replacement"},
+        existing_links=["stale-a", "stale-b", "stale-c", "stale-d"],
+    )
+    connection = FakeConnection(cursor)
+    monkeypatch.setattr(service, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        service,
+        "list_conversation_links",
+        lambda *_args, **_kwargs: [{"id": "replacement", "title": "Replacement"}],
+    )
+
+    result = service.link_conversations(12, "target", ["replacement"])
+
+    assert result == [{"id": "replacement", "title": "Replacement"}]
+    cleanup_index = next(
+        index for index, (query, _) in enumerate(cursor.calls)
+        if query.startswith("DELETE FROM velia_conversation_links AS l")
+    )
+    count_index = next(
+        index for index, (query, _) in enumerate(cursor.calls)
+        if query.startswith("SELECT source_conversation_id FROM velia_conversation_links")
+    )
+    assert cleanup_index < count_index
+    assert cursor.existing_links == ["replacement"]
+    assert connection.commits == 1
+
+
+def test_target_row_is_locked_before_link_limit_check(monkeypatch):
+    cursor = FakeCursor(
+        active_titles={"target": "Main", "source": "Source"},
+        existing_links=[],
+    )
+    connection = FakeConnection(cursor)
+    monkeypatch.setattr(service, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        service,
+        "list_conversation_links",
+        lambda *_args, **_kwargs: [{"id": "source", "title": "Source"}],
+    )
+
+    service.link_conversations(13, "target", ["source"])
+
+    target_lock_index = next(
+        index for index, (query, _) in enumerate(cursor.calls)
+        if query.startswith("SELECT conversation_id FROM velia_conversations")
+        and "FOR UPDATE" in query
+    )
+    link_count_index = next(
+        index for index, (query, _) in enumerate(cursor.calls)
+        if query.startswith("SELECT source_conversation_id FROM velia_conversation_links")
+    )
+    assert target_lock_index < link_count_index
 
 
 def test_relevance_selection_keeps_latest_and_finds_older_matching_context():
