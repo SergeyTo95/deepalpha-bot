@@ -7,11 +7,20 @@ from services import velia_conversation_ux_service as service
 
 
 class FakeCursor:
-    def __init__(self, *, active_ids=None, source_titles=None, source_messages=None, share_messages=None):
+    def __init__(
+        self,
+        *,
+        active_ids=None,
+        source_titles=None,
+        source_messages=None,
+        share_messages=None,
+        public_share_row=None,
+    ):
         self.active_ids = active_ids or []
         self.source_titles = source_titles or {}
         self.source_messages = source_messages or {}
         self.share_messages = share_messages or []
+        self.public_share_row = public_share_row
         self.calls = []
         self._rows = []
         self._row = None
@@ -52,6 +61,8 @@ class FakeCursor:
             else:
                 source_id = str(params[1])
                 self._rows = list(self.source_messages.get(source_id, []))
+        elif normalized.startswith("SELECT share_id, title, snapshot_json"):
+            self._row = self.public_share_row
 
     def fetchall(self):
         return list(self._rows)
@@ -210,12 +221,49 @@ def test_share_snapshot_is_public_content_only_and_stores_hash_not_raw_token(mon
     assert connection.commits == 1
 
 
+def test_public_share_returns_immutable_long_message_without_read_time_truncation(monkeypatch):
+    long_content = "x" * 25_001
+    snapshot = {
+        "schema_version": 1,
+        "title": "Long snapshot",
+        "messages": [{"role": "assistant", "content": long_content}],
+        "created_at": "2026-08-09T19:00:00Z",
+    }
+    cursor = FakeCursor(
+        public_share_row={
+            "share_id": "share-1",
+            "title": "Long snapshot",
+            "snapshot_json": snapshot,
+            "created_at": "2026-08-09T19:00:00Z",
+            "expires_at": "2026-11-07T19:00:00Z",
+        }
+    )
+    connection = FakeConnection(cursor)
+    monkeypatch.setattr(service, "get_connection", lambda: connection)
+
+    share = service.get_public_share("A" * 32)
+
+    assert share is not None
+    assert share["messages"] == [{"role": "assistant", "content": long_content}]
+    assert len(share["messages"][0]["content"]) == 25_001
+
+
 def test_android_smart_link_uses_package_and_store_fallback(monkeypatch):
     monkeypatch.setenv("VELIA_ANDROID_STORE_URL", "https://play.google.com/store/apps/details?id=ai.deepalpha.android")
     url = routes._smart_open_url("abc_DEF-123", "Mozilla/5.0 (Linux; Android 16)")
     assert url.startswith("intent://share/abc_DEF-123#Intent;scheme=velia;")
     assert "package=ai.deepalpha.android" in url
     assert "browser_fallback_url=https%3A%2F%2Fplay.google.com" in url
+
+
+def test_android_smart_link_targets_package_even_without_store_url(monkeypatch):
+    monkeypatch.delenv("VELIA_ANDROID_STORE_URL", raising=False)
+    url = routes._smart_open_url("abc_DEF-123", "Mozilla/5.0 (Linux; Android 16)")
+    assert url == (
+        "intent://share/abc_DEF-123#Intent;scheme=velia;"
+        "package=ai.deepalpha.android;end"
+    )
+    assert "browser_fallback_url" not in url
 
 
 def test_ios_detection_uses_ios_store_and_velia_scheme(monkeypatch):
