@@ -58,6 +58,17 @@ def payment_admin_snapshot() -> Dict[str, Any]:
 
         cur.execute(
             """
+            SELECT channel, COUNT(*) AS intents,
+                   COALESCE(SUM(expected_amount_usd) FILTER (WHERE status IN ('confirmed','fulfilled')),0) AS confirmed_amount_usd
+            FROM velia_payment_intents
+            GROUP BY channel
+            ORDER BY intents DESC, channel
+            """
+        )
+        channels = _rows(cur)
+
+        cur.execute(
+            """
             SELECT network,asset,enabled,mode,status,cursor_value,chain_height,lag_blocks,
                    last_poll_at,last_success_at,last_error_code,updated_at
             FROM velia_payment_worker_state
@@ -112,7 +123,7 @@ def payment_admin_snapshot() -> Dict[str, Any]:
             "signing_capability": False,
             "successful_poll_networks": successful_poll_networks,
             "summary": summary,
-            "channels": channels if False else [],
+            "channels": channels,
             "networks": networks,
             "intents": intents,
             "fulfillments": fulfillments,
