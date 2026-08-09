@@ -52,11 +52,11 @@ def build_unauthenticated_connect_page() -> str:
     p {{ color: #cec7d5; line-height: 1.55; }}
     .button {{
       display: block; text-align: center; padding: 15px 18px; margin-top: 22px;
-      border-radius: 16px; background: #6b4eff; color: white; text-decoration: none;
-      font-weight: 750;
+      border-radius: 16px; background: #6b4eff; color: white; text-decoration:none;
+      font-weight:750;
     }}
     .secondary {{ background: transparent; border: 1px solid #6c6674; }}
-    .note {{ margin-top: 20px; font-size: 14px; color: #aaa2b1; }}
+    .note {{ margin-top:20px; font-size:14px; color:#aaa2b1; }}
   </style>
 </head>
 <body>
@@ -107,17 +107,21 @@ def install(
 
     app.middlewares.append(telegram_connect_page_middleware)
 
-    # Conversation UX v2 is installed here because this established runtime patch
-    # already receives the fully configured aiohttp app after the base mobile chat
-    # routes have been registered but before aiohttp freezes the router. The
-    # ordering patch changes only the list function that the existing handler
-    # resolves at request time; merge/share/reorder use unique additive routes.
+    # Conversation UX is installed here because this established late runtime
+    # patch receives the fully configured aiohttp app after the base mobile chat
+    # routes and chat wrappers have been installed, but before aiohttp freezes
+    # the router. Linked-chat context therefore wraps the final _build_prompt
+    # used by both blocking and SSE generation without rewriting those pipelines.
     import services.velia_chat_service as chat_service_module
     import velia_mobile_routes as mobile_routes_module
+    from services.velia_conversation_links_routes import setup_velia_conversation_links_routes
+    from services.velia_conversation_links_service import install_linked_conversation_prompt
     from services.velia_conversation_ux_routes import setup_velia_conversation_ux_routes
     from services.velia_conversation_ux_service import install_conversation_ordering
 
     install_conversation_ordering(chat_service_module, mobile_routes_module)
+    install_linked_conversation_prompt(chat_service_module)
     setup_velia_conversation_ux_routes(app, mobile_routes_module)
+    setup_velia_conversation_links_routes(app, mobile_routes_module)
 
     app["velia_telegram_connect_page_patch_installed"] = True
