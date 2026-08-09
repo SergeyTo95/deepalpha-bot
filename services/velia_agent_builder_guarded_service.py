@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict
 
 from db.database import get_connection
 from services import velia_agent_builder_service as base
 
-# Public/runtime-facing exports. The storage service remains the implementation
-# layer; all quota-sensitive allocations and prompt composition must pass here.
+# Capture the storage implementation before install() replaces the public
+# runtime call points. This avoids recursion while keeping schema/storage code
+# separate from concurrency and prompt-boundary enforcement.
+_storage_create_agent = base.create_agent
+_storage_create_child_conversation = base.create_child_conversation
+_storage_prompt_context_for_conversation = base.prompt_context_for_conversation
+
 AgentBuilderError = base.AgentBuilderError
 builder_enabled = base.builder_enabled
 list_capabilities = base.list_capabilities
@@ -77,7 +82,7 @@ def create_agent(
     return _with_advisory_lock(
         "velia-agent-builder-user",
         str(int(user_id)),
-        lambda: base.create_agent(
+        lambda: _storage_create_agent(
             int(user_id),
             str(name or ""),
             description=str(description or ""),
@@ -102,7 +107,7 @@ def create_child_conversation(
     return _with_advisory_lock(
         "velia-agent-builder-parent",
         f"{int(user_id)}:{parent}",
-        lambda: base.create_child_conversation(
+        lambda: _storage_create_child_conversation(
             int(user_id),
             parent,
             title=str(title or ""),
@@ -115,7 +120,7 @@ def create_child_conversation(
 def prompt_context_for_conversation(user_id: int, conversation_id: str) -> str:
     """Guarantee the safety boundary survives every accepted context limit."""
 
-    context = base.prompt_context_for_conversation(int(user_id), str(conversation_id))
+    context = _storage_prompt_context_for_conversation(int(user_id), str(conversation_id))
     if not context:
         return ""
 
@@ -130,3 +135,14 @@ def prompt_context_for_conversation(user_id: int, conversation_id: str) -> str:
     safe_body = body[:body_budget].rstrip()
     rendered = (safe_body + separator if safe_body else "") + _BOUNDARY_FOOTER
     return rendered[:maximum]
+
+
+def install() -> None:
+    """Replace public runtime call points with guarded implementations once."""
+
+    if getattr(base, "_velia_agent_builder_guard_installed", False):
+        return
+    base.create_agent = create_agent
+    base.create_child_conversation = create_child_conversation
+    base.prompt_context_for_conversation = prompt_context_for_conversation
+    base._velia_agent_builder_guard_installed = True
