@@ -1,0 +1,56 @@
+name: Gram Admin Treasury
+
+on:
+  pull_request:
+    paths:
+      - 'bot/admin.py'
+      - 'tests/test_gram_admin_treasury_panel.py'
+      - '.github/workflows/gram-admin-treasury.yml'
+  workflow_dispatch:
+
+jobs:
+  gram-admin-treasury:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove exact head
+        if: github.event_name == 'pull_request'
+        run: |
+          ACTUAL="$(git rev-parse HEAD)"
+          EXPECTED="${{ github.event.pull_request.head.sha }}"
+          echo "actual=$ACTUAL expected=$EXPECTED"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compile Gram admin module
+        run: python -m py_compile bot/admin.py
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Gram admin Treasury safety tests
+        run: pytest -q tests/test_gram_admin_treasury_panel.py
+
+      - name: Secret and money-gate boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('bot/admin.py').read_text(encoding='utf-8')
+          start = s.index('def _admin_set_watch_only_treasury_tx')
+          end = s.index('\ndef ', start + 10)
+          helper = s[start:end]
+          assert 'VALUES (%s,NULL' in helper
+          assert 'TREASURY_INCOMING_ENABLED=true' not in helper
+          assert 'TREASURY_OUTGOING_ENABLED=true' not in helper
+          assert 'VELIA_USDT_CHECKOUT_ENABLED=true' not in helper
+          assert 'VELIA_PAYMENT_TON_ENABLED=true' not in helper
+          print('watch-only / money-gate boundary: OK')
+          PY
