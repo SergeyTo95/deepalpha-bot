@@ -35,27 +35,42 @@ def _short(admin: Any, value: Any, size: int = 18) -> str:
     return admin._e(text[:half] + "…" + text[-half:])
 
 
+def _network_label(admin: Any, value: Any) -> str:
+    network = str(value or "").strip().lower()
+    if network == "ton":
+        return "Gram <span class='hint'>(technical: ton)</span>"
+    return admin._e(network.upper() or "—")
+
+
 def _payments_body(admin: Any, data: dict) -> str:
     if not data.get("available"):
+        checkout = "ON" if data.get("public_checkout_enabled") else "OFF"
         return (
-            "<div class='card full'><h2>Payments foundation unavailable</h2>"
+            "<div class='card full'><h2>Payment telemetry unavailable</h2>"
             f"<div class='muted'>{admin._e(data.get('reason') or 'unknown')}</div>"
-            "<div class='hint'>Live money acceptance remains disabled.</div></div>"
+            f"<div class='hint'>Public USDT checkout: {checkout}. No signing capability is exposed by this view.</div></div>"
         )
 
     summary = data.get("summary") or {}
+    checkout_enabled = bool(data.get("public_checkout_enabled"))
+    checkout_label = "ON" if checkout_enabled else "OFF"
+    successful_poll_networks = [str(item or "").lower() for item in data.get("successful_poll_networks") or []]
+    successful_poll_label = ", ".join("Gram" if item == "ton" else item.upper() for item in successful_poll_networks) or "none yet"
+
     network_rows = "".join(
         "<tr>"
-        f"<td><strong>{admin._e(str(row.get('network') or '').upper())}</strong></td>"
+        f"<td><strong>{_network_label(admin, row.get('network'))}</strong></td>"
         f"<td>{admin._e(row.get('asset') or 'USDT')}</td>"
         f"<td>{'Enabled' if row.get('enabled') else 'Disabled'}</td>"
         f"<td>{admin._e(row.get('status') or '—')}</td>"
         f"<td>{admin._metric(row.get('chain_height'))}</td>"
         f"<td>{admin._metric(row.get('lag_blocks'))}</td>"
+        f"<td>{admin._e(row.get('last_poll_at') or '—')}</td>"
+        f"<td>{admin._e(row.get('last_success_at') or '—')}</td>"
         f"<td>{admin._e(row.get('last_error_code') or '—')}</td>"
         "</tr>"
         for row in data.get("networks") or []
-    ) or "<tr><td colspan='7' class='muted'>No worker state recorded.</td></tr>"
+    ) or "<tr><td colspan='9' class='muted'>No worker state recorded.</td></tr>"
 
     channel_rows = "".join(
         "<tr>"
@@ -72,7 +87,7 @@ def _payments_body(admin: Any, data: dict) -> str:
         f"<td><a href='/admin/users/{int(row.get('user_id') or 0)}'><code>{int(row.get('user_id') or 0)}</code></a><div class='hint'>{_user_label(admin, row)}</div></td>"
         f"<td>{admin._e(row.get('product_code') or '—')}</td>"
         f"<td>{admin._e(row.get('channel') or '—')}</td>"
-        f"<td>{admin._e(row.get('network') or '—')} / {admin._e(row.get('asset') or '—')}</td>"
+        f"<td>{_network_label(admin, row.get('network'))} / {admin._e(row.get('asset') or '—')}</td>"
         f"<td>{_usd(row.get('expected_amount_usd'))}</td>"
         f"<td>{_short(admin, row.get('deposit_address'))}</td>"
         f"<td>{admin._e(row.get('status') or '—')}</td>"
@@ -83,7 +98,7 @@ def _payments_body(admin: Any, data: dict) -> str:
     fulfillment_rows = "".join(
         f"<tr><td>{admin._e(row.get('status') or '—')}</td><td>{admin._metric(row.get('count'))}</td></tr>"
         for row in data.get("fulfillments") or []
-    ) or "<tr><td colspan='2' class='muted'>No queued fulfillments.</td></tr>"
+    ) or "<tr><td colspan='2' class='muted'>No fulfillment records.</td></tr>"
 
     legacy = data.get("legacy_ton") or {}
     legacy_text = (
@@ -91,41 +106,42 @@ def _payments_body(admin: Any, data: dict) -> str:
         f"fulfilled: {admin._metric(legacy.get('fulfilled'))} · "
         f"transactions: {admin._metric(legacy.get('transactions'))}"
         if legacy.get("available")
-        else "Legacy TON tables unavailable."
+        else "Legacy Gram payment tables unavailable."
     )
 
     return f"""
 <div class='card full' style='border-color:rgba(246,200,95,.36);background:linear-gradient(145deg,rgba(54,42,14,.35),rgba(9,13,20,.96))'>
-  <div class='label'>PAYMENT FOUNDATION</div>
-  <div class='value' style='font-size:20px'>WATCH-ONLY · LIVE MONEY DISABLED</div>
-  <div class='hint'>No blockchain polling, store receipt verification, wallet signing or automatic user credit is active in this stage.</div>
+  <div class='label'>PAYMENT TELEMETRY</div>
+  <div class='value' style='font-size:20px'>WATCH-ONLY · PUBLIC CHECKOUT {checkout_label}</div>
+  <div class='hint'>Successful poll recorded for: {admin._e(successful_poll_label)}. Polling state below is persisted by velia-payment-worker. Signing capability: disabled.</div>
+  <div class='hint'>A recent successful poll proves chain observation only; it does not by itself prove an end-to-end payment or exactly-once fulfillment.</div>
 </div>
 
 <div class='grid' style='margin-top:12px'>
   <div class='card'><div class='label'>Intents</div><div class='value'>{admin._metric(summary.get('total'))}</div><div class='hint'>Created 24h: {admin._metric(summary.get('created_24h'))}</div></div>
   <div class='card'><div class='label'>Awaiting</div><div class='value'>{admin._metric(summary.get('awaiting_payment'))}</div><div class='hint'>Detected {admin._metric(summary.get('detected'))} · Confirming {admin._metric(summary.get('confirming'))}</div></div>
   <div class='card'><div class='label'>Confirmed</div><div class='value'>{admin._metric(summary.get('confirmed'))}</div><div class='hint'>Fulfilled {admin._metric(summary.get('fulfilled'))}</div></div>
-  <div class='card'><div class='label'>Failed</div><div class='value'>{admin._metric(summary.get('failed'))}</div><div class='hint'>Foundation only</div></div>
+  <div class='card'><div class='label'>Failed</div><div class='value'>{admin._metric(summary.get('failed'))}</div><div class='hint'>Persisted intent state</div></div>
   <div class='card wide'><div class='label'>Confirmed amount · 30d</div><div class='value'>{_usd(summary.get('confirmed_amount_30d_usd'))}</div><div class='hint'>Persisted confirmed intent amounts only; not settlement accounting.</div></div>
 </div>
 
 <div class='card full' style='margin-top:12px'>
   <h2>Payment worker networks</h2>
-  <div class='table-wrap'><table><thead><tr><th>Network</th><th>Asset</th><th>Flag</th><th>Status</th><th>Height</th><th>Lag</th><th>Last error</th></tr></thead><tbody>{network_rows}</tbody></table></div>
-  <div class='hint'>TRON / Solana / TON are planned first. BNB / Polygon remain disabled until canonical USDT identifiers and finality rules are explicitly approved.</div>
+  <div class='table-wrap'><table><thead><tr><th>Network</th><th>Asset</th><th>Flag</th><th>Status</th><th>Height</th><th>Lag</th><th>Last poll</th><th>Last success</th><th>Last error</th></tr></thead><tbody>{network_rows}</tbody></table></div>
+  <div class='hint'>Gram, TRON and Solana are Phase-1 watch-only rails. BNB / Polygon remain fail-closed until separately reviewed.</div>
 </div>
 
 <div class='grid' style='margin-top:12px'>
   <div class='card wide'><h2>Channels</h2><div class='table-wrap'><table><thead><tr><th>Channel</th><th>Intents</th><th>Confirmed amount</th></tr></thead><tbody>{channel_rows}</tbody></table></div></div>
-  <div class='card wide'><h2>Fulfillment queue</h2><div class='table-wrap'><table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>{fulfillment_rows}</tbody></table></div><div class='hint'>Foundation can only queue an idempotent fulfillment after confirmed status; it does not credit users.</div></div>
+  <div class='card wide'><h2>Fulfillment records</h2><div class='table-wrap'><table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>{fulfillment_rows}</tbody></table></div><div class='hint'>A real incoming-payment acceptance still requires a controlled finalized transfer and repeated-poll exactly-once proof.</div></div>
 </div>
 
 <div class='card full' style='margin-top:12px'><h2>Recent VELIA payment intents</h2><div class='table-wrap'><table><thead><tr><th>Created</th><th>User</th><th>Product</th><th>Channel</th><th>Rail</th><th>USD</th><th>Deposit</th><th>Status</th></tr></thead><tbody>{intent_rows}</tbody></table></div></div>
 
 <div class='card full' style='margin-top:12px'>
-  <h2>Legacy TON boundary</h2>
+  <h2>Legacy Gram boundary</h2>
   <div>{legacy_text}</div>
-  <div class='hint'>Existing TON payment_intents/transactions remain untouched and are not silently mixed into the new VELIA multi-rail accounting.</div>
+  <div class='hint'>Existing technical TON payment_intents/transactions remain untouched and are not silently mixed into the new VELIA multi-rail accounting.</div>
 </div>
 <div class='hint' style='margin:10px 2px'>{admin._e(data.get('scope_note') or '')}</div>
 """
