@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from services.velia_agent_memory_recall_service import recall_context_for_conversation
+from services.velia_agent_memory_recall_runtime_service import recall_context_for_conversation
 
 logger = logging.getLogger(__name__)
 
