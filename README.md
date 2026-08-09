@@ -6,16 +6,16 @@ sdk: docker
 
 # VELIA / DeepAlpha backend
 
-> Внутренний инженерный README. Источник фактического статуса backend, Android-клиента, VELIA Developer, Coding Agent и Coding Autopilot. Не считать функцию работающей только потому, что код написан или смержен: нужны exact-head CI, deployment и реальный acceptance.
+> Внутренний инженерный README. Источник фактического статуса backend, Android-клиента, VELIA Developer, Coding Agent, Coding Autopilot и VELIA Payments. Не считать функцию работающей только потому, что код написан или смержен: нужны exact-head CI, deployment и реальный acceptance.
 
-**Последнее обновление:** 2026-08-06  
+**Последнее обновление:** 2026-08-09  
 **Backend:** `SergeyTo95/deepalpha-bot`  
 **Android:** `SergeyTo95/deepalpha-android`  
 **Backend production branch:** `feature/turbo-short-term-btc`  
 **Android integration branch:** `develop`  
 **Public backend:** `https://deepalpha-ai.com`  
 **Railway project:** `melodious-radiance`  
-**Railway services:** `deepalpha-bot`, `velyon-memory`
+**Railway services:** `deepalpha-bot`, `velyon-memory`, `velia-repowise`, `velia-payment-worker`
 
 ## 1. Актуальный подтверждённый baseline
 
@@ -24,17 +24,21 @@ sdk: docker
 Последний проверенный production commit на момент обновления:
 
 ```text
-8497c3709a825c4f3cf14d63dc74db5dc5905ca8
+d718dfa74d8202d8d59780397148a18e06b12989
 ```
 
-Commit добавляет controlled Autopilot smoke-файл в path-filter workflow `VELIA Agent Core`.
+Это merge PR `#448` — safe Gram Treasury diagnostics для расследования production blocker, при котором `Set admin wallet as watch-only Treasury` не создаёт активный Treasury.
 
 Для commit подтверждено:
 
 - Railway `deepalpha-bot` — `success`;
 - Railway `velyon-memory` — `success`;
-- controlled acceptance-файл теперь реально запускает Agent Core CI;
-- production runtime Autopilot не выполняет merge или deployment.
+- Railway `velia-repowise` — `success`;
+- Railway `velia-payment-worker` — `success`;
+- production Gram admin содержит read-only `🧾 Treasury diagnostics`;
+- money/withdraw/payment flags этим PR не включались.
+
+Старый Autopilot path-filter fix `8497c3709a825c4f3cf14d63dc74db5dc5905ca8` остаётся частью production history, но уже не является текущим head.
 
 В новой сессии всё равно сначала повторно проверить текущий head branch и combined status: SHA выше является baseline этого README, а не вечной константой.
 
@@ -57,6 +61,8 @@ fdc7c9e151df0accf56c25d0655a584ad5ea7cdb
 - CI Watch, CI Repair, Actions logs fallback, Review Loop и merge dry-run отображаются как включённые;
 - UI явно показывает `draft_pr_only`, `auto_merge=false`, `deployment=false`.
 
+Google Play billing Android PR `#35` на момент обновления остаётся **Draft / not merged**, head `ac22e0a2a22a249b6c2db139a238f863ecdc27b5`, mergeable=true.
+
 ## 2. Что такое VELIA
 
 VELIA — персональный ИИ-помощник и AI-среда, а не только чат.
@@ -66,10 +72,15 @@ VELIA — персональный ИИ-помощник и AI-среда, а н
 - продукт и приложение: **VELIA**;
 - помощник: **Velia / Велия**;
 - интеллектуальное ядро: **Velyon Core**;
+- premium reasoning: **Velyon Core Deep**;
 - генерация изображений: **Velia Images / Velyon Core Images**;
-- prediction-market модуль: **DeepAlpha**.
+- платная compute-единица: **VELIA Credits**;
+- prediction-market модуль: **DeepAlpha**;
+- TON-сеть на пользовательской стороне: **Gram**.
 
 Backend исторически вырос из `deepalpha-bot`, поэтому старые DeepAlpha-названия в инфраструктуре и коде допустимы. Новые пользовательские AI-возможности развиваются как VELIA.
+
+Технические `TON_*`, Toncenter, Jetton и `network="ton"` внутри backend не переименовывать, если это реальные protocol identifiers. На пользовательской стороне писать **Gram**.
 
 ## 3. Высокоуровневая архитектура
 
@@ -99,6 +110,17 @@ Authenticated mobile API
             ├─ bounded Actions logs
             ├─ Review Loop
             └─ merge recommendation dry-run
+
+Payments
+  ├─ Google Play server verification in deepalpha-bot
+  ├─ direct/web USDT checkout in deepalpha-bot
+  ├─ velia-payment-worker
+  │    ├─ watch-only TRON
+  │    ├─ watch-only Solana
+  │    └─ watch-only Gram/USDT
+  └─ Telegram admin Gram Treasury
+       ├─ watch-only payment routing
+       └─ guarded Gram/USDT withdrawal path
 
 GitHub
   ├─ GitHub App installation tokens
@@ -491,6 +513,14 @@ paused mission
 | Controlled fixture | `#413` / `961aca34...` | production |
 | Android Autopilot Center | Android `#29`, `#30` / `fdc7c9e1...` | develop, device opened |
 | Smoke path-filter fix | `8497c370...` | production, Railway success |
+| Economy v0.2 | `#439` | production |
+| Video Standard 5s = 100 Credits | `#440` | production |
+| Google Play backend billing | `#444` | production, external activation pending |
+| USDT checkout v1 | `#445` | production, public checkout OFF |
+| Gram admin + watch-only Treasury setup | `#446` | production |
+| Gram + USDT Treasury Withdraw | `#447` | production, withdrawal flags OFF |
+| Gram Treasury diagnostics | `#448` / `d718dfa7...` | production, Railway 4/4 success |
+| Android Google Play billing | Android `#35` / `ac22e0a2...` | Draft, not merged |
 
 Перед использованием SHA обязательно повторно проверить repository state.
 
@@ -506,16 +536,29 @@ fix/velia-autopilot-controlled-smoke-trigger
 
 Также не merge-ить старые test/draft PR без отдельной проверки их актуальности и diff.
 
+Для payment work не продолжать старые feature branches `#444–#448`; начинать новый fix от фактического production head.
+
 ## 12. Порядок следующей сессии
 
+Если продолжается Autopilot:
+
 1. Прочитать этот README и `docs/VELIA_NEW_CHAT_HANDOFF.md` через GitHub connector.
-2. Проверить текущий backend production head и оба Railway statuses.
+2. Проверить текущий backend production head и Railway statuses.
 3. Проверить Android `develop` head и последний CI.
 4. Не продолжать stale branch `fix/velia-autopilot-controlled-smoke-trigger`.
 5. Провести один controlled Autopilot end-to-end acceptance по разделу 9.
 6. Не merge-ить smoke PR.
 7. После acceptance обновить README фактическими run id, PR, commits, CI attempts, cost и итогом.
-8. Только затем обсуждать следующий найденный пользователем GitHub-проект и его интеграцию в VELIA.
+
+Если продолжается Payments/Gram Treasury:
+
+1. Прочитать этот README и `docs/VELIA_PAYMENTS_NEW_CHAT_HANDOFF.md`.
+2. Проверить production head + Railway 4/4.
+3. Проверить, что `#448` действительно merged/current.
+4. В Telegram открыть `/admin → 💎 Gram Wallets → 🧾 Treasury diagnostics` и получить runtime evidence.
+5. Исправить root cause `Treasury / payments: not configured`, не угадывая причину.
+6. После реального successful Treasury setup подключить Gram deposit address к `velia-payment-worker`.
+7. Затем поэтапно провести watcher/withdraw/incoming-USDT acceptance; public checkout до этого не включать.
 
 ## 13. Инженерный рабочий контракт
 
@@ -525,18 +568,145 @@ fix/velia-autopilot-controlled-smoke-trigger
 - Использовать GitHub connector для private/project repositories.
 - Не придумывать CI, merge, deploy, Railway или device results.
 - Проверять exact-head SHA.
-- Backend production принимать только после обоих Railway `success`.
+- Backend production принимать только после success всех фактически затронутых Railway production services; для текущей архитектуры обычно проверять 4 сервиса: `deepalpha-bot`, `velyon-memory`, `velia-repowise`, `velia-payment-worker`.
 - Не раскрывать secrets.
 - Не менять safety boundaries ради прохождения теста.
-- При failure читать конкретный code/log и исправлять root cause.
+- При failure читать конкретный code/log/runtime diagnostics и исправлять root cause.
 - Не объявлять Autopilot принятым до полного controlled acceptance.
+- Не объявлять payment channel live до реального end-to-end money acceptance.
+- Для подготовленного payment PR владелец разрешил merge без повторного вопроса, если exact-head CI green, mergeable, branch fresh, review threads 0, Railway preview green и нет money/security blocker. Это не разрешение автоматически включать real-money flags.
 
 ## 14. Новый чат
 
-Полный handoff-промт:
+Общий VELIA handoff:
 
 ```text
 docs/VELIA_NEW_CHAT_HANDOFF.md
 ```
 
-Первым сообщением нового чата отправить содержимое этого файла. Затем дать ссылку или название найденного GitHub-проекта, который предлагается добавить в VELIA.
+Отдельный актуальный handoff для платежей и Gram Treasury:
+
+```text
+docs/VELIA_PAYMENTS_NEW_CHAT_HANDOFF.md
+```
+
+Если новый чат продолжает текущую payment-задачу, первым сообщением отправить содержимое `docs/VELIA_PAYMENTS_NEW_CHAT_HANDOFF.md`.
+
+## 15. VELIA Payments / Billing — состояние на 2026-08-09
+
+### 15.1 Economy
+
+Принята коммерческая модель VELIA Economy v0.2:
+
+- Free: 100 Premium Credits/month + 50 welcome;
+- Plus: $14.99 Store / $10.49 USDT, 1,200 Credits/month;
+- Pro: $29.99 Store / $20.99 USDT, 3,000 Credits/month;
+- top-ups: 100 / 250 / 800 / 2,000 / 5,000 / 10,000 Credits;
+- crypto discount 30%;
+- public paid-compute unit: VELIA Credits;
+- paid Velyon Core — included/fair use;
+- premium expensive compute расходует Credits.
+
+Recurring Free grants и полноценное разделение subscription/purchased Credit buckets не считать завершёнными только по draft economy: runtime compatibility surface всё ещё использует aggregate `users.token_balance`.
+
+### 15.2 Google Play
+
+Backend `#444` merged: server-side catalog/verification/fulfillment boundary реализован.
+
+Android `#35` готов по exact-head CI, но остаётся Draft и не merged.
+
+Для live Google Play ещё нужны Play Console products, service account/Android Publisher credentials, Railway config, licensed/internal test и post-merge Android verification.
+
+### 15.3 Direct USDT
+
+Backend `#445` merged.
+
+Phase-1 supported canonical rails:
+
+```text
+TRON/TRC20 USDT
+Solana USDT
+Gram/USDT Jetton
+```
+
+`velia-payment-worker` создан и успешно деплоится как отдельный Railway service с start command:
+
+```text
+python run_payment_worker.py
+```
+
+Worker watch-only и не имеет signing/private-key/send capability.
+
+Public checkout должен оставаться OFF до controlled end-to-end acceptance.
+
+### 15.4 Gram Treasury
+
+Production admin custodial public address, показанный UI:
+
+```text
+UQARaLE231LslLaQtra38Z8G5DQAZBXm90_lQwHNuyqGpeo0
+```
+
+PR `#446` добавил safe watch-only Treasury setup, но реальная попытка production setup не завершилась: после Confirm + Refresh UI всё ещё показывает:
+
+```text
+Treasury / payments: — [not configured]
+Mode: not configured
+USDT on Gram: WAITING: set admin wallet as Treasury
+```
+
+Это текущий blocker. Не считать Treasury configured.
+
+PR `#448` уже production и добавляет `🧾 Treasury diagnostics`, чтобы получить безопасное runtime evidence вместо догадок. Исторический schema-код подтверждает, что `seed_encrypted` объявлен nullable; гипотезу `NOT NULL` не принимать за факт без production diagnostics.
+
+### 15.5 Treasury Withdraw
+
+PR `#447` merged: admin-only Gram + USDT withdrawal flow реализован, но real-money gates должны оставаться OFF:
+
+```env
+VELIA_GRAM_TREASURY_WITHDRAW_ENABLED=false
+VELIA_GRAM_TREASURY_USDT_WITHDRAW_ENABLED=false
+```
+
+Эти flags относятся к `deepalpha-bot`, не к `velia-payment-worker`.
+
+После успешного Treasury setup нужен controlled mainnet acceptance:
+
+```text
+минимальный Gram withdrawal
+→ on-chain tx + receive verification
+→ затем минимальный USDT-on-Gram withdrawal
+```
+
+До этого не объявлять withdraw production-accepted.
+
+### 15.6 Следующие обязательные шаги
+
+1. Получить `🧾 Treasury diagnostics` из production Telegram admin.
+2. Зафиксировать exact safe failure code/state.
+3. Исправить root cause Treasury setup отдельным PR + regression test.
+4. После green exact-head gates можно merge без повторного вопроса владельцу.
+5. Подтвердить production deploy и реальный UI Treasury state.
+6. Поставить тот же Gram public address в `VELIA_PAYMENT_TON_DEPOSIT_ADDRESS` worker-а.
+7. Запустить сначала только Gram watcher при public checkout OFF и проверить реальный successful poll.
+8. Провести минимальный Gram withdrawal test.
+9. Провести минимальный USDT-on-Gram withdrawal test.
+10. Перепроверить/закрыть gap controlled test-intent при `VELIA_USDT_CHECKOUT_ENABLED=false`.
+11. Провести incoming USDT exactly-once acceptance.
+12. Затем по одной сети принять TRON и Solana.
+13. Только после этого обсуждать включение public USDT checkout.
+14. Google Play вести отдельным activation-треком.
+
+### 15.7 Secret boundary
+
+Никогда не публиковать и не просить в чат:
+
+- seed/mnemonic/private key;
+- `MASTER_ENCRYPTION_KEY`;
+- RPC API keys;
+- Railway secret values;
+- Google service-account JSON;
+- bot token;
+- GitHub installation token/private key.
+
+Public receiving addresses не являются секретами.
