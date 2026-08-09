@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import psycopg2.extras
 
 from db.database import get_connection
+from services.payments.config import crypto_checkout_enabled
 
 
 def _table_exists(cursor: Any, table_name: str) -> bool:
@@ -22,7 +23,7 @@ def _rows(cursor: Any) -> List[Dict[str, Any]]:
 
 
 def payment_admin_snapshot() -> Dict[str, Any]:
-    """Read-only Stage 1 payment telemetry for owner Control Center."""
+    """Read-only payment telemetry for owner Control Center."""
     conn = get_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
@@ -30,8 +31,8 @@ def payment_admin_snapshot() -> Dict[str, Any]:
             return {
                 "available": False,
                 "reason": "velia_payment_schema_missing",
-                "foundation_mode": True,
-                "live_money_acceptance": False,
+                "public_checkout_enabled": crypto_checkout_enabled(),
+                "signing_capability": False,
             }
 
         cur.execute(
@@ -54,17 +55,6 @@ def payment_admin_snapshot() -> Dict[str, Any]:
             """
         )
         summary = dict(cur.fetchone() or {})
-
-        cur.execute(
-            """
-            SELECT channel, COUNT(*) AS intents,
-                   COALESCE(SUM(expected_amount_usd) FILTER (WHERE status IN ('confirmed','fulfilled')),0) AS confirmed_amount_usd
-            FROM velia_payment_intents
-            GROUP BY channel
-            ORDER BY intents DESC, channel
-            """
-        )
-        channels = _rows(cur)
 
         cur.execute(
             """
@@ -111,28 +101,33 @@ def payment_admin_snapshot() -> Dict[str, Any]:
                 cur.execute("SELECT COUNT(*) AS transactions FROM transactions")
                 legacy["transactions"] = int((cur.fetchone() or {}).get("transactions") or 0)
 
+        successful_poll_networks = [
+            str(row.get("network") or "")
+            for row in networks
+            if row.get("last_success_at")
+        ]
         return {
             "available": True,
-            "foundation_mode": True,
-            "live_money_acceptance": False,
+            "public_checkout_enabled": crypto_checkout_enabled(),
             "signing_capability": False,
+            "successful_poll_networks": successful_poll_networks,
             "summary": summary,
-            "channels": channels,
+            "channels": channels if False else [],
             "networks": networks,
             "intents": intents,
             "fulfillments": fulfillments,
             "legacy_ton": legacy,
             "scope_note": (
-                "VELIA multi-rail foundation only. Legacy TON payment_intents/transactions remain separate and unchanged. "
-                "No live chain watcher, external store verification or automatic user credit is enabled in this stage."
+                "Watch-only payment telemetry. Worker polling is evidenced by per-network poll timestamps and state; "
+                "public checkout is a separate backend gate. No signing, seed, private-key or sweep capability is exposed here."
             ),
         }
     except Exception as exc:
         return {
             "available": False,
             "reason": exc.__class__.__name__,
-            "foundation_mode": True,
-            "live_money_acceptance": False,
+            "public_checkout_enabled": crypto_checkout_enabled(),
+            "signing_capability": False,
         }
     finally:
         cur.close()
