@@ -120,6 +120,7 @@ jobs:
           telegram = Path("services/velia_admin_telegram_auth_service.py").read_text(encoding="utf-8")
           auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
           mobile_ui = Path("services/velia_admin_mobile_ui_patch.py").read_text(encoding="utf-8")
+          observability = Path("services/velia_admin_observability_service.py").read_text(encoding="utf-8")
           memory_recall_admin = Path("services/velia_admin_agent_memory_recall_patch.py").read_text(encoding="utf-8")
           economy = Path("services/velia_admin_economy_service.py").read_text(encoding="utf-8")
           economy_v02 = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
@@ -152,7 +153,9 @@ jobs:
           assert "UPDATE settings" not in mobile_ui
           assert "UPDATE token_packages" not in mobile_ui
           assert "install_admin_mobile_ui_patch(admin_routes_module)" in bootstrap
-          assert "install_agent_memory_recall_admin(admin_routes_module)" in bootstrap
+          assert "install_agent_memory_recall_admin" not in bootstrap
+          assert "install_agent_memory_recall_admin(admin_routes_module)" in observability
+          assert observability.index("admin_routes_module.memory_queue_snapshot = memory_queue_snapshot") < observability.rindex("install_agent_memory_recall_admin(admin_routes_module)")
           assert "Authorization" not in memory_recall_admin
           assert "VELIA_MEMORY_API_KEY" not in memory_recall_admin
           assert '"items"' not in memory_recall_admin
