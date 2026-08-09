@@ -7,6 +7,8 @@ on:
 jobs:
   gram-treasury-withdraw:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout exact PR head
         uses: actions/checkout@v4
@@ -40,6 +42,33 @@ jobs:
       - name: Treasury withdrawal targeted tests
         run: |
           pytest -q tests/test_gram_treasury_withdrawal_service.py
+
+      - name: TEP-74 offline signed transfer probe
+        run: |
+          python - <<'PY'
+          from services.ton_wallet_service import _generate_wallet_real, _wallet_from_mnemonic, _extract_boc_from_transfer
+          from services.gram_treasury_withdrawal_service import _build_usdt_transfer_payload, _build_jetton_wallet_transfer
+
+          source_seed, source_address, _ = _generate_wallet_real()
+          _, destination_address, _ = _generate_wallet_real()
+          _, jetton_wallet_address, _ = _generate_wallet_real()
+
+          body = _build_usdt_transfer_payload(
+              destination_address=destination_address,
+              response_destination=source_address,
+              amount_raw=1_000_001,
+              memo='offline-probe',
+              query_id=42,
+          )
+          assert body.to_boc(False)
+
+          wallet, _public_key, _private_key, regenerated = _wallet_from_mnemonic(source_seed)
+          assert regenerated == source_address
+          transfer = _build_jetton_wallet_transfer(wallet, jetton_wallet_address, 0, body)
+          boc = _extract_boc_from_transfer(transfer)
+          assert boc and len(boc) > 20
+          print('TEP-74 offline signed transfer probe: OK')
+          PY
 
       - name: Existing Treasury and Gram security regression
         run: |
