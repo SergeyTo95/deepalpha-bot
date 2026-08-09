@@ -51,6 +51,12 @@ async def _body(request: web.Request) -> Dict[str, Any]:
 
 
 def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -> None:
+    # Install the prompt layer at the final Agent bootstrap point. It is inert
+    # while VELIA_AGENT_BUILDER_ENABLED is false and never changes ordinary chats.
+    from services import velia_chat_service as chat_service
+    from services.velia_agent_builder_chat_patch import install as install_builder_chat
+
+    install_builder_chat(chat_service)
     if app.get("velia_agent_builder_routes_installed"):
         return
 
