@@ -1,0 +1,32 @@
+name: Gram Admin Status Codemod
+
+on:
+  push:
+    branches:
+      - feature/gram-admin-treasury-v1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[gram-admin-status-codemod]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/gram-admin-treasury-v1
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python scripts/apply_gram_admin_status_compat.py
+      - run: python -m py_compile bot/admin.py
+      - name: Commit compatibility fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot/admin.py
+          git diff --cached --quiet && { echo "No generated change"; exit 1; }
+          git commit -m "fix: preserve Gram wallet status output contract"
+          git push origin HEAD:feature/gram-admin-treasury-v1
