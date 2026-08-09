@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from services import velia_agent_builder_chat_patch as chat_patch
+from services import velia_agent_builder_routes as builder_routes
 from services import velia_agent_builder_service as builder
 
 
@@ -53,6 +54,22 @@ def test_public_capability_does_not_expose_hidden_guidance_or_private_metadata()
     assert "instructions" not in public
     assert "provenance" not in public
     assert "source" not in public
+
+
+def test_public_agent_contract_uses_conversation_scope_not_internal_memory_mode():
+    public = builder_routes._public_agent(
+        {
+            "id": "agent-1",
+            "name": "Atlas",
+            "memory_mode": "isolated",
+            "brain": "Velyon Core",
+        }
+    )
+    assert public["id"] == "agent-1"
+    assert public["name"] == "Atlas"
+    assert public["brain"] == "Velyon Core"
+    assert public["context_scope"] == "conversation"
+    assert "memory_mode" not in public
 
 
 def test_text_normalization_is_bounded_and_required_values_fail_closed():
@@ -138,6 +155,8 @@ def test_public_builder_source_keeps_hidden_origins_out_of_mobile_contract():
     service_source = open("services/velia_agent_builder_service.py", encoding="utf-8").read()
     assert '"brain": "Velyon Core"' in routes_source
     assert '"product": "VELIA"' in routes_source
+    assert '"dedicated_long_term_agent_memory": False' in routes_source
+    assert '"conversation_scoped_agent_context": True' in routes_source
     assert "private_provenance_json" in service_source
     assert "private_provenance_json" not in routes_source
     assert "instructions" not in builder._capability_public(
