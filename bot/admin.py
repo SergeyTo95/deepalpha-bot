@@ -393,10 +393,15 @@ def _admin_set_watch_only_treasury_tx(user_id: int, wallet_id: int, admin_user_i
         conn.commit()
         logger.info("GRAM_ADMIN_TREASURY_CONFIGURED wallet=%s mode=watch_only", _mask_ton_admin(address))
         return {"ok": True, "watch_only": True, "address": address}
-    except Exception:
+    except Exception as exc:
         conn.rollback()
         logger.exception("GRAM_ADMIN_TREASURY_CONFIGURE_FAILED")
-        return {"ok": False, "error": "treasury_configure_failed"}
+        return {
+            "ok": False,
+            "error": "treasury_configure_failed",
+            "error_class": exc.__class__.__name__,
+            "sqlstate": str(getattr(exc, "pgcode", "") or ""),
+        }
     finally:
         conn.close()
 
@@ -571,6 +576,71 @@ def restore_archived_ton_wallet_manually(*_args, **_kwargs):
     raise RuntimeError("Manual maintenance restore only: use a controlled DB runbook, not Telegram admin callbacks.")
 
 
+
+def _get_cashier_payment_wallet_diagnostics() -> dict:
+    """Return public-only Treasury row diagnostics; never fetch or expose secret material."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id,wallet_address,network,status,
+                      CASE WHEN seed_encrypted IS NULL THEN 'watch-only' ELSE 'managed' END AS custody_mode
+               FROM cashier_payment_wallets
+               ORDER BY id ASC"""
+        )
+        rows = cur.fetchall() or []
+        normalized = []
+        for row in rows:
+            normalized.append({
+                "id": int(row[0]),
+                "wallet_address": str(row[1] or ""),
+                "network": str(row[2] or ""),
+                "status": str(row[3] or ""),
+                "custody_mode": str(row[4] or "unknown"),
+            })
+        return {"ok": True, "rows": normalized}
+    except Exception as exc:
+        logger.exception("GRAM_TREASURY_DIAGNOSTICS_FAILED")
+        return {
+            "ok": False,
+            "error": "treasury_diagnostics_failed",
+            "error_class": exc.__class__.__name__,
+            "sqlstate": str(getattr(exc, "pgcode", "") or ""),
+            "rows": [],
+        }
+    finally:
+        conn.close()
+
+
+def _format_cashier_payment_wallet_diagnostics() -> str:
+    result = _get_cashier_payment_wallet_diagnostics()
+    lines = ["🧾 Gram Treasury diagnostics", ""]
+    if not result.get("ok"):
+        lines.append(f"Status: FAILED ({result.get('error')})")
+        lines.append(f"Error class: {result.get('error_class') or 'unknown'}")
+        if result.get("sqlstate"):
+            lines.append(f"SQLSTATE: {result.get('sqlstate')}")
+        lines.append("No secret values are displayed.")
+        return "\n".join(lines)
+
+    rows = result.get("rows") or []
+    admin_wallet = _get_admin_gram_wallet_summary()
+    admin_address = str(admin_wallet.get("wallet_address") or "")
+    active_count = sum(1 for row in rows if str(row.get("status") or "").lower() == "active")
+    lines.append(f"Rows: {len(rows)} total / {active_count} active")
+    if not rows:
+        lines.append("No cashier/Treasury rows exist.")
+    for row in rows:
+        address = str(row.get("wallet_address") or "")
+        marker = " ← admin address" if admin_address and address == admin_address else ""
+        lines.append(
+            f"#{row.get('id')} | {_mask_ton_admin(address)}{marker}\n"
+            f"status={row.get('status') or 'unknown'} | network={row.get('network') or 'unknown'} | mode={row.get('custody_mode') or 'unknown'}"
+        )
+    lines.append("")
+    lines.append("Public metadata only. Seed/private-key material is never queried or shown.")
+    return "\n".join(lines)
+
 def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
     status = get_ton_wallet_runtime_status()
     conn = get_connection()
@@ -661,6 +731,7 @@ def admin_gram_wallets_kb() -> InlineKeyboardMarkup:
     elif admin_wallet.get("ok") and cashier_address == admin_address:
         kb.add(InlineKeyboardButton("✅ Admin wallet = Treasury", callback_data="admin_gram_wallets_noop"))
 
+    kb.add(InlineKeyboardButton("🧾 Treasury diagnostics", callback_data="admin_gram_wallets_treasury_diag"))
     kb.add(InlineKeyboardButton("🔍 Search by user_id", callback_data="admin_gram_wallets_search"))
     kb.add(InlineKeyboardButton("🔎 Search by wallet address", callback_data="admin_gram_wallets_search_address"))
     kb.add(InlineKeyboardButton(("🛑 Disable WebApp wallets" if web_enabled else "✅ Enable WebApp wallets"), callback_data="admin_gram_wallets_toggle_web"))
@@ -1916,6 +1987,19 @@ def register_admin(dp: Dispatcher):
             return
         await callback.answer("Already configured")
 
+    @dp.callback_query_handler(lambda c: str(c.data or "") == "admin_gram_wallets_treasury_diag")
+    async def admin_gram_wallets_treasury_diag(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+        await callback.message.edit_text(
+            _format_cashier_payment_wallet_diagnostics(),
+            reply_markup=InlineKeyboardMarkup(row_width=1).add(
+                InlineKeyboardButton("⬅️ Back to Gram Wallets", callback_data="admin_gram_wallets")
+            ),
+        )
+        await callback.answer()
+
     @dp.callback_query_handler(lambda c: str(c.data or "").startswith("admin_gram_wallets_show:"))
     async def admin_gram_wallets_show(callback: types.CallbackQuery):
         if not is_admin(callback.from_user.id):
@@ -2187,8 +2271,18 @@ def register_admin(dp: Dispatcher):
             return
         result = _admin_set_watch_only_treasury_tx(ADMIN_ID, int(parts[1]), callback.from_user.id)
         if not result.get("ok"):
-            await callback.answer(f"Treasury not changed: {result.get('error')}", show_alert=True)
-            await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
+            error_code = str(result.get("error") or "unknown")
+            await callback.answer(f"Treasury not changed: {error_code}", show_alert=True)
+            diagnostic = f"⚠️ Last Treasury setup error: {error_code}"
+            if result.get("error_class"):
+                diagnostic += f"\nError class: {result.get('error_class')}"
+            if result.get("sqlstate"):
+                diagnostic += f"\nSQLSTATE: {result.get('sqlstate')}"
+            diagnostic += "\nNo secret values are displayed."
+            await callback.message.edit_text(
+                admin_gram_wallets_text() + "\n\n" + diagnostic,
+                reply_markup=admin_gram_wallets_kb(),
+            )
             return
         await callback.answer("✅ Watch-only Treasury configured", show_alert=True)
         await callback.message.edit_text(admin_gram_wallets_text(), reply_markup=admin_gram_wallets_kb())
