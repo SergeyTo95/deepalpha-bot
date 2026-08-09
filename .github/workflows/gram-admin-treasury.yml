@@ -5,6 +5,7 @@ on:
     paths:
       - 'bot/admin.py'
       - 'tests/test_gram_admin_treasury_panel.py'
+      - 'tests/test_gram_treasury_diagnostics.py'
       - '.github/workflows/gram-admin-treasury.yml'
   workflow_dispatch:
 
@@ -37,7 +38,7 @@ jobs:
         run: python -m pip install pytest
 
       - name: Gram admin Treasury safety tests
-        run: pytest -q tests/test_gram_admin_treasury_panel.py
+        run: pytest -q tests/test_gram_admin_treasury_panel.py tests/test_gram_treasury_diagnostics.py
 
       - name: Secret and money-gate boundary
         run: |
