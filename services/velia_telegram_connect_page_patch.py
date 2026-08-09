@@ -106,4 +106,18 @@ def install(
         return await handler(request)
 
     app.middlewares.append(telegram_connect_page_middleware)
+
+    # Conversation UX v2 is installed here because this established runtime patch
+    # already receives the fully configured aiohttp app after the base mobile chat
+    # routes have been registered but before aiohttp freezes the router. The
+    # ordering patch changes only the list function that the existing handler
+    # resolves at request time; merge/share/reorder use unique additive routes.
+    import services.velia_chat_service as chat_service_module
+    import velia_mobile_routes as mobile_routes_module
+    from services.velia_conversation_ux_routes import setup_velia_conversation_ux_routes
+    from services.velia_conversation_ux_service import install_conversation_ordering
+
+    install_conversation_ordering(chat_service_module, mobile_routes_module)
+    setup_velia_conversation_ux_routes(app, mobile_routes_module)
+
     app["velia_telegram_connect_page_patch_installed"] = True
