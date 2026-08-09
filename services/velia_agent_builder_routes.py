@@ -73,7 +73,8 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 "product": "VELIA",
                 "brain": "Velyon Core",
                 "custom_agents": True,
-                "isolated_agent_memory": True,
+                "conversation_scoped_agent_context": True,
+                "dedicated_long_term_agent_memory": False,
                 "child_conversations": True,
                 "external_actions_still_permission_gated": True,
             }
