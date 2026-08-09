@@ -337,10 +337,18 @@ def _admin_set_watch_only_treasury_tx(user_id: int, wallet_id: int, admin_user_i
         if not validate_ton_address(address):
             conn.rollback(); return {"ok": False, "error": "invalid_gram_address"}
 
-        network = str(row[3] or os.getenv("TON_NETWORK", "mainnet") or "mainnet").strip().lower()
-        if "test" in network or network not in {"mainnet", "-239"}:
+        runtime_network = str(os.getenv("TON_NETWORK", "testnet") or "testnet").strip().lower()
+        legacy_wallet_network = str(row[3] or "").strip().lower()
+        if runtime_network != "mainnet":
             conn.rollback(); return {"ok": False, "error": "treasury_requires_mainnet"}
         canonical_network = "mainnet"
+        if legacy_wallet_network and legacy_wallet_network != canonical_network:
+            logger.warning(
+                "GRAM_ADMIN_TREASURY_LEGACY_NETWORK_METADATA wallet=%s stored_network=%s runtime_network=%s",
+                _mask_ton_admin(address),
+                legacy_wallet_network,
+                runtime_network,
+            )
 
         cur.execute(
             """SELECT id,wallet_address,status
