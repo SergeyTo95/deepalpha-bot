@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from services import velia_admin_control_service as control
+from services.velia_admin_agent_memory_recall_patch import install as install_agent_memory_recall_admin
 
 
 def _reason(exc: Exception) -> str:
@@ -96,8 +97,12 @@ def overview_snapshot() -> Dict[str, Any]:
 
 
 def install(admin_routes_module: Any) -> None:
-    """Rebind only the web Control Center read-side telemetry functions."""
+    """Rebind web Control Center telemetry, then apply read-only extensions."""
     if getattr(admin_routes_module, "_velia_admin_observability_installed", False):
+        # The recall extension is idempotent and belongs outside the base
+        # observability surface. Re-assert it for callers that invoke install()
+        # again after dynamic patching.
+        install_agent_memory_recall_admin(admin_routes_module)
         return
     admin_routes_module.overview_snapshot = overview_snapshot
     admin_routes_module.ai_snapshot = ai_snapshot
@@ -105,3 +110,7 @@ def install(admin_routes_module: Any) -> None:
     admin_routes_module.memory_queue_snapshot = memory_queue_snapshot
     admin_routes_module.velyon_memory_health = velyon_memory_health
     admin_routes_module._velia_admin_observability_installed = True
+    # Must be last. This extension wraps memory_queue_snapshot, and installing it
+    # in the earlier economy/bootstrap stage would be overwritten by the rebinding
+    # immediately above during normal run_web_process startup.
+    install_agent_memory_recall_admin(admin_routes_module)
