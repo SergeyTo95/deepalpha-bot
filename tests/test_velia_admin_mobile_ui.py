@@ -43,6 +43,12 @@ def test_mobile_patch_is_idempotent_and_presentation_only():
     assert "data-label='Action'" in rendered
     assert "class='mobile-colspan' data-label=''" in rendered
 
+    # Android/Telegram WebView must retain native one-finger vertical scrolling.
+    assert "overflow-y:auto!important" in rendered
+    assert "overscroll-behavior-y:auto" in rendered
+    assert "touch-action:pan-y pinch-zoom" in rendered
+    assert "overscroll-behavior-y:contain" not in rendered
+
     # The patch must not introduce data/billing/auth mutations.
     source = open("services/velia_admin_mobile_ui_patch.py", encoding="utf-8").read()
     for forbidden in (
