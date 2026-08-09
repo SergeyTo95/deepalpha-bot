@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-import requests
 
 from services import velia_agent_memory_recall_chat_patch as chat_patch
 from services import velia_agent_memory_recall_runtime_service as runtime_guard
@@ -160,8 +159,23 @@ def test_recall_context_never_calls_memory_for_ordinary_conversation(monkeypatch
     assert called == []
 
 
+def test_runtime_guard_is_zero_cost_when_recall_disabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runtime_guard, "recall_enabled", lambda: False)
+    monkeypatch.setattr(runtime_guard.builder, "builder_enabled", lambda: True)
+    monkeypatch.setattr(
+        runtime_guard.builder,
+        "session_for_conversation",
+        lambda *args: calls.append(("session", args)) or {"status": "active"},
+    )
+    monkeypatch.setattr(runtime_guard, "_recall_context", lambda *args: calls.append(("recall", args)) or "memory")
+    assert runtime_guard.recall_context_for_conversation(7, "conversation-1") == ""
+    assert calls == []
+
+
 def test_runtime_guard_requires_builder_and_active_agent_session(monkeypatch):
     calls = []
+    monkeypatch.setattr(runtime_guard, "recall_enabled", lambda: True)
     monkeypatch.setattr(runtime_guard.builder, "builder_enabled", lambda: False)
     monkeypatch.setattr(runtime_guard, "_recall_context", lambda *args: calls.append(args) or "memory")
     assert runtime_guard.recall_context_for_conversation(7, "conversation-1") == ""
@@ -219,7 +233,7 @@ def test_probe_is_read_only_atomic_search(monkeypatch):
     probe = recall.probe_atomic_search_support()
     assert probe["supported"] is True
     assert probe["status"] == "online"
-    assert probe["contract"] if "contract" in probe else probe["result_shape"] == "v3_atomic_search"
+    assert probe["result_shape"] == "v3_atomic_search"
     assert captured["memory_agent_id"] == "velia-agent:compatibility-probe"
     assert captured["limit"] == 1
 
