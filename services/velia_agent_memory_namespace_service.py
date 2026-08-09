@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
-from services import velia_agent_builder_service as builder
+from db.database import get_connection
 
 _NAMESPACE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 
@@ -22,41 +22,76 @@ def _namespace_for_agent(agent_id: str) -> str:
     return namespace
 
 
+def _row_value(row, key: str, index: int = 0):
+    if isinstance(row, dict):
+        return row.get(key)
+    if row is None:
+        return None
+    try:
+        return row[index]
+    except (IndexError, TypeError):
+        return None
+
+
 def resolve_memory_namespace(user_id: int, conversation_id: str) -> Dict[str, Optional[str]]:
-    """Resolve an internal Velyon Memory namespace from server-owned Agent state.
+    """Resolve an internal Velyon Memory namespace from persistent Agent state.
 
-    Ordinary VELIA conversations intentionally return no override and therefore
-    keep the existing configured main-memory agent id. A conversation linked to
-    a custom VELIA Agent receives one stable namespace shared by all of that
-    Agent's root/child conversations while the memory service's session_id
-    remains the concrete conversation id.
+    Resolution intentionally does not depend on the Agent Builder feature flag or
+    active session status. A queued memory event can be delivered after an Agent
+    is archived or the product flag is temporarily disabled without being mixed
+    into the ordinary VELIA namespace.
 
-    The caller must treat resolver failures as a memory-capture failure, not as
-    permission to fall back an Agent conversation into the ordinary namespace.
+    Ordinary VELIA conversations return no agent override and keep the existing
+    configured main-memory agent id. Root and child conversations belonging to
+    one custom VELIA Agent share one memory agent namespace while retaining their
+    concrete conversation id as the Velyon Memory session id.
     """
 
     clean_conversation = str(conversation_id or "").strip()
     if int(user_id) <= 0 or not clean_conversation:
         raise AgentMemoryNamespaceError("velia_agent_memory_identity_invalid")
 
-    if not builder.builder_enabled():
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT to_regclass('public.velia_agent_sessions')")
+        table_row = cursor.fetchone()
+        if not _row_value(table_row, "to_regclass", 0):
+            return {
+                "scope": "velia",
+                "agent_id": None,
+                "session_id": clean_conversation,
+            }
+
+        cursor.execute(
+            """
+            SELECT agent_id
+            FROM velia_agent_sessions
+            WHERE user_id=%s AND conversation_id=%s
+            LIMIT 1
+            """,
+            (int(user_id), clean_conversation),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "scope": "velia",
+                "agent_id": None,
+                "session_id": clean_conversation,
+            }
+
+        agent_id = str(_row_value(row, "agent_id", 0) or "").strip()
         return {
-            "scope": "velia",
-            "agent_id": None,
+            "scope": "agent",
+            "agent_id": _namespace_for_agent(agent_id),
             "session_id": clean_conversation,
         }
-
-    session = builder.session_for_conversation(int(user_id), clean_conversation)
-    if not session:
-        return {
-            "scope": "velia",
-            "agent_id": None,
-            "session_id": clean_conversation,
-        }
-
-    agent_id = str(session.get("agent_id") or "").strip()
-    return {
-        "scope": "agent",
-        "agent_id": _namespace_for_agent(agent_id),
-        "session_id": clean_conversation,
-    }
+    except AgentMemoryNamespaceError:
+        raise
+    except Exception as exc:
+        raise AgentMemoryNamespaceError(
+            f"velia_agent_memory_lookup_{exc.__class__.__name__}"
+        ) from exc
+    finally:
+        cursor.close()
+        conn.close()
