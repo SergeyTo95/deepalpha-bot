@@ -1,6 +1,10 @@
 from typing import Any, Dict, List
 
 from services import velia_admin_control_service as control
+from services.velia_admin_agent_memory_recall_patch import (
+    augment_memory_snapshot,
+    install as install_agent_memory_recall_admin,
+)
 
 
 def _reason(exc: Exception) -> str:
@@ -9,9 +13,12 @@ def _reason(exc: Exception) -> str:
 
 def memory_queue_snapshot() -> Dict[str, Any]:
     try:
-        return control.memory_queue_snapshot()
+        value = control.memory_queue_snapshot()
     except Exception as exc:
+        # Preserve the established degraded contract exactly and avoid a second
+        # network dependency when the base memory/storage snapshot is unavailable.
         return {"available": False, "reason": _reason(exc)}
+    return augment_memory_snapshot(value)
 
 
 def velyon_memory_health() -> Dict[str, Any]:
@@ -96,8 +103,9 @@ def overview_snapshot() -> Dict[str, Any]:
 
 
 def install(admin_routes_module: Any) -> None:
-    """Rebind only the web Control Center read-side telemetry functions."""
+    """Rebind web Control Center telemetry, then apply read-only UI extensions."""
     if getattr(admin_routes_module, "_velia_admin_observability_installed", False):
+        install_agent_memory_recall_admin(admin_routes_module)
         return
     admin_routes_module.overview_snapshot = overview_snapshot
     admin_routes_module.ai_snapshot = ai_snapshot
@@ -105,3 +113,7 @@ def install(admin_routes_module: Any) -> None:
     admin_routes_module.memory_queue_snapshot = memory_queue_snapshot
     admin_routes_module.velyon_memory_health = velyon_memory_health
     admin_routes_module._velia_admin_observability_installed = True
+    # Keep the established read-side function identity above. The Agent recall
+    # extension only decorates the existing Memory page presentation here; the
+    # safe diagnostic data is produced inside memory_queue_snapshot itself.
+    install_agent_memory_recall_admin(admin_routes_module)

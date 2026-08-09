@@ -21,6 +21,7 @@ from services.velia_agent_coding_autopilot_review_routes import (
 )
 from services.velia_agent_coding_autopilot_routes import setup_velia_coding_autopilot_routes
 from services.velia_agent_google_calendar_routes import setup_velia_google_calendar_routes
+from services.velia_agent_memory_recall_chat_patch import install as install_agent_memory_recall
 from services.velia_agent_protocol_service import AgentProtocolError
 from services.velia_agent_scheduler_routes import setup_velia_agent_scheduler_routes
 
@@ -53,6 +54,12 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
 def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
     install_agent_builder_guard()
     setup_velia_agent_builder_routes(app, routes_module)
+    # Builder context is installed first; recall wraps the already-configured
+    # Agent prompt so remembered context sits below the server-controlled Agent
+    # configuration and above the current conversation transcript.
+    from services import velia_chat_service as chat_service
+
+    install_agent_memory_recall(chat_service)
     setup_velia_google_calendar_routes(app, routes_module)
     # Install background-worker patches before Autopilot registers its cleanup
     # context. Review wraps the CI-aware run_once implementation, so explicit

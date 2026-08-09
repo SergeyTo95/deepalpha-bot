@@ -64,6 +64,7 @@ jobs:
             services/velia_admin_telegram_bridge.py \
             services/velia_admin_user_display_service.py \
             services/velia_admin_mobile_ui_patch.py \
+            services/velia_admin_agent_memory_recall_patch.py \
             services/velia_admin_economy_service.py \
             services/velia_admin_economy_routes.py \
             services/velia_admin_economy_bootstrap_service.py \
@@ -101,6 +102,7 @@ jobs:
             tests/test_velia_control_center_login_origin.py \
             tests/test_velia_admin_user_display.py \
             tests/test_velia_admin_mobile_ui.py \
+            tests/test_velia_admin_agent_memory_recall.py \
             tests/test_velia_admin_economy.py \
             tests/test_velia_economy_v02.py \
             tests/test_velia_payment_foundation.py \
@@ -118,6 +120,8 @@ jobs:
           telegram = Path("services/velia_admin_telegram_auth_service.py").read_text(encoding="utf-8")
           auth = Path("services/velia_admin_security_service.py").read_text(encoding="utf-8")
           mobile_ui = Path("services/velia_admin_mobile_ui_patch.py").read_text(encoding="utf-8")
+          observability = Path("services/velia_admin_observability_service.py").read_text(encoding="utf-8")
+          memory_recall_admin = Path("services/velia_admin_agent_memory_recall_patch.py").read_text(encoding="utf-8")
           economy = Path("services/velia_admin_economy_service.py").read_text(encoding="utf-8")
           economy_v02 = Path("services/velia_admin_economy_v02_service.py").read_text(encoding="utf-8")
           economy_v02_ui = Path("services/velia_admin_economy_v02_ui_patch.py").read_text(encoding="utf-8")
@@ -142,12 +146,21 @@ jobs:
           assert 'normalized != "/admin/login"' in security
           assert "setup_velia_admin_economy(app, admin_routes_module)" in security
 
-          # Mobile UI remains presentation-only and cannot mutate data/auth.
+          # Mobile UI and Agent recall diagnostics remain presentation/read-only
+          # layers and cannot mutate data/auth or expose private memory payloads.
           assert "get_connection" not in mobile_ui
           assert "UPDATE users" not in mobile_ui
           assert "UPDATE settings" not in mobile_ui
           assert "UPDATE token_packages" not in mobile_ui
           assert "install_admin_mobile_ui_patch(admin_routes_module)" in bootstrap
+          assert "install_agent_memory_recall_admin" not in bootstrap
+          assert "install_agent_memory_recall_admin(admin_routes_module)" in observability
+          assert observability.index("admin_routes_module.memory_queue_snapshot = memory_queue_snapshot") < observability.rindex("install_agent_memory_recall_admin(admin_routes_module)")
+          assert "Authorization" not in memory_recall_admin
+          assert "VELIA_MEMORY_API_KEY" not in memory_recall_admin
+          assert '"items"' not in memory_recall_admin
+          assert '"content"' not in memory_recall_admin
+          assert "probe_atomic_search_support" in memory_recall_admin
 
           # Economy drafts remain isolated from live billing/runtime balances.
           assert "UPDATE settings" not in economy
