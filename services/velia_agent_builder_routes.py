@@ -16,6 +16,13 @@ def _auth(routes_module: Any, request: web.Request) -> Optional[Dict[str, Any]]:
     return routes_module._require_mobile_auth(request)
 
 
+def _public_agent(value: Any) -> Dict[str, Any]:
+    item = dict(value or {}) if isinstance(value, dict) else {}
+    item.pop("memory_mode", None)
+    item["context_scope"] = "conversation"
+    return item
+
+
 def _json_error(routes_module: Any, exc: Exception) -> web.Response:
     if isinstance(exc, builder.AgentBuilderError):
         return routes_module._json_response(
@@ -113,7 +120,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
             items = await asyncio.to_thread(builder.list_agents, int(auth["user_id"]))
-            return routes_module._json_response({"ok": True, "agents": items})
+            return routes_module._json_response({"ok": True, "agents": [_public_agent(item) for item in items]})
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -135,7 +142,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 capability_ids=payload.get("capability_ids"),
                 can_create_chats=bool(payload.get("can_create_chats", False)),
             )
-            return routes_module._json_response({"ok": True, "agent": item}, status=201)
+            return routes_module._json_response({"ok": True, "agent": _public_agent(item)}, status=201)
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -152,7 +159,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 int(auth["user_id"]),
                 request.match_info["agent_id"],
             )
-            return routes_module._json_response({"ok": True, "agent": item})
+            return routes_module._json_response({"ok": True, "agent": _public_agent(item)})
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -171,7 +178,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 request.match_info["agent_id"],
                 payload,
             )
-            return routes_module._json_response({"ok": True, "agent": item})
+            return routes_module._json_response({"ok": True, "agent": _public_agent(item)})
         except Exception as exc:
             return _json_error(routes_module, exc)
 
