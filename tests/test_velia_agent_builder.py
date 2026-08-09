@@ -57,7 +57,7 @@ def test_public_capability_does_not_expose_hidden_guidance_or_private_metadata()
     assert "source" not in public
 
 
-def test_public_agent_contract_uses_conversation_scope_not_internal_memory_mode():
+def test_public_agent_contract_uses_conversation_context_and_agent_memory_scope():
     public = builder_routes._public_agent(
         {
             "id": "agent-1",
@@ -70,6 +70,7 @@ def test_public_agent_contract_uses_conversation_scope_not_internal_memory_mode(
     assert public["name"] == "Atlas"
     assert public["brain"] == "Velyon Core"
     assert public["context_scope"] == "conversation"
+    assert public["memory_scope"] == "agent"
     assert "memory_mode" not in public
 
 
@@ -242,7 +243,8 @@ def test_public_builder_source_keeps_hidden_origins_out_of_mobile_contract():
     agent_routes_source = open("services/velia_agent_routes.py", encoding="utf-8").read()
     assert '"brain": "Velyon Core"' in routes_source
     assert '"product": "VELIA"' in routes_source
-    assert '"dedicated_long_term_agent_memory": False' in routes_source
+    assert '"dedicated_long_term_agent_memory": True' in routes_source
+    assert '"memory_scope": "agent"' in routes_source
     assert '"conversation_scoped_agent_context": True' in routes_source
     assert "private_provenance_json" in service_source
     assert "private_provenance_json" not in routes_source
