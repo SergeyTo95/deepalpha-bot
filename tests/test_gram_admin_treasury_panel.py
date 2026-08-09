@@ -56,6 +56,18 @@ def test_watch_only_treasury_assignment_is_locked_and_fail_closed():
     assert "DELETE FROM cashier_payment_wallets" not in src
 
 
+def test_watch_only_treasury_mainnet_gate_uses_runtime_not_legacy_wallet_metadata():
+    src = _function_source("_admin_set_watch_only_treasury_tx")
+    assert 'runtime_network = str(os.getenv("TON_NETWORK", "testnet") or "testnet").strip().lower()' in src
+    assert 'legacy_wallet_network = str(row[3] or "").strip().lower()' in src
+    assert 'if runtime_network != "mainnet"' in src
+    assert 'canonical_network = "mainnet"' in src
+    assert 'GRAM_ADMIN_TREASURY_LEGACY_NETWORK_METADATA' in src
+    assert '"test" in network' not in src
+    assert 'network not in {"mainnet", "-239"}' not in src
+    assert "UPDATE user_ton_wallets SET network" not in src
+
+
 def test_treasury_promotion_requires_two_step_admin_confirmation():
     assert "admin_gram_wallets_treasury_prepare:" in ADMIN
     assert "admin_gram_wallets_treasury_confirm:" in ADMIN
