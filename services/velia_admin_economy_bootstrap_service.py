@@ -8,6 +8,7 @@ from typing import Any
 from db.database import get_connection
 from services.payments.schema import ensure_payment_tables_serialized
 from services import velia_admin_economy_routes as economy_routes_module
+from services.velia_admin_agent_memory_recall_patch import install as install_agent_memory_recall_admin
 from services.velia_admin_economy_routes import setup_velia_admin_economy_routes
 from services.velia_admin_economy_service import ensure_economy_tables
 from services.velia_admin_economy_v02_branding_service import ensure_economy_v02_branding
@@ -97,6 +98,10 @@ def setup_velia_admin_economy(app: Any, admin_routes_module: Any) -> None:
     # Presentation-only global patch: mobile navigation, touch targets, stacked
     # forms and server-labelled card tables. Auth/CSRF/routes/data stay unchanged.
     install_admin_mobile_ui_patch(admin_routes_module)
+    # Read-only Velyon Memory diagnostics. This wraps only functions that the
+    # existing owner-only Memory handler resolves at request time; no route/auth
+    # surface is added and the network probe itself runs inside to_thread.
+    install_agent_memory_recall_admin(admin_routes_module)
     # The Economy UI patch wraps the already-threaded Economy snapshot, so all
     # v0.2 DB reads stay off the aiohttp event loop. It is still read-only/draft-only.
     install_economy_v02_ui_patch(economy_routes_module)
