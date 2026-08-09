@@ -546,7 +546,7 @@ def get_public_share(token: str) -> Optional[Dict[str, Any]]:
                 continue
             safe_messages.append({
                 "role": role,
-                "content": str(item.get("content") or "")[:20_000],
+                "content": str(item.get("content") or ""),
             })
         return {
             "id": str(_row_value(row, "share_id", 0, "")),
