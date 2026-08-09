@@ -16,6 +16,7 @@ on:
       - "tests/test_velia_admin_*.py"
       - "tests/test_velia_economy_v02.py"
       - "tests/test_velia_payment_foundation.py"
+      - "tests/test_velia_payment_observability.py"
       - ".github/workflows/velia-control-center.yml"
   workflow_dispatch:
 
@@ -103,6 +104,7 @@ jobs:
             tests/test_velia_admin_economy.py \
             tests/test_velia_economy_v02.py \
             tests/test_velia_payment_foundation.py \
+            tests/test_velia_payment_observability.py \
             tests/test_velia_telegram_pairing.py \
             2>&1 | tee velia-control-center-pytest.log
 
@@ -178,20 +180,22 @@ jobs:
           assert "ensure_payment_tables_serialized" in bootstrap
           assert "setup_velia_admin_payments_routes(app, admin_routes_module)" in bootstrap
 
-          # Payment foundation is additive, watch-only and fail-closed.
+          # Payment runtime is additive, watch-only and fail-closed at signing boundaries.
           payment_text = "\n".join((payment_repo, payment_worker, payment_schema, payment_entry))
           assert "UPDATE users SET token_balance" not in payment_text
           assert "seed_encrypted" not in payment_text
           assert "send_transaction" not in payment_text
           assert "sign_transaction" not in payment_text
+          assert "send_raw_transaction" not in payment_text.lower()
           assert 'os.getenv("PRIVATE_KEY' not in payment_text
           assert '"private_key"' in payment_repo  # redaction key only
           assert "_redact_payload" in payment_repo
           assert "ALTER TABLE payment_intents" not in payment_schema
           assert "UPDATE payment_intents" not in payment_schema
-          assert '"live_money_acceptance": False' in payment_worker
+          assert "process_finalized_transfer" in payment_worker
+          assert "update_worker_state" in payment_worker
+          assert "VELIA_PAYMENT_POLL_OK" in payment_worker
           assert '"signing_capability": False' in payment_worker
-          assert "foundation_live_polling_disabled" in payment_worker
           assert "VELIA_PAYMENT_ALLOW_NONPROD_SCHEMA_BOOTSTRAP" in payment_entry
 
           # Legacy Developer API patch modules may remain initialized for
