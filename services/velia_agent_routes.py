@@ -22,6 +22,7 @@ from services.velia_agent_coding_autopilot_review_routes import (
 from services.velia_agent_coding_autopilot_routes import setup_velia_coding_autopilot_routes
 from services.velia_agent_google_calendar_routes import setup_velia_google_calendar_routes
 from services.velia_agent_memory_recall_chat_patch import install as install_agent_memory_recall
+from services.velia_agent_owner_rollout_service import install as install_agent_owner_rollout
 from services.velia_agent_protocol_service import AgentProtocolError
 from services.velia_agent_scheduler_routes import setup_velia_agent_scheduler_routes
 
@@ -52,6 +53,9 @@ def _require_enabled(routes_module: Any) -> Optional[web.Response]:
 
 
 def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
+    # Owner rollout must be installed before Builder/recall chat wrappers bind
+    # their function references. Global feature flags remain unchanged.
+    install_agent_owner_rollout(app, routes_module)
     install_agent_builder_guard()
     setup_velia_agent_builder_routes(app, routes_module)
     # Builder context is installed first; recall wraps the already-configured
