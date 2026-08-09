@@ -617,6 +617,7 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
             lines.append("Safe wallet rows (secret fields omitted):")
             for r in found_rows:
                 lines.append(f"id={r[0]} address={_mask_ton_admin(r[1])} status={r[4] or 'unknown'} balance={r[5] or 0} created_at={r[6] or '—'} seed_reveal_used={bool(r[7])}")
+                lines.append(f"Status: {r[4] or 'unknown'}")
             if len(found_rows) > 1:
                 lines.append("⚠️ wallet_conflict: resolve duplicates before Treasury assignment.")
         else:
