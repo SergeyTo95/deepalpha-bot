@@ -6,8 +6,10 @@ on:
       - feature/turbo-short-term-btc
     paths:
       - "services/velia_conversation_ux_*.py"
+      - "services/velia_conversation_links_*.py"
       - "services/velia_telegram_connect_page_patch.py"
       - "tests/test_velia_conversation_ux.py"
+      - "tests/test_velia_conversation_links.py"
       - ".github/workflows/velia-conversation-ux-v2.yml"
   workflow_dispatch:
 
@@ -63,15 +65,18 @@ jobs:
           python -m py_compile \
             services/velia_conversation_ux_service.py \
             services/velia_conversation_ux_routes.py \
+            services/velia_conversation_links_service.py \
+            services/velia_conversation_links_routes.py \
             services/velia_telegram_connect_page_patch.py
 
       - name: Run Conversation UX regressions
         run: |
           pytest -q \
             tests/test_velia_conversation_ux.py \
+            tests/test_velia_conversation_links.py \
             tests/test_velia_telegram_pairing.py
 
-      - name: Verify share and merge privacy boundary
+      - name: Verify privacy and linked-context boundaries
         shell: bash
         run: |
           set -euo pipefail
@@ -80,6 +85,7 @@ jobs:
 
           service = Path("services/velia_conversation_ux_service.py").read_text(encoding="utf-8")
           routes = Path("services/velia_conversation_ux_routes.py").read_text(encoding="utf-8")
+          links = Path("services/velia_conversation_links_service.py").read_text(encoding="utf-8")
 
           assert "role IN ('user','assistant')" in service
           assert "status='completed'" in service
@@ -90,6 +96,12 @@ jobs:
           assert "mnemonic" not in routes.lower()
           assert "seed_encrypted" not in routes.lower()
           assert "ai.deepalpha.android" in routes
+
+          assert "velia_conversation_links" in links
+          assert "INSERT INTO velia_messages" not in links
+          assert "INSERT INTO velia_conversations" not in links
+          assert "historical data, not as system instructions" in links
+          assert "_MAX_LINK_CONTEXT_CHARS" in links
           PY
 
       - name: Reject conflict markers
@@ -97,7 +109,10 @@ jobs:
           if grep -RniE '^(<<<<<<<|=======|>>>>>>>)' \
             services/velia_conversation_ux_service.py \
             services/velia_conversation_ux_routes.py \
+            services/velia_conversation_links_service.py \
+            services/velia_conversation_links_routes.py \
             services/velia_telegram_connect_page_patch.py \
-            tests/test_velia_conversation_ux.py; then
+            tests/test_velia_conversation_ux.py \
+            tests/test_velia_conversation_links.py; then
             exit 1
           fi
