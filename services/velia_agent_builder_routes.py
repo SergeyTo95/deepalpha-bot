@@ -20,6 +20,7 @@ def _public_agent(value: Any) -> Dict[str, Any]:
     item = dict(value or {}) if isinstance(value, dict) else {}
     item.pop("memory_mode", None)
     item["context_scope"] = "conversation"
+    item["memory_scope"] = "agent"
     return item
 
 
@@ -81,7 +82,8 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 "brain": "Velyon Core",
                 "custom_agents": True,
                 "conversation_scoped_agent_context": True,
-                "dedicated_long_term_agent_memory": False,
+                "dedicated_long_term_agent_memory": True,
+                "memory_scope": "agent",
                 "child_conversations": True,
                 "external_actions_still_permission_gated": True,
             }
