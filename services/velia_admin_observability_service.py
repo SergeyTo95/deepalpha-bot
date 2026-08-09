@@ -15,7 +15,9 @@ def memory_queue_snapshot() -> Dict[str, Any]:
     try:
         value = control.memory_queue_snapshot()
     except Exception as exc:
-        value = {"available": False, "reason": _reason(exc)}
+        # Preserve the established degraded contract exactly and avoid a second
+        # network dependency when the base memory/storage snapshot is unavailable.
+        return {"available": False, "reason": _reason(exc)}
     return augment_memory_snapshot(value)
 
 
