@@ -12,6 +12,7 @@ from services.velia_images_service import (
     image_metadata_for_request,
     generate_and_store_image,
 )
+from services.velia_media_worker_runtime_patch import install as install_media_worker_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,10 @@ def install(velia_chat_service_module: Any) -> None:
         return
 
     install_queue_runtime()
+    # Self-hosted mode intentionally replaces the legacy paid submitters after
+    # their compatibility patches are installed. The legacy implementations
+    # remain in code for an explicit env rollback only.
+    install_media_worker_runtime()
     original_generate = velia_chat_service_module.generate_velia_chat_result
     original_serialize = velia_chat_service_module._serialize_message
 
