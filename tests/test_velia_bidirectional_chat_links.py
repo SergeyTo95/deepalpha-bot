@@ -59,6 +59,32 @@ def test_bidirectional_service_reads_and_unlinks_either_stored_direction():
     assert source.count("(target_conversation_id=%s AND source_conversation_id=%s)") >= 2
 
 
+def test_stale_edges_are_deleted_before_peer_capacity_is_counted():
+    class RecordingCursor:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, query, params=None):
+            self.calls.append((" ".join(str(query).split()), tuple(params or ())))
+
+    cursor = RecordingCursor()
+    service._delete_inactive_edges_touching(cursor, 17, ["chat-a", "chat-b"])
+
+    assert len(cursor.calls) == 1
+    query, params = cursor.calls[0]
+    assert query.startswith("DELETE FROM velia_conversation_links AS l")
+    assert query.count("NOT EXISTS") == 2
+    assert "l.target_conversation_id IN (%s,%s)" in query
+    assert "l.source_conversation_id IN (%s,%s)" in query
+    assert params == (17, "chat-a", "chat-b", "chat-a", "chat-b")
+
+    source = Path("services/velia_conversation_links_bidirectional_service.py").read_text(encoding="utf-8")
+    cleanup_call = "_delete_inactive_edges_touching(cursor, uid, participant_ids)"
+    active_edge_call = "edges = _active_edges(cursor, uid)"
+    assert cleanup_call in source
+    assert source.index(cleanup_call) < source.index(active_edge_call)
+
+
 def test_badges_are_emitted_for_both_edge_participants():
     peers = service._peer_map([
         ("chat-a", "chat-b"),
