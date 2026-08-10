@@ -85,6 +85,56 @@ def test_stale_edges_are_deleted_before_peer_capacity_is_counted():
     assert source.index(cleanup_call) < source.index(active_edge_call)
 
 
+def test_legacy_fan_in_is_not_truncated_to_new_link_limit():
+    class PeerCursor:
+        def execute(self, _query, _params=None):
+            pass
+
+        def fetchall(self):
+            return [
+                {
+                    "peer_conversation_id": f"peer-{index}",
+                    "title": f"Peer {index}",
+                    "created_at": None,
+                }
+                for index in range(7)
+            ]
+
+    peers = service._peer_rows(PeerCursor(), 9, "legacy-source")
+
+    assert len(peers) == 7
+    assert [item["id"] for item in peers] == [f"peer-{index}" for index in range(7)]
+
+
+def test_relevant_late_legacy_peer_wins_bounded_context_selection():
+    number = "644567889975321"
+    candidates = []
+    for index in range(30):
+        candidates.append(
+            {
+                "source_id": f"peer-{index}",
+                "source_title": f"Peer {index}",
+                "role": "user",
+                "content": (
+                    f"запомни число: {number}"
+                    if index == 29
+                    else f"обычная заметка номер {index}"
+                ),
+                "created_at": None,
+                "message_id": f"m-{index}",
+            }
+        )
+
+    selected = service._select_context_messages_across_peers(
+        candidates,
+        "какое число попросил запомнить?",
+    )
+
+    assert len(selected) == 24
+    assert any(item["message_id"] == "m-29" for item in selected)
+    assert any(number in item["content"] for item in selected)
+
+
 def test_badges_are_emitted_for_both_edge_participants():
     peers = service._peer_map([
         ("chat-a", "chat-b"),
