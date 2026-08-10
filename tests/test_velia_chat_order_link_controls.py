@@ -36,6 +36,16 @@ def test_runtime_installs_pagination_safe_reorder_before_routes():
     assert source.index(assignment) < source.index("setup_velia_conversation_ux_routes(app, mobile_routes_module)")
 
 
+def test_runtime_uses_same_canonical_listing_as_reorder():
+    runtime = Path("services/velia_telegram_connect_page_patch.py").read_text(encoding="utf-8")
+    order_service = Path("services/velia_conversation_ux_order_service.py").read_text(encoding="utf-8")
+
+    assert "chat_service_module.list_conversations = list_conversations_ordered_stable" in runtime
+    assert "mobile_routes_module.list_conversations = list_conversations_ordered_stable" in runtime
+    assert "c.updated_at DESC,\n              c.conversation_id ASC" in order_service
+    assert order_service.count("c.conversation_id ASC") >= 2
+
+
 def test_link_summary_route_is_bulk_and_owner_authenticated():
     source = Path("services/velia_conversation_links_routes.py").read_text(encoding="utf-8")
     assert '"/mobile-api/v1/conversation-links/summary"' in source
