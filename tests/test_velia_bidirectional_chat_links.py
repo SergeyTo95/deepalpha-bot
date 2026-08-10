@@ -85,6 +85,39 @@ def test_stale_edges_are_deleted_before_peer_capacity_is_counted():
     assert source.index(cleanup_call) < source.index(active_edge_call)
 
 
+def test_link_mutation_locks_user_conversations_before_cleanup_and_capacity():
+    class RecordingCursor:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, query, params=None):
+            self.calls.append((" ".join(str(query).split()), tuple(params or ())))
+
+        def fetchall(self):
+            return [
+                {"conversation_id": "chat-a", "is_archived": False},
+                {"conversation_id": "chat-b", "is_archived": False},
+                {"conversation_id": "chat-old", "is_archived": True},
+            ]
+
+    cursor = RecordingCursor()
+    active = service._lock_user_conversations_for_link_mutation(cursor, 17)
+
+    assert active == {"chat-a", "chat-b"}
+    query, params = cursor.calls[0]
+    assert "FROM velia_conversations" in query
+    assert "WHERE user_id=%s AND deleted_at IS NULL" in query
+    assert "ORDER BY conversation_id ASC FOR UPDATE" in query
+    assert params == (17,)
+
+    source = Path("services/velia_conversation_links_bidirectional_service.py").read_text(encoding="utf-8")
+    lock_call = "active_ids = _lock_user_conversations_for_link_mutation(cursor, uid)"
+    cleanup_call = "_delete_inactive_edges_touching(cursor, uid, participant_ids)"
+    active_edge_call = "edges = _active_edges(cursor, uid)"
+    assert source.index(lock_call) < source.index(cleanup_call) < source.index(active_edge_call)
+
+
+
 def test_legacy_fan_in_is_not_truncated_to_new_link_limit():
     class PeerCursor:
         def execute(self, _query, _params=None):

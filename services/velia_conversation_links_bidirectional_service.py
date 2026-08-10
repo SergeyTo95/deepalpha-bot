@@ -192,6 +192,36 @@ def _delete_inactive_edges_touching(
     )
 
 
+def _lock_user_conversations_for_link_mutation(cursor, user_id: int) -> Set[str]:
+    """Stabilize archive/delete state for every existing edge endpoint.
+
+    Link mutations are infrequent, while a user's chat set is bounded in normal
+    mobile use. Locking all non-deleted conversation rows in deterministic order
+    closes the race where a linked neighbor is archived between stale cleanup and
+    capacity evaluation. Archive/delete updates then either commit before this
+    statement (and are observed) or wait until the link transaction commits.
+    """
+
+    cursor.execute(
+        """
+        SELECT conversation_id, is_archived
+        FROM velia_conversations
+        WHERE user_id=%s AND deleted_at IS NULL
+        ORDER BY conversation_id ASC
+        FOR UPDATE
+        """,
+        (int(user_id),),
+    )
+    active_ids: Set[str] = set()
+    for row in cursor.fetchall() or []:
+        conversation_id = str(_row_value(row, "conversation_id", 0, ""))
+        is_archived = bool(_row_value(row, "is_archived", 1, False))
+        if conversation_id and not is_archived:
+            active_ids.add(conversation_id)
+    return active_ids
+
+
+
 def link_conversations_bidirectional(
     user_id: int,
     conversation_id: str,
@@ -207,35 +237,15 @@ def link_conversations_bidirectional(
         raise ConversationUxError("cannot_link_conversation_to_itself")
 
     participant_ids = sorted(set([anchor_id] + peer_ids))
-    placeholders = ",".join(["%s"] * len(participant_ids))
     conn = get_connection()
     cursor = legacy._dict_cursor(conn)
     try:
-        # Every mutation involving a chat locks that stable conversation row first.
-        # This serializes concurrent link operations even when no edge row exists yet.
-        cursor.execute(
-            f"""
-            SELECT conversation_id, title
-            FROM velia_conversations
-            WHERE user_id=%s
-              AND conversation_id IN ({placeholders})
-              AND deleted_at IS NULL
-              AND is_archived=FALSE
-            ORDER BY conversation_id ASC
-            FOR UPDATE
-            """,
-            tuple([uid] + participant_ids),
-        )
-        active_ids = {
-            str(_row_value(row, "conversation_id", 0, ""))
-            for row in cursor.fetchall() or []
-        }
-        if active_ids != set(participant_ids):
+        # Stabilize every possible existing edge endpoint before cleanup/counting.
+        # This closes the archive/delete race across separate SQL statements.
+        active_ids = _lock_user_conversations_for_link_mutation(cursor, uid)
+        if not set(participant_ids).issubset(active_ids):
             raise ConversationUxError("conversation_not_found", status=404)
 
-        # Do this inside the same transaction and after locking participant rows.
-        # Otherwise an archived peer could stop counting, a replacement could take
-        # its slot, and the old edge could later resurrect as a fifth active peer.
         _delete_inactive_edges_touching(cursor, uid, participant_ids)
 
         edges = _active_edges(cursor, uid)
