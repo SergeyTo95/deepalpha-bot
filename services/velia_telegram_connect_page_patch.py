@@ -117,11 +117,18 @@ def install(
     import velia_mobile_routes as mobile_routes_module
     from services.velia_conversation_links_routes import setup_velia_conversation_links_routes
     from services.velia_conversation_links_service import install_linked_conversation_prompt
-    from services.velia_conversation_ux_order_service import reorder_visible_conversations
+    from services.velia_conversation_ux_order_service import (
+        list_conversations_ordered_stable,
+        reorder_visible_conversations,
+    )
     from services.velia_conversation_ux_routes import setup_velia_conversation_ux_routes
     from services.velia_conversation_ux_service import install_conversation_ordering
 
     install_conversation_ordering(chat_service_module, mobile_routes_module)
+    # Replace the legacy list implementation with the same canonical order used
+    # by pagination-safe reorder so equal timestamps cannot produce different pages.
+    chat_service_module.list_conversations = list_conversations_ordered_stable
+    mobile_routes_module.list_conversations = list_conversations_ordered_stable
     install_linked_conversation_prompt(chat_service_module)
     # Keep the public route contract stable while swapping in the pagination-safe
     # implementation before the route handlers are registered.
