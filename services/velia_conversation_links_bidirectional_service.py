@@ -368,6 +368,23 @@ def list_conversation_link_summaries_bidirectional(user_id: int) -> List[Dict[st
         conn.close()
 
 
+def _context_terms(value: str) -> Set[str]:
+    """Normalize lexical edge punctuation for linked-context relevance.
+
+    The legacy tokenizer intentionally keeps URL/code punctuation in tokens. For
+    conversational relevance, however, `число:` and `число` must match. Only edge
+    punctuation is stripped so meaningful punctuation inside URLs/identifiers is
+    still preserved as much as possible.
+    """
+
+    result: Set[str] = set()
+    for term in legacy._terms(value):
+        normalized = str(term).lower().strip("./:#@-")
+        if len(normalized) >= 3:
+            result.add(normalized)
+    return result
+
+
 def _select_context_messages_across_peers(
     candidates: List[Dict[str, Any]],
     query: str,
@@ -377,7 +394,7 @@ def _select_context_messages_across_peers(
     if not candidates:
         return []
     maximum = int(legacy._MAX_LINK_CONTEXT_MESSAGES)
-    query_terms = legacy._terms(query)
+    query_terms = _context_terms(query)
     selected: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     # Relevance wins globally, so a source that was historically the 15th fan-in
@@ -385,7 +402,7 @@ def _select_context_messages_across_peers(
     scored: List[Tuple[int, int, Dict[str, Any]]] = []
     for position, item in enumerate(candidates):
         overlap = (
-            len(query_terms.intersection(legacy._terms(str(item["content"]))))
+            len(query_terms.intersection(_context_terms(str(item["content"]))))
             if query_terms
             else 0
         )
