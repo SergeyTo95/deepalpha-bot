@@ -1,11 +1,12 @@
 from datetime import datetime
-from typing import Any, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 from db.database import get_connection
 from services.velia_conversation_ux_service import (
     ConversationUxError,
+    _dict_cursor,
+    _serialize_conversation,
     ensure_velia_conversation_ux_tables,
-    list_conversations_ordered,
 )
 
 
@@ -39,6 +40,52 @@ def _normalize_ids(raw_ids: Sequence[Any]) -> List[str]:
     if len(result) > _MAX_REORDER_SUBSET:
         raise ConversationUxError("too_many_conversations")
     return result
+
+
+def list_conversations_ordered_stable(
+    user_id: int,
+    *,
+    include_archived: bool = False,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Canonical mobile ordering used by both listing and drag persistence.
+
+    `conversation_id ASC` is the final deterministic tie-breaker. Without it,
+    equal timestamps can produce different page membership between the list API
+    and the reorder transaction, making a visually successful drag appear to
+    revert after refresh.
+    """
+
+    ensure_velia_conversation_ux_tables()
+    maximum = min(_MAX_REORDER_SUBSET, max(1, int(limit or 50)))
+    conn = get_connection()
+    cursor = _dict_cursor(conn)
+    try:
+        archived_clause = "" if include_archived else "AND c.is_archived=FALSE"
+        cursor.execute(
+            f"""
+            SELECT c.conversation_id, c.user_id, c.title, c.title_source,
+                   c.is_pinned, c.is_archived, c.created_at, c.updated_at,
+                   o.position
+            FROM velia_conversations AS c
+            LEFT JOIN velia_conversation_order AS o
+              ON o.user_id=c.user_id AND o.conversation_id=c.conversation_id
+            WHERE c.user_id=%s AND c.deleted_at IS NULL {archived_clause}
+            ORDER BY
+              (o.position IS NULL) DESC,
+              CASE WHEN o.position IS NULL THEN c.is_pinned ELSE FALSE END DESC,
+              CASE WHEN o.position IS NULL THEN c.updated_at END DESC,
+              o.position ASC,
+              c.updated_at DESC,
+              c.conversation_id ASC
+            LIMIT %s
+            """,
+            (int(user_id), maximum),
+        )
+        return [_serialize_conversation(row) for row in cursor.fetchall() or []]
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def merge_partial_conversation_order(
@@ -143,4 +190,8 @@ def reorder_visible_conversations(user_id: int, conversation_ids: Sequence[Any])
         cursor.close()
         conn.close()
 
-    return list_conversations_ordered(uid, include_archived=False, limit=_MAX_REORDER_SUBSET)
+    return list_conversations_ordered_stable(
+        uid,
+        include_archived=False,
+        limit=_MAX_REORDER_SUBSET,
+    )
