@@ -1,0 +1,38 @@
+name: One-shot bidirectional link lock patch
+
+on:
+  push:
+    branches:
+      - fix/velia-bidirectional-chat-links
+    paths:
+      - ".github/scripts/patch_bidirectional_link_lock.py"
+      - ".github/workflows/zz-one-shot-bidirectional-link-lock.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/velia-bidirectional-chat-links
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply focused patch
+        run: python .github/scripts/patch_bidirectional_link_lock.py
+      - name: Remove one-shot files and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/scripts/patch_bidirectional_link_lock.py
+          rm -f .github/workflows/zz-one-shot-bidirectional-link-lock.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Serialize linked chat mutations with archive changes"
+          git push origin HEAD:fix/velia-bidirectional-chat-links
