@@ -22,7 +22,10 @@ _ORIGINAL_VIDEO_GENERATE_AND_STORE = video_service.generate_and_store_video
 
 
 def _provider() -> str:
-    return str(os.getenv("VELIA_MEDIA_PROVIDER", "self_hosted") or "self_hosted").strip().lower()
+    # Rollout is explicit. Production switches to the worker only when Railway
+    # sets VELIA_MEDIA_PROVIDER=self_hosted; otherwise the existing providers
+    # keep their current behavior.
+    return str(os.getenv("VELIA_MEDIA_PROVIDER", "legacy") or "legacy").strip().lower()
 
 
 def _request_id_for(kind: str) -> str:
@@ -59,7 +62,7 @@ def _video_submit_and_wait(
     request_id = _request_id_for("video")
     if mode != "t2v" or attachment is not None:
         # Stage 1 Wan worker is deliberately T2V-only. Do not silently route
-        # i2v back to the paid legacy BFL provider while self-hosted mode is on.
+        # i2v back to the paid legacy provider while self-hosted mode is on.
         raise video_service.VideoGenerationError("video_mode_not_supported")
     logger.info(
         "VELIA_MEDIA_WORKER_VIDEO_SUBMIT request_id=%s provider=self_hosted mode=t2v",
@@ -156,10 +159,10 @@ def install() -> None:
     import services.velia_images_runtime_patch as image_runtime
     import services.velia_videos_runtime_patch as video_runtime
 
-    # The image runtime installs its legacy Fal queue patch first. Replacing the
-    # provider function here makes the self-hosted worker the only active media
-    # provider while leaving legacy code available for an explicit rollback via
-    # VELIA_MEDIA_PROVIDER=legacy.
+    # The image runtime installs its legacy queue compatibility patch first.
+    # Replacing the provider function here makes the self-hosted worker the only
+    # active media provider while leaving legacy code available for an explicit
+    # rollback via VELIA_MEDIA_PROVIDER=legacy.
     image_service._submit_and_wait = _image_submit_and_wait
     video_service._submit_and_wait = _video_submit_and_wait
     image_service.generate_and_store_image = _generate_and_store_image
