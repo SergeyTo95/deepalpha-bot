@@ -6,7 +6,7 @@ from services import velia_conversation_links_service as legacy
 
 
 ConversationUxError = legacy.ConversationUxError
-_MAX_LINKED_PEERS = legacy._MAX_LINKED_SOURCES
+_MAX_NEW_LINKED_PEERS = legacy._MAX_LINKED_SOURCES
 
 
 def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
@@ -29,7 +29,12 @@ def _normalize_peer_ids(values: Sequence[Any]) -> List[str]:
 
 
 def _peer_rows(cursor, user_id: int, conversation_id: str) -> List[Dict[str, Any]]:
-    """Return active directly linked peers regardless of stored edge direction."""
+    """Return every active directly linked peer regardless of stored edge direction.
+
+    Existing directional data could legally fan in to more than four targets. Those
+    relationships are grandfathered: the four-peer limit governs new mutations, not
+    visibility of already valid links.
+    """
 
     cursor.execute(
         """
@@ -78,7 +83,7 @@ def _peer_rows(cursor, user_id: int, conversation_id: str) -> List[Dict[str, Any
                 "created_at": _row_value(row, "created_at", 2),
             }
         )
-    return result[:_MAX_LINKED_PEERS]
+    return result
 
 
 def list_conversation_links_bidirectional(
@@ -192,7 +197,7 @@ def link_conversations_bidirectional(
     conversation_id: str,
     peer_conversation_ids: Sequence[Any],
 ) -> List[Dict[str, Any]]:
-    """Create undirected direct chat links while preserving the legacy table schema."""
+    """Create undirected direct chat links while preserving legacy fan-in."""
 
     legacy.ensure_velia_conversation_links_table()
     uid = int(user_id)
@@ -239,9 +244,12 @@ def link_conversations_bidirectional(
         for peer_id in peer_ids:
             if peer_id in peers_by_chat.get(anchor_id, set()):
                 continue
-            if len(peers_by_chat.get(anchor_id, set())) >= _MAX_LINKED_PEERS:
+            # Existing legacy fan-in is preserved even if it already exceeds four.
+            # Such a node cannot accept another new edge until its peer count drops
+            # below the normal creation boundary.
+            if len(peers_by_chat.get(anchor_id, set())) >= _MAX_NEW_LINKED_PEERS:
                 raise ConversationUxError("too_many_linked_conversations", status=409)
-            if len(peers_by_chat.get(peer_id, set())) >= _MAX_LINKED_PEERS:
+            if len(peers_by_chat.get(peer_id, set())) >= _MAX_NEW_LINKED_PEERS:
                 raise ConversationUxError("too_many_linked_conversations", status=409)
             canonical = tuple(sorted((anchor_id, peer_id)))
             new_edges.append(canonical)
@@ -360,6 +368,72 @@ def list_conversation_link_summaries_bidirectional(user_id: int) -> List[Dict[st
         conn.close()
 
 
+def _select_context_messages_across_peers(
+    candidates: List[Dict[str, Any]],
+    query: str,
+) -> List[Dict[str, Any]]:
+    """Bound context without dropping a relevant late legacy peer by position."""
+
+    if not candidates:
+        return []
+    maximum = int(legacy._MAX_LINK_CONTEXT_MESSAGES)
+    query_terms = legacy._terms(query)
+    selected: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    # Relevance wins globally, so a source that was historically the 15th fan-in
+    # peer can still answer a matching question instead of being position-truncated.
+    scored: List[Tuple[int, int, Dict[str, Any]]] = []
+    for position, item in enumerate(candidates):
+        overlap = (
+            len(query_terms.intersection(legacy._terms(str(item["content"]))))
+            if query_terms
+            else 0
+        )
+        if overlap > 0:
+            scored.append((overlap, -position, item))
+    scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
+    for _, _, item in scored:
+        if len(selected) >= maximum:
+            break
+        selected[(str(item["source_id"]), str(item["message_id"]))] = item
+
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for item in candidates:
+        by_source.setdefault(str(item["source_id"]), []).append(item)
+
+    # Then distribute fresh context across as many linked peers as the bounded
+    # prompt allows before taking second messages or generic recency fillers.
+    for source_items in by_source.values():
+        if len(selected) >= maximum:
+            break
+        if source_items:
+            item = source_items[0]
+            selected[(str(item["source_id"]), str(item["message_id"]))] = item
+
+    for source_items in by_source.values():
+        if len(selected) >= maximum:
+            break
+        if len(source_items) > 1:
+            item = source_items[1]
+            selected[(str(item["source_id"]), str(item["message_id"]))] = item
+
+    for item in candidates:
+        if len(selected) >= maximum:
+            break
+        selected[(str(item["source_id"]), str(item["message_id"]))] = item
+
+    result = list(selected.values())[:maximum]
+    source_order = {source_id: index for index, source_id in enumerate(by_source)}
+    result.sort(
+        key=lambda item: (
+            source_order.get(str(item["source_id"]), 999),
+            item.get("created_at") or datetime.min,
+            str(item.get("message_id") or ""),
+        )
+    )
+    return result
+
+
 def _render_linked_context(selected: Sequence[Dict[str, Any]]) -> str:
     if not selected:
         return ""
@@ -419,5 +493,5 @@ def build_linked_context_bidirectional(user_id: int, conversation_id: str) -> st
         cursor.close()
         conn.close()
 
-    selected = legacy._select_context_messages(candidates, query)
+    selected = _select_context_messages_across_peers(candidates, query)
     return _render_linked_context(selected)
