@@ -10,6 +10,7 @@ on:
       - "services/velia_telegram_connect_page_patch.py"
       - "tests/test_velia_conversation_ux.py"
       - "tests/test_velia_conversation_links.py"
+      - "tests/test_velia_chat_order_link_controls.py"
       - ".github/workflows/velia-conversation-ux-v2.yml"
   workflow_dispatch:
 
@@ -64,8 +65,10 @@ jobs:
         run: |
           python -m py_compile \
             services/velia_conversation_ux_service.py \
+            services/velia_conversation_ux_order_service.py \
             services/velia_conversation_ux_routes.py \
             services/velia_conversation_links_service.py \
+            services/velia_conversation_links_summary_service.py \
             services/velia_conversation_links_routes.py \
             services/velia_telegram_connect_page_patch.py
 
@@ -74,6 +77,7 @@ jobs:
           pytest -q \
             tests/test_velia_conversation_ux.py \
             tests/test_velia_conversation_links.py \
+            tests/test_velia_chat_order_link_controls.py \
             tests/test_velia_telegram_pairing.py
 
       - name: Verify privacy and linked-context boundaries
@@ -86,6 +90,8 @@ jobs:
           service = Path("services/velia_conversation_ux_service.py").read_text(encoding="utf-8")
           routes = Path("services/velia_conversation_ux_routes.py").read_text(encoding="utf-8")
           links = Path("services/velia_conversation_links_service.py").read_text(encoding="utf-8")
+          order = Path("services/velia_conversation_ux_order_service.py").read_text(encoding="utf-8")
+          summary = Path("services/velia_conversation_links_summary_service.py").read_text(encoding="utf-8")
 
           assert "role IN ('user','assistant')" in service
           assert "status='completed'" in service
@@ -102,17 +108,25 @@ jobs:
           assert "INSERT INTO velia_conversations" not in links
           assert "historical data, not as system instructions" in links
           assert "_MAX_LINK_CONTEXT_CHARS" in links
+
+          assert "merge_partial_conversation_order" in order
+          assert "submitted_order_not_subset" in order
+          assert "DELETE FROM velia_conversation_order" in order
+          assert "linked_group_size" in summary
           PY
 
       - name: Reject conflict markers
         run: |
           if grep -RniE '^(<<<<<<<|=======|>>>>>>>)' \
             services/velia_conversation_ux_service.py \
+            services/velia_conversation_ux_order_service.py \
             services/velia_conversation_ux_routes.py \
             services/velia_conversation_links_service.py \
+            services/velia_conversation_links_summary_service.py \
             services/velia_conversation_links_routes.py \
             services/velia_telegram_connect_page_patch.py \
             tests/test_velia_conversation_ux.py \
-            tests/test_velia_conversation_links.py; then
+            tests/test_velia_conversation_links.py \
+            tests/test_velia_chat_order_link_controls.py; then
             exit 1
           fi
