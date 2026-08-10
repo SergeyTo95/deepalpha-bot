@@ -7,9 +7,9 @@ import services.velia_videos_runtime_patch as video_runtime
 import services.velia_videos_service as video_service
 
 
-def test_self_hosted_provider_is_default(monkeypatch):
+def test_legacy_provider_is_safe_default(monkeypatch):
     monkeypatch.delenv("VELIA_MEDIA_PROVIDER", raising=False)
-    assert media_patch._provider() == "self_hosted"
+    assert media_patch._provider() == "legacy"
 
 
 def test_install_replaces_legacy_submitters_without_fallback(monkeypatch):
