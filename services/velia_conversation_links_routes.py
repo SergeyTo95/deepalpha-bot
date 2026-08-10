@@ -8,6 +8,9 @@ from services.velia_conversation_links_service import (
     list_conversation_links,
     unlink_conversation,
 )
+from services.velia_conversation_links_summary_service import (
+    list_conversation_link_summaries,
+)
 
 
 def _error_response(mobile_routes_module: Any, error: ConversationUxError) -> web.Response:
@@ -20,6 +23,18 @@ def _error_response(mobile_routes_module: Any, error: ConversationUxError) -> we
 def setup_velia_conversation_links_routes(app: web.Application, mobile_routes_module: Any) -> None:
     if app.get("velia_conversation_links_routes_installed"):
         return
+
+    async def handle_links_summary(request: web.Request) -> web.Response:
+        if not mobile_routes_module._mobile_api_available():
+            return mobile_routes_module._disabled_response()
+        auth = mobile_routes_module._require_mobile_auth(request)
+        if not auth:
+            return mobile_routes_module._json_response(
+                {"ok": False, "error": "unauthorized"},
+                status=401,
+            )
+        summaries = list_conversation_link_summaries(int(auth["user_id"]))
+        return mobile_routes_module._json_response({"ok": True, "summaries": summaries})
 
     async def handle_links_list(request: web.Request) -> web.Response:
         if not mobile_routes_module._mobile_api_available():
@@ -88,6 +103,10 @@ def setup_velia_conversation_links_routes(app: web.Application, mobile_routes_mo
             )
         return mobile_routes_module._json_response({"ok": True})
 
+    app.router.add_get(
+        "/mobile-api/v1/conversation-links/summary",
+        handle_links_summary,
+    )
     app.router.add_get(
         "/mobile-api/v1/conversations/{conversation_id}/links",
         handle_links_list,
