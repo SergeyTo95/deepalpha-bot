@@ -140,6 +140,53 @@ def _peer_map(edges: Sequence[Tuple[str, str]]) -> Dict[str, Set[str]]:
     return result
 
 
+def _delete_inactive_edges_touching(
+    cursor,
+    user_id: int,
+    participant_ids: Sequence[str],
+) -> None:
+    """Remove hidden edges before capacity is evaluated.
+
+    A deleted/archived peer must not disappear from the active count while its edge
+    remains able to resurrect later. Cleanup is scoped to the conversations being
+    mutated so an unrelated link group is never changed by this request.
+    """
+
+    normalized = [str(value) for value in participant_ids if str(value)]
+    if not normalized:
+        return
+    placeholders = ",".join(["%s"] * len(normalized))
+    cursor.execute(
+        f"""
+        DELETE FROM velia_conversation_links AS l
+        WHERE l.user_id=%s
+          AND (
+            l.target_conversation_id IN ({placeholders})
+            OR l.source_conversation_id IN ({placeholders})
+          )
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM velia_conversations AS target
+              WHERE target.user_id=l.user_id
+                AND target.conversation_id=l.target_conversation_id
+                AND target.deleted_at IS NULL
+                AND target.is_archived=FALSE
+            )
+            OR NOT EXISTS (
+              SELECT 1
+              FROM velia_conversations AS source
+              WHERE source.user_id=l.user_id
+                AND source.conversation_id=l.source_conversation_id
+                AND source.deleted_at IS NULL
+                AND source.is_archived=FALSE
+            )
+          )
+        """,
+        tuple([int(user_id)] + normalized + normalized),
+    )
+
+
 def link_conversations_bidirectional(
     user_id: int,
     conversation_id: str,
@@ -180,6 +227,11 @@ def link_conversations_bidirectional(
         }
         if active_ids != set(participant_ids):
             raise ConversationUxError("conversation_not_found", status=404)
+
+        # Do this inside the same transaction and after locking participant rows.
+        # Otherwise an archived peer could stop counting, a replacement could take
+        # its slot, and the old edge could later resurrect as a fifth active peer.
+        _delete_inactive_edges_touching(cursor, uid, participant_ids)
 
         edges = _active_edges(cursor, uid)
         peers_by_chat = _peer_map(edges)
