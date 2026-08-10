@@ -106,24 +106,31 @@ def test_legacy_fan_in_is_not_truncated_to_new_link_limit():
     assert [item["id"] for item in peers] == [f"peer-{index}" for index in range(7)]
 
 
-def test_relevant_late_legacy_peer_wins_bounded_context_selection():
+def _late_numeric_candidates(long_early_messages: bool = False):
     number = "644567889975321"
     candidates = []
     for index in range(30):
+        if index == 29:
+            content = f"запомни число: {number}"
+        elif long_early_messages:
+            content = f"обычная заметка {index} " + ("x" * 7000)
+        else:
+            content = f"обычная заметка номер {index}"
         candidates.append(
             {
                 "source_id": f"peer-{index}",
                 "source_title": f"Peer {index}",
                 "role": "user",
-                "content": (
-                    f"запомни число: {number}"
-                    if index == 29
-                    else f"обычная заметка номер {index}"
-                ),
+                "content": content,
                 "created_at": None,
                 "message_id": f"m-{index}",
             }
         )
+    return number, candidates
+
+
+def test_relevant_late_legacy_peer_wins_bounded_context_selection():
+    number, candidates = _late_numeric_candidates()
 
     selected = service._select_context_messages_across_peers(
         candidates,
@@ -133,6 +140,21 @@ def test_relevant_late_legacy_peer_wins_bounded_context_selection():
     assert len(selected) == 24
     assert any(item["message_id"] == "m-29" for item in selected)
     assert any(number in item["content"] for item in selected)
+
+
+def test_relevant_late_peer_survives_render_character_budget():
+    number, candidates = _late_numeric_candidates(long_early_messages=True)
+
+    selected = service._select_context_messages_across_peers(
+        candidates,
+        "какое число попросил запомнить?",
+    )
+    context = service._render_linked_context(selected)
+
+    assert selected[0]["message_id"] == "m-29"
+    assert number in context
+    assert context.index(number) < 2000
+    assert len(context) <= service.legacy._MAX_LINK_CONTEXT_CHARS + 200
 
 
 def test_badges_are_emitted_for_both_edge_participants():
