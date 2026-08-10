@@ -76,9 +76,9 @@ def install(velia_chat_service_module: Any) -> None:
         return
 
     install_queue_runtime()
-    # Self-hosted mode intentionally replaces the legacy Fal/Reve and BFL
-    # submitters after their compatibility patches are installed. The legacy
-    # implementations remain in code for an explicit env rollback only.
+    # Self-hosted mode intentionally replaces the legacy paid submitters after
+    # their compatibility patches are installed. The legacy implementations
+    # remain in code for an explicit env rollback only.
     install_media_worker_runtime()
     original_generate = velia_chat_service_module.generate_velia_chat_result
     original_serialize = velia_chat_service_module._serialize_message
