@@ -439,16 +439,11 @@ def _select_context_messages_across_peers(
             break
         selected[(str(item["source_id"]), str(item["message_id"]))] = item
 
-    result = list(selected.values())[:maximum]
-    source_order = {source_id: index for index, source_id in enumerate(by_source)}
-    result.sort(
-        key=lambda item: (
-            source_order.get(str(item["source_id"]), 999),
-            item.get("created_at") or datetime.min,
-            str(item.get("message_id") or ""),
-        )
-    )
-    return result
+    # Keep insertion/priority order all the way into rendering. The rendered block
+    # is character-bounded as well as message-bounded; sorting matches back behind
+    # earlier sources can otherwise consume the character budget before a relevant
+    # fact is emitted into the actual prompt.
+    return list(selected.values())[:maximum]
 
 
 def _render_linked_context(selected: Sequence[Dict[str, Any]]) -> str:
