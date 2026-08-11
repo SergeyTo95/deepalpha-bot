@@ -43,7 +43,23 @@ def _image_submit_and_wait(prompt: str) -> Dict[str, Any]:
         "VELIA_MEDIA_WORKER_IMAGE_SUBMIT request_id=%s provider=self_hosted",
         request_id,
     )
-    result = generate_image(prompt=prompt, request_id=request_id)
+    try:
+        result = generate_image(prompt=prompt, request_id=request_id)
+    except MediaWorkerError as exc:
+        logger.error(
+            "VELIA_MEDIA_WORKER_IMAGE_FAILED request_id=%s code=%s http_status=%s",
+            request_id,
+            exc.code,
+            exc.http_status if exc.http_status is not None else "",
+        )
+        raise
+    except Exception as exc:
+        logger.exception(
+            "VELIA_MEDIA_WORKER_IMAGE_FAILED_UNEXPECTED request_id=%s error_type=%s",
+            request_id,
+            type(exc).__name__,
+        )
+        raise
     logger.info(
         "VELIA_MEDIA_WORKER_IMAGE_COMPLETED request_id=%s artifact_id=%s sha256=%s",
         request_id,
@@ -71,6 +87,12 @@ def _video_submit_and_wait(
     try:
         result = generate_video(prompt=prompt, request_id=request_id)
     except MediaWorkerError as exc:
+        logger.error(
+            "VELIA_MEDIA_WORKER_VIDEO_FAILED request_id=%s code=%s http_status=%s",
+            request_id,
+            exc.code,
+            exc.http_status if exc.http_status is not None else "",
+        )
         raise video_service.VideoGenerationError(
             exc.code,
             http_status=exc.http_status,
