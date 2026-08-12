@@ -364,6 +364,21 @@ def _submit_and_wait(prompt: str) -> Dict[str, Any]:
     }
 
 
+def _generation_estimated_cost_usd(generated: Optional[Dict[str, Any]] = None) -> float:
+    if isinstance(generated, dict) and "estimated_cost_usd" in generated:
+        try:
+            return max(0.0, float(generated.get("estimated_cost_usd") or 0.0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(
+            0.0,
+            float(os.getenv("VELYON_IMAGES_ESTIMATED_COST_USD", "0.04") or 0.04),
+        )
+    except (TypeError, ValueError):
+        return 0.04
+
+
 def _success_text(message: str) -> str:
     lower = str(message or "").lower()
     if re.search(r"[а-яё]", lower):
@@ -463,9 +478,7 @@ def generate_and_store_image(
         }
 
     image_id = str(uuid.uuid4())
-    estimated_cost = float(
-        os.getenv("VELYON_IMAGES_ESTIMATED_COST_USD", "0.04") or 0.04
-    )
+    estimated_cost = _generation_estimated_cost_usd(generated)
     conn = get_connection()
     cursor = conn.cursor()
     try:
