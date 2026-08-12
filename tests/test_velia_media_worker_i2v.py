@@ -63,9 +63,11 @@ def test_client_video_rejects_unsupported_duration() -> None:
 
 def test_runtime_i2v_passes_attachment_to_worker(monkeypatch) -> None:
     attachment = video_service.RequestImageAttachment(
-        content_bytes=b"png-bytes",
+        attachment_id="attachment-1",
         mime_type="image/png",
-        filename="reference.png",
+        content_bytes=b"png-bytes",
+        width=512,
+        height=512,
     )
     captured = {}
 
