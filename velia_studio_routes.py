@@ -22,7 +22,10 @@ from services.velia_studio_service import (
     verify_reference_signature,
 )
 from services.velia_studio_upload_quota import assert_studio_upload_capacity
-from services.velia_studio_video_worker_service import studio_video_duration_options
+from services.velia_studio_video_worker_service import (
+    studio_video_duration_options,
+    studio_video_resolution,
+)
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -78,7 +81,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 "draft": True,
                 "duration_seconds": int(duration_options[0]),
                 "duration_options_seconds": duration_options,
-                "resolution": "hd",
+                "resolution": studio_video_resolution(),
                 "max_references": 1,
                 "image_to_video": True,
             },
