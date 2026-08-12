@@ -89,16 +89,26 @@ def _video_submit_and_wait(
     attachment: Optional[video_service.RequestImageAttachment],
 ) -> Dict[str, Any]:
     request_id = _request_id_for("video")
-    if mode != "t2v" or attachment is not None:
-        # Stage 1 Wan worker is deliberately T2V-only. Do not silently route
-        # i2v back to the paid legacy provider while self-hosted mode is on.
+    if mode not in {"t2v", "i2v"}:
         raise video_service.VideoGenerationError("video_mode_not_supported")
+    if mode == "i2v" and attachment is None:
+        raise video_service.VideoGenerationError("video_requires_one_image")
+    if mode == "t2v" and attachment is not None:
+        raise video_service.VideoGenerationError("video_mode_not_supported")
+
     logger.info(
-        "VELIA_MEDIA_WORKER_VIDEO_SUBMIT request_id=%s provider=self_hosted mode=t2v",
+        "VELIA_MEDIA_WORKER_VIDEO_SUBMIT request_id=%s provider=self_hosted mode=%s duration_seconds=5",
         request_id,
+        mode,
     )
     try:
-        result = generate_video(prompt=prompt, request_id=request_id)
+        result = generate_video(
+            prompt=prompt,
+            request_id=request_id,
+            duration_seconds=5,
+            reference_bytes=attachment.content_bytes if attachment is not None else None,
+            reference_mime_type=attachment.mime_type if attachment is not None else "",
+        )
     except MediaWorkerError as exc:
         logger.error(
             "VELIA_MEDIA_WORKER_VIDEO_FAILED request_id=%s code=%s http_status=%s",
@@ -112,8 +122,10 @@ def _video_submit_and_wait(
         ) from exc
     result["estimated_cost_usd"] = 0.0
     logger.info(
-        "VELIA_MEDIA_WORKER_VIDEO_COMPLETED request_id=%s artifact_id=%s sha256=%s",
+        "VELIA_MEDIA_WORKER_VIDEO_COMPLETED request_id=%s mode=%s duration_seconds=%s artifact_id=%s sha256=%s",
         request_id,
+        mode,
+        int(result.get("duration_seconds") or 5),
         str(result.get("artifact_id") or "")[:80],
         str(result.get("sha256") or "")[:16],
     )
