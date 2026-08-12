@@ -47,6 +47,7 @@ def test_client_video_payload_includes_duration_and_reference(monkeypatch) -> No
         }
     ]
     assert result["duration_seconds"] == 10
+    assert result["resolution"] == "480p"
     assert result["aspect_ratio"] == "auto"
     assert result["has_audio"] is False
 
