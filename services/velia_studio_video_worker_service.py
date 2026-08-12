@@ -26,6 +26,10 @@ def studio_video_duration_options() -> List[int]:
     return list(_SUPPORTED_DURATIONS if self_hosted_media_active() else (5,))
 
 
+def studio_video_resolution() -> str:
+    return "480p" if self_hosted_media_active() else "hd"
+
+
 def normalize_studio_video_duration(value: Any) -> int:
     try:
         duration = int(value or 5)
