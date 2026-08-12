@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -26,6 +27,17 @@ def _provider() -> str:
     # sets VELIA_MEDIA_PROVIDER=self_hosted; otherwise the existing providers
     # keep their current behavior.
     return str(os.getenv("VELIA_MEDIA_PROVIDER", "legacy") or "legacy").strip().lower()
+
+
+def _auth_token_diagnostics() -> tuple[int, str]:
+    # Match the client normalization exactly, but never log the credential.
+    # A short SHA-256 prefix is sufficient to compare independently computed
+    # fingerprints between Railway and the worker host without exposing the
+    # bearer token itself.
+    token = str(os.getenv("VELIA_MEDIA_WORKER_AUTH_TOKEN", "") or "").strip()
+    if not token:
+        return 0, "missing"
+    return len(token), hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
 def _request_id_for(kind: str) -> str:
@@ -193,6 +205,9 @@ def install() -> None:
     video_runtime.generate_and_store_video = _generate_and_store_video
 
     _INSTALLED = True
+    token_len, token_fingerprint = _auth_token_diagnostics()
     logger.info(
-        "VELIA_MEDIA_WORKER_RUNTIME_INSTALLED provider=self_hosted legacy_fallback=false"
+        "VELIA_MEDIA_WORKER_RUNTIME_INSTALLED provider=self_hosted legacy_fallback=false auth_token_len=%d auth_token_sha256_prefix=%s",
+        token_len,
+        token_fingerprint,
     )
