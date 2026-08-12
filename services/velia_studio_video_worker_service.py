@@ -40,6 +40,46 @@ def normalize_studio_video_duration(value: Any) -> int:
     return duration
 
 
+def _ensure_self_hosted_resolution_schema(cur) -> None:
+    """Expand the legacy HD-only check constraint without weakening other checks."""
+    cur.execute(
+        """
+        DO $$
+        DECLARE
+            constraint_row RECORD;
+        BEGIN
+            FOR constraint_row IN
+                SELECT conname
+                FROM pg_constraint
+                WHERE conrelid = 'velia_generated_videos'::regclass
+                  AND contype = 'c'
+                  AND lower(pg_get_constraintdef(oid)) LIKE '%resolution%'
+                  AND lower(pg_get_constraintdef(oid)) NOT LIKE '%480p%'
+            LOOP
+                EXECUTE format(
+                    'ALTER TABLE velia_generated_videos DROP CONSTRAINT %I',
+                    constraint_row.conname
+                );
+            END LOOP;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'velia_generated_videos'::regclass
+                  AND contype = 'c'
+                  AND lower(pg_get_constraintdef(oid)) LIKE '%resolution%'
+                  AND lower(pg_get_constraintdef(oid)) LIKE '%480p%'
+            ) THEN
+                ALTER TABLE velia_generated_videos
+                    ADD CONSTRAINT velia_generated_videos_resolution_check
+                    CHECK (resolution IN ('hd', '480p'));
+            END IF;
+        END
+        $$
+        """
+    )
+
+
 def _store_generated_video(
     *,
     user_id: int,
@@ -54,6 +94,7 @@ def _store_generated_video(
     conn = get_connection()
     cur = conn.cursor()
     try:
+        _ensure_self_hosted_resolution_schema(cur)
         cur.execute(
             """
             INSERT INTO velia_generated_videos(
