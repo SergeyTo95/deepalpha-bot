@@ -378,7 +378,7 @@ def generate_video(
         "artifact_id": artifact.artifact_id,
         "sha256": artifact.sha256,
         "duration_seconds": duration,
-        "resolution": "hd",
+        "resolution": "480p",
         "aspect_ratio": "auto" if references else "16:9",
         "has_audio": False,
     }
