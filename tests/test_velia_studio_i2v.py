@@ -11,10 +11,12 @@ import services.velia_studio_video_worker_service as worker_service
 def test_studio_video_duration_options_follow_provider(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     assert worker_service.studio_video_duration_options() == [5, 10, 15]
+    assert worker_service.studio_video_resolution() == "480p"
     assert worker_service.normalize_studio_video_duration(15) == 15
 
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "legacy")
     assert worker_service.studio_video_duration_options() == [5]
+    assert worker_service.studio_video_resolution() == "hd"
     with pytest.raises(studio_service.StudioError) as exc_info:
         worker_service.normalize_studio_video_duration(10)
     assert exc_info.value.code == "studio_video_duration_not_supported"
