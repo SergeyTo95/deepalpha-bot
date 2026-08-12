@@ -199,10 +199,10 @@ def install() -> None:
         )
         return
 
-    # Import here to avoid a module cycle while velia_images_runtime_patch is
-    # itself importing this provider patch.
+    # Import here to avoid module cycles while runtime patches are being installed.
     import services.velia_images_runtime_patch as image_runtime
     import services.velia_videos_runtime_patch as video_runtime
+    import services.velia_studio_service as studio_service
 
     # The image runtime installs its legacy queue compatibility patch first.
     # Replacing the provider function here makes the self-hosted worker the only
@@ -214,6 +214,10 @@ def install() -> None:
     video_service.generate_and_store_video = _generate_and_store_video
     image_runtime.generate_and_store_image = _generate_and_store_image
     video_runtime.generate_and_store_video = _generate_and_store_video
+    # Studio imported this function by value at module import time. Rebind that
+    # alias too so Studio image generations cannot silently use the legacy image
+    # provider while global self-hosted mode is active.
+    studio_service.generate_and_store_image = _generate_and_store_image
 
     _INSTALLED = True
     token_len, token_fingerprint = _auth_token_diagnostics()
