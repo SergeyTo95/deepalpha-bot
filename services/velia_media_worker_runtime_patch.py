@@ -72,6 +72,7 @@ def _image_submit_and_wait(prompt: str) -> Dict[str, Any]:
             type(exc).__name__,
         )
         raise
+    result["estimated_cost_usd"] = 0.0
     logger.info(
         "VELIA_MEDIA_WORKER_IMAGE_COMPLETED request_id=%s artifact_id=%s sha256=%s",
         request_id,
@@ -109,9 +110,7 @@ def _video_submit_and_wait(
             exc.code,
             http_status=exc.http_status,
         ) from exc
-    result["estimated_cost_usd"] = video_service._estimated_cost_usd(
-        int(result.get("duration_seconds") or 5)
-    )
+    result["estimated_cost_usd"] = 0.0
     logger.info(
         "VELIA_MEDIA_WORKER_VIDEO_COMPLETED request_id=%s artifact_id=%s sha256=%s",
         request_id,
