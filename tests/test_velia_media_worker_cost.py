@@ -40,13 +40,23 @@ def test_self_hosted_image_submit_reports_zero_provider_cost(monkeypatch) -> Non
 
 
 def test_self_hosted_video_submit_reports_zero_provider_cost(monkeypatch) -> None:
-    def fake_generate_video(*, prompt: str, request_id: str):
+    def fake_generate_video(
+        *,
+        prompt: str,
+        request_id: str,
+        duration_seconds: int,
+        reference_bytes,
+        reference_mime_type: str,
+    ):
         assert prompt == "hamster wedding video"
         assert request_id == "video-request"
+        assert duration_seconds == 5
+        assert reference_bytes is None
+        assert reference_mime_type == ""
         return {
             "artifact_id": "video-artifact",
             "sha256": "b" * 64,
-            "duration_seconds": 5,
+            "duration_seconds": duration_seconds,
         }
 
     monkeypatch.setattr(runtime_patch, "generate_video", fake_generate_video)
