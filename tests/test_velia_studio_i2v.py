@@ -22,6 +22,24 @@ def test_studio_video_duration_options_follow_provider(monkeypatch) -> None:
     assert exc_info.value.code == "studio_video_duration_not_supported"
 
 
+def test_self_hosted_video_schema_expands_legacy_hd_constraint() -> None:
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.statements = []
+
+        def execute(self, statement, params=None) -> None:
+            self.statements.append(str(statement))
+
+    cursor = FakeCursor()
+    worker_service._ensure_self_hosted_resolution_schema(cursor)
+
+    assert len(cursor.statements) == 1
+    statement = cursor.statements[0]
+    assert "pg_constraint" in statement
+    assert "NOT LIKE '%480p%'" in statement
+    assert "CHECK (resolution IN ('hd', '480p'))" in statement
+
+
 def test_studio_video_generation_routes_to_self_hosted_adapter(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     monkeypatch.setattr(studio_service, "_ensure_schema", lambda: None)
