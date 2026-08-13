@@ -11,6 +11,9 @@ from services.velia_studio_video_worker_service import (
 )
 
 
+_SUPPORTED_SELF_HOSTED_VIDEO_DURATIONS = {5, 10}
+
+
 def generate_studio_turn(
     *,
     user_id: int,
@@ -18,13 +21,13 @@ def generate_studio_turn(
     prompt: str,
     client_request_id: str,
     reference_asset_ids: Any = None,
+    duration_seconds: int = 5,
 ) -> Dict[str, Any]:
     """Route Studio generation without broadening the ordinary chat router.
 
-    Self-hosted Studio video uses an explicit 5-second T2V adapter so Studio
-    cannot retain stale import-time aliases to the legacy video provider or
-    legacy quota function. Reference-conditioned image generation remains a
-    Studio-only path.
+    Self-hosted Studio T2V accepts the server-advertised 5s/10s durations as a
+    structured request field. Reference-conditioned video and 15s remain
+    fail-closed until their separate acceptance is complete.
     """
     studio_service._ensure_schema()
     if not studio_service.studio_enabled():
@@ -50,15 +53,24 @@ def generate_studio_turn(
 
     reference_ids = studio_service._reference_ids(reference_asset_ids)
     mode = str(session["mode"])
+    duration = int(duration_seconds or 5)
 
     if mode == "video" and self_hosted_media_active():
+        if duration not in _SUPPORTED_SELF_HOSTED_VIDEO_DURATIONS:
+            raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
         return generate_self_hosted_studio_video_turn(
             user_id=int(user_id),
             session_id=str(session_id),
             prompt=normalized_prompt,
             client_request_id=normalized_client_request_id,
             reference_ids=reference_ids,
+            duration_seconds=duration,
         )
+
+    # Legacy rollback keeps its original 5-second contract. Do not silently
+    # submit a long-duration request to a paid provider.
+    if mode == "video" and duration != 5:
+        raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
 
     if mode != "image" or not reference_ids:
         return studio_service.generate_turn(
