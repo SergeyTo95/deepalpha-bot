@@ -22,6 +22,7 @@ from services.velia_studio_upload_quota import assert_studio_upload_capacity
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+_STUDIO_VIDEO_DURATION_OPTIONS = (5, 10)
 
 
 def _json_response(data: Dict[str, Any], status: int = 200) -> web.Response:
@@ -71,7 +72,10 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             "image": {"max_references": 4, "reference_editing": True},
             "video": {
                 "draft": True,
+                # Compatibility default for older APKs. New clients must use
+                # duration_options_seconds and send duration_seconds explicitly.
                 "duration_seconds": 5,
+                "duration_options_seconds": list(_STUDIO_VIDEO_DURATION_OPTIONS),
                 "resolution": "hd",
                 "max_references": 1,
             },
@@ -207,6 +211,12 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             return _json_response({"ok": False, "error": "invalid_json"}, status=400)
         key = str(request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "").strip()
         try:
+            duration_seconds = int(data.get("duration_seconds", 5) or 5)
+        except (TypeError, ValueError):
+            return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
+        if duration_seconds not in _STUDIO_VIDEO_DURATION_OPTIONS:
+            return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
+        try:
             result = await asyncio.to_thread(
                 generate_studio_turn,
                 user_id=int(auth["user_id"]),
@@ -214,6 +224,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 prompt=str(data.get("prompt") or ""),
                 client_request_id=key,
                 reference_asset_ids=data.get("reference_asset_ids"),
+                duration_seconds=duration_seconds,
             )
         except StudioError as exc:
             return _error(exc)
