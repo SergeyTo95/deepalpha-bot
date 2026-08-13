@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import services.velia_images_service as image_service
 import services.velia_videos_service as video_service
 from services.velia_media_worker_client import MediaWorkerError, generate_image, generate_video
+from services.velia_video_quota_service import reserve_self_hosted_video_capacity
 
 
 logger = logging.getLogger(__name__)
@@ -89,16 +90,26 @@ def _video_submit_and_wait(
     attachment: Optional[video_service.RequestImageAttachment],
 ) -> Dict[str, Any]:
     request_id = _request_id_for("video")
-    if mode != "t2v" or attachment is not None:
-        # Stage 1 Wan worker is deliberately T2V-only. Do not silently route
-        # i2v back to the paid legacy provider while self-hosted mode is on.
+    if mode not in {"t2v", "i2v"}:
         raise video_service.VideoGenerationError("video_mode_not_supported")
+    if mode == "i2v" and attachment is None:
+        raise video_service.VideoGenerationError("video_requires_one_image")
+    if mode == "t2v" and attachment is not None:
+        raise video_service.VideoGenerationError("video_mode_not_supported")
+
     logger.info(
-        "VELIA_MEDIA_WORKER_VIDEO_SUBMIT request_id=%s provider=self_hosted mode=t2v",
+        "VELIA_MEDIA_WORKER_VIDEO_SUBMIT request_id=%s provider=self_hosted mode=%s duration_seconds=5",
         request_id,
+        mode,
     )
     try:
-        result = generate_video(prompt=prompt, request_id=request_id)
+        result = generate_video(
+            prompt=prompt,
+            request_id=request_id,
+            duration_seconds=5,
+            reference_bytes=attachment.content_bytes if attachment is not None else None,
+            reference_mime_type=attachment.mime_type if attachment is not None else "",
+        )
     except MediaWorkerError as exc:
         logger.error(
             "VELIA_MEDIA_WORKER_VIDEO_FAILED request_id=%s code=%s http_status=%s",
@@ -112,8 +123,10 @@ def _video_submit_and_wait(
         ) from exc
     result["estimated_cost_usd"] = 0.0
     logger.info(
-        "VELIA_MEDIA_WORKER_VIDEO_COMPLETED request_id=%s artifact_id=%s sha256=%s",
+        "VELIA_MEDIA_WORKER_VIDEO_COMPLETED request_id=%s mode=%s duration_seconds=%s artifact_id=%s sha256=%s",
         request_id,
+        mode,
+        int(result.get("duration_seconds") or 5),
         str(result.get("artifact_id") or "")[:80],
         str(result.get("sha256") or "")[:16],
     )
@@ -187,10 +200,10 @@ def install() -> None:
         )
         return
 
-    # Import here to avoid a module cycle while velia_images_runtime_patch is
-    # itself importing this provider patch.
+    # Import here to avoid module cycles while runtime patches are being installed.
     import services.velia_images_runtime_patch as image_runtime
     import services.velia_videos_runtime_patch as video_runtime
+    import services.velia_studio_service as studio_service
 
     # The image runtime installs its legacy queue compatibility patch first.
     # Replacing the provider function here makes the self-hosted worker the only
@@ -198,10 +211,15 @@ def install() -> None:
     # rollback via VELIA_MEDIA_PROVIDER=legacy.
     image_service._submit_and_wait = _image_submit_and_wait
     video_service._submit_and_wait = _video_submit_and_wait
+    video_service._reserve_capacity = reserve_self_hosted_video_capacity
     image_service.generate_and_store_image = _generate_and_store_image
     video_service.generate_and_store_video = _generate_and_store_video
     image_runtime.generate_and_store_image = _generate_and_store_image
     video_runtime.generate_and_store_video = _generate_and_store_video
+    # Studio imported this function by value at module import time. Rebind that
+    # alias too so Studio image generations cannot silently use the legacy image
+    # provider while global self-hosted mode is active.
+    studio_service.generate_and_store_image = _generate_and_store_image
 
     _INSTALLED = True
     token_len, token_fingerprint = _auth_token_diagnostics()

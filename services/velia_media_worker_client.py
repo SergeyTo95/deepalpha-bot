@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -243,9 +244,9 @@ def _run_job(
 
     deadline = time.monotonic() + _env_int(
         "VELIA_MEDIA_WORKER_JOB_TIMEOUT_SECONDS",
-        1800,
+        7200,
         60,
-        3600,
+        7200,
     )
     poll_seconds = _env_int("VELIA_MEDIA_WORKER_POLL_INTERVAL_SECONDS", 2, 1, 15)
     status_payload = submitted
@@ -321,13 +322,46 @@ def generate_image(*, prompt: str, request_id: str) -> Dict[str, Any]:
     }
 
 
-def generate_video(*, prompt: str, request_id: str) -> Dict[str, Any]:
+def generate_video(
+    *,
+    prompt: str,
+    request_id: str,
+    duration_seconds: int = 5,
+    reference_bytes: Optional[bytes] = None,
+    reference_mime_type: str = "",
+) -> Dict[str, Any]:
     normalized_prompt = str(prompt or "").strip()
     if not normalized_prompt:
         raise MediaWorkerError("media_worker_video_prompt_missing")
+    duration = int(duration_seconds or 5)
+    if duration not in {5, 10, 15}:
+        raise MediaWorkerError("media_worker_video_duration_not_supported")
+
+    references = []
+    raw_reference = bytes(reference_bytes or b"")
+    if raw_reference:
+        mime_type = str(reference_mime_type or "").split(";", 1)[0].strip().lower()
+        if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise MediaWorkerError("media_worker_video_reference_type_not_supported")
+        max_reference_bytes = _env_int(
+            "VELIA_MEDIA_WORKER_MAX_REFERENCE_BYTES",
+            15 * 1024 * 1024,
+            1024,
+            64 * 1024 * 1024,
+        )
+        if len(raw_reference) > max_reference_bytes:
+            raise MediaWorkerError("media_worker_video_reference_too_large")
+        references.append(
+            {
+                "media_type": mime_type,
+                "content_base64": base64.b64encode(raw_reference).decode("ascii"),
+            }
+        )
+
     payload = {
         "prompt": normalized_prompt,
-        "duration_seconds": 5,
+        "duration_seconds": duration,
+        "references": references,
     }
     artifact = _run_job(
         kind="videos",
@@ -343,8 +377,8 @@ def generate_video(*, prompt: str, request_id: str) -> Dict[str, Any]:
         "external_request_id": artifact.job_id,
         "artifact_id": artifact.artifact_id,
         "sha256": artifact.sha256,
-        "duration_seconds": 5,
-        "resolution": "hd",
-        "aspect_ratio": "16:9",
+        "duration_seconds": duration,
+        "resolution": "480p",
+        "aspect_ratio": "auto" if references else "16:9",
         "has_audio": False,
     }

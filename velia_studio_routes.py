@@ -5,6 +5,9 @@ from typing import Any, Dict, Optional
 from aiohttp import web
 
 from services.velia_mobile_auth_service import authenticate_access_token
+from services.velia_studio_generated_reference_service import (
+    create_reference_from_generated_image,
+)
 from services.velia_studio_generation_service import generate_studio_turn
 from services.velia_studio_recovery_service import generation_for_client_request
 from services.velia_studio_service import (
@@ -19,6 +22,10 @@ from services.velia_studio_service import (
     verify_reference_signature,
 )
 from services.velia_studio_upload_quota import assert_studio_upload_capacity
+from services.velia_studio_video_worker_service import (
+    studio_video_duration_options,
+    studio_video_resolution,
+)
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -64,6 +71,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
     async def status(request: web.Request) -> web.Response:
         if not _require_auth(request):
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+        duration_options = studio_video_duration_options()
         return _json_response({
             "ok": True,
             "enabled": studio_enabled(),
@@ -71,9 +79,11 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             "image": {"max_references": 4, "reference_editing": True},
             "video": {
                 "draft": True,
-                "duration_seconds": 5,
-                "resolution": "hd",
+                "duration_seconds": int(duration_options[0]),
+                "duration_options_seconds": duration_options,
+                "resolution": studio_video_resolution(),
                 "max_references": 1,
+                "image_to_video": True,
             },
         })
 
@@ -196,6 +206,28 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             return _json_response({"ok": False, "error": "studio_reference_upload_failed"}, status=500)
         return _json_response({"ok": True, "asset": asset}, status=201)
 
+    async def asset_from_generated_image(request: web.Request) -> web.Response:
+        auth = _require_auth(request)
+        if not auth:
+            return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if not studio_enabled():
+            return _json_response({"ok": False, "error": "studio_disabled"}, status=503)
+        data = await _read_json(request)
+        if data is None:
+            return _json_response({"ok": False, "error": "invalid_json"}, status=400)
+        try:
+            asset = await asyncio.to_thread(
+                create_reference_from_generated_image,
+                user_id=int(auth["user_id"]),
+                session_id=str(request.match_info.get("session_id") or ""),
+                image_id=str(data.get("image_id") or ""),
+            )
+        except StudioError as exc:
+            return _error(exc)
+        except Exception:
+            return _json_response({"ok": False, "error": "studio_generated_reference_failed"}, status=500)
+        return _json_response({"ok": True, "asset": asset}, status=201)
+
     async def generate(request: web.Request) -> web.Response:
         auth = _require_auth(request)
         if not auth:
@@ -214,6 +246,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 prompt=str(data.get("prompt") or ""),
                 client_request_id=key,
                 reference_asset_ids=data.get("reference_asset_ids"),
+                duration_seconds=data.get("duration_seconds", 5),
             )
         except StudioError as exc:
             return _error(exc)
@@ -247,5 +280,6 @@ def setup_velia_studio_routes(app: web.Application) -> None:
     app.router.add_get("/mobile-api/v1/studio/sessions/{session_id}/messages", messages)
     app.router.add_get("/mobile-api/v1/studio/sessions/{session_id}/recover", recover)
     app.router.add_post("/mobile-api/v1/studio/sessions/{session_id}/assets", asset_upload)
+    app.router.add_post("/mobile-api/v1/studio/sessions/{session_id}/assets/from-generated-image", asset_from_generated_image)
     app.router.add_post("/mobile-api/v1/studio/sessions/{session_id}/generate", generate)
     app.router.add_get("/api/mobile/studio/assets/{asset_id}/content", asset_content)
