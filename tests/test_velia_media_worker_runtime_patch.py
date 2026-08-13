@@ -9,6 +9,7 @@ import services.velia_studio_service as studio_service
 import services.velia_videos_runtime_patch as video_runtime
 import services.velia_videos_service as video_service
 from services.velia_media_worker_client import MediaWorkerError
+from services.velia_video_quota_service import reserve_self_hosted_video_capacity
 
 
 def test_legacy_provider_is_safe_default(monkeypatch):
@@ -22,6 +23,7 @@ def test_install_replaces_legacy_submitters_without_fallback(monkeypatch):
         "installed": media_patch._INSTALLED,
         "image_submit": image_service._submit_and_wait,
         "video_submit": video_service._submit_and_wait,
+        "video_reserve": video_service._reserve_capacity,
         "image_generate": image_service.generate_and_store_image,
         "video_generate": video_service.generate_and_store_video,
         "image_runtime_generate": image_runtime.generate_and_store_image,
@@ -34,6 +36,7 @@ def test_install_replaces_legacy_submitters_without_fallback(monkeypatch):
 
         assert image_service._submit_and_wait is media_patch._image_submit_and_wait
         assert video_service._submit_and_wait is media_patch._video_submit_and_wait
+        assert video_service._reserve_capacity is reserve_self_hosted_video_capacity
         assert image_service.generate_and_store_image is media_patch._generate_and_store_image
         assert video_service.generate_and_store_video is media_patch._generate_and_store_video
         assert image_runtime.generate_and_store_image is media_patch._generate_and_store_image
@@ -42,6 +45,7 @@ def test_install_replaces_legacy_submitters_without_fallback(monkeypatch):
     finally:
         image_service._submit_and_wait = saved["image_submit"]
         video_service._submit_and_wait = saved["video_submit"]
+        video_service._reserve_capacity = saved["video_reserve"]
         image_service.generate_and_store_image = saved["image_generate"]
         video_service.generate_and_store_video = saved["video_generate"]
         image_runtime.generate_and_store_image = saved["image_runtime_generate"]
