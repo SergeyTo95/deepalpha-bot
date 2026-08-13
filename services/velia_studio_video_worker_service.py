@@ -9,11 +9,13 @@ from typing import Any, Dict, List, Optional
 from db.database import get_connection
 import services.velia_studio_service as studio_service
 import services.velia_videos_service as video_service
-from services.velia_media_worker_client import MediaWorkerError, generate_video
+from services.velia_media_worker_client import MediaWorkerError
+from services.velia_studio_video_duration_client import generate_studio_video
 
 
 logger = logging.getLogger(__name__)
 _SELF_HOSTED_PROVIDERS = {"self_hosted", "self-hosted", "velia_worker", "worker"}
+_SUPPORTED_DURATIONS = {5, 10}
 
 
 def self_hosted_media_active() -> bool:
@@ -81,18 +83,17 @@ def generate_self_hosted_studio_video_turn(
     prompt: str,
     client_request_id: str,
     reference_ids: List[str],
+    duration_seconds: int = 5,
 ) -> Dict[str, Any]:
-    """Generate the production 5-second Studio T2V path directly on the worker.
-
-    This adapter deliberately bypasses Studio's import-time aliases to the
-    legacy video submitter/quota functions. Reference-conditioned video and
-    long-duration video remain fail-closed until their separate acceptance is
-    complete.
-    """
+    """Generate an accepted 5s/10s Studio T2V job directly on the worker."""
     if not self_hosted_media_active():
         raise studio_service.StudioError("studio_self_hosted_video_not_active", status=409)
     if reference_ids:
         raise studio_service.StudioError("video_mode_not_supported", status=409)
+
+    duration = int(duration_seconds or 5)
+    if duration not in _SUPPORTED_DURATIONS:
+        raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
 
     generation_id = studio_service._insert_turn(
         int(user_id),
@@ -114,12 +115,14 @@ def generate_self_hosted_studio_video_turn(
             error_code = str(limit_error)
         else:
             logger.info(
-                "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT generation_id=%s mode=t2v duration_seconds=5",
+                "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT generation_id=%s mode=t2v duration_seconds=%s",
                 generation_id,
+                duration,
             )
-            generated = generate_video(
+            generated = generate_studio_video(
                 prompt=str(prompt),
                 request_id=str(generation_id),
+                duration_seconds=duration,
             )
             _store_generated_video(
                 user_id=int(user_id),
@@ -132,24 +135,27 @@ def generate_self_hosted_studio_video_turn(
             reservation_id = None
             created = True
             logger.info(
-                "VELIA_STUDIO_MEDIA_WORKER_VIDEO_COMPLETED generation_id=%s artifact_id=%s sha256=%s",
+                "VELIA_STUDIO_MEDIA_WORKER_VIDEO_COMPLETED generation_id=%s duration_seconds=%s artifact_id=%s sha256=%s",
                 generation_id,
+                duration,
                 str(generated.get("artifact_id") or "")[:80],
                 str(generated.get("sha256") or "")[:16],
             )
     except MediaWorkerError as exc:
         error_code = exc.code
         logger.error(
-            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_FAILED generation_id=%s code=%s http_status=%s",
+            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_FAILED generation_id=%s duration_seconds=%s code=%s http_status=%s",
             generation_id,
+            duration,
             exc.code,
             exc.http_status if exc.http_status is not None else "",
         )
     except Exception as exc:
         error_code = "video_generation_failed"
         logger.exception(
-            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_FAILED_UNEXPECTED generation_id=%s error_type=%s",
+            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_FAILED_UNEXPECTED generation_id=%s duration_seconds=%s error_type=%s",
             generation_id,
+            duration,
             type(exc).__name__,
         )
     finally:
