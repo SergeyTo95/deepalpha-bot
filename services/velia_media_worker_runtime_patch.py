@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import services.velia_images_service as image_service
 import services.velia_videos_service as video_service
 from services.velia_media_worker_client import MediaWorkerError, generate_image, generate_video
+from services.velia_video_quota_service import reserve_self_hosted_video_capacity
 
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,7 @@ def install() -> None:
     # rollback via VELIA_MEDIA_PROVIDER=legacy.
     image_service._submit_and_wait = _image_submit_and_wait
     video_service._submit_and_wait = _video_submit_and_wait
+    video_service._reserve_capacity = reserve_self_hosted_video_capacity
     image_service.generate_and_store_image = _generate_and_store_image
     video_service.generate_and_store_video = _generate_and_store_video
     image_runtime.generate_and_store_image = _generate_and_store_image
