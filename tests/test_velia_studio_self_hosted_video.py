@@ -63,10 +63,19 @@ def test_worker_adapter_uses_dynamic_video_quota_and_selected_duration(monkeypat
     monkeypatch.setattr(
         studio_service,
         "_generation",
-        lambda *args, **kwargs: {"id": "generation-7", "status": "completed"},
+        lambda *args, **kwargs: {
+            "id": "generation-7",
+            "status": "pending",
+            "estimated_seconds_remaining": 900,
+        },
     )
-    finished = {}
-    monkeypatch.setattr(studio_service, "_finish", lambda *args, **kwargs: finished.update(kwargs))
+    monkeypatch.setattr(
+        studio_service,
+        "_finish",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("accepted async submission must stay pending")
+        ),
+    )
 
     quota_calls = []
 
@@ -79,23 +88,28 @@ def test_worker_adapter_uses_dynamic_video_quota_and_selected_duration(monkeypat
 
     worker_calls = []
 
-    def fake_generate_studio_video(*, prompt, request_id, duration_seconds):
+    def fake_submit_studio_video_job(*, prompt, request_id, duration_seconds):
         worker_calls.append((prompt, request_id, duration_seconds))
         return {
-            "video_bytes": b"video-bytes",
-            "mime_type": "video/mp4",
-            "duration_seconds": duration_seconds,
-            "resolution": "hd",
-            "aspect_ratio": "16:9",
-            "has_audio": False,
-            "external_request_id": "worker-job-1",
-            "artifact_id": "artifact-1",
-            "sha256": "a" * 64,
+            "job_id": "worker-job-1",
+            "status": "queued",
+            "progress_percent": 0,
+            "estimated_seconds_remaining": 900,
         }
 
-    monkeypatch.setattr(worker_service, "generate_studio_video", fake_generate_studio_video)
-    stored = {}
-    monkeypatch.setattr(worker_service, "_store_generated_video", lambda **kwargs: stored.update(kwargs))
+    monkeypatch.setattr(
+        worker_service,
+        "submit_studio_video_job",
+        fake_submit_studio_video_job,
+    )
+    persisted = {}
+    monkeypatch.setattr(worker_service, "_persist_submission", lambda **kwargs: persisted.update(kwargs))
+    monitored = []
+    monkeypatch.setattr(
+        worker_service,
+        "ensure_self_hosted_video_monitor",
+        monitored.append,
+    )
 
     result = worker_service.generate_self_hosted_studio_video_turn(
         user_id=77,
@@ -108,16 +122,16 @@ def test_worker_adapter_uses_dynamic_video_quota_and_selected_duration(monkeypat
 
     assert quota_calls == [77]
     assert worker_calls == [("hamster gangster", "generation-7", 10)]
-    assert stored["reservation_id"] == "reservation-1"
-    assert stored["generated"]["duration_seconds"] == 10
-    assert finished["created"] is True
-    assert finished["cost"] == 0.0
-    assert finished["error_code"] is None
-    assert result["generation"]["status"] == "completed"
+    assert persisted["reservation_id"] == "reservation-1"
+    assert persisted["submitted"]["job_id"] == "worker-job-1"
+    assert monitored == ["generation-7"]
+    assert result["generation"]["status"] == "pending"
+    assert result["generation"]["estimated_seconds_remaining"] == 900
 
 
 def test_self_hosted_15_second_video_fails_closed_before_worker(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
+    monkeypatch.delenv("VELIA_STUDIO_VIDEO_15S_ENABLED", raising=False)
     called = False
 
     def unexpected_worker(**kwargs):
@@ -125,7 +139,7 @@ def test_self_hosted_15_second_video_fails_closed_before_worker(monkeypatch) -> 
         called = True
         raise AssertionError("15s worker must not run before acceptance")
 
-    monkeypatch.setattr(worker_service, "generate_studio_video", unexpected_worker)
+    monkeypatch.setattr(worker_service, "submit_studio_video_job", unexpected_worker)
 
     with pytest.raises(studio_service.StudioError) as captured:
         worker_service.generate_self_hosted_studio_video_turn(
@@ -140,6 +154,102 @@ def test_self_hosted_15_second_video_fails_closed_before_worker(monkeypatch) -> 
     assert captured.value.code == "studio_video_duration_not_supported"
     assert captured.value.status == 400
     assert called is False
+
+
+def test_monitor_persists_progress_then_finalizes_success(monkeypatch) -> None:
+    context = {
+        "generation_id": "generation-7",
+        "user_id": 77,
+        "session_id": "session-1",
+        "prompt": "hamster gangster",
+        "duration_seconds": 10,
+        "job_id": "worker-job-1",
+        "reservation_id": "reservation-1",
+        "estimated_completion_at": None,
+    }
+    monkeypatch.setattr(worker_service, "_load_monitor_context", lambda _generation_id: context)
+    results = iter(
+        [
+            {
+                "status": "running",
+                "progress_percent": 40,
+                "estimated_seconds_remaining": 480,
+                "estimated_completion_at": "2026-08-15T20:30:00Z",
+            },
+            {
+                "status": "succeeded",
+                "generated": {
+                    "artifact_id": "artifact-1",
+                    "sha256": "a" * 64,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(worker_service, "poll_studio_video_job", lambda **kwargs: next(results))
+    monkeypatch.setattr(worker_service.time, "sleep", lambda _seconds: None)
+    progress = []
+    monkeypatch.setattr(
+        worker_service,
+        "_update_progress",
+        lambda generation_id, **kwargs: progress.append((generation_id, kwargs)),
+    )
+    completed = []
+    monkeypatch.setattr(
+        worker_service,
+        "_finalize_success",
+        lambda monitor_context, generated: completed.append((monitor_context, generated)) or True,
+    )
+
+    worker_service._monitor_generation("generation-7")
+
+    assert progress == [
+        (
+            "generation-7",
+            {
+                "worker_status": "running",
+                "progress_percent": 40,
+                "estimated_seconds_remaining": 480,
+                "estimated_completion_at": "2026-08-15T20:30:00Z",
+            },
+        )
+    ]
+    assert completed[0][0] == context
+    assert completed[0][1]["artifact_id"] == "artifact-1"
+
+
+def test_backend_restart_resumes_pending_worker_jobs(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
+
+    class Cursor:
+        def execute(self, sql, params):
+            assert "worker_job_id IS NOT NULL" in sql
+            assert params == (100,)
+
+        def fetchall(self):
+            return [("generation-1",), ("generation-2",)]
+
+        def close(self):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(worker_service, "get_connection", Connection)
+    monitored = []
+    monkeypatch.setattr(
+        worker_service,
+        "ensure_self_hosted_video_monitor",
+        monitored.append,
+    )
+
+    resumed = worker_service.resume_pending_self_hosted_video_monitors()
+
+    assert resumed == 2
+    assert monitored == ["generation-1", "generation-2"]
 
 
 def test_self_hosted_reference_video_fails_closed_before_worker(monkeypatch) -> None:

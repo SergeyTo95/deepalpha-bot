@@ -60,6 +60,39 @@ def test_recovery_uses_exact_user_session_and_client_request(monkeypatch):
     assert params == (42, "session-1", "client-request-1")
 
 
+def test_recovery_restarts_pending_video_monitor(monkeypatch):
+    connection = _Connection(("generation-1",))
+    monkeypatch.setattr(recovery, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        recovery,
+        "_generation",
+        lambda user_id, generation_id=None: {
+            "id": generation_id,
+            "session_id": "session-1",
+            "type": "video",
+            "status": "pending",
+            "client_request_id": "client-request-1",
+        },
+    )
+    monitored = []
+    from services import velia_studio_video_worker_service as worker_service
+
+    monkeypatch.setattr(
+        worker_service,
+        "ensure_self_hosted_video_monitor",
+        monitored.append,
+    )
+
+    result = recovery.generation_for_client_request(
+        42,
+        "session-1",
+        "client-request-1",
+    )
+
+    assert result["status"] == "pending"
+    assert monitored == ["generation-1"]
+
+
 def test_reference_daily_count_limit_fails_closed(monkeypatch):
     monkeypatch.setenv("VELIA_STUDIO_DAILY_REFERENCE_LIMIT", "2")
     monkeypatch.setenv("VELIA_STUDIO_DAILY_REFERENCE_BYTES", str(100 * 1024 * 1024))

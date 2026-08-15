@@ -49,6 +49,13 @@ def generation_for_client_request(
     generation = _generation(int(user_id), generation_id=generation_id)
     if generation is None:
         return None
+    if generation.get("status") == "pending" and generation.get("type") == "video":
+        # A recovery request also resumes monitoring after a backend restart.
+        from services.velia_studio_video_worker_service import (
+            ensure_self_hosted_video_monitor,
+        )
+
+        ensure_self_hosted_video_monitor(generation_id)
     return {
         **generation,
         "client_request_id": normalized_client_request_id,
