@@ -108,7 +108,7 @@ def poll_studio_video_job(
             "artifact_id": artifact.artifact_id,
             "sha256": artifact.sha256,
             "duration_seconds": duration,
-            "resolution": "sd",
+            # Keep the current production storage contract in sync with the\n            # synchronous path. The database constraint accepts ``hd`` until\n            # the separate 480p/SD metadata migration is deployed.\n            "resolution": "hd",
             "aspect_ratio": "16:9",
             "has_audio": False,
         },
