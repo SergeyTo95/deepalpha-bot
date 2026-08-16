@@ -106,6 +106,41 @@ def test_async_poll_returns_progress_without_downloading(monkeypatch) -> None:
     assert result["estimated_seconds_remaining"] == 480
 
 
+def test_async_poll_preserves_production_storage_resolution_contract(monkeypatch) -> None:
+    monkeypatch.setattr(
+        duration_client,
+        "get_job_status",
+        lambda **kwargs: {
+            "job_id": kwargs["job_id"],
+            "status": "succeeded",
+            "progress_percent": 100,
+            "estimated_seconds_remaining": 0,
+        },
+    )
+    monkeypatch.setattr(
+        duration_client,
+        "artifact_from_job",
+        lambda **kwargs: MediaWorkerArtifact(
+            job_id="worker-job-15",
+            artifact_id="artifact-15",
+            media_type="video/mp4",
+            size_bytes=16,
+            sha256="a" * 64,
+            content=b"0000ftyp00000000",
+        ),
+    )
+
+    result = duration_client.poll_studio_video_job(
+        job_id="worker-job-15",
+        request_id="studio-generation-15",
+        duration_seconds=15,
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["generated"]["resolution"] == "hd"
+    assert result["generated"]["duration_seconds"] == 15
+
+
 def test_studio_duration_client_can_disable_fifteen_seconds_before_submit(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "false")
     called = False
