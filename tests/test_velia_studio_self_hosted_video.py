@@ -156,6 +156,18 @@ def test_self_hosted_15_second_video_can_be_disabled_before_worker(monkeypatch) 
     assert called is False
 
 
+def test_fallback_eta_matches_quality_profile_segment_budget(monkeypatch) -> None:
+    for duration in (5, 10, 15):
+        monkeypatch.delenv(
+            f"VELIA_STUDIO_VIDEO_ETA_{duration}_SECONDS",
+            raising=False,
+        )
+
+    assert worker_service._fallback_eta(5) == 1500
+    assert worker_service._fallback_eta(10) == 3000
+    assert worker_service._fallback_eta(15) == 4500
+
+
 def test_monitor_persists_progress_then_finalizes_success(monkeypatch) -> None:
     context = {
         "generation_id": "generation-7",
