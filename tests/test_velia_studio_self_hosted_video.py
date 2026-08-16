@@ -129,15 +129,15 @@ def test_worker_adapter_uses_dynamic_video_quota_and_selected_duration(monkeypat
     assert result["generation"]["estimated_seconds_remaining"] == 900
 
 
-def test_self_hosted_15_second_video_fails_closed_before_worker(monkeypatch) -> None:
+def test_self_hosted_15_second_video_can_be_disabled_before_worker(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
-    monkeypatch.delenv("VELIA_STUDIO_VIDEO_15S_ENABLED", raising=False)
+    monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "false")
     called = False
 
     def unexpected_worker(**kwargs):
         nonlocal called
         called = True
-        raise AssertionError("15s worker must not run before acceptance")
+        raise AssertionError("disabled 15s worker must not run")
 
     monkeypatch.setattr(worker_service, "submit_studio_video_job", unexpected_worker)
 

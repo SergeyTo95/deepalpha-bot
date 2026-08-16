@@ -106,14 +106,14 @@ def test_async_poll_returns_progress_without_downloading(monkeypatch) -> None:
     assert result["estimated_seconds_remaining"] == 480
 
 
-def test_studio_duration_client_rejects_fifteen_seconds_before_submit(monkeypatch) -> None:
-    monkeypatch.delenv("VELIA_STUDIO_VIDEO_15S_ENABLED", raising=False)
+def test_studio_duration_client_can_disable_fifteen_seconds_before_submit(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "false")
     called = False
 
     def unexpected_run_job(**kwargs):
         nonlocal called
         called = True
-        raise AssertionError("15s worker submission must stay disabled")
+        raise AssertionError("disabled 15s worker submission must not run")
 
     monkeypatch.setattr(duration_client, "_run_job", unexpected_run_job)
 
@@ -127,8 +127,11 @@ def test_studio_duration_client_rejects_fifteen_seconds_before_submit(monkeypatc
     assert called is False
 
 
-def test_fifteen_seconds_is_advertised_only_when_feature_flag_is_enabled(monkeypatch) -> None:
+def test_fifteen_seconds_is_advertised_by_default_with_emergency_rollback(monkeypatch) -> None:
     monkeypatch.delenv("VELIA_STUDIO_VIDEO_15S_ENABLED", raising=False)
+    assert duration_client.studio_video_duration_options() == (5, 10, 15)
+
+    monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "false")
     assert duration_client.studio_video_duration_options() == (5, 10)
 
     monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "true")

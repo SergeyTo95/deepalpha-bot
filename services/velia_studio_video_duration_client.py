@@ -13,8 +13,8 @@ from services.velia_media_worker_client import (
 
 
 def studio_video_duration_options() -> tuple[int, ...]:
-    enabled_15s = str(os.getenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "") or "").strip().lower()
-    return (5, 10, 15) if enabled_15s in {"1", "true", "yes", "on", "enabled"} else (5, 10)
+    enabled_15s = str(os.getenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "true") or "").strip().lower()
+    return (5, 10) if enabled_15s in {"0", "false", "no", "off", "disabled"} else (5, 10, 15)
 
 
 def _validate_request(prompt: str, duration_seconds: int) -> tuple[str, int]:
@@ -125,7 +125,8 @@ def generate_studio_video(
     """Run an accepted Studio T2V duration synchronously for rollback callers.
 
     New Studio video requests use submit_studio_video_job/poll_studio_video_job.
-    Fifteen seconds remains fail-closed unless the server capability flag is on.
+    Fifteen seconds is enabled by default. Set
+    VELIA_STUDIO_VIDEO_15S_ENABLED=false for an emergency rollback.
     """
     normalized_prompt, duration = _validate_request(prompt, duration_seconds)
 
