@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+_HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LEADING_LABEL_RE = re.compile(
     r"^(?:english\s+)?(?:video\s+)?prompt\s*:\s*",
     flags=re.IGNORECASE,
@@ -28,11 +30,21 @@ def _rewrite_instruction(prompt: str) -> str:
         "text-to-video model. Return only the final English prompt, without a label, "
         "quotes, Markdown, or explanation. Preserve every requested subject, species, "
         "count, action, location, era, and visual style. Do not replace animals with "
-        "people. Make the main subjects immediately recognizable and visible in a "
-        "well-lit medium-wide or wide shot. Describe one coherent five-second shot "
-        "with clear foreground action, natural motion, stable anatomy, sharp detail, "
-        "balanced exposure, and no text or logos. If the request is not English, "
-        "translate it accurately into English first.\n\n"
+        "people; when people are explicitly requested as a separate group, preserve "
+        "both groups and their distinct roles. Make the main subjects immediately "
+        "recognizable and visible in a well-lit medium-wide or wide shot. Describe one "
+        "coherent five-second shot with clear foreground action, natural motion, stable "
+        "anatomy, sharp detail, balanced exposure, and no text or logos. Whenever "
+        "subjects interact, establish simple, readable spatial roles and keep the same "
+        "screen direction throughout the shot. For conflict, pursuit, weapons, or "
+        "reciprocal action, explicitly place the opposing sides in the frame, keep each "
+        "intended target visible, make every weapon or prop correctly held by the "
+        "requested subject and aimed only at a visible intended target, and describe "
+        "clear cause and effect. Never make a character act, aim, or fire into empty "
+        "space or off-screen. Prefer one legible interaction over many unrelated "
+        "simultaneous actions, and do not invent extra principal subjects or change "
+        "their requested roles. If the request is not English, translate it accurately "
+        "into English first.\n\n"
         f"User request:\n{prompt.strip()}"
     )
 
@@ -47,6 +59,18 @@ def _clean_rewrite(value: str) -> str:
     if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
         cleaned = cleaned[1:-1].strip()
     return " ".join(cleaned.split())[:4000]
+
+
+def _diagnostic_source_matches(source: str) -> bool:
+    """Allow prompt-text logging only for one explicitly selected source prompt."""
+
+    configured = str(
+        os.getenv("VELIA_STUDIO_VIDEO_PROMPT_DIAGNOSTIC_SOURCE_SHA256") or ""
+    ).strip().lower()
+    if not _HEX_SHA256_RE.fullmatch(configured):
+        return False
+    actual = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return actual == configured
 
 
 def rewrite_studio_video_prompt(
@@ -102,4 +126,10 @@ def rewrite_studio_video_prompt(
         bool(_CYRILLIC_RE.search(source)),
         bool(_CYRILLIC_RE.search(cleaned)),
     )
+    if _diagnostic_source_matches(source):
+        logger.info(
+            "VELIA_STUDIO_VIDEO_PROMPT_DIAGNOSTIC generation_id=%s rewritten_prompt=%r",
+            str(generation_id)[:80],
+            cleaned,
+        )
     return cleaned
