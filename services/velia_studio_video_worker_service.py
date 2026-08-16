@@ -448,15 +448,35 @@ def _monitor_generation(generation_id: str) -> None:
 
             status = str(result.get("status") or "")
             if status in {"queued", "running"}:
-                remaining = result.get("estimated_seconds_remaining")
-                if remaining is None:
+                progress = max(0, min(100, int(result.get("progress_percent") or 0)))
+                raw_remaining = result.get("estimated_seconds_remaining")
+                try:
+                    remaining = (
+                        max(0, int(raw_remaining))
+                        if raw_remaining is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    remaining = None
+                estimate_overrun = (
+                    status == "running"
+                    and progress >= 95
+                    and (remaining is None or remaining == 0)
+                )
+                if not estimate_overrun and remaining is None:
                     remaining = _remaining_from_context(context)
                 _update_progress(
                     generation_id,
                     worker_status=status,
-                    progress_percent=int(result.get("progress_percent") or 0),
-                    estimated_seconds_remaining=int(remaining),
-                    estimated_completion_at=result.get("estimated_completion_at"),
+                    progress_percent=progress,
+                    estimated_seconds_remaining=(
+                        None if estimate_overrun else remaining
+                    ),
+                    estimated_completion_at=(
+                        None
+                        if estimate_overrun
+                        else result.get("estimated_completion_at")
+                    ),
                 )
                 time.sleep(poll_seconds)
                 continue
