@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
+
+import services
 
 from services.velia_studio_video_prompt_service import (
     _clean_rewrite,
@@ -26,10 +27,11 @@ def test_rewrite_translates_russian_prompt(monkeypatch):
             "taking over a New York City street, sharp detail and natural motion."
         )
 
-    monkeypatch.setitem(
-        sys.modules,
-        "services.llm_service",
+    monkeypatch.setattr(
+        services,
+        "llm_service",
         SimpleNamespace(generate_text=generate_text),
+        raising=False,
     )
 
     result = rewrite_studio_video_prompt(
@@ -49,10 +51,11 @@ def test_rewrite_fails_open_when_provider_raises(monkeypatch):
     def generate_text(*args, **kwargs):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setitem(
-        sys.modules,
-        "services.llm_service",
+    monkeypatch.setattr(
+        services,
+        "llm_service",
         SimpleNamespace(generate_text=generate_text),
+        raising=False,
     )
     source = "хомяки идут по улице"
 
