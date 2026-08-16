@@ -49,7 +49,9 @@ def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
 
 
 def _fallback_eta(duration_seconds: int) -> int:
-    defaults = {5: 1020, 10: 1500, 15: 2100}
+    # Match the worker's conservative 25-minute budget per native 5-second
+    # segment for the 1280x704/50-step RTX 3090 quality profile.
+    defaults = {5: 1500, 10: 3000, 15: 4500}
     duration = int(duration_seconds or 5)
     return _env_int(
         f"VELIA_STUDIO_VIDEO_ETA_{duration}_SECONDS",
