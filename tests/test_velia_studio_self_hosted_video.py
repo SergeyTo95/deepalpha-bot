@@ -217,6 +217,60 @@ def test_monitor_persists_progress_then_finalizes_success(monkeypatch) -> None:
     assert completed[0][1]["artifact_id"] == "artifact-1"
 
 
+def test_monitor_clears_expired_eta_instead_of_showing_one_minute(monkeypatch) -> None:
+    context = {
+        "generation_id": "generation-overrun",
+        "user_id": 77,
+        "session_id": "session-1",
+        "prompt": "long-running video",
+        "duration_seconds": 15,
+        "job_id": "worker-job-overrun",
+        "reservation_id": "reservation-1",
+        "estimated_completion_at": None,
+    }
+    monkeypatch.setattr(worker_service, "_load_monitor_context", lambda _generation_id: context)
+    results = iter(
+        [
+            {
+                "status": "running",
+                "progress_percent": 95,
+                "estimated_seconds_remaining": 0,
+                "estimated_completion_at": "2026-08-16T20:00:00Z",
+            },
+            {
+                "status": "succeeded",
+                "generated": {
+                    "artifact_id": "artifact-overrun",
+                    "sha256": "b" * 64,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(worker_service, "poll_studio_video_job", lambda **kwargs: next(results))
+    monkeypatch.setattr(worker_service.time, "sleep", lambda _seconds: None)
+    progress = []
+    monkeypatch.setattr(
+        worker_service,
+        "_update_progress",
+        lambda generation_id, **kwargs: progress.append((generation_id, kwargs)),
+    )
+    monkeypatch.setattr(worker_service, "_finalize_success", lambda *_args, **_kwargs: True)
+
+    worker_service._monitor_generation("generation-overrun")
+
+    assert progress == [
+        (
+            "generation-overrun",
+            {
+                "worker_status": "running",
+                "progress_percent": 95,
+                "estimated_seconds_remaining": None,
+                "estimated_completion_at": None,
+            },
+        )
+    ]
+
+
 def test_backend_restart_resumes_pending_worker_jobs(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
 
