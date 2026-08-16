@@ -17,6 +17,7 @@ from services.velia_studio_video_duration_client import (
     studio_video_duration_options,
     submit_studio_video_job,
 )
+from services.velia_studio_video_prompt_service import rewrite_studio_video_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -604,8 +605,14 @@ def generate_self_hosted_studio_video_turn(
             generation_id,
             duration,
         )
+        worker_prompt = rewrite_studio_video_prompt(
+            str(prompt),
+            user_id=int(user_id),
+            generation_id=str(generation_id),
+            session_id=str(session_id),
+        )
         submitted = submit_studio_video_job(
-            prompt=str(prompt),
+            prompt=worker_prompt,
             request_id=str(generation_id),
             duration_seconds=duration,
         )

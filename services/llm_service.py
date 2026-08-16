@@ -69,6 +69,8 @@ _FEATURE_PROVIDER_ENV = {
     "channel_news": "LLM_PROVIDER_NEWS",
     "live_analyst": "LLM_PROVIDER_LIVE_ANALYST",
     "watchlist_ai_summary": "LLM_PROVIDER_POLYMARKET",
+    # User-initiated Studio prompt normalization shares the global Gemini gate.
+    "studio_video_prompt": "GEMINI_ENABLED",
 }
 
 
