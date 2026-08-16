@@ -9,6 +9,7 @@ from services.velia_studio_generation_service import generate_studio_turn
 from services.velia_studio_recovery_service import generation_for_client_request
 from services.velia_studio_service import (
     StudioError,
+    _ensure_schema,
     create_reference_asset,
     create_session,
     get_reference_content,
@@ -19,12 +20,10 @@ from services.velia_studio_service import (
     verify_reference_signature,
 )
 from services.velia_studio_upload_quota import assert_studio_upload_capacity
+from services.velia_studio_video_duration_client import studio_video_duration_options
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
-_STUDIO_VIDEO_DURATION_OPTIONS = (5, 10)
-
-
 def _json_response(data: Dict[str, Any], status: int = 200) -> web.Response:
     response = web.Response(
         text=json.dumps(data, ensure_ascii=False, default=str),
@@ -62,6 +61,12 @@ def _error(exc: StudioError) -> web.Response:
 
 
 def setup_velia_studio_routes(app: web.Application) -> None:
+    async def resume_pending_video_jobs(_app: web.Application) -> None:
+        if studio_enabled():
+            await asyncio.to_thread(_ensure_schema)
+
+    app.on_startup.append(resume_pending_video_jobs)
+
     async def status(request: web.Request) -> web.Response:
         if not _require_auth(request):
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
@@ -75,9 +80,10 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 # Compatibility default for older APKs. New clients must use
                 # duration_options_seconds and send duration_seconds explicitly.
                 "duration_seconds": 5,
-                "duration_options_seconds": list(_STUDIO_VIDEO_DURATION_OPTIONS),
-                "resolution": "hd",
+                "duration_options_seconds": list(studio_video_duration_options()),
+                "resolution": "640x368",
                 "max_references": 1,
+                "eta_supported": True,
             },
         })
 
@@ -214,7 +220,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             duration_seconds = int(data.get("duration_seconds", 5) or 5)
         except (TypeError, ValueError):
             return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
-        if duration_seconds not in _STUDIO_VIDEO_DURATION_OPTIONS:
+        if duration_seconds not in studio_video_duration_options():
             return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
         try:
             result = await asyncio.to_thread(
@@ -230,7 +236,15 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             return _error(exc)
         except Exception:
             return _json_response({"ok": False, "error": "studio_generation_failed"}, status=500)
-        return _json_response({"ok": True, **result}, status=200 if result.get("duplicate") else 201)
+        generation = result.get("generation") if isinstance(result, dict) else None
+        response_status = (
+            200
+            if result.get("duplicate")
+            else 202
+            if isinstance(generation, dict) and generation.get("status") == "pending"
+            else 201
+        )
+        return _json_response({"ok": True, **result}, status=response_status)
 
     async def asset_content(request: web.Request) -> web.Response:
         asset_id = str(request.match_info.get("asset_id") or "").strip()

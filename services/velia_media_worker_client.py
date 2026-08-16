@@ -221,6 +221,47 @@ def _run_job(
     payload: Dict[str, Any],
     expected_media_type: str,
 ) -> MediaWorkerArtifact:
+    status_payload = submit_job(
+        kind=kind,
+        request_id=request_id,
+        payload=payload,
+    )
+    job_id = str(status_payload["job_id"])
+    safe_request_id = _safe_request_id(request_id, json.dumps(payload, sort_keys=True))
+
+    deadline = time.monotonic() + _env_int(
+        "VELIA_MEDIA_WORKER_JOB_TIMEOUT_SECONDS",
+        1800,
+        60,
+        3600,
+    )
+    poll_seconds = _env_int("VELIA_MEDIA_WORKER_POLL_INTERVAL_SECONDS", 2, 1, 15)
+    while True:
+        state = str(status_payload.get("status") or "").strip().lower()
+        if state == "succeeded":
+            return artifact_from_job(
+                status_payload=status_payload,
+                expected_media_type=expected_media_type,
+                request_id=safe_request_id,
+            )
+        if state == "failed":
+            error = status_payload.get("error")
+            worker_code = "media_worker_job_failed"
+            if isinstance(error, dict):
+                worker_code = str(error.get("code") or worker_code)[:80]
+            raise MediaWorkerError(worker_code)
+        if time.monotonic() >= deadline:
+            raise MediaWorkerError("media_worker_job_timeout")
+        time.sleep(poll_seconds)
+        status_payload = get_job_status(job_id=job_id, request_id=safe_request_id)
+
+
+def submit_job(
+    *,
+    kind: str,
+    request_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
     if kind not in {"images", "videos"}:
         raise MediaWorkerError("media_worker_kind_invalid")
 
@@ -240,45 +281,50 @@ def _run_job(
     job_id = str(submitted.get("job_id") or "").strip()
     if not job_id:
         raise MediaWorkerError("media_worker_job_id_missing")
+    state = str(submitted.get("status") or "").strip().lower()
+    if state not in {"queued", "running", "succeeded", "failed"}:
+        raise MediaWorkerError("media_worker_job_status_invalid")
+    return submitted
 
-    deadline = time.monotonic() + _env_int(
-        "VELIA_MEDIA_WORKER_JOB_TIMEOUT_SECONDS",
-        1800,
-        60,
-        3600,
+
+def get_job_status(*, job_id: str, request_id: str) -> Dict[str, Any]:
+    normalized_job_id = str(job_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", normalized_job_id):
+        raise MediaWorkerError("media_worker_job_id_invalid")
+    safe_request_id = _safe_request_id(request_id, normalized_job_id)
+    payload = _json_request(
+        "GET",
+        f"/v1/jobs/{normalized_job_id}",
+        headers={
+            "Authorization": f"Bearer {_auth_token()}",
+            "X-Request-ID": safe_request_id,
+        },
     )
-    poll_seconds = _env_int("VELIA_MEDIA_WORKER_POLL_INTERVAL_SECONDS", 2, 1, 15)
-    status_payload = submitted
-    while True:
-        state = str(status_payload.get("status") or "").strip().lower()
-        if state == "succeeded":
-            descriptor = _artifact_descriptor(status_payload)
-            if str(descriptor["media_type"]).lower() != expected_media_type.lower():
-                raise MediaWorkerError("media_worker_artifact_media_type_mismatch")
-            return _download_artifact(
-                job_id=job_id,
-                descriptor=descriptor,
-                request_id=safe_request_id,
-            )
-        if state == "failed":
-            error = status_payload.get("error")
-            worker_code = "media_worker_job_failed"
-            if isinstance(error, dict):
-                worker_code = str(error.get("code") or worker_code)[:80]
-            raise MediaWorkerError(worker_code)
-        if state not in {"queued", "running"}:
-            raise MediaWorkerError("media_worker_job_status_invalid")
-        if time.monotonic() >= deadline:
-            raise MediaWorkerError("media_worker_job_timeout")
-        time.sleep(poll_seconds)
-        status_payload = _json_request(
-            "GET",
-            f"/v1/jobs/{job_id}",
-            headers={
-                "Authorization": f"Bearer {_auth_token()}",
-                "X-Request-ID": safe_request_id,
-            },
-        )
+    state = str(payload.get("status") or "").strip().lower()
+    if state not in {"queued", "running", "succeeded", "failed"}:
+        raise MediaWorkerError("media_worker_job_status_invalid")
+    return payload
+
+
+def artifact_from_job(
+    *,
+    status_payload: Dict[str, Any],
+    expected_media_type: str,
+    request_id: str,
+) -> MediaWorkerArtifact:
+    if str(status_payload.get("status") or "").strip().lower() != "succeeded":
+        raise MediaWorkerError("media_worker_job_not_succeeded")
+    job_id = str(status_payload.get("job_id") or "").strip()
+    if not job_id:
+        raise MediaWorkerError("media_worker_job_id_missing")
+    descriptor = _artifact_descriptor(status_payload)
+    if str(descriptor["media_type"]).lower() != expected_media_type.lower():
+        raise MediaWorkerError("media_worker_artifact_media_type_mismatch")
+    return _download_artifact(
+        job_id=job_id,
+        descriptor=descriptor,
+        request_id=_safe_request_id(request_id, job_id),
+    )
 
 
 def generate_image(*, prompt: str, request_id: str) -> Dict[str, Any]:

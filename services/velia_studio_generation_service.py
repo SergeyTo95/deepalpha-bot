@@ -6,12 +6,11 @@ from services.velia_studio_image_reference_service import (
     generate_and_store_reference_image,
 )
 from services.velia_studio_video_worker_service import (
+    ensure_self_hosted_video_monitor,
     generate_self_hosted_studio_video_turn,
     self_hosted_media_active,
 )
-
-
-_SUPPORTED_SELF_HOSTED_VIDEO_DURATIONS = {5, 10}
+from services.velia_studio_video_duration_client import studio_video_duration_options
 
 
 def generate_studio_turn(
@@ -25,9 +24,8 @@ def generate_studio_turn(
 ) -> Dict[str, Any]:
     """Route Studio generation without broadening the ordinary chat router.
 
-    Self-hosted Studio T2V accepts the server-advertised 5s/10s durations as a
-    structured request field. Reference-conditioned video and 15s remain
-    fail-closed until their separate acceptance is complete.
+    Self-hosted Studio T2V accepts only server-advertised durations. The 15s
+    capability remains fail-closed until its production feature flag is set.
     """
     studio_service._ensure_schema()
     if not studio_service.studio_enabled():
@@ -49,6 +47,8 @@ def generate_studio_turn(
     if existing:
         if existing["session_id"] != str(session_id):
             raise studio_service.StudioError("studio_idempotency_conflict", status=409)
+        if existing.get("status") == "pending" and existing.get("type") == "video":
+            ensure_self_hosted_video_monitor(str(existing.get("id") or ""))
         return {"duplicate": True, "generation": existing}
 
     reference_ids = studio_service._reference_ids(reference_asset_ids)
@@ -56,7 +56,7 @@ def generate_studio_turn(
     duration = int(duration_seconds or 5)
 
     if mode == "video" and self_hosted_media_active():
-        if duration not in _SUPPORTED_SELF_HOSTED_VIDEO_DURATIONS:
+        if duration not in studio_video_duration_options():
             raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
         return generate_self_hosted_studio_video_turn(
             user_id=int(user_id),

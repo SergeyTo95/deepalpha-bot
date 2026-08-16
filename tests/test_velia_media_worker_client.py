@@ -55,13 +55,13 @@ def test_image_job_uses_async_contract_and_verifies_artifact(monkeypatch):
         if method == "POST" and url.endswith("/v1/images/jobs"):
             return FakeResponse(
                 status_code=202,
-                payload={"request_id": "req", "job_id": "job-1", "status": "queued"},
+                payload={"request_id": "req", "job_id": "job-0001", "status": "queued"},
             )
-        if method == "GET" and url.endswith("/v1/jobs/job-1"):
+        if method == "GET" and url.endswith("/v1/jobs/job-0001"):
             return FakeResponse(
                 payload={
                     "request_id": "req",
-                    "job_id": "job-1",
+                    "job_id": "job-0001",
                     "status": "succeeded",
                     "artifact": {
                         "id": "artifact-1",
@@ -87,7 +87,7 @@ def test_image_job_uses_async_contract_and_verifies_artifact(monkeypatch):
     assert result["mime_type"] == "image/png"
     assert result["width"] == 64
     assert result["height"] == 48
-    assert result["external_request_id"] == "job-1"
+    assert result["external_request_id"] == "job-0001"
     assert result["artifact_id"] == "artifact-1"
     assert result["sha256"] == digest
 
@@ -194,3 +194,55 @@ def test_worker_base_url_requires_https_by_default(monkeypatch):
 
     with pytest.raises(client.MediaWorkerError, match="media_worker_base_url_invalid"):
         client._base_url()
+
+
+def test_submit_and_status_helpers_keep_async_progress_fields(monkeypatch):
+    _configure(monkeypatch)
+    responses = iter(
+        [
+            FakeResponse(
+                status_code=202,
+                payload={
+                    "job_id": "video-job-123",
+                    "status": "queued",
+                    "progress_percent": 0,
+                    "estimated_seconds_remaining": 900,
+                },
+            ),
+            FakeResponse(
+                payload={
+                    "job_id": "video-job-123",
+                    "status": "running",
+                    "progress_percent": 35,
+                    "estimated_seconds_remaining": 540,
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(client.requests, "request", lambda *args, **kwargs: next(responses))
+
+    submitted = client.submit_job(
+        kind="videos",
+        request_id="generation-123",
+        payload={"prompt": "clouds", "duration_seconds": 10},
+    )
+    running = client.get_job_status(
+        job_id="video-job-123",
+        request_id="generation-123",
+    )
+
+    assert submitted["estimated_seconds_remaining"] == 900
+    assert running["progress_percent"] == 35
+    assert running["estimated_seconds_remaining"] == 540
+
+
+def test_status_helper_rejects_untrusted_job_id_before_request(monkeypatch):
+    _configure(monkeypatch)
+    monkeypatch.setattr(
+        client.requests,
+        "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not request")),
+    )
+
+    with pytest.raises(client.MediaWorkerError, match="media_worker_job_id_invalid"):
+        client.get_job_status(job_id="../../secrets", request_id="generation-123")

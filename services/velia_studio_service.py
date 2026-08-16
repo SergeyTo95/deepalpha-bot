@@ -114,6 +114,16 @@ def ensure_velia_studio_tables() -> None:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
         """)
+        # Durable worker orchestration metadata. ADD COLUMN is intentionally
+        # idempotent because Studio schema bootstrap runs inside the app.
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS duration_seconds INTEGER NOT NULL DEFAULT 5")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS worker_job_id TEXT NULL")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS worker_status TEXT NULL")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS worker_reservation_id TEXT NULL")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS progress_percent INTEGER NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS estimated_seconds_remaining INTEGER NULL")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS estimated_completion_at TIMESTAMP NULL")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS worker_updated_at TIMESTAMP NULL")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS velia_studio_assets (
                 asset_id TEXT PRIMARY KEY,
@@ -132,6 +142,7 @@ def ensure_velia_studio_tables() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_studio_sessions_user_mode ON velia_studio_sessions(user_id,mode,updated_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_studio_messages_session ON velia_studio_messages(session_id,created_at ASC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_studio_assets_session ON velia_studio_assets(session_id,created_at ASC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_studio_pending_worker ON velia_studio_generations(status,worker_status,worker_updated_at)")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -145,10 +156,24 @@ def _ensure_schema() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
+    initialized = False
     with _SCHEMA_LOCK:
         if not _SCHEMA_READY:
             ensure_velia_studio_tables()
             _SCHEMA_READY = True
+            initialized = True
+    if initialized:
+        try:
+            from services.velia_studio_video_worker_service import (
+                resume_pending_self_hosted_video_monitors,
+            )
+
+            resume_pending_self_hosted_video_monitors()
+        except Exception as exc:
+            logger.exception(
+                "VELIA_STUDIO_VIDEO_RESUME_FAILED error_type=%s",
+                type(exc).__name__,
+            )
 
 
 def _mode(value: str) -> str:
@@ -342,9 +367,9 @@ def _generation(user_id: int, *, generation_id: Optional[str]=None, client_reque
     conn=get_connection(); cur=conn.cursor()
     try:
         if generation_id:
-            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at FROM velia_studio_generations WHERE generation_id=%s AND user_id=%s LIMIT 1",(generation_id,int(user_id)))
+            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at FROM velia_studio_generations WHERE generation_id=%s AND user_id=%s LIMIT 1",(generation_id,int(user_id)))
         else:
-            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at FROM velia_studio_generations WHERE client_request_id=%s AND user_id=%s LIMIT 1",(str(client_request_id),int(user_id)))
+            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at FROM velia_studio_generations WHERE client_request_id=%s AND user_id=%s LIMIT 1",(str(client_request_id),int(user_id)))
         row=cur.fetchone()
     finally:
         cur.close(); conn.close()
@@ -354,7 +379,7 @@ def _generation(user_id: int, *, generation_id: Optional[str]=None, client_reque
     except Exception: ref_ids=[]
     media=image_metadata_for_request(out,int(user_id)) if out and gen_type=="image" else video_metadata_for_request(out,int(user_id)) if out and gen_type=="video" else None
     refs=[m for m in (reference_asset_metadata(str(i),user_id) for i in ref_ids) if m]
-    return {"id":gen_id,"session_id":str(_rv(row,"session_id",1,"")),"type":gen_type,"prompt":str(_rv(row,"prompt",3,"")),"references":refs,"status":str(_rv(row,"status",5,"pending")),"media":media,"estimated_cost_usd":float(_rv(row,"estimated_cost_usd",7,0) or 0),"error_code":_rv(row,"error_code",8),"created_at":_iso(_rv(row,"created_at",9)),"completed_at":_iso(_rv(row,"completed_at",10))}
+    return {"id":gen_id,"session_id":str(_rv(row,"session_id",1,"")),"type":gen_type,"prompt":str(_rv(row,"prompt",3,"")),"client_request_id":str(_rv(row,"client_request_id",11,"") or ""),"references":refs,"status":str(_rv(row,"status",5,"pending")),"media":media,"estimated_cost_usd":float(_rv(row,"estimated_cost_usd",7,0) or 0),"error_code":_rv(row,"error_code",8),"duration_seconds":int(_rv(row,"duration_seconds",12,5) or 5),"worker_status":str(_rv(row,"worker_status",13,"") or "") or None,"progress_percent":max(0,min(100,int(_rv(row,"progress_percent",14,0) or 0))),"estimated_seconds_remaining":int(_rv(row,"estimated_seconds_remaining",15,0)) if _rv(row,"estimated_seconds_remaining",15) is not None else None,"estimated_completion_at":_iso(_rv(row,"estimated_completion_at",16)),"created_at":_iso(_rv(row,"created_at",9)),"completed_at":_iso(_rv(row,"completed_at",10))}
 
 
 def list_messages(user_id: int, session_id: str, *, limit: int=200) -> List[Dict[str, Any]]:
