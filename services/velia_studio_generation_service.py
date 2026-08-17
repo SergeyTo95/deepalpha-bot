@@ -11,6 +11,12 @@ from services.velia_studio_video_worker_service import (
     self_hosted_media_active,
 )
 from services.velia_studio_video_duration_client import studio_video_duration_options
+from services.velia_studio_music_worker_service import (
+    ensure_self_hosted_music_monitor,
+    generate_self_hosted_studio_music_turn,
+    self_hosted_music_active,
+)
+from services.velia_studio_music_duration_client import studio_music_duration_options
 
 
 def generate_studio_turn(
@@ -21,6 +27,8 @@ def generate_studio_turn(
     client_request_id: str,
     reference_asset_ids: Any = None,
     duration_seconds: int = 5,
+    lyrics_mode: str = "auto",
+    lyrics: str = "",
 ) -> Dict[str, Any]:
     """Route Studio generation without broadening the ordinary chat router.
 
@@ -49,11 +57,29 @@ def generate_studio_turn(
             raise studio_service.StudioError("studio_idempotency_conflict", status=409)
         if existing.get("status") == "pending" and existing.get("type") == "video":
             ensure_self_hosted_video_monitor(str(existing.get("id") or ""))
+        if existing.get("status") == "pending" and existing.get("type") == "music":
+            ensure_self_hosted_music_monitor(str(existing.get("id") or ""))
         return {"duplicate": True, "generation": existing}
 
     reference_ids = studio_service._reference_ids(reference_asset_ids)
     mode = str(session["mode"])
     duration = int(duration_seconds or 5)
+
+    if mode == "music":
+        if not self_hosted_music_active():
+            raise studio_service.StudioError("studio_music_disabled", status=503)
+        if duration not in studio_music_duration_options():
+            raise studio_service.StudioError("studio_music_duration_not_supported", status=400)
+        return generate_self_hosted_studio_music_turn(
+            user_id=int(user_id),
+            session_id=str(session_id),
+            prompt=normalized_prompt,
+            client_request_id=normalized_client_request_id,
+            reference_ids=reference_ids,
+            duration_seconds=duration,
+            lyrics_mode=str(lyrics_mode or "auto"),
+            lyrics=str(lyrics or ""),
+        )
 
     if mode == "video" and self_hosted_media_active():
         if duration not in studio_video_duration_options():
