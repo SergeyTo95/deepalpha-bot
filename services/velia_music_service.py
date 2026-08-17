@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional
 from db.database import get_connection
 
 
+MUSIC_ATTRIBUTION = "MiniMax-Music3 · AI-generated"
+
+
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(os.getenv(name, str(default)) or default)
@@ -234,7 +237,7 @@ def music_metadata_for_request(request_id: str, user_id: int) -> Optional[Dict[s
         "channels": int(values[7] or 2),
         "byte_size": int(values[8] or 0),
         "sha256": str(values[9] or ""),
-        "attribution": "MiniMax-Music3",
+        "attribution": MUSIC_ATTRIBUTION,
     }
 
 
