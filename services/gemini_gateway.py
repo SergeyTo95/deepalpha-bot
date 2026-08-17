@@ -32,6 +32,9 @@ FEATURE_FLAGS = {
     "live_analyst": "LIVE_ANALYST_GEMINI_ENABLED",
     "live_analyst_vision": "LIVE_ANALYST_VISION_GEMINI_ENABLED",
     "watchlist_ai_summary": "WATCHLIST_AI_SUMMARY_GEMINI_ENABLED",
+    "studio_video_prompt": "GEMINI_ENABLED",
+    "studio_music_prompt": "GEMINI_ENABLED",
+    "studio_music_lyrics": "GEMINI_ENABLED",
 }
 
 
