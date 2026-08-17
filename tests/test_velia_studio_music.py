@@ -12,7 +12,7 @@ import services.velia_studio_music_duration_client as duration_client
 import services.velia_studio_music_prompt_service as prompt_service
 import services.velia_studio_service as studio_service
 from services.velia_media_worker_client import MediaWorkerArtifact, MediaWorkerError
-from services.velia_music_service import inspect_music_wav
+from services.velia_music_service import MUSIC_ATTRIBUTION, inspect_music_wav
 
 
 def _wav(seconds: int = 1) -> bytes:
@@ -41,6 +41,10 @@ def test_music_wav_validation_rejects_mono() -> None:
         audio.writeframes(b"\0\0" * 32000)
     with pytest.raises(ValueError, match="music_artifact_format_invalid"):
         inspect_music_wav(buffer.getvalue())
+
+
+def test_music_attribution_discloses_ai_generation() -> None:
+    assert MUSIC_ATTRIBUTION == "MiniMax-Music3 · AI-generated"
 
 
 def test_submit_music_job_preserves_contract(monkeypatch) -> None:
