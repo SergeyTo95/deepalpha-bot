@@ -550,6 +550,7 @@ def resume_pending_self_hosted_video_monitors(limit: int = 100) -> int:
             SELECT generation_id
             FROM velia_studio_generations
             WHERE status='pending'
+              AND generation_type='video'
               AND worker_job_id IS NOT NULL
             ORDER BY created_at ASC
             LIMIT %s

@@ -56,6 +56,12 @@ def generation_for_client_request(
         )
 
         ensure_self_hosted_video_monitor(generation_id)
+    if generation.get("status") == "pending" and generation.get("type") == "music":
+        from services.velia_studio_music_worker_service import (
+            ensure_self_hosted_music_monitor,
+        )
+
+        ensure_self_hosted_music_monitor(generation_id)
     return {
         **generation,
         "client_request_id": normalized_client_request_id,

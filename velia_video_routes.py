@@ -6,6 +6,7 @@ from services.velia_videos_service import (
     get_video_content,
     verify_video_signature,
 )
+from services.velia_music_service import get_music_content, verify_music_signature
 from velia_studio_routes import setup_velia_studio_routes
 
 
@@ -105,5 +106,64 @@ def setup_velia_video_routes(app) -> None:
         "/api/mobile/videos/{video_id}/content",
         video_content,
         name="velia_video_content",
+    )
+
+    async def music_content(request: web.Request) -> web.Response:
+        music_id = str(request.match_info.get("music_id") or "").strip()
+        try:
+            user_id = int(request.query.get("user_id") or 0)
+            expires_at = int(request.query.get("expires") or 0)
+        except (TypeError, ValueError):
+            raise web.HTTPForbidden(text="Music access is unavailable")
+        signature = str(request.query.get("signature") or "")
+        if not music_id or user_id <= 0 or not verify_music_signature(
+            music_id, user_id, expires_at, signature
+        ):
+            raise web.HTTPForbidden(text="Music access is unavailable")
+        music = get_music_content(music_id, user_id)
+        if not music:
+            raise web.HTTPNotFound(text="Music not found")
+        raw = bytes(music["bytes"])
+        total_size = len(raw)
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f'inline; filename="{music_id}.wav"',
+            "X-Content-Type-Options": "nosniff",
+        }
+        range_header = str(request.headers.get("Range") or "")
+        if range_header:
+            try:
+                selected = parse_single_byte_range(range_header, total_size)
+            except ValueError:
+                raise web.HTTPRequestRangeNotSatisfiable(
+                    headers={"Content-Range": f"bytes */{total_size}"}
+                )
+            if selected is None:
+                raise web.HTTPRequestRangeNotSatisfiable(
+                    headers={"Content-Range": f"bytes */{total_size}"}
+                )
+            start, end = selected
+            chunk = raw[start : end + 1]
+            return web.Response(
+                status=206,
+                body=b"" if request.method == "HEAD" else chunk,
+                content_type=str(music["mime_type"]),
+                headers={
+                    **headers,
+                    "Content-Range": f"bytes {start}-{end}/{total_size}",
+                    "Content-Length": str(len(chunk)),
+                },
+            )
+        return web.Response(
+            body=b"" if request.method == "HEAD" else raw,
+            content_type=str(music["mime_type"]),
+            headers={**headers, "Content-Length": str(total_size)},
+        )
+
+    app.router.add_get(
+        "/api/mobile/music/{music_id}/content",
+        music_content,
+        name="velia_music_content",
     )
     setup_velia_studio_routes(app)

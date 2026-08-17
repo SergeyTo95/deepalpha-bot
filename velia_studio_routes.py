@@ -17,10 +17,12 @@ from services.velia_studio_service import (
     list_messages,
     list_sessions,
     studio_enabled,
+    studio_music_enabled,
     verify_reference_signature,
 )
 from services.velia_studio_upload_quota import assert_studio_upload_capacity
 from services.velia_studio_video_duration_client import studio_video_duration_options
+from services.velia_studio_music_duration_client import studio_music_duration_options
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -73,7 +75,7 @@ def setup_velia_studio_routes(app: web.Application) -> None:
         return _json_response({
             "ok": True,
             "enabled": studio_enabled(),
-            "modes": ["image", "video"],
+            "modes": ["image", "video", "music"],
             "image": {"max_references": 4, "reference_editing": True},
             "video": {
                 "draft": True,
@@ -84,6 +86,17 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 "resolution": "640x368",
                 "max_references": 1,
                 "eta_supported": True,
+            },
+            "music": {
+                "enabled": studio_music_enabled(),
+                "model": "MiniMaxAI/MiniMax-Music3",
+                "duration_seconds": 30,
+                "duration_options_seconds": list(studio_music_duration_options()),
+                "lyrics_modes": ["auto", "custom", "instrumental"],
+                "max_references": 0,
+                "media_type": "audio/wav",
+                "eta_supported": True,
+                "attribution": "MiniMax-Music3 · AI-generated",
             },
         })
 
@@ -220,8 +233,6 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             duration_seconds = int(data.get("duration_seconds", 5) or 5)
         except (TypeError, ValueError):
             return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
-        if duration_seconds not in studio_video_duration_options():
-            return _json_response({"ok": False, "error": "studio_video_duration_not_supported"}, status=400)
         try:
             result = await asyncio.to_thread(
                 generate_studio_turn,
@@ -231,6 +242,8 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 client_request_id=key,
                 reference_asset_ids=data.get("reference_asset_ids"),
                 duration_seconds=duration_seconds,
+                lyrics_mode=str(data.get("lyrics_mode") or "auto"),
+                lyrics=str(data.get("lyrics") or ""),
             )
         except StudioError as exc:
             return _error(exc)

@@ -71,6 +71,8 @@ _FEATURE_PROVIDER_ENV = {
     "watchlist_ai_summary": "LLM_PROVIDER_POLYMARKET",
     # User-initiated Studio prompt normalization shares the global Gemini gate.
     "studio_video_prompt": "GEMINI_ENABLED",
+    "studio_music_prompt": "GEMINI_ENABLED",
+    "studio_music_lyrics": "GEMINI_ENABLED",
 }
 
 
@@ -320,6 +322,11 @@ def _call_gemini(
 
 def generate_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False, request_id: Optional[str] = None, cycle_id: Optional[str] = None, job_id: Optional[str] = None) -> str:
     return _call_gemini(prompt, max_tokens=512, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, budget_checked=budget_checked, admin_override=admin_override, primary_model=DEFAULT_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS, request_id=request_id, cycle_id=cycle_id, job_id=job_id)
+
+
+def generate_music_text(prompt: str, feature: str, user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, request_id: Optional[str] = None, cycle_id: Optional[str] = None, job_id: Optional[str] = None) -> str:
+    max_tokens = max(256, min(4096, int(os.getenv("VELIA_STUDIO_MUSIC_LLM_MAX_OUTPUT_TOKENS", "2500"))))
+    return _call_gemini(prompt, max_tokens=max_tokens, feature=feature, user_id=user_id, chat_id=chat_id, is_background=is_background, primary_model=DEFAULT_GEMINI_MODEL, fallback_models=GEMINI_FALLBACK_MODELS, request_id=request_id, cycle_id=cycle_id, job_id=job_id)
 
 
 def generate_decision_text(prompt: str, feature: str = "signal_generation", user_id: Optional[int] = None, chat_id: Optional[int] = None, is_background: bool = False, budget_checked: bool = False, admin_override: bool = False, request_id: Optional[str] = None, cycle_id: Optional[str] = None, job_id: Optional[str] = None) -> str:
