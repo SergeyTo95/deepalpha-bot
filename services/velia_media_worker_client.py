@@ -262,7 +262,7 @@ def submit_job(
     request_id: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    if kind not in {"images", "videos"}:
+    if kind not in {"images", "videos", "music"}:
         raise MediaWorkerError("media_worker_kind_invalid")
 
     safe_request_id = _safe_request_id(request_id, json.dumps(payload, sort_keys=True))
