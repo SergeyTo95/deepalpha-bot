@@ -15,13 +15,13 @@ from services.velia_media_worker_client import MediaWorkerArtifact, MediaWorkerE
 from services.velia_music_service import MUSIC_ATTRIBUTION, inspect_music_wav
 
 
-def _wav(seconds: int = 1) -> bytes:
+def _wav(seconds: int = 1, sample_rate: int = 32000) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as audio:
         audio.setnchannels(2)
         audio.setsampwidth(2)
-        audio.setframerate(32000)
-        audio.writeframes(b"\0\0\0\0" * 32000 * seconds)
+        audio.setframerate(sample_rate)
+        audio.writeframes(b"\0\0\0\0" * sample_rate * seconds)
     return buffer.getvalue()
 
 
@@ -32,6 +32,14 @@ def test_music_wav_validation_accepts_exact_contract() -> None:
     assert metadata["sample_rate_hz"] == 32000
     assert metadata["channels"] == 2
     assert metadata["sha256"] == hashlib.sha256(raw).hexdigest()
+
+
+def test_music_wav_validation_accepts_native_music3_sample_rate() -> None:
+    raw = _wav(2, sample_rate=44100)
+    metadata = inspect_music_wav(raw)
+    assert metadata["duration_seconds"] == 2.0
+    assert metadata["sample_rate_hz"] == 44100
+    assert metadata["channels"] == 2
 
 
 def test_music_wav_validation_rejects_mono() -> None:

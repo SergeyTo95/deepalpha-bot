@@ -111,7 +111,10 @@ def inspect_music_wav(content: bytes) -> Dict[str, Any]:
             frames = int(wav.getnframes())
     except (wave.Error, EOFError) as exc:
         raise ValueError("music_artifact_invalid_wav") from exc
-    if channels != 2 or sample_rate != 32000 or sample_width != 2 or frames <= 0:
+    # MiniMax Music3's native Diffusers pipeline emits 44.1 kHz stereo PCM.
+    # Keep accepting the earlier 32 kHz reference-server output as well so
+    # already compatible workers do not regress.
+    if channels != 2 or sample_rate not in {32000, 44100} or sample_width != 2 or frames <= 0:
         raise ValueError("music_artifact_format_invalid")
     duration = frames / sample_rate
     if duration < 1.0 or duration > 305.0:
