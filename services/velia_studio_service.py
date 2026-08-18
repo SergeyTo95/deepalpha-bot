@@ -416,6 +416,27 @@ def _load_refs(user_id: int, session_id: str, ids: List[str]) -> List[Dict[str, 
     return [{"id":i,"mime_type":str(_rv(by_id[i],"mime_type",1,"")),"content_bytes":bytes(_rv(by_id[i],"content_bytes",2,b"") or b""),"width":int(_rv(by_id[i],"width",3,0) or 0),"height":int(_rv(by_id[i],"height",4,0) or 0)} for i in ids]
 
 
+def _generation_media(gen_type: str, output_request_id: str, generation_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    lookup = str(output_request_id or generation_id or "").strip()
+    if not lookup:
+        return None
+    if gen_type == "image":
+        return image_metadata_for_request(lookup, int(user_id))
+    if gen_type == "video":
+        return video_metadata_for_request(lookup, int(user_id))
+    if gen_type == "music":
+        media = music_metadata_for_request(lookup, int(user_id))
+        if media is None and lookup != generation_id:
+            media = music_metadata_for_request(str(generation_id), int(user_id))
+        if media is None:
+            logger.error(
+                "VELIA_STUDIO_MUSIC_MEDIA_MISSING generation_id=%s output_request_id=%s user_id=%s",
+                generation_id, output_request_id, user_id,
+            )
+        return media
+    return None
+
+
 def _generation(user_id: int, *, generation_id: Optional[str]=None, client_request_id: Optional[str]=None) -> Optional[Dict[str, Any]]:
     conn=get_connection(); cur=conn.cursor()
     try:
@@ -430,7 +451,7 @@ def _generation(user_id: int, *, generation_id: Optional[str]=None, client_reque
     gen_id=str(_rv(row,"generation_id",0,"")); gen_type=str(_rv(row,"generation_type",2,"")); out=str(_rv(row,"output_request_id",6,"") or "")
     try: ref_ids=json.loads(str(_rv(row,"reference_asset_ids_json",4,"[]") or "[]"))
     except Exception: ref_ids=[]
-    media=image_metadata_for_request(out,int(user_id)) if out and gen_type=="image" else video_metadata_for_request(out,int(user_id)) if out and gen_type=="video" else music_metadata_for_request(out,int(user_id)) if out and gen_type=="music" else None
+    media=_generation_media(gen_type,out,gen_id,int(user_id))
     refs=[m for m in (reference_asset_metadata(str(i),user_id) for i in ref_ids) if m]
     return {"id":gen_id,"session_id":str(_rv(row,"session_id",1,"")),"type":gen_type,"prompt":str(_rv(row,"prompt",3,"")),"client_request_id":str(_rv(row,"client_request_id",11,"") or ""),"references":refs,"status":str(_rv(row,"status",5,"pending")),"media":media,"estimated_cost_usd":float(_rv(row,"estimated_cost_usd",7,0) or 0),"error_code":_rv(row,"error_code",8),"duration_seconds":int(_rv(row,"duration_seconds",12,5) or 5),"worker_status":str(_rv(row,"worker_status",13,"") or "") or None,"progress_percent":max(0,min(100,int(_rv(row,"progress_percent",14,0) or 0))),"estimated_seconds_remaining":int(_rv(row,"estimated_seconds_remaining",15,0)) if _rv(row,"estimated_seconds_remaining",15) is not None else None,"estimated_completion_at":_iso(_rv(row,"estimated_completion_at",16)),"lyrics":str(_rv(row,"lyrics",17,"") or ""),"instrumental":bool(_rv(row,"instrumental",18,False)),"created_at":_iso(_rv(row,"created_at",9)),"completed_at":_iso(_rv(row,"completed_at",10))}
 
