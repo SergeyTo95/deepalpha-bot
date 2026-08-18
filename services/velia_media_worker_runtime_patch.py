@@ -30,6 +30,12 @@ def _provider() -> str:
     return str(os.getenv("VELIA_MEDIA_PROVIDER", "legacy") or "legacy").strip().lower()
 
 
+def _video_provider() -> str:
+    return str(
+        os.getenv("VELIA_STUDIO_VIDEO_PROVIDER", _provider()) or "legacy"
+    ).strip().lower()
+
+
 def _auth_token_diagnostics() -> tuple[int, str]:
     # Match the client normalization exactly, but never log the credential.
     # A short SHA-256 prefix is sufficient to compare independently computed
@@ -181,7 +187,9 @@ def install() -> None:
         return
 
     provider = _provider()
-    if provider not in {"self_hosted", "self-hosted", "velia_worker", "worker"}:
+    video_provider = _video_provider()
+    self_hosted = {"self_hosted", "self-hosted", "velia_worker", "worker"}
+    if provider not in self_hosted and video_provider not in self_hosted:
         logger.info(
             "VELIA_MEDIA_WORKER_RUNTIME_SKIPPED provider=%s legacy_provider_active=true",
             provider or "legacy",
@@ -197,18 +205,22 @@ def install() -> None:
     # Replacing the provider function here makes the self-hosted worker the only
     # active media provider while leaving legacy code available for an explicit
     # rollback via VELIA_MEDIA_PROVIDER=legacy.
-    image_service._submit_and_wait = _image_submit_and_wait
-    video_service._submit_and_wait = _video_submit_and_wait
-    video_service._reserve_capacity = reserve_self_hosted_video_capacity
-    image_service.generate_and_store_image = _generate_and_store_image
-    video_service.generate_and_store_video = _generate_and_store_video
-    image_runtime.generate_and_store_image = _generate_and_store_image
-    video_runtime.generate_and_store_video = _generate_and_store_video
+    if provider in self_hosted:
+        image_service._submit_and_wait = _image_submit_and_wait
+        image_service.generate_and_store_image = _generate_and_store_image
+        image_runtime.generate_and_store_image = _generate_and_store_image
+    if video_provider in self_hosted:
+        video_service._submit_and_wait = _video_submit_and_wait
+        video_service._reserve_capacity = reserve_self_hosted_video_capacity
+        video_service.generate_and_store_video = _generate_and_store_video
+        video_runtime.generate_and_store_video = _generate_and_store_video
 
     _INSTALLED = True
     token_len, token_fingerprint = _auth_token_diagnostics()
     logger.info(
-        "VELIA_MEDIA_WORKER_RUNTIME_INSTALLED provider=self_hosted legacy_fallback=false auth_token_len=%d auth_token_sha256_prefix=%s",
+        "VELIA_MEDIA_WORKER_RUNTIME_INSTALLED provider=%s video_provider=%s auth_token_len=%d auth_token_sha256_prefix=%s",
+        provider,
+        video_provider,
         token_len,
         token_fingerprint,
     )

@@ -333,3 +333,10 @@ def test_self_hosted_reference_video_fails_closed_before_worker(monkeypatch) -> 
 
     assert captured.value.code == "video_mode_not_supported"
     assert captured.value.status == 409
+
+
+def test_video_provider_can_roll_back_without_disabling_other_self_hosted_media(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
+    monkeypatch.setenv("VELIA_STUDIO_VIDEO_PROVIDER", "legacy")
+
+    assert worker_service.self_hosted_media_active() is False

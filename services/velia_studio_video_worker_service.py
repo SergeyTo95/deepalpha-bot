@@ -35,7 +35,10 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 def self_hosted_media_active() -> bool:
-    provider = str(os.getenv("VELIA_MEDIA_PROVIDER", "legacy") or "legacy").strip().lower()
+    provider = str(
+        os.getenv("VELIA_STUDIO_VIDEO_PROVIDER", os.getenv("VELIA_MEDIA_PROVIDER", "legacy"))
+        or "legacy"
+    ).strip().lower()
     return provider in _SELF_HOSTED_PROVIDERS
 
 
