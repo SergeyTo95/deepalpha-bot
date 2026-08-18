@@ -168,6 +168,46 @@ def test_generation_service_dispatches_music(monkeypatch) -> None:
     assert result["generation"]["id"] == "music-1"
 
 
+def test_completed_music_media_falls_back_to_generation_id(monkeypatch) -> None:
+    lookups = []
+
+    def lookup(request_id: str, user_id: int):
+        lookups.append((request_id, user_id))
+        if request_id == "generation-1":
+            return {
+                "id": "music-1",
+                "content_url": "/api/mobile/music/music-1/content?signed=1",
+                "mime_type": "audio/wav",
+            }
+        return None
+
+    monkeypatch.setattr(studio_service, "music_metadata_for_request", lookup)
+    media = studio_service._generation_media(
+        "music", "stale-output-id", "generation-1", 7
+    )
+
+    assert media is not None
+    assert media["content_url"].startswith("/api/mobile/music/")
+    assert lookups == [("stale-output-id", 7), ("generation-1", 7)]
+
+
+def test_completed_music_media_uses_generation_id_when_output_is_blank(monkeypatch) -> None:
+    monkeypatch.setattr(
+        studio_service,
+        "music_metadata_for_request",
+        lambda request_id, user_id: {
+            "id": "music-1",
+            "content_url": f"/api/mobile/music/{request_id}/content?user_id={user_id}",
+            "mime_type": "audio/wav",
+        },
+    )
+
+    media = studio_service._generation_media("music", "", "generation-1", 7)
+
+    assert media is not None
+    assert "generation-1" in media["content_url"]
+
+
 @pytest.mark.parametrize("duration", [5, 10, 20, 301])
 def test_music_rejects_unsupported_duration(duration: int) -> None:
     with pytest.raises(MediaWorkerError, match="studio_music_duration_not_supported"):
