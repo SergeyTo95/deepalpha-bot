@@ -7,6 +7,7 @@ from services.velia_media_worker_client import MediaWorkerArtifact, MediaWorkerE
 
 
 def test_studio_duration_client_submits_ten_seconds_as_structured_worker_field(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     captured = {}
 
     def fake_run_job(*, kind, request_id, payload, expected_media_type):
@@ -44,6 +45,7 @@ def test_studio_duration_client_submits_ten_seconds_as_structured_worker_field(m
 
 
 def test_async_submit_preserves_duration_and_worker_eta(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     captured = {}
 
     def fake_submit_job(*, kind, request_id, payload):
@@ -142,6 +144,7 @@ def test_async_poll_preserves_production_storage_resolution_contract(monkeypatch
 
 
 def test_studio_duration_client_can_disable_fifteen_seconds_before_submit(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     monkeypatch.setenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "false")
     called = False
 
@@ -163,6 +166,7 @@ def test_studio_duration_client_can_disable_fifteen_seconds_before_submit(monkey
 
 
 def test_fifteen_seconds_is_advertised_by_default_with_emergency_rollback(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
     monkeypatch.delenv("VELIA_STUDIO_VIDEO_15S_ENABLED", raising=False)
     assert duration_client.studio_video_duration_options() == (5, 10, 15)
 
@@ -189,3 +193,10 @@ def test_fifteen_seconds_is_advertised_by_default_with_emergency_rollback(monkey
 
     assert captured["payload"]["duration_seconds"] == 15
     assert result["job_id"] == "worker-job-15"
+
+
+def test_legacy_video_provider_only_advertises_five_seconds(monkeypatch) -> None:
+    monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
+    monkeypatch.setenv("VELIA_STUDIO_VIDEO_PROVIDER", "legacy")
+
+    assert duration_client.studio_video_duration_options() == (5,)
