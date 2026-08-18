@@ -13,6 +13,12 @@ from services.velia_media_worker_client import (
 
 
 def studio_video_duration_options() -> tuple[int, ...]:
+    provider = str(
+        os.getenv("VELIA_STUDIO_VIDEO_PROVIDER", os.getenv("VELIA_MEDIA_PROVIDER", "legacy"))
+        or "legacy"
+    ).strip().lower()
+    if provider not in {"self_hosted", "self-hosted", "velia_worker", "worker"}:
+        return (5,)
     enabled_15s = str(os.getenv("VELIA_STUDIO_VIDEO_15S_ENABLED", "true") or "").strip().lower()
     return (5, 10) if enabled_15s in {"0", "false", "no", "off", "disabled"} else (5, 10, 15)
 
