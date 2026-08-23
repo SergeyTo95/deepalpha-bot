@@ -3,8 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from services import velia_software_factory_deployment_observer_hardening_patch as hardening
 from services import velia_software_factory_deployment_observer_service as observer
 from services.velia_software_factory_core_service import SoftwareFactoryError
+
+hardening.install(observer)
 
 
 def _profile(*contexts):
@@ -92,10 +95,10 @@ def test_observer_defaults_fail_closed(monkeypatch):
     assert status["deployment_supported"] is False
 
 
-def test_contexts_must_be_exact_and_nonempty():
+def test_contexts_must_be_exact_nonempty_and_canonical():
     assert observer._normalize_contexts(["railway-api", "  RAILWAY-API  ", "ci/unit"]) == [
-        "railway-api",
         "ci/unit",
+        "railway-api",
     ]
     with pytest.raises(SoftwareFactoryError) as exc:
         observer._normalize_contexts(["railway-*"])
@@ -114,6 +117,12 @@ def test_expected_contexts_all_success():
     assert result["missing_contexts"] == []
     assert result["failing_contexts"] == []
     assert result["waiting_contexts"] == []
+
+
+def test_corrupt_empty_profile_cannot_vacuously_succeed():
+    with pytest.raises(SoftwareFactoryError) as exc:
+        observer._evaluate_expected_contexts(_profile(), _status())
+    assert exc.value.code == "velia_factory_deployment_contexts_required"
 
 
 def test_missing_or_pending_context_is_pending():
@@ -149,6 +158,24 @@ def test_verified_release_becomes_deployment_success(monkeypatch):
     assert result["deployment_triggered"] is False
     assert result["deployment_supported"] is False
     assert len(result["observation_fingerprint"]) == 64
+
+
+def test_verified_release_without_verified_merges_is_rejected(monkeypatch):
+    monkeypatch.setattr(observer, "_require_user", lambda user_id: None)
+    monkeypatch.setattr(
+        observer.post_merge,
+        "get_verification",
+        lambda module, user_id, verification_id: {
+            "verification_id": verification_id,
+            "release_execution_id": "release-1",
+            "verification_fingerprint": "fp",
+            "verification_status": "verified",
+            "verified_merges": [],
+        },
+    )
+    with pytest.raises(SoftwareFactoryError) as exc:
+        observer.build_observation_snapshot(SimpleNamespace(), 7, "verification-1")
+    assert exc.value.code == "velia_factory_deployment_verified_merges_missing"
 
 
 def test_partial_verified_release_never_becomes_complete(monkeypatch):
