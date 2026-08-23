@@ -1,0 +1,141 @@
+name: VELIA Software Factory Stage 4.3
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_agent_coding_autopilot_integration_repair_service.py'
+      - 'services/velia_software_factory_integration_repair_*.py'
+      - 'services/velia_software_factory_integration_validator_hardening_patch.py'
+      - 'tests/test_velia_agent_coding_autopilot_integration_repair_service.py'
+      - 'tests/test_velia_software_factory_integration_repair_*.py'
+      - '.github/workflows/velia-software-factory-stage4-3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage4-3-integration-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 4.3 modules
+        run: |
+          python -m py_compile \
+            services/velia_agent_coding_autopilot_integration_repair_service.py \
+            services/velia_software_factory_integration_repair_service.py \
+            services/velia_software_factory_integration_repair_runtime_patch.py \
+            services/velia_software_factory_integration_validator_service.py \
+            services/velia_software_factory_integration_validator_runtime_patch.py \
+            services/velia_software_factory_integration_validator_hardening_patch.py \
+            services/velia_software_factory_workspace_execution_service.py \
+            services/velia_software_factory_workspace_execution_hardening_patch.py
+      - name: Run Stage 4.3 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_agent_coding_autopilot_integration_repair_service.py \
+            tests/test_velia_software_factory_integration_repair_service.py \
+            tests/test_velia_software_factory_integration_repair_runtime.py \
+            tests/test_velia_software_factory_integration_validator_service.py \
+            tests/test_velia_software_factory_integration_validator_hardening.py \
+            tests/test_velia_software_factory_workspace_execution_hardening.py
+      - name: Verify Stage 4.3 fail-closed flags
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_integration_repair_service as repair
+          from services import velia_software_factory_integration_validator_service as validator
+
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_INTEGRATION_VALIDATOR_ENABLED", None)
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_ENABLED", None)
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_MAX_ATTEMPTS", None)
+          assert validator.integration_validator_enabled() is False
+          assert repair.integration_repair_enabled() is False
+          assert repair.integration_repair_max_attempts() == 2
+          status = repair.public_status()
+          assert status["enabled"] is False
+          assert status["same_pull_request_only"] is True
+          assert status["new_branch_allowed"] is False
+          assert status["new_pull_request_allowed"] is False
+          assert status["write_owner"] == "coding_autopilot"
+          PY
+      - name: Verify Factory has no repository writer
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = [
+              "services/velia_software_factory_integration_repair_service.py",
+              "services/velia_software_factory_integration_repair_runtime_patch.py",
+          ]
+          forbidden_calls = {
+              "create_branch", "open_pull_request", "merge_pull", "merge_pull_request",
+              "commit_operations", "apply_patch", "update_file", "create_file", "delete_file",
+          }
+          forbidden_import_fragments = {
+              "velia_developer_github_write_service",
+          }
+          for filename in files:
+              source = Path(filename).read_text(encoding="utf-8")
+              tree = ast.parse(source, filename=filename)
+              for fragment in forbidden_import_fragments:
+                  assert fragment not in source, (filename, fragment)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                      assert node.func.attr not in forbidden_calls, (filename, node.func.attr, node.lineno)
+          PY
+      - name: Verify Autopilot same-PR repair boundary
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          filename = "services/velia_agent_coding_autopilot_integration_repair_service.py"
+          source = Path(filename).read_text(encoding="utf-8")
+          tree = ast.parse(source, filename=filename)
+          forbidden = {
+              "create_branch", "open_pull_request", "merge_pull", "merge_pull_request",
+          }
+          calls = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                  calls.append(node.func.attr)
+                  assert node.func.attr not in forbidden, (node.func.attr, node.lineno)
+          assert "commit_operations" in calls
+          assert "_create_attempt" in calls
+          assert "_allowed_repair_files" in calls
+          assert "existing_pr_required" in source
+          assert "requires_green_ci" in source
+          assert "branch_head_changed" in source
+          PY
+      - name: Verify repair runtime install order and non-code fail closed
+        run: |
+          grep -q '_integration_validator_hardening_validate_wrapped' services/velia_software_factory_integration_validator_hardening_patch.py
+          grep -q 'repair_runtime.install(workspace_module, execution_module, integration_runtime)' services/velia_software_factory_integration_validator_hardening_patch.py
+          grep -q 'velia_factory_integration_repair_non_code_failure' services/velia_software_factory_integration_repair_runtime_patch.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_INSTALLED' services/velia_software_factory_integration_repair_runtime_patch.py
+          grep -q 'velia_factory_integration_repair_waiting_ci' services/velia_software_factory_integration_repair_service.py
+          grep -q 'validate_and_store' services/velia_software_factory_integration_repair_service.py
+      - name: Reject newly added Python bytecode
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo "Generated Python bytecode was added by this PR."
+            exit 1
+          fi

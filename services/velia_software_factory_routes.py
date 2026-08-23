@@ -89,6 +89,19 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
             callable(getattr(workspace_execution, "integration_validator_enabled", None))
             and workspace_execution.integration_validator_enabled()
         )
+        repair_status = (
+            workspace_execution.integration_repair_status()
+            if callable(getattr(workspace_execution, "integration_repair_status", None))
+            else {
+                "available": True,
+                "enabled": False,
+                "max_attempts": 2,
+                "same_pull_request_only": True,
+                "new_branch_allowed": False,
+                "new_pull_request_allowed": False,
+                "write_owner": "coding_autopilot",
+            }
+        )
         return routes_module._json_response(
             {
                 "ok": True,
@@ -98,7 +111,7 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                 "supervisor_enabled": autonomy.supervisor_enabled(),
                 "developer_enabled": project_service.developer_enabled(),
                 "autopilot_enabled": autopilot.autopilot_enabled(),
-                "stage": "4.2",
+                "stage": "4.3",
                 "rollout": rollout_status,
                 "workspace_capabilities": {
                     "multi_repo_registry": True,
@@ -111,8 +124,12 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                     "integration_validator_available": True,
                     "integration_validator_enabled": integration_enabled,
                     "integration_contract_inference": True,
+                    "integration_repair_available": bool(repair_status.get("available", True)),
+                    "integration_repair_enabled": bool(repair_status.get("enabled", False)),
+                    "integration_repair_same_pull_request_only": bool(repair_status.get("same_pull_request_only", True)),
+                    "integration_repair_max_attempts": int(repair_status.get("max_attempts", 2) or 0),
                     "dependency_gate": "ready_for_review",
-                    "completion_gate": "cross_repo_integration_validation",
+                    "completion_gate": "cross_repo_integration_validation_after_bounded_repair",
                 },
                 "pipeline": [
                     "natural_language_intake",
@@ -132,12 +149,13 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                     "workspace_scheduler",
                     "coding_autopilot",
                     "integration_validator",
+                    "bounded_same_pr_integration_repair",
                     "autonomous_supervisor",
                 ],
                 "execution_owner": "coding_autopilot",
                 "review_owner": "coding_autopilot",
                 "completion_scope": "review_ready",
-                "completion_gate": "integration_validation_when_cross_repo",
+                "completion_gate": "integration_validation_after_bounded_repair_when_cross_repo",
                 "stop_semantics": "pause_then_safe_boundary",
             }
         )
@@ -613,7 +631,8 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/stop", stop)
     app["velia_software_factory_routes_installed"] = True
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=4.2 workspace_execution=%s integration_validator=%s",
+        "VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=4.3 workspace_execution=%s integration_validator=%s integration_repair=%s",
         str(workspace_execution.workspace_execution_enabled()).lower(),
         str(workspace_execution.integration_validator_enabled()).lower(),
+        str(bool(repair_status.get("enabled", False))).lower(),
     )
