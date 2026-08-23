@@ -1,0 +1,98 @@
+name: VELIA Software Factory Stage 4.4
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_workspace_chat_service.py'
+      - 'services/velia_software_factory_workspace_chat_runtime_patch.py'
+      - 'services/velia_software_factory_workspace_hardening_patch.py'
+      - 'tests/test_velia_software_factory_workspace_chat_*.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage4-4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage4-4-workspace-chat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 4.4 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_workspace_chat_service.py \
+            services/velia_software_factory_workspace_chat_runtime_patch.py \
+            services/velia_software_factory_workspace_hardening_patch.py
+      - name: Run Stage 4.4 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_workspace_chat_service.py \
+            tests/test_velia_software_factory_workspace_chat_runtime.py \
+            tests/test_velia_software_factory_workspace_hardening.py
+      - name: Verify fail-closed workspace chat gate
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_workspace_chat_service as chat
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_WORKSPACE_CHAT_ENABLED', None)
+          assert chat.workspace_chat_enabled() is False
+          assert chat.public_status()['enabled'] is False
+          PY
+      - name: Verify Stage 4.4 write boundary
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = [
+              'services/velia_software_factory_workspace_chat_service.py',
+              'services/velia_software_factory_workspace_chat_runtime_patch.py',
+          ]
+          forbidden = {
+              'create_branch', 'open_pull_request', 'merge_pull', 'merge_pull_request',
+              'apply_patch', 'update_file', 'create_file', 'delete_file', 'commit_files',
+          }
+          for filename in files:
+              tree = ast.parse(Path(filename).read_text(encoding='utf-8'), filename=filename)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                      assert node.func.attr not in forbidden, (filename, node.func.attr, node.lineno)
+          PY
+          ! grep -nE 'autopilot\.enqueue_task|github_service\._request|create_branch|open_pull_request|merge_pull_request|update_file|create_file|delete_file' \
+            services/velia_software_factory_workspace_chat_service.py \
+            services/velia_software_factory_workspace_chat_runtime_patch.py
+          grep -q 'workspace_execution.create_execution' services/velia_software_factory_workspace_chat_runtime_patch.py
+          grep -q 'workspace_execution.integration_validator_enabled' services/velia_software_factory_workspace_chat_runtime_patch.py
+          grep -q 'workspace_service.approve_workspace_scope' services/velia_software_factory_workspace_chat_runtime_patch.py
+          grep -q 'workspace_chat_runtime.install(chat_module)' services/velia_software_factory_workspace_hardening_patch.py
+      - name: Verify model cannot grant repository scope
+        run: |
+          ! grep -nE 'item\.get\("allowed_paths"\)|item\.get\("blocked_paths"\)' services/velia_software_factory_workspace_chat_service.py
+          grep -q 'if project_id not in members' services/velia_software_factory_workspace_chat_service.py
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
