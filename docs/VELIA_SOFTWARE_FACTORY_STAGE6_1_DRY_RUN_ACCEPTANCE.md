@@ -12,11 +12,14 @@ Required preview settings:
 - `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_REPOSITORY=<exact owner/repository>`
 - optional `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_PROMPT`; default: `Хочу интернет-магазин цветов`
 - `VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED=true`
+- `VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE=<admin_id|live_owner|jarvis_founder|chat_beta>`
 - `VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE=dry_run`
 - `VELIA_DEVELOPER_ENABLED=true`
 - `VELIA_SOFTWARE_FACTORY_ENABLED=true`
 - `VELIA_SOFTWARE_FACTORY_TEAM_ENABLED=true`
 - `VELIA_SOFTWARE_FACTORY_AUTONOMY_ENABLED=true`
+
+`VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE` never contains a numeric user ID. It selects one already configured server-controlled identity source. `admin_id` preserves the Stage 6 default; the other supported values reuse existing owner/founder/beta allowlists. Unknown source names resolve to an empty actor set and fail closed.
 
 The following execution/write gates must remain false during Stage 6.1 acceptance:
 
@@ -39,10 +42,12 @@ Runtime order:
 1. Stage 2 owns Factory `create/get/clarify/advance`.
 2. Stage 3 hardening installs the controlled rollout wrapper.
 3. The rollout runtime replaces `factory.advance_run` with the `dry_run` planner path.
-4. Only then, when `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=true`, the startup gate calls the acceptance service.
-5. A non-passing result or exception is re-raised and prevents the preview web process from starting.
+4. The startup gate reads the exact acceptance repository and the selected server-controlled pilot actor set.
+5. It accepts exactly one actor whose active Developer project matches the exact repository. Zero matches or multiple matches fail closed.
+6. Only then, when `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=true`, the gate calls the acceptance service.
+7. A non-passing result or exception is re-raised and prevents the preview web process from starting.
 
-The startup gate logs a safe `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` marker without exposing the administrator user ID or prompt text.
+The startup gate logs a safe `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` marker. It may expose the source name and actor count, but never the actor IDs, `ADMIN_ID`, allowlist contents, or the prompt text.
 
 The standalone helper remains available for local/diagnostic use:
 
@@ -54,7 +59,7 @@ It is not the acceptance authority for Railway PR previews because Railway Docke
 
 ## Acceptance flow
 
-The probe resolves one exact Developer project owned by the configured VELIA administrator. It then:
+The probe resolves one exact Developer project owned by the uniquely matched pilot actor. It then:
 
 1. Reads a safe recommended write scope.
 2. Builds a ProjectSpec from the natural-language request.
@@ -78,7 +83,9 @@ The probe fingerprint includes:
 - prompt fingerprint
 - exact `RAILWAY_GIT_COMMIT_SHA`
 
-Restarting the same preview commit reuses the existing result. A new commit produces a new probe fingerprint and must pass again.
+The database uniqueness key also includes the resolved pilot actor, so the same code/repo/prompt tested by another actor cannot reuse another actor's evidence.
+
+Restarting the same preview commit for the same actor reuses the existing result. A new commit or actor produces new acceptance evidence and must pass again.
 
 ## Completion criterion
 
@@ -87,6 +94,7 @@ Stage 6.1 is accepted only when all of the following are true on the same PR hea
 - dedicated and repository-wide GitHub CI are green;
 - Railway PR preview starts with the Stage 6.1 preview-only variables above;
 - startup logs contain `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` with `status=passed` and `passed=true`;
+- the marker identifies only the bounded `pilot_source` and actor count, never raw IDs;
 - `dry_run=true`;
 - `execution_blocked=true`;
 - `autopilot_missions_unchanged=true`;
