@@ -1,0 +1,152 @@
+name: VELIA Software Factory Stage 6
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_rollout_service.py'
+      - 'services/velia_software_factory_rollout_runtime_patch.py'
+      - 'services/velia_admin_security_service.py'
+      - 'tests/test_velia_software_factory_stage6_admin_pilot.py'
+      - 'tests/test_velia_software_factory_rollout_service.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controlled-admin-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 6 modules
+        run: |
+          python -m py_compile \
+            services/velia_admin_security_service.py \
+            services/velia_software_factory_rollout_service.py \
+            services/velia_software_factory_rollout_runtime_patch.py
+      - name: Run Stage 6 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_rollout_service.py \
+            tests/test_velia_software_factory_stage6_admin_pilot.py
+      - name: Verify fail-closed admin pilot defaults
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_rollout_service as rollout
+
+          for key in (
+              'ADMIN_ID',
+              'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED',
+              'VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE',
+              'VELIA_SOFTWARE_FACTORY_USER_IDS',
+          ):
+              os.environ.pop(key, None)
+
+          assert rollout.rollout_mode() == 'off'
+          assert rollout.admin_pilot_enabled() is False
+          assert rollout.user_allowed(123) is False
+          assert rollout.intake_allowed(123) is False
+          assert rollout.live_execution_allowed(123) is False
+          assert rollout.supervisor_allowed() is False
+          status = rollout.public_status(123)
+          assert status['mode'] == 'off'
+          assert status['eligible'] is False
+          assert status['eligibility_source'] == 'none'
+          assert status['admin_pilot_enabled'] is False
+          assert status['dry_run'] is False
+          assert status['live_execution'] is False
+          assert status['pilot_readiness']['plan']['ready'] is False
+          PY
+      - name: Verify three independent pilot locks
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_rollout_service as rollout
+
+          os.environ['ADMIN_ID'] = '424242'
+          os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED'] = 'true'
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'off'
+          assert rollout.user_allowed(424242) is True
+          assert rollout.intake_allowed(424242) is False
+          assert rollout.live_execution_allowed(424242) is False
+          assert rollout.supervisor_allowed() is False
+
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'dry_run'
+          assert rollout.intake_allowed(424242) is True
+          assert rollout.dry_run_enabled(424242) is True
+          assert rollout.live_execution_allowed(424242) is False
+          assert rollout.supervisor_allowed() is False
+
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'live'
+          assert rollout.live_execution_allowed(424242) is True
+          assert rollout.supervisor_allowed() is True
+
+          os.environ['ADMIN_ID'] = '777777'
+          assert rollout.user_allowed(424242) is False
+          assert rollout.live_execution_allowed(424242) is False
+          PY
+      - name: Verify readiness and public-status privacy boundary
+        run: |
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED' services/velia_software_factory_rollout_service.py
+          grep -q 'eligibility_source' services/velia_software_factory_rollout_service.py
+          grep -q 'pilot_readiness' services/velia_software_factory_rollout_service.py
+          grep -q 'admin_pilot=%s' services/velia_software_factory_rollout_runtime_patch.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED=false' .env.example
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          source = Path('services/velia_software_factory_rollout_service.py').read_text()
+          tree = ast.parse(source)
+          public = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'public_status')
+          public_text = ast.get_source_segment(source, public) or ''
+          assert 'configured_admin_id' not in public_text
+          assert 'ADMIN_ID' not in public_text
+          assert 'eligibility_source' in public_text
+          assert 'pilot_readiness' in public_text
+          PY
+      - name: Verify explicit allowlist remains compatible
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_rollout_service as rollout
+
+          os.environ['VELIA_SOFTWARE_FACTORY_USER_IDS'] = '7,11,bad,-1'
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'dry_run'
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED', None)
+          os.environ.pop('ADMIN_ID', None)
+          assert rollout.allowed_user_ids() == {7, 11}
+          assert rollout.user_allowed(7) is True
+          assert rollout.eligibility_source(7) == 'explicit_allowlist'
+          assert rollout.dry_run_enabled(7) is True
+          assert rollout.user_allowed(12) is False
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi

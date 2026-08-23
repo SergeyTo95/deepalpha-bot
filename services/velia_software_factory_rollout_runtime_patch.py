@@ -162,5 +162,9 @@ def install(factory_module: Any, autonomy_module: Any) -> bool:
     factory_module._velia_factory_rollout_runtime_installed = True
     _INSTALLED = True
     _install_chat_copy_patch()
-    logger.info("VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s", rollout.rollout_mode())
+    logger.info(
+        "VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s admin_pilot=%s",
+        rollout.rollout_mode(),
+        str(bool(rollout.admin_pilot_enabled())).lower(),
+    )
     return True
