@@ -40,6 +40,8 @@ def test_recommended_scope_comes_from_real_tree_and_excludes_protected_roots():
         return {
             "entries": [
                 {"path": "services/api.py", "type": "blob", "size": 100},
+                {"path": "services/catalog/api.py", "type": "blob", "size": 100},
+                {"path": "services/auth/session.py", "type": "blob", "size": 100},
                 {"path": "webapp/catalog.tsx", "type": "blob", "size": 100},
                 {"path": "tests/test_api.py", "type": "blob", "size": 100},
                 {"path": ".github/workflows/ci.yml", "type": "blob", "size": 100},
@@ -52,7 +54,11 @@ def test_recommended_scope_comes_from_real_tree_and_excludes_protected_roots():
         }
 
     scope = recommend_write_scope(_project(), tree_loader=tree_loader)
-    assert "services" in scope
+    # Because services contains a nested protected auth subtree, Stage 3 must
+    # never recommend the broad services prefix. It falls back to safe children.
+    assert "services" not in scope
+    assert "services/catalog" in scope
+    assert "services/api.py" in scope
     assert "webapp" in scope
     assert "tests" in scope
     assert "Dockerfile" not in scope
@@ -61,6 +67,7 @@ def test_recommended_scope_comes_from_real_tree_and_excludes_protected_roots():
     assert "billing" not in scope
     assert "migrations" not in scope
     assert "node_modules" not in scope
+    assert all("services/auth" not in item for item in scope)
     assert len(scope) <= 20
 
 
@@ -68,6 +75,8 @@ def test_scope_approval_never_expands_beyond_recommendations():
     recommended = ["services", "webapp", "tests"]
     assert parse_scope_answer("используй рекомендуемые пути", recommended) == recommended
     assert parse_scope_answer("services и tests, а еще secrets", recommended) == ["services", "tests"]
+    assert parse_scope_answer("services/catalog и tests", recommended) == ["services/catalog", "tests"]
+    assert parse_scope_answer("services/auth и tests", recommended) == ["tests"]
     assert parse_scope_answer("terraform и secrets", recommended) == []
 
 
