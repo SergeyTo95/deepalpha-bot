@@ -60,6 +60,7 @@ jobs:
             tests/test_velia_software_factory_release_preflight_service.py \
             tests/test_velia_software_factory_release_merge_github_service.py \
             tests/test_velia_software_factory_release_execution_service.py \
+            tests/test_velia_software_factory_release_execution_hardening.py \
             tests/test_velia_agent_coding_autopilot_merge_policy_service.py
       - name: Verify fail-closed delivery gates
         env:
