@@ -1,13 +1,63 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 from db.database import get_connection
 from services import velia_software_factory_autonomy_service as autonomy
 from services.velia_software_factory_core_service import ProjectSpec
 
 _INSTALLED = False
+_ROOT_CONTROL_FILES = {"dockerfile", "makefile", "pyproject.toml", "package.json"}
+_PROTECTED_SEGMENTS = {
+    "auth",
+    "billing",
+    "credentials",
+    "infrastructure",
+    "migrations",
+    "private_keys",
+    "secrets",
+    "terraform",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "node_modules",
+    "build",
+    "dist",
+    "coverage",
+    "generated",
+    "target",
+    "vendor",
+}
+
+
+def _segment_protected(segment: str) -> bool:
+    lowered = str(segment or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered.startswith(".") or lowered.startswith(".env"):
+        return True
+    stem = lowered.split(".", 1)[0]
+    return lowered in _PROTECTED_SEGMENTS or stem in _PROTECTED_SEGMENTS
+
+
+def _normalize_path(value: Any) -> str:
+    return str(value or "").strip().replace("\\", "/").strip("/")
+
+
+def _safe_path(value: Any) -> str:
+    normalized = _normalize_path(value)
+    if not normalized:
+        return ""
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(_segment_protected(part) for part in parts):
+        return ""
+    if len(parts) == 1 and parts[0].lower() in _ROOT_CONTROL_FILES:
+        return ""
+    try:
+        return autonomy.github_service.validate_path(normalized)
+    except Exception:
+        return ""
 
 
 def _sanitize_deliverables(payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
@@ -40,6 +90,119 @@ def _sanitize_deliverables(payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
             if str(dep) in valid_ids and str(dep) != str(item.get("id"))
         ]
     return staged
+
+
+def _tree_scope_candidates(project: Mapping[str, Any], tree_loader=None) -> List[str]:
+    loader = tree_loader or autonomy.github_service.list_tree
+    tree = loader(
+        int(project.get("installation_id") or 0),
+        int(project.get("repository_id") or 0),
+        str(project.get("repository_full_name") or ""),
+        str(project.get("selected_branch") or ""),
+        prefix="",
+    )
+    entries = [item for item in tree.get("entries") or [] if isinstance(item, Mapping)]
+    protected_roots: set[str] = set()
+    root_counts: Dict[str, int] = {}
+    child_counts: Dict[str, Dict[str, int]] = {}
+
+    for raw in entries:
+        path = _normalize_path(raw.get("path"))
+        if not path:
+            continue
+        parts = [part for part in path.split("/") if part]
+        if not parts:
+            continue
+        root = parts[0]
+        if _segment_protected(root) or (len(parts) == 1 and root.lower() in _ROOT_CONTROL_FILES):
+            continue
+
+        nested_protected = any(_segment_protected(part) for part in parts[1:])
+        if nested_protected:
+            protected_roots.add(root)
+            continue
+
+        if len(parts) < 2:
+            continue
+        root_counts[root] = root_counts.get(root, 0) + 1
+
+        # If a broad root contains a protected descendant, fall back to safe
+        # immediate children instead of recommending the whole root. This keeps
+        # user approval least-privilege even for layouts like services/auth/...
+        if len(parts) >= 3 or str(raw.get("type") or "") == "tree":
+            candidate = f"{root}/{parts[1]}"
+        else:
+            candidate = path
+        candidate = _safe_path(candidate)
+        if candidate:
+            child_counts.setdefault(root, {})[candidate] = child_counts.setdefault(root, {}).get(candidate, 0) + 1
+
+    priority_rank = {
+        name: index
+        for index, name in enumerate(getattr(autonomy, "_PRIORITY_ROOTS", ()))
+    }
+    roots = sorted(
+        root_counts,
+        key=lambda item: (
+            priority_rank.get(item.lower(), len(priority_rank) + 1),
+            -root_counts.get(item, 0),
+            item.lower(),
+        ),
+    )
+
+    result: List[str] = []
+    for root in roots:
+        if root not in protected_roots:
+            safe_root = _safe_path(root)
+            if safe_root and safe_root not in result:
+                result.append(safe_root)
+        else:
+            children = sorted(
+                child_counts.get(root, {}),
+                key=lambda item: (-child_counts[root][item], item.lower()),
+            )
+            for child in children:
+                if child not in result:
+                    result.append(child)
+                if len(result) >= 20:
+                    break
+        if len(result) >= 20:
+            break
+    return result[:20]
+
+
+def _parse_scope_answer(message: str, recommended: Sequence[str]) -> List[str]:
+    safe_recommended: List[str] = []
+    for raw in recommended:
+        candidate = _safe_path(raw)
+        if candidate and candidate not in safe_recommended:
+            safe_recommended.append(candidate)
+    if not safe_recommended:
+        return []
+
+    text = str(message or "").strip().replace("\\", "/")
+    if autonomy._APPROVE_SCOPE_RE.search(text):
+        return list(safe_recommended)
+
+    lowered = text.casefold()
+    selected: List[str] = []
+    # Longest prefixes first avoids a broad path swallowing a more specific one.
+    for prefix in sorted(safe_recommended, key=len, reverse=True):
+        escaped = re.escape(prefix.casefold())
+        match = re.search(
+            rf"(?<![\w.-])({escaped}(?:/[A-Za-z0-9_.\-/]+)?)(?![\w.-])",
+            lowered,
+        )
+        if not match:
+            continue
+        candidate = _safe_path(match.group(1).rstrip(".,:;!?)\"]}"))
+        if not candidate:
+            continue
+        if candidate != prefix and not candidate.startswith(prefix + "/"):
+            continue
+        if candidate not in selected:
+            selected.append(candidate)
+    return selected
 
 
 def _autonomous_candidates(limit: int = 30):
@@ -86,15 +249,13 @@ def install(module=autonomy) -> None:
         re.IGNORECASE,
     )
 
-    original_recommend = module.recommend_write_scope
     original_intake = module.build_project_spec_from_message
 
     def recommend_write_scope(project, *, tree_loader=None):
-        items = original_recommend(project, tree_loader=tree_loader)
-        # Build/deploy control files are intentionally not auto-recommended.
-        # They can be handled later through an explicitly reviewed scope change.
-        root_control_files = {"dockerfile", "makefile", "pyproject.toml", "package.json"}
-        return [item for item in items if str(item).lower() not in root_control_files][:20]
+        return _tree_scope_candidates(project, tree_loader=tree_loader)
+
+    def parse_scope_answer(message, recommended):
+        return _parse_scope_answer(message, recommended)
 
     def build_project_spec_from_message(*args, **kwargs):
         payload = dict(original_intake(*args, **kwargs))
@@ -103,6 +264,7 @@ def install(module=autonomy) -> None:
         return ProjectSpec.from_payload(payload).to_dict()
 
     module.recommend_write_scope = recommend_write_scope
+    module.parse_scope_answer = parse_scope_answer
     module.build_project_spec_from_message = build_project_spec_from_message
     module._candidate_runs = _autonomous_candidates
     module._stage3_hardening_installed = True
