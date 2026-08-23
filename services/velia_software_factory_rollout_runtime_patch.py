@@ -6,6 +6,7 @@ from typing import Any, Dict, Mapping
 
 from db.database import get_connection
 from services import velia_developer_project_service as project_service
+from services import velia_software_factory_dry_run_fixture_service as fixture_service
 from services import velia_software_factory_rollout_service as rollout
 from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
 from services import velia_software_factory_team_service as team_service
@@ -13,7 +14,7 @@ from services.velia_software_factory_core_service import ProjectSpec, SoftwareFa
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
-_ACCEPTANCE_ACTOR_SOURCES = {"pilot_allowlist", "repository_owner"}
+_ACCEPTANCE_ACTOR_SOURCES = {"pilot_allowlist", "repository_owner", "preview_fixture"}
 _DANGEROUS_ACCEPTANCE_FLAGS = (
     "VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED",
     "VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED",
@@ -198,7 +199,11 @@ def _resolve_acceptance_actor_id(acceptance_module: Any) -> int:
     if source == "invalid":
         raise SoftwareFactoryError("velia_factory_dry_run_acceptance_actor_source_invalid", status=409)
 
-    if source == "repository_owner":
+    if source == "preview_fixture":
+        fixture = fixture_service.ensure_fixture(repository)
+        matches = [int(fixture.get("actor_id") or 0)] if int(fixture.get("actor_id") or 0) > 0 else []
+        candidate_count = len(matches)
+    elif source == "repository_owner":
         matches = _repository_owner_actor_ids(repository)
         candidate_count = len(matches)
     else:
@@ -247,14 +252,18 @@ def _run_dry_run_acceptance_gate(acceptance_module: Any = None, *, actor_id: int
     original_is_admin_user = getattr(acceptance_module, "is_admin_user", None)
     original_admin_pilot_user_ids = rollout.admin_pilot_user_ids
     original_admin_pilot_id_source = rollout.admin_pilot_id_source
+    original_recommend_write_scope = getattr(acceptance_module.autonomy, "recommend_write_scope", None)
 
     acceptance_module.configured_admin_id = lambda: resolved_actor
     acceptance_module.is_admin_user = lambda user_id: int(user_id) == resolved_actor
-    if actor_source == "repository_owner":
-        # Startup-only eligibility bridge. The normal rollout source remains unchanged
-        # before and after this synchronous dry-run probe.
+    if actor_source in {"repository_owner", "preview_fixture"}:
+        label = "acceptance_preview_fixture" if actor_source == "preview_fixture" else "acceptance_repository_owner"
         rollout.admin_pilot_user_ids = lambda: {resolved_actor}
-        rollout.admin_pilot_id_source = lambda: "acceptance_repository_owner"
+        rollout.admin_pilot_id_source = lambda: label
+    if actor_source == "preview_fixture" and original_recommend_write_scope is not None:
+        acceptance_module.autonomy.recommend_write_scope = (
+            lambda project: original_recommend_write_scope(project, tree_loader=fixture_service.tree_loader)
+        )
     try:
         result = dict(acceptance_module.run_acceptance())
     except Exception as exc:
@@ -268,6 +277,8 @@ def _run_dry_run_acceptance_gate(acceptance_module: Any = None, *, actor_id: int
     finally:
         rollout.admin_pilot_user_ids = original_admin_pilot_user_ids
         rollout.admin_pilot_id_source = original_admin_pilot_id_source
+        if original_recommend_write_scope is not None:
+            acceptance_module.autonomy.recommend_write_scope = original_recommend_write_scope
         if original_configured_admin_id is not None:
             acceptance_module.configured_admin_id = original_configured_admin_id
         if original_is_admin_user is not None:
