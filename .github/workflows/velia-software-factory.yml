@@ -41,10 +41,13 @@ jobs:
             services/velia_software_factory_rollout_runtime_patch.py \
             services/velia_software_factory_stage3_hardening_patch.py \
             services/velia_software_factory_workspace_service.py \
+            services/velia_software_factory_workspace_hardening_patch.py \
+            services/velia_software_factory_workspace_execution_service.py \
+            services/velia_software_factory_workspace_execution_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py \
             run_web_process.py
-      - name: Run Stage 1 through Stage 4 focused tests
+      - name: Run Stage 1 through Stage 4.1 focused tests
         env:
           PYTHONPATH: .
         run: |
@@ -53,7 +56,9 @@ jobs:
             tests/test_velia_software_factory_team_service.py \
             tests/test_velia_software_factory_autonomy_service.py \
             tests/test_velia_software_factory_rollout_service.py \
-            tests/test_velia_software_factory_workspace_service.py
+            tests/test_velia_software_factory_workspace_service.py \
+            tests/test_velia_software_factory_workspace_hardening.py \
+            tests/test_velia_software_factory_workspace_execution_service.py
       - name: Verify Factory write and review boundary
         run: |
           grep -q 'from services import velia_agent_coding_autopilot_service as autopilot' services/velia_software_factory_lead_service.py
@@ -69,6 +74,8 @@ jobs:
             services/velia_software_factory_rollout_runtime_patch.py \
             services/velia_software_factory_stage3_hardening_patch.py \
             services/velia_software_factory_workspace_service.py \
+            services/velia_software_factory_workspace_hardening_patch.py \
+            services/velia_software_factory_workspace_execution_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py
       - name: Verify autonomy safety contract
@@ -96,8 +103,26 @@ jobs:
           grep -q 'scope_approved BOOLEAN NOT NULL DEFAULT FALSE' services/velia_software_factory_workspace_service.py
           grep -q 'velia_factory_workspace_scope_requires_separate_approval' services/velia_software_factory_workspace_service.py
           grep -q 'allowed_paths = \[path for path in requested_paths if path in approved_paths\]' services/velia_software_factory_workspace_service.py
+          grep -q 'velia_factory_workspace_scope_path_outside_safe_tree' services/velia_software_factory_workspace_hardening_patch.py
+          grep -q 'velia_factory_workspace_scope_locked_by_execution' services/velia_software_factory_workspace_hardening_patch.py
           ! grep -nE 'autopilot|enqueue_task|create_branch|open_pull_request|merge_pull|merge_pull_request' \
-            services/velia_software_factory_workspace_service.py
+            services/velia_software_factory_workspace_service.py \
+            services/velia_software_factory_workspace_hardening_patch.py
+      - name: Verify multi-repo execution safety contract
+        run: |
+          grep -q 'VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'workspace_execution_enabled.*False' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'velia_factory_workspace_live_rollout_required' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'velia_factory_workspace_mission_conflict' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'client_request_id=f"workspace:' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'never merge' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'str.*status.*== "ready_for_review"' services/velia_software_factory_workspace_execution_service.py
+          grep -q '_preflight_mission_conflicts' services/velia_software_factory_workspace_execution_hardening_patch.py
+          grep -q 'stop_requested' services/velia_software_factory_workspace_execution_hardening_patch.py
+          grep -q 'execution_hardening.install(execution_module)' services/velia_software_factory_workspace_hardening_patch.py
+          ! grep -nE 'create_branch|open_pull_request|merge_pull|merge_pull_request|apply_patch|contents.:.?write' \
+            services/velia_software_factory_workspace_execution_service.py \
+            services/velia_software_factory_workspace_execution_hardening_patch.py
       - name: Verify fail-closed rollout flags
         env:
           PYTHONPATH: .
@@ -108,6 +133,7 @@ jobs:
           from services import velia_software_factory_lead_service as lead
           from services import velia_software_factory_rollout_service as rollout
           from services import velia_software_factory_team_service as team
+          from services import velia_software_factory_workspace_execution_service as workspace_execution
 
           for name in (
               "VELIA_SOFTWARE_FACTORY_ENABLED",
@@ -116,6 +142,7 @@ jobs:
               "VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED",
               "VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE",
               "VELIA_SOFTWARE_FACTORY_USER_IDS",
+              "VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED",
           ):
               os.environ.pop(name, None)
 
@@ -127,6 +154,8 @@ jobs:
           assert rollout.allowed_user_ids() == set()
           assert rollout.intake_allowed(1) is False
           assert rollout.supervisor_allowed() is False
+          assert workspace_execution.workspace_execution_enabled() is False
+          assert workspace_execution.workspace_supervisor_enabled() is False
           PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
