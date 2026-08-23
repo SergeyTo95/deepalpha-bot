@@ -9,6 +9,7 @@ from aiohttp import web
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_project_service as project_service
 from services import velia_software_factory_lead_service as factory
+from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ async def _body(request: web.Request) -> Dict[str, Any]:
 
 
 def setup_velia_software_factory_routes(app: web.Application, routes_module: Any) -> None:
+    stage2_runtime.install(factory)
     if app.get("velia_software_factory_routes_installed"):
         return
 
@@ -69,22 +71,66 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
             {
                 "ok": True,
                 "enabled": factory.software_factory_enabled(),
+                "team_enabled": factory.team_runtime_enabled(),
                 "developer_enabled": project_service.developer_enabled(),
                 "autopilot_enabled": autopilot.autopilot_enabled(),
-                "stage": 1,
+                "stage": 2,
                 "pipeline": [
                     "project_spec",
-                    "project_brain",
+                    "persistent_project_brain",
                     "state_machine",
                     "event_log",
-                    "task_dag",
                     "clarifier",
+                    "architect",
+                    "designer_when_needed",
+                    "planner",
+                    "specialist_task_dag",
                     "lead",
+                    "coding_autopilot",
                 ],
                 "execution_owner": "coding_autopilot",
+                "review_owner": "coding_autopilot",
                 "completion_scope": "review_ready",
             }
         )
+
+    async def team(request: web.Request) -> web.Response:
+        if not routes_module._mobile_api_available():
+            return routes_module._disabled_response()
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        return routes_module._json_response(
+            {
+                "ok": True,
+                "enabled": factory.team_runtime_enabled(),
+                "roles": factory.team_role_catalog(),
+                "write_owner": "coding_autopilot",
+                "review_owner": "coding_autopilot",
+            }
+        )
+
+    async def project_brain(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            try:
+                limit = min(300, max(1, int(request.query.get("limit") or 100)))
+            except (TypeError, ValueError):
+                limit = 100
+            items = await asyncio.to_thread(
+                factory.list_project_brain,
+                int(auth["user_id"]),
+                request.match_info["project_id"],
+                limit,
+            )
+            return routes_module._json_response({"ok": True, "brain": items})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
 
     async def create(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
@@ -168,10 +214,12 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
             return _json_error(routes_module, exc)
 
     app.router.add_get(f"{_PREFIX}/status", status)
+    app.router.add_get(f"{_PREFIX}/team", team)
+    app.router.add_get(f"{_PREFIX}/projects/{{project_id}}/brain", project_brain)
     app.router.add_post(f"{_PREFIX}/runs", create)
     app.router.add_get(f"{_PREFIX}/runs/{{run_id}}", get)
     app.router.add_get(f"{_PREFIX}/runs/{{run_id}}/events", events)
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/clarifications", clarify)
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/advance", advance)
     app["velia_software_factory_routes_installed"] = True
-    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED")
+    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=2")
