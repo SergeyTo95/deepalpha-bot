@@ -138,10 +138,8 @@ def _filter_failure_to_effective_checks(
     for item in result.get("failures") or []:
         if not isinstance(item, Mapping):
             continue
-        source = str(item.get("source") or "")
         comparable = dict(item)
-        if source == "actions_job_log" and item.get("workflow"):
-            comparable["name"] = str(item.get("workflow") or "")
+        if str(item.get("source") or "") == "actions_job_log":
             comparable["source"] = "check_run"
         if any(_same_check(check, comparable) for check in required):
             filtered.append(dict(item))
@@ -243,6 +241,9 @@ def _requeue_blocked_attempt(
             """,
             (ci._json(result), now, str(run.get("task_id") or "")),
         )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            return None
         conn.commit()
     except Exception:
         conn.rollback()
@@ -361,7 +362,12 @@ def install() -> None:
             len(meta.get("required") or []),
             len(meta.get("ignored") or []),
         )
-        return {**dict(payload), "total": len(effective), "checks": effective, "baseline_contract": meta}
+        return {
+            **dict(payload),
+            "total": len(effective),
+            "checks": effective,
+            "baseline_contract": meta,
+        }
 
     def failure_details_with_baseline(
         project: Dict[str, Any], sha: str, checks: List[Dict[str, Any]]
@@ -389,13 +395,17 @@ def install() -> None:
             _ACTIVE_ATTEMPT.reset(token)
 
     def run_once_with_baseline_recovery():
-        recovered = recover_blocked_baseline_once(original_commit_status)
-        if recovered:
-            logger.info(
-                "VELIA_AUTOPILOT_CI_BASELINE_RECOVERY_HANDOFF run=%s",
-                str(recovered.get("run_id") or ""),
-            )
-        return original_run_once()
+        token = _ACTIVE_ATTEMPT.set(None)
+        try:
+            recovered = recover_blocked_baseline_once(original_commit_status)
+            if recovered:
+                logger.info(
+                    "VELIA_AUTOPILOT_CI_BASELINE_RECOVERY_HANDOFF run=%s",
+                    str(recovered.get("run_id") or ""),
+                )
+            return original_run_once()
+        finally:
+            _ACTIVE_ATTEMPT.reset(token)
 
     ci._current_attempt = current_attempt_with_context
     ci.write_service.commit_status = commit_status_with_baseline
