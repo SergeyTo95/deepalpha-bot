@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Mapping, Sequence
 
 from db.database import get_connection
 from services import velia_software_factory_autonomy_service as autonomy
+from services import velia_software_factory_lead_service as factory
+from services import velia_software_factory_rollout_runtime_patch as rollout_runtime
+from services import velia_software_factory_rollout_service as rollout
 from services.velia_software_factory_core_service import ProjectSpec
 
 _INSTALLED = False
@@ -207,6 +210,8 @@ def _parse_scope_answer(message: str, recommended: Sequence[str]) -> List[str]:
 
 def _autonomous_candidates(limit: int = 30):
     autonomy.ensure_autonomy_tables()
+    if not rollout.supervisor_allowed():
+        return []
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -227,7 +232,12 @@ def _autonomous_candidates(limit: int = 30):
             """,
             (min(100, max(1, int(limit))),),
         )
-        return [(int(row[0]), str(row[1]), bool(row[2])) for row in cursor.fetchall() or []]
+        result = []
+        for row in cursor.fetchall() or []:
+            user_id = int(row[0])
+            if rollout.live_execution_allowed(user_id):
+                result.append((user_id, str(row[1]), bool(row[2])))
+        return result
     finally:
         cursor.close()
         conn.close()
@@ -235,6 +245,10 @@ def _autonomous_candidates(limit: int = 30):
 
 def install(module=autonomy) -> None:
     global _INSTALLED
+    # This call is intentionally made on every install attempt. The module is
+    # imported before Stage 2 is mounted, so rollout_runtime.install() initially
+    # defers; setup_velia_software_factory_routes() calls us again after Stage 2.
+    rollout_runtime.install(factory, module)
     if getattr(module, "_stage3_hardening_installed", False):
         return
 
