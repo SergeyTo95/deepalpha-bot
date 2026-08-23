@@ -4,7 +4,7 @@ Stage 6.1 is an acceptance harness, not a new execution layer. It proves that th
 
 ## Safety boundary
 
-The acceptance runner is intended only for a Railway PR-preview environment and is disabled unless `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=true` is explicitly set there.
+The acceptance startup gate is intended only for a Railway PR-preview environment and is disabled unless `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=true` is explicitly set there.
 
 Required preview settings:
 
@@ -30,22 +30,27 @@ The following execution/write gates must remain false during Stage 6.1 acceptanc
 
 No production variable is changed for Stage 6.1.
 
-## Railway preview gate
+## Railway preview startup gate
 
-Set the PR-preview `deepalpha-bot` pre-deploy command to:
+Stage 6.1 is enforced inside the existing controlled rollout runtime after the Stage 2 team runtime and dry-run wrapper have been installed.
+
+Runtime order:
+
+1. Stage 2 owns Factory `create/get/clarify/advance`.
+2. Stage 3 hardening installs the controlled rollout wrapper.
+3. The rollout runtime replaces `factory.advance_run` with the `dry_run` planner path.
+4. Only then, when `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=true`, the startup gate calls the acceptance service.
+5. A non-passing result or exception is re-raised and prevents the preview web process from starting.
+
+The startup gate logs a safe `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` marker without exposing the administrator user ID or prompt text.
+
+The standalone helper remains available for local/diagnostic use:
 
 ```text
 PYTHONPATH=. python scripts/run_velia_software_factory_dry_run_acceptance.py
 ```
 
-The runner reproduces production runtime order before probing:
-
-1. Stage 2 runtime is installed on the Factory Lead.
-2. Stage 3 hardening is installed after Stage 2.
-3. Stage 3 installs the controlled rollout wrapper.
-4. The acceptance service runs through the wrapped `factory.create_run`, `factory.answer_clarifications`, and `factory.advance_run` methods.
-
-A `passed` result exits with code `0`. `blocked`, `failed`, or an exception exits non-zero and fails the Railway preview deployment.
+It is not the acceptance authority for Railway PR previews because Railway Docker deployments do not reliably expose pre-deploy command execution/output through the deployment evidence available to this project.
 
 ## Acceptance flow
 
@@ -80,13 +85,15 @@ Restarting the same preview commit reuses the existing result. A new commit prod
 Stage 6.1 is accepted only when all of the following are true on the same PR head SHA:
 
 - dedicated and repository-wide GitHub CI are green;
-- Railway PR preview executes the pre-deploy acceptance runner;
-- pre-deploy output contains `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` with `status=passed` and `passed=true`;
+- Railway PR preview starts with the Stage 6.1 preview-only variables above;
+- startup logs contain `VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT` with `status=passed` and `passed=true`;
 - `dry_run=true`;
 - `execution_blocked=true`;
 - `autopilot_missions_unchanged=true`;
 - `repository_write_performed=false`;
 - `autopilot_task_dispatched=false`;
+- `merge_performed=false`;
+- `deployment_triggered=false`;
 - the preview service subsequently reaches `SUCCESS`.
 
 After acceptance, preview-only variables/configuration must not be copied to production.
