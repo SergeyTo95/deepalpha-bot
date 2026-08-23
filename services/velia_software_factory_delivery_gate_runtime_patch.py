@@ -11,6 +11,8 @@ from services import velia_software_factory_release_completion_hardening_patch a
 from services import velia_software_factory_release_completion_service as completion
 from services import velia_software_factory_release_execution_hardening_patch as release_hardening
 from services import velia_software_factory_release_execution_service as release_execution
+from services import velia_software_factory_release_passport_hardening_patch as passport_hardening
+from services import velia_software_factory_release_passport_service as passport
 from services import velia_software_factory_release_post_merge_service as post_merge
 from services import velia_software_factory_release_preflight_service as preflight
 
@@ -31,12 +33,16 @@ def install(execution_module: Any) -> None:
     post_merge.ensure_post_merge_tables(execution_module)
     deployment_hardening.install(deployment_observer)
     completion_hardening.install(completion)
+    passport_hardening.install(passport)
     deployment_status = deployment_observer.public_status()
     if bool(deployment_status.get("enabled")):
         deployment_observer.ensure_deployment_observer_tables(execution_module)
     completion_status = completion.public_status()
     if bool(completion_status.get("enabled")):
         completion.ensure_completion_tables(execution_module)
+    passport_status = passport.public_status()
+    if bool(passport_status.get("enabled")):
+        passport.ensure_passport_tables(execution_module)
 
     execution_module.delivery_gate_status = delivery.public_status
     execution_module.delivery_approval_status = approval.public_status
@@ -45,6 +51,7 @@ def install(execution_module: Any) -> None:
     execution_module.release_verification_status = post_merge.public_status
     execution_module.deployment_observer_status = deployment_observer.public_status
     execution_module.release_completion_status = completion.public_status
+    execution_module.release_passport_status = passport.public_status
     execution_module.evaluate_delivery_candidate = lambda user_id, execution_id: delivery.evaluate_workspace_candidate(
         execution_module, int(user_id), str(execution_id), persist=True
     )
@@ -175,6 +182,18 @@ def install(execution_module: Any) -> None:
     execution_module.list_release_completion_certificates = lambda user_id, release_execution_id, limit=20: completion.list_completion_certificates(
         execution_module, int(user_id), str(release_execution_id), int(limit)
     )
+    execution_module.create_release_passport = lambda user_id, certificate_id: passport.create_passport(
+        execution_module, int(user_id), str(certificate_id), persist=True
+    )
+    execution_module.preview_release_passport = lambda user_id, certificate_id: passport.create_passport(
+        execution_module, int(user_id), str(certificate_id), persist=False
+    )
+    execution_module.get_release_passport = lambda user_id, passport_id: passport.get_passport(
+        execution_module, int(user_id), str(passport_id)
+    )
+    execution_module.list_release_passports = lambda user_id, release_execution_id, limit=20: passport.list_passports(
+        execution_module, int(user_id), str(release_execution_id), int(limit)
+    )
 
     execution_module._workspace_delivery_gate_installed = True
     _INSTALLED = True
@@ -185,8 +204,9 @@ def install(execution_module: Any) -> None:
     verification_status = post_merge.public_status()
     deployment_status = deployment_observer.public_status()
     completion_status = completion.public_status()
+    passport_status = passport.public_status()
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_DELIVERY_GATE_INSTALLED enabled=%s mode=%s approval_enabled=%s approval_mode=%s preflight_enabled=%s preflight_mode=%s release_execution_enabled=%s release_execution_mode=%s release_verification_enabled=%s release_verification_mode=%s deployment_observer_enabled=%s deployment_observer_mode=%s release_completion_enabled=%s release_completion_mode=%s release_complete_supported=%s deployment_trigger_supported=false execution_supported=%s merge_supported=%s deployment_supported=false",
+        "VELIA_SOFTWARE_FACTORY_DELIVERY_GATE_INSTALLED enabled=%s mode=%s approval_enabled=%s approval_mode=%s preflight_enabled=%s preflight_mode=%s release_execution_enabled=%s release_execution_mode=%s release_verification_enabled=%s release_verification_mode=%s deployment_observer_enabled=%s deployment_observer_mode=%s release_completion_enabled=%s release_completion_mode=%s release_complete_supported=%s release_passport_enabled=%s release_passport_mode=%s release_passport_supported=%s deployment_trigger_supported=false execution_supported=%s merge_supported=%s deployment_supported=false",
         str(bool(status.get("enabled"))).lower(),
         str(status.get("mode") or "read_only_candidate"),
         str(bool(approval_status.get("enabled"))).lower(),
@@ -202,6 +222,9 @@ def install(execution_module: Any) -> None:
         str(bool(completion_status.get("enabled"))).lower(),
         str(completion_status.get("mode") or "evidence_certificate"),
         str(bool(completion_status.get("release_complete_supported"))).lower(),
+        str(bool(passport_status.get("enabled"))).lower(),
+        str(passport_status.get("mode") or "immutable_audit_passport"),
+        str(bool(passport_status.get("passport_supported"))).lower(),
         str(bool(execution_status.get("execution_supported"))).lower(),
         str(bool(execution_status.get("merge_supported"))).lower(),
     )
