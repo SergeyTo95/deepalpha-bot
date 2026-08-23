@@ -13,6 +13,13 @@ _INSTALLED = False
 _REPAIR_BLOCKERS = {
     "velia_factory_integration_repair_waiting_ci",
 }
+_NON_CODE_ISSUE_TOKENS = (
+    "pull_request_not_open",
+    "semantic_evidence_unreadable",
+    "pull_request_missing",
+    "pr_head_missing",
+    "semantic_validator_unavailable",
+)
 
 
 def _repair_candidates(execution_module: Any, limit: int) -> list[tuple[int, str]]:
@@ -34,6 +41,21 @@ def _repair_candidates(execution_module: Any, limit: int) -> list[tuple[int, str
         conn.close()
 
 
+def _assert_code_repairable(validation: Mapping[str, Any]) -> None:
+    report = validation.get("report") if isinstance(validation.get("report"), Mapping) else {}
+    for contract in report.get("contracts") or []:
+        if not isinstance(contract, Mapping) or str(contract.get("status") or "") != "failed":
+            continue
+        for raw_issue in contract.get("issues") or []:
+            issue = str(raw_issue or "").lower()
+            if any(token in issue for token in _NON_CODE_ISSUE_TOKENS):
+                raise SoftwareFactoryError(
+                    "velia_factory_integration_repair_non_code_failure",
+                    detail=str(raw_issue or "")[:500],
+                    status=409,
+                )
+
+
 def install(workspace_module: Any, execution_module: Any, integration_runtime: Any) -> None:
     global _INSTALLED
     if getattr(execution_module, "_workspace_integration_repair_installed", False):
@@ -43,6 +65,15 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
     original_set_execution_state = execution_module._set_execution_state
     original_resume_execution = getattr(execution_module, "resume_execution", None)
     original_supervisor_once = execution_module.run_workspace_supervisor_once
+    original_select_repair_target = repair_service.select_repair_target
+
+    def select_repair_target(
+        execution: Mapping[str, Any], validation: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        _assert_code_repairable(validation)
+        return original_select_repair_target(execution, validation)
+
+    repair_service.select_repair_target = select_repair_target
 
     def finalize_validation_pass(
         module: Any,
@@ -71,10 +102,13 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
 
     def get_execution(user_id: int, execution_id: str) -> Dict[str, Any]:
         result = original_get_execution(int(user_id), str(execution_id))
-        result["integration_repair"] = repair_service.latest_repair(
-            execution_module, int(user_id), str(execution_id)
+        enabled = repair_service.integration_repair_enabled()
+        result["integration_repair"] = (
+            repair_service.latest_repair(execution_module, int(user_id), str(execution_id))
+            if enabled
+            else {}
         )
-        result["integration_repair_enabled"] = repair_service.integration_repair_enabled()
+        result["integration_repair_enabled"] = enabled
         return result
 
     def set_execution_state(
