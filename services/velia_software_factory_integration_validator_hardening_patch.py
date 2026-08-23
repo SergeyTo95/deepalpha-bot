@@ -68,13 +68,15 @@ def install(validator_module: Any) -> None:
     global _INSTALLED
     if getattr(validator_module, "_integration_validator_hardening_installed", False):
         return
-    original_validate = validator_module.validate_execution
 
-    def validate_execution(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return _recompute(original_validate(*args, **kwargs))
+    if not getattr(validator_module, "_integration_validator_hardening_validate_wrapped", False):
+        original_validate = validator_module.validate_execution
 
-    validator_module.validate_execution = validate_execution
-    validator_module._integration_validator_hardening_installed = True
+        def validate_execution(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+            return _recompute(original_validate(*args, **kwargs))
+
+        validator_module.validate_execution = validate_execution
+        validator_module._integration_validator_hardening_validate_wrapped = True
 
     # Stage 4.3 must install only after the Stage 4.2 runtime and deterministic
     # evidence hardening are active, but still before the workspace supervisor
@@ -86,4 +88,5 @@ def install(validator_module: Any) -> None:
     from services import velia_software_factory_workspace_service as workspace_module
 
     repair_runtime.install(workspace_module, execution_module, integration_runtime)
+    validator_module._integration_validator_hardening_installed = True
     _INSTALLED = True
