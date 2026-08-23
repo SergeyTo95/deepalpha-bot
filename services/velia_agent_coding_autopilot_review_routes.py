@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
+from services import velia_agent_coding_autopilot_review_diagnostics as review_diagnostics
 from services import velia_agent_coding_autopilot_review_fairness_service as review_fairness
 from services import velia_agent_coding_autopilot_review_service as review_service
 from services import velia_agent_coding_autopilot_review_store as review_store
@@ -45,6 +46,7 @@ def setup_velia_coding_autopilot_review_routes(
     # Disabled features must not initialize schema or patch the worker.
     if review_service.review_loop_enabled():
         review_fairness.install_review_loop()
+        review_diagnostics.log_runtime_snapshot()
     if app.get("velia_coding_autopilot_review_routes_installed"):
         return
 
