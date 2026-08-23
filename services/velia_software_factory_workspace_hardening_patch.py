@@ -269,7 +269,7 @@ def install(workspace_module: Any) -> None:
     # 1) execution safety/lifecycle hardening;
     # 2) integration completion gate;
     # 3) deterministic semantic-evidence hardening;
-    # 4) Stage 4.4 workspace chat wrapper;
+    # 4) Stage 4.4 workspace chat wrapper + gate hardening;
     # 5) only then workspace supervisor cleanup_ctx is installed by routes.
     from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
     from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
@@ -284,13 +284,17 @@ def install(workspace_module: Any) -> None:
     _INSTALLED = True
 
     # Routes call workspace_hardening only after the established single-repo
-    # Factory chat wrapper is installed. Install Stage 4.4 last so it is the
-    # outermost product-build router while delegating every non-workspace turn.
+    # Factory chat wrapper is installed. Stage 4.4 remains outermost and must be
+    # hardened immediately after installation before the workspace supervisor is
+    # registered.
     try:
         from services import velia_chat_service as chat_module
+        from services import velia_software_factory_workspace_chat_hardening_patch as workspace_chat_hardening
         from services import velia_software_factory_workspace_chat_runtime_patch as workspace_chat_runtime
+        from services import velia_software_factory_workspace_chat_service as workspace_chat_service
 
         if getattr(chat_module, "_velia_software_factory_chat_patch_installed", False):
             workspace_chat_runtime.install(chat_module)
+            workspace_chat_hardening.install(chat_module, workspace_chat_service, workspace_chat_runtime)
     except Exception:
         logger.exception("VELIA_SOFTWARE_FACTORY_WORKSPACE_CHAT_INSTALL_FAILED")
