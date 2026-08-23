@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
+from services import velia_agent_coding_autopilot_ci_baseline_patch as ci_baseline
 from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
 from services import velia_agent_coding_autopilot_ci_log_service as ci_logs
 from services import velia_agent_coding_autopilot_ci_reliability_patch as ci_reliability
@@ -76,6 +77,7 @@ def setup_velia_coding_autopilot_ci_routes(
             ci_logs.install()
         ci_evidence.install()
         ci_service.install_ci_repair_loop()
+        ci_baseline.install()
     if app.get("velia_coding_autopilot_ci_routes_installed"):
         return
 
@@ -102,6 +104,7 @@ def setup_velia_coding_autopilot_ci_routes(
                 "structured_infrastructure_classifier": True,
                 "strong_evidence_required": True,
                 "literal_evidence_guard": True,
+                "same_run_green_ci_baseline": True,
                 "max_repairs": ci_service._env_int(
                     "VELIA_DEVELOPER_AUTOPILOT_CI_MAX_REPAIRS", 2, 0, 2
                 ),
