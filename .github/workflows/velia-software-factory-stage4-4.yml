@@ -5,6 +5,7 @@ on:
     paths:
       - 'services/velia_software_factory_workspace_chat_service.py'
       - 'services/velia_software_factory_workspace_chat_runtime_patch.py'
+      - 'services/velia_software_factory_workspace_chat_hardening_patch.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_workspace_chat_*.py'
       - '.env.example'
@@ -35,6 +36,7 @@ jobs:
           python -m py_compile \
             services/velia_software_factory_workspace_chat_service.py \
             services/velia_software_factory_workspace_chat_runtime_patch.py \
+            services/velia_software_factory_workspace_chat_hardening_patch.py \
             services/velia_software_factory_workspace_hardening_patch.py
       - name: Run Stage 4.4 focused tests
         env:
@@ -43,6 +45,7 @@ jobs:
           python -m pytest -q \
             tests/test_velia_software_factory_workspace_chat_service.py \
             tests/test_velia_software_factory_workspace_chat_runtime.py \
+            tests/test_velia_software_factory_workspace_chat_hardening.py \
             tests/test_velia_software_factory_workspace_hardening.py
       - name: Verify fail-closed workspace chat gate
         env:
@@ -66,6 +69,7 @@ jobs:
           files = [
               'services/velia_software_factory_workspace_chat_service.py',
               'services/velia_software_factory_workspace_chat_runtime_patch.py',
+              'services/velia_software_factory_workspace_chat_hardening_patch.py',
           ]
           forbidden = {
               'create_branch', 'open_pull_request', 'merge_pull', 'merge_pull_request',
@@ -79,11 +83,20 @@ jobs:
           PY
           ! grep -nE 'autopilot\.enqueue_task|github_service\._request|create_branch|open_pull_request|merge_pull_request|update_file|create_file|delete_file' \
             services/velia_software_factory_workspace_chat_service.py \
-            services/velia_software_factory_workspace_chat_runtime_patch.py
+            services/velia_software_factory_workspace_chat_runtime_patch.py \
+            services/velia_software_factory_workspace_chat_hardening_patch.py
           grep -q 'workspace_execution.create_execution' services/velia_software_factory_workspace_chat_runtime_patch.py
           grep -q 'workspace_execution.integration_validator_enabled' services/velia_software_factory_workspace_chat_runtime_patch.py
           grep -q 'workspace_service.approve_workspace_scope' services/velia_software_factory_workspace_chat_runtime_patch.py
           grep -q 'workspace_chat_runtime.install(chat_module)' services/velia_software_factory_workspace_hardening_patch.py
+          grep -q 'workspace_chat_hardening.install(chat_module, workspace_chat_service, workspace_chat_runtime)' services/velia_software_factory_workspace_hardening_patch.py
+      - name: Verify Stage 4.4 gate cascade
+        run: |
+          grep -q 'factory.software_factory_enabled' services/velia_software_factory_workspace_chat_hardening_patch.py
+          grep -q 'team_service.team_enabled' services/velia_software_factory_workspace_chat_hardening_patch.py
+          grep -q 'autonomy.autonomy_enabled' services/velia_software_factory_workspace_chat_hardening_patch.py
+          grep -q 'workspace_supervisor_enabled' services/velia_software_factory_workspace_chat_hardening_patch.py
+          grep -q 'integration_validator_enabled' services/velia_software_factory_workspace_chat_runtime_patch.py
       - name: Verify model cannot grant repository scope
         run: |
           ! grep -nE 'item\.get\("allowed_paths"\)|item\.get\("blocked_paths"\)' services/velia_software_factory_workspace_chat_service.py
