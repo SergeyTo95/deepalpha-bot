@@ -4,10 +4,16 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
 from services import velia_software_factory_autonomy_service as autonomy
+from services import velia_software_factory_rollout_service as rollout
 from services import velia_software_factory_stage3_hardening_patch as stage3_hardening
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
 _INSTALLED = False
+
+
+def _require_rollout_user(user_id: int) -> None:
+    if not rollout.intake_allowed(int(user_id)):
+        raise SoftwareFactoryError("velia_factory_rollout_forbidden", status=403)
 
 
 def _sanitize_metadata(value: Any) -> Dict[str, Any]:
@@ -126,6 +132,7 @@ def approve_workspace_scope(
     allowed_paths: Any,
     blocked_paths: Any = None,
 ) -> Dict[str, Any]:
+    _require_rollout_user(int(user_id))
     workspace_module.ensure_workspace_tables()
     workspace = workspace_module.get_workspace(int(user_id), str(workspace_id))
     _assert_scope_mutable(str(workspace_id), int(user_id))
@@ -177,6 +184,7 @@ def approve_workspace_scope(
 
 
 def revoke_workspace_scope(workspace_module: Any, user_id: int, workspace_id: str, project_id: str) -> Dict[str, Any]:
+    _require_rollout_user(int(user_id))
     workspace_module.ensure_workspace_tables()
     workspace_module.get_workspace(int(user_id), str(workspace_id))
     _assert_scope_mutable(str(workspace_id), int(user_id))
@@ -219,6 +227,7 @@ def install(workspace_module: Any) -> None:
     original_get = workspace_module.get_workspace
 
     def create_workspace(user_id: int, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        _require_rollout_user(int(user_id))
         safe_payload = dict(payload or {})
         safe_payload["metadata"] = _sanitize_metadata(safe_payload.get("metadata"))
         return original_create(int(user_id), safe_payload)
