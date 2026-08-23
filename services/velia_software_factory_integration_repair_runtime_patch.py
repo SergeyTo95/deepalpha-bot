@@ -11,6 +11,7 @@ from services.velia_software_factory_core_service import SoftwareFactoryError
 logger = logging.getLogger(__name__)
 _INSTALLED = False
 _REPAIR_BLOCKERS = {
+    "velia_factory_workspace_integration_validation_failed",
     "velia_factory_integration_repair_waiting_ci",
 }
 _NON_CODE_ISSUE_TOKENS = (
@@ -29,8 +30,10 @@ def _repair_candidates(execution_module: Any, limit: int) -> list[tuple[int, str
     try:
         cursor.execute(
             "SELECT user_id,execution_id FROM velia_software_factory_workspace_executions "
-            "WHERE status='blocked' AND blocker_json LIKE %s ORDER BY updated_at ASC LIMIT %s",
+            "WHERE status='blocked' AND (blocker_json LIKE %s OR blocker_json LIKE %s) "
+            "ORDER BY updated_at ASC LIMIT %s",
             (
+                "%velia_factory_workspace_integration_validation_failed%",
                 "%velia_factory_integration_repair_waiting_ci%",
                 min(100, max(1, int(limit))),
             ),
@@ -66,6 +69,7 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
     original_resume_execution = getattr(execution_module, "resume_execution", None)
     original_supervisor_once = execution_module.run_workspace_supervisor_once
     original_select_repair_target = repair_service.select_repair_target
+    original_process_execution = repair_service.process_execution
 
     def select_repair_target(
         execution: Mapping[str, Any], validation: Mapping[str, Any]
@@ -111,32 +115,55 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
         result["integration_repair_enabled"] = enabled
         return result
 
+    def process_execution_locked(user_id: int, execution_id: str) -> Dict[str, Any]:
+        lock_conn = get_connection()
+        lock_cursor = lock_conn.cursor()
+        locked = False
+        try:
+            lock_cursor.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (execution_module._lock_key(str(execution_id)),),
+            )
+            row = lock_cursor.fetchone()
+            locked = bool(
+                row[0]
+                if row and not isinstance(row, dict)
+                else (next(iter(row.values())) if row else False)
+            )
+            if not locked:
+                return get_execution(int(user_id), str(execution_id))
+            return original_process_execution(
+                execution_module,
+                integration_runtime,
+                int(user_id),
+                str(execution_id),
+            )
+        finally:
+            if locked:
+                try:
+                    lock_cursor.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (execution_module._lock_key(str(execution_id)),),
+                    )
+                    lock_conn.commit()
+                except Exception:
+                    lock_conn.rollback()
+            lock_cursor.close()
+            lock_conn.close()
+
     def set_execution_state(
         execution_id: str,
         user_id: int,
         status: str,
         blocker: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        # Stage 4.2 may convert review_ready into a blocked integration failure
+        # while tick_execution still owns the workspace advisory lock. Do not
+        # repair recursively under that lock. The same supervisor pass will
+        # discover the blocked execution after tick_execution releases it.
         original_set_execution_state(
             str(execution_id), int(user_id), str(status), blocker
         )
-        if str(status) != "review_ready" or not repair_service.integration_repair_enabled():
-            return
-        current = original_get_execution(int(user_id), str(execution_id))
-        current_blocker = (
-            current.get("blocker") if isinstance(current.get("blocker"), Mapping) else {}
-        )
-        if (
-            str(current.get("status") or "") == "blocked"
-            and str(current_blocker.get("code") or "")
-            == "velia_factory_workspace_integration_validation_failed"
-        ):
-            repair_service.process_execution(
-                execution_module,
-                integration_runtime,
-                int(user_id),
-                str(execution_id),
-            )
 
     def resume_execution(user_id: int, execution_id: str) -> Dict[str, Any]:
         current = original_get_execution(int(user_id), str(execution_id))
@@ -147,12 +174,7 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
                 raise SoftwareFactoryError(
                     "velia_factory_integration_repair_disabled", status=503
                 )
-            return repair_service.process_execution(
-                execution_module,
-                integration_runtime,
-                int(user_id),
-                str(execution_id),
-            )
+            return process_execution_locked(int(user_id), str(execution_id))
         if callable(original_resume_execution):
             return original_resume_execution(int(user_id), str(execution_id))
         raise SoftwareFactoryError("velia_factory_workspace_execution_not_resumable", status=409)
@@ -170,14 +192,7 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
             if not execution_module.rollout.user_allowed(int(user_id)):
                 continue
             try:
-                results.append(
-                    repair_service.process_execution(
-                        execution_module,
-                        integration_runtime,
-                        int(user_id),
-                        str(execution_id),
-                    )
-                )
+                results.append(process_execution_locked(int(user_id), str(execution_id)))
             except Exception:
                 logger.exception(
                     "VELIA_WORKSPACE_INTEGRATION_REPAIR_SUPERVISOR_FAILED execution_id=%s",
@@ -189,9 +204,7 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
     execution_module._set_execution_state = set_execution_state
     execution_module.resume_execution = resume_execution
     execution_module.run_workspace_supervisor_once = run_workspace_supervisor_once
-    execution_module.process_integration_repair = lambda user_id, execution_id: repair_service.process_execution(
-        execution_module, integration_runtime, int(user_id), str(execution_id)
-    )
+    execution_module.process_integration_repair = process_execution_locked
     execution_module.latest_integration_repair = lambda user_id, execution_id: repair_service.latest_repair(
         execution_module, int(user_id), str(execution_id)
     )
