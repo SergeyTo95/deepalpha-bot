@@ -37,6 +37,7 @@ jobs:
             services/velia_software_factory_team_service.py \
             services/velia_software_factory_stage2_runtime_patch.py \
             services/velia_software_factory_autonomy_service.py \
+            services/velia_software_factory_stage3_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py \
             run_web_process.py
@@ -59,6 +60,7 @@ jobs:
             services/velia_software_factory_team_service.py \
             services/velia_software_factory_stage2_runtime_patch.py \
             services/velia_software_factory_autonomy_service.py \
+            services/velia_software_factory_stage3_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py
       - name: Verify autonomy safety contract
@@ -66,6 +68,9 @@ jobs:
           grep -q 'autopilot_module.set_mission_status.*paused' services/velia_software_factory_autonomy_service.py
           grep -q 'autopilot_module.cancel_task' services/velia_software_factory_autonomy_service.py
           grep -q 'pg_try_advisory_lock' services/velia_software_factory_autonomy_service.py
+          grep -q 'FROM velia_software_factory_chat_contexts c' services/velia_software_factory_stage3_hardening_patch.py
+          grep -q 'item.pop("allowed_paths", None)' services/velia_software_factory_stage3_hardening_patch.py
+          grep -q 'stage3_hardening.install(autonomy)' services/velia_software_factory_routes.py
           grep -q 'install_velia_software_factory_chat(velia_chat_service_module)' run_web_process.py
           grep -q 'install_velia_software_factory_autonomy(deepalpha_web.app)' run_web_process.py
       - name: Verify fail-closed rollout flags
