@@ -111,7 +111,37 @@ def _acceptance_gate_requested() -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-def _run_dry_run_acceptance_gate(acceptance_module: Any = None) -> Dict[str, Any]:
+def _resolve_acceptance_actor_id(acceptance_module: Any) -> int:
+    repository = str(acceptance_module.acceptance_repository() or "").strip()
+    candidates = sorted(int(item) for item in rollout.admin_pilot_user_ids() if int(item) > 0)
+    matches = []
+    if repository:
+        for user_id in candidates:
+            projects = project_service.list_projects(int(user_id))
+            if any(
+                not bool(project.get("archived"))
+                and str(project.get("repository_full_name") or "").strip().casefold() == repository.casefold()
+                for project in projects
+            ):
+                matches.append(int(user_id))
+    if len(matches) != 1:
+        code = (
+            "velia_factory_dry_run_acceptance_actor_not_found"
+            if not matches
+            else "velia_factory_dry_run_acceptance_actor_ambiguous"
+        )
+        raise SoftwareFactoryError(
+            code,
+            detail=(
+                f"source={rollout.admin_pilot_id_source()} candidates={len(candidates)} "
+                f"matches={len(matches)} repository={repository}"
+            ),
+            status=409,
+        )
+    return matches[0]
+
+
+def _run_dry_run_acceptance_gate(acceptance_module: Any = None, *, actor_id: int | None = None) -> Dict[str, Any]:
     """Preview-only fail-closed acceptance gate. Production defaults to a no-op."""
     if not _acceptance_gate_requested():
         return {"enabled": False, "status": "disabled", "passed": False}
@@ -119,21 +149,34 @@ def _run_dry_run_acceptance_gate(acceptance_module: Any = None) -> Dict[str, Any
     if acceptance_module is None:
         from services import velia_software_factory_dry_run_acceptance_service as acceptance_module
 
+    resolved_actor = int(actor_id) if actor_id is not None else _resolve_acceptance_actor_id(acceptance_module)
+    original_configured_admin_id = getattr(acceptance_module, "configured_admin_id", None)
+    original_is_admin_user = getattr(acceptance_module, "is_admin_user", None)
+    acceptance_module.configured_admin_id = lambda: resolved_actor
+    acceptance_module.is_admin_user = lambda user_id: int(user_id) == resolved_actor
     try:
         result = dict(acceptance_module.run_acceptance())
     except Exception as exc:
         logger.exception(
-            "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=failed passed=false error=%s",
+            "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=failed passed=false pilot_source=%s error=%s",
+            rollout.admin_pilot_id_source(),
             str(getattr(exc, "code", exc.__class__.__name__))[:160],
         )
         raise
+    finally:
+        if original_configured_admin_id is not None:
+            acceptance_module.configured_admin_id = original_configured_admin_id
+        if original_is_admin_user is not None:
+            acceptance_module.is_admin_user = original_is_admin_user
 
     status = str(result.get("status") or "failed")
     passed = bool(result.get("passed")) and status == "passed"
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=%s passed=%s repository=%s code_ref=%s run_id=%s dry_run=%s execution_blocked=%s missions_unchanged=%s writes=%s autopilot_task=%s merge=%s deployment=%s reused=%s blocker=%s",
+        "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=%s passed=%s pilot_source=%s actor_count=%s repository=%s code_ref=%s run_id=%s dry_run=%s execution_blocked=%s missions_unchanged=%s writes=%s autopilot_task=%s merge=%s deployment=%s reused=%s blocker=%s",
         status[:40],
         str(passed).lower(),
+        rollout.admin_pilot_id_source(),
+        len(rollout.admin_pilot_user_ids()),
         str(result.get("repository_full_name") or "")[:240],
         str(result.get("code_ref") or "")[:40],
         str(result.get("run_id") or "")[:80],
@@ -210,9 +253,11 @@ def install(factory_module: Any, autonomy_module: Any) -> bool:
     _INSTALLED = True
     _install_chat_copy_patch()
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s admin_pilot=%s",
+        "VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s admin_pilot=%s pilot_source=%s actor_count=%s",
         rollout.rollout_mode(),
         str(bool(rollout.admin_pilot_enabled())).lower(),
+        rollout.admin_pilot_id_source(),
+        len(rollout.admin_pilot_user_ids()) if rollout.admin_pilot_enabled() else 0,
     )
     _run_dry_run_acceptance_gate()
     return True
