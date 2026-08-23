@@ -269,8 +269,10 @@ def install(workspace_module: Any) -> None:
     # 1) execution safety/lifecycle hardening;
     # 2) integration completion gate;
     # 3) deterministic semantic-evidence hardening;
-    # 4) Stage 4.4 workspace chat wrapper + gate hardening;
-    # 5) only then workspace supervisor cleanup_ctx is installed by routes.
+    # 4) Stage 5 read-only delivery gate;
+    # 5) Stage 4.4 workspace chat wrapper + gate hardening;
+    # 6) only then workspace supervisor cleanup_ctx is installed by routes.
+    from services import velia_software_factory_delivery_gate_runtime_patch as delivery_runtime
     from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
     from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
     from services import velia_software_factory_integration_validator_service as integration_validator
@@ -280,6 +282,7 @@ def install(workspace_module: Any) -> None:
     execution_hardening.install(execution_module)
     integration_runtime.install(workspace_module, execution_module)
     integration_hardening.install(integration_validator)
+    delivery_runtime.install(execution_module)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True
 
