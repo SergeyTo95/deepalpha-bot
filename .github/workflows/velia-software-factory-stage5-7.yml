@@ -1,0 +1,112 @@
+name: VELIA Software Factory Stage 5.7
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_release_passport_*.py'
+      - 'services/velia_software_factory_delivery_gate_runtime_patch.py'
+      - 'tests/test_velia_software_factory_release_passport_*.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage5-7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-passport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 5.7 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_release_passport_service.py \
+            services/velia_software_factory_release_passport_hardening_patch.py \
+            services/velia_software_factory_delivery_gate_runtime_patch.py
+      - name: Run Stage 5.7 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q tests/test_velia_software_factory_release_passport_service.py
+      - name: Verify fail-closed passport status
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_release_passport_service as passport
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_RELEASE_PASSPORT_ENABLED', None)
+          status = passport.public_status()
+          assert status['enabled'] is False
+          assert status['mode'] == 'immutable_audit_passport'
+          assert status['complete_certificate_required'] is True
+          assert status['derive_chain_from_certificate'] is True
+          assert status['cross_reference_validation'] is True
+          assert status['tamper_evident_chain_hash'] is True
+          assert status['append_only'] is True
+          assert status['network_access_supported'] is False
+          assert status['github_access_supported'] is False
+          assert status['railway_access_supported'] is False
+          assert status['github_write_supported'] is False
+          assert status['merge_supported'] is False
+          assert status['deployment_supported'] is False
+          assert status['passport_supported'] is False
+          PY
+      - name: Verify passport has no network or release write primitives
+        run: |
+          ! grep -nE 'github_service\._request|release_github|merge_exact_head|require_write_permissions|create_deployment|redeploy|RAILWAY_TOKEN|RAILWAY_API|requests\.|httpx\.|aiohttp\.|urllib\.request|autopilot\.enqueue_task|automatic_revert|rollback' \
+            services/velia_software_factory_release_passport_service.py \
+            services/velia_software_factory_release_passport_hardening_patch.py
+          ! grep -nE '"(POST|PUT|PATCH|DELETE)"' \
+            services/velia_software_factory_release_passport_service.py \
+            services/velia_software_factory_release_passport_hardening_patch.py
+          grep -q 'completion.get_completion_certificate' services/velia_software_factory_release_passport_service.py
+          grep -q 'post_merge.get_verification' services/velia_software_factory_release_passport_service.py
+          grep -q 'deployment.get_observation' services/velia_software_factory_release_passport_service.py
+          grep -q 'release_execution.get_execution' services/velia_software_factory_release_passport_service.py
+          grep -q 'preflight.get_plan' services/velia_software_factory_release_passport_service.py
+          grep -q 'delivery.get_candidate' services/velia_software_factory_release_passport_service.py
+      - name: Verify immutable chain and append-only persistence
+        run: |
+          grep -q 'evidence_chain_hash = _fingerprint(chain)' services/velia_software_factory_release_passport_service.py
+          grep -q 'evidence_chain_hash = passport_module._fingerprint(hardened_chain)' services/velia_software_factory_release_passport_hardening_patch.py
+          grep -q 'workspace_execution' services/velia_software_factory_release_passport_hardening_patch.py
+          grep -q 'velia_factory_release_passport_approval_sequence_mismatch' services/velia_software_factory_release_passport_service.py
+          grep -q 'velia_factory_release_passport_source_fingerprint_mismatch' services/velia_software_factory_release_passport_service.py
+          grep -q 'velia_factory_release_passport_deployment_merge_mismatch' services/velia_software_factory_release_passport_service.py
+          grep -q 'velia_factory_release_passport_merged_count_mismatch' services/velia_software_factory_release_passport_hardening_patch.py
+          grep -q 'ON CONFLICT (user_id,certificate_id,evidence_chain_hash) DO NOTHING' services/velia_software_factory_release_passport_service.py
+          ! grep -n 'UPDATE velia_software_factory_release_passports' services/velia_software_factory_release_passport_service.py
+      - name: Verify hardening and lazy runtime install order
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_delivery_gate_runtime_patch.py').read_text()
+          assert 'passport_hardening.install(passport)' in text
+          assert text.index('passport_hardening.install(passport)') < text.index('passport_status = passport.public_status()')
+          assert 'if bool(passport_status.get("enabled"))' in text
+          assert 'passport.ensure_passport_tables(execution_module)' in text
+          assert 'release_passport_enabled=%s' in text
+          assert 'release_passport_mode=%s' in text
+          assert 'release_passport_supported=%s' in text
+          assert 'deployment_supported=false' in text
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
