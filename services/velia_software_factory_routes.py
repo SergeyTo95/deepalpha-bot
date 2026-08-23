@@ -12,6 +12,7 @@ from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_lead_service as factory
 from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
 from services import velia_software_factory_stage3_hardening_patch as stage3_hardening
+from services import velia_software_factory_workspace_service as workspace_service
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,11 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
         auth = _auth(routes_module, request)
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        rollout_status = (
+            factory.factory_rollout_status(int(auth["user_id"]))
+            if callable(getattr(factory, "factory_rollout_status", None))
+            else {"mode": "off", "eligible": False, "dry_run": False, "live_execution": False}
+        )
         return routes_module._json_response(
             {
                 "ok": True,
@@ -79,7 +85,14 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                 "supervisor_enabled": autonomy.supervisor_enabled(),
                 "developer_enabled": project_service.developer_enabled(),
                 "autopilot_enabled": autopilot.autopilot_enabled(),
-                "stage": 3,
+                "stage": 4,
+                "rollout": rollout_status,
+                "workspace_capabilities": {
+                    "multi_repo_registry": True,
+                    "workspace_brain": True,
+                    "cross_repo_plan_validation": True,
+                    "multi_repo_execution": False,
+                },
                 "pipeline": [
                     "natural_language_intake",
                     "project_spec",
@@ -140,6 +153,97 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                 limit,
             )
             return routes_module._json_response({"ok": True, "brain": items})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def list_workspaces(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            try:
+                limit = min(100, max(1, int(request.query.get("limit") or 50)))
+            except (TypeError, ValueError):
+                limit = 50
+            items = await asyncio.to_thread(workspace_service.list_workspaces, int(auth["user_id"]), limit)
+            return routes_module._json_response({"ok": True, "workspaces": items})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def create_workspace(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            item = await asyncio.to_thread(
+                workspace_service.create_workspace,
+                int(auth["user_id"]),
+                await _body(request),
+            )
+            return routes_module._json_response({"ok": True, "workspace": item}, status=201)
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def get_workspace(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            item = await asyncio.to_thread(
+                workspace_service.get_workspace,
+                int(auth["user_id"]),
+                request.match_info["workspace_id"],
+            )
+            return routes_module._json_response({"ok": True, "workspace": item})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def workspace_brain(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            try:
+                limit = min(300, max(1, int(request.query.get("limit") or 100)))
+            except (TypeError, ValueError):
+                limit = 100
+            items = await asyncio.to_thread(
+                workspace_service.list_workspace_brain,
+                int(auth["user_id"]),
+                request.match_info["workspace_id"],
+                limit,
+            )
+            return routes_module._json_response({"ok": True, "brain": items})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def validate_workspace_plan(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            workspace = await asyncio.to_thread(
+                workspace_service.get_workspace,
+                int(auth["user_id"]),
+                request.match_info["workspace_id"],
+            )
+            plan = workspace_service.normalize_workspace_plan(await _body(request), workspace)
+            return routes_module._json_response({"ok": True, "plan": plan})
         except Exception as exc:
             return _json_error(routes_module, exc)
 
@@ -242,6 +346,11 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_get(f"{_PREFIX}/team", team)
     app.router.add_get(f"{_PREFIX}/projects/{{project_id}}/brain", project_brain)
+    app.router.add_get(f"{_PREFIX}/workspaces", list_workspaces)
+    app.router.add_post(f"{_PREFIX}/workspaces", create_workspace)
+    app.router.add_get(f"{_PREFIX}/workspaces/{{workspace_id}}", get_workspace)
+    app.router.add_get(f"{_PREFIX}/workspaces/{{workspace_id}}/brain", workspace_brain)
+    app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/plans/validate", validate_workspace_plan)
     app.router.add_post(f"{_PREFIX}/runs", create)
     app.router.add_get(f"{_PREFIX}/runs/{{run_id}}", get)
     app.router.add_get(f"{_PREFIX}/runs/{{run_id}}/events", events)
@@ -249,4 +358,4 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/advance", advance)
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/stop", stop)
     app["velia_software_factory_routes_installed"] = True
-    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=3")
+    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=4 workspace_execution=false")
