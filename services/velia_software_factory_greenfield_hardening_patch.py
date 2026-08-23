@@ -77,6 +77,40 @@ def _validate_manifest_owner(service: Any, user_id: int, manifest: Mapping[str, 
             raise SoftwareFactoryError("velia_factory_greenfield_scope_manifest_invalid", detail=full_name, status=409)
 
 
+def _require_initialized_repositories(service: Any, manifest: Mapping[str, Any]) -> None:
+    installation_id = int(manifest.get("installation_id") or 0)
+    available = service._available_repositories(installation_id)
+    for raw in manifest.get("repositories") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        full_name = str(raw.get("full_name") or "").strip()
+        repo = available.get(full_name.casefold())
+        if not repo or bool(repo.get("archived")):
+            raise SoftwareFactoryError("velia_factory_greenfield_repository_missing", detail=full_name, status=409)
+        if str(repo.get("full_name") or "").casefold() != full_name.casefold():
+            raise SoftwareFactoryError("velia_factory_greenfield_repository_identity_mismatch", detail=full_name, status=409)
+        branch = str(repo.get("default_branch") or "main")
+        try:
+            tree = service.github_service.list_tree(
+                installation_id,
+                int(repo.get("id") or 0),
+                full_name,
+                branch,
+                prefix="",
+            )
+        except Exception as exc:
+            code = str(getattr(exc, "code", ""))
+            detail = str(getattr(exc, "detail", "")).lower()
+            if code in {"github_not_found", "github_invalid_request", "github_api_error"} and "empty" in detail:
+                raise SoftwareFactoryError(
+                    "velia_factory_greenfield_initial_commit_required", detail=full_name, status=409
+                ) from exc
+            raise
+        entries = tree.get("entries") if isinstance(tree, Mapping) else []
+        if not isinstance(entries, list) or not entries:
+            raise SoftwareFactoryError("velia_factory_greenfield_initial_commit_required", detail=full_name, status=409)
+
+
 def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
     global _INSTALLED
     if getattr(chat_module, "_velia_software_factory_greenfield_hardening_installed", False):
@@ -103,6 +137,7 @@ def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
         if not rollout.intake_allowed(int(user_id)):
             raise SoftwareFactoryError("velia_factory_rollout_forbidden", status=403)
         _validate_manifest_owner(service, int(user_id), manifest)
+        _require_initialized_repositories(service, manifest)
         return original_attach(int(user_id), manifest)
 
     def recommend_write_scope(project: Mapping[str, Any], *args: Any, **kwargs: Any) -> List[str]:
@@ -124,9 +159,9 @@ def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
         text = str(result.get("text") or "")
         russian = runtime_module._russian(text)
         safe["text"] = (
-            "Не удалось продолжить greenfield bootstrap. Проверь, что нужные репозитории созданы и доступны установленному VELIA GitHub App, затем повтори «продолжай». Репозитории Velia этим шагом не создаёт."
+            "Не удалось продолжить greenfield bootstrap. Проверь, что нужные репозитории созданы, имеют первый commit и доступны установленному VELIA GitHub App, затем повтори «продолжай». Репозитории Velia этим шагом не создаёт."
             if russian
-            else "The greenfield bootstrap could not continue. Verify that the required repositories exist and are visible to the installed VELIA GitHub App, then retry “continue”. VELIA does not create repositories in this step."
+            else "The greenfield bootstrap could not continue. Verify that the required repositories exist, have an initial commit, and are visible to the installed VELIA GitHub App, then retry “continue”. VELIA does not create repositories in this step."
         )
         return safe
 
