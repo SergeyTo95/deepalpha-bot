@@ -70,11 +70,10 @@ def install(observer_module: Any) -> None:
         )
         return result
 
-    def evaluate_expected_contexts(profile: Mapping[str, Any], status_snapshot: Mapping[str, Any]):
+    def evaluate_expected_contexts(
+        profile: Mapping[str, Any], status_snapshot: Mapping[str, Any]
+    ):
         expected = normalize_contexts(profile.get("expected_contexts") or [])
-        hardened_profile = dict(profile)
-        hardened_profile["expected_contexts"] = expected
-
         statuses = {
             str(item.get("context") or ""): dict(item)
             for item in status_snapshot.get("statuses") or []
@@ -84,26 +83,38 @@ def install(observer_module: Any) -> None:
         missing = []
         failing = []
         waiting = []
+        invalid_targets = []
+        allowed_hosts = set(
+            getattr(observer_module.status_github, "_RAILWAY_HOSTS", set()) or set()
+        )
         for context in expected:
             item = statuses.get(context)
             if item is None:
                 missing.append(context)
                 continue
             state = str(item.get("state") or "").strip().lower()
+            target_url = str(item.get("target_url") or "")[:1000]
+            target_host = observer_module.status_github._target_host(target_url)
             matched.append(
                 {
                     "context": context,
                     "state": state,
                     "description": str(item.get("description") or "")[:500],
-                    "target_url": str(item.get("target_url") or "")[:1000],
+                    "target_url": target_url,
+                    "target_host": target_host,
                     "updated_at": str(item.get("updated_at") or "")[:80],
                 }
             )
+            if target_host not in allowed_hosts:
+                invalid_targets.append(context)
+                continue
             if state in {"failure", "error"}:
                 failing.append(context)
             elif state != "success":
                 waiting.append(context)
-        if failing:
+        if invalid_targets:
+            status = "failed"
+        elif failing:
             status = "failed"
         elif missing or waiting:
             status = "pending"
@@ -116,6 +127,7 @@ def install(observer_module: Any) -> None:
             "missing_contexts": missing,
             "failing_contexts": failing,
             "waiting_contexts": waiting,
+            "invalid_target_contexts": invalid_targets,
         }
 
     def build_observation_snapshot(execution_module, user_id, verification_id):
