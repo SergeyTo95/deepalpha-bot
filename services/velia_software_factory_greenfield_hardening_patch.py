@@ -111,6 +111,21 @@ def _require_initialized_repositories(service: Any, manifest: Mapping[str, Any])
             raise SoftwareFactoryError("velia_factory_greenfield_initial_commit_required", detail=full_name, status=409)
 
 
+def _delegation_slot_busy(runtime_module: Any, user_id: int, conversation_id: str) -> bool:
+    if autonomy.get_chat_run(int(user_id), str(conversation_id)):
+        return True
+    workspace_context = runtime_module.workspace_runtime.get_workspace_chat_context(
+        int(user_id), str(conversation_id)
+    )
+    if str(workspace_context.get("status") or "") in runtime_module.workspace_runtime._ACTIVE_CONTEXT_STATES:
+        return True
+    if runtime_module.agent_planner.active_chat_job(int(user_id), str(conversation_id)):
+        return True
+    if runtime_module.coding_service.active_job(int(user_id), str(conversation_id)):
+        return True
+    return False
+
+
 def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
     global _INSTALLED
     if getattr(chat_module, "_velia_software_factory_greenfield_hardening_installed", False):
@@ -120,6 +135,7 @@ def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
     original_attach = service.attach_exact_repositories
     original_recommend_scope = autonomy.recommend_write_scope
     original_generate = chat_module.generate_velia_chat_result
+    original_attach_and_delegate = runtime_module._attach_and_delegate
 
     def greenfield_enabled() -> bool:
         return (
@@ -149,6 +165,34 @@ def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
             return []
         return _registered_roots(service, project_id)
 
+    def attach_and_delegate(
+        message: str,
+        *,
+        user_id: int,
+        conversation_id: str,
+        request_id: str,
+        context: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        if _delegation_slot_busy(runtime_module, int(user_id), str(conversation_id)):
+            text = (
+                "Greenfield bootstrap готов к подключению репозиториев, но в этом чате уже запущена другая разработка. Заверши или отмени её, затем снова напиши «продолжай». Репозитории этим шагом не прикреплялись и код не запускался."
+                if runtime_module._russian(message)
+                else "The greenfield bootstrap is ready to attach repositories, but another development run is active in this chat. Complete or cancel it, then reply “continue” again. No repositories were attached and no code execution was started by this step."
+            )
+            return runtime_module._result(
+                text,
+                request_id,
+                reason="software_factory_greenfield_plan_conflict",
+                context=context,
+            )
+        return original_attach_and_delegate(
+            message,
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            request_id=str(request_id),
+            context=context,
+        )
+
     def generate_hardened(*args: Any, **kwargs: Any) -> Dict[str, Any]:
         result = original_generate(*args, **kwargs)
         if not isinstance(result, dict):
@@ -168,6 +212,7 @@ def install(chat_module: Any, service: Any, runtime_module: Any) -> None:
     service.greenfield_enabled = greenfield_enabled
     service.attach_exact_repositories = attach_exact_repositories
     autonomy.recommend_write_scope = recommend_write_scope
+    runtime_module._attach_and_delegate = attach_and_delegate
     chat_module.generate_velia_chat_result = generate_hardened
     chat_module._velia_software_factory_greenfield_hardening_installed = True
     _INSTALLED = True
