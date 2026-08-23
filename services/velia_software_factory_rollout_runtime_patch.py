@@ -159,9 +159,6 @@ def _repository_owner_actor_ids(repository: str) -> list[int]:
     repository = str(repository or "").strip()
     if "/" not in repository:
         return []
-    owner = repository.split("/", 1)[0].strip()
-    if not owner:
-        return []
     project_service.ensure_developer_tables()
     conn = get_connection()
     cursor = conn.cursor()
@@ -176,11 +173,10 @@ def _repository_owner_actor_ids(repository: str) -> list[int]:
               AND p.deleted_at IS NULL
               AND p.is_archived=FALSE
               AND i.deleted_at IS NULL
-              AND LOWER(i.account_login)=LOWER(%s)
             ORDER BY p.user_id
             LIMIT 3
             """,
-            (repository, owner),
+            (repository,),
         )
         result = []
         for row in cursor.fetchall() or []:
