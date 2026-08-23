@@ -7,6 +7,7 @@ on:
       - 'services/velia_software_factory_rollout_runtime_patch.py'
       - 'services/velia_admin_security_service.py'
       - 'tests/test_velia_software_factory_stage6_admin_pilot.py'
+      - 'tests/test_velia_software_factory_rollout_service.py'
       - '.env.example'
       - '.github/workflows/velia-software-factory-stage6.yml'
   workflow_dispatch:
@@ -40,7 +41,9 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          python -m pytest -q tests/test_velia_software_factory_stage6_admin_pilot.py
+          python -m pytest -q \
+            tests/test_velia_software_factory_rollout_service.py \
+            tests/test_velia_software_factory_stage6_admin_pilot.py
       - name: Verify fail-closed admin pilot defaults
         env:
           PYTHONPATH: .
@@ -113,10 +116,10 @@ jobs:
           import ast
           from pathlib import Path
 
-          path = Path('services/velia_software_factory_rollout_service.py')
-          tree = ast.parse(path.read_text())
+          source = Path('services/velia_software_factory_rollout_service.py').read_text()
+          tree = ast.parse(source)
           public = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'public_status')
-          public_text = ast.get_source_segment(path.read_text(), public) or ''
+          public_text = ast.get_source_segment(source, public) or ''
           assert 'configured_admin_id' not in public_text
           assert 'ADMIN_ID' not in public_text
           assert 'eligibility_source' in public_text
