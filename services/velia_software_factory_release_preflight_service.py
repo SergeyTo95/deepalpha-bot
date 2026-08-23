@@ -273,6 +273,31 @@ def _repository_order(execution: Mapping[str, Any], repositories: Sequence[Mappi
     return ordered
 
 
+def _validate_repository_identity(repositories: Sequence[Mapping[str, Any]]) -> None:
+    seen_projects = set()
+    seen_repositories: Dict[str, str] = {}
+    for item in repositories:
+        project_id = str(item.get("project_id") or "").strip()
+        repository = str(item.get("repository_full_name") or "").strip()
+        if project_id in seen_projects:
+            raise SoftwareFactoryError(
+                "velia_factory_release_multiple_prs_per_repository_unsupported",
+                detail=project_id,
+                status=409,
+            )
+        seen_projects.add(project_id)
+        key = repository.casefold()
+        previous = seen_repositories.get(key)
+        if key and previous and previous != project_id:
+            raise SoftwareFactoryError(
+                "velia_factory_release_repository_identity_conflict",
+                detail=repository,
+                status=409,
+            )
+        if key:
+            seen_repositories[key] = project_id
+
+
 def _build_plan_snapshot(
     execution_module: Any,
     user_id: int,
@@ -286,6 +311,7 @@ def _build_plan_snapshot(
     if str(execution.get("status") or "") != "review_ready":
         raise SoftwareFactoryError("velia_factory_delivery_execution_not_review_ready", status=409)
     repositories = [dict(item) for item in candidate.get("repositories") or [] if isinstance(item, Mapping)]
+    _validate_repository_identity(repositories)
     order = _repository_order(execution, repositories)
     by_project = {str(item.get("project_id") or ""): item for item in repositories}
     ordered_items: List[Dict[str, Any]] = []
