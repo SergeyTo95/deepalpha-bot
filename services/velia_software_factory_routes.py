@@ -8,6 +8,7 @@ from aiohttp import web
 
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_developer_project_service as project_service
+from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_lead_service as factory
 from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
 from services.velia_software_factory_core_service import SoftwareFactoryError
@@ -72,25 +73,30 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                 "ok": True,
                 "enabled": factory.software_factory_enabled(),
                 "team_enabled": factory.team_runtime_enabled(),
+                "autonomy_enabled": autonomy.autonomy_enabled(),
+                "supervisor_enabled": autonomy.supervisor_enabled(),
                 "developer_enabled": project_service.developer_enabled(),
                 "autopilot_enabled": autopilot.autopilot_enabled(),
-                "stage": 2,
+                "stage": 3,
                 "pipeline": [
+                    "natural_language_intake",
                     "project_spec",
                     "persistent_project_brain",
                     "state_machine",
                     "event_log",
-                    "clarifier",
+                    "material_clarifier",
                     "architect",
                     "designer_when_needed",
                     "planner",
                     "specialist_task_dag",
                     "lead",
                     "coding_autopilot",
+                    "autonomous_supervisor",
                 ],
                 "execution_owner": "coding_autopilot",
                 "review_owner": "coding_autopilot",
                 "completion_scope": "review_ready",
+                "stop_semantics": "pause_then_safe_boundary",
             }
         )
 
@@ -104,6 +110,8 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
             {
                 "ok": True,
                 "enabled": factory.team_runtime_enabled(),
+                "autonomy_enabled": autonomy.autonomy_enabled(),
+                "supervisor_enabled": autonomy.supervisor_enabled(),
                 "roles": factory.team_role_catalog(),
                 "write_owner": "coding_autopilot",
                 "review_owner": "coding_autopilot",
@@ -214,6 +222,21 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
         except Exception as exc:
             return _json_error(routes_module, exc)
 
+    async def stop(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module, execution=True)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if not autonomy.autonomy_enabled():
+            return routes_module._json_response({"ok": False, "error": "velia_software_factory_autonomy_disabled"}, status=503)
+        try:
+            item = await asyncio.to_thread(autonomy.request_stop, int(auth["user_id"]), request.match_info["run_id"])
+            return routes_module._json_response({"ok": True, "stop": item})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_get(f"{_PREFIX}/team", team)
     app.router.add_get(f"{_PREFIX}/projects/{{project_id}}/brain", project_brain)
@@ -222,5 +245,6 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_get(f"{_PREFIX}/runs/{{run_id}}/events", events)
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/clarifications", clarify)
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/advance", advance)
+    app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/stop", stop)
     app["velia_software_factory_routes_installed"] = True
-    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=2")
+    logger.info("VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=3")
