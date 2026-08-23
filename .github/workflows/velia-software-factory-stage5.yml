@@ -5,9 +5,11 @@ on:
     paths:
       - 'services/velia_software_factory_delivery_gate_*.py'
       - 'services/velia_software_factory_delivery_approval_*.py'
+      - 'services/velia_software_factory_release_preflight_*.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_delivery_gate_*.py'
       - 'tests/test_velia_software_factory_delivery_approval_*.py'
+      - 'tests/test_velia_software_factory_release_preflight_*.py'
       - '.env.example'
       - '.github/workflows/velia-software-factory-stage5.yml'
   workflow_dispatch:
@@ -36,6 +38,7 @@ jobs:
           python -m py_compile \
             services/velia_software_factory_delivery_gate_service.py \
             services/velia_software_factory_delivery_approval_service.py \
+            services/velia_software_factory_release_preflight_service.py \
             services/velia_software_factory_delivery_gate_runtime_patch.py \
             services/velia_software_factory_workspace_hardening_patch.py
       - name: Run Stage 5 focused tests
@@ -47,6 +50,7 @@ jobs:
             tests/test_velia_software_factory_delivery_gate_runtime.py \
             tests/test_velia_software_factory_delivery_approval_service.py \
             tests/test_velia_software_factory_delivery_approval_runtime.py \
+            tests/test_velia_software_factory_release_preflight_service.py \
             tests/test_velia_agent_coding_autopilot_merge_policy_service.py
       - name: Verify fail-closed delivery gates
         env:
@@ -56,8 +60,10 @@ jobs:
           import os
           from services import velia_software_factory_delivery_approval_service as approval
           from services import velia_software_factory_delivery_gate_service as delivery
+          from services import velia_software_factory_release_preflight_service as preflight
           os.environ.pop('VELIA_SOFTWARE_FACTORY_DELIVERY_GATE_ENABLED', None)
           os.environ.pop('VELIA_SOFTWARE_FACTORY_DELIVERY_APPROVAL_ENABLED', None)
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_RELEASE_PREFLIGHT_ENABLED', None)
           status = delivery.public_status()
           assert status['enabled'] is False
           assert status['mode'] == 'read_only_candidate'
@@ -73,18 +79,29 @@ jobs:
           assert approval_status['exact_fingerprint_required'] is True
           assert approval_status['merge_supported'] is False
           assert approval_status['deployment_supported'] is False
+          preflight_status = preflight.public_status()
+          assert preflight_status['enabled'] is False
+          assert preflight_status['mode'] == 'preflight_only'
+          assert preflight_status['current_approval_required'] is True
+          assert preflight_status['exact_head_sha_required'] is True
+          assert preflight_status['cross_repository_atomic_merge'] is False
+          assert preflight_status['partial_merge_recovery_required'] is True
+          assert preflight_status['execution_supported'] is False
+          assert preflight_status['merge_supported'] is False
+          assert preflight_status['deployment_supported'] is False
           PY
       - name: Verify Delivery Gate write boundary
         run: |
           ! grep -nE 'merge_pull_request|merge_pull\(|create_deployment|redeploy|github_service\._request|write_service\.(create|update|delete)|autopilot\.enqueue_task' \
             services/velia_software_factory_delivery_gate_service.py \
             services/velia_software_factory_delivery_approval_service.py \
+            services/velia_software_factory_release_preflight_service.py \
             services/velia_software_factory_delivery_gate_runtime_patch.py
           grep -q 'merge_policy.evaluate_merge_policy' services/velia_software_factory_delivery_gate_service.py
           grep -q 'integration_validation_not_passed' services/velia_software_factory_delivery_gate_service.py
           grep -q 'execution_supported=false merge_supported=false deployment_supported=false' \
             services/velia_software_factory_delivery_gate_runtime_patch.py
-      - name: Verify immutable candidate and append-only approval evidence
+      - name: Verify release evidence and transaction preflight
         run: |
           grep -q 'plan_fingerprint' services/velia_software_factory_delivery_gate_service.py
           grep -q 'contract_fingerprint' services/velia_software_factory_delivery_gate_service.py
@@ -95,6 +112,13 @@ jobs:
           grep -q 'velia_factory_delivery_candidate_stale' services/velia_software_factory_delivery_approval_service.py
           grep -q 'require_current_approval' services/velia_software_factory_delivery_approval_service.py
           ! grep -n 'UPDATE velia_software_factory_delivery_approval_events' services/velia_software_factory_delivery_approval_service.py
+          grep -q 'pg_advisory_xact_lock' services/velia_software_factory_release_preflight_service.py
+          grep -q "WHERE status='prepared'" services/velia_software_factory_release_preflight_service.py
+          grep -q 'velia_factory_release_repository_dependency_cycle' services/velia_software_factory_release_preflight_service.py
+          grep -q 'velia_factory_release_multiple_prs_per_repository_unsupported' services/velia_software_factory_release_preflight_service.py
+          grep -q 'cross_repository_atomic_merge' services/velia_software_factory_release_preflight_service.py
+          grep -q 'stop_after_first_failure_and_require_explicit_recovery_plan' services/velia_software_factory_release_preflight_service.py
+          grep -q 'len(text) == 40' services/velia_software_factory_release_preflight_service.py
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
