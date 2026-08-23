@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Mapping
 
+from db.database import get_connection
 from services import velia_developer_project_service as project_service
+from services import velia_software_factory_dry_run_fixture_service as fixture_service
 from services import velia_software_factory_rollout_service as rollout
 from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
 from services import velia_software_factory_team_service as team_service
@@ -11,6 +14,33 @@ from services.velia_software_factory_core_service import ProjectSpec, SoftwareFa
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
+_ACCEPTANCE_ACTOR_SOURCES = {"pilot_allowlist", "repository_owner", "preview_fixture"}
+_DANGEROUS_ACCEPTANCE_FLAGS = (
+    "VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_INTEGRATION_VALIDATOR_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_GREENFIELD_BOOTSTRAP_ENABLED",
+    "VELIA_DEVELOPER_AUTOPILOT_ENABLED",
+    "VELIA_DEVELOPER_AUTOPILOT_WORKER_ENABLED",
+    "VELIA_DEVELOPER_WRITE_ENABLED",
+    "VELIA_DEVELOPER_AUTOPILOT_MERGE_POLICY_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_DELIVERY_GATE_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_DELIVERY_APPROVAL_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_RELEASE_PREFLIGHT_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_RELEASE_EXECUTION_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_RELEASE_VERIFICATION_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_DEPLOYMENT_OBSERVER_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_RELEASE_COMPLETION_ENABLED",
+    "VELIA_SOFTWARE_FACTORY_RELEASE_PASSPORT_ENABLED",
+)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _decorate_run(run: Mapping[str, Any], user_id: int) -> Dict[str, Any]:
@@ -105,6 +135,180 @@ def _install_chat_copy_patch() -> None:
     chat_runtime._velia_factory_rollout_copy_installed = True
 
 
+def _acceptance_gate_requested() -> bool:
+    return _env_bool("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED", False)
+
+
+def _acceptance_actor_source() -> str:
+    raw = str(os.getenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ACTOR_SOURCE", "pilot_allowlist") or "pilot_allowlist").strip().lower()
+    return raw if raw in _ACCEPTANCE_ACTOR_SOURCES else "invalid"
+
+
+def _assert_acceptance_execution_gates_closed() -> None:
+    if rollout.rollout_mode() != rollout.ROLLOUT_DRY_RUN:
+        raise SoftwareFactoryError("velia_factory_dry_run_acceptance_mode_required", status=409)
+    open_flags = [name for name in _DANGEROUS_ACCEPTANCE_FLAGS if _env_bool(name, False)]
+    if open_flags:
+        raise SoftwareFactoryError(
+            "velia_factory_dry_run_acceptance_execution_gate_open",
+            detail=",".join(open_flags),
+            status=409,
+        )
+
+
+def _repository_owner_actor_ids(repository: str) -> list[int]:
+    repository = str(repository or "").strip()
+    if "/" not in repository:
+        return []
+    project_service.ensure_developer_tables()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT DISTINCT p.user_id
+            FROM velia_developer_projects p
+            JOIN velia_developer_installations i
+              ON i.installation_id=p.installation_id AND i.user_id=p.user_id
+            WHERE LOWER(p.repository_full_name)=LOWER(%s)
+              AND p.deleted_at IS NULL
+              AND p.is_archived=FALSE
+              AND i.deleted_at IS NULL
+            ORDER BY p.user_id
+            LIMIT 3
+            """,
+            (repository,),
+        )
+        result = []
+        for row in cursor.fetchall() or []:
+            try:
+                value = int(row[0])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if value > 0:
+                result.append(value)
+        return result
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _resolve_acceptance_actor_id(acceptance_module: Any) -> int:
+    repository = str(acceptance_module.acceptance_repository() or "").strip()
+    source = _acceptance_actor_source()
+    if source == "invalid":
+        raise SoftwareFactoryError("velia_factory_dry_run_acceptance_actor_source_invalid", status=409)
+
+    if source == "preview_fixture":
+        fixture = fixture_service.ensure_fixture(repository)
+        matches = [int(fixture.get("actor_id") or 0)] if int(fixture.get("actor_id") or 0) > 0 else []
+        candidate_count = len(matches)
+    elif source == "repository_owner":
+        matches = _repository_owner_actor_ids(repository)
+        candidate_count = len(matches)
+    else:
+        candidates = sorted(int(item) for item in rollout.admin_pilot_user_ids() if int(item) > 0)
+        matches = []
+        if repository:
+            for user_id in candidates:
+                projects = project_service.list_projects(int(user_id))
+                if any(
+                    not bool(project.get("archived"))
+                    and str(project.get("repository_full_name") or "").strip().casefold() == repository.casefold()
+                    for project in projects
+                ):
+                    matches.append(int(user_id))
+        candidate_count = len(candidates)
+
+    if len(matches) != 1:
+        code = (
+            "velia_factory_dry_run_acceptance_actor_not_found"
+            if not matches
+            else "velia_factory_dry_run_acceptance_actor_ambiguous"
+        )
+        raise SoftwareFactoryError(
+            code,
+            detail=(
+                f"actor_source={source} candidates={candidate_count} "
+                f"matches={len(matches)} repository={repository}"
+            ),
+            status=409,
+        )
+    return matches[0]
+
+
+def _run_dry_run_acceptance_gate(acceptance_module: Any = None, *, actor_id: int | None = None) -> Dict[str, Any]:
+    """Preview-only fail-closed acceptance gate. Production defaults to a no-op."""
+    if not _acceptance_gate_requested():
+        return {"enabled": False, "status": "disabled", "passed": False}
+
+    _assert_acceptance_execution_gates_closed()
+    if acceptance_module is None:
+        from services import velia_software_factory_dry_run_acceptance_service as acceptance_module
+
+    actor_source = _acceptance_actor_source()
+    resolved_actor = int(actor_id) if actor_id is not None else _resolve_acceptance_actor_id(acceptance_module)
+    original_configured_admin_id = getattr(acceptance_module, "configured_admin_id", None)
+    original_is_admin_user = getattr(acceptance_module, "is_admin_user", None)
+    original_admin_pilot_user_ids = rollout.admin_pilot_user_ids
+    original_admin_pilot_id_source = rollout.admin_pilot_id_source
+    original_recommend_write_scope = getattr(acceptance_module.autonomy, "recommend_write_scope", None)
+
+    acceptance_module.configured_admin_id = lambda: resolved_actor
+    acceptance_module.is_admin_user = lambda user_id: int(user_id) == resolved_actor
+    if actor_source in {"repository_owner", "preview_fixture"}:
+        label = "acceptance_preview_fixture" if actor_source == "preview_fixture" else "acceptance_repository_owner"
+        rollout.admin_pilot_user_ids = lambda: {resolved_actor}
+        rollout.admin_pilot_id_source = lambda: label
+    if actor_source == "preview_fixture" and original_recommend_write_scope is not None:
+        acceptance_module.autonomy.recommend_write_scope = (
+            lambda project: original_recommend_write_scope(project, tree_loader=fixture_service.tree_loader)
+        )
+    try:
+        result = dict(acceptance_module.run_acceptance())
+    except Exception as exc:
+        logger.exception(
+            "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=failed passed=false actor_source=%s pilot_source=%s error=%s",
+            actor_source,
+            rollout.admin_pilot_id_source(),
+            str(getattr(exc, "code", exc.__class__.__name__))[:160],
+        )
+        raise
+    finally:
+        rollout.admin_pilot_user_ids = original_admin_pilot_user_ids
+        rollout.admin_pilot_id_source = original_admin_pilot_id_source
+        if original_recommend_write_scope is not None:
+            acceptance_module.autonomy.recommend_write_scope = original_recommend_write_scope
+        if original_configured_admin_id is not None:
+            acceptance_module.configured_admin_id = original_configured_admin_id
+        if original_is_admin_user is not None:
+            acceptance_module.is_admin_user = original_is_admin_user
+
+    status = str(result.get("status") or "failed")
+    passed = bool(result.get("passed")) and status == "passed"
+    logger.info(
+        "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=%s passed=%s actor_source=%s repository=%s code_ref=%s run_id=%s dry_run=%s execution_blocked=%s missions_unchanged=%s writes=%s autopilot_task=%s merge=%s deployment=%s reused=%s blocker=%s",
+        status[:40],
+        str(passed).lower(),
+        actor_source,
+        str(result.get("repository_full_name") or "")[:240],
+        str(result.get("code_ref") or "")[:40],
+        str(result.get("run_id") or "")[:80],
+        str(bool(result.get("dry_run"))).lower(),
+        str(bool(result.get("execution_blocked"))).lower(),
+        str(bool(result.get("autopilot_missions_unchanged"))).lower(),
+        str(bool(result.get("repository_write_performed"))).lower(),
+        str(bool(result.get("autopilot_task_dispatched"))).lower(),
+        str(bool(result.get("merge_performed"))).lower(),
+        str(bool(result.get("deployment_triggered"))).lower(),
+        str(bool(result.get("reused"))).lower(),
+        str(result.get("blocker_code") or "")[:160],
+    )
+    if not passed:
+        raise RuntimeError("velia_factory_dry_run_acceptance_failed")
+    return result
+
+
 def install(factory_module: Any, autonomy_module: Any) -> bool:
     global _INSTALLED
     if _INSTALLED or getattr(factory_module, "_velia_factory_rollout_runtime_installed", False):
@@ -163,8 +367,12 @@ def install(factory_module: Any, autonomy_module: Any) -> bool:
     _INSTALLED = True
     _install_chat_copy_patch()
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s admin_pilot=%s",
+        "VELIA_SOFTWARE_FACTORY_ROLLOUT_RUNTIME_INSTALLED mode=%s admin_pilot=%s pilot_source=%s actor_count=%s acceptance_actor_source=%s",
         rollout.rollout_mode(),
         str(bool(rollout.admin_pilot_enabled())).lower(),
+        rollout.admin_pilot_id_source(),
+        len(rollout.admin_pilot_user_ids()) if rollout.admin_pilot_enabled() else 0,
+        _acceptance_actor_source(),
     )
+    _run_dry_run_acceptance_gate()
     return True

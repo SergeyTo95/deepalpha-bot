@@ -10,6 +10,11 @@ from services.velia_software_factory_core_service import SoftwareFactoryError
 def _clear(monkeypatch):
     monkeypatch.delenv("ADMIN_ID", raising=False)
     monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", raising=False)
+    monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE", raising=False)
+    monkeypatch.delenv("LIVE_OWNER_USER_IDS", raising=False)
+    monkeypatch.delenv("JARVIS_FOUNDER_IDS", raising=False)
+    monkeypatch.delenv("VELIA_CHAT_BETA_USER_IDS", raising=False)
+    monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED", raising=False)
     monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", raising=False)
     monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_USER_IDS", raising=False)
 

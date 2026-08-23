@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Dict, Iterable, Set
 
-from services.velia_admin_security_service import configured_admin_id, is_admin_user
+from services.velia_admin_security_service import configured_admin_id
 
 
 ROLLOUT_OFF = "off"
 ROLLOUT_DRY_RUN = "dry_run"
 ROLLOUT_LIVE = "live"
 _VALID_MODES = {ROLLOUT_OFF, ROLLOUT_DRY_RUN, ROLLOUT_LIVE}
+_ID_SPLIT_RE = re.compile(r"[\s,;]+")
+_ADMIN_PILOT_SOURCE_ENV = {
+    "live_owner": "LIVE_OWNER_USER_IDS",
+    "jarvis_founder": "JARVIS_FOUNDER_IDS",
+    "chat_beta": "VELIA_CHAT_BETA_USER_IDS",
+    "mobile_debug": "VELIA_MOBILE_DEBUG_USER_IDS",
+}
 
 _PLAN_FLAGS = (
     "VELIA_DEVELOPER_ENABLED",
@@ -48,6 +56,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _parse_ids(raw: object) -> Set[int]:
+    result: Set[int] = set()
+    for part in _ID_SPLIT_RE.split(str(raw or "").strip()):
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            result.add(value)
+        if len(result) >= 64:
+            break
+    return result
+
+
 def rollout_mode() -> str:
     raw = str(os.getenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", ROLLOUT_OFF) or ROLLOUT_OFF).strip().lower()
     return raw if raw in _VALID_MODES else ROLLOUT_OFF
@@ -58,17 +82,25 @@ def admin_pilot_enabled() -> bool:
     return _env_bool("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", False)
 
 
+def admin_pilot_id_source() -> str:
+    raw = str(os.getenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE", "admin_id") or "admin_id").strip().lower()
+    if raw == "admin_id" or raw in _ADMIN_PILOT_SOURCE_ENV:
+        return raw
+    return "invalid"
+
+
+def admin_pilot_user_ids() -> Set[int]:
+    source = admin_pilot_id_source()
+    if source == "admin_id":
+        value = configured_admin_id()
+        return {value} if value > 0 else set()
+    env_name = _ADMIN_PILOT_SOURCE_ENV.get(source)
+    return _parse_ids(os.getenv(env_name, "")) if env_name else set()
+
+
 def allowed_user_ids() -> Set[int]:
     """Parse the Factory allowlist using the same comma-separated ID convention as VELIA chat beta rollout."""
-    result: Set[int] = set()
-    for part in str(os.getenv("VELIA_SOFTWARE_FACTORY_USER_IDS", "") or "").split(","):
-        try:
-            value = int(part.strip())
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            result.add(value)
-    return result
+    return _parse_ids(os.getenv("VELIA_SOFTWARE_FACTORY_USER_IDS", ""))
 
 
 def explicit_user_allowed(user_id: int) -> bool:
@@ -83,7 +115,7 @@ def admin_pilot_user_allowed(user_id: int) -> bool:
         candidate = int(user_id)
     except (TypeError, ValueError):
         return False
-    return candidate > 0 and is_admin_user(candidate)
+    return candidate > 0 and candidate in admin_pilot_user_ids()
 
 
 def user_allowed(user_id: int) -> bool:
@@ -104,7 +136,7 @@ def live_execution_allowed(user_id: int) -> bool:
 
 
 def _admin_pilot_configured() -> bool:
-    return admin_pilot_enabled() and configured_admin_id() > 0
+    return admin_pilot_enabled() and bool(admin_pilot_user_ids())
 
 
 def supervisor_allowed() -> bool:
@@ -168,6 +200,8 @@ def public_status(user_id: int) -> dict:
         "eligible": eligible,
         "eligibility_source": eligibility_source(int(user_id)),
         "admin_pilot_enabled": admin_pilot_enabled(),
+        "admin_pilot_id_source": admin_pilot_id_source(),
+        "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
         "dry_run": bool(mode == ROLLOUT_DRY_RUN and eligible),
         "live_execution": bool(mode == ROLLOUT_LIVE and eligible),
         "supervisor_allowed": bool(supervisor_allowed()),
