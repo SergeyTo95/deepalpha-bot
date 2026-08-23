@@ -16,6 +16,7 @@ _ADMIN_PILOT_SOURCE_ENV = {
     "live_owner": "LIVE_OWNER_USER_IDS",
     "jarvis_founder": "JARVIS_FOUNDER_IDS",
     "chat_beta": "VELIA_CHAT_BETA_USER_IDS",
+    "mobile_debug": "VELIA_MOBILE_DEBUG_USER_IDS",
 }
 
 _PLAN_FLAGS = (
