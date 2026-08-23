@@ -40,7 +40,8 @@ jobs:
           PYTHONPATH: .
         run: |
           python -m pytest -q \
-            tests/test_velia_software_factory_release_completion_service.py
+            tests/test_velia_software_factory_release_completion_service.py \
+            tests/test_velia_software_factory_release_completion_profile.py
       - name: Verify fail-closed completion status
         env:
           PYTHONPATH: .
