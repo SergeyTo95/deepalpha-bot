@@ -1,0 +1,111 @@
+name: VELIA Software Factory Stage 5.5
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_deployment_*.py'
+      - 'services/velia_software_factory_delivery_gate_runtime_patch.py'
+      - 'tests/test_velia_software_factory_deployment_*.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage5-5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deployment-observer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 5.5 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_deployment_status_github_service.py \
+            services/velia_software_factory_deployment_observer_service.py \
+            services/velia_software_factory_deployment_observer_hardening_patch.py \
+            services/velia_software_factory_delivery_gate_runtime_patch.py
+      - name: Run Stage 5.5 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_deployment_status_github_service.py \
+            tests/test_velia_software_factory_deployment_observer_service.py
+      - name: Verify fail-closed observer status
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_deployment_observer_service as observer
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_DEPLOYMENT_OBSERVER_ENABLED', None)
+          status = observer.public_status()
+          assert status['enabled'] is False
+          assert status['mode'] == 'github_commit_status_observer'
+          assert status['profile_required'] is True
+          assert status['exact_context_match'] is True
+          assert status['railway_credentials_required'] is False
+          assert status['deployment_trigger_supported'] is False
+          assert status['deployment_supported'] is False
+          PY
+      - name: Verify observer is read-only and exact-context only
+        run: |
+          ! grep -nE 'create_deployment|redeploy|set-variables|RAILWAY_TOKEN|RAILWAY_API|autopilot\.enqueue_task|merge_exact_head|require_write_permissions' \
+            services/velia_software_factory_deployment_observer_service.py \
+            services/velia_software_factory_deployment_observer_hardening_patch.py \
+            services/velia_software_factory_deployment_status_github_service.py
+          ! grep -nE '"(POST|PUT|PATCH|DELETE)"' services/velia_software_factory_deployment_status_github_service.py
+          grep -q '"GET"' services/velia_software_factory_deployment_status_github_service.py
+          grep -q '/commits/{quote(exact_sha)}/status' services/velia_software_factory_deployment_status_github_service.py
+          grep -q 'velia_factory_deployment_context_must_be_exact' services/velia_software_factory_deployment_observer_hardening_patch.py
+          grep -q 'velia_factory_deployment_verified_merges_missing' services/velia_software_factory_deployment_observer_hardening_patch.py
+          grep -q 'snapshot_json", 6' services/velia_software_factory_deployment_observer_hardening_patch.py
+          grep -q 'ON CONFLICT (user_id,verification_id,observation_fingerprint) DO NOTHING' services/velia_software_factory_deployment_observer_service.py
+          ! grep -n 'UPDATE velia_software_factory_deployment_observations' services/velia_software_factory_deployment_observer_service.py
+      - name: Verify runtime installs hardening before observer status
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          runtime_text = Path('services/velia_software_factory_delivery_gate_runtime_patch.py').read_text()
+          assert 'deployment_hardening.install(deployment_observer)' in runtime_text
+          assert runtime_text.index('deployment_hardening.install(deployment_observer)') < runtime_text.index('deployment_status = deployment_observer.public_status()')
+          assert 'deployment_observer_enabled=%s' in runtime_text
+          assert 'deployment_trigger_supported=false' in runtime_text
+          assert 'deployment_supported=false' in runtime_text
+
+          tree = ast.parse(Path('services/velia_software_factory_deployment_status_github_service.py').read_text())
+          calls = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == '_request':
+                  calls.append(node)
+          assert calls
+          for call in calls:
+              assert call.args
+              method = call.args[0]
+              assert isinstance(method, ast.Constant) and method.value == 'GET'
+          PY
+      - name: Verify observer schema remains lazy while disabled
+        run: |
+          grep -q 'if bool(deployment_status.get("enabled"))' services/velia_software_factory_delivery_gate_runtime_patch.py
+          grep -q 'deployment_observer.ensure_deployment_observer_tables(execution_module)' services/velia_software_factory_delivery_gate_runtime_patch.py
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
