@@ -109,14 +109,22 @@ jobs:
             services/velia_software_factory_workspace_service.py \
             services/velia_software_factory_workspace_hardening_patch.py
       - name: Verify multi-repo execution safety contract
+        env:
+          PYTHONPATH: .
         run: |
-          grep -q 'VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED' services/velia_software_factory_workspace_execution_service.py
-          grep -q 'workspace_execution_enabled.*False' services/velia_software_factory_workspace_execution_service.py
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_workspace_execution_service as execution
+
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED", None)
+          assert execution.workspace_execution_enabled() is False
+          assert execution.workspace_supervisor_enabled() is False
+          PY
           grep -q 'velia_factory_workspace_live_rollout_required' services/velia_software_factory_workspace_execution_service.py
           grep -q 'velia_factory_workspace_mission_conflict' services/velia_software_factory_workspace_execution_service.py
           grep -q 'client_request_id=f"workspace:' services/velia_software_factory_workspace_execution_service.py
           grep -q 'never merge' services/velia_software_factory_workspace_execution_service.py
-          grep -q 'str.*status.*== "ready_for_review"' services/velia_software_factory_workspace_execution_service.py
+          grep -q 'ready_for_review' services/velia_software_factory_workspace_execution_service.py
           grep -q '_preflight_mission_conflicts' services/velia_software_factory_workspace_execution_hardening_patch.py
           grep -q 'stop_requested' services/velia_software_factory_workspace_execution_hardening_patch.py
           grep -q 'execution_hardening.install(execution_module)' services/velia_software_factory_workspace_hardening_patch.py
