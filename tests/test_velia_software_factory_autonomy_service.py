@@ -1,5 +1,8 @@
 import json
 
+# Production imports the Stage 3 hardening patch through the Factory routes.
+# Import it first here so focused tests exercise the same runtime contract.
+from services import velia_software_factory_stage3_hardening_patch as _stage3_hardening  # noqa: F401
 from services.velia_software_factory_autonomy_service import (
     build_project_spec_from_message,
     is_build_intent,
@@ -52,7 +55,7 @@ def test_recommended_scope_comes_from_real_tree_and_excludes_protected_roots():
     assert "services" in scope
     assert "webapp" in scope
     assert "tests" in scope
-    assert "Dockerfile" in scope
+    assert "Dockerfile" not in scope
     assert ".github" not in scope
     assert "auth" not in scope
     assert "billing" not in scope
@@ -100,6 +103,39 @@ def test_intake_builds_project_spec_but_does_not_auto_grant_write_scope():
     clarification = Clarifier().evaluate(spec)
     assert clarification.blocking is True
     assert [item["key"] for item in clarification.questions] == ["allowed_paths"]
+
+
+def test_llm_deliverable_cannot_grant_or_hide_write_scope():
+    raw = {
+        "title": "Flower Store",
+        "objective": "Build the store.",
+        "acceptance_criteria": ["Tests pass"],
+        "constraints": [],
+        "deliverables": [
+            {
+                "id": "store",
+                "title": "Store",
+                "goal": "Implement everything",
+                "kind": "coding",
+                "depends_on": [],
+                "allowed_paths": ["secrets", ".github", "services"],
+                "blocked_paths": [],
+            }
+        ],
+    }
+    payload = build_project_spec_from_message(
+        "Хочу интернет магазин цветов",
+        _project(),
+        ["services", "webapp", "tests"],
+        user_id=1,
+        request_id="request-bypass",
+        generator=lambda _: json.dumps(raw),
+    )
+    assert payload["allowed_paths"] == []
+    assert len(payload["deliverables"]) == 1
+    assert "allowed_paths" not in payload["deliverables"][0]
+    assert "blocked_paths" not in payload["deliverables"][0]
+    assert Clarifier().evaluate(ProjectSpec.from_payload(payload)).blocking is True
 
 
 def test_explicit_safe_scope_in_initial_message_can_be_approved_without_widening():
