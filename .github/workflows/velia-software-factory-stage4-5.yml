@@ -1,0 +1,91 @@
+name: VELIA Software Factory Stage 4.5
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_greenfield_*.py'
+      - 'services/velia_software_factory_workspace_chat_hardening_patch.py'
+      - 'tests/test_velia_software_factory_greenfield_*.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage4-5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage4-5-greenfield:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 4.5 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_greenfield_service.py \
+            services/velia_software_factory_greenfield_chat_runtime_patch.py \
+            services/velia_software_factory_greenfield_hardening_patch.py \
+            services/velia_software_factory_workspace_chat_hardening_patch.py
+      - name: Run greenfield service tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_velia_software_factory_greenfield_service.py
+      - name: Run greenfield hardening tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_velia_software_factory_greenfield_hardening.py
+      - name: Verify install ordering
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q tests/test_velia_software_factory_greenfield_install_order.py
+      - name: Verify fail-closed greenfield gate
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_greenfield_service as service
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_GREENFIELD_BOOTSTRAP_ENABLED', None)
+          assert service.greenfield_enabled() is False
+          assert service.public_status()['repository_creation'] is False
+          PY
+      - name: Verify Stage 4.5 write boundary
+        run: |
+          ! grep -nE 'create_branch|open_pull_request|merge_pull|merge_pull_request|update_file|create_file|delete_file|commit_files|autopilot\.enqueue_task|workspace_execution\.create_execution|github_service\._request' \
+            services/velia_software_factory_greenfield_service.py \
+            services/velia_software_factory_greenfield_chat_runtime_patch.py \
+            services/velia_software_factory_greenfield_hardening_patch.py
+          grep -q 'project_service.create_project' services/velia_software_factory_greenfield_service.py
+          grep -q 'exact_full_name_only' services/velia_software_factory_greenfield_service.py
+          grep -q 'initial_commit_required' services/velia_software_factory_greenfield_chat_runtime_patch.py
+          grep -q 'velia_factory_greenfield_initial_commit_required' services/velia_software_factory_greenfield_hardening_patch.py
+      - name: Verify canonical greenfield scopes
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          from services import velia_software_factory_greenfield_service as service
+          allowed = {'app', 'android', 'tests', 'docs'}
+          protected = {'.github', 'auth', 'billing', 'secrets', 'infrastructure', 'migrations', 'terraform'}
+          for profile in ('fullstack', 'backend', 'frontend', 'android'):
+              roots = set(service.canonical_roots(profile))
+              assert roots <= allowed
+              assert not (roots & protected)
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi

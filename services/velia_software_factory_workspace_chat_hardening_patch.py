@@ -88,3 +88,16 @@ def install(chat_module: Any, workspace_chat_service: Any, runtime_module: Any) 
         "VELIA_SOFTWARE_FACTORY_WORKSPACE_CHAT_HARDENING_INSTALLED enabled=%s",
         str(workspace_chat_enabled()).lower(),
     )
+
+    # Stage 4.5 is deliberately outside the already hardened Stage 4.4 router.
+    # It owns only greenfield intake/attach. Once repositories are attached it
+    # delegates to the existing single-repo or workspace Factory path.
+    try:
+        from services import velia_software_factory_greenfield_chat_runtime_patch as greenfield_runtime
+        from services import velia_software_factory_greenfield_hardening_patch as greenfield_hardening
+        from services import velia_software_factory_greenfield_service as greenfield_service
+
+        greenfield_runtime.install(chat_module)
+        greenfield_hardening.install(chat_module, greenfield_service, greenfield_runtime)
+    except Exception:
+        logger.exception("VELIA_SOFTWARE_FACTORY_GREENFIELD_INSTALL_FAILED")

@@ -52,7 +52,15 @@ def test_workspace_chat_hardening_requires_full_factory_stack(monkeypatch):
     topology = service.select_workspace_projects("Хочу интернет-магазин цветов", [])
     assert topology["status"] == "single"
 
-    result = chat.generate_velia_chat_result()
+    # Use the real production chat signature. Stage 4.5 is installed outside
+    # Stage 4.4, so calling an artificial zero-argument wrapper would test a
+    # signature that the application never uses.
+    result = chat.generate_velia_chat_result(
+        "prompt",
+        user_id=1,
+        conversation_id="workspace-hardening-test",
+        request_id="workspace-hardening-test-request",
+    )
     assert result["reason"] == "software_factory_workspace_internal_error"
     assert "GitHub не измен" not in result["text"]
     assert "Проверь статус workspace" in result["text"]
