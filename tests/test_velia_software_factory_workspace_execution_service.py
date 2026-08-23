@@ -69,18 +69,29 @@ def test_existing_foreign_mission_is_never_hijacked(monkeypatch):
         "list_missions",
         lambda user_id: [
             {
-                "mission_id": "foreign-mission",
+                "mission_id": "foreign-backend",
                 "project_id": "backend-project",
-                "name": "Existing unrelated mission",
+                "name": "Existing unrelated backend mission",
                 "status": "active",
-            }
+            },
+            {
+                "mission_id": "foreign-android",
+                "project_id": "android-project",
+                "name": "Existing unrelated Android mission",
+                "status": "paused",
+            },
         ],
+    )
+    monkeypatch.setattr(
+        execution.autopilot,
+        "create_mission",
+        lambda *args, **kwargs: pytest.fail("foreign mission conflict must be detected before creating a mission"),
     )
 
     with pytest.raises(SoftwareFactoryError) as exc:
         execution._ensure_missions(run)
     assert exc.value.code == "velia_factory_workspace_mission_conflict"
-    assert exc.value.detail == "foreign-mission"
+    assert exc.value.detail in {"foreign-backend", "foreign-android"}
 
 
 def test_scheduler_dispatches_only_dependency_ready_tasks(monkeypatch):
