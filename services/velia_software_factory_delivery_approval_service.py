@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping
 
 from db.database import get_connection
 from services import velia_software_factory_delivery_gate_service as delivery
@@ -80,6 +80,7 @@ def ensure_approval_tables(execution_module: Any) -> None:
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS velia_software_factory_delivery_approval_events (
+                    sequence_id BIGSERIAL UNIQUE NOT NULL,
                     decision_id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES velia_software_factory_delivery_candidates(candidate_id) ON DELETE CASCADE,
                     user_id BIGINT NOT NULL,
@@ -94,7 +95,7 @@ def ensure_approval_tables(execution_module: Any) -> None:
             )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_velia_factory_delivery_approval_events "
-                "ON velia_software_factory_delivery_approval_events(user_id,candidate_id,created_at DESC)"
+                "ON velia_software_factory_delivery_approval_events(user_id,candidate_id,sequence_id DESC)"
             )
             conn.commit()
             _SCHEMA_READY = True
@@ -117,14 +118,15 @@ def _require_user(user_id: int) -> None:
 
 def _event_row(row: Any) -> Dict[str, Any]:
     return {
-        "decision_id": str(_value(row, "decision_id", 0, "")),
-        "candidate_id": str(_value(row, "candidate_id", 1, "")),
-        "user_id": int(_value(row, "user_id", 2, 0) or 0),
-        "source_id": str(_value(row, "source_id", 3, "")),
-        "source_fingerprint": str(_value(row, "source_fingerprint", 4, "")),
-        "decision": str(_value(row, "decision", 5, "")),
-        "note": str(_value(row, "note", 6, "") or ""),
-        "created_at": str(_value(row, "created_at", 7, "") or ""),
+        "sequence_id": int(_value(row, "sequence_id", 0, 0) or 0),
+        "decision_id": str(_value(row, "decision_id", 1, "")),
+        "candidate_id": str(_value(row, "candidate_id", 2, "")),
+        "user_id": int(_value(row, "user_id", 3, 0) or 0),
+        "source_id": str(_value(row, "source_id", 4, "")),
+        "source_fingerprint": str(_value(row, "source_fingerprint", 5, "")),
+        "decision": str(_value(row, "decision", 6, "")),
+        "note": str(_value(row, "note", 7, "") or ""),
+        "created_at": str(_value(row, "created_at", 8, "") or ""),
     }
 
 
@@ -135,9 +137,9 @@ def latest_decision(execution_module: Any, user_id: int, candidate_id: str) -> D
     cursor = _dict_cursor(conn)
     try:
         cursor.execute(
-            "SELECT decision_id,candidate_id,user_id,source_id,source_fingerprint,decision,note,created_at "
+            "SELECT sequence_id,decision_id,candidate_id,user_id,source_id,source_fingerprint,decision,note,created_at "
             "FROM velia_software_factory_delivery_approval_events "
-            "WHERE candidate_id=%s AND user_id=%s ORDER BY created_at DESC,decision_id DESC LIMIT 1",
+            "WHERE candidate_id=%s AND user_id=%s ORDER BY sequence_id DESC LIMIT 1",
             (str(candidate_id), int(user_id)),
         )
         row = cursor.fetchone()
@@ -202,7 +204,7 @@ def _insert_event(
             INSERT INTO velia_software_factory_delivery_approval_events (
                 decision_id,candidate_id,user_id,source_id,source_fingerprint,decision,note,created_at
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING decision_id,candidate_id,user_id,source_id,source_fingerprint,decision,note,created_at
+            RETURNING sequence_id,decision_id,candidate_id,user_id,source_id,source_fingerprint,decision,note,created_at
             """,
             (
                 str(uuid.uuid4()),
