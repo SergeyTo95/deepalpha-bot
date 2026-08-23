@@ -5,6 +5,17 @@ from services import velia_software_factory_workspace_hardening_patch as hardeni
 from services import velia_software_factory_workspace_service as workspace
 
 
+def test_workspace_mutations_require_controlled_rollout_user(monkeypatch):
+    monkeypatch.setattr(hardening.rollout, "intake_allowed", lambda user_id: False)
+    with pytest.raises(SoftwareFactoryError) as exc:
+        hardening._require_rollout_user(7)
+    assert exc.value.code == "velia_factory_rollout_forbidden"
+    assert exc.value.status == 403
+
+    monkeypatch.setattr(hardening.rollout, "intake_allowed", lambda user_id: int(user_id) == 7)
+    hardening._require_rollout_user(7)
+
+
 def test_workspace_metadata_is_bounded_and_fail_safe():
     assert hardening._sanitize_metadata(["not", "a", "mapping"]) == {}
     value = hardening._sanitize_metadata(
