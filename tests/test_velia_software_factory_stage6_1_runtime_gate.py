@@ -35,6 +35,15 @@ def _enable_gate(monkeypatch, *, actor_source="pilot_allowlist"):
         monkeypatch.setenv(name, "false")
 
 
+def _fake_module(run_acceptance, *, admin_id=99):
+    return SimpleNamespace(
+        configured_admin_id=lambda: admin_id,
+        is_admin_user=lambda user_id: user_id == admin_id,
+        autonomy=SimpleNamespace(recommend_write_scope=lambda project: ["services", "tests"]),
+        run_acceptance=run_acceptance,
+    )
+
+
 def test_acceptance_gate_disabled_is_noop(monkeypatch):
     monkeypatch.delenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED", raising=False)
     fake = SimpleNamespace(run_acceptance=lambda: (_ for _ in ()).throw(AssertionError("must not run")))
@@ -104,6 +113,17 @@ def test_repository_owner_actor_source_requires_unique_active_owner(monkeypatch)
     assert exc.value.code == "velia_factory_dry_run_acceptance_actor_ambiguous"
 
 
+def test_preview_fixture_actor_source_uses_fixture_actor(monkeypatch):
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ACTOR_SOURCE", "preview_fixture")
+    fake = SimpleNamespace(acceptance_repository=lambda: "Acme/shop")
+    monkeypatch.setattr(
+        runtime.fixture_service,
+        "ensure_fixture",
+        lambda repository: {"actor_id": 8100000000000000001, "repository_full_name": repository},
+    )
+    assert runtime._resolve_acceptance_actor_id(fake) == 8100000000000000001
+
+
 def test_invalid_acceptance_actor_source_fails_closed(monkeypatch):
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ACTOR_SOURCE", "everyone")
     fake = SimpleNamespace(acceptance_repository=lambda: "Acme/shop")
@@ -125,11 +145,7 @@ def test_acceptance_gate_rejects_open_write_or_execution_gate(monkeypatch):
 
 def test_acceptance_gate_passes_only_explicit_pass(monkeypatch):
     _enable_gate(monkeypatch)
-    fake = SimpleNamespace(
-        configured_admin_id=lambda: 99,
-        is_admin_user=lambda user_id: user_id == 99,
-        run_acceptance=lambda: _result(),
-    )
+    fake = _fake_module(lambda: _result())
 
     result = runtime._run_dry_run_acceptance_gate(fake, actor_id=7)
 
@@ -147,10 +163,7 @@ def test_repository_owner_gate_bridges_eligibility_only_during_probe(monkeypatch
     monkeypatch.setattr(runtime.rollout, "admin_pilot_user_ids", lambda: {99})
     monkeypatch.setattr(runtime.rollout, "admin_pilot_id_source", lambda: "mobile_debug")
     observed = {}
-    fake = SimpleNamespace(
-        configured_admin_id=lambda: 99,
-        is_admin_user=lambda user_id: user_id == 99,
-    )
+    fake = _fake_module(lambda: None)
 
     def run_acceptance():
         observed["actor_ids"] = runtime.rollout.admin_pilot_user_ids()
@@ -173,13 +186,54 @@ def test_repository_owner_gate_bridges_eligibility_only_during_probe(monkeypatch
     assert fake.is_admin_user(99) is True
 
 
-def test_acceptance_gate_rejects_nonpassing_result(monkeypatch):
-    _enable_gate(monkeypatch)
+def test_preview_fixture_bridges_scope_only_during_probe(monkeypatch):
+    _enable_gate(monkeypatch, actor_source="preview_fixture")
+    monkeypatch.setattr(runtime.rollout, "admin_pilot_user_ids", lambda: {99})
+    monkeypatch.setattr(runtime.rollout, "admin_pilot_id_source", lambda: "mobile_debug")
+    original_scope = lambda project: ["original"]
+    observed = {}
     fake = SimpleNamespace(
         configured_admin_id=lambda: 99,
         is_admin_user=lambda user_id: user_id == 99,
-        run_acceptance=lambda: _result(status="failed", passed=False, failure_reasons=["team_plan_empty"]),
+        autonomy=SimpleNamespace(recommend_write_scope=original_scope),
     )
+
+    def real_scope(project, *, tree_loader=None):
+        observed["tree"] = tree_loader()
+        return ["services", "tests", "docs"]
+
+    fake.autonomy.recommend_write_scope = real_scope
+    original_scope = fake.autonomy.recommend_write_scope
+
+    def run_acceptance():
+        observed["actor_ids"] = runtime.rollout.admin_pilot_user_ids()
+        observed["source"] = runtime.rollout.admin_pilot_id_source()
+        observed["configured_admin"] = fake.configured_admin_id()
+        observed["scope"] = fake.autonomy.recommend_write_scope({"id": "fixture-project"})
+        return _result()
+
+    fake.run_acceptance = run_acceptance
+    result = runtime._run_dry_run_acceptance_gate(fake, actor_id=8100000000000000001)
+
+    assert result["passed"] is True
+    assert observed["actor_ids"] == {8100000000000000001}
+    assert observed["source"] == "acceptance_preview_fixture"
+    assert observed["configured_admin"] == 8100000000000000001
+    assert observed["scope"] == ["services", "tests", "docs"]
+    assert [item["path"] for item in observed["tree"]["entries"]] == [
+        "services/stage61_acceptance.py",
+        "tests/test_stage61_acceptance.py",
+        "docs/stage61_acceptance.md",
+    ]
+    assert runtime.rollout.admin_pilot_user_ids() == {99}
+    assert runtime.rollout.admin_pilot_id_source() == "mobile_debug"
+    assert fake.autonomy.recommend_write_scope is original_scope
+    assert fake.configured_admin_id() == 99
+
+
+def test_acceptance_gate_rejects_nonpassing_result(monkeypatch):
+    _enable_gate(monkeypatch)
+    fake = _fake_module(lambda: _result(status="failed", passed=False, failure_reasons=["team_plan_empty"]))
 
     with pytest.raises(RuntimeError, match="velia_factory_dry_run_acceptance_failed"):
         runtime._run_dry_run_acceptance_gate(fake, actor_id=7)
@@ -194,11 +248,7 @@ def test_acceptance_gate_propagates_probe_exception_and_restores(monkeypatch):
     class ProbeError(RuntimeError):
         code = "probe_boom"
 
-    fake = SimpleNamespace(
-        configured_admin_id=lambda: 99,
-        is_admin_user=lambda user_id: user_id == 99,
-        run_acceptance=lambda: (_ for _ in ()).throw(ProbeError("boom")),
-    )
+    fake = _fake_module(lambda: (_ for _ in ()).throw(ProbeError("boom")))
 
     with pytest.raises(ProbeError, match="boom"):
         runtime._run_dry_run_acceptance_gate(fake, actor_id=7)
