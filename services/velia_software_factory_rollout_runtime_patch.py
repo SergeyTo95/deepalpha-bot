@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Mapping
 
 from services import velia_developer_project_service as project_service
@@ -105,6 +106,52 @@ def _install_chat_copy_patch() -> None:
     chat_runtime._velia_factory_rollout_copy_installed = True
 
 
+def _acceptance_gate_requested() -> bool:
+    raw = os.getenv("VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED")
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _run_dry_run_acceptance_gate(acceptance_module: Any = None) -> Dict[str, Any]:
+    """Preview-only fail-closed acceptance gate. Production defaults to a no-op."""
+    if not _acceptance_gate_requested():
+        return {"enabled": False, "status": "disabled", "passed": False}
+
+    if acceptance_module is None:
+        from services import velia_software_factory_dry_run_acceptance_service as acceptance_module
+
+    try:
+        result = dict(acceptance_module.run_acceptance())
+    except Exception as exc:
+        logger.exception(
+            "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=failed passed=false error=%s",
+            str(getattr(exc, "code", exc.__class__.__name__))[:160],
+        )
+        raise
+
+    status = str(result.get("status") or "failed")
+    passed = bool(result.get("passed")) and status == "passed"
+    logger.info(
+        "VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT status=%s passed=%s repository=%s code_ref=%s run_id=%s dry_run=%s execution_blocked=%s missions_unchanged=%s writes=%s autopilot_task=%s merge=%s deployment=%s reused=%s blocker=%s",
+        status[:40],
+        str(passed).lower(),
+        str(result.get("repository_full_name") or "")[:240],
+        str(result.get("code_ref") or "")[:40],
+        str(result.get("run_id") or "")[:80],
+        str(bool(result.get("dry_run"))).lower(),
+        str(bool(result.get("execution_blocked"))).lower(),
+        str(bool(result.get("autopilot_missions_unchanged"))).lower(),
+        str(bool(result.get("repository_write_performed"))).lower(),
+        str(bool(result.get("autopilot_task_dispatched"))).lower(),
+        str(bool(result.get("merge_performed"))).lower(),
+        str(bool(result.get("deployment_triggered"))).lower(),
+        str(bool(result.get("reused"))).lower(),
+        str(result.get("blocker_code") or "")[:160],
+    )
+    if not passed:
+        raise RuntimeError("velia_factory_dry_run_acceptance_failed")
+    return result
+
+
 def install(factory_module: Any, autonomy_module: Any) -> bool:
     global _INSTALLED
     if _INSTALLED or getattr(factory_module, "_velia_factory_rollout_runtime_installed", False):
@@ -167,4 +214,5 @@ def install(factory_module: Any, autonomy_module: Any) -> bool:
         rollout.rollout_mode(),
         str(bool(rollout.admin_pilot_enabled())).lower(),
     )
+    _run_dry_run_acceptance_gate()
     return True
