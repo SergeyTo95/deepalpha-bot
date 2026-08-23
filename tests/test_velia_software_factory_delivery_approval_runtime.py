@@ -8,6 +8,8 @@ def test_runtime_registers_approval_boundary(monkeypatch):
     monkeypatch.setattr(runtime.delivery, "ensure_delivery_tables", lambda module: None)
     monkeypatch.setattr(runtime.approval, "ensure_approval_tables", lambda module: None)
     monkeypatch.setattr(runtime.preflight, "ensure_preflight_tables", lambda module: None)
+    monkeypatch.setattr(runtime.release_hardening, "install", lambda release_module, execution_module: None)
+    monkeypatch.setattr(runtime.release_execution, "ensure_execution_tables", lambda module: None)
     monkeypatch.setattr(
         runtime.delivery,
         "public_status",
@@ -22,6 +24,11 @@ def test_runtime_registers_approval_boundary(monkeypatch):
         runtime.preflight,
         "public_status",
         lambda: {"enabled": False, "mode": "preflight_only"},
+    )
+    monkeypatch.setattr(
+        runtime.release_execution,
+        "public_status",
+        lambda: {"enabled": False, "mode": "controlled_merge", "execution_supported": False, "merge_supported": False},
     )
     monkeypatch.setattr(
         runtime.delivery,
@@ -62,6 +69,10 @@ def test_runtime_registers_approval_boundary(monkeypatch):
     monkeypatch.setattr(runtime.preflight, "get_plan", lambda *args, **kwargs: {"plan_id": "p"})
     monkeypatch.setattr(runtime.preflight, "list_plans", lambda *args, **kwargs: [])
     monkeypatch.setattr(runtime.preflight, "cancel_plan", lambda *args, **kwargs: {"status": "cancelled"})
+    monkeypatch.setattr(runtime.release_execution, "create_execution", lambda *args, **kwargs: {"status": "created"})
+    monkeypatch.setattr(runtime.release_execution, "execute_release", lambda *args, **kwargs: {"status": "completed"})
+    monkeypatch.setattr(runtime.release_execution, "get_execution", lambda *args, **kwargs: {"execution_id": "r"})
+    monkeypatch.setattr(runtime.release_execution, "request_stop", lambda *args, **kwargs: {"stop_requested": True})
 
     module = SimpleNamespace()
     runtime.install(module)
@@ -69,6 +80,7 @@ def test_runtime_registers_approval_boundary(monkeypatch):
     assert module.delivery_gate_status()["mode"] == "read_only_candidate"
     assert module.delivery_approval_status()["mode"] == "record_only"
     assert module.release_preflight_status()["mode"] == "preflight_only"
+    assert module.release_execution_status()["mode"] == "controlled_merge"
     assert module.get_delivery_approval(7, "candidate-1")["state"] == "none"
     decision = module.record_delivery_decision(7, "candidate-1", "approved", "ship")
     assert decision["decision"] == "approved"
