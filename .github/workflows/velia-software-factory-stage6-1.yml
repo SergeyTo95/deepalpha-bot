@@ -11,6 +11,7 @@ on:
       - 'services/velia_software_factory_stage2_runtime_patch.py'
       - 'services/velia_software_factory_stage3_hardening_patch.py'
       - 'docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md'
+      - '.env.example'
       - '.github/workflows/velia-software-factory-stage6-1.yml'
   workflow_dispatch:
 
@@ -37,6 +38,7 @@ jobs:
         run: |
           python -m py_compile \
             services/velia_software_factory_dry_run_acceptance_service.py \
+            services/velia_software_factory_rollout_service.py \
             services/velia_software_factory_rollout_runtime_patch.py \
             scripts/run_velia_software_factory_dry_run_acceptance.py
       - name: Run Stage 6.1 focused tests
@@ -45,7 +47,8 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_velia_software_factory_stage6_1_dry_run_acceptance.py \
-            tests/test_velia_software_factory_stage6_1_runtime_gate.py
+            tests/test_velia_software_factory_stage6_1_runtime_gate.py \
+            tests/test_velia_software_factory_stage6_admin_pilot.py
       - name: Verify acceptance defaults fail closed
         env:
           PYTHONPATH: .
@@ -54,11 +57,16 @@ jobs:
           import os
           from services import velia_software_factory_dry_run_acceptance_service as acceptance
           from services import velia_software_factory_rollout_runtime_patch as runtime
+          from services import velia_software_factory_rollout_service as rollout
 
           for key in (
               'VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED',
               'VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_REPOSITORY',
               'VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_PROMPT',
+              'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE',
+              'LIVE_OWNER_USER_IDS',
+              'JARVIS_FOUNDER_IDS',
+              'VELIA_CHAT_BETA_USER_IDS',
               'RAILWAY_GIT_COMMIT_SHA',
           ):
               os.environ.pop(key, None)
@@ -73,6 +81,7 @@ jobs:
           assert status['merge_supported'] is False
           assert status['deployment_supported'] is False
           assert acceptance.code_ref() == ''
+          assert rollout.admin_pilot_id_source() == 'admin_id'
           assert runtime._run_dry_run_acceptance_gate()['status'] == 'disabled'
           PY
       - name: Verify probe contains no repository execution primitive
@@ -94,8 +103,22 @@ jobs:
           call = text.rindex('_run_dry_run_acceptance_gate()')
           assert text.index('factory_module.advance_run = advance_run') < call
           assert text.index('factory_module._velia_factory_rollout_runtime_installed = True') < call
+          assert '_resolve_acceptance_actor_id' in text
+          assert 'project_service.list_projects' in text
+          assert 'len(matches) != 1' in text
           assert 'VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_RESULT' in text
           assert 'raise RuntimeError("velia_factory_dry_run_acceptance_failed")' in text
+          PY
+      - name: Verify pilot actor privacy boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          runtime = Path('services/velia_software_factory_rollout_runtime_patch.py').read_text()
+          rollout = Path('services/velia_software_factory_rollout_service.py').read_text()
+          assert 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE' in rollout
+          assert 'admin_pilot_actor_count' in rollout
+          assert 'pilot_source=%s actor_count=%s' in runtime
+          assert 'user_id=%s' not in runtime[runtime.index('def _run_dry_run_acceptance_gate'):runtime.index('def install(')]
           PY
       - name: Verify standalone runner reproduces runtime install order
         run: |
@@ -115,10 +138,13 @@ jobs:
       - name: Verify preview-only operating contract
         run: |
           grep -q 'VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE=dry_run' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE=' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
           grep -q 'VELIA_DEVELOPER_WRITE_ENABLED=false' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
           grep -q 'VELIA_DEVELOPER_AUTOPILOT_ENABLED=false' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
           grep -q 'startup gate' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
           grep -q 'No production variable is changed' docs/VELIA_SOFTWARE_FACTORY_STAGE6_1_DRY_RUN_ACCEPTANCE.md
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE=admin_id' .env.example
+          grep -q 'VELIA_SOFTWARE_FACTORY_DRY_RUN_ACCEPTANCE_ENABLED=false' .env.example
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
