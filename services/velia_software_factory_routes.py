@@ -85,6 +85,10 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
             if callable(getattr(factory, "factory_rollout_status", None))
             else {"mode": "off", "eligible": False, "dry_run": False, "live_execution": False}
         )
+        integration_enabled = bool(
+            callable(getattr(workspace_execution, "integration_validator_enabled", None))
+            and workspace_execution.integration_validator_enabled()
+        )
         return routes_module._json_response(
             {
                 "ok": True,
@@ -94,7 +98,7 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                 "supervisor_enabled": autonomy.supervisor_enabled(),
                 "developer_enabled": project_service.developer_enabled(),
                 "autopilot_enabled": autopilot.autopilot_enabled(),
-                "stage": "4.1",
+                "stage": "4.2",
                 "rollout": rollout_status,
                 "workspace_capabilities": {
                     "multi_repo_registry": True,
@@ -104,7 +108,11 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                     "multi_repo_execution_available": True,
                     "multi_repo_execution_enabled": workspace_execution.workspace_execution_enabled(),
                     "multi_repo_supervisor_enabled": workspace_execution.workspace_supervisor_enabled(),
+                    "integration_validator_available": True,
+                    "integration_validator_enabled": integration_enabled,
+                    "integration_contract_inference": True,
                     "dependency_gate": "ready_for_review",
+                    "completion_gate": "cross_repo_integration_validation",
                 },
                 "pipeline": [
                     "natural_language_intake",
@@ -119,14 +127,17 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
                     "designer_when_needed",
                     "planner",
                     "cross_repo_task_dag",
+                    "integration_contract_inference",
                     "per_repo_autopilot_missions",
                     "workspace_scheduler",
                     "coding_autopilot",
+                    "integration_validator",
                     "autonomous_supervisor",
                 ],
                 "execution_owner": "coding_autopilot",
                 "review_owner": "coding_autopilot",
                 "completion_scope": "review_ready",
+                "completion_gate": "integration_validation_when_cross_repo",
                 "stop_semantics": "pause_then_safe_boundary",
             }
         )
@@ -383,6 +394,52 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
         except Exception as exc:
             return _json_error(routes_module, exc)
 
+    async def validate_workspace_integration(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            current = await asyncio.to_thread(
+                workspace_execution.get_execution,
+                int(auth["user_id"]),
+                request.match_info["execution_id"],
+            )
+            _execution_matches_workspace(current, request.match_info["workspace_id"])
+            validation = await asyncio.to_thread(
+                workspace_execution.validate_integration,
+                int(auth["user_id"]),
+                request.match_info["execution_id"],
+            )
+            return routes_module._json_response({"ok": True, "integration_validation": validation})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
+    async def resume_workspace_execution(request: web.Request) -> web.Response:
+        blocked = _require_available(routes_module, execution=True)
+        if blocked is not None:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            current = await asyncio.to_thread(
+                workspace_execution.get_execution,
+                int(auth["user_id"]),
+                request.match_info["execution_id"],
+            )
+            _execution_matches_workspace(current, request.match_info["workspace_id"])
+            item = await asyncio.to_thread(
+                workspace_execution.resume_execution,
+                int(auth["user_id"]),
+                request.match_info["execution_id"],
+            )
+            return routes_module._json_response({"ok": True, "execution": item})
+        except Exception as exc:
+            return _json_error(routes_module, exc)
+
     async def stop_workspace_execution(request: web.Request) -> web.Response:
         blocked = _require_available(routes_module)
         if blocked is not None:
@@ -544,6 +601,8 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/executions", create_workspace_execution)
     app.router.add_get(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}", get_workspace_execution)
     app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}/tick", tick_workspace_execution)
+    app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}/validate-integration", validate_workspace_integration)
+    app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}/resume", resume_workspace_execution)
     app.router.add_post(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}/stop", stop_workspace_execution)
     app.router.add_get(f"{_PREFIX}/workspaces/{{workspace_id}}/executions/{{execution_id}}/events", workspace_execution_events)
     app.router.add_post(f"{_PREFIX}/runs", create)
@@ -554,6 +613,7 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
     app.router.add_post(f"{_PREFIX}/runs/{{run_id}}/stop", stop)
     app["velia_software_factory_routes_installed"] = True
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=4.1 workspace_execution=%s",
+        "VELIA_SOFTWARE_FACTORY_ROUTES_INSTALLED stage=4.2 workspace_execution=%s integration_validator=%s",
         str(workspace_execution.workspace_execution_enabled()).lower(),
+        str(workspace_execution.integration_validator_enabled()).lower(),
     )

@@ -51,8 +51,6 @@ def _sanitize_metadata(value: Any) -> Dict[str, Any]:
 
 
 def _normalize_repository_role(workspace_module: Any, value: Any, project: Mapping[str, Any], *, primary: bool = False) -> str:
-    # Primary is topology, not an engineering specialty. Keep the actual repo role
-    # useful to the task router instead of degrading every primary repo to fullstack.
     role = str(value or "").strip().lower()[:40]
     if role == "primary" or role not in workspace_module._REPO_ROLES:
         role = workspace_module.infer_repository_role(project, primary=False)
@@ -265,12 +263,19 @@ def install(workspace_module: Any) -> None:
     workspace_module.approve_workspace_scope = approve_scope
     workspace_module.revoke_workspace_scope = revoke_scope
 
-    # The route setup calls workspace hardening before it starts the workspace
-    # execution supervisor. Install execution hardening here so mission-conflict
-    # preflight and emergency-stop reconciliation are mandatory runtime policy.
+    # Mandatory ordering before the supervisor starts:
+    # 1) execution safety/lifecycle hardening;
+    # 2) integration completion gate;
+    # 3) deterministic semantic-evidence hardening;
+    # 4) only then workspace supervisor cleanup_ctx is installed by routes.
+    from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
+    from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
+    from services import velia_software_factory_integration_validator_service as integration_validator
     from services import velia_software_factory_workspace_execution_hardening_patch as execution_hardening
     from services import velia_software_factory_workspace_execution_service as execution_module
 
     execution_hardening.install(execution_module)
+    integration_runtime.install(workspace_module, execution_module)
+    integration_hardening.install(integration_validator)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True

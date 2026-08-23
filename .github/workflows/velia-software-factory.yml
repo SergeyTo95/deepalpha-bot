@@ -44,10 +44,13 @@ jobs:
             services/velia_software_factory_workspace_hardening_patch.py \
             services/velia_software_factory_workspace_execution_service.py \
             services/velia_software_factory_workspace_execution_hardening_patch.py \
+            services/velia_software_factory_integration_validator_service.py \
+            services/velia_software_factory_integration_validator_runtime_patch.py \
+            services/velia_software_factory_integration_validator_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py \
             run_web_process.py
-      - name: Run Stage 1 through Stage 4.1 focused tests
+      - name: Run Stage 1 through Stage 4.2 focused tests
         env:
           PYTHONPATH: .
         run: |
@@ -59,7 +62,9 @@ jobs:
             tests/test_velia_software_factory_workspace_service.py \
             tests/test_velia_software_factory_workspace_hardening.py \
             tests/test_velia_software_factory_workspace_execution_service.py \
-            tests/test_velia_software_factory_workspace_execution_hardening.py
+            tests/test_velia_software_factory_workspace_execution_hardening.py \
+            tests/test_velia_software_factory_integration_validator_service.py \
+            tests/test_velia_software_factory_integration_validator_hardening.py
       - name: Verify Factory write and review boundary
         run: |
           grep -q 'from services import velia_agent_coding_autopilot_service as autopilot' services/velia_software_factory_lead_service.py
@@ -77,6 +82,9 @@ jobs:
             services/velia_software_factory_workspace_service.py \
             services/velia_software_factory_workspace_hardening_patch.py \
             services/velia_software_factory_workspace_execution_hardening_patch.py \
+            services/velia_software_factory_integration_validator_service.py \
+            services/velia_software_factory_integration_validator_runtime_patch.py \
+            services/velia_software_factory_integration_validator_hardening_patch.py \
             services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py
       - name: Verify autonomy safety contract
@@ -107,8 +115,7 @@ jobs:
           grep -q 'velia_factory_workspace_scope_path_outside_safe_tree' services/velia_software_factory_workspace_hardening_patch.py
           grep -q 'velia_factory_workspace_scope_locked_by_execution' services/velia_software_factory_workspace_hardening_patch.py
           ! grep -nE 'autopilot|enqueue_task|create_branch|open_pull_request|merge_pull|merge_pull_request' \
-            services/velia_software_factory_workspace_service.py \
-            services/velia_software_factory_workspace_hardening_patch.py
+            services/velia_software_factory_workspace_service.py
       - name: Verify multi-repo execution safety contract
         env:
           PYTHONPATH: .
@@ -134,6 +141,51 @@ jobs:
           ! grep -nE 'create_branch|open_pull_request|merge_pull|merge_pull_request|apply_patch|contents.:.?write' \
             services/velia_software_factory_workspace_execution_service.py \
             services/velia_software_factory_workspace_execution_hardening_patch.py
+      - name: Verify Stage 4.2 integration validation contract
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+          from services import velia_software_factory_integration_validator_service as validator
+
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_INTEGRATION_VALIDATOR_ENABLED", None)
+          assert validator.integration_validator_enabled() is False
+
+          forbidden = {
+              "create_branch", "open_pull_request", "merge_pull", "merge_pull_request",
+              "apply_patch", "update_file", "create_file", "delete_file",
+          }
+          github_reads = 0
+          for filename in (
+              "services/velia_software_factory_integration_validator_service.py",
+              "services/velia_software_factory_integration_validator_runtime_patch.py",
+              "services/velia_software_factory_integration_validator_hardening_patch.py",
+          ):
+              tree = ast.parse(Path(filename).read_text(encoding="utf-8"), filename=filename)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                      assert node.func.attr not in forbidden, (filename, node.func.attr, node.lineno)
+                      if node.func.attr == "_request":
+                          github_reads += 1
+                          assert node.args, (filename, node.lineno)
+                          method = node.args[0]
+                          assert isinstance(method, ast.Constant) and method.value == "GET", (filename, node.lineno)
+          assert github_reads >= 2
+          PY
+          grep -q 'integration_runtime.install(workspace_module, execution_module)' services/velia_software_factory_workspace_hardening_patch.py
+          grep -q 'integration_hardening.install(integration_validator)' services/velia_software_factory_workspace_hardening_patch.py
+          grep -q 'software_factory_integration_validator' services/velia_software_factory_integration_validator_runtime_patch.py
+          grep -q 'integration_validation_failed' services/velia_software_factory_integration_validator_runtime_patch.py
+          grep -q 'integration_validation_blocked' services/velia_software_factory_integration_validator_runtime_patch.py
+          grep -q '_infer_integration_contracts' services/velia_software_factory_integration_validator_runtime_patch.py
+          grep -q 'cross_repo_edge_uncovered' services/velia_software_factory_integration_validator_service.py
+          grep -q 'semantic_validator_unavailable' services/velia_software_factory_integration_validator_service.py
+          grep -q 'pulls/{pr_number}/files' services/velia_software_factory_integration_validator_service.py
+          grep -q 'semantic_evidence_unreadable' services/velia_software_factory_integration_validator_hardening_patch.py
+          grep -q 'pull_request_not_open' services/velia_software_factory_integration_validator_hardening_patch.py
       - name: Verify fail-closed rollout flags
         env:
           PYTHONPATH: .
@@ -141,6 +193,7 @@ jobs:
           python - <<'PY'
           import os
           from services import velia_software_factory_autonomy_service as autonomy
+          from services import velia_software_factory_integration_validator_service as integration_validator
           from services import velia_software_factory_lead_service as lead
           from services import velia_software_factory_rollout_service as rollout
           from services import velia_software_factory_team_service as team
@@ -154,6 +207,7 @@ jobs:
               "VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE",
               "VELIA_SOFTWARE_FACTORY_USER_IDS",
               "VELIA_SOFTWARE_FACTORY_WORKSPACE_EXECUTION_ENABLED",
+              "VELIA_SOFTWARE_FACTORY_INTEGRATION_VALIDATOR_ENABLED",
           ):
               os.environ.pop(name, None)
 
@@ -167,6 +221,7 @@ jobs:
           assert rollout.supervisor_allowed() is False
           assert workspace_execution.workspace_execution_enabled() is False
           assert workspace_execution.workspace_supervisor_enabled() is False
+          assert integration_validator.integration_validator_enabled() is False
           PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
