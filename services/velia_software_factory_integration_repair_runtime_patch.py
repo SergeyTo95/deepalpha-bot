@@ -197,6 +197,13 @@ def install(workspace_module: Any, execution_module: Any, integration_runtime: A
     )
     execution_module.integration_repair_enabled = repair_service.integration_repair_enabled
     execution_module.integration_repair_status = repair_service.public_status
+
+    # setup_velia_software_factory_routes logs after this runtime is installed.
+    # Publish the immutable install-time status into that module so the startup
+    # marker cannot reference a handler-local variable before the first request.
+    from services import velia_software_factory_routes as factory_routes
+
+    factory_routes.repair_status = repair_service.public_status()
     execution_module._workspace_integration_repair_installed = True
     _INSTALLED = True
     logger.info(
