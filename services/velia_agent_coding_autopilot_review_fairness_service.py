@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 
+from services import velia_agent_coding_autopilot_review_recovery_service as recovery_service
 from services import velia_agent_coding_autopilot_review_service as review_service
 from services import velia_agent_coding_autopilot_review_store as review_store
 from services import velia_agent_coding_autopilot_service as autopilot
@@ -45,6 +46,14 @@ def _run_once_with_review_fairness(
         return []
     if not review_service.review_loop_enabled():
         return original_run_once()
+
+    recovered = recovery_service.recover_reopened_github_not_found_once()
+    if recovered:
+        logger.info(
+            "VELIA_AUTOPILOT_REVIEW_RECOVERY_HANDOFF run=%s pr=%s",
+            str(recovered.get("run_id") or ""),
+            int(recovered.get("pull_request_number") or 0),
+        )
 
     scanned = 0
     for _ in range(max_polls_per_tick()):
