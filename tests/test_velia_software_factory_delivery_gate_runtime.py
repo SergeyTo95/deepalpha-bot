@@ -9,6 +9,7 @@ def test_delivery_runtime_installs_read_only_capabilities(monkeypatch):
     execution = SimpleNamespace()
     monkeypatch.setattr(runtime.delivery, "ensure_delivery_tables", lambda module: None)
     monkeypatch.setattr(runtime.approval, "ensure_approval_tables", lambda module: None)
+    monkeypatch.setattr(runtime.preflight, "ensure_preflight_tables", lambda module: None)
     monkeypatch.setattr(
         runtime.delivery,
         "public_status",
@@ -31,20 +32,39 @@ def test_delivery_runtime_installs_read_only_capabilities(monkeypatch):
             "deployment_supported": False,
         },
     )
+    monkeypatch.setattr(
+        runtime.preflight,
+        "public_status",
+        lambda: {
+            "enabled": False,
+            "mode": "preflight_only",
+            "execution_supported": False,
+            "merge_supported": False,
+            "deployment_supported": False,
+        },
+    )
     monkeypatch.setattr(runtime.delivery, "evaluate_workspace_candidate", lambda *args, **kwargs: {"status": "blocked"})
     monkeypatch.setattr(runtime.delivery, "get_candidate", lambda *args, **kwargs: {"candidate_id": "c"})
     monkeypatch.setattr(runtime.delivery, "list_candidates", lambda *args, **kwargs: [])
     monkeypatch.setattr(runtime.approval, "latest_decision", lambda *args, **kwargs: {"state": "none"})
     monkeypatch.setattr(runtime.approval, "record_decision", lambda *args, **kwargs: {"decision": "approved"})
     monkeypatch.setattr(runtime.approval, "require_current_approval", lambda *args, **kwargs: {"current": True})
+    monkeypatch.setattr(runtime.preflight, "prepare_plan", lambda *args, **kwargs: {"status": "prepared"})
+    monkeypatch.setattr(runtime.preflight, "validate_plan", lambda *args, **kwargs: {"current": True})
+    monkeypatch.setattr(runtime.preflight, "get_plan", lambda *args, **kwargs: {"plan_id": "p"})
+    monkeypatch.setattr(runtime.preflight, "list_plans", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runtime.preflight, "cancel_plan", lambda *args, **kwargs: {"status": "cancelled"})
 
     runtime.install(execution)
 
     assert execution.delivery_gate_status()["merge_supported"] is False
     assert execution.delivery_approval_status()["mode"] == "record_only"
+    assert execution.release_preflight_status()["mode"] == "preflight_only"
     assert execution.preview_delivery_candidate(1, "e")["status"] == "blocked"
     assert execution.evaluate_delivery_candidate(1, "e")["status"] == "blocked"
     assert execution.get_delivery_approval(1, "c")["state"] == "none"
+    assert execution.prepare_release_preflight(1, "c")["status"] == "prepared"
+    assert execution.validate_release_preflight(1, "p")["current"] is True
     assert execution._workspace_delivery_gate_installed is True
 
 
@@ -54,6 +74,7 @@ def test_delivery_modules_do_not_contain_merge_or_deploy_primitives():
         for path in (
             "services/velia_software_factory_delivery_gate_service.py",
             "services/velia_software_factory_delivery_approval_service.py",
+            "services/velia_software_factory_release_preflight_service.py",
             "services/velia_software_factory_delivery_gate_runtime_patch.py",
         )
     )
