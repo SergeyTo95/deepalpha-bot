@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 import uuid
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
 from services import velia_software_factory_integration_validator_service as validator
@@ -57,6 +57,57 @@ def _configure_llm_feature() -> None:
         llm_service._FEATURE_PROVIDER_ENV.update(features)
     except Exception:
         logger.exception("VELIA_SOFTWARE_FACTORY_INTEGRATION_LLM_FEATURE_PATCH_FAILED")
+
+
+def _infer_contract_kind(provider: Mapping[str, Any], consumer: Mapping[str, Any]) -> str:
+    haystack = " ".join(
+        [
+            str(provider.get("title") or ""),
+            str(provider.get("goal") or ""),
+            str(provider.get("role") or ""),
+            str(consumer.get("title") or ""),
+            str(consumer.get("goal") or ""),
+            str(consumer.get("role") or ""),
+        ]
+    ).lower()
+    if any(token in haystack for token in ("api", "endpoint", "route", "http", "request", "response")):
+        return "http_api"
+    if any(token in haystack for token in ("schema", "model", "dto", "payload", "json", "proto")):
+        return "schema"
+    if any(token in haystack for token in ("event", "webhook", "message", "queue")):
+        return "event"
+    return "protocol"
+
+
+def _infer_integration_contracts(normalized_plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    tasks = [dict(item) for item in normalized_plan.get("tasks") or [] if isinstance(item, Mapping)]
+    by_id = {str(item.get("id") or ""): item for item in tasks}
+    contracts: List[Dict[str, Any]] = []
+    for index, edge in enumerate(validator._cross_repo_edges(tasks), start=1):
+        provider_id = str(edge.get("provider_task_id") or "")
+        consumer_id = str(edge.get("consumer_task_id") or "")
+        provider = by_id.get(provider_id) or {}
+        consumer = by_id.get(consumer_id) or {}
+        provider_paths = list(provider.get("allowed_paths") or [])[:8]
+        consumer_paths = list(consumer.get("allowed_paths") or [])[:8]
+        if not provider_paths or not consumer_paths:
+            continue
+        contracts.append(
+            {
+                "id": f"auto-{index}-{provider_id}-{consumer_id}"[:80],
+                "kind": _infer_contract_kind(provider, consumer),
+                "description": (
+                    f"Compatibility from {str(provider.get('title') or provider_id)} "
+                    f"to {str(consumer.get('title') or consumer_id)}"
+                )[:2500],
+                "provider_task_id": provider_id,
+                "consumer_task_ids": [consumer_id],
+                "provider_paths": provider_paths,
+                "consumer_paths": {consumer_id: consumer_paths},
+                "proof_mode": "semantic",
+            }
+        )
+    return contracts[:12]
 
 
 def ensure_integration_tables(execution_module: Any) -> None:
@@ -209,7 +260,20 @@ def install(workspace_module: Any, execution_module: Any) -> None:
 
     def normalize_workspace_plan(raw_plan: Mapping[str, Any], workspace: Mapping[str, Any]) -> Dict[str, Any]:
         normalized = original_normalize_plan(raw_plan, workspace)
-        return validator.normalize_plan_contracts(raw_plan, normalized)
+        explicit = raw_plan.get("integration_contracts") if isinstance(raw_plan, Mapping) else None
+        augmented = dict(raw_plan or {})
+        if not isinstance(explicit, list) or not explicit:
+            inferred = _infer_integration_contracts(normalized)
+            if inferred:
+                augmented["integration_contracts"] = inferred
+                normalized = dict(normalized)
+                normalized["integration_contract_source"] = "inferred"
+        else:
+            normalized = dict(normalized)
+            normalized["integration_contract_source"] = "explicit"
+        result = validator.normalize_plan_contracts(augmented, normalized)
+        result["integration_contract_source"] = normalized.get("integration_contract_source") or "none"
+        return result
 
     def create_execution(user_id: int, workspace_id: str, plan_payload: Mapping[str, Any]) -> Dict[str, Any]:
         if validator.integration_validator_enabled():
