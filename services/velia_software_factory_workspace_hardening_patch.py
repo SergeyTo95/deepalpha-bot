@@ -255,7 +255,13 @@ def install(workspace_module: Any) -> None:
     workspace_module.get_workspace = get_workspace
     workspace_module.approve_workspace_scope = approve_scope
     workspace_module.revoke_workspace_scope = revoke_scope
+
+    # The route setup calls workspace hardening before it starts the workspace
+    # execution supervisor. Install execution hardening here so mission-conflict
+    # preflight and emergency-stop reconciliation are mandatory runtime policy.
+    from services import velia_software_factory_workspace_execution_hardening_patch as execution_hardening
+    from services import velia_software_factory_workspace_execution_service as execution_module
+
+    execution_hardening.install(execution_module)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True
-
-
