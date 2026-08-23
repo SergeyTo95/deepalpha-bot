@@ -266,12 +266,16 @@ def install(workspace_module: Any) -> None:
     # Mandatory ordering before the supervisor starts:
     # 1) execution safety/lifecycle hardening;
     # 2) integration completion gate;
-    # 3) only then workspace supervisor cleanup_ctx is installed by routes.
+    # 3) deterministic semantic-evidence hardening;
+    # 4) only then workspace supervisor cleanup_ctx is installed by routes.
+    from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
     from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
+    from services import velia_software_factory_integration_validator_service as integration_validator
     from services import velia_software_factory_workspace_execution_hardening_patch as execution_hardening
     from services import velia_software_factory_workspace_execution_service as execution_module
 
     execution_hardening.install(execution_module)
     integration_runtime.install(workspace_module, execution_module)
+    integration_hardening.install(integration_validator)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True
