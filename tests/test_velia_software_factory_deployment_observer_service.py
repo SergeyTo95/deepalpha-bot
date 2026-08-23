@@ -117,12 +117,21 @@ def test_expected_contexts_all_success():
     assert result["missing_contexts"] == []
     assert result["failing_contexts"] == []
     assert result["waiting_contexts"] == []
+    assert result["invalid_target_contexts"] == []
 
 
 def test_corrupt_empty_profile_cannot_vacuously_succeed():
     with pytest.raises(SoftwareFactoryError) as exc:
         observer._evaluate_expected_contexts(_profile(), _status())
     assert exc.value.code == "velia_factory_deployment_contexts_required"
+
+
+def test_matching_context_with_non_railway_target_fails():
+    snapshot = _status()
+    snapshot["statuses"][0]["target_url"] = "https://github.com/Acme/repo/actions/runs/1"
+    result = observer._evaluate_expected_contexts(_profile("railway-api"), snapshot)
+    assert result["status"] == "failed"
+    assert result["invalid_target_contexts"] == ["railway-api"]
 
 
 def test_missing_or_pending_context_is_pending():
