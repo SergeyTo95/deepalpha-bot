@@ -55,6 +55,10 @@ jobs:
           for key in (
               'ADMIN_ID',
               'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED',
+              'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE',
+              'LIVE_OWNER_USER_IDS',
+              'JARVIS_FOUNDER_IDS',
+              'VELIA_CHAT_BETA_USER_IDS',
               'VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE',
               'VELIA_SOFTWARE_FACTORY_USER_IDS',
           ):
@@ -62,6 +66,8 @@ jobs:
 
           assert rollout.rollout_mode() == 'off'
           assert rollout.admin_pilot_enabled() is False
+          assert rollout.admin_pilot_id_source() == 'admin_id'
+          assert rollout.admin_pilot_user_ids() == set()
           assert rollout.user_allowed(123) is False
           assert rollout.intake_allowed(123) is False
           assert rollout.live_execution_allowed(123) is False
@@ -71,6 +77,8 @@ jobs:
           assert status['eligible'] is False
           assert status['eligibility_source'] == 'none'
           assert status['admin_pilot_enabled'] is False
+          assert status['admin_pilot_id_source'] == 'admin_id'
+          assert status['admin_pilot_actor_count'] == 0
           assert status['dry_run'] is False
           assert status['live_execution'] is False
           assert status['pilot_readiness']['plan']['ready'] is False
@@ -85,6 +93,7 @@ jobs:
 
           os.environ['ADMIN_ID'] = '424242'
           os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED'] = 'true'
+          os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE'] = 'admin_id'
           os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'off'
           assert rollout.user_allowed(424242) is True
           assert rollout.intake_allowed(424242) is False
@@ -105,13 +114,45 @@ jobs:
           assert rollout.user_allowed(424242) is False
           assert rollout.live_execution_allowed(424242) is False
           PY
+      - name: Verify server-controlled pilot source is bounded
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from services import velia_software_factory_rollout_service as rollout
+
+          os.environ['ADMIN_ID'] = '42'
+          os.environ['LIVE_OWNER_USER_IDS'] = '11,17'
+          os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED'] = 'true'
+          os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE'] = 'live_owner'
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'dry_run'
+          assert rollout.admin_pilot_user_ids() == {11, 17}
+          assert rollout.user_allowed(11) is True
+          assert rollout.user_allowed(42) is False
+          status = rollout.public_status(11)
+          assert status['admin_pilot_id_source'] == 'live_owner'
+          assert status['admin_pilot_actor_count'] == 2
+          encoded = json.dumps(status, sort_keys=True)
+          assert '11' not in encoded
+          assert '17' not in encoded
+          assert 'LIVE_OWNER_USER_IDS' not in encoded
+
+          os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE'] = 'invalid-source'
+          assert rollout.admin_pilot_user_ids() == set()
+          assert rollout.user_allowed(11) is False
+          assert rollout.supervisor_allowed() is False
+          PY
       - name: Verify readiness and public-status privacy boundary
         run: |
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED' services/velia_software_factory_rollout_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE' services/velia_software_factory_rollout_service.py
           grep -q 'eligibility_source' services/velia_software_factory_rollout_service.py
           grep -q 'pilot_readiness' services/velia_software_factory_rollout_service.py
           grep -q 'admin_pilot=%s' services/velia_software_factory_rollout_runtime_patch.py
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED=false' .env.example
+          grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE=admin_id' .env.example
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -124,6 +165,7 @@ jobs:
           assert 'ADMIN_ID' not in public_text
           assert 'eligibility_source' in public_text
           assert 'pilot_readiness' in public_text
+          assert 'admin_pilot_actor_count' in public_text
           PY
       - name: Verify explicit allowlist remains compatible
         env:
@@ -136,6 +178,7 @@ jobs:
           os.environ['VELIA_SOFTWARE_FACTORY_USER_IDS'] = '7,11,bad,-1'
           os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'dry_run'
           os.environ.pop('VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED', None)
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE', None)
           os.environ.pop('ADMIN_ID', None)
           assert rollout.allowed_user_ids() == {7, 11}
           assert rollout.user_allowed(7) is True
