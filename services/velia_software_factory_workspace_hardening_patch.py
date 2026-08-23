@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
@@ -8,6 +9,7 @@ from services import velia_software_factory_rollout_service as rollout
 from services import velia_software_factory_stage3_hardening_patch as stage3_hardening
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
+logger = logging.getLogger(__name__)
 _INSTALLED = False
 
 
@@ -267,7 +269,8 @@ def install(workspace_module: Any) -> None:
     # 1) execution safety/lifecycle hardening;
     # 2) integration completion gate;
     # 3) deterministic semantic-evidence hardening;
-    # 4) only then workspace supervisor cleanup_ctx is installed by routes.
+    # 4) Stage 4.4 workspace chat wrapper + gate hardening;
+    # 5) only then workspace supervisor cleanup_ctx is installed by routes.
     from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
     from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
     from services import velia_software_factory_integration_validator_service as integration_validator
@@ -279,3 +282,19 @@ def install(workspace_module: Any) -> None:
     integration_hardening.install(integration_validator)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True
+
+    # Routes call workspace_hardening only after the established single-repo
+    # Factory chat wrapper is installed. Stage 4.4 remains outermost and must be
+    # hardened immediately after installation before the workspace supervisor is
+    # registered.
+    try:
+        from services import velia_chat_service as chat_module
+        from services import velia_software_factory_workspace_chat_hardening_patch as workspace_chat_hardening
+        from services import velia_software_factory_workspace_chat_runtime_patch as workspace_chat_runtime
+        from services import velia_software_factory_workspace_chat_service as workspace_chat_service
+
+        if getattr(chat_module, "_velia_software_factory_chat_patch_installed", False):
+            workspace_chat_runtime.install(chat_module)
+            workspace_chat_hardening.install(chat_module, workspace_chat_service, workspace_chat_runtime)
+    except Exception:
+        logger.exception("VELIA_SOFTWARE_FACTORY_WORKSPACE_CHAT_INSTALL_FAILED")
