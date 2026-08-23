@@ -118,6 +118,7 @@ def setup_velia_software_factory_routes(app: web.Application, routes_module: Any
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
+            await asyncio.to_thread(factory.ensure_software_factory_tables)
             try:
                 limit = min(300, max(1, int(request.query.get("limit") or 100)))
             except (TypeError, ValueError):
