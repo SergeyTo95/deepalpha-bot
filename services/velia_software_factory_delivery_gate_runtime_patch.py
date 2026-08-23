@@ -5,6 +5,7 @@ from typing import Any
 
 from services import velia_software_factory_delivery_approval_service as approval
 from services import velia_software_factory_delivery_gate_service as delivery
+from services import velia_software_factory_deployment_observer_hardening_patch as deployment_hardening
 from services import velia_software_factory_deployment_observer_service as deployment_observer
 from services import velia_software_factory_release_execution_hardening_patch as release_hardening
 from services import velia_software_factory_release_execution_service as release_execution
@@ -26,6 +27,7 @@ def install(execution_module: Any) -> None:
     release_hardening.install(release_execution, execution_module)
     release_execution.ensure_execution_tables(execution_module)
     post_merge.ensure_post_merge_tables(execution_module)
+    deployment_hardening.install(deployment_observer)
     deployment_status = deployment_observer.public_status()
     if bool(deployment_status.get("enabled")):
         deployment_observer.ensure_deployment_observer_tables(execution_module)
