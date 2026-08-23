@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import uuid
 from typing import Any, Dict, List, Mapping
@@ -18,6 +19,7 @@ _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_ADVISORY_KEY = 8_618_270_701
 _VERIFIABLE_EXECUTION_STATES = {"completed", "partial_release"}
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -37,8 +39,9 @@ def public_status() -> Dict[str, Any]:
         "enabled": verification_enabled(),
         "mode": "post_merge_read_only",
         "exact_planned_head_required": True,
-        "merge_commit_required": True,
+        "exact_recorded_merge_commit_required": True,
         "merge_commit_must_be_reachable_from_base": True,
+        "append_only_evidence": True,
         "partial_release_recovery_artifact": True,
         "revert_supported": False,
         "github_write_supported": False,
@@ -67,6 +70,10 @@ def _loads(value: Any, fallback: Any) -> Any:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+def _valid_sha(value: Any) -> bool:
+    return bool(_SHA_RE.fullmatch(str(value or "").strip().lower()))
 
 
 def _dict_cursor(conn):
@@ -195,13 +202,25 @@ def build_verification_snapshot(execution_module: Any, user_id: int, release_exe
                 }
             )
             continue
+        expected_merge = str(item.get("merge_commit_sha") or "").strip().lower()
+        if not _valid_sha(expected_merge):
+            failures.append(
+                {
+                    "position": str(int(item.get("position") or 0)),
+                    "project_id": str(item.get("project_id") or ""),
+                    "repository_full_name": str(item.get("repository_full_name") or ""),
+                    "code": "velia_factory_release_verification_recorded_merge_commit_missing",
+                    "detail": expected_merge[:80],
+                }
+            )
+            continue
         try:
             project = _project_for_item(int(user_id), item)
             evidence = verification_github.verify_merged_pull(
                 project,
                 pull_number=int(item.get("pull_request_number") or 0),
                 expected_head_sha=str(item.get("expected_head_sha") or ""),
-                expected_merge_commit_sha=str(item.get("merge_commit_sha") or ""),
+                expected_merge_commit_sha=expected_merge,
             )
             merged.append(
                 {
@@ -223,14 +242,15 @@ def build_verification_snapshot(execution_module: Any, user_id: int, release_exe
             )
 
     expected_merged = int(execution.get("merged_count") or 0)
-    if expected_merged != sum(1 for item in items if str(item.get("status") or "") == "merged"):
+    item_merged_count = sum(1 for item in items if str(item.get("status") or "") == "merged")
+    if expected_merged != item_merged_count:
         failures.append(
             {
                 "position": "",
                 "project_id": "",
                 "repository_full_name": "",
                 "code": "velia_factory_release_verification_merged_count_mismatch",
-                "detail": f"execution={expected_merged}",
+                "detail": f"execution={expected_merged} items={item_merged_count}",
             }
         )
     if execution_status == "completed" and unmerged:
@@ -321,8 +341,7 @@ def persist_verification(execution_module: Any, user_id: int, snapshot: Mapping[
             INSERT INTO velia_software_factory_release_verifications (
                 verification_id,release_execution_id,user_id,verification_fingerprint,status,snapshot_json,created_at
             ) VALUES (%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (user_id,release_execution_id,verification_fingerprint) DO UPDATE SET
-                snapshot_json=EXCLUDED.snapshot_json
+            ON CONFLICT (user_id,release_execution_id,verification_fingerprint) DO NOTHING
             RETURNING verification_id,release_execution_id,user_id,verification_fingerprint,status,snapshot_json,created_at
             """,
             (
@@ -336,6 +355,20 @@ def persist_verification(execution_module: Any, user_id: int, snapshot: Mapping[
             ),
         )
         row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                "SELECT verification_id,release_execution_id,user_id,verification_fingerprint,status,snapshot_json,created_at "
+                "FROM velia_software_factory_release_verifications "
+                "WHERE user_id=%s AND release_execution_id=%s AND verification_fingerprint=%s",
+                (
+                    int(user_id),
+                    str(snapshot.get("release_execution_id") or ""),
+                    str(snapshot.get("verification_fingerprint") or ""),
+                ),
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise SoftwareFactoryError("velia_factory_release_verification_persist_failed", status=500)
         conn.commit()
         return _verification_row(row)
     except Exception:
@@ -420,8 +453,7 @@ def build_recovery_artifact(execution_module: Any, user_id: int, verification_id
             INSERT INTO velia_software_factory_release_recovery_artifacts (
                 recovery_id,release_execution_id,verification_id,user_id,recovery_fingerprint,artifact_json,created_at
             ) VALUES (%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (user_id,release_execution_id,recovery_fingerprint) DO UPDATE SET
-                artifact_json=EXCLUDED.artifact_json
+            ON CONFLICT (user_id,release_execution_id,recovery_fingerprint) DO NOTHING
             RETURNING recovery_id,release_execution_id,verification_id,user_id,recovery_fingerprint,artifact_json,created_at
             """,
             (
@@ -435,6 +467,20 @@ def build_recovery_artifact(execution_module: Any, user_id: int, verification_id
             ),
         )
         row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                "SELECT recovery_id,release_execution_id,verification_id,user_id,recovery_fingerprint,artifact_json,created_at "
+                "FROM velia_software_factory_release_recovery_artifacts "
+                "WHERE user_id=%s AND release_execution_id=%s AND recovery_fingerprint=%s",
+                (
+                    int(user_id),
+                    str(artifact.get("release_execution_id") or ""),
+                    str(artifact.get("recovery_fingerprint") or ""),
+                ),
+            )
+            row = cursor.fetchone()
+        if not row:
+            raise SoftwareFactoryError("velia_factory_release_recovery_persist_failed", status=500)
         conn.commit()
     except Exception:
         conn.rollback()
