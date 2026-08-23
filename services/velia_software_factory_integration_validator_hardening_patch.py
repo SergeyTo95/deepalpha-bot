@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Mapping
 
 _INSTALLED = False
 
@@ -75,4 +75,15 @@ def install(validator_module: Any) -> None:
 
     validator_module.validate_execution = validate_execution
     validator_module._integration_validator_hardening_installed = True
+
+    # Stage 4.3 must install only after the Stage 4.2 runtime and deterministic
+    # evidence hardening are active, but still before the workspace supervisor
+    # cleanup context is registered by routes. The repair runtime owns no direct
+    # GitHub writer; it delegates same-PR commits to Coding Autopilot.
+    from services import velia_software_factory_integration_repair_runtime_patch as repair_runtime
+    from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
+    from services import velia_software_factory_workspace_execution_service as execution_module
+    from services import velia_software_factory_workspace_service as workspace_module
+
+    repair_runtime.install(workspace_module, execution_module, integration_runtime)
     _INSTALLED = True
