@@ -163,6 +163,65 @@ def install(completion_module: Any) -> None:
                     status=409,
                 )
 
+    def validate_acceptance_profile(
+        execution_module: Any,
+        user_id: int,
+        item: Mapping[str, Any],
+    ) -> None:
+        project_id = str(item.get("project_id") or "")
+        repository = str(item.get("repository_full_name") or "")
+        branch = str(item.get("base_branch") or "")
+        acceptance_profile = completion_module.get_acceptance_profile(
+            execution_module,
+            int(user_id),
+            project_id,
+            branch,
+            require_enabled=True,
+        )
+        deployment_profile = completion_module.deployment.get_profile(
+            execution_module,
+            int(user_id),
+            project_id,
+            branch,
+            require_enabled=True,
+        )
+        contexts = completion_module._normalize_contexts(
+            acceptance_profile.get("expected_contexts") or []
+        )
+        deployment_contexts = {
+            str(context).casefold()
+            for context in deployment_profile.get("expected_contexts") or []
+            if str(context or "").strip()
+        }
+        overlap = [
+            context for context in contexts if context.casefold() in deployment_contexts
+        ]
+        if overlap:
+            raise SoftwareFactoryError(
+                "velia_factory_acceptance_context_overlaps_deployment",
+                detail=",".join(overlap)[:500],
+                status=409,
+            )
+        expected_fp = completion_module._fingerprint(
+            {
+                "project_id": project_id,
+                "repository_full_name": repository,
+                "branch": branch,
+                "expected_contexts": contexts,
+                "deployment_profile_fingerprint": str(
+                    deployment_profile.get("profile_fingerprint") or ""
+                ),
+                "enabled": True,
+            }
+        )
+        actual_fp = str(acceptance_profile.get("profile_fingerprint") or "")
+        if not actual_fp or actual_fp != expected_fp:
+            raise SoftwareFactoryError(
+                "velia_factory_acceptance_profile_stale",
+                detail=project_id,
+                status=409,
+            )
+
     def build_completion_snapshot(
         execution_module: Any,
         user_id: int,
@@ -178,6 +237,15 @@ def install(completion_module: Any) -> None:
                 "velia_factory_release_completion_requires_full_verified_release",
                 detail=str(verification.get("verification_status") or ""),
                 status=409,
+            )
+        verified = [
+            dict(item)
+            for item in verification.get("verified_merges") or []
+            if isinstance(item, Mapping)
+        ]
+        if not verified:
+            raise SoftwareFactoryError(
+                "velia_factory_release_completion_verified_merges_missing", status=409
             )
         observation = completion_module.deployment.get_observation(
             execution_module, int(user_id), str(deployment_observation_id)
@@ -199,6 +267,8 @@ def install(completion_module: Any) -> None:
         validate_deployment_evidence(
             execution_module, int(user_id), verification, observation
         )
+        for item in verified:
+            validate_acceptance_profile(execution_module, int(user_id), item)
         return original_build(
             execution_module,
             int(user_id),
@@ -208,6 +278,7 @@ def install(completion_module: Any) -> None:
 
     completion_module._evaluate_acceptance_contexts = evaluate_acceptance_contexts
     completion_module._validate_deployment_evidence = validate_deployment_evidence
+    completion_module._validate_acceptance_profile = validate_acceptance_profile
     completion_module.build_completion_snapshot = build_completion_snapshot
     completion_module._release_completion_hardening_installed = True
     _INSTALLED = True
