@@ -23,6 +23,11 @@ _SCHEMA_ADVISORY_KEY = 8_618_270_677
 _TERMINAL = {"completed", "blocked", "partial_release", "cancelled", "failed"}
 _ACTIVE = {"created", "running"}
 _ITEM_TERMINAL = {"merged", "failed", "skipped"}
+_CONFIRMED_RECONCILE_FAILURES = {
+    "velia_factory_release_head_sha_stale",
+    "velia_factory_release_pr_closed_without_merge",
+    "velia_factory_release_repository_identity_changed",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -51,6 +56,7 @@ def public_status() -> Dict[str, Any]:
         "approval_event_must_remain_active": True,
         "per_pr_exact_head_revalidation": True,
         "per_pr_merge_policy_revalidation": True,
+        "uncertain_merge_reconciliation": True,
         "stop_after_first_failure": True,
         "cross_repository_atomic_merge": False,
         "partial_release_state": True,
@@ -393,9 +399,11 @@ def create_execution(execution_module: Any, user_id: int, plan_id: str) -> Dict[
         )
         existing = cursor.fetchone()
         if existing:
-            execution_id = str(_value(existing, "execution_id", 0, ""))
+            existing_id = str(_value(existing, "execution_id", 0, ""))
             conn.commit()
-            return get_execution(execution_module, int(user_id), execution_id)
+            cursor.close()
+            conn.close()
+            return get_execution(execution_module, int(user_id), existing_id)
         execution_id = str(uuid.uuid4())
         cursor.execute(
             """
@@ -439,8 +447,10 @@ def create_execution(execution_module: Any, user_id: int, plan_id: str) -> Dict[
         conn.rollback()
         raise
     finally:
-        cursor.close()
-        conn.close()
+        if not cursor.closed:
+            cursor.close()
+        if not conn.closed:
+            conn.close()
     _event(execution_id, int(user_id), "release_execution.created", {"plan_id": str(plan_id)})
     return get_execution(execution_module, int(user_id), execution_id)
 
@@ -507,6 +517,34 @@ def _terminal_after_stop(merged_count: int) -> str:
     return "partial_release" if int(merged_count) > 0 else "cancelled"
 
 
+def _record_uncertain(
+    execution_id: str,
+    user_id: int,
+    merged_count: int,
+    detail: str,
+) -> Dict[str, Any]:
+    _set_execution(
+        str(execution_id),
+        int(user_id),
+        status="running",
+        merged_count=int(merged_count),
+        blocker_code="velia_factory_release_merge_outcome_uncertain",
+        blocker_detail=str(detail or "")[:1000],
+        result={
+            "reconciliation_required": True,
+            "safe_to_retry_execution": True,
+            "deployment_started": False,
+        },
+    )
+    _event(
+        str(execution_id),
+        int(user_id),
+        "release_item.merge_outcome_uncertain",
+        {"merged_count": int(merged_count), "detail": str(detail or "")[:500]},
+    )
+    return get_execution(None, int(user_id), str(execution_id))
+
+
 def execute_release(execution_module: Any, user_id: int, execution_id: str) -> Dict[str, Any]:
     _require_user(int(user_id))
     ensure_execution_tables(execution_module)
@@ -538,12 +576,23 @@ def execute_release(execution_module: Any, user_id: int, execution_id: str) -> D
             if status == "merged":
                 continue
             if status == "merging":
-                if _reconcile_merging_item(int(user_id), str(execution_id), item):
-                    merged_count += 1
-                    _set_execution(str(execution_id), int(user_id), merged_count=merged_count)
-                    _event(str(execution_id), int(user_id), "release_item.reconciled_merged", item)
-                    continue
-                status = "pending"
+                try:
+                    if _reconcile_merging_item(int(user_id), str(execution_id), item):
+                        merged_count += 1
+                        _set_execution(str(execution_id), int(user_id), merged_count=merged_count, blocker_code="", blocker_detail="")
+                        _event(str(execution_id), int(user_id), "release_item.reconciled_merged", item)
+                        continue
+                    status = "pending"
+                except Exception as reconcile_exc:
+                    code = str(getattr(reconcile_exc, "code", reconcile_exc.__class__.__name__))[:160]
+                    if code not in _CONFIRMED_RECONCILE_FAILURES:
+                        return _record_uncertain(
+                            str(execution_id),
+                            int(user_id),
+                            merged_count,
+                            str(getattr(reconcile_exc, "detail", str(reconcile_exc)) or ""),
+                        )
+                    raise
             if status in _ITEM_TERMINAL:
                 break
 
@@ -554,6 +603,7 @@ def execute_release(execution_module: Any, user_id: int, execution_id: str) -> D
                 _event(str(execution_id), int(user_id), "release_execution.stopped", {"merged_count": merged_count})
                 return get_execution(execution_module, int(user_id), str(execution_id))
 
+            merge_started = False
             try:
                 plan = preflight.get_plan(execution_module, int(user_id), str(current.get("plan_id") or ""))
                 if str(plan.get("status") or "") != "prepared" or str(plan.get("plan_fingerprint") or "") != str(current.get("plan_fingerprint") or ""):
@@ -562,6 +612,7 @@ def execute_release(execution_module: Any, user_id: int, execution_id: str) -> D
                 _validate_item_policy(int(user_id), item)
                 project = _project_for_item(int(user_id), item)
                 _set_item(str(execution_id), int(item.get("position") or 0), status="merging")
+                merge_started = True
                 _event(str(execution_id), int(user_id), "release_item.merge_started", item)
                 result = release_github.merge_exact_head(
                     project,
@@ -576,9 +627,30 @@ def execute_release(execution_module: Any, user_id: int, execution_id: str) -> D
                     merge_commit_sha=str(result.get("merge_commit_sha") or ""),
                 )
                 merged_count += 1
-                _set_execution(str(execution_id), int(user_id), merged_count=merged_count)
+                _set_execution(str(execution_id), int(user_id), merged_count=merged_count, blocker_code="", blocker_detail="")
                 _event(str(execution_id), int(user_id), "release_item.merged", result)
             except Exception as exc:
+                if merge_started:
+                    try:
+                        if _reconcile_merging_item(int(user_id), str(execution_id), item):
+                            merged_count += 1
+                            _set_execution(str(execution_id), int(user_id), merged_count=merged_count, blocker_code="", blocker_detail="")
+                            _event(
+                                str(execution_id),
+                                int(user_id),
+                                "release_item.reconciled_after_error",
+                                {"position": item.get("position"), "merged_count": merged_count},
+                            )
+                            continue
+                    except Exception as reconcile_exc:
+                        reconcile_code = str(getattr(reconcile_exc, "code", reconcile_exc.__class__.__name__))[:160]
+                        if reconcile_code not in _CONFIRMED_RECONCILE_FAILURES:
+                            return _record_uncertain(
+                                str(execution_id),
+                                int(user_id),
+                                merged_count,
+                                str(getattr(reconcile_exc, "detail", str(reconcile_exc)) or ""),
+                            )
                 code = str(getattr(exc, "code", exc.__class__.__name__))[:160]
                 detail = str(getattr(exc, "detail", str(exc)) or "")[:1000]
                 _set_item(
@@ -599,6 +671,7 @@ def execute_release(execution_module: Any, user_id: int, execution_id: str) -> D
                     result={
                         "recovery_required": bool(merged_count > 0),
                         "recovery_policy": "stop_after_first_failure_and_require_explicit_recovery_plan",
+                        "deployment_started": False,
                     },
                 )
                 _event(
