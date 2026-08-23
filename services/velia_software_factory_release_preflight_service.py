@@ -94,6 +94,11 @@ def _lock_key(candidate_id: str) -> int:
     return value - (1 << 64) if value >= (1 << 63) else value
 
 
+def _valid_sha(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 40 and all(char in "0123456789abcdef" for char in text)
+
+
 def ensure_preflight_tables(execution_module: Any) -> None:
     global _SCHEMA_READY
     approval.ensure_approval_tables(execution_module)
@@ -125,7 +130,7 @@ def ensure_preflight_tables(execution_module: Any) -> None:
                 """
             )
             cursor.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_velia_factory_release_preflight_fingerprint "
+                "CREATE INDEX IF NOT EXISTS idx_velia_factory_release_preflight_fingerprint "
                 "ON velia_software_factory_release_preflight_plans(user_id,candidate_id,plan_fingerprint)"
             )
             cursor.execute(
@@ -245,9 +250,14 @@ def _repository_order(execution: Mapping[str, Any], repositories: Sequence[Mappi
     for project_id in repo_projects:
         outgoing.setdefault(project_id, set())
         incoming.setdefault(project_id, set())
-    # Restrict graph to repositories participating in this exact candidate.
-    scoped_out = {project: {item for item in outgoing.get(project, set()) if item in repo_projects} for project in repo_projects}
-    scoped_in = {project: {item for item in incoming.get(project, set()) if item in repo_projects} for project in repo_projects}
+    scoped_out = {
+        project: {item for item in outgoing.get(project, set()) if item in repo_projects}
+        for project in repo_projects
+    }
+    scoped_in = {
+        project: {item for item in incoming.get(project, set()) if item in repo_projects}
+        for project in repo_projects
+    }
     ready = sorted(project for project in repo_projects if not scoped_in[project])
     ordered: List[str] = []
     while ready:
@@ -283,14 +293,32 @@ def _build_plan_snapshot(
     for index, project_id in enumerate(order, start=1):
         item = by_project.get(project_id) or {}
         pr = int(item.get("pull_request_number") or 0)
-        head_sha = str(item.get("head_sha") or "")
-        repository = str(item.get("repository_full_name") or "")
-        run_id = str(item.get("run_id") or "")
-        if pr <= 0 or len(head_sha) < 7 or not repository or not run_id or not bool(item.get("eligible")):
-            raise SoftwareFactoryError("velia_factory_release_repository_evidence_incomplete", detail=project_id, status=409)
+        head_sha = str(item.get("head_sha") or "").strip().lower()
+        repository = str(item.get("repository_full_name") or "").strip()
+        run_id = str(item.get("run_id") or "").strip()
+        ci_status = str(item.get("ci_status") or "").strip().lower()
+        policy_recommendation = str(item.get("policy_recommendation") or "").strip().lower()
+        if (
+            pr <= 0
+            or not _valid_sha(head_sha)
+            or not repository
+            or not run_id
+            or ci_status != "success"
+            or policy_recommendation != "eligible"
+            or not bool(item.get("eligible"))
+        ):
+            raise SoftwareFactoryError(
+                "velia_factory_release_repository_evidence_incomplete",
+                detail=project_id,
+                status=409,
+            )
         target = (repository.casefold(), pr)
         if target in seen_targets:
-            raise SoftwareFactoryError("velia_factory_release_duplicate_pull_request", detail=f"{repository}#{pr}", status=409)
+            raise SoftwareFactoryError(
+                "velia_factory_release_duplicate_pull_request",
+                detail=f"{repository}#{pr}",
+                status=409,
+            )
         seen_targets.add(target)
         ordered_items.append(
             {
@@ -301,8 +329,8 @@ def _build_plan_snapshot(
                 "pull_request_number": pr,
                 "head_sha": head_sha,
                 "ci_attempt": int(item.get("ci_attempt") or 0),
-                "ci_status": str(item.get("ci_status") or ""),
-                "policy_recommendation": str(item.get("policy_recommendation") or ""),
+                "ci_status": ci_status,
+                "policy_recommendation": policy_recommendation,
             }
         )
     approval_sequence_id = int((approval_evidence.get("approval") or {}).get("sequence_id") or 0)
@@ -338,7 +366,9 @@ def _build_plan_snapshot(
 
 
 def _fresh_snapshot(execution_module: Any, user_id: int, candidate_id: str) -> Dict[str, Any]:
-    approval_evidence = approval.require_current_approval(execution_module, int(user_id), str(candidate_id))
+    approval_evidence = approval.require_current_approval(
+        execution_module, int(user_id), str(candidate_id)
+    )
     candidate = delivery.get_candidate(execution_module, int(user_id), str(candidate_id))
     fresh = delivery.evaluate_workspace_candidate(
         execution_module,
@@ -349,7 +379,9 @@ def _fresh_snapshot(execution_module: Any, user_id: int, candidate_id: str) -> D
     if str(fresh.get("source_fingerprint") or "") != str(candidate.get("source_fingerprint") or ""):
         raise SoftwareFactoryError("velia_factory_delivery_candidate_stale", status=409)
     fresh_candidate = {**dict(fresh), "candidate_id": str(candidate_id)}
-    return _build_plan_snapshot(execution_module, int(user_id), fresh_candidate, approval_evidence)
+    return _build_plan_snapshot(
+        execution_module, int(user_id), fresh_candidate, approval_evidence
+    )
 
 
 def _mark_status(plan_id: str, user_id: int, status: str) -> None:
@@ -376,10 +408,16 @@ def validate_plan(execution_module: Any, user_id: int, plan_id: str) -> Dict[str
     _require_user(int(user_id))
     current = get_plan(execution_module, int(user_id), str(plan_id))
     if str(current.get("status") or "") != _PREPARED:
-        raise SoftwareFactoryError("velia_factory_release_preflight_not_prepared", detail=str(current.get("status") or ""), status=409)
+        raise SoftwareFactoryError(
+            "velia_factory_release_preflight_not_prepared",
+            detail=str(current.get("status") or ""),
+            status=409,
+        )
     try:
-        fresh = _fresh_snapshot(execution_module, int(user_id), str(current.get("candidate_id") or ""))
-    except Exception:
+        fresh = _fresh_snapshot(
+            execution_module, int(user_id), str(current.get("candidate_id") or "")
+        )
+    except SoftwareFactoryError:
         _mark_status(str(plan_id), int(user_id), "stale")
         raise
     if str(fresh.get("plan_fingerprint") or "") != str(current.get("plan_fingerprint") or ""):
@@ -408,21 +446,23 @@ def prepare_plan(execution_module: Any, user_id: int, candidate_id: str) -> Dict
     try:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_lock_key(str(candidate_id)),))
         cursor.execute(
-            "SELECT plan_id FROM velia_software_factory_release_preflight_plans "
+            "SELECT plan_id,candidate_id,user_id,source_id,source_fingerprint,approval_sequence_id,"
+            "plan_fingerprint,status,plan_json,created_at,updated_at "
+            "FROM velia_software_factory_release_preflight_plans "
             "WHERE user_id=%s AND candidate_id=%s AND status='prepared' LIMIT 1",
             (int(user_id), str(candidate_id)),
         )
         active = cursor.fetchone()
         if active:
-            active_id = str(_value(active, "plan_id", 0, ""))
-            conn.commit()
-            existing = get_plan(execution_module, int(user_id), active_id)
+            existing = _plan_row(active)
             if str(existing.get("plan_fingerprint") or "") == str(snapshot.get("plan_fingerprint") or ""):
+                conn.commit()
                 return existing
-            _mark_status(active_id, int(user_id), "stale")
-            conn = get_connection()
-            cursor = _dict_cursor(conn)
-            cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_lock_key(str(candidate_id)),))
+            cursor.execute(
+                "UPDATE velia_software_factory_release_preflight_plans SET status='stale',updated_at=%s "
+                "WHERE plan_id=%s AND user_id=%s AND status='prepared'",
+                (_utcnow(), str(existing.get("plan_id") or ""), int(user_id)),
+            )
         plan_id = str(uuid.uuid4())
         cursor.execute(
             """
@@ -430,8 +470,6 @@ def prepare_plan(execution_module: Any, user_id: int, candidate_id: str) -> Dict
                 plan_id,candidate_id,user_id,source_id,source_fingerprint,approval_sequence_id,
                 plan_fingerprint,status,plan_json,created_at,updated_at
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,'prepared',%s,%s,%s)
-            ON CONFLICT (user_id,candidate_id,plan_fingerprint) DO UPDATE SET
-                updated_at=velia_software_factory_release_preflight_plans.updated_at
             RETURNING plan_id,candidate_id,user_id,source_id,source_fingerprint,approval_sequence_id,
                 plan_fingerprint,status,plan_json,created_at,updated_at
             """,
@@ -452,17 +490,11 @@ def prepare_plan(execution_module: Any, user_id: int, candidate_id: str) -> Dict
         conn.commit()
         return _plan_row(row)
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
         raise
     finally:
-        try:
-            cursor.close()
-            conn.close()
-        except Exception:
-            pass
+        cursor.close()
+        conn.close()
 
 
 def cancel_plan(execution_module: Any, user_id: int, plan_id: str) -> Dict[str, Any]:
