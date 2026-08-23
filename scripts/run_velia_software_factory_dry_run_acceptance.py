@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import json
-import sys
 
-from services import velia_software_factory_dry_run_acceptance_service as acceptance
+# Reproduce the production Software Factory install order before importing the
+# acceptance service. The standalone Railway pre-deploy process does not inherit
+# run_web_process.py runtime patches automatically.
+from services import velia_software_factory_lead_service as factory
+from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
+
+stage2_runtime.install(factory)
+
+from services import velia_software_factory_autonomy_service as autonomy  # noqa: E402
+from services import velia_software_factory_stage3_hardening_patch as stage3_hardening  # noqa: E402
+
+stage3_hardening.install(autonomy)
+
+from services import velia_software_factory_dry_run_acceptance_service as acceptance  # noqa: E402
 
 
 def _safe_summary(result: dict) -> dict:
