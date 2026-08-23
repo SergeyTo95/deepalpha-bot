@@ -74,11 +74,28 @@ jobs:
           grep -q 'install_velia_software_factory_chat(velia_chat_service_module)' run_web_process.py
           grep -q 'install_velia_software_factory_autonomy(deepalpha_web.app)' run_web_process.py
       - name: Verify fail-closed rollout flags
+        env:
+          PYTHONPATH: .
         run: |
-          grep -q 'VELIA_SOFTWARE_FACTORY_ENABLED.*False' services/velia_software_factory_lead_service.py
-          grep -q 'VELIA_SOFTWARE_FACTORY_TEAM_ENABLED.*False' services/velia_software_factory_team_service.py
-          grep -q 'VELIA_SOFTWARE_FACTORY_AUTONOMY_ENABLED.*False' services/velia_software_factory_autonomy_service.py
-          grep -q 'VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED.*False' services/velia_software_factory_autonomy_service.py
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_autonomy_service as autonomy
+          from services import velia_software_factory_lead_service as lead
+          from services import velia_software_factory_team_service as team
+
+          for name in (
+              "VELIA_SOFTWARE_FACTORY_ENABLED",
+              "VELIA_SOFTWARE_FACTORY_TEAM_ENABLED",
+              "VELIA_SOFTWARE_FACTORY_AUTONOMY_ENABLED",
+              "VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED",
+          ):
+              os.environ.pop(name, None)
+
+          assert lead.software_factory_enabled() is False
+          assert team.team_enabled() is False
+          assert autonomy.autonomy_enabled() is False
+          assert autonomy.supervisor_enabled() is False
+          PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
