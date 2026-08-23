@@ -11,6 +11,7 @@ from services import velia_developer_project_service as project_service
 from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_lead_service as factory
 from services import velia_software_factory_stage2_runtime_patch as stage2_runtime
+from services import velia_software_factory_stage3_hardening_patch as stage3_hardening
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ async def _body(request: web.Request) -> Dict[str, Any]:
 
 def setup_velia_software_factory_routes(app: web.Application, routes_module: Any) -> None:
     stage2_runtime.install(factory)
+    stage3_hardening.install(autonomy)
     if app.get("velia_software_factory_routes_installed"):
         return
 
