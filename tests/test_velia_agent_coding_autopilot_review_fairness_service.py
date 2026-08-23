@@ -13,6 +13,35 @@ def _enable_worker(monkeypatch):
     monkeypatch.setattr(fairness.autopilot, "worker_enabled", lambda: True)
     monkeypatch.setattr(fairness.coding_service, "coding_enabled", lambda: True)
     monkeypatch.setattr(fairness.review_service, "review_loop_enabled", lambda: True)
+    monkeypatch.setattr(
+        fairness.recovery_service,
+        "recover_reopened_github_not_found_once",
+        lambda: None,
+    )
+
+
+def test_recovery_happens_before_review_poll(monkeypatch):
+    _enable_worker(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        fairness.recovery_service,
+        "recover_reopened_github_not_found_once",
+        lambda: calls.append("recover")
+        or {"run_id": "recovered-run", "pull_request_number": 427},
+    )
+    monkeypatch.setattr(
+        fairness.review_service,
+        "process_review_once",
+        lambda: calls.append("review")
+        or {"run_id": "recovered-run", "status": "waiting_ci"},
+    )
+
+    result = fairness._run_once_with_review_fairness(
+        lambda: (_ for _ in ()).throw(AssertionError("ordinary worker must not run"))
+    )
+
+    assert result == [{"run_id": "recovered-run", "status": "waiting_ci"}]
+    assert calls == ["recover", "review"]
 
 
 def test_older_non_actionable_review_does_not_starve_newer_actionable_review(monkeypatch):
@@ -107,10 +136,15 @@ def test_empty_review_queue_falls_through_without_extra_poll(monkeypatch):
     assert review_calls == ["review"]
 
 
-def test_disabled_review_loop_calls_original_without_polling(monkeypatch):
+def test_disabled_review_loop_calls_original_without_recovery_or_polling(monkeypatch):
     monkeypatch.setattr(fairness.autopilot, "worker_enabled", lambda: True)
     monkeypatch.setattr(fairness.coding_service, "coding_enabled", lambda: True)
     monkeypatch.setattr(fairness.review_service, "review_loop_enabled", lambda: False)
+    monkeypatch.setattr(
+        fairness.recovery_service,
+        "recover_reopened_github_not_found_once",
+        lambda: (_ for _ in ()).throw(AssertionError("recovery must not run")),
+    )
     monkeypatch.setattr(
         fairness.review_service,
         "process_review_once",
