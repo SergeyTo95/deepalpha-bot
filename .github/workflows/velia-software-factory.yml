@@ -58,7 +58,8 @@ jobs:
             tests/test_velia_software_factory_rollout_service.py \
             tests/test_velia_software_factory_workspace_service.py \
             tests/test_velia_software_factory_workspace_hardening.py \
-            tests/test_velia_software_factory_workspace_execution_service.py
+            tests/test_velia_software_factory_workspace_execution_service.py \
+            tests/test_velia_software_factory_workspace_execution_hardening.py
       - name: Verify Factory write and review boundary
         run: |
           grep -q 'from services import velia_agent_coding_autopilot_service as autopilot' services/velia_software_factory_lead_service.py
@@ -126,6 +127,8 @@ jobs:
           grep -q 'never merge' services/velia_software_factory_workspace_execution_service.py
           grep -q 'ready_for_review' services/velia_software_factory_workspace_execution_service.py
           grep -q '_preflight_mission_conflicts' services/velia_software_factory_workspace_execution_hardening_patch.py
+          grep -q '_set_terminal_state_and_archive_missions' services/velia_software_factory_workspace_execution_hardening_patch.py
+          grep -q "SET status='archived'" services/velia_software_factory_workspace_execution_hardening_patch.py
           grep -q 'stop_requested' services/velia_software_factory_workspace_execution_hardening_patch.py
           grep -q 'execution_hardening.install(execution_module)' services/velia_software_factory_workspace_hardening_patch.py
           ! grep -nE 'create_branch|open_pull_request|merge_pull|merge_pull_request|apply_patch|contents.:.?write' \
