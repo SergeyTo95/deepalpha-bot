@@ -133,7 +133,7 @@ def test_llm_deliverable_cannot_grant_or_hide_write_scope():
     )
     assert payload["allowed_paths"] == []
     assert len(payload["deliverables"]) == 1
-    assert "allowed_paths" not in payload["deliverables"][0]
+    assert payload["deliverables"][0].get("allowed_paths") == []
     assert "blocked_paths" not in payload["deliverables"][0]
     assert Clarifier().evaluate(ProjectSpec.from_payload(payload)).blocking is True
 
