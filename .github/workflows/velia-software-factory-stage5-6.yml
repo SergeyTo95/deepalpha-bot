@@ -1,0 +1,112 @@
+name: VELIA Software Factory Stage 5.6
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_release_completion_*.py'
+      - 'services/velia_software_factory_delivery_gate_runtime_patch.py'
+      - 'tests/test_velia_software_factory_release_completion_*.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage5-6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-completion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 5.6 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_release_completion_service.py \
+            services/velia_software_factory_release_completion_hardening_patch.py \
+            services/velia_software_factory_delivery_gate_runtime_patch.py
+      - name: Run Stage 5.6 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_release_completion_service.py
+      - name: Verify fail-closed completion status
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_release_completion_service as completion
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_RELEASE_COMPLETION_ENABLED', None)
+          status = completion.public_status()
+          assert status['enabled'] is False
+          assert status['mode'] == 'evidence_certificate'
+          assert status['full_verified_release_required'] is True
+          assert status['deployment_observation_success_required'] is True
+          assert status['acceptance_profile_required'] is True
+          assert status['exact_acceptance_context_match'] is True
+          assert status['deployment_contexts_cannot_count_as_acceptance'] is True
+          assert status['railway_status_cannot_count_as_acceptance'] is True
+          assert status['arbitrary_http_probe_supported'] is False
+          assert status['github_write_supported'] is False
+          assert status['deployment_trigger_supported'] is False
+          assert status['release_complete_supported'] is False
+          assert status['deployment_supported'] is False
+          PY
+      - name: Verify completion boundary is read-only evidence only
+        run: |
+          ! grep -nE 'create_deployment|redeploy|set-variables|RAILWAY_TOKEN|RAILWAY_API|requests\.(get|post|put|patch|delete)|httpx\.|aiohttp\.|autopilot\.enqueue_task|merge_exact_head|require_write_permissions|automatic_revert|rollback' \
+            services/velia_software_factory_release_completion_service.py \
+            services/velia_software_factory_release_completion_hardening_patch.py
+          ! grep -nE '"(POST|PUT|PATCH|DELETE)"' \
+            services/velia_software_factory_release_completion_service.py \
+            services/velia_software_factory_release_completion_hardening_patch.py
+          grep -q 'status_github.commit_status_snapshot' services/velia_software_factory_release_completion_service.py
+          grep -q 'velia_factory_acceptance_context_overlaps_deployment' services/velia_software_factory_release_completion_service.py
+          grep -q 'velia_factory_acceptance_profile_stale' services/velia_software_factory_release_completion_hardening_patch.py
+          grep -q 'velia_factory_release_completion_deployment_profile_stale' services/velia_software_factory_release_completion_hardening_patch.py
+          grep -q 'invalid_target_contexts' services/velia_software_factory_release_completion_hardening_patch.py
+          grep -q 'railway_target_contexts' services/velia_software_factory_release_completion_hardening_patch.py
+          grep -q 'ON CONFLICT (user_id,verification_id,deployment_observation_id,certificate_fingerprint) DO NOTHING' services/velia_software_factory_release_completion_service.py
+          ! grep -n 'UPDATE velia_software_factory_release_completion_certificates' services/velia_software_factory_release_completion_service.py
+      - name: Verify hardening and lazy runtime install order
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_delivery_gate_runtime_patch.py').read_text()
+          assert 'completion_hardening.install(completion)' in text
+          assert text.index('completion_hardening.install(completion)') < text.index('completion_status = completion.public_status()')
+          assert 'if bool(completion_status.get("enabled"))' in text
+          assert 'completion.ensure_completion_tables(execution_module)' in text
+          assert 'release_completion_enabled=%s' in text
+          assert 'release_completion_mode=%s' in text
+          assert 'release_complete_supported=%s' in text
+          assert 'deployment_supported=false' in text
+          PY
+      - name: Verify completion certificate requires all prior evidence
+        run: |
+          grep -q 'verification_status != "verified"' services/velia_software_factory_release_completion_service.py
+          grep -q 'deployment_complete' services/velia_software_factory_release_completion_service.py
+          grep -q 'verification_fingerprint' services/velia_software_factory_release_completion_service.py
+          grep -q 'deployment_observation_fingerprint' services/velia_software_factory_release_completion_service.py
+          grep -q 'acceptance_profile_fingerprint' services/velia_software_factory_release_completion_service.py
+          grep -q 'deployment_profile_fingerprint' services/velia_software_factory_release_completion_service.py
+          grep -q 'release_complete": status == "complete"' services/velia_software_factory_release_completion_service.py
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
