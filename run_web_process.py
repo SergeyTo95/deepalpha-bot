@@ -92,6 +92,8 @@ def main() -> None:
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
     from services.velia_mobile_streaming_service import setup_velia_mobile_streaming_route
     from services.velia_plugin_service import ensure_velia_plugin_tables
+    from services.velia_software_factory_autonomy_service import install_autonomy as install_velia_software_factory_autonomy
+    from services.velia_software_factory_chat_runtime_patch import install as install_velia_software_factory_chat
     from services.velia_software_factory_routes import setup_velia_software_factory_routes
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
     from services.velia_usdt_checkout_routes import setup_velia_usdt_checkout_routes
@@ -232,12 +234,15 @@ def main() -> None:
     # Streaming wraps only generation and calls the already hardened final
     # sender, preserving idempotency, budget, shadow memory and persistence.
     install_velia_chat_streaming(velia_chat_service_module)
-    # Developer handles repository requests. Agent Chat is installed after it
-    # as the outer personal-action layer; the conflict guard is outermost and
-    # prevents two active plans from sharing one conversation.
+    # Developer handles repository requests. Agent Chat is installed after it;
+    # its conflict guard protects the two legacy plan types. Software Factory is
+    # outermost for high-level product-build intents and adds its own cross-plan
+    # conflict check before creating an autonomous run.
     install_velia_developer_chat(velia_chat_service_module)
     install_velia_agent_chat(velia_chat_service_module)
     install_velia_agent_chat_conflict(velia_chat_service_module)
+    install_velia_software_factory_chat(velia_chat_service_module)
+    install_velia_software_factory_autonomy(deepalpha_web.app)
     setup_velia_mobile_streaming_route(
         deepalpha_web.app,
         velia_chat_service_module,
