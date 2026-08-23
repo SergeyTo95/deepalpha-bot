@@ -92,6 +92,7 @@ def main() -> None:
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
     from services.velia_mobile_streaming_service import setup_velia_mobile_streaming_route
     from services.velia_plugin_service import ensure_velia_plugin_tables
+    from services.velia_software_factory_routes import setup_velia_software_factory_routes
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
     from services.velia_usdt_checkout_routes import setup_velia_usdt_checkout_routes
     from services.velia_user_profile_runtime_patch import install as install_velia_user_profile
@@ -243,6 +244,7 @@ def main() -> None:
         velia_mobile_routes_module,
     )
     setup_velia_developer_routes(deepalpha_web.app, velia_mobile_routes_module)
+    setup_velia_software_factory_routes(deepalpha_web.app, velia_mobile_routes_module)
     setup_velia_agent_routes(deepalpha_web.app, velia_mobile_routes_module)
     install_velia_telegram_connect_page(
         deepalpha_web.app,
