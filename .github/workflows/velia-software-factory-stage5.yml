@@ -5,6 +5,7 @@ on:
     paths:
       - 'services/velia_software_factory_delivery_gate_*.py'
       - 'services/velia_software_factory_delivery_approval_*.py'
+      - 'services/velia_software_factory_deployment_*.py'
       - 'services/velia_software_factory_release_preflight_*.py'
       - 'services/velia_software_factory_release_execution_*.py'
       - 'services/velia_software_factory_release_merge_github_service.py'
@@ -13,6 +14,7 @@ on:
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_delivery_gate_*.py'
       - 'tests/test_velia_software_factory_delivery_approval_*.py'
+      - 'tests/test_velia_software_factory_deployment_*.py'
       - 'tests/test_velia_software_factory_release_preflight_*.py'
       - 'tests/test_velia_software_factory_release_execution_*.py'
       - 'tests/test_velia_software_factory_release_merge_github_*.py'
@@ -46,6 +48,8 @@ jobs:
           python -m py_compile \
             services/velia_software_factory_delivery_gate_service.py \
             services/velia_software_factory_delivery_approval_service.py \
+            services/velia_software_factory_deployment_status_github_service.py \
+            services/velia_software_factory_deployment_observer_service.py \
             services/velia_software_factory_release_preflight_service.py \
             services/velia_software_factory_release_merge_github_service.py \
             services/velia_software_factory_release_execution_service.py \
@@ -63,6 +67,8 @@ jobs:
             tests/test_velia_software_factory_delivery_gate_runtime.py \
             tests/test_velia_software_factory_delivery_approval_service.py \
             tests/test_velia_software_factory_delivery_approval_runtime.py \
+            tests/test_velia_software_factory_deployment_status_github_service.py \
+            tests/test_velia_software_factory_deployment_observer_service.py \
             tests/test_velia_software_factory_release_preflight_service.py \
             tests/test_velia_software_factory_release_merge_github_service.py \
             tests/test_velia_software_factory_release_execution_service.py \
@@ -78,6 +84,7 @@ jobs:
           import os
           from services import velia_software_factory_delivery_approval_service as approval
           from services import velia_software_factory_delivery_gate_service as delivery
+          from services import velia_software_factory_deployment_observer_service as deployment
           from services import velia_software_factory_release_execution_service as execution
           from services import velia_software_factory_release_post_merge_service as post_merge
           from services import velia_software_factory_release_preflight_service as preflight
@@ -87,6 +94,7 @@ jobs:
               'VELIA_SOFTWARE_FACTORY_RELEASE_PREFLIGHT_ENABLED',
               'VELIA_SOFTWARE_FACTORY_RELEASE_EXECUTION_ENABLED',
               'VELIA_SOFTWARE_FACTORY_RELEASE_VERIFICATION_ENABLED',
+              'VELIA_SOFTWARE_FACTORY_DEPLOYMENT_OBSERVER_ENABLED',
           ):
               os.environ.pop(key, None)
           status = delivery.public_status()
@@ -134,6 +142,14 @@ jobs:
           assert verification_status['revert_supported'] is False
           assert verification_status['merge_supported'] is False
           assert verification_status['deployment_supported'] is False
+          deployment_status = deployment.public_status()
+          assert deployment_status['enabled'] is False
+          assert deployment_status['mode'] == 'github_commit_status_observer'
+          assert deployment_status['profile_required'] is True
+          assert deployment_status['exact_context_match'] is True
+          assert deployment_status['railway_credentials_required'] is False
+          assert deployment_status['deployment_trigger_supported'] is False
+          assert deployment_status['deployment_supported'] is False
           PY
       - name: Verify read-only Delivery Gate boundary
         run: |
@@ -200,6 +216,35 @@ jobs:
           grep -q 'automatic_merge": False' services/velia_software_factory_release_post_merge_service.py
           grep -q 'release_verification_enabled=%s' services/velia_software_factory_delivery_gate_runtime_patch.py
           grep -q 'deployment_supported=false' services/velia_software_factory_delivery_gate_runtime_patch.py
+      - name: Verify Stage 5.5 deployment observer boundary
+        run: |
+          ! grep -nE 'create_deployment|redeploy|set-variables|RAILWAY_TOKEN|RAILWAY_API|requests\.(post|put|patch|delete)|autopilot\.enqueue_task|merge_exact_head|require_write_permissions' \
+            services/velia_software_factory_deployment_observer_service.py \
+            services/velia_software_factory_deployment_status_github_service.py
+          ! grep -nE '"(POST|PUT|PATCH|DELETE)"' services/velia_software_factory_deployment_status_github_service.py
+          grep -q '"GET"' services/velia_software_factory_deployment_status_github_service.py
+          grep -q '/commits/{quote(exact_sha)}/status' services/velia_software_factory_deployment_status_github_service.py
+          grep -q 'velia_factory_deployment_context_must_be_exact' services/velia_software_factory_deployment_observer_service.py
+          grep -q 'explicit_profile_confirmation_required' services/velia_software_factory_deployment_observer_service.py
+          grep -q 'ON CONFLICT (user_id,verification_id,observation_fingerprint) DO NOTHING' services/velia_software_factory_deployment_observer_service.py
+          ! grep -n 'UPDATE velia_software_factory_deployment_observations' services/velia_software_factory_deployment_observer_service.py
+          grep -q 'deployment_triggered": False' services/velia_software_factory_deployment_observer_service.py
+          grep -q 'deployment_observer_enabled=%s' services/velia_software_factory_delivery_gate_runtime_patch.py
+          grep -q 'deployment_trigger_supported=false' services/velia_software_factory_delivery_gate_runtime_patch.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          tree = ast.parse(Path('services/velia_software_factory_deployment_status_github_service.py').read_text())
+          request_calls = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == '_request':
+                  request_calls.append(node)
+          assert request_calls, 'deployment status adapter must perform a read request'
+          for call in request_calls:
+              assert call.args, 'request method must be literal'
+              method = call.args[0]
+              assert isinstance(method, ast.Constant) and method.value == 'GET', 'only GET is allowed'
+          PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
