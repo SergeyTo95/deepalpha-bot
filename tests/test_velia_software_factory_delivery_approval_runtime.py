@@ -7,6 +7,7 @@ def test_runtime_registers_approval_boundary(monkeypatch):
     runtime._INSTALLED = False
     monkeypatch.setattr(runtime.delivery, "ensure_delivery_tables", lambda module: None)
     monkeypatch.setattr(runtime.approval, "ensure_approval_tables", lambda module: None)
+    monkeypatch.setattr(runtime.preflight, "ensure_preflight_tables", lambda module: None)
     monkeypatch.setattr(
         runtime.delivery,
         "public_status",
@@ -16,6 +17,11 @@ def test_runtime_registers_approval_boundary(monkeypatch):
         runtime.approval,
         "public_status",
         lambda: {"enabled": False, "mode": "record_only"},
+    )
+    monkeypatch.setattr(
+        runtime.preflight,
+        "public_status",
+        lambda: {"enabled": False, "mode": "preflight_only"},
     )
     monkeypatch.setattr(
         runtime.delivery,
@@ -51,12 +57,18 @@ def test_runtime_registers_approval_boundary(monkeypatch):
         "require_current_approval",
         lambda module, user_id, candidate_id: {"candidate_id": candidate_id, "current": True},
     )
+    monkeypatch.setattr(runtime.preflight, "prepare_plan", lambda *args, **kwargs: {"status": "prepared"})
+    monkeypatch.setattr(runtime.preflight, "validate_plan", lambda *args, **kwargs: {"current": True})
+    monkeypatch.setattr(runtime.preflight, "get_plan", lambda *args, **kwargs: {"plan_id": "p"})
+    monkeypatch.setattr(runtime.preflight, "list_plans", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runtime.preflight, "cancel_plan", lambda *args, **kwargs: {"status": "cancelled"})
 
     module = SimpleNamespace()
     runtime.install(module)
 
     assert module.delivery_gate_status()["mode"] == "read_only_candidate"
     assert module.delivery_approval_status()["mode"] == "record_only"
+    assert module.release_preflight_status()["mode"] == "preflight_only"
     assert module.get_delivery_approval(7, "candidate-1")["state"] == "none"
     decision = module.record_delivery_decision(7, "candidate-1", "approved", "ship")
     assert decision["decision"] == "approved"
