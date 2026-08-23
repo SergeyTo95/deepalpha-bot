@@ -36,14 +36,18 @@ jobs:
             services/velia_software_factory_lead_service.py \
             services/velia_software_factory_team_service.py \
             services/velia_software_factory_stage2_runtime_patch.py \
-            services/velia_software_factory_routes.py
-      - name: Run Stage 1 and Stage 2 focused tests
+            services/velia_software_factory_autonomy_service.py \
+            services/velia_software_factory_chat_runtime_patch.py \
+            services/velia_software_factory_routes.py \
+            run_web_process.py
+      - name: Run Stage 1 through Stage 3 focused tests
         env:
           PYTHONPATH: .
         run: |
           python -m pytest -q \
             tests/test_velia_software_factory_core_service.py \
-            tests/test_velia_software_factory_team_service.py
+            tests/test_velia_software_factory_team_service.py \
+            tests/test_velia_software_factory_autonomy_service.py
       - name: Verify Factory write and review boundary
         run: |
           grep -q 'from services import velia_agent_coding_autopilot_service as autopilot' services/velia_software_factory_lead_service.py
@@ -54,11 +58,22 @@ jobs:
             services/velia_software_factory_core_service.py \
             services/velia_software_factory_team_service.py \
             services/velia_software_factory_stage2_runtime_patch.py \
+            services/velia_software_factory_autonomy_service.py \
+            services/velia_software_factory_chat_runtime_patch.py \
             services/velia_software_factory_routes.py
+      - name: Verify autonomy safety contract
+        run: |
+          grep -q 'autopilot_module.set_mission_status.*paused' services/velia_software_factory_autonomy_service.py
+          grep -q 'autopilot_module.cancel_task' services/velia_software_factory_autonomy_service.py
+          grep -q 'pg_try_advisory_lock' services/velia_software_factory_autonomy_service.py
+          grep -q 'install_velia_software_factory_chat(velia_chat_service_module)' run_web_process.py
+          grep -q 'install_velia_software_factory_autonomy(deepalpha_web.app)' run_web_process.py
       - name: Verify fail-closed rollout flags
         run: |
-          grep -q 'VELIA_SOFTWARE_FACTORY_ENABLED.*false' services/velia_software_factory_lead_service.py
-          grep -q 'VELIA_SOFTWARE_FACTORY_TEAM_ENABLED.*false' services/velia_software_factory_team_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_ENABLED.*False' services/velia_software_factory_lead_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_TEAM_ENABLED.*False' services/velia_software_factory_team_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_AUTONOMY_ENABLED.*False' services/velia_software_factory_autonomy_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_SUPERVISOR_ENABLED.*False' services/velia_software_factory_autonomy_service.py
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'
         run: |
