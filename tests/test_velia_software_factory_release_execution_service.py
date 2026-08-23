@@ -152,7 +152,10 @@ def test_second_repo_failure_becomes_partial_release(monkeypatch):
         return [dict(item) for item in items]
 
     def set_execution(execution_id, user_id, **kwargs):
+        payload = kwargs.pop("result", None)
         execution.update(kwargs)
+        if isinstance(payload, dict):
+            execution.update(payload)
 
     def set_item(execution_id, position, **kwargs):
         target = next(item for item in items if item["position"] == position)
