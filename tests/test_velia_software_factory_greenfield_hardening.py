@@ -20,6 +20,20 @@ def _manifest():
     }
 
 
+def _runtime(*, agent_active=False, coding_active=False, workspace_status=""):
+    return SimpleNamespace(
+        _russian=lambda text: True,
+        _attach_and_delegate=lambda *args, **kwargs: {"ok": True, "reason": "delegated"},
+        _result=lambda text, request_id, **kwargs: {"ok": True, "text": text, "reason": kwargs.get("reason")},
+        workspace_runtime=SimpleNamespace(
+            get_workspace_chat_context=lambda user_id, conversation_id: {"status": workspace_status} if workspace_status else {},
+            _ACTIVE_CONTEXT_STATES={"selecting_repositories", "collecting_scopes", "planned", "running"},
+        ),
+        agent_planner=SimpleNamespace(active_chat_job=lambda user_id, conversation_id: agent_active),
+        coding_service=SimpleNamespace(active_job=lambda user_id, conversation_id: coding_active),
+    )
+
+
 def test_manifest_owner_must_match_linked_installation(monkeypatch):
     monkeypatch.setattr(
         hardening.project_service,
@@ -92,12 +106,24 @@ def test_initialized_exact_repository_passes_read_only_preflight():
     assert calls == [(7, 100, "Acme/flower-store", "main", "")]
 
 
+def test_delegation_slot_rechecks_agent_and_workspace_conflicts(monkeypatch):
+    monkeypatch.setattr(hardening.autonomy, "get_chat_run", lambda user_id, conversation_id: None)
+    assert hardening._delegation_slot_busy(_runtime(), 1, "c") is False
+    assert hardening._delegation_slot_busy(_runtime(agent_active=True), 1, "c") is True
+    assert hardening._delegation_slot_busy(_runtime(coding_active=True), 1, "c") is True
+    assert hardening._delegation_slot_busy(_runtime(workspace_status="running"), 1, "c") is True
+
+    monkeypatch.setattr(hardening.autonomy, "get_chat_run", lambda user_id, conversation_id: {"run": {}})
+    assert hardening._delegation_slot_busy(_runtime(), 1, "c") is True
+
+
 def test_greenfield_gate_requires_full_factory_stack(monkeypatch):
     hardening._INSTALLED = False
     monkeypatch.setattr(hardening.project_service, "developer_enabled", lambda: True)
     monkeypatch.setattr(hardening.factory, "software_factory_enabled", lambda: False)
     monkeypatch.setattr(hardening.team_service, "team_enabled", lambda: True)
     monkeypatch.setattr(hardening.autonomy, "autonomy_enabled", lambda: True)
+    monkeypatch.setattr(hardening.autonomy, "get_chat_run", lambda user_id, conversation_id: None)
     monkeypatch.setattr(hardening.workspace_chat, "workspace_chat_enabled", lambda: True)
 
     chat = SimpleNamespace(generate_velia_chat_result=lambda *args, **kwargs: {"ok": True, "reason": "delegated"})
@@ -105,10 +131,40 @@ def test_greenfield_gate_requires_full_factory_stack(monkeypatch):
         greenfield_enabled=lambda: True,
         attach_exact_repositories=lambda user_id, manifest: [],
     )
-    runtime = SimpleNamespace(_russian=lambda text: True)
+    runtime = _runtime()
 
     hardening.install(chat, service, runtime)
     assert service.greenfield_enabled() is False
 
     monkeypatch.setattr(hardening.factory, "software_factory_enabled", lambda: True)
     assert service.greenfield_enabled() is True
+
+
+def test_attach_and_delegate_conflict_does_not_call_original(monkeypatch):
+    hardening._INSTALLED = False
+    monkeypatch.setattr(hardening.project_service, "developer_enabled", lambda: True)
+    monkeypatch.setattr(hardening.factory, "software_factory_enabled", lambda: True)
+    monkeypatch.setattr(hardening.team_service, "team_enabled", lambda: True)
+    monkeypatch.setattr(hardening.autonomy, "autonomy_enabled", lambda: True)
+    monkeypatch.setattr(hardening.autonomy, "get_chat_run", lambda user_id, conversation_id: None)
+    monkeypatch.setattr(hardening.workspace_chat, "workspace_chat_enabled", lambda: True)
+
+    calls = []
+    runtime = _runtime(agent_active=True)
+    runtime._attach_and_delegate = lambda *args, **kwargs: calls.append(True) or {"reason": "delegated"}
+    chat = SimpleNamespace(generate_velia_chat_result=lambda *args, **kwargs: {"ok": True, "reason": "delegated"})
+    service = SimpleNamespace(
+        greenfield_enabled=lambda: True,
+        attach_exact_repositories=lambda user_id, manifest: [],
+    )
+
+    hardening.install(chat, service, runtime)
+    result = runtime._attach_and_delegate(
+        "продолжай",
+        user_id=1,
+        conversation_id="c",
+        request_id="r",
+        context={"manifest": _manifest()},
+    )
+    assert result["reason"] == "software_factory_greenfield_plan_conflict"
+    assert calls == []
