@@ -26,7 +26,9 @@ def install(execution_module: Any) -> None:
     release_hardening.install(release_execution, execution_module)
     release_execution.ensure_execution_tables(execution_module)
     post_merge.ensure_post_merge_tables(execution_module)
-    deployment_observer.ensure_deployment_observer_tables(execution_module)
+    deployment_status = deployment_observer.public_status()
+    if bool(deployment_status.get("enabled")):
+        deployment_observer.ensure_deployment_observer_tables(execution_module)
 
     execution_module.delivery_gate_status = delivery.public_status
     execution_module.delivery_approval_status = approval.public_status
@@ -135,7 +137,6 @@ def install(execution_module: Any) -> None:
     preflight_status = preflight.public_status()
     execution_status = release_execution.public_status()
     verification_status = post_merge.public_status()
-    deployment_status = deployment_observer.public_status()
     logger.info(
         "VELIA_SOFTWARE_FACTORY_DELIVERY_GATE_INSTALLED enabled=%s mode=%s approval_enabled=%s approval_mode=%s preflight_enabled=%s preflight_mode=%s release_execution_enabled=%s release_execution_mode=%s release_verification_enabled=%s release_verification_mode=%s deployment_observer_enabled=%s deployment_observer_mode=%s deployment_trigger_supported=false execution_supported=%s merge_supported=%s deployment_supported=false",
         str(bool(status.get("enabled"))).lower(),
