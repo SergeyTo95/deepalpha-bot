@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
+import threading
 from datetime import datetime
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
 from services import velia_agent_chat_presentation_service as presentation_store
+
+
+logger = logging.getLogger(__name__)
 
 
 class CodingQuoteError(RuntimeError):
@@ -16,6 +21,10 @@ class CodingQuoteError(RuntimeError):
         self.code = str(code)
         self.status = int(status)
         self.quote = dict(quote or {})
+
+
+_SCHEMA_READY = False
+_SCHEMA_LOCK = threading.Lock()
 
 
 def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
@@ -35,43 +44,71 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 def ensure_coding_quote_tables() -> None:
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS velia_developer_coding_quotes (
-                job_id TEXT PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                quoted_tokens INTEGER NOT NULL,
-                balance_at_quote INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                charged_tokens INTEGER NOT NULL DEFAULT 0,
-                pricing_version TEXT NOT NULL DEFAULT 'coding-budget-v1',
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                charged_at TIMESTAMP NULL,
-                completed_at TIMESTAMP NULL,
-                refunded_at TIMESTAMP NULL,
-                CHECK (quoted_tokens > 0),
-                CHECK (charged_tokens >= 0),
-                CHECK (status IN ('pending','insufficient','charged','consumed','refunded','cancelled'))
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS velia_developer_coding_quotes (
+                    job_id TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    quoted_tokens INTEGER NOT NULL,
+                    balance_at_quote INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    charged_tokens INTEGER NOT NULL DEFAULT 0,
+                    pricing_version TEXT NOT NULL DEFAULT 'coding-budget-v1',
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    charged_at TIMESTAMP NULL,
+                    completed_at TIMESTAMP NULL,
+                    refunded_at TIMESTAMP NULL,
+                    CHECK (quoted_tokens > 0),
+                    CHECK (charged_tokens >= 0),
+                    CHECK (status IN (
+                        'pending','insufficient','charged','consumed',
+                        'refund_pending','refunded','cancelled'
+                    ))
+                )
+                """
             )
-            """
-        )
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_velia_coding_quotes_owner
-            ON velia_developer_coding_quotes(user_id, conversation_id, created_at DESC)
-            """
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+            # Safe forward migration for an earlier preview schema that did not
+            # know about the durable refund_pending reconciliation state.
+            cursor.execute(
+                """
+                ALTER TABLE velia_developer_coding_quotes
+                DROP CONSTRAINT IF EXISTS velia_developer_coding_quotes_status_check
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE velia_developer_coding_quotes
+                ADD CONSTRAINT velia_developer_coding_quotes_status_check
+                CHECK (status IN (
+                    'pending','insufficient','charged','consumed',
+                    'refund_pending','refunded','cancelled'
+                ))
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_velia_coding_quotes_owner
+                ON velia_developer_coding_quotes(user_id, conversation_id, created_at DESC)
+                """
+            )
+            conn.commit()
+            _SCHEMA_READY = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
 
 
 def _row_value(row: Any, key: str, index: int, default: Any = None) -> Any:
@@ -128,13 +165,12 @@ def _user_balance(cursor: Any, user_id: int, *, for_update: bool = False) -> int
 
 
 def quote_tokens_for_job(job: Mapping[str, Any]) -> int:
-    """Return a fixed execution quote from the existing Coding Agent budget envelope.
+    """Return one fixed execution quote for the whole Coding Agent plan.
 
-    The planner call has already happened when a job reaches this point. We quote only
-    the execution phase: each planned step may spend up to the existing per-step model
-    budget, capped by the existing whole-job model budget. The USD budget is converted
-    to internal VELIA usage tokens through a coding-specific configurable ratio rather
-    than claiming that a VELIA token has a universal fixed USD value.
+    The planner call has already happened when a job reaches this point. The quote
+    covers only the execution phase and uses the existing per-step / per-job model
+    budget envelope. VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN is a coding-specific
+    budgeting ratio; it is not a universal USD exchange rate for VELIA Token.
     """
     plan = job.get("plan") if isinstance(job.get("plan"), Mapping) else {}
     raw_steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
@@ -160,7 +196,10 @@ def create_quote(*, user_id: int, conversation_id: str, job: Mapping[str, Any]) 
         raise CodingQuoteError("developer_coding_quote_job_missing", status=400)
     existing = quote_for_job(job_id)
     if existing:
+        if int(existing.get("user_id") or 0) != int(user_id):
+            raise CodingQuoteError("developer_coding_quote_owner_mismatch", status=403)
         return existing
+
     quoted = quote_tokens_for_job(job)
     conn = get_connection()
     cursor = conn.cursor()
@@ -184,14 +223,17 @@ def create_quote(*, user_id: int, conversation_id: str, job: Mapping[str, Any]) 
     finally:
         cursor.close()
         conn.close()
+
     value = quote_for_job(job_id)
     if not value:
         raise CodingQuoteError("developer_coding_quote_persist_failed", status=500)
+    if int(value.get("user_id") or 0) != int(user_id):
+        raise CodingQuoteError("developer_coding_quote_owner_mismatch", status=403)
     return value
 
 
 def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
-    """Atomically re-check balance and debit the fixed quote before any repository write."""
+    """Lock, re-check balance and debit once before any repository write."""
     ensure_coding_quote_tables()
     conn = get_connection()
     cursor = conn.cursor()
@@ -201,18 +243,24 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
         row = cursor.fetchone()
         if not row:
             raise CodingQuoteError("developer_coding_quote_missing", status=409)
-        quote = _serialize_quote(row)
-        if int(quote.get("user_id") or 0) != int(user_id):
+        value = _serialize_quote(row)
+        if int(value.get("user_id") or 0) != int(user_id):
             raise CodingQuoteError("developer_coding_quote_owner_mismatch", status=403)
-        if quote.get("status") in {"charged", "consumed"}:
-            conn.commit()
-            return quote
-        if quote.get("status") != "pending":
+
+        status = str(value.get("status") or "")
+        # A charged quote represents the one execution request that already crossed
+        # the financial gate. Never let a second approval reuse it.
+        if status in {"charged", "consumed"}:
             raise CodingQuoteError(
-                "developer_coding_quote_not_payable", status=409, quote=quote
+                "developer_coding_quote_already_started", status=409, quote=value
             )
+        if status != "pending":
+            raise CodingQuoteError(
+                "developer_coding_quote_not_payable", status=409, quote=value
+            )
+
         balance = _user_balance(cursor, int(user_id), for_update=True)
-        quoted = int(quote.get("quoted_tokens") or 0)
+        quoted = int(value.get("quoted_tokens") or 0)
         if balance < quoted:
             cursor.execute(
                 """
@@ -223,7 +271,7 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
                 (balance, str(job_id)),
             )
             conn.commit()
-            insufficient = {**quote, "status": "insufficient", "balance_tokens": balance}
+            insufficient = {**value, "status": "insufficient", "balance_tokens": balance}
         else:
             cursor.execute(
                 "UPDATE users SET token_balance=token_balance-%s WHERE user_id=%s",
@@ -239,7 +287,7 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
             )
             conn.commit()
             return {
-                **quote,
+                **value,
                 "status": "charged",
                 "charged_tokens": quoted,
                 "balance_tokens": balance,
@@ -253,6 +301,7 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
     finally:
         cursor.close()
         conn.close()
+
     if insufficient is not None:
         raise CodingQuoteError(
             "developer_coding_insufficient_tokens", status=402, quote=insufficient
@@ -261,25 +310,59 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
 
 
 def consume_quote(job_id: str) -> Dict[str, Any]:
+    """Finalize a successful execution without touching the user's balance again."""
     ensure_coding_quote_tables()
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(_quote_select_sql(for_update=True), (str(job_id),))
-        quote = _serialize_quote(cursor.fetchone())
-        if quote and quote.get("status") == "charged":
+        value = _serialize_quote(cursor.fetchone())
+        if not value:
+            raise CodingQuoteError("developer_coding_quote_missing", status=409)
+        if value.get("status") == "consumed":
+            conn.commit()
+            return value
+        if value.get("status") != "charged":
+            raise CodingQuoteError(
+                "developer_coding_quote_consume_conflict", status=409, quote=value
+            )
+        cursor.execute(
+            """
+            UPDATE velia_developer_coding_quotes
+            SET status='consumed', completed_at=%s WHERE job_id=%s
+            """,
+            (datetime.utcnow(), str(job_id)),
+        )
+        conn.commit()
+        return {**value, "status": "consumed"}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def mark_refund_pending(*, user_id: int, job_id: str) -> Dict[str, Any]:
+    """Persist refund intent before attempting the credit-back transaction."""
+    ensure_coding_quote_tables()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(_quote_select_sql(for_update=True), (str(job_id),))
+        value = _serialize_quote(cursor.fetchone())
+        if not value or int(value.get("user_id") or 0) != int(user_id):
+            conn.commit()
+            return value
+        if value.get("status") == "charged":
             cursor.execute(
-                """
-                UPDATE velia_developer_coding_quotes
-                SET status='consumed', completed_at=%s WHERE job_id=%s
-                """,
-                (datetime.utcnow(), str(job_id)),
+                "UPDATE velia_developer_coding_quotes SET status='refund_pending' WHERE job_id=%s",
+                (str(job_id),),
             )
             conn.commit()
-            quote["status"] = "consumed"
-            return quote
+            return {**value, "status": "refund_pending"}
         conn.commit()
-        return quote
+        return value
     except Exception:
         conn.rollback()
         raise
@@ -289,20 +372,24 @@ def consume_quote(job_id: str) -> Dict[str, Any]:
 
 
 def refund_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
-    """Refund a charged quote when Coding Agent did not complete successfully."""
+    """Refund exactly once; both charged and durable refund_pending are retryable."""
     ensure_coding_quote_tables()
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(_quote_select_sql(for_update=True), (str(job_id),))
-        quote = _serialize_quote(cursor.fetchone())
-        if not quote or int(quote.get("user_id") or 0) != int(user_id):
+        value = _serialize_quote(cursor.fetchone())
+        if not value or int(value.get("user_id") or 0) != int(user_id):
             conn.commit()
-            return quote
-        if quote.get("status") != "charged":
+            return value
+        if value.get("status") == "refunded":
             conn.commit()
-            return quote
-        charged = int(quote.get("charged_tokens") or quote.get("quoted_tokens") or 0)
+            return value
+        if value.get("status") not in {"charged", "refund_pending"}:
+            conn.commit()
+            return value
+
+        charged = int(value.get("charged_tokens") or value.get("quoted_tokens") or 0)
         _user_balance(cursor, int(user_id), for_update=True)
         cursor.execute(
             "UPDATE users SET token_balance=token_balance+%s WHERE user_id=%s",
@@ -316,13 +403,69 @@ def refund_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
             (datetime.utcnow(), str(job_id)),
         )
         conn.commit()
-        return {**quote, "status": "refunded"}
+        return {**value, "status": "refunded"}
     except Exception:
         conn.rollback()
         raise
     finally:
         cursor.close()
         conn.close()
+
+
+def reconcile_quotes_for_user(*, user_id: int, conversation_id: str) -> Dict[str, int]:
+    """Best-effort durable reconciliation for completed/failed Coding Agent jobs.
+
+    A charged quote whose job completed should become consumed. A charged or
+    refund_pending quote whose job ended in error/cancelled should be refunded.
+    This is safe to invoke before later coding interactions and makes transient
+    post-write billing failures recoverable without re-running the code task.
+    """
+    ensure_coding_quote_tables()
+    conn = get_connection()
+    cursor = conn.cursor()
+    rows: List[Any] = []
+    try:
+        cursor.execute(
+            """
+            SELECT q.job_id, q.status, j.status
+            FROM velia_developer_coding_quotes q
+            JOIN velia_developer_coding_jobs j ON j.job_id=q.job_id
+            WHERE q.user_id=%s AND q.conversation_id=%s
+              AND q.status IN ('charged','refund_pending')
+              AND j.status IN ('completed','error','cancelled')
+            ORDER BY q.created_at ASC
+            LIMIT 20
+            """,
+            (int(user_id), str(conversation_id)),
+        )
+        rows = list(cursor.fetchall() or [])
+    finally:
+        cursor.close()
+        conn.close()
+
+    consumed = 0
+    refunded = 0
+    failed = 0
+    for row in rows:
+        job_id = str(_row_value(row, "job_id", 0, "") or "")
+        job_status = str(_row_value(row, "job_status", 2, "") or "")
+        try:
+            if job_status == "completed":
+                consume_quote(job_id)
+                consumed += 1
+            else:
+                mark_refund_pending(user_id=int(user_id), job_id=job_id)
+                refund_quote(user_id=int(user_id), job_id=job_id)
+                refunded += 1
+        except Exception:
+            failed += 1
+            logger.exception(
+                "VELIA_CODING_QUOTE_RECONCILE_FAILED job_id=%s user_id=%s job_status=%s",
+                job_id,
+                int(user_id),
+                job_status,
+            )
+    return {"consumed": consumed, "refunded": refunded, "failed": failed}
 
 
 def cancel_quote(job_id: str) -> None:
@@ -367,11 +510,31 @@ def insufficient_text(message: str, quote: Mapping[str, Any]) -> str:
     )
 
 
-def quote_text(message: str, quote: Mapping[str, Any]) -> str:
+def already_started_text(message: str, quote: Mapping[str, Any]) -> str:
     price = int(quote.get("quoted_tokens") or 0)
     if _russian(message):
-        return f"Стоимость выполнения всего плана — {price} VELIA-токенов. Выполняем?"
-    return f"The fixed price for executing the whole plan is {price} VELIA tokens. Proceed?"
+        return (
+            f"Этот план уже запущен после подтверждения стоимости {price} VELIA-токенов. "
+            "Повторное подтверждение не выполняется и повторного списания нет."
+        )
+    return (
+        f"This plan is already running after the {price} VELIA-token confirmation. "
+        "The duplicate approval was ignored and no second charge was made."
+    )
+
+
+def quote_text(message: str, quote: Mapping[str, Any]) -> str:
+    price = int(quote.get("quoted_tokens") or 0)
+    balance = int(quote.get("balance_tokens") or 0)
+    if _russian(message):
+        return (
+            f"Стоимость выполнения всего плана — {price} VELIA-токенов. "
+            f"Баланс: {balance}. Выполняем?"
+        )
+    return (
+        f"The fixed price for executing the whole plan is {price} VELIA tokens. "
+        f"Balance: {balance}. Proceed?"
+    )
 
 
 def enrich_result_with_quote(
@@ -388,11 +551,11 @@ def enrich_result_with_quote(
     coding = presentation.get("coding") if isinstance(presentation.get("coding"), dict) else {}
     if not coding:
         return result
+
     value = dict(quote or {})
     if not value:
         job_id = str((result.get("developer_context") or {}).get("coding_job_id") or "")
         if not job_id:
-            # Presentation history/status can omit developer_context; resolve the newest quote.
             conn = get_connection()
             cursor = conn.cursor()
             try:
@@ -414,6 +577,7 @@ def enrich_result_with_quote(
             value = quote_for_job(job_id)
     if not value:
         return result
+
     coding = dict(coding)
     coding.update(
         {
@@ -424,7 +588,9 @@ def enrich_result_with_quote(
     )
     presentation = dict(presentation)
     presentation["coding"] = coding
-    if value.get("status") in {"insufficient", "cancelled", "refunded"}:
+    if value.get("status") in {
+        "insufficient", "charged", "consumed", "refund_pending", "refunded", "cancelled"
+    }:
         presentation["can_execute"] = False
         presentation["can_cancel"] = False
         presentation["execute_command"] = ""
