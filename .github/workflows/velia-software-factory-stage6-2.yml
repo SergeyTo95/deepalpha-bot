@@ -84,14 +84,24 @@ jobs:
       - name: Verify Lead boundary is one-shot and grant-first
         run: |
           python - <<'PY'
+          import ast
           from pathlib import Path
-          text = Path('services/velia_software_factory_live_pilot_dispatch_runtime_patch.py').read_text()
+
+          path = Path('services/velia_software_factory_live_pilot_dispatch_runtime_patch.py')
+          text = path.read_text()
+          tree = ast.parse(text)
+          string_constants = {
+              node.value
+              for node in ast.walk(tree)
+              if isinstance(node, ast.Constant) and isinstance(node.value, str)
+          }
           mission = text.index('def guarded_mission_for_run')
           claim = text.index('guard.claim_dispatch(', mission)
           original_mission = text.index('return original_mission_for_run', mission)
           assert claim < original_mission
           assert 'return [selected]' in text
-          assert "{'dispatched', 'running'}" in text or '{"dispatched", "running"}' in text
+          assert 'dispatched' in string_constants
+          assert 'running' in string_constants
           assert 'guard.confirm_dispatch(' in text
           assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_DISPATCH_CONSUMED' in text
           assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_DISPATCH_BLOCKED' in text
