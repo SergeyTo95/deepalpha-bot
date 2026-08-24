@@ -52,12 +52,15 @@ def _result(
     usage: Optional[Dict[str, Any]] = None,
     estimated_cost_usd: float = 0.0,
     job: Optional[Dict[str, Any]] = None,
+    conflict_blocked: bool = False,
 ) -> Dict[str, Any]:
     context: Dict[str, Any] = {
         "read_only": False,
         "approval_gated": True,
         "provider_neutral": True,
     }
+    if conflict_blocked:
+        context["conflict_blocked"] = True
     if job:
         context.update(
             {
@@ -166,13 +169,31 @@ def install(chat_module: Any) -> None:
                 request_id=request_id,
             )
 
+        active = planner.active_chat_job(int(user_id), str(conversation_id))
+
         # Coding Agent owns explicit software-change requests. Agent Core is
         # installed outside the Developer/Coding layer and otherwise a phrase
-        # such as "create a task to fix an Android bug" also matches the generic
-        # task planner first. Delegate before reading/creating an Agent Core job
-        # so the existing Coding Agent planner, quote and approval gate remain
-        # the single source of truth. This handoff itself performs no GitHub write.
+        # such as "create a task to fix a bug" can match the generic task planner
+        # first. Preserve exclusivity of an already-active personal Agent plan;
+        # otherwise delegate to the existing Coding Agent planner/quote gate.
+        # This handoff itself performs no GitHub write and charges no tokens.
         if coding_service.is_coding_request(message):
+            if active:
+                russian = bool(re.search(r"[А-Яа-яЁё]", message))
+                text = (
+                    "В этом чате уже активен личный план Велии. Сначала выполни или отмени его, затем начинай работу с кодом."
+                    if russian
+                    else "This chat already has an active personal VELIA plan. Execute or cancel it before starting coding work."
+                )
+                return _result(
+                    text,
+                    request_id,
+                    reason="velia_agent_chat_job_active",
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                    job=active,
+                    conflict_blocked=True,
+                )
             return original_generate(
                 prompt,
                 user_id=user_id,
@@ -180,7 +201,6 @@ def install(chat_module: Any) -> None:
                 request_id=request_id,
             )
 
-        active = planner.active_chat_job(int(user_id), str(conversation_id))
         if not planner.should_handle(message, has_active_job=bool(active)):
             return original_generate(
                 prompt,
