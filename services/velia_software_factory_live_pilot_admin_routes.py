@@ -134,7 +134,8 @@ def _render_page(
       <div class='action-box'>
         {_field('run_id', 'Run ID', run_id)}
         {_field('repository', 'Exact repository', repository)}
-        {_field('confirmation', 'Type exact confirmation', arm_confirmation)}
+        <div class='hint'>Type exactly: <code>{_e(arm_confirmation or 'Inspect a run first')}</code></div>
+        {_field('confirmation', 'Type exact confirmation')}
         <label class='confirm'><input type='checkbox' name='confirmed' value='yes' required> I confirm this exact one-shot grant</label>
         <button class='primary' type='submit' data-confirm='Arm one one-shot Factory pilot grant?'>Arm grant</button>
       </div>
@@ -161,7 +162,8 @@ def _render_page(
           {_field('repository', 'Exact repository', repository)}
           {_field('grant_id', 'Exact grant ID', grant_id)}
         </div>
-        {_field('confirmation', 'Type exact dispatch confirmation', dispatch_confirmation)}
+        <div class='hint'>Type exactly: <code>{_e(dispatch_confirmation or 'Inspect an armed grant first')}</code></div>
+        {_field('confirmation', 'Type exact dispatch confirmation')}
         <label class='confirm'><input type='checkbox' name='confirmed' value='yes' required> I confirm one live Coding Autopilot dispatch</label>
         <button class='danger' type='submit' data-confirm='Dispatch exactly one live Coding Autopilot task for this Factory run?'>Dispatch one task</button>
       </div>
