@@ -186,7 +186,7 @@ def setup_factory_pilot_admin_routes(
 
     async def factory_pilot_page(request: web.Request) -> web.Response:
         denied = await guard(request)
-        if denied:
+        if denied is not None:
             return denied
         admin_user_id = _admin_id(request)
         status = await asyncio.to_thread(control.public_status, admin_user_id)
@@ -222,7 +222,7 @@ def setup_factory_pilot_admin_routes(
 
     async def factory_pilot_action(request: web.Request) -> web.StreamResponse:
         denied = await guard(request)
-        if denied:
+        if denied is not None:
             return denied
         admin_user_id = _admin_id(request)
         form = await request.post()
