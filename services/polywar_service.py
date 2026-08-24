@@ -47,6 +47,16 @@ def _is_sqlite(conn) -> bool:
     return base.__class__.__module__.startswith("sqlite3")
 
 
+def _cursor_connection(cursor):
+    connection = getattr(cursor, "connection", None)
+    if connection is not None:
+        return connection
+    inner = getattr(cursor, "inner", None)
+    if inner is not None:
+        return getattr(inner, "connection", None)
+    return None
+
+
 def _iso(dt: Any) -> Optional[str]:
     if not dt:
         return None
@@ -119,21 +129,23 @@ def is_enabled() -> bool:
 
 
 def _execute(cursor, sql: str, params=()):
-    rendered = sql
+    connection = _cursor_connection(cursor)
+    sqlite_backend = connection is not None and _is_sqlite(connection)
+    rendered = sql.replace("%s", "?") if sqlite_backend else sql
+    attempts = 30 if sqlite_backend else 1
     last_error = None
-    for attempt in range(30):
+
+    for attempt in range(attempts):
         try:
             return cursor.execute(rendered, params)
         except Exception as exc:
-            text = str(exc).lower()
             last_error = exc
-            if "%s" in rendered:
-                rendered = rendered.replace("%s", "?")
-                continue
-            if "locked" in text:
-                time.sleep(0.025 * (attempt + 1))
-                continue
-            raise
+            if not sqlite_backend or "locked" not in str(exc).lower():
+                raise
+            if attempt >= attempts - 1:
+                break
+            time.sleep(0.025 * (attempt + 1))
+
     raise last_error
 
 

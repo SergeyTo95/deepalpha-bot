@@ -905,10 +905,22 @@ def update_squad_season_config(conn, season_id, *, move_interval_minutes=None, s
     _execute(conn.cursor(), f"UPDATE polywar_squad_season_config SET {','.join(fields)},updated_at=%s WHERE season_id=%s", tuple(vals))
     return ensure_squad_season_config(conn, season_id)
 
+def _maintenance_schema_ready(conn):
+    c=conn.cursor()
+    if _is_sqlite(conn):
+        row=_fetchone(c,"SELECT name FROM sqlite_master WHERE type='table' AND name=%s LIMIT 1",('polywar_seasons',))
+        return bool(row)
+    row=_fetchone(c,'SELECT to_regclass(%s) AS table_name',('polywar_seasons',))
+    return bool(row and row.get('table_name'))
+
 def run_squad_maintenance_once(now=None):
     conn=polywar.get_connection(); ok=False; now=now or _now()
     try:
         c=conn.cursor(); polywar.begin_serialized_transaction(conn)
+        if not _maintenance_schema_ready(conn):
+            conn.commit(); ok=True
+            logger.debug('polywar_squad_maintenance_skipped_schema_uninitialized')
+            return {'ok':True,'processed':False,'reason':'no_active_season'}
         season=_fetchone(c,"SELECT * FROM polywar_seasons WHERE status=%s ORDER BY starts_at DESC LIMIT 1"+('' if _is_sqlite(conn) else ' FOR UPDATE'),('active',))
         if not season:
             conn.commit(); ok=True; return {'ok':True,'processed':False,'reason':'no_active_season'}
