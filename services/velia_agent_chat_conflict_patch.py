@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, Dict, Optional
 
@@ -29,6 +30,18 @@ _MOBILE_APPROVAL_RE = re.compile(
     r")\s*[.!]?\s*$",
     re.IGNORECASE,
 )
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _quote_enabled() -> bool:
+    # Billing changes are fail-closed until a separate production rollout decision.
+    return _env_bool("VELIA_DEVELOPER_CODING_TOKEN_QUOTE_ENABLED", False)
 
 
 def _install_mobile_approval_aliases() -> None:
@@ -141,6 +154,63 @@ def _text(message: str, kind: str) -> str:
     )
 
 
+def _decorate_quote_presentation(
+    result: Dict[str, Any],
+    *,
+    quote: Dict[str, Any],
+    user_id: int,
+    conversation_id: str,
+    request_id: str,
+    message: str,
+) -> Dict[str, Any]:
+    if not quote:
+        return result
+    context = result.get("agent_context") if isinstance(result.get("agent_context"), dict) else {}
+    presentation = context.get("presentation") if isinstance(context.get("presentation"), dict) else {}
+    coding = presentation.get("coding") if isinstance(presentation.get("coding"), dict) else {}
+    if not coding:
+        return result
+    price = int(quote.get("quoted_tokens") or 0)
+    balance = int(quote.get("balance_tokens") or 0)
+    status = str(quote.get("status") or "")
+    russian = bool(re.search(r"[А-Яа-яЁё]", str(message or "")))
+    if status == "pending":
+        line = (
+            f"Стоимость выполнения всего плана — {price} VELIA-токенов. Баланс: {balance}. Выполняем?"
+            if russian
+            else f"Fixed price for the whole plan: {price} VELIA tokens. Balance: {balance}. Proceed?"
+        )
+    elif status == "insufficient":
+        line = coding_quote.insufficient_text(message, quote)
+    elif status == "consumed":
+        line = (
+            f"За выполнение плана списано {price} VELIA-токенов."
+            if russian else f"{price} VELIA tokens were charged for this coding plan."
+        )
+    elif status == "refunded":
+        line = (
+            f"Выполнение не завершилось успешно; {price} VELIA-токенов возвращены на баланс."
+            if russian else f"Execution did not complete successfully; {price} VELIA tokens were refunded."
+        )
+    else:
+        line = ""
+    if line:
+        summary = str(presentation.get("summary") or "").strip()
+        presentation = dict(presentation)
+        presentation["summary"] = (summary + ("\n\n" if summary else "") + line)[:1800]
+        context = dict(context)
+        context["presentation"] = presentation
+        result["agent_context"] = context
+        if str(request_id or "").strip():
+            developer_presentation.presentation_store.persist_context_best_effort(
+                request_id=str(request_id),
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+                context=context,
+            )
+    return result
+
+
 def install(chat_module: Any) -> None:
     if getattr(chat_module, "_velia_agent_chat_conflict_patch_installed", False):
         return
@@ -161,6 +231,7 @@ def install(chat_module: Any) -> None:
         had_reset = hasattr(stream_context, "on_reset")
         original_delta = getattr(stream_context, "on_delta", None)
         original_reset = getattr(stream_context, "on_reset", None)
+        pricing_enabled = _quote_enabled()
         coding_scope = bool(
             _REPOSITORY_SCOPE_RE.search(message)
             or coding_service.is_coding_request(message)
@@ -168,10 +239,14 @@ def install(chat_module: Any) -> None:
             or coding_service.is_cancel(message)
             or coding_service.is_status_request(message)
         )
-        coding_job_before = coding_service.active_job(int(user_id), str(conversation_id))
+        coding_job_before = (
+            coding_service.active_job(int(user_id), str(conversation_id))
+            if pricing_enabled and coding_scope
+            else None
+        )
         charged_quote: Dict[str, Any] = {}
 
-        if coding_job_before and _coding_approval(message):
+        if pricing_enabled and coding_job_before and _coding_approval(message):
             try:
                 quote = coding_quote.quote_for_job(str(coding_job_before.get("job_id") or ""))
                 if not quote:
@@ -206,13 +281,21 @@ def install(chat_module: Any) -> None:
                         request_id=str(request_id or ""),
                         message=str(message or ""),
                     )
-                    return coding_quote.enrich_result_with_quote(
+                    enriched = coding_quote.enrich_result_with_quote(
                         enriched,
                         user_id=int(user_id),
                         conversation_id=str(conversation_id),
                         request_id=str(request_id or ""),
                         message=message,
                         quote=quote,
+                    )
+                    return _decorate_quote_presentation(
+                        enriched,
+                        quote=quote,
+                        user_id=int(user_id),
+                        conversation_id=str(conversation_id),
+                        request_id=str(request_id or ""),
+                        message=message,
                     )
                 raise
 
@@ -262,9 +345,13 @@ def install(chat_module: Any) -> None:
 
         reason = str(result.get("reason") or "")
         quote: Dict[str, Any] = {}
-        job_after = coding_service.active_job(int(user_id), str(conversation_id))
+        job_after = (
+            coding_service.active_job(int(user_id), str(conversation_id))
+            if pricing_enabled and (coding_scope or reason.startswith("developer_coding_"))
+            else None
+        )
 
-        if reason == "developer_coding_plan_ready" and job_after:
+        if pricing_enabled and reason == "developer_coding_plan_ready" and job_after:
             try:
                 quote = coding_quote.create_quote(
                     user_id=int(user_id),
@@ -310,7 +397,7 @@ def install(chat_module: Any) -> None:
                 else:
                     result["text"] = str(result.get("text") or "").rstrip() + "\n\n" + coding_quote.quote_text(message, quote)
 
-        if coding_job_before and reason == "developer_coding_cancelled":
+        if pricing_enabled and coding_job_before and reason == "developer_coding_cancelled":
             try:
                 coding_quote.cancel_quote(str(coding_job_before.get("job_id") or ""))
             except Exception:
@@ -344,13 +431,23 @@ def install(chat_module: Any) -> None:
             request_id=str(request_id or ""),
             message=str(message or ""),
         )
-        return coding_quote.enrich_result_with_quote(
+        if not pricing_enabled:
+            return enriched
+        enriched = coding_quote.enrich_result_with_quote(
             enriched,
             user_id=int(user_id),
             conversation_id=str(conversation_id),
             request_id=str(request_id or ""),
             message=message,
             quote=quote,
+        )
+        return _decorate_quote_presentation(
+            enriched,
+            quote=quote,
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            request_id=str(request_id or ""),
+            message=message,
         )
 
     def generate_without_plan_conflicts(
