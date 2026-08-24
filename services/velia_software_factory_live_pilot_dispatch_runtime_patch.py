@@ -152,20 +152,20 @@ def install(factory_module: Any = None) -> bool:
 
         def guarded_mission_for_run(user_id, run, spec, dag):
             ctx = _context()
-            if not ctx.get("active"):
+            if ctx.get("active"):
+                task_id = str(ctx.get("factory_task_id") or "")
+                request_id = str(ctx.get("client_request_id") or "")
+                if not task_id or not request_id:
+                    raise SoftwareFactoryError("velia_factory_live_pilot_dispatch_identity_required", status=409)
+                claimed = guard.claim_dispatch(
+                    int(user_id),
+                    run,
+                    ctx["project"],
+                    factory_task_id=task_id,
+                    client_request_id=request_id,
+                )
+                ctx["grant_id"] = str(claimed.get("grant_id") or "")
                 return original_mission_for_run(user_id, run, spec, dag)
-            task_id = str(ctx.get("factory_task_id") or "")
-            request_id = str(ctx.get("client_request_id") or "")
-            if not task_id or not request_id:
-                raise SoftwareFactoryError("velia_factory_live_pilot_dispatch_identity_required", status=409)
-            claimed = guard.claim_dispatch(
-                int(user_id),
-                run,
-                ctx["project"],
-                factory_task_id=task_id,
-                client_request_id=request_id,
-            )
-            ctx["grant_id"] = str(claimed.get("grant_id") or "")
             return original_mission_for_run(user_id, run, spec, dag)
 
         def guarded_enqueue_task(user_id, mission_id, instruction, *, priority=0, client_request_id=""):
