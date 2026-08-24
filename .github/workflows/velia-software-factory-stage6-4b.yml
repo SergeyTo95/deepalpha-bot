@@ -112,6 +112,7 @@ jobs:
               "services/velia_software_factory_live_pilot_admin_routes.py",
               "services/velia_software_factory_live_pilot_preflight_admin_routes.py",
               "tests/test_velia_software_factory_stage6_4b_preflight_control_center.py",
+              "tests/test_velia_software_factory_stage6_3b_control_center.py",
               ".github/workflows/velia-software-factory-stage6-4b.yml",
           }
           unexpected = changed - allowed
