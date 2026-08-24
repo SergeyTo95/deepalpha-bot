@@ -170,10 +170,12 @@ def _decorate_quote_presentation(
     coding = presentation.get("coding") if isinstance(presentation.get("coding"), dict) else {}
     if not coding:
         return result
+
     price = int(quote.get("quoted_tokens") or 0)
     balance = int(quote.get("balance_tokens") or 0)
     status = str(quote.get("status") or "")
     russian = bool(re.search(r"[А-Яа-яЁё]", str(message or "")))
+
     if status == "pending":
         line = (
             f"Стоимость выполнения всего плана — {price} VELIA-токенов. Баланс: {balance}. Выполняем?"
@@ -182,22 +184,34 @@ def _decorate_quote_presentation(
         )
     elif status == "insufficient":
         line = coding_quote.insufficient_text(message, quote)
+    elif status == "charged":
+        line = coding_quote.already_started_text(message, quote)
+    elif status == "refund_pending":
+        line = (
+            f"Возврат {price} VELIA-токенов за незавершённое выполнение поставлен в очередь."
+            if russian
+            else f"A refund of {price} VELIA tokens is pending reconciliation."
+        )
     elif status == "consumed":
         line = (
             f"За выполнение плана списано {price} VELIA-токенов."
-            if russian else f"{price} VELIA tokens were charged for this coding plan."
+            if russian
+            else f"{price} VELIA tokens were charged for this coding plan."
         )
     elif status == "refunded":
         line = (
             f"Выполнение не завершилось успешно; {price} VELIA-токенов возвращены на баланс."
-            if russian else f"Execution did not complete successfully; {price} VELIA tokens were refunded."
+            if russian
+            else f"Execution did not complete successfully; {price} VELIA tokens were refunded."
         )
     else:
         line = ""
+
     if line:
         summary = str(presentation.get("summary") or "").strip()
         presentation = dict(presentation)
-        presentation["summary"] = (summary + ("\n\n" if summary else "") + line)[:1800]
+        # Price / billing state goes first so Android's maxLines=5 cannot hide it.
+        presentation["summary"] = (line + ("\n\n" + summary if summary else ""))[:1800]
         context = dict(context)
         context["presentation"] = presentation
         result["agent_context"] = context
@@ -239,6 +253,21 @@ def install(chat_module: Any) -> None:
             or coding_service.is_cancel(message)
             or coding_service.is_status_request(message)
         )
+
+        if pricing_enabled and coding_scope:
+            try:
+                coding_quote.reconcile_quotes_for_user(
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                )
+            except Exception:
+                # Reconciliation is recoverable and must not block a read-only plan/status request.
+                logger.exception(
+                    "VELIA_CODING_QUOTE_RECONCILE_SWEEP_FAILED user_id=%s conversation_id=%s",
+                    int(user_id),
+                    str(conversation_id),
+                )
+
         coding_job_before = (
             coding_service.active_job(int(user_id), str(conversation_id))
             if pricing_enabled and coding_scope
@@ -297,9 +326,41 @@ def install(chat_module: Any) -> None:
                         request_id=str(request_id or ""),
                         message=message,
                     )
+                if exc.code == "developer_coding_quote_already_started":
+                    raw = _coding_result(
+                        text=coding_quote.already_started_text(message, quote),
+                        request_id=request_id,
+                        reason="developer_coding_already_started",
+                        job=coding_job_before,
+                        quote=quote,
+                    )
+                    enriched = developer_presentation.enrich_result_best_effort(
+                        raw,
+                        user_id=int(user_id),
+                        conversation_id=str(conversation_id),
+                        request_id=str(request_id or ""),
+                        message=str(message or ""),
+                    )
+                    enriched = coding_quote.enrich_result_with_quote(
+                        enriched,
+                        user_id=int(user_id),
+                        conversation_id=str(conversation_id),
+                        request_id=str(request_id or ""),
+                        message=message,
+                        quote=quote,
+                    )
+                    return _decorate_quote_presentation(
+                        enriched,
+                        quote=quote,
+                        user_id=int(user_id),
+                        conversation_id=str(conversation_id),
+                        request_id=str(request_id or ""),
+                        message=message,
+                    )
                 raise
 
         if coding_scope and callable(original_delta):
+
             def compact_delta(value: str) -> None:
                 compact = developer_presentation.compact_progress_text(value)
                 if callable(original_reset):
@@ -321,15 +382,28 @@ def install(chat_module: Any) -> None:
             )
         except Exception:
             if charged_quote and coding_job_before:
+                job_id = str(coding_job_before.get("job_id") or "")
                 try:
-                    coding_quote.refund_quote(
+                    coding_quote.mark_refund_pending(
                         user_id=int(user_id),
-                        job_id=str(coding_job_before.get("job_id") or ""),
+                        job_id=job_id,
                     )
                 except Exception:
                     logger.exception(
-                        "VELIA_CODING_QUOTE_REFUND_FAILED job_id=%s user_id=%s",
-                        str(coding_job_before.get("job_id") or ""),
+                        "VELIA_CODING_QUOTE_REFUND_PENDING_FAILED job_id=%s user_id=%s",
+                        job_id,
+                        int(user_id),
+                    )
+                try:
+                    coding_quote.refund_quote(
+                        user_id=int(user_id),
+                        job_id=job_id,
+                    )
+                except Exception:
+                    # A charged/refund_pending terminal job is picked up by reconciliation.
+                    logger.exception(
+                        "VELIA_CODING_QUOTE_REFUND_DEFERRED job_id=%s user_id=%s",
+                        job_id,
                         int(user_id),
                     )
             raise
@@ -390,12 +464,20 @@ def install(chat_module: Any) -> None:
                     )
                     result["reason"] = "developer_coding_insufficient_tokens"
                     result["text"] = coding_quote.insufficient_text(message, quote)
-                    developer_context = result.get("developer_context") if isinstance(result.get("developer_context"), dict) else {}
+                    developer_context = (
+                        result.get("developer_context")
+                        if isinstance(result.get("developer_context"), dict)
+                        else {}
+                    )
                     developer_context = dict(developer_context)
                     developer_context["write_pending_approval"] = False
                     result["developer_context"] = developer_context
                 else:
-                    result["text"] = str(result.get("text") or "").rstrip() + "\n\n" + coding_quote.quote_text(message, quote)
+                    result["text"] = (
+                        str(result.get("text") or "").rstrip()
+                        + "\n\n"
+                        + coding_quote.quote_text(message, quote)
+                    )
 
         if pricing_enabled and coding_job_before and reason == "developer_coding_cancelled":
             try:
@@ -407,22 +489,44 @@ def install(chat_module: Any) -> None:
                 )
 
         if charged_quote and coding_job_before:
+            job_id = str(coding_job_before.get("job_id") or "")
             if reason == "developer_coding_completed":
-                coding_quote.consume_quote(str(coding_job_before.get("job_id") or ""))
-                quote = coding_quote.quote_for_job(str(coding_job_before.get("job_id") or ""))
-            else:
                 try:
-                    quote = coding_quote.refund_quote(
-                        user_id=int(user_id),
-                        job_id=str(coding_job_before.get("job_id") or ""),
-                    )
+                    coding_quote.consume_quote(job_id)
+                    quote = coding_quote.quote_for_job(job_id)
                 except Exception:
+                    # GitHub execution already succeeded. Never convert success into a
+                    # client error; the charged+completed pair is reconciled later.
                     logger.exception(
-                        "VELIA_CODING_QUOTE_REFUND_FAILED job_id=%s user_id=%s",
-                        str(coding_job_before.get("job_id") or ""),
+                        "VELIA_CODING_QUOTE_CONSUME_DEFERRED job_id=%s user_id=%s",
+                        job_id,
                         int(user_id),
                     )
                     quote = charged_quote
+            else:
+                try:
+                    coding_quote.mark_refund_pending(
+                        user_id=int(user_id),
+                        job_id=job_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "VELIA_CODING_QUOTE_REFUND_PENDING_FAILED job_id=%s user_id=%s",
+                        job_id,
+                        int(user_id),
+                    )
+                try:
+                    quote = coding_quote.refund_quote(
+                        user_id=int(user_id),
+                        job_id=job_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "VELIA_CODING_QUOTE_REFUND_DEFERRED job_id=%s user_id=%s",
+                        job_id,
+                        int(user_id),
+                    )
+                    quote = {**charged_quote, "status": "refund_pending"}
 
         enriched = developer_presentation.enrich_result_best_effort(
             result,
@@ -483,7 +587,11 @@ def install(chat_module: Any) -> None:
         if agent_job and coding_job:
             return _result(_text(message, "both"), request_id, "velia_agent_chat_plan_conflict")
         if coding_job and agent_planner.is_agent_request(message):
-            return _result(_text(message, "coding_active"), request_id, "velia_agent_chat_coding_job_active")
+            return _result(
+                _text(message, "coding_active"),
+                request_id,
+                "velia_agent_chat_coding_job_active",
+            )
         if not agent_job and _REPOSITORY_SCOPE_RE.search(message):
             return call_inner_with_developer_presentation(
                 prompt,
@@ -505,7 +613,11 @@ def install(chat_module: Any) -> None:
             and _REPOSITORY_SCOPE_RE.search(message)
             and not (is_approval or is_cancel or is_status)
         ):
-            return _result(_text(message, "agent_active"), request_id, "velia_agent_chat_job_active")
+            return _result(
+                _text(message, "agent_active"),
+                request_id,
+                "velia_agent_chat_job_active",
+            )
         if (
             agent_job
             and agent_planner.is_agent_request(message)
