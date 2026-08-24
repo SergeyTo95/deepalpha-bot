@@ -39,7 +39,7 @@ def _presentation(result, **kwargs):
             "can_execute": result.get("reason") == "developer_coding_plan_ready",
             "can_cancel": result.get("reason") == "developer_coding_plan_ready",
             "execute_command": "Выполняй план" if result.get("reason") == "developer_coding_plan_ready" else "",
-            "cancel_command": "Отмени план" if result.get("reason") == "developer_coding_plan_ready" else "",
+            "cancel_command": "Отмени план" if result.get("reason") == "developer_coding_plan_plan_ready" else "",
             "actions": [],
             "coding": {"estimated_cost_usd": float(result.get("estimated_cost_usd") or 0.0)},
         }
@@ -251,7 +251,7 @@ def test_quote_summary_is_visible_to_current_android_schema(monkeypatch):
                 "can_cancel": True,
                 "execute_command": "Выполняй план",
                 "cancel_command": "Отмени план",
-                "coding": {},
+                "coding": {"estimated_cost_usd": 0.01},
             }
         }
     }
