@@ -1,0 +1,22 @@
+FROM ghcr.io/cirruslabs/android-sdk:36
+
+USER root
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl openssl python3 unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --fail --location --retry 3 \
+      https://services.gradle.org/distributions/gradle-9.5.0-bin.zip \
+      -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && rm /tmp/gradle.zip \
+    && /opt/gradle-9.5.0/bin/gradle --version
+
+COPY tools/railway_android_apk_builder.py /usr/local/bin/railway_android_apk_builder.py
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["python3", "/usr/local/bin/railway_android_apk_builder.py"]
