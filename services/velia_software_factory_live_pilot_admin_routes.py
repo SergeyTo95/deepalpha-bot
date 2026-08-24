@@ -10,6 +10,9 @@ from aiohttp import web
 from services import velia_software_factory_live_pilot_control_service as control
 from services.velia_admin_security_service import record_admin_audit
 from services.velia_software_factory_core_service import SoftwareFactoryError
+from services.velia_software_factory_live_pilot_preflight_admin_routes import (
+    setup_factory_pilot_preflight_admin_routes,
+)
 
 
 GuardFn = Callable[[web.Request], Awaitable[Optional[web.StreamResponse]]]
@@ -330,4 +333,10 @@ def setup_factory_pilot_admin_routes(
 
     app.router.add_get("/admin/factory-pilot", factory_pilot_page)
     app.router.add_post("/admin/factory-pilot/actions/{action}", factory_pilot_action)
+    setup_factory_pilot_preflight_admin_routes(
+        app,
+        guard=guard,
+        layout=layout,
+        key=key,
+    )
     app["velia_factory_pilot_admin_routes_installed"] = True
