@@ -72,6 +72,7 @@ jobs:
           bootstrap = Path("run_web_process.py").read_text(encoding="utf-8")
 
           assert 'app.router.add_get("/admin/factory-pilot/preflight"' in route
+          assert route.count("app.router.add_get(") == 1
           assert "app.router.add_post(" not in route
           assert "request.post(" not in route
           assert "record_admin_audit" not in route
@@ -92,6 +93,7 @@ jobs:
           assert "guard=guard" in parent
           assert "layout=layout" in parent
           assert "key=key" in parent
+          assert parent.count('app.router.add_post("/admin/factory-pilot/actions/{action}"') == 1
 
           # Stage 6.4b deliberately reuses the already-mounted Factory Pilot
           # installer and must not broaden the global web bootstrap.
