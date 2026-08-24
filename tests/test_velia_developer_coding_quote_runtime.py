@@ -17,15 +17,28 @@ JOB = {
 
 def _patch_router(monkeypatch, *, message, active_job):
     monkeypatch.setattr(runtime.agent_planner, "chat_agent_enabled", lambda: True)
-    monkeypatch.setattr(runtime.agent_patch, "_latest_request_user_message", lambda request_id, user_id: message)
+    monkeypatch.setattr(
+        runtime.agent_patch,
+        "_latest_request_user_message",
+        lambda request_id, user_id: message,
+    )
     monkeypatch.setattr(runtime.agent_planner, "active_chat_job", lambda *args: None)
     monkeypatch.setattr(runtime.agent_planner, "is_agent_request", lambda value: False)
     monkeypatch.setattr(runtime.agent_planner, "is_cancel", lambda value: False)
     monkeypatch.setattr(runtime.agent_planner, "is_status", lambda value: False)
-    monkeypatch.setattr(runtime.coding_service, "is_coding_request", lambda value: "endpoint" in value.lower())
+    monkeypatch.setattr(
+        runtime.coding_service,
+        "is_coding_request",
+        lambda value: "endpoint" in value.lower(),
+    )
     monkeypatch.setattr(runtime.coding_service, "is_cancel", lambda value: False)
     monkeypatch.setattr(runtime.coding_service, "is_status_request", lambda value: False)
     monkeypatch.setattr(runtime.coding_service, "active_job", active_job)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "reconcile_quotes_for_user",
+        lambda **kwargs: {"consumed": 0, "refunded": 0, "failed": 0},
+    )
 
 
 def _presentation(result, **kwargs):
@@ -33,13 +46,29 @@ def _presentation(result, **kwargs):
     value["agent_context"] = {
         "presentation": {
             "schema_version": 2,
-            "kind": "coding_plan" if result.get("reason") == "developer_coding_plan_ready" else "coding_completed",
+            "kind": (
+                "coding_plan"
+                if result.get("reason") == "developer_coding_plan_ready"
+                else "coding_completed"
+            ),
             "summary": "Implement feature",
-            "status": "planned" if result.get("reason") == "developer_coding_plan_ready" else "completed",
+            "status": (
+                "planned"
+                if result.get("reason") == "developer_coding_plan_ready"
+                else "completed"
+            ),
             "can_execute": result.get("reason") == "developer_coding_plan_ready",
             "can_cancel": result.get("reason") == "developer_coding_plan_ready",
-            "execute_command": "Выполняй план" if result.get("reason") == "developer_coding_plan_ready" else "",
-            "cancel_command": "Отмени план" if result.get("reason") == "developer_coding_plan_plan_ready" else "",
+            "execute_command": (
+                "Выполняй план"
+                if result.get("reason") == "developer_coding_plan_ready"
+                else ""
+            ),
+            "cancel_command": (
+                "Отмени план"
+                if result.get("reason") == "developer_coding_plan_ready"
+                else ""
+            ),
             "actions": [],
             "coding": {"estimated_cost_usd": float(result.get("estimated_cost_usd") or 0.0)},
         }
@@ -60,6 +89,11 @@ def test_disabled_quote_gate_preserves_existing_coding_flow(monkeypatch):
         runtime.coding_quote,
         "charge_quote",
         lambda **kwargs: pytest.fail("disabled quote gate must not touch billing"),
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "reconcile_quotes_for_user",
+        lambda **kwargs: pytest.fail("disabled quote gate must not reconcile billing"),
     )
     monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
 
@@ -91,29 +125,35 @@ def test_approval_charges_before_inner_coding_execution_and_consumes_on_success(
         message="Выполни план",
         active_job=lambda *args: next(active_values, None),
     )
-    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: {
-        "job_id": job_id,
+    pending = {
+        "job_id": "job-1",
         "user_id": 7,
         "quoted_tokens": 120,
         "balance_tokens": 500,
         "status": "pending",
-    })
+    }
+    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: pending)
 
     def charge(**kwargs):
         events.append("charge")
-        return {
-            "job_id": "job-1",
-            "user_id": 7,
-            "quoted_tokens": 120,
-            "balance_tokens": 500,
-            "status": "charged",
-            "charged_tokens": 120,
-        }
+        return {**pending, "status": "charged", "charged_tokens": 120}
 
     monkeypatch.setattr(runtime.coding_quote, "charge_quote", charge)
-    monkeypatch.setattr(runtime.coding_quote, "consume_quote", lambda job_id: events.append("consume") or {})
-    monkeypatch.setattr(runtime.coding_quote, "refund_quote", lambda **kwargs: events.append("refund") or {})
-    monkeypatch.setattr(runtime.coding_quote, "enrich_result_with_quote", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "consume_quote",
+        lambda job_id: events.append("consume") or {**pending, "status": "consumed"},
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "refund_quote",
+        lambda **kwargs: events.append("refund") or {},
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "enrich_result_with_quote",
+        lambda result, **kwargs: result,
+    )
     monkeypatch.setattr(runtime, "_decorate_quote_presentation", lambda result, **kwargs: result)
     monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
 
@@ -154,7 +194,11 @@ def test_insufficient_balance_cancels_before_inner_execution(monkeypatch):
         "balance_tokens": 50,
         "status": "insufficient",
     }
-    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: {**quote_value, "status": "pending"})
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "quote_for_job",
+        lambda job_id: {**quote_value, "status": "pending"},
+    )
 
     def insufficient(**kwargs):
         raise runtime.coding_quote.CodingQuoteError(
@@ -163,8 +207,16 @@ def test_insufficient_balance_cancels_before_inner_execution(monkeypatch):
 
     monkeypatch.setattr(runtime.coding_quote, "charge_quote", insufficient)
     updates = []
-    monkeypatch.setattr(runtime.coding_service, "_update_job", lambda job_id, **fields: updates.append((job_id, fields)))
-    monkeypatch.setattr(runtime.coding_quote, "enrich_result_with_quote", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        runtime.coding_service,
+        "_update_job",
+        lambda job_id, **fields: updates.append((job_id, fields)),
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "enrich_result_with_quote",
+        lambda result, **kwargs: result,
+    )
     monkeypatch.setattr(runtime, "_decorate_quote_presentation", lambda result, **kwargs: result)
     monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
 
@@ -183,7 +235,51 @@ def test_insufficient_balance_cancels_before_inner_execution(monkeypatch):
     assert updates[-1][1]["error_code"] == "developer_coding_insufficient_tokens"
 
 
-def test_failed_execution_refunds_charged_quote(monkeypatch):
+def test_duplicate_approval_for_charged_quote_never_reenters_execution_or_refunds(monkeypatch):
+    monkeypatch.setattr(runtime, "_quote_enabled", lambda: True)
+    _patch_router(monkeypatch, message="Выполни план", active_job=lambda *args: JOB)
+    charged = {
+        "job_id": "job-1",
+        "user_id": 7,
+        "quoted_tokens": 120,
+        "balance_tokens": 500,
+        "status": "charged",
+        "charged_tokens": 120,
+    }
+    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: charged)
+
+    def duplicate(**kwargs):
+        raise runtime.coding_quote.CodingQuoteError(
+            "developer_coding_quote_already_started", status=409, quote=charged
+        )
+
+    monkeypatch.setattr(runtime.coding_quote, "charge_quote", duplicate)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "refund_quote",
+        lambda **kwargs: pytest.fail("duplicate approval must not refund"),
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "enrich_result_with_quote",
+        lambda result, **kwargs: result,
+    )
+    monkeypatch.setattr(runtime, "_decorate_quote_presentation", lambda result, **kwargs: result)
+    monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
+    module = SimpleNamespace(
+        generate_velia_chat_result=lambda *args, **kwargs: pytest.fail(
+            "duplicate approval must not execute"
+        )
+    )
+    runtime.install(module)
+    result = module.generate_velia_chat_result(
+        "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1"
+    )
+
+    assert result["reason"] == "developer_coding_already_started"
+
+
+def test_failed_execution_marks_refund_pending_then_refunds(monkeypatch):
     monkeypatch.setattr(runtime, "_quote_enabled", lambda: True)
     active_values = iter([JOB, JOB, None])
     _patch_router(
@@ -191,29 +287,42 @@ def test_failed_execution_refunds_charged_quote(monkeypatch):
         message="Выполни план",
         active_job=lambda *args: next(active_values, None),
     )
-    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: {
-        "job_id": job_id,
-        "user_id": 7,
-        "quoted_tokens": 120,
-        "balance_tokens": 500,
-        "status": "pending",
-    })
-    monkeypatch.setattr(runtime.coding_quote, "charge_quote", lambda **kwargs: {
+    pending = {
         "job_id": "job-1",
         "user_id": 7,
         "quoted_tokens": 120,
         "balance_tokens": 500,
-        "status": "charged",
-        "charged_tokens": 120,
-    })
+        "status": "pending",
+    }
+    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: pending)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "charge_quote",
+        lambda **kwargs: {**pending, "status": "charged", "charged_tokens": 120},
+    )
     events = []
-    monkeypatch.setattr(runtime.coding_quote, "refund_quote", lambda **kwargs: events.append("refund") or {
-        "quoted_tokens": 120,
-        "balance_tokens": 500,
-        "status": "refunded",
-    })
-    monkeypatch.setattr(runtime.coding_quote, "consume_quote", lambda job_id: pytest.fail("failed execution must not consume quote"))
-    monkeypatch.setattr(runtime.coding_quote, "enrich_result_with_quote", lambda result, **kwargs: result)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "mark_refund_pending",
+        lambda **kwargs: events.append("refund_pending")
+        or {**pending, "status": "refund_pending", "charged_tokens": 120},
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "refund_quote",
+        lambda **kwargs: events.append("refund")
+        or {**pending, "status": "refunded", "charged_tokens": 120},
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "consume_quote",
+        lambda job_id: pytest.fail("failed execution must not consume quote"),
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "enrich_result_with_quote",
+        lambda result, **kwargs: result,
+    )
     monkeypatch.setattr(runtime, "_decorate_quote_presentation", lambda result, **kwargs: result)
     monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
 
@@ -231,11 +340,68 @@ def test_failed_execution_refunds_charged_quote(monkeypatch):
     result = module.generate_velia_chat_result(
         "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1"
     )
+
     assert result["reason"] == "developer_coding_failed"
-    assert events == ["refund"]
+    assert events == ["refund_pending", "refund"]
 
 
-def test_quote_summary_is_visible_to_current_android_schema(monkeypatch):
+def test_successful_execution_survives_transient_consume_failure(monkeypatch):
+    monkeypatch.setattr(runtime, "_quote_enabled", lambda: True)
+    active_values = iter([JOB, JOB, None])
+    _patch_router(
+        monkeypatch,
+        message="Выполни план",
+        active_job=lambda *args: next(active_values, None),
+    )
+    pending = {
+        "job_id": "job-1",
+        "user_id": 7,
+        "quoted_tokens": 120,
+        "balance_tokens": 500,
+        "status": "pending",
+    }
+    monkeypatch.setattr(runtime.coding_quote, "quote_for_job", lambda job_id: pending)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "charge_quote",
+        lambda **kwargs: {**pending, "status": "charged", "charged_tokens": 120},
+    )
+
+    def fail_consume(job_id):
+        raise RuntimeError("transient database failure")
+
+    monkeypatch.setattr(runtime.coding_quote, "consume_quote", fail_consume)
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "refund_quote",
+        lambda **kwargs: pytest.fail("successful execution must not refund"),
+    )
+    monkeypatch.setattr(
+        runtime.coding_quote,
+        "enrich_result_with_quote",
+        lambda result, **kwargs: result,
+    )
+    monkeypatch.setattr(runtime, "_decorate_quote_presentation", lambda result, **kwargs: result)
+    monkeypatch.setattr(runtime.developer_presentation, "enrich_result_best_effort", _presentation)
+
+    module = SimpleNamespace(
+        generate_velia_chat_result=lambda *args, **kwargs: {
+            "ok": True,
+            "provider": "velia_coding_agent",
+            "reason": "developer_coding_completed",
+            "request_id": kwargs.get("request_id"),
+            "text": "done",
+        }
+    )
+    runtime.install(module)
+    result = module.generate_velia_chat_result(
+        "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1"
+    )
+
+    assert result["reason"] == "developer_coding_completed"
+
+
+def test_quote_summary_price_is_first_for_current_android_card(monkeypatch):
     monkeypatch.setattr(
         runtime.developer_presentation.presentation_store,
         "persist_context_best_effort",
@@ -246,7 +412,7 @@ def test_quote_summary_is_visible_to_current_android_schema(monkeypatch):
             "presentation": {
                 "schema_version": 2,
                 "kind": "coding_plan",
-                "summary": "Добавить endpoint и тесты.",
+                "summary": "Добавить endpoint и тесты. " * 80,
                 "can_execute": True,
                 "can_cancel": True,
                 "execute_command": "Выполняй план",
@@ -264,6 +430,6 @@ def test_quote_summary_is_visible_to_current_android_schema(monkeypatch):
         message="Добавь endpoint",
     )
     summary = decorated["agent_context"]["presentation"]["summary"]
-    assert "120 VELIA-токенов" in summary
+    assert summary.startswith("Стоимость выполнения всего плана — 120 VELIA-токенов")
     assert "Баланс: 500" in summary
     assert "Выполняем?" in summary
