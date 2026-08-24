@@ -6,7 +6,9 @@ on:
       - feature/turbo-short-term-btc
     paths:
       - "services/polywar_service.py"
+      - "services/polywar_squad_service.py"
       - "tests/test_polywar_sql_execution.py"
+      - "tests/test_polywar_squad_maintenance_schema_ready.py"
       - ".github/workflows/polywar-sql-execution.yml"
   workflow_dispatch:
 
@@ -42,10 +44,18 @@ jobs:
           fi
 
       - name: Compile Polywar SQL boundary
-        run: python -m py_compile services/polywar_service.py tests/test_polywar_sql_execution.py
+        run: |
+          python -m py_compile \
+            services/polywar_service.py \
+            services/polywar_squad_service.py \
+            tests/test_polywar_sql_execution.py \
+            tests/test_polywar_squad_maintenance_schema_ready.py
 
-      - name: Run SQL execution regressions
-        run: python -m pytest -q tests/test_polywar_sql_execution.py
+      - name: Run SQL and maintenance regressions
+        run: |
+          python -m pytest -q \
+            tests/test_polywar_sql_execution.py \
+            tests/test_polywar_squad_maintenance_schema_ready.py
 
       - name: Verify hotfix diff boundary
         if: github.event_name == 'pull_request'
@@ -58,7 +68,9 @@ jobs:
           changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
           allowed = {
               "services/polywar_service.py",
+              "services/polywar_squad_service.py",
               "tests/test_polywar_sql_execution.py",
+              "tests/test_polywar_squad_maintenance_schema_ready.py",
               ".github/workflows/polywar-sql-execution.yml",
           }
           unexpected = changed - allowed
