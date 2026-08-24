@@ -1,0 +1,125 @@
+name: VELIA Software Factory Stage 6.4a
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/velia_software_factory_live_pilot_preflight_service.py"
+      - "services/velia_software_factory_live_pilot_control_service.py"
+      - "services/velia_software_factory_live_pilot_guard_service.py"
+      - "services/velia_software_factory_rollout_service.py"
+      - "tests/test_velia_software_factory_stage6_4a_pilot_preflight.py"
+      - "tests/test_velia_software_factory_stage6_3_live_pilot_control.py"
+      - "tests/test_velia_software_factory_stage6_2_live_pilot_guard.py"
+      - ".github/workflows/velia-software-factory-stage6-4a.yml"
+  workflow_dispatch:
+
+jobs:
+  read-only-pilot-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile preflight boundary
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_live_pilot_preflight_service.py \
+            services/velia_software_factory_live_pilot_control_service.py \
+            services/velia_software_factory_live_pilot_guard_service.py \
+            services/velia_software_factory_rollout_service.py
+
+      - name: Run focused Stage 6 safety tests
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage6_4a_pilot_preflight.py \
+            tests/test_velia_software_factory_stage6_3_live_pilot_control.py \
+            tests/test_velia_software_factory_stage6_2_live_pilot_guard.py \
+            tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+
+      - name: Verify preflight is dormant and read-only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("services/velia_software_factory_live_pilot_preflight_service.py").read_text(encoding="utf-8")
+          bootstrap = Path("run_web_process.py").read_text(encoding="utf-8")
+          admin = Path("services/velia_software_factory_live_pilot_admin_routes.py").read_text(encoding="utf-8")
+
+          assert "preflight_candidate" in source
+          assert "factory.get_run(" in source
+          assert "project_service.get_project(" in source
+          assert "rollout.public_status(" in source
+          assert "guard.public_status(" in source
+
+          for forbidden in (
+              "advance_run(",
+              "issue_grant(",
+              "claim_dispatch(",
+              "confirm_dispatch(",
+              "get_grant(",
+              "get_connection(",
+          ):
+              assert forbidden not in source, forbidden
+
+          assert '"grant_read": False' in source
+          assert '"grant_issue": False' in source
+          assert '"dispatch": False' in source
+          assert '"environment_mutation": False' in source
+
+          # Stage 6.4a is core-only. No HTTP/bootstrap exposure until a separate
+          # reviewed binding stage.
+          assert "velia_software_factory_live_pilot_preflight_service" not in bootstrap
+          assert "preflight_candidate" not in admin
+          PY
+
+      - name: Verify diff stays inside Stage 6.4a boundary
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          base = "${{ github.event.pull_request.base.sha }}"
+          head = "${{ github.event.pull_request.head.sha }}"
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
+          allowed = {
+              "services/velia_software_factory_live_pilot_preflight_service.py",
+              "tests/test_velia_software_factory_stage6_4a_pilot_preflight.py",
+              ".github/workflows/velia-software-factory-stage6-4a.yml",
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f"unexpected Stage 6.4a files: {sorted(unexpected)}"
+          PY
+
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)(__pycache__/|.*\.pyc$)'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi
