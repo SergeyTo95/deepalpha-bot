@@ -102,11 +102,34 @@ def download_source(token: str, sha: str, destination: Path) -> None:
             tar.extract(member, source_dir, filter="data")
 
 
+def tune_build_memory(source_dir: Path) -> None:
+    properties = source_dir / "gradle.properties"
+    lines = properties.read_text(encoding="utf-8").splitlines()
+    filtered = [line for line in lines if not line.startswith("org.gradle.jvmargs=")]
+    filtered.extend(
+        [
+            "org.gradle.jvmargs=-Xmx5g -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8",
+            "org.gradle.workers.max=1",
+            "org.gradle.parallel=false",
+        ]
+    )
+    properties.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+    print("ANDROID_BUILD_MEMORY_TUNED heap=5g workers=1", flush=True)
+
+
 def run_build(source_dir: Path) -> Path:
+    tune_build_memory(source_dir)
     env = os.environ.copy()
     env.setdefault("GRADLE_USER_HOME", "/tmp/gradle-home")
     subprocess.run(
-        [GRADLE_BIN, "--no-daemon", "lintDebug", "testDebugUnitTest", "assembleDebug"],
+        [
+            GRADLE_BIN,
+            "--no-daemon",
+            "--max-workers=1",
+            "lintDebug",
+            "testDebugUnitTest",
+            "assembleDebug",
+        ],
         cwd=source_dir,
         env=env,
         check=True,
