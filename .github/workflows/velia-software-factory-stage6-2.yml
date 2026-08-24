@@ -1,0 +1,126 @@
+name: VELIA Software Factory Stage 6.2
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_live_pilot_guard_service.py'
+      - 'services/velia_software_factory_live_pilot_dispatch_runtime_patch.py'
+      - 'services/velia_software_factory_rollout_service.py'
+      - 'services/velia_software_factory_stage3_hardening_patch.py'
+      - 'tests/test_velia_software_factory_stage6_admin_pilot.py'
+      - 'tests/test_velia_software_factory_stage6_2_live_pilot_guard.py'
+      - 'tests/test_velia_software_factory_stage6_2_dispatch_runtime.py'
+      - '.env.example'
+      - '.github/workflows/velia-software-factory-stage6-2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-pilot-one-shot-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 6.2 modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_live_pilot_guard_service.py \
+            services/velia_software_factory_live_pilot_dispatch_runtime_patch.py \
+            services/velia_software_factory_rollout_service.py \
+            services/velia_software_factory_stage3_hardening_patch.py
+      - name: Run Stage 6.2 focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage6_admin_pilot.py \
+            tests/test_velia_software_factory_stage6_2_live_pilot_guard.py \
+            tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+      - name: Verify Stage 6.2 defaults fail closed
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_live_pilot_guard_service as guard
+          from services import velia_software_factory_rollout_service as rollout
+
+          for name in (
+              'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED',
+              'VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE',
+              'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED',
+              'VELIA_SOFTWARE_FACTORY_USER_IDS',
+          ):
+              os.environ.pop(name, None)
+          status = guard.public_status()
+          assert status['enabled'] is False
+          assert status['max_dispatches_per_run'] == 1
+          assert status['grant_required_before_autopilot_enqueue'] is True
+          assert status['repository_write_supported_by_guard'] is False
+          assert status['merge_supported_by_guard'] is False
+          assert status['deployment_supported_by_guard'] is False
+          assert rollout.live_execution_allowed(1) is False
+          PY
+      - name: Verify grant service has no repository or infrastructure write primitive
+        run: |
+          ! grep -nE 'velia_developer_github|github_service|write_service|merge_pull_request|merge_exact_head|Railway|railway|aiohttp|requests\.|httpx|urllib|create_deployment|redeploy' \
+            services/velia_software_factory_live_pilot_guard_service.py
+          grep -q 'UNIQUE(user_id, run_id)' services/velia_software_factory_live_pilot_guard_service.py
+          grep -q '"max_dispatches_per_run": 1' services/velia_software_factory_live_pilot_guard_service.py
+          grep -q '"max_dispatches": 1' services/velia_software_factory_live_pilot_guard_service.py
+          ! grep -q 'MAX_DISPATCH' services/velia_software_factory_live_pilot_guard_service.py
+      - name: Verify Lead boundary is one-shot and grant-first
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_dispatch_runtime_patch.py').read_text()
+          mission = text.index('def guarded_mission_for_run')
+          claim = text.index('guard.claim_dispatch(', mission)
+          original_mission = text.index('return original_mission_for_run', mission)
+          assert claim < original_mission
+          assert 'return [selected]' in text
+          assert "{'dispatched', 'running'}" in text or '{"dispatched", "running"}' in text
+          assert 'guard.confirm_dispatch(' in text
+          assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_DISPATCH_CONSUMED' in text
+          assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_DISPATCH_BLOCKED' in text
+          assert 'velia_factory_live_pilot_dispatch_budget_exhausted' in Path('services/velia_software_factory_live_pilot_guard_service.py').read_text()
+          PY
+      - name: Verify Stage 3 installs dispatch boundary before rollout capture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_stage3_hardening_patch.py').read_text()
+          assert text.index('live_pilot_dispatch.install(factory)') < text.index('rollout_runtime.install(factory, module)')
+          assert text.rstrip().endswith('install(autonomy)')
+          PY
+      - name: Verify admin live rollout requires guard but explicit allowlist remains compatible
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_rollout_service.py').read_text()
+          live = text[text.index('def live_execution_allowed'):text.index('def _admin_pilot_configured')]
+          assert 'explicit_user_allowed' in live
+          assert 'admin_pilot_user_allowed' in live
+          assert 'live_pilot_guard.live_pilot_guard_enabled()' in live
+          assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED' in text
+          assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED=false' in Path('.env.example').read_text()
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
