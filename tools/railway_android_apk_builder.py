@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 ANDROID_REPO = "SergeyTo95/deepalpha-android"
-DEFAULT_SHA = "c2205e4d477375ac79764694e2df90f01039fa98"
+DEFAULT_SHA = "3cc927d23a71a52b798e540a4db7a92932291c26"
 GRADLE_BIN = "/opt/gradle-9.5.0/bin/gradle"
 OUT_DIR = Path("/srv")
 
@@ -142,7 +142,7 @@ def run_build(source_dir: Path) -> Path:
 
 def serve_artifact(apk: Path, sha: str) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    output = OUT_DIR / "VELIA-debug-c2205e4.apk"
+    output = OUT_DIR / "VELIA-debug-3cc927d.apk"
     shutil.copy2(apk, output)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     metadata = {
