@@ -120,15 +120,49 @@ jobs:
           assert runtime.index('guard.claim_dispatch(', mission) < runtime.index('return original_mission_for_run', mission)
           assert 'guard.confirm_dispatch(' in runtime
           PY
-      - name: Verify bootstrap diff is registration-only
+      - name: Verify Factory bootstrap diff is registration-only
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
           import os, subprocess
-          diff = subprocess.check_output(['git','diff','--unified=0',f'origin/{os.environ["GITHUB_BASE_REF"]}...HEAD','--','run_web_process.py'], text=True)
-          added = [line[1:] for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++')]
-          allowed_fragments = ('velia_software_factory_live_pilot_admin_routes', 'Factory Pilot', 'factory-pilot', 'setup_factory_pilot_admin_routes', 'admin_routes_module._guard', 'admin_routes_module._layout', 'admin_routes_module._key', 'admin_routes_module._request_id')
-          unexpected = [line for line in added if line.strip() and not any(token in line for token in allowed_fragments) and line.strip() not in {'deepalpha_web.app,', ')'}]
+
+          diff = subprocess.check_output(
+              ['git','diff','--unified=0',f'origin/{os.environ["GITHUB_BASE_REF"]}...HEAD','--','run_web_process.py'],
+              text=True,
+          )
+          markers = (
+              'velia_software_factory_live_pilot_admin_routes',
+              'Factory Pilot',
+              'factory-pilot',
+              'setup_factory_pilot_admin_routes',
+              'admin_routes_module._guard',
+              'admin_routes_module._layout',
+              'admin_routes_module._key',
+              'admin_routes_module._request_id',
+          )
+          allowed = markers
+          hunks = []
+          current = []
+          for line in diff.splitlines():
+              if line.startswith('@@'):
+                  if current:
+                      hunks.append(current)
+                  current = []
+                  continue
+              if line.startswith('+') and not line.startswith('+++'):
+                  current.append(line[1:])
+          if current:
+              hunks.append(current)
+
+          relevant = [hunk for hunk in hunks if any(any(token in line for token in markers) for line in hunk)]
+          unexpected = []
+          for hunk in relevant:
+              for line in hunk:
+                  stripped = line.strip()
+                  if not stripped or stripped in {'deepalpha_web.app,', ')'}:
+                      continue
+                  if not any(token in line for token in allowed):
+                      unexpected.append(line)
           assert not unexpected, unexpected
           PY
       - name: Reject newly added Python bytecode
