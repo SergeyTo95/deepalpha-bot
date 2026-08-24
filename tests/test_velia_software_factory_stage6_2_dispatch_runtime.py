@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from services import velia_software_factory_live_pilot_dispatch_runtime_patch as runtime
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
@@ -34,7 +32,13 @@ class FakeDag:
         task.result = dict(result or {})
 
 
+_ORIGINAL_READY_TASKS = FakeDag.ready_tasks
+
+
 def _fake_factory(tasks, events):
+    # install() intentionally patches the TaskDAG class method permanently in a
+    # process. Restore the fake class for each unit test so wrappers never nest.
+    FakeDag.ready_tasks = _ORIGINAL_READY_TASKS
     factory = SimpleNamespace()
     factory.TaskDAG = FakeDag
     factory._dag = FakeDag(tasks)
