@@ -4,6 +4,7 @@ import os
 import re
 from typing import Dict, Iterable, Set
 
+from services import velia_software_factory_live_pilot_guard_service as live_pilot_guard
 from services.velia_admin_security_service import configured_admin_id
 
 
@@ -18,6 +19,7 @@ _ADMIN_PILOT_SOURCE_ENV = {
     "chat_beta": "VELIA_CHAT_BETA_USER_IDS",
     "mobile_debug": "VELIA_MOBILE_DEBUG_USER_IDS",
 }
+_LIVE_PILOT_GUARD_FLAG = "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED"
 
 _PLAN_FLAGS = (
     "VELIA_DEVELOPER_ENABLED",
@@ -132,7 +134,13 @@ def dry_run_enabled(user_id: int) -> bool:
 
 
 def live_execution_allowed(user_id: int) -> bool:
-    return rollout_mode() == ROLLOUT_LIVE and user_allowed(int(user_id))
+    if rollout_mode() != ROLLOUT_LIVE:
+        return False
+    if explicit_user_allowed(int(user_id)):
+        return True
+    if admin_pilot_user_allowed(int(user_id)):
+        return live_pilot_guard.live_pilot_guard_enabled()
+    return False
 
 
 def _admin_pilot_configured() -> bool:
@@ -140,9 +148,14 @@ def _admin_pilot_configured() -> bool:
 
 
 def supervisor_allowed() -> bool:
-    """Supervisor can exist only in live mode and only with an explicit eligibility source."""
-    eligible_source_configured = bool(allowed_user_ids()) or _admin_pilot_configured()
-    return rollout_mode() == ROLLOUT_LIVE and eligible_source_configured
+    """Supervisor can exist only in live mode and only behind the right write boundary."""
+    if rollout_mode() != ROLLOUT_LIVE:
+        return False
+    # Preserve the existing explicit allowlist rollout path. Admin-pilot-only
+    # execution is stricter and requires the Stage 6.2 one-shot dispatch guard.
+    if bool(allowed_user_ids()):
+        return True
+    return _admin_pilot_configured() and live_pilot_guard.live_pilot_guard_enabled()
 
 
 def eligibility_source(user_id: int) -> str:
@@ -161,6 +174,13 @@ def _stage_readiness(
 ) -> Dict[str, object]:
     flags = tuple(dict.fromkeys(str(name) for name in required_flags if str(name)))
     missing = [name for name in flags if not _env_bool(name, False)]
+    if (
+        require_live
+        and eligibility_source(int(user_id)) == "admin_pilot"
+        and not live_pilot_guard.live_pilot_guard_enabled()
+        and _LIVE_PILOT_GUARD_FLAG not in missing
+    ):
+        missing.append(_LIVE_PILOT_GUARD_FLAG)
     mode = rollout_mode()
     mode_ok = mode == ROLLOUT_LIVE if require_live else mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIVE}
     eligible = user_allowed(int(user_id))
@@ -202,8 +222,9 @@ def public_status(user_id: int) -> dict:
         "admin_pilot_enabled": admin_pilot_enabled(),
         "admin_pilot_id_source": admin_pilot_id_source(),
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
+        "live_pilot_guard": live_pilot_guard.public_status(),
         "dry_run": bool(mode == ROLLOUT_DRY_RUN and eligible),
-        "live_execution": bool(mode == ROLLOUT_LIVE and eligible),
+        "live_execution": bool(live_execution_allowed(int(user_id))),
         "supervisor_allowed": bool(supervisor_allowed()),
         "pilot_readiness": pilot_readiness(int(user_id)),
     }
