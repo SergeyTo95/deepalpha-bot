@@ -1,0 +1,136 @@
+name: VELIA Coding Token Quote
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/velia_developer_coding_quote_service.py"
+      - "services/velia_agent_chat_conflict_patch.py"
+      - "tests/test_velia_developer_coding_quote_service.py"
+      - "tests/test_velia_developer_coding_quote_runtime.py"
+      - ".github/workflows/velia-coding-token-quote.yml"
+  workflow_dispatch:
+
+jobs:
+  coding-token-quote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile quote boundary
+        run: |
+          python -m py_compile \
+            services/velia_developer_coding_quote_service.py \
+            services/velia_agent_chat_conflict_patch.py \
+            tests/test_velia_developer_coding_quote_service.py \
+            tests/test_velia_developer_coding_quote_runtime.py
+
+      - name: Run quote and existing Coding Agent regressions
+        run: |
+          python -m pytest -q \
+            tests/test_velia_developer_coding_quote_service.py \
+            tests/test_velia_developer_coding_quote_runtime.py \
+            tests/test_velia_developer_chat_presentation_service.py \
+            tests/test_velia_developer_chat_presentation_runtime.py \
+            tests/test_velia_developer_coding_chat_gate.py \
+            tests/test_velia_developer_coding_intent_classifier.py
+
+      - name: Verify financial and write ordering boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          quote = Path("services/velia_developer_coding_quote_service.py").read_text(encoding="utf-8")
+          runtime = Path("services/velia_agent_chat_conflict_patch.py").read_text(encoding="utf-8")
+
+          assert 'VELIA_DEVELOPER_CODING_TOKEN_QUOTE_ENABLED' in runtime
+          assert 'return _env_bool("VELIA_DEVELOPER_CODING_TOKEN_QUOTE_ENABLED", False)' in runtime
+          assert 'SELECT token_balance FROM users WHERE user_id=%s' in quote
+          assert 'FOR UPDATE' in quote
+          assert 'UPDATE users SET token_balance=token_balance-%s' in quote
+          assert 'UPDATE users SET token_balance=token_balance+%s' in quote
+          assert "developer_coding_insufficient_tokens" in runtime
+          assert "coding_quote.charge_quote" in runtime
+          assert "coding_quote.refund_quote" in runtime
+          assert "coding_quote.consume_quote" in runtime
+
+          charge = runtime.index("charged_quote = coding_quote.charge_quote")
+          execute = runtime.index("result = original_generate", charge)
+          assert charge < execute, "token charge must happen before Coding Agent execution"
+
+          forbidden = [
+              "merge_pull_request",
+              "VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE",
+              "VELIA_SOFTWARE_FACTORY_LIVE_PILOT",
+              "VELIA_SOFTWARE_FACTORY_MERGE",
+              "VELIA_SOFTWARE_FACTORY_DEPLOY",
+          ]
+          combined = quote + runtime
+          found = [item for item in forbidden if item in combined]
+          assert not found, f"quote gate crossed Factory/merge/deploy boundary: {found}"
+          PY
+
+      - name: Verify one quote per coding job contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("services/velia_developer_coding_quote_service.py").read_text(encoding="utf-8")
+          assert "job_id TEXT PRIMARY KEY" in source
+          assert "ON CONFLICT (job_id) DO NOTHING" in source
+          assert "quote_tokens_for_job" in source
+          assert "VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD" in source
+          assert "VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD" in source
+          assert "VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN" in source
+          PY
+
+      - name: Verify feature diff boundary
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+          base = "${{ github.event.pull_request.base.sha }}"
+          head = "${{ github.event.pull_request.head.sha }}"
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
+          allowed = {
+              "services/velia_developer_coding_quote_service.py",
+              "services/velia_agent_chat_conflict_patch.py",
+              "tests/test_velia_developer_coding_quote_service.py",
+              "tests/test_velia_developer_coding_quote_runtime.py",
+              ".github/workflows/velia-coding-token-quote.yml",
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f"unexpected coding quote feature files: {sorted(unexpected)}"
+          PY
+
+      - name: Reject Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)(__pycache__/|.*\.pyc$)'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi
