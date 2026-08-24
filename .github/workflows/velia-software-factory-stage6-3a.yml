@@ -1,0 +1,176 @@
+name: VELIA Software Factory Stage 6.3a
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_live_pilot_control_service.py'
+      - 'services/velia_software_factory_live_pilot_guard_service.py'
+      - 'services/velia_software_factory_live_pilot_dispatch_runtime_patch.py'
+      - 'services/velia_software_factory_rollout_service.py'
+      - 'tests/test_velia_software_factory_stage6_3_live_pilot_control.py'
+      - 'tests/test_velia_software_factory_stage6_2_live_pilot_guard.py'
+      - 'tests/test_velia_software_factory_stage6_2_dispatch_runtime.py'
+      - '.github/workflows/velia-software-factory-stage6-3a.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dormant-live-pilot-control-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile Stage 6.3a modules
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_live_pilot_control_service.py \
+            services/velia_software_factory_live_pilot_guard_service.py \
+            services/velia_software_factory_live_pilot_dispatch_runtime_patch.py \
+            services/velia_software_factory_rollout_service.py
+      - name: Run Stage 6.3a focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage6_3_live_pilot_control.py \
+            tests/test_velia_software_factory_stage6_2_live_pilot_guard.py \
+            tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+      - name: Verify control defaults fail closed
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_live_pilot_control_service as control
+
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_LIVE_PILOT_CONTROL_ENABLED', None)
+          assert control.live_pilot_control_enabled() is False
+          assert control._CONTROL_FLAG == 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_CONTROL_ENABLED'
+          assert control._DEFAULT_TTL_SECONDS == 600
+          PY
+      - name: Verify dormant core has no HTTP or infrastructure writer
+        run: |
+          ! grep -nE 'aiohttp|requests\.|httpx|urllib|velia_developer_github|github_service|merge_pull_request|merge_exact_head|Railway|railway|create_deployment|redeploy|set-variables' \
+            services/velia_software_factory_live_pilot_control_service.py
+          ! grep -nE 'app\.router|add_(get|post|put|patch|delete)|web\.Route|web\.Response' \
+            services/velia_software_factory_live_pilot_control_service.py
+      - name: Verify dormant core is not wired into runtime or web routes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          needle = 'velia_software_factory_live_pilot_control_service'
+          allowed = {
+              Path('services/velia_software_factory_live_pilot_control_service.py'),
+              Path('tests/test_velia_software_factory_stage6_3_live_pilot_control.py'),
+          }
+          found = []
+          for root in (Path('services'), Path('.')):
+              paths = root.glob('*.py') if root == Path('.') else root.rglob('*.py')
+              for path in paths:
+                  if path in allowed or '__pycache__' in path.parts:
+                      continue
+                  try:
+                      text = path.read_text(encoding='utf-8')
+                  except Exception:
+                      continue
+                  if needle in text:
+                      found.append(str(path))
+          assert not found, f'Control core must remain dormant in Stage 6.3a: {found}'
+          PY
+      - name: Verify dispatch is explicit, bounded and single-entry
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          path = Path('services/velia_software_factory_live_pilot_control_service.py')
+          text = path.read_text()
+          tree = ast.parse(text)
+
+          advance_calls = []
+          dispatch_fn = None
+          revoke_fn = None
+          for node in ast.walk(tree):
+              if isinstance(node, ast.FunctionDef) and node.name == 'dispatch_once':
+                  dispatch_fn = node
+              if isinstance(node, ast.FunctionDef) and node.name == 'revoke_grant':
+                  revoke_fn = node
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                  if isinstance(node.func.value, ast.Name) and node.func.value.id == 'factory' and node.func.attr == 'advance_run':
+                      advance_calls.append(node)
+
+          assert dispatch_fn is not None
+          assert revoke_fn is not None
+          assert len(advance_calls) == 1
+          assert dispatch_fn.lineno <= advance_calls[0].lineno <= getattr(dispatch_fn, 'end_lineno', advance_calls[0].lineno)
+
+          dispatch_text = ast.get_source_segment(text, dispatch_fn) or ''
+          revoke_text = ast.get_source_segment(text, revoke_fn) or ''
+          assert dispatch_text.index('_require_live_control(actor)') < dispatch_text.index('factory.advance_run(')
+          assert 'grant_id' in dispatch_text
+          assert 'confirmation' in dispatch_text
+          assert 'velia_factory_live_pilot_dispatch_budget_exhausted' in dispatch_text
+          assert '_require_live_control' not in revoke_text
+          assert 'revoke_pending_grant' in revoke_text
+          PY
+      - name: Verify arm is exact-admin, exact-repo, guard-backed and not automatic
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          path = Path('services/velia_software_factory_live_pilot_control_service.py')
+          text = path.read_text()
+          tree = ast.parse(text)
+          arm = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == 'arm_grant')
+          arm_text = ast.get_source_segment(text, arm) or ''
+          gate = text[text.index('def _require_live_control'):text.index('def public_status')]
+          status = text[text.index('def public_status'):text.index('def grant_status')]
+
+          assert '_admin_actor' in gate
+          assert 'live_pilot_control_enabled()' in gate
+          assert 'guard.live_pilot_guard_enabled()' in gate
+          assert 'eligibility_source(actor) != "admin_pilot"' in gate
+          assert 'live_execution_allowed(actor)' in gate
+          assert 'pilot_readiness(actor)' in gate
+          assert 'build_review' in gate
+          assert '_confirm_repository' in arm_text
+          assert '_require_confirmation' in arm_text
+          assert 'guard.issue_grant' in arm_text
+          assert 'automatic_grant_issue": False' in status
+          assert 'automatic_dispatch": False' in status
+          assert 'merge_supported": False' in status
+          assert 'deployment_supported": False' in status
+          PY
+      - name: Preserve Stage 6.2 one-shot boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_dispatch_runtime_patch.py').read_text()
+          mission = text.index('def guarded_mission_for_run')
+          claim = text.index('guard.claim_dispatch(', mission)
+          original_mission = text.index('return original_mission_for_run', mission)
+          assert claim < original_mission
+          assert 'guard.confirm_dispatch(' in text
+          assert 'velia_factory_live_pilot_dispatch_budget_exhausted' in Path('services/velia_software_factory_live_pilot_guard_service.py').read_text()
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo 'Generated Python bytecode was added by this PR.'
+            exit 1
+          fi
