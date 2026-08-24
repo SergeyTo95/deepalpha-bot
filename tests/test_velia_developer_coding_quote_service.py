@@ -27,7 +27,7 @@ class _Cursor:
                 self.quoted
                 if self.quote_status in {"charged", "consumed", "refund_pending"}
                 else 0,
-                "coding-budget-v1",
+                "coding-budget-v2",
             )
         elif "SELECT token_balance FROM users WHERE user_id=%s FOR UPDATE" in sql:
             self._next = (self.balance,)
@@ -87,6 +87,24 @@ def test_quote_is_once_per_whole_plan_and_uses_existing_execution_budgets(monkey
     assert quote.quote_tokens_for_job(_job(3)) == 180
     assert quote.quote_tokens_for_job(_job(4)) == 240
     assert quote.quote_tokens_for_job(_job(8)) == 240
+
+
+def test_quote_subtracts_existing_planning_cost_from_whole_job_budget(monkeypatch):
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD", "0.06")
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD", "0.24")
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN", "0.001")
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_MIN_QUOTE_TOKENS", "1")
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_MAX_QUOTE_TOKENS", "5000")
+
+    four_step = _job(4)
+    four_step["estimated_cost_usd"] = 0.01
+    assert quote.quote_tokens_for_job(four_step) == 230
+
+    # Three steps are still constrained by the per-step execution budget (3 * $0.06),
+    # so a small planner cost does not inflate or reduce the actual execution envelope.
+    three_step = _job(3)
+    three_step["estimated_cost_usd"] = 0.01
+    assert quote.quote_tokens_for_job(three_step) == 180
 
 
 def test_quote_bounds_can_be_configured_without_claiming_global_token_usd_value(monkeypatch):
