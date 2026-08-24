@@ -218,16 +218,64 @@ async def deepalpha_security_middleware(request: web.Request, handler):
     return response
 
 
+class _TruthyAdminGuardResponse(web.Response):
+    """Response compatible with legacy `if denied:` admin handlers.
+
+    aiohttp 3.8 StreamResponse objects are falsy before preparation. Existing
+    Control Center handlers therefore cannot safely use response truthiness to
+    distinguish a deny response from `None`. This subclass preserves the exact
+    response payload/status/headers while making an explicit deny value truthy.
+    """
+
+    def __bool__(self) -> bool:
+        return True
+
+
+def _truthy_admin_guard_response(denied: web.StreamResponse) -> web.StreamResponse:
+    if isinstance(denied, _TruthyAdminGuardResponse):
+        return denied
+    if not isinstance(denied, web.StreamResponse):
+        raise RuntimeError("VELIA Control Center guard returned an invalid denial response")
+    body = getattr(denied, "body", None)
+    return _TruthyAdminGuardResponse(
+        body=body,
+        status=int(getattr(denied, "status", 500) or 500),
+        reason=getattr(denied, "reason", None),
+        headers=dict(getattr(denied, "headers", {}) or {}),
+    )
+
+
+def _install_admin_guard_fail_closed(admin_routes_module: Any) -> None:
+    if getattr(admin_routes_module, "_velia_admin_guard_fail_closed_installed", False):
+        return
+    original_guard = getattr(admin_routes_module, "_guard", None)
+    if not callable(original_guard):
+        raise RuntimeError("VELIA Control Center guard is unavailable")
+
+    async def fail_closed_guard(request: web.Request):
+        denied = await original_guard(request)
+        if denied is None:
+            return None
+        return _truthy_admin_guard_response(denied)
+
+    admin_routes_module._guard = fail_closed_guard
+    admin_routes_module._velia_admin_guard_fail_closed_installed = True
+
+
 def install_http_security(app: web.Application, admin_routes_module: Any) -> None:
     if app.get("deepalpha_http_security_installed"):
         return
     if not bool(getattr(admin_routes_module, "CONTROL_CENTER_AUTH_V2", False)):
         raise RuntimeError("VELIA Control Center identity auth is required")
+    # Install the fail-closed wrapper before any secondary admin route module
+    # captures the shared guard. Stage 1 handlers resolve `_guard` dynamically,
+    # while Stage 2+ modules receive this hardened callable during setup.
+    _install_admin_guard_fail_closed(admin_routes_module)
     # Stage 2 is registered inside the same owner-only /admin security boundary.
     # Production installs the ledger schema before accepting requests; preview
     # startup skips that database bootstrap.
     setup_velia_admin_economy(app, admin_routes_module)
     # Stage 1 owns /admin/login and /admin/logout inside admin_routes.py.
-    # Do not monkeypatch the guard/key and do not expose legacy shared-secret auth.
+    # Do not expose legacy shared-secret auth.
     app.middlewares.append(deepalpha_security_middleware)
     app["deepalpha_http_security_installed"] = True
