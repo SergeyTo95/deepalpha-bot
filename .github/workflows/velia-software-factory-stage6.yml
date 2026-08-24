@@ -56,6 +56,7 @@ jobs:
               'ADMIN_ID',
               'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED',
               'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE',
+              'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED',
               'LIVE_OWNER_USER_IDS',
               'JARVIS_FOUNDER_IDS',
               'VELIA_CHAT_BETA_USER_IDS',
@@ -79,11 +80,12 @@ jobs:
           assert status['admin_pilot_enabled'] is False
           assert status['admin_pilot_id_source'] == 'admin_id'
           assert status['admin_pilot_actor_count'] == 0
+          assert status['live_pilot_guard']['enabled'] is False
           assert status['dry_run'] is False
           assert status['live_execution'] is False
           assert status['pilot_readiness']['plan']['ready'] is False
           PY
-      - name: Verify three independent pilot locks
+      - name: Verify independent pilot locks and one-shot live guard
         env:
           PYTHONPATH: .
         run: |
@@ -95,6 +97,7 @@ jobs:
           os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED'] = 'true'
           os.environ['VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE'] = 'admin_id'
           os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'off'
+          os.environ['VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED'] = 'false'
           assert rollout.user_allowed(424242) is True
           assert rollout.intake_allowed(424242) is False
           assert rollout.live_execution_allowed(424242) is False
@@ -107,6 +110,11 @@ jobs:
           assert rollout.supervisor_allowed() is False
 
           os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'live'
+          assert rollout.live_execution_allowed(424242) is False
+          assert rollout.supervisor_allowed() is False
+          assert 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED' in rollout.pilot_readiness(424242)['build_review']['missing_flags']
+
+          os.environ['VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED'] = 'true'
           assert rollout.live_execution_allowed(424242) is True
           assert rollout.supervisor_allowed() is True
 
@@ -148,11 +156,13 @@ jobs:
         run: |
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED' services/velia_software_factory_rollout_service.py
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE' services/velia_software_factory_rollout_service.py
+          grep -q 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED' services/velia_software_factory_rollout_service.py
           grep -q 'eligibility_source' services/velia_software_factory_rollout_service.py
           grep -q 'pilot_readiness' services/velia_software_factory_rollout_service.py
           grep -q 'admin_pilot=%s' services/velia_software_factory_rollout_runtime_patch.py
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED=false' .env.example
           grep -q 'VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE=admin_id' .env.example
+          grep -q 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED=false' .env.example
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -166,6 +176,7 @@ jobs:
           assert 'eligibility_source' in public_text
           assert 'pilot_readiness' in public_text
           assert 'admin_pilot_actor_count' in public_text
+          assert 'live_pilot_guard' in public_text
           PY
       - name: Verify explicit allowlist remains compatible
         env:
@@ -179,12 +190,17 @@ jobs:
           os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'dry_run'
           os.environ.pop('VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED', None)
           os.environ.pop('VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE', None)
+          os.environ.pop('VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED', None)
           os.environ.pop('ADMIN_ID', None)
           assert rollout.allowed_user_ids() == {7, 11}
           assert rollout.user_allowed(7) is True
           assert rollout.eligibility_source(7) == 'explicit_allowlist'
           assert rollout.dry_run_enabled(7) is True
           assert rollout.user_allowed(12) is False
+
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'live'
+          assert rollout.live_execution_allowed(7) is True
+          assert rollout.supervisor_allowed() is True
           PY
       - name: Reject newly added Python bytecode
         if: github.event_name == 'pull_request'

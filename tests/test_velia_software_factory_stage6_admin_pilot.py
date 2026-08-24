@@ -8,6 +8,7 @@ def _clear(monkeypatch):
         "ADMIN_ID",
         "VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED",
         "VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE",
+        "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED",
         "LIVE_OWNER_USER_IDS",
         "JARVIS_FOUNDER_IDS",
         "VELIA_CHAT_BETA_USER_IDS",
@@ -59,6 +60,7 @@ def test_default_rollout_stays_fail_closed(monkeypatch):
     assert status["admin_pilot_enabled"] is False
     assert status["admin_pilot_id_source"] == "admin_id"
     assert status["admin_pilot_actor_count"] == 0
+    assert status["live_pilot_guard"]["enabled"] is False
     assert status["pilot_readiness"]["plan"]["ready"] is False
 
 
@@ -99,7 +101,7 @@ def test_dry_run_admin_can_plan_but_never_execute(monkeypatch):
     ]
 
 
-def test_live_admin_requires_all_build_flags(monkeypatch):
+def test_live_admin_requires_guard_and_all_build_flags(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("ADMIN_ID", "42")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", "true")
@@ -109,8 +111,18 @@ def test_live_admin_requires_all_build_flags(monkeypatch):
     assert readiness["multi_repo_plan"]["ready"] is True
     assert readiness["build_review"]["ready"] is False
     assert "VELIA_DEVELOPER_WRITE_ENABLED" in readiness["build_review"]["missing_flags"]
+    assert "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED" in readiness["build_review"]["missing_flags"]
 
     _enable(monkeypatch, rollout._BUILD_REVIEW_FLAGS)
+    readiness = rollout.pilot_readiness(42)
+    assert readiness["build_review"]["ready"] is False
+    assert rollout.live_execution_allowed(42) is False
+    assert rollout.supervisor_allowed() is False
+    assert readiness["build_review"]["missing_flags"] == [
+        "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED"
+    ]
+
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED", "true")
     readiness = rollout.pilot_readiness(42)
     assert readiness["build_review"]["ready"] is True
     assert rollout.live_execution_allowed(42) is True
@@ -124,6 +136,7 @@ def test_full_release_readiness_is_informational_only(monkeypatch):
     monkeypatch.setenv("ADMIN_ID", "42")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", "true")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "live")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED", "true")
     _enable(monkeypatch, rollout._RELEASE_FLAGS)
     readiness = rollout.pilot_readiness(42)
     assert readiness["release"]["ready"] is True
@@ -137,6 +150,7 @@ def test_non_admin_is_denied_even_when_admin_pilot_is_live(monkeypatch):
     monkeypatch.setenv("ADMIN_ID", "42")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", "true")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "live")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED", "true")
     assert rollout.user_allowed(99) is False
     assert rollout.intake_allowed(99) is False
     assert rollout.live_execution_allowed(99) is False
@@ -206,6 +220,14 @@ def test_explicit_allowlist_has_priority_over_admin_pilot_label(monkeypatch):
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_USER_IDS", "42")
     assert rollout.user_allowed(42) is True
     assert rollout.eligibility_source(42) == "explicit_allowlist"
+
+
+def test_explicit_live_allowlist_does_not_require_stage6_2_guard(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_USER_IDS", "42")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "live")
+    assert rollout.live_execution_allowed(42) is True
+    assert rollout.supervisor_allowed() is True
 
 
 def test_invalid_mode_resolves_off_and_public_status_leaks_no_admin_id(monkeypatch):
