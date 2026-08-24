@@ -1,0 +1,120 @@
+name: VELIA Code Archive
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/velia_code_archive_service.py"
+      - "services/velia_code_archive_runtime_patch.py"
+      - "velia_code_archive_routes.py"
+      - "run_web_process.py"
+      - "tests/test_velia_code_archive_service.py"
+      - "tests/test_velia_code_archive_runtime.py"
+      - ".github/workflows/velia-code-archive.yml"
+  workflow_dispatch:
+
+jobs:
+  code-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile archive boundary
+        run: |
+          python -m py_compile \
+            services/velia_code_archive_service.py \
+            services/velia_code_archive_runtime_patch.py \
+            velia_code_archive_routes.py \
+            tests/test_velia_code_archive_service.py \
+            tests/test_velia_code_archive_runtime.py
+
+      - name: Run archive regressions
+        run: |
+          python -m pytest -q \
+            tests/test_velia_code_archive_service.py \
+            tests/test_velia_code_archive_runtime.py
+
+      - name: Verify bootstrap wiring
+        run: |
+          grep -q "ensure_velia_code_archive_tables" run_web_process.py
+          grep -q "install_velia_code_archive" run_web_process.py
+          grep -q "setup_velia_code_archive_routes" run_web_process.py
+
+      - name: Verify archive safety boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          service = Path("services/velia_code_archive_service.py").read_text()
+          runtime = Path("services/velia_code_archive_runtime_patch.py").read_text()
+          route = Path("velia_code_archive_routes.py").read_text()
+          combined = service + runtime + route
+          forbidden = [
+              "merge_pull_request",
+              "create_draft_pull_request(",
+              "commit_operations(",
+              "create_work_branch(",
+              "Railway",
+              "VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE",
+              "VELIA_SOFTWARE_FACTORY_LIVE_PILOT",
+          ]
+          found = [item for item in forbidden if item in combined]
+          assert not found, f"archive boundary contains forbidden execution primitives: {found}"
+          assert "read_utf8_file(" in service
+          assert "application/zip" in service
+          assert "BYTEA" in service
+          PY
+
+      - name: Verify feature diff boundary
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+          base = "${{ github.event.pull_request.base.sha }}"
+          head = "${{ github.event.pull_request.head.sha }}"
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
+          allowed = {
+              "services/velia_code_archive_service.py",
+              "services/velia_code_archive_runtime_patch.py",
+              "velia_code_archive_routes.py",
+              "run_web_process.py",
+              "tests/test_velia_code_archive_service.py",
+              "tests/test_velia_code_archive_runtime.py",
+              ".github/workflows/velia-code-archive.yml",
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f"unexpected archive feature files: {sorted(unexpected)}"
+          PY
+
+      - name: Reject Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)(__pycache__/|.*\.pyc$)'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi
