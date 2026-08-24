@@ -63,7 +63,7 @@ def ensure_coding_quote_tables() -> None:
                     balance_at_quote INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     charged_tokens INTEGER NOT NULL DEFAULT 0,
-                    pricing_version TEXT NOT NULL DEFAULT 'coding-budget-v1',
+                    pricing_version TEXT NOT NULL DEFAULT 'coding-budget-v2',
                     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                     charged_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -165,12 +165,13 @@ def _user_balance(cursor: Any, user_id: int, *, for_update: bool = False) -> int
 
 
 def quote_tokens_for_job(job: Mapping[str, Any]) -> int:
-    """Return one fixed execution quote for the whole Coding Agent plan.
+    """Return one fixed quote for the remaining Coding Agent execution budget.
 
-    The planner call has already happened when a job reaches this point. The quote
-    covers only the execution phase and uses the existing per-step / per-job model
-    budget envelope. VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN is a coding-specific
-    budgeting ratio; it is not a universal USD exchange rate for VELIA Token.
+    Planning has already happened and its model cost is stored on the job. The
+    Coding Agent execution loop uses that same accumulated cost against the whole
+    job cap, so only the remaining allowance may be sold to the user here.
+    VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN is a coding-specific budgeting
+    ratio; it is not a universal USD exchange rate for VELIA Token.
     """
     plan = job.get("plan") if isinstance(job.get("plan"), Mapping) else {}
     raw_steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
@@ -179,7 +180,14 @@ def quote_tokens_for_job(job: Mapping[str, Any]) -> int:
         "VELIA_DEVELOPER_CODING_MAX_COST_PER_STEP_USD", 0.06, 0.02, 0.15
     )
     job_budget = _env_float("VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD", 0.24, 0.05, 1.0)
-    execution_budget = min(job_budget, steps * per_step_budget)
+    try:
+        planning_cost = max(0.0, float(job.get("estimated_cost_usd") or 0.0))
+    except (TypeError, ValueError):
+        planning_cost = 0.0
+    remaining_job_budget = max(0.0, job_budget - planning_cost)
+    execution_budget = min(remaining_job_budget, steps * per_step_budget)
+    if execution_budget <= 0.0:
+        raise CodingQuoteError("developer_coding_quote_execution_budget_empty", status=409)
     usd_budget_per_token = _env_float(
         "VELIA_DEVELOPER_CODING_USD_BUDGET_PER_TOKEN", 0.001, 0.0001, 0.1
     )
@@ -211,7 +219,7 @@ def create_quote(*, user_id: int, conversation_id: str, job: Mapping[str, Any]) 
             INSERT INTO velia_developer_coding_quotes (
                 job_id,user_id,conversation_id,quoted_tokens,balance_at_quote,status,
                 charged_tokens,pricing_version
-            ) VALUES (%s,%s,%s,%s,%s,%s,0,'coding-budget-v1')
+            ) VALUES (%s,%s,%s,%s,%s,%s,0,'coding-budget-v2')
             ON CONFLICT (job_id) DO NOTHING
             """,
             (job_id, int(user_id), str(conversation_id), quoted, balance, status),
@@ -248,8 +256,6 @@ def charge_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
             raise CodingQuoteError("developer_coding_quote_owner_mismatch", status=403)
 
         status = str(value.get("status") or "")
-        # A charged quote represents the one execution request that already crossed
-        # the financial gate. Never let a second approval reuse it.
         if status in {"charged", "consumed"}:
             raise CodingQuoteError(
                 "developer_coding_quote_already_started", status=409, quote=value
@@ -413,13 +419,7 @@ def refund_quote(*, user_id: int, job_id: str) -> Dict[str, Any]:
 
 
 def reconcile_quotes_for_user(*, user_id: int, conversation_id: str) -> Dict[str, int]:
-    """Best-effort durable reconciliation for completed/failed Coding Agent jobs.
-
-    A charged quote whose job completed should become consumed. A charged or
-    refund_pending quote whose job ended in error/cancelled should be refunded.
-    This is safe to invoke before later coding interactions and makes transient
-    post-write billing failures recoverable without re-running the code task.
-    """
+    """Best-effort durable reconciliation for completed/failed Coding Agent jobs."""
     ensure_coding_quote_tables()
     conn = get_connection()
     cursor = conn.cursor()
@@ -427,7 +427,7 @@ def reconcile_quotes_for_user(*, user_id: int, conversation_id: str) -> Dict[str
     try:
         cursor.execute(
             """
-            SELECT q.job_id, q.status, j.status
+            SELECT q.job_id, q.status AS quote_status, j.status AS job_status
             FROM velia_developer_coding_quotes q
             JOIN velia_developer_coding_jobs j ON j.job_id=q.job_id
             WHERE q.user_id=%s AND q.conversation_id=%s
