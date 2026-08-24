@@ -94,6 +94,7 @@ def main() -> None:
     from services.velia_plugin_service import ensure_velia_plugin_tables
     from services.velia_software_factory_autonomy_service import install_autonomy as install_velia_software_factory_autonomy
     from services.velia_software_factory_chat_runtime_patch import install as install_velia_software_factory_chat
+    from services.velia_software_factory_live_pilot_admin_routes import setup_factory_pilot_admin_routes
     from services.velia_software_factory_routes import setup_velia_software_factory_routes
     from services.velia_telegram_connect_page_patch import install as install_velia_telegram_connect_page
     from services.velia_usdt_checkout_routes import setup_velia_usdt_checkout_routes
@@ -109,6 +110,15 @@ def main() -> None:
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_velia_admin_observability(admin_routes_module)
+    if not any(path == "/admin/factory-pilot" for _, path in admin_routes_module.SECTIONS):
+        admin_routes_module.SECTIONS.append(("Factory Pilot", "/admin/factory-pilot"))
+    setup_factory_pilot_admin_routes(
+        deepalpha_web.app,
+        guard=admin_routes_module._guard,
+        layout=admin_routes_module._layout,
+        key=admin_routes_module._key,
+        request_id=admin_routes_module._request_id,
+    )
     install_webhook_cors(deepalpha_web.app)
     install_portal_quick_analysis()
     install_portal_webhook_scope()

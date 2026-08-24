@@ -1,0 +1,137 @@
+name: VELIA Software Factory Stage 6.3b
+
+on:
+  pull_request:
+    paths:
+      - 'run_web_process.py'
+      - 'services/velia_software_factory_live_pilot_admin_routes.py'
+      - 'services/velia_software_factory_live_pilot_control_service.py'
+      - 'services/velia_software_factory_live_pilot_guard_service.py'
+      - 'services/velia_software_factory_live_pilot_dispatch_runtime_patch.py'
+      - 'tests/test_velia_software_factory_stage6_3b_control_center.py'
+      - 'tests/test_velia_software_factory_stage6_3_live_pilot_control.py'
+      - 'tests/test_velia_software_factory_stage6_2_live_pilot_guard.py'
+      - 'tests/test_velia_software_factory_stage6_2_dispatch_runtime.py'
+      - '.github/workflows/velia-software-factory-stage6-3b.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  owner-control-center-binding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile Stage 6.3b modules
+        run: |
+          python -m py_compile run_web_process.py services/velia_software_factory_live_pilot_admin_routes.py services/velia_software_factory_live_pilot_control_service.py services/velia_software_factory_live_pilot_dispatch_runtime_patch.py
+      - name: Run focused Factory pilot tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q tests/test_velia_software_factory_stage6_3b_control_center.py tests/test_velia_software_factory_stage6_3_live_pilot_control.py tests/test_velia_software_factory_stage6_2_live_pilot_guard.py tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+      - name: Verify bootstrap reuses existing owner boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('run_web_process.py').read_text()
+          assert text.index('install_http_security(deepalpha_web.app, admin_routes_module)') < text.index('setup_factory_pilot_admin_routes(')
+          assert 'guard=admin_routes_module._guard' in text
+          assert 'layout=admin_routes_module._layout' in text
+          assert 'key=admin_routes_module._key' in text
+          assert 'request_id=admin_routes_module._request_id' in text
+          assert 'admin_routes_module.SECTIONS.append(("Factory Pilot", "/admin/factory-pilot"))' in text
+          PY
+      - name: Verify handlers guard before parsing and control calls
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          tree = ast.parse(text)
+          setup = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'setup_factory_pilot_admin_routes')
+          nested = {n.name: n for n in setup.body if isinstance(n, ast.AsyncFunctionDef)}
+          page = ast.get_source_segment(text, nested['factory_pilot_page']) or ''
+          action = ast.get_source_segment(text, nested['factory_pilot_action']) or ''
+          assert page.index('denied = await guard(request)') < page.index('control.public_status')
+          assert action.index('denied = await guard(request)') < action.index('form = await request.post()')
+          first_control = min(action.index(token) for token in ('control.arm_grant', 'control.revoke_grant', 'control.dispatch_once'))
+          assert action.index('denied = await guard(request)') < first_control
+          PY
+      - name: Verify narrow admin-only route surface
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          assert text.count('app.router.add_get(') == 1
+          assert text.count('app.router.add_post(') == 1
+          assert 'app.router.add_get("/admin/factory-pilot", factory_pilot_page)' in text
+          assert 'app.router.add_post("/admin/factory-pilot/actions/{action}", factory_pilot_action)' in text
+          assert '/velia/' not in text and '/api/' not in text
+          PY
+      - name: Verify web layer delegates all execution to control core
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          forbidden = ('factory.advance_run', 'guard.issue_grant', 'guard.claim_dispatch', 'autopilot.enqueue_task', 'merge_pull_request', 'create_deployment')
+          assert not any(token in text for token in forbidden)
+          assert text.count('control.arm_grant') == 1
+          assert text.count('control.revoke_grant') == 1
+          assert text.count('control.dispatch_once') == 1
+          assert 'requests.' not in text and 'httpx' not in text and 'aiohttp.Client' not in text
+          PY
+      - name: Verify confirmations are typed and never audited
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          assert "_field('confirmation', 'Type exact confirmation')" in text
+          assert "_field('confirmation', 'Type exact dispatch confirmation')" in text
+          assert "_field('confirmation', 'Type exact confirmation', arm_confirmation)" not in text
+          assert "_field('confirmation', 'Type exact dispatch confirmation', dispatch_confirmation)" not in text
+          assert 'Type exactly: <code>' in text
+          assert '"confirmation":' not in text
+          PY
+      - name: Verify one-shot authority remains Stage 6.2
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          web = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          core = Path('services/velia_software_factory_live_pilot_control_service.py').read_text()
+          runtime = Path('services/velia_software_factory_live_pilot_dispatch_runtime_patch.py').read_text()
+          assert web.count('control.dispatch_once') == 1
+          dispatch = core[core.index('def dispatch_once'):]
+          assert dispatch.count('factory.advance_run(') == 1
+          assert 'velia_factory_live_pilot_dispatch_budget_exhausted' in dispatch
+          mission = runtime.index('def guarded_mission_for_run')
+          assert runtime.index('guard.claim_dispatch(', mission) < runtime.index('return original_mission_for_run', mission)
+          assert 'guard.confirm_dispatch(' in runtime
+          PY
+      - name: Verify bootstrap diff is registration-only
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import os, subprocess
+          diff = subprocess.check_output(['git','diff','--unified=0',f'origin/{os.environ["GITHUB_BASE_REF"]}...HEAD','--','run_web_process.py'], text=True)
+          added = [line[1:] for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++')]
+          allowed_fragments = ('velia_software_factory_live_pilot_admin_routes', 'Factory Pilot', 'factory-pilot', 'setup_factory_pilot_admin_routes', 'admin_routes_module._guard', 'admin_routes_module._layout', 'admin_routes_module._key', 'admin_routes_module._request_id')
+          unexpected = [line for line in added if line.strip() and not any(token in line for token in allowed_fragments) and line.strip() not in {'deepalpha_web.app,', ')'}]
+          assert not unexpected, unexpected
+          PY
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" | grep -E '(^|/)__pycache__/|\.py[co]$'; then exit 1; fi
