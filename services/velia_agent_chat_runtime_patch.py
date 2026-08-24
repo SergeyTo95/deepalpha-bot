@@ -9,6 +9,7 @@ from db.database import get_connection
 from services import velia_agent_chat_planner_service as planner
 from services import velia_agent_chat_presentation_service as presentation
 from services import velia_chat_streaming_runtime_patch as streaming_patch
+from services import velia_developer_coding_service as coding_service
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,20 @@ def install(chat_module: Any) -> None:
 
         message = _latest_request_user_message(str(request_id or ""), int(user_id))
         if not message:
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+
+        # Coding Agent owns explicit software-change requests. Agent Core is
+        # installed outside the Developer/Coding layer and otherwise a phrase
+        # such as "create a task to fix an Android bug" also matches the generic
+        # task planner first. Delegate before reading/creating an Agent Core job
+        # so the existing Coding Agent planner, quote and approval gate remain
+        # the single source of truth. This handoff itself performs no GitHub write.
+        if coding_service.is_coding_request(message):
             return original_generate(
                 prompt,
                 user_id=user_id,
