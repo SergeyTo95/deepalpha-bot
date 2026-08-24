@@ -300,6 +300,10 @@ def test_route_registration_is_idempotent_and_narrow():
         key=_key,
         request_id=_request_id,
     )
-    assert set(app.router.gets) == {"/admin/factory-pilot"}
+    assert set(app.router.gets) == {
+        "/admin/factory-pilot",
+        "/admin/factory-pilot/preflight",
+    }
     assert set(app.router.posts) == {"/admin/factory-pilot/actions/{action}"}
     assert app["velia_factory_pilot_admin_routes_installed"] is True
+    assert app["velia_factory_pilot_preflight_admin_routes_installed"] is True
