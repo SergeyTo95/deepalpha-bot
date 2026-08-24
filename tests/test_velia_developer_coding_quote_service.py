@@ -24,7 +24,9 @@ class _Cursor:
                 self.quoted,
                 500,
                 self.quote_status,
-                self.quoted if self.quote_status in {"charged", "consumed"} else 0,
+                self.quoted
+                if self.quote_status in {"charged", "consumed", "refund_pending"}
+                else 0,
                 "coding-budget-v1",
             )
         elif "SELECT token_balance FROM users WHERE user_id=%s FOR UPDATE" in sql:
@@ -110,8 +112,12 @@ def test_charge_rechecks_locked_balance_and_debits_before_marking_quote(monkeypa
     assert result["status"] == "charged"
     assert result["charged_tokens"] == 120
     sql = [statement for statement, _params in cursor.statements]
-    locked_balance = next(i for i, value in enumerate(sql) if "SELECT token_balance" in value and "FOR UPDATE" in value)
-    debit = next(i for i, value in enumerate(sql) if "UPDATE users SET token_balance=token_balance-%s" in value)
+    locked_balance = next(
+        i for i, value in enumerate(sql) if "SELECT token_balance" in value and "FOR UPDATE" in value
+    )
+    debit = next(
+        i for i, value in enumerate(sql) if "UPDATE users SET token_balance=token_balance-%s" in value
+    )
     mark = next(i for i, value in enumerate(sql) if "SET status='charged'" in value)
     assert locked_balance < debit < mark
     assert conn.commits == 1
@@ -129,22 +135,38 @@ def test_charge_insufficient_balance_never_debits_user(monkeypatch):
 
     assert exc.value.code == "developer_coding_insufficient_tokens"
     assert exc.value.quote["balance_tokens"] == 119
-    assert not any("UPDATE users SET token_balance=token_balance-%s" in sql for sql, _ in cursor.statements)
+    assert not any(
+        "UPDATE users SET token_balance=token_balance-%s" in sql for sql, _ in cursor.statements
+    )
     assert any("SET status='insufficient'" in sql for sql, _ in cursor.statements)
     assert conn.commits == 1
 
 
-def test_consumed_quote_is_idempotent_and_never_debits_again(monkeypatch):
+def test_duplicate_approval_for_charged_quote_is_rejected_without_second_debit(monkeypatch):
+    cursor = _Cursor(balance=500, quote_status="charged", quoted=120)
+    conn = _Connection(cursor)
+    monkeypatch.setattr(quote, "ensure_coding_quote_tables", lambda: None)
+    monkeypatch.setattr(quote, "get_connection", lambda: conn)
+
+    with pytest.raises(quote.CodingQuoteError) as exc:
+        quote.charge_quote(user_id=7, job_id="job-1")
+
+    assert exc.value.code == "developer_coding_quote_already_started"
+    assert exc.value.quote["status"] == "charged"
+    assert not any("UPDATE users SET token_balance" in sql for sql, _ in cursor.statements)
+
+
+def test_duplicate_approval_for_consumed_quote_is_rejected_without_second_debit(monkeypatch):
     cursor = _Cursor(balance=500, quote_status="consumed", quoted=120)
     conn = _Connection(cursor)
     monkeypatch.setattr(quote, "ensure_coding_quote_tables", lambda: None)
     monkeypatch.setattr(quote, "get_connection", lambda: conn)
 
-    result = quote.charge_quote(user_id=7, job_id="job-1")
+    with pytest.raises(quote.CodingQuoteError) as exc:
+        quote.charge_quote(user_id=7, job_id="job-1")
 
-    assert result["status"] == "consumed"
+    assert exc.value.code == "developer_coding_quote_already_started"
     assert not any("UPDATE users SET token_balance" in sql for sql, _ in cursor.statements)
-    assert conn.commits == 1
 
 
 def test_refund_restores_only_a_charged_quote(monkeypatch):
@@ -159,6 +181,23 @@ def test_refund_restores_only_a_charged_quote(monkeypatch):
     sql = [statement for statement, _params in cursor.statements]
     assert any("UPDATE users SET token_balance=token_balance+%s" in value for value in sql)
     assert any("SET status='refunded'" in value for value in sql)
+
+
+def test_refund_pending_quote_can_be_retried_exactly_once(monkeypatch):
+    cursor = _Cursor(balance=380, quote_status="refund_pending", quoted=120)
+    conn = _Connection(cursor)
+    monkeypatch.setattr(quote, "ensure_coding_quote_tables", lambda: None)
+    monkeypatch.setattr(quote, "get_connection", lambda: conn)
+
+    result = quote.refund_quote(user_id=7, job_id="job-1")
+
+    assert result["status"] == "refunded"
+    credits = [
+        sql
+        for sql, _ in cursor.statements
+        if "UPDATE users SET token_balance=token_balance+%s" in sql
+    ]
+    assert len(credits) == 1
 
 
 def test_quote_presentation_payload_disables_execution_when_balance_is_insufficient(monkeypatch):
@@ -201,6 +240,7 @@ def test_quote_presentation_payload_disables_execution_when_balance_is_insuffici
 def test_feature_flag_defaults_off(monkeypatch):
     monkeypatch.delenv("VELIA_DEVELOPER_CODING_TOKEN_QUOTE_ENABLED", raising=False)
     from services import velia_agent_chat_conflict_patch as runtime
+
     assert runtime._quote_enabled() is False
     monkeypatch.setenv("VELIA_DEVELOPER_CODING_TOKEN_QUOTE_ENABLED", "true")
     assert runtime._quote_enabled() is True
