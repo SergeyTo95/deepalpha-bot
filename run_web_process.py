@@ -74,6 +74,8 @@ def main() -> None:
     from services.velia_attachment_message_runtime_patch import install as install_velia_attachment_messages
     from services.velia_attachment_service import ensure_velia_attachment_tables
     from services.velia_chat_latency_runtime_patch import install as install_velia_chat_latency
+    from services.velia_code_archive_runtime_patch import install as install_velia_code_archive
+    from services.velia_code_archive_service import ensure_velia_code_archive_tables
     from services.velia_chat_service import ensure_velia_chat_tables
     from services.velia_chat_streaming_runtime_patch import install as install_velia_chat_streaming
     from services.velia_conversation_quality_patch import install as install_velia_conversation_quality
@@ -102,6 +104,7 @@ def main() -> None:
     from services.velia_user_profile_service import ensure_velia_user_profile_table
     from services.velia_videos_runtime_patch import install as install_velia_videos
     from services.velia_videos_service import ensure_velia_video_tables
+    from velia_code_archive_routes import setup_velia_code_archive_routes
     from velia_image_routes import setup_velia_image_routes
     from velia_mobile_attachment_routes import setup_velia_mobile_attachment_routes
     from velia_plugin_routes import setup_velia_plugin_routes
@@ -220,6 +223,7 @@ def main() -> None:
     )
     setup_velia_mobile_attachment_routes(deepalpha_web.app)
     setup_velia_image_routes(deepalpha_web.app)
+    setup_velia_code_archive_routes(deepalpha_web.app)
     setup_velia_video_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
     setup_velia_profile_routes(deepalpha_web.app)
@@ -252,6 +256,10 @@ def main() -> None:
     install_velia_agent_chat(velia_chat_service_module)
     install_velia_agent_chat_conflict(velia_chat_service_module)
     install_velia_software_factory_chat(velia_chat_service_module)
+    # Code archive routing is outermost: an explicit ZIP request after a
+    # completed Coding Agent run is served deterministically without
+    # entering Developer/Agent/Factory planning again.
+    install_velia_code_archive(velia_chat_service_module)
     install_velia_software_factory_autonomy(deepalpha_web.app)
     setup_velia_mobile_streaming_route(
         deepalpha_web.app,
@@ -286,6 +294,7 @@ def main() -> None:
         ensure_velia_agent_chat_tables()
         ensure_velia_attachment_tables()
         ensure_velia_image_tables()
+        ensure_velia_code_archive_tables()
         ensure_velia_video_tables()
         ensure_velia_plugin_tables()
         ensure_velia_user_profile_table()
