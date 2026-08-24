@@ -118,7 +118,7 @@ def _dict(row) -> Optional[Dict[str, Any]]:
 
 def _setting_int(key: str, default: int, min_value: int = 1, max_value: int = 3650) -> int:
     try:
-        value = int(str(get_setting(key, str(default))).strip()
+        value = int(str(get_setting(key, str(default))).strip())
     except Exception:
         value = default
     return max(min_value, min(max_value, value))
