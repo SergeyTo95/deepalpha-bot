@@ -76,7 +76,10 @@ def public_status(user_id: int) -> Dict[str, Any]:
     build_review = dict(readiness.get("build_review") or {})
     reviewer_enabled = bool(reviewer.reviewer_enabled())
     reviewer_installed = bool(getattr(reviewer_runtime, "_INSTALLED", False))
-    remediation_ready = bool(remediation.remediation_enabled(ci_service))
+    remediation_attempt_budget = int(remediation.remediation_max_attempts())
+    remediation_ready = bool(
+        remediation.remediation_enabled(ci_service) and remediation_attempt_budget > 0
+    )
     blockers = []
     if not admin_acceptance_enabled():
         blockers.append("acceptance_disabled")
@@ -116,7 +119,7 @@ def public_status(user_id: int) -> Dict[str, Any]:
         },
         "remediation": {
             "ready": remediation_ready,
-            "max_attempts": remediation.remediation_max_attempts(),
+            "max_attempts": remediation_attempt_budget,
         },
         "build_review": build_review,
         "blockers": blockers,
@@ -182,6 +185,13 @@ def arm_acceptance(
         approval_source=_ACCEPTANCE_SOURCE,
     )
     grant = _acceptance_grant(result)
+    grant_status = str(grant.get("status") or "")
+    if grant_status != "pending":
+        raise SoftwareFactoryError(
+            "velia_factory_admin_acceptance_grant_not_pending",
+            detail=grant_status or "unknown",
+            status=409,
+        )
     return {
         **dict(result),
         "acceptance": {
