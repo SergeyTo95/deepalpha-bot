@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from services import velia_software_factory_admin_acceptance_service as acceptance
 from services import velia_software_factory_live_pilot_control_service as control
+from services import velia_software_factory_stage6_7_ci_context_filter_patch as ci_context_filter
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
@@ -15,6 +16,12 @@ _LOCK = threading.Lock()
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
+        # Install the exact-name CI context filter even if another bootstrap path
+        # already bound the Stage 6.7 status surface. The filter defaults to an
+        # empty ignore set, so normal CI semantics remain unchanged unless an
+        # operator explicitly opts in with the bounded environment variable.
+        ci_context_filter.install()
+
         if getattr(control, "_velia_factory_admin_acceptance_status_installed", False):
             _INSTALLED = True
             return True

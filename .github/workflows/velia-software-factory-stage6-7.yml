@@ -8,9 +8,13 @@ on:
       - 'services/velia_software_factory_admin_acceptance_service.py'
       - 'services/velia_software_factory_admin_acceptance_runtime_patch.py'
       - 'services/velia_software_factory_admin_acceptance_admin_routes.py'
+      - 'services/velia_software_factory_stage6_7_ci_context_filter_patch.py'
+      - 'services/velia_agent_coding_autopilot_ci_service.py'
       - 'services/velia_software_factory_live_pilot_control_service.py'
       - 'services/velia_software_factory_live_pilot_admin_routes.py'
       - 'tests/test_velia_software_factory_stage6_7_admin_acceptance.py'
+      - 'tests/test_velia_software_factory_stage6_7_ci_context_filter.py'
+      - 'tests/test_velia_agent_coding_autopilot_ci_service.py'
       - '.github/workflows/velia-software-factory-stage6-7.yml'
   workflow_dispatch:
 
@@ -53,6 +57,8 @@ jobs:
             services/velia_software_factory_admin_acceptance_service.py \
             services/velia_software_factory_admin_acceptance_runtime_patch.py \
             services/velia_software_factory_admin_acceptance_admin_routes.py \
+            services/velia_software_factory_stage6_7_ci_context_filter_patch.py \
+            services/velia_agent_coding_autopilot_ci_service.py \
             services/velia_software_factory_live_pilot_control_service.py \
             services/velia_software_factory_live_pilot_admin_routes.py \
             services/velia_software_factory_live_pilot_preflight_service.py \
@@ -63,6 +69,8 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_velia_software_factory_stage6_7_admin_acceptance.py \
+            tests/test_velia_software_factory_stage6_7_ci_context_filter.py \
+            tests/test_velia_agent_coding_autopilot_ci_service.py \
             tests/test_velia_software_factory_stage6_6_reviewer_remediation.py \
             tests/test_velia_software_factory_stage6_5b_reviewer_pilot_gate.py \
             tests/test_velia_software_factory_reviewer_gate.py \
@@ -93,6 +101,26 @@ jobs:
           assert '"deployment_authority": False' in text
           PY
 
+      - name: Verify CI context filter remains exact and opt-in
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_stage6_7_ci_context_filter_patch.py').read_text()
+          runtime = Path('services/velia_software_factory_admin_acceptance_runtime_patch.py').read_text()
+          assert 'VELIA_DEVELOPER_AUTOPILOT_CI_IGNORED_CONTEXTS' in text
+          assert 'os.getenv(_ENV_NAME, "")' in text
+          assert '_MAX_CONTEXTS = 20' in text
+          assert '_MAX_CONTEXT_LENGTH = 240' in text
+          assert 'item.casefold()' in text
+          assert 'fnmatch' not in text
+          assert 're.match' not in text
+          assert 're.search' not in text
+          assert 'wildcard=false' in text
+          assert 'ci_context_filter.install()' in runtime
+          assert 'filtered, _ignored = filter_checks(checks)' in text
+          assert 'original_checks_state(filtered)' in text
+          PY
+
       - name: Verify acceptance delegates to existing one-shot control
         run: |
           python - <<'PY'
@@ -116,6 +144,7 @@ jobs:
               'services/velia_software_factory_admin_acceptance_service.py',
               'services/velia_software_factory_admin_acceptance_runtime_patch.py',
               'services/velia_software_factory_admin_acceptance_admin_routes.py',
+              'services/velia_software_factory_stage6_7_ci_context_filter_patch.py',
           )
           text = '\n'.join(Path(path).read_text() for path in files)
           forbidden = (
@@ -165,9 +194,13 @@ jobs:
               'services/velia_software_factory_admin_acceptance_service.py',
               'services/velia_software_factory_admin_acceptance_runtime_patch.py',
               'services/velia_software_factory_admin_acceptance_admin_routes.py',
+              'services/velia_software_factory_stage6_7_ci_context_filter_patch.py',
+              'services/velia_agent_coding_autopilot_ci_service.py',
               'services/velia_software_factory_live_pilot_control_service.py',
               'services/velia_software_factory_live_pilot_admin_routes.py',
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
+              'tests/test_velia_software_factory_stage6_7_ci_context_filter.py',
+              'tests/test_velia_agent_coding_autopilot_ci_service.py',
               '.github/workflows/velia-software-factory-stage6-7.yml',
               'tests/test_velia_software_factory_stage6_3b_control_center.py',
               'tests/test_velia_software_factory_stage6_4b_preflight_control_center.py',
@@ -179,12 +212,18 @@ jobs:
           }
           unexpected = changed - allowed
           assert not unexpected, f'unexpected Stage 6.7 files: {sorted(unexpected)}'
-          required = {
+          acceptance_core = {
               'services/velia_software_factory_admin_acceptance_service.py',
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
               '.github/workflows/velia-software-factory-stage6-7.yml',
           }
-          assert required <= changed, sorted(required - changed)
+          context_filter_hardening = {
+              'services/velia_software_factory_admin_acceptance_runtime_patch.py',
+              'services/velia_software_factory_stage6_7_ci_context_filter_patch.py',
+              'tests/test_velia_software_factory_stage6_7_ci_context_filter.py',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+          }
+          assert acceptance_core <= changed or context_filter_hardening <= changed, sorted(changed)
           PY
 
       - name: Reject newly added Python bytecode
