@@ -168,10 +168,12 @@ jobs:
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
               '.github/workflows/velia-software-factory-stage6-7.yml',
               'tests/test_velia_software_factory_stage6_3b_control_center.py',
+              'tests/test_velia_software_factory_stage6_4b_preflight_control_center.py',
               '.github/workflows/velia-software-factory-stage6-3a.yml',
               '.github/workflows/velia-software-factory-stage6-4a.yml',
               '.github/workflows/velia-software-factory-stage6-4b.yml',
               '.github/workflows/velia-software-factory-stage6-5b.yml',
+              '.github/workflows/velia-software-factory-stage6-6.yml',
           }
           unexpected = changed - allowed
           assert not unexpected, f'unexpected Stage 6.7 files: {sorted(unexpected)}'
