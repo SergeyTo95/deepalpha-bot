@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
 from services import velia_agent_coding_autopilot_ci_service as ci
+from services import velia_software_factory_stage6_7_ci_context_filter_patch as ci_context_filter
 from services import velia_developer_github_service as github_service
 from services import velia_developer_github_write_service as write_service
 
@@ -184,6 +185,13 @@ def enrich_failure(project: Mapping[str, Any], sha: str, failure: Mapping[str, A
     return ci_classifier.classify_failure_payload(result)
 
 
+def _postprocess_failure(result: Mapping[str, Any]) -> Dict[str, Any]:
+    # The context filter is installed before this log wrapper in the checked
+    # web bootstrap. Re-apply it after enrichment so ignored job logs cannot be
+    # reintroduced as repair evidence.
+    return ci_context_filter.filter_failure_payload(result, ci_module=ci)
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -195,7 +203,8 @@ def install() -> None:
         sha: str,
         checks: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        return enrich_failure(project, sha, original(project, sha, checks))
+        enriched = enrich_failure(project, sha, original(project, sha, checks))
+        return _postprocess_failure(enriched)
 
     ci._failure_details = failure_details_with_logs
     _INSTALLED = True
