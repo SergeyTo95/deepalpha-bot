@@ -35,6 +35,7 @@ FEATURE_FLAGS = {
     "studio_video_prompt": "GEMINI_ENABLED",
     "studio_music_prompt": "GEMINI_ENABLED",
     "studio_music_lyrics": "GEMINI_ENABLED",
+    "software_factory_reviewer": "GEMINI_ENABLED",
 }
 
 
