@@ -18,6 +18,9 @@ REQUIRED_IGNORED_CONTEXTS = (
     "melodious-radiance - velia-stage67-acceptance-operator",
 )
 EXECUTION_CONFIRMATION = f"execute:{TOKEN}:{EXPECTED_BASE_SHA}"
+STALE_ACCEPTANCE_MISSION_ID = "c8d8797f-f68a-4d62-b575-5086d34efd9a"
+STALE_ACCEPTANCE_MISSION_NAME = "VELIA Controlled Repair Acceptance"
+TERMINAL_AUTOPILOT_STATUSES = ("ready_for_review", "failed", "blocked", "cancelled")
 
 
 def emit(event: str, **values: Any) -> None:
@@ -93,6 +96,119 @@ def existing_factory_run_id(admin_id: int) -> str:
     if len(found) > 1:
         fail("duplicate_acceptance_runs", count=len(found))
     return str(found[0][0]) if found else ""
+
+
+def archive_known_stale_acceptance_mission(admin_id: int, project_id: str, factory_run_id: str) -> None:
+    """Release the project mission slot only for the known, fully terminal Stage 5 canary."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT mission_id,name,status
+            FROM velia_developer_autopilot_missions
+            WHERE user_id=%s AND project_id=%s AND status IN ('paused','active')
+            ORDER BY created_at ASC
+            FOR UPDATE
+            """,
+            (int(admin_id), str(project_id)),
+        )
+        missions = list(cur.fetchall() or [])
+        factory_prefix = f"VELIA Factory · {str(factory_run_id)[:8]} ·"
+        if len(missions) == 1 and str(missions[0][1] or "").startswith(factory_prefix):
+            conn.rollback()
+            emit("factory_mission_resumed", mission_id=str(missions[0][0] or ""))
+            return
+        if not missions:
+            conn.rollback()
+            emit("factory_mission_slot_ready")
+            return
+        if len(missions) != 1:
+            conn.rollback()
+            fail("active_mission_slot_ambiguous", mission_count=len(missions))
+
+        mission_id, mission_name, mission_status = missions[0]
+        if (
+            str(mission_id or "") != STALE_ACCEPTANCE_MISSION_ID
+            or str(mission_name or "") != STALE_ACCEPTANCE_MISSION_NAME
+        ):
+            conn.rollback()
+            fail(
+                "foreign_active_mission_present",
+                mission_id=str(mission_id or ""),
+                mission_name=str(mission_name or ""),
+                mission_status=str(mission_status or ""),
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM velia_developer_autopilot_tasks
+            WHERE mission_id=%s AND status NOT IN ('ready_for_review','failed','blocked','cancelled')
+            """,
+            (STALE_ACCEPTANCE_MISSION_ID,),
+        )
+        nonterminal_tasks = int((cur.fetchone() or (0,))[0] or 0)
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM velia_developer_autopilot_runs
+            WHERE mission_id=%s AND status NOT IN ('ready_for_review','failed','blocked','cancelled')
+            """,
+            (STALE_ACCEPTANCE_MISSION_ID,),
+        )
+        nonterminal_runs = int((cur.fetchone() or (0,))[0] or 0)
+        if nonterminal_tasks or nonterminal_runs:
+            conn.rollback()
+            fail(
+                "stale_acceptance_mission_not_terminal",
+                mission_id=STALE_ACCEPTANCE_MISSION_ID,
+                nonterminal_task_count=nonterminal_tasks,
+                nonterminal_run_count=nonterminal_runs,
+            )
+
+        cur.execute(
+            """
+            UPDATE velia_developer_autopilot_missions
+            SET status='archived',updated_at=NOW()
+            WHERE mission_id=%s AND user_id=%s AND project_id=%s
+              AND name=%s AND status IN ('paused','active')
+              AND NOT EXISTS (
+                  SELECT 1 FROM velia_developer_autopilot_tasks t
+                  WHERE t.mission_id=velia_developer_autopilot_missions.mission_id
+                    AND t.status NOT IN ('ready_for_review','failed','blocked','cancelled')
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM velia_developer_autopilot_runs r
+                  WHERE r.mission_id=velia_developer_autopilot_missions.mission_id
+                    AND r.status NOT IN ('ready_for_review','failed','blocked','cancelled')
+              )
+            """,
+            (
+                STALE_ACCEPTANCE_MISSION_ID,
+                int(admin_id),
+                str(project_id),
+                STALE_ACCEPTANCE_MISSION_NAME,
+            ),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            fail("stale_acceptance_mission_archive_race", mission_id=STALE_ACCEPTANCE_MISSION_ID)
+        conn.commit()
+        emit(
+            "stale_acceptance_mission_archived",
+            mission_id=STALE_ACCEPTANCE_MISSION_ID,
+            previous_status=str(mission_status or ""),
+            terminal_statuses=list(TERMINAL_AUTOPILOT_STATUSES),
+        )
+    except SystemExit:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_admin_project(project_service: Any, admin_id: int) -> Dict[str, Any]:
@@ -246,6 +362,8 @@ def main() -> int:
 
     if str(run.get("state") or "") != "ready":
         fail("factory_run_not_ready", factory_run_id=factory_run_id, state=str(run.get("state") or ""))
+
+    archive_known_stale_acceptance_mission(admin_id, project_id, factory_run_id)
 
     grant_view: Dict[str, Any] = {}
     try:
