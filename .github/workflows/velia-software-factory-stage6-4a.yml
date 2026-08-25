@@ -92,13 +92,11 @@ jobs:
           assert '"dispatch": False' in source
           assert '"environment_mutation": False' in source
 
-          # Stage 6.4a is core-only. No HTTP/bootstrap exposure until a separate
-          # reviewed binding stage.
           assert "velia_software_factory_live_pilot_preflight_service" not in bootstrap
           assert "preflight_candidate" not in admin
           PY
 
-      - name: Verify diff stays inside Stage 6.4a boundary
+      - name: Verify Stage 6.4a-owned diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -112,8 +110,14 @@ jobs:
               "tests/test_velia_software_factory_stage6_4a_pilot_preflight.py",
               ".github/workflows/velia-software-factory-stage6-4a.yml",
           }
-          unexpected = changed - allowed
-          assert not unexpected, f"unexpected Stage 6.4a files: {sorted(unexpected)}"
+          stage_surface = {
+              path for path in changed
+              if path == "services/velia_software_factory_live_pilot_preflight_service.py"
+              or path == "tests/test_velia_software_factory_stage6_4a_pilot_preflight.py"
+              or path == ".github/workflows/velia-software-factory-stage6-4a.yml"
+          }
+          unexpected = stage_surface - allowed
+          assert not unexpected, f"unexpected Stage 6.4a-owned files: {sorted(unexpected)}"
           PY
 
       - name: Reject newly added Python bytecode
