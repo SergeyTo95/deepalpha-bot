@@ -4,6 +4,7 @@ import logging
 import threading
 from typing import Any, Dict, Mapping, Optional
 
+from services import velia_software_factory_reviewer_remediation_service as remediation
 from services import velia_software_factory_reviewer_service as reviewer
 
 
@@ -155,6 +156,7 @@ def _review_transition(
 
 def _review_ci_transition(
     autopilot: Any,
+    ci_module: Any,
     original_set_run_state: Any,
     run: Mapping[str, Any],
     status: str,
@@ -193,9 +195,19 @@ def _review_ci_transition(
         )
         return
 
-    _context()[_run_key(run)] = dict(decision)
+    key = _run_key(run)
     final_result = dict(decision.get("result") or {})
-    if str(decision.get("status") or "") == "passed":
+    review_status = str(decision.get("status") or "")
+
+    if review_status == "passed":
+        final_result = remediation.mark_review_passed(
+            ci_module,
+            final_result,
+            decision.get("report") if isinstance(decision.get("report"), Mapping) else {},
+        )
+        passed_decision = dict(decision)
+        passed_decision["result"] = final_result
+        _context()[key] = passed_decision
         original_set_run_state(
             run,
             "ready_for_review",
@@ -205,13 +217,51 @@ def _review_ci_transition(
         )
         return
 
+    if review_status == "failed":
+        try:
+            scheduled = remediation.schedule_after_failed_review(
+                autopilot,
+                ci_module,
+                run,
+                final_result,
+                decision,
+            )
+        except Exception:
+            logger.exception(
+                "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_SCHEDULE_FAILED run_id=%s",
+                str(run.get("run_id") or "")[:120],
+            )
+            scheduled = None
+        if isinstance(scheduled, Mapping):
+            remediating = dict(decision)
+            remediating["status"] = "remediating"
+            remediating["result"] = dict(scheduled.get("result") or final_result)
+            remediating["remediation"] = {
+                "attempt_number": int(scheduled.get("attempt_number") or 0),
+                "head_sha": str(scheduled.get("head_sha") or "")[:40],
+            }
+            remediating.pop("error_code", None)
+            _context()[key] = remediating
+            # schedule_after_failed_review already persisted the active
+            # reviewer-remediation state. Never persist blocked/ready in between.
+            return
+
+    final_error = str(
+        decision.get("error_code") or "velia_factory_reviewer_blocked"
+    )
+    final_result = remediation.mark_review_blocked(
+        ci_module,
+        final_result,
+        final_error,
+    )
+    blocked_decision = dict(decision)
+    blocked_decision["result"] = final_result
+    _context()[key] = blocked_decision
     original_set_run_state(
         run,
         "blocked",
         result=final_result,
-        error_code=str(
-            decision.get("error_code") or "velia_factory_reviewer_blocked"
-        ),
+        error_code=final_error,
         finished=True,
     )
 
@@ -241,6 +291,26 @@ def _record_reviewer_event(
                     (report.get("evidence") or {}).get("reviewed_head_sha")
                     or ""
                 )[:40],
+            },
+        )
+        return
+    if review_status == "remediating":
+        remediation_state = (
+            decision.get("remediation")
+            if isinstance(decision.get("remediation"), Mapping)
+            else {}
+        )
+        autopilot._record_event(
+            run,
+            "reviewer.remediation_scheduled",
+            {
+                "summary": str(report.get("summary") or "")[:2000],
+                "finding_count": len(report.get("findings") or []),
+                "reviewed_head_sha": str(
+                    (report.get("evidence") or {}).get("reviewed_head_sha") or ""
+                )[:40],
+                "head_sha": str(remediation_state.get("head_sha") or "")[:40],
+                "attempt_number": int(remediation_state.get("attempt_number") or 0),
             },
         )
         return
@@ -275,8 +345,13 @@ def _rewrite_result(
         else {}
     )
     result["result"] = dict(final_result)
-    if str(decision.get("status") or "") == "passed":
+    decision_status = str(decision.get("status") or "")
+    if decision_status == "passed":
         result["status"] = "ready_for_review"
+        result.pop("error_code", None)
+        return result
+    if decision_status == "remediating":
+        result["status"] = "executing"
         result.pop("error_code", None)
         return result
     result["status"] = "blocked"
@@ -381,7 +456,8 @@ def install(
         # baseline wrapper captures ci_module.process_ci_once, so the final call
         # chain remains baseline -> reviewer -> CI/repair processor. The state
         # hook evaluates the final exact head before ready_for_review is ever
-        # persisted.
+        # persisted. Reviewer-remediation runs are consumed by this wrapper
+        # before generic CI can interpret their state as a normal CI attempt.
         if not getattr(
             ci_module,
             "_velia_factory_reviewer_gate_installed",
@@ -400,6 +476,7 @@ def install(
             ) -> None:
                 _review_ci_transition(
                     autopilot_module,
+                    ci_module,
                     original_ci_set_run_state,
                     run,
                     status,
@@ -409,7 +486,21 @@ def install(
                 )
 
             def ci_process_once_with_reviewer():
-                result = original_ci_process_once()
+                # Stage 6.6 is default-off. When disabled, preserve the exact
+                # Stage 6.5a CI/Reviewer call chain and do not touch the DB.
+                # A run already scheduled into reviewer remediation remains in
+                # status=executing, so generic CI cannot claim it while the
+                # feature is disabled mid-flight.
+                remediation_result = (
+                    remediation.process_once(autopilot_module, ci_module)
+                    if remediation.remediation_enabled(ci_module)
+                    else None
+                )
+                result = (
+                    remediation_result
+                    if remediation_result is not None
+                    else original_ci_process_once()
+                )
                 if not isinstance(result, Mapping):
                     return result
                 key = _run_key(result)
@@ -431,7 +522,10 @@ def install(
         logger.info(
             "VELIA_SOFTWARE_FACTORY_REVIEWER_GATE_INSTALLED "
             "enabled=%s scope=factory_and_workspace read_only=true "
-            "atomic_transition=true final_head_after_ci=true",
+            "atomic_transition=true final_head_after_ci=true "
+            "remediation_enabled=%s remediation_max_attempts=%s",
             str(reviewer.reviewer_enabled()).lower(),
+            str(remediation.remediation_enabled(ci_module)).lower(),
+            remediation.remediation_max_attempts(),
         )
         return True
