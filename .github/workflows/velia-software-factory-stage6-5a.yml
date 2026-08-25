@@ -96,14 +96,19 @@ jobs:
                           assert node.args, (filename, node.lineno)
                           method = node.args[0]
                           assert isinstance(method, ast.Constant) and method.value == "GET", (filename, node.lineno)
-          assert github_reads == 1
+          # compare exact head + current PR metadata. PR metadata is invoked
+          # twice at runtime (before and after semantic review) from one GET site.
+          assert github_reads == 2
           PY
 
       - name: Verify atomic reviewer contract
         run: |
           grep -q 'VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED' services/velia_software_factory_reviewer_service.py
+          grep -q 'load_pull_request' services/velia_software_factory_reviewer_service.py
+          grep -q 'reviewer_pr_head_changed' services/velia_software_factory_reviewer_service.py
           grep -q 'reviewer._FAILING_CHECK_CONCLUSIONS.add("error")' services/velia_software_factory_reviewer_runtime_patch.py
           grep -q 'atomic_transition=true' services/velia_software_factory_reviewer_runtime_patch.py
+          grep -q 'final_head_after_ci=true' services/velia_software_factory_reviewer_runtime_patch.py
           grep -q 'original_transition(run, "blocked"' services/velia_software_factory_reviewer_runtime_patch.py
           grep -q 'draft_pr_created_review_blocked' services/velia_software_factory_reviewer_runtime_patch.py
           grep -q 'reviewer_runtime.install()' services/velia_software_factory_stage3_hardening_patch.py
