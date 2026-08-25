@@ -126,6 +126,12 @@ def _gemini_result(
 ) -> Dict[str, Any]:
     from services.gemini_gateway import generate_content
 
+    # Gemini 2.5 Flash can spend part of maxOutputTokens on internal reasoning.
+    # The Senior Reviewer must still have enough visible budget to finish its
+    # strict JSON verdict; a truncated JSON object is fail-closed as unavailable.
+    if feature == "software_factory_reviewer":
+        max_tokens = max(8192, int(max_tokens))
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
