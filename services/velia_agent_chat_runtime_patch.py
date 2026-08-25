@@ -9,6 +9,7 @@ from db.database import get_connection
 from services import velia_agent_chat_planner_service as planner
 from services import velia_agent_chat_presentation_service as presentation
 from services import velia_chat_streaming_runtime_patch as streaming_patch
+from services import velia_developer_coding_service as coding_service
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,21 @@ def install(chat_module: Any) -> None:
                 request_id=request_id,
             )
 
+        # Coding Agent owns explicit software-change requests. This check must
+        # happen before Agent Core reads personal-plan state; otherwise generic
+        # task wording can be consumed by Agent Core before the existing
+        # Developer/Coding planner and quote gate see it. The outer conflict
+        # router remains authoritative for active-plan exclusivity.
+        if coding_service.is_coding_request(message):
+            return original_generate(
+                prompt,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            )
+
         active = planner.active_chat_job(int(user_id), str(conversation_id))
+
         if not planner.should_handle(message, has_active_job=bool(active)):
             return original_generate(
                 prompt,

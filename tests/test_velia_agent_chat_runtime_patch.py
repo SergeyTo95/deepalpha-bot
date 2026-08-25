@@ -36,6 +36,33 @@ def test_repository_request_falls_through_to_developer_layer(monkeypatch):
     assert len(calls) == 1
 
 
+def test_coding_task_request_falls_through_before_agent_core_planning(monkeypatch):
+    module, calls = _chat_module()
+    monkeypatch.setattr(planner, "chat_agent_enabled", lambda: True)
+    monkeypatch.setattr(
+        patch,
+        "_latest_request_user_message",
+        lambda request_id, user_id: "Создай задачу: исправь баг в Android приложении",
+    )
+
+    def unexpected_agent_call(*args, **kwargs):
+        raise AssertionError("Agent Core planner must not receive a coding request")
+
+    monkeypatch.setattr(planner, "active_chat_job", unexpected_agent_call)
+    monkeypatch.setattr(planner, "create_chat_plan", unexpected_agent_call)
+    patch.install(module)
+
+    result = module.generate_velia_chat_result(
+        "prompt",
+        user_id=7,
+        conversation_id="conversation-1",
+        request_id="request-1",
+    )
+
+    assert result["reason"] == "ordinary"
+    assert len(calls) == 1
+
+
 def test_personal_action_request_returns_plan_without_execution(monkeypatch):
     module, calls = _chat_module()
     monkeypatch.setattr(planner, "chat_agent_enabled", lambda: True)
