@@ -1,0 +1,196 @@
+name: VELIA Software Factory Stage 6.7
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'services/velia_software_factory_admin_acceptance_service.py'
+      - 'services/velia_software_factory_admin_acceptance_runtime_patch.py'
+      - 'services/velia_software_factory_admin_acceptance_admin_routes.py'
+      - 'services/velia_software_factory_live_pilot_control_service.py'
+      - 'services/velia_software_factory_live_pilot_admin_routes.py'
+      - 'tests/test_velia_software_factory_stage6_7_admin_acceptance.py'
+      - '.github/workflows/velia-software-factory-stage6-7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controlled-admin-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile Stage 6.7 boundary
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_admin_acceptance_service.py \
+            services/velia_software_factory_admin_acceptance_runtime_patch.py \
+            services/velia_software_factory_admin_acceptance_admin_routes.py \
+            services/velia_software_factory_live_pilot_control_service.py \
+            services/velia_software_factory_live_pilot_admin_routes.py \
+            services/velia_software_factory_live_pilot_preflight_service.py \
+            services/velia_software_factory_reviewer_runtime_patch.py \
+            services/velia_software_factory_reviewer_remediation_service.py
+
+      - name: Run Stage 6.7 and prior safety regressions
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage6_7_admin_acceptance.py \
+            tests/test_velia_software_factory_stage6_6_reviewer_remediation.py \
+            tests/test_velia_software_factory_stage6_5b_reviewer_pilot_gate.py \
+            tests/test_velia_software_factory_reviewer_gate.py \
+            tests/test_velia_software_factory_reviewer_runtime_atomic.py \
+            tests/test_velia_software_factory_stage6_4a_pilot_preflight.py \
+            tests/test_velia_software_factory_stage6_3b_control_center.py \
+            tests/test_velia_software_factory_stage6_3_live_pilot_control.py \
+            tests/test_velia_software_factory_stage6_2_live_pilot_guard.py \
+            tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+
+      - name: Verify acceptance remains separately gated and remediation-proving
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('services/velia_software_factory_admin_acceptance_service.py').read_text()
+          assert 'VELIA_SOFTWARE_FACTORY_ADMIN_ACCEPTANCE_ENABLED' in text
+          assert '_env_bool(_ACCEPTANCE_FLAG, False)' in text
+          assert 'control_center_stage6_7_acceptance' in text
+          assert 'requires_reviewer_remediation_observed' in text
+          assert 'remediation_attempt_budget > 0' in text
+          assert 'velia_factory_admin_acceptance_grant_not_pending' in text
+          assert 'remediation_attempts >= 1' in text
+          assert 'reviewer_status == "passed"' in text
+          assert 'run_status == "ready_for_review"' in text
+          assert 'grant_status == "consumed"' in text
+          assert 'incomplete_no_remediation_observed' in text
+          assert '"merge_authority": False' in text
+          assert '"deployment_authority": False' in text
+          PY
+
+      - name: Verify acceptance delegates to existing one-shot control
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          service = Path('services/velia_software_factory_admin_acceptance_service.py').read_text()
+          control = Path('services/velia_software_factory_live_pilot_control_service.py').read_text()
+          assert service.count('control.arm_grant(') == 1
+          assert service.count('control.dispatch_once(') == 1
+          assert service.count('control.revoke_grant(') == 1
+          assert '_ALLOWED_APPROVAL_SOURCES' in control
+          assert '_ACCEPTANCE_APPROVAL_SOURCE' in control
+          assert 'velia_factory_live_pilot_approval_source_invalid' in control
+          assert control.count('factory.advance_run(') == 1
+          PY
+
+      - name: Reject parallel write, rollout, release, or environment authority
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          files = (
+              'services/velia_software_factory_admin_acceptance_service.py',
+              'services/velia_software_factory_admin_acceptance_runtime_patch.py',
+              'services/velia_software_factory_admin_acceptance_admin_routes.py',
+          )
+          text = '\n'.join(Path(path).read_text() for path in files)
+          forbidden = (
+              'factory.advance_run',
+              'guard.issue_grant',
+              'guard.claim_dispatch',
+              'autopilot.enqueue_task',
+              'merge_pull_request',
+              'merge_exact_head',
+              'create_deployment',
+              'redeploy',
+              'set-variables',
+              'os.environ[',
+              'os.putenv',
+          )
+          for token in forbidden:
+              assert token not in text, token
+          PY
+
+      - name: Verify Control Center binding preserves Stage 6.3 surface
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          old = Path('services/velia_software_factory_live_pilot_admin_routes.py').read_text()
+          new = Path('services/velia_software_factory_admin_acceptance_admin_routes.py').read_text()
+          assert old.count('app.router.add_get(') == 1
+          assert old.count('app.router.add_post(') == 1
+          assert 'setup_factory_pilot_acceptance_admin_routes(' in old
+          assert new.count('app.router.add_get(') == 1
+          assert new.count('app.router.add_post(') == 1
+          assert 'app.router.add_get("/admin/factory-pilot/acceptance", acceptance_page)' in new
+          assert 'app.router.add_post("/admin/factory-pilot/acceptance/actions/{action}", acceptance_action)' in new
+          action_start = new.index('async def acceptance_action')
+          assert new.index('denied = await guard(request)', action_start) < new.index('form = await request.post()', action_start)
+          assert 'acceptance_runtime.install()' in new
+          PY
+
+      - name: Verify Stage 6.7-owned diff surface
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+          base = '${{ github.event.pull_request.base.sha }}'
+          head = '${{ github.event.pull_request.head.sha }}'
+          changed = set(subprocess.check_output(['git','diff','--name-only',base,head], text=True).splitlines())
+          allowed = {
+              'services/velia_software_factory_admin_acceptance_service.py',
+              'services/velia_software_factory_admin_acceptance_runtime_patch.py',
+              'services/velia_software_factory_admin_acceptance_admin_routes.py',
+              'services/velia_software_factory_live_pilot_control_service.py',
+              'services/velia_software_factory_live_pilot_admin_routes.py',
+              'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+              'tests/test_velia_software_factory_stage6_3b_control_center.py',
+              'tests/test_velia_software_factory_stage6_4b_preflight_control_center.py',
+              '.github/workflows/velia-software-factory-stage6-3a.yml',
+              '.github/workflows/velia-software-factory-stage6-4a.yml',
+              '.github/workflows/velia-software-factory-stage6-4b.yml',
+              '.github/workflows/velia-software-factory-stage6-5b.yml',
+              '.github/workflows/velia-software-factory-stage6-6.yml',
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f'unexpected Stage 6.7 files: {sorted(unexpected)}'
+          required = {
+              'services/velia_software_factory_admin_acceptance_service.py',
+              'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+          }
+          assert required <= changed, sorted(required - changed)
+          PY
+
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)__pycache__/|.*\.py[co]$'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi

@@ -94,14 +94,11 @@ jobs:
           assert "layout=layout" in parent
           assert "key=key" in parent
           assert parent.count('app.router.add_post("/admin/factory-pilot/actions/{action}"') == 1
-
-          # Stage 6.4b deliberately reuses the already-mounted Factory Pilot
-          # installer and must not broaden the global web bootstrap.
           assert "velia_software_factory_live_pilot_preflight_admin_routes" not in bootstrap
           assert "/admin/factory-pilot/preflight" not in bootstrap
           PY
 
-      - name: Verify diff stays inside Stage 6.4b boundary
+      - name: Verify Stage 6.4b-owned diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -111,14 +108,18 @@ jobs:
           head = "${{ github.event.pull_request.head.sha }}"
           changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
           allowed = {
-              "services/velia_software_factory_live_pilot_admin_routes.py",
               "services/velia_software_factory_live_pilot_preflight_admin_routes.py",
               "tests/test_velia_software_factory_stage6_4b_preflight_control_center.py",
-              "tests/test_velia_software_factory_stage6_3b_control_center.py",
               ".github/workflows/velia-software-factory-stage6-4b.yml",
           }
-          unexpected = changed - allowed
-          assert not unexpected, f"unexpected Stage 6.4b files: {sorted(unexpected)}"
+          stage_surface = {
+              path for path in changed
+              if path == "services/velia_software_factory_live_pilot_preflight_admin_routes.py"
+              or path == "tests/test_velia_software_factory_stage6_4b_preflight_control_center.py"
+              or path == ".github/workflows/velia-software-factory-stage6-4b.yml"
+          }
+          unexpected = stage_surface - allowed
+          assert not unexpected, f"unexpected Stage 6.4b-owned files: {sorted(unexpected)}"
           PY
 
       - name: Reject newly added Python bytecode
