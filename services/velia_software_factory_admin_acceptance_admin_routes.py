@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 
 from aiohttp import web
 
+from services import velia_software_factory_admin_acceptance_runtime_patch as acceptance_runtime
 from services import velia_software_factory_admin_acceptance_service as acceptance
 from services.velia_admin_security_service import record_admin_audit
 from services.velia_software_factory_core_service import SoftwareFactoryError
@@ -15,6 +16,8 @@ GuardFn = Callable[[web.Request], Awaitable[Optional[web.StreamResponse]]]
 LayoutFn = Callable[[str, str, str, str, str], str]
 KeyFn = Callable[[web.Request], str]
 RequestIdFn = Callable[[web.Request], str]
+
+acceptance_runtime.install()
 
 
 def _e(value: Any) -> str:
@@ -80,7 +83,6 @@ def _render(status: Dict[str, Any], inspection: Optional[Dict[str, Any]], run_id
     session = dict(inspection.get("acceptance") or {})
     evidence = dict(inspection.get("evidence") or {})
     certificate = dict(inspection.get("certificate") or {})
-    grant = dict(inspection.get("grant") or {})
     acceptance_id = str(session.get("acceptance_id") or "")
     expected_arm = str(inspection.get("expected_arm_confirmation") or "")
     expected_dispatch = str(inspection.get("expected_dispatch_confirmation") or "")
@@ -231,7 +233,7 @@ def setup_factory_pilot_acceptance_admin_routes(
                     confirmation,
                 )
             session = dict((result or {}).get("acceptance") or {})
-            grant = dict((result or {}).get("grant") or {})
+            result_grant = dict((result or {}).get("grant") or {})
             await asyncio.to_thread(
                 record_admin_audit,
                 **metadata,
@@ -241,9 +243,9 @@ def setup_factory_pilot_acceptance_admin_routes(
                 before={"repository_full_name": repository, "grant_id": grant_id or None},
                 after={
                     "repository_full_name": repository,
-                    "acceptance_id": session.get("acceptance_id") or grant.get("grant_id"),
-                    "grant_status": grant.get("status") or session.get("status"),
-                    "autopilot_task_id": grant.get("autopilot_task_id"),
+                    "acceptance_id": session.get("acceptance_id") or result_grant.get("grant_id"),
+                    "grant_status": result_grant.get("status") or session.get("status"),
+                    "autopilot_task_id": result_grant.get("autopilot_task_id"),
                 },
                 success=True,
             )
