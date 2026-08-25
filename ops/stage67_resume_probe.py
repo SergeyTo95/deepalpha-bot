@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# Snapshot trigger: keep this probe strictly read-only; no acceptance mutation.
 import json
 from typing import Any
 
