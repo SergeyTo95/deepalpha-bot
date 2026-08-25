@@ -7,6 +7,7 @@ from db.database import get_connection
 from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_lead_service as factory
 from services import velia_software_factory_live_pilot_dispatch_runtime_patch as live_pilot_dispatch
+from services import velia_software_factory_live_pilot_reviewer_gate_patch as reviewer_pilot_gate
 from services import velia_software_factory_reviewer_runtime_patch as reviewer_runtime
 from services import velia_software_factory_rollout_runtime_patch as rollout_runtime
 from services import velia_software_factory_rollout_service as rollout
@@ -253,6 +254,9 @@ def install(module=autonomy) -> None:
     # Install the independent read-only Senior Reviewer around Coding Autopilot.
     # Its behavior is inert unless VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED=true.
     reviewer_runtime.install()
+    # Bind reviewer readiness to live-pilot preflight, arming, and the deepest
+    # grant-claim boundary. This remains inert for dry-run and non-admin paths.
+    reviewer_pilot_gate.install()
     # This call is intentionally made on every install attempt. The module is
     # imported before Stage 2 is mounted, so rollout_runtime.install() initially
     # defers; setup_velia_software_factory_routes() calls us again after Stage 2.
