@@ -1,0 +1,2 @@
+Clean Stage 6.7 acceptance rerun after transient GitHub ref recovery.
+Expected production base: fc825a11e0c99c5e7b002e5163b20e865b124528
