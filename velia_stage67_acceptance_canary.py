@@ -15,4 +15,8 @@ def evaluate_expression(text):
     rejected by the Senior Reviewer and repaired by remediation.
     """
     # STAGE67_REVIEWER_CANARY: intentionally unsafe first draft
+    # STAGE67_SENIOR_REVIEW: REJECT/BLOCK (severity: critical) - direct
+    # eval(text) below enables arbitrary code execution (CWE-95).
+    # Remediation must replace eval with a safe integer-only +/- parser
+    # on this exact PR head. PR remains draft; no merge or deploy.
     return eval(text)
