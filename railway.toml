@@ -1,3 +1,0 @@
-[deploy]
-startCommand = "python ops/stage67_live_acceptance_operator.py"
-restartPolicyType = "NEVER"

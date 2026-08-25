@@ -225,3 +225,43 @@ def test_existing_annotations_are_not_replaced_by_logs(monkeypatch):
     }
 
     assert logs.enrich_failure({}, "a" * 40, original) == original
+
+def test_postprocess_failure_filters_log_enrichment_after_install_order(monkeypatch):
+    ignored_context = "melodious-radiance - velia-android-apk-c2205e4"
+    monkeypatch.setenv(
+        "VELIA_DEVELOPER_AUTOPILOT_CI_IGNORED_CONTEXTS",
+        ignored_context,
+    )
+    result = logs._postprocess_failure(
+        {
+            "checks": [
+                {
+                    "name": "backend-status",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ],
+            "failures": [
+                {
+                    "source": "actions_job_log",
+                    "name": ignored_context,
+                    "conclusion": "failure",
+                    "text": "FAILED tests/test_android.py::test_build - AssertionError",
+                },
+                {
+                    "source": "commit_status",
+                    "name": "backend-status",
+                    "conclusion": "failure",
+                    "description": "Backend status failed without actionable output.",
+                },
+            ],
+            "repairable": True,
+            "infrastructure": False,
+        }
+    )
+
+    assert [item["name"] for item in result["failures"]] == ["backend-status"]
+    assert result["ignored_contexts"] == [ignored_context]
+    assert result["repairable"] is False
+    assert result["evidence_quality"] == "weak"
+

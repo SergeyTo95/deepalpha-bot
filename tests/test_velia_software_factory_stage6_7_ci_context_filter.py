@@ -126,7 +126,7 @@ def test_failure_details_remove_only_exact_ignored_context_and_reclassify(monkey
             "source": "check_run",
             "name": "backend-tests",
             "conclusion": "failure",
-            "summary": "assertion failed",
+            "summary": "AssertionError at tests/test_backend.py:12",
             "annotations": [],
         },
     ]
@@ -145,6 +145,74 @@ def test_failure_details_remove_only_exact_ignored_context_and_reclassify(monkey
     assert result["ignored_contexts"] == [ANDROID_CONTEXT]
     assert result["infrastructure"] is False
     assert result["repairable"] is True
+
+
+def test_log_enriched_ignored_context_is_removed_before_reclassification(monkeypatch):
+    monkeypatch.setenv("VELIA_DEVELOPER_AUTOPILOT_CI_IGNORED_CONTEXTS", ANDROID_CONTEXT)
+    result = context_filter.filter_failure_payload(
+        {
+            "checks": [
+                {
+                    "name": "backend-status",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ],
+            "failures": [
+                {
+                    "source": "actions_job_log",
+                    "name": ANDROID_CONTEXT,
+                    "conclusion": "failure",
+                    "text": "FAILED tests/test_android.py::test_build - AssertionError",
+                },
+                {
+                    "source": "commit_status",
+                    "name": "backend-status",
+                    "conclusion": "failure",
+                    "description": "Backend status failed without actionable output.",
+                },
+            ],
+            "repairable": True,
+            "infrastructure": False,
+        }
+    )
+
+    assert [item["name"] for item in result["failures"]] == ["backend-status"]
+    assert result["ignored_contexts"] == [ANDROID_CONTEXT]
+    assert result["evidence_quality"] == "weak"
+    assert result["repairable"] is False
+    assert result["infrastructure"] is False
+
+
+def test_log_enriched_nonignored_strong_failure_remains_repairable(monkeypatch):
+    monkeypatch.setenv("VELIA_DEVELOPER_AUTOPILOT_CI_IGNORED_CONTEXTS", ANDROID_CONTEXT)
+    result = context_filter.filter_failure_payload(
+        {
+            "checks": [
+                {
+                    "name": "backend-tests",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ],
+            "failures": [
+                {
+                    "source": "actions_job_log",
+                    "name": "backend-tests",
+                    "conclusion": "failure",
+                    "text": "FAILED tests/test_backend.py::test_value - assert 1 == 2",
+                }
+            ],
+            "repairable": False,
+            "infrastructure": False,
+        }
+    )
+
+    assert [item["name"] for item in result["failures"]] == ["backend-tests"]
+    assert result["ignored_contexts"] == []
+    assert result["evidence_quality"] == "strong"
+    assert result["repairable"] is True
+    assert result["infrastructure"] is False
 
 
 def test_context_list_is_bounded_deduplicated_and_rejects_overlong(monkeypatch):

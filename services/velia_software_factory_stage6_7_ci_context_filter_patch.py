@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -100,21 +99,38 @@ def _merge_names(*groups: Sequence[str]) -> List[str]:
 
 
 def _recompute_failure_classification(ci_module: Any, result: Dict[str, Any]) -> None:
-    failures = [item for item in (result.get("failures") or []) if isinstance(item, Mapping)]
-    rendered = json.dumps(failures, ensure_ascii=False, separators=(",", ":"), default=str)[:20000]
-    infrastructure = bool(ci_module._INFRA_FAILURE_RE.search(rendered))
-    repairable = bool(
-        failures
-        and any(str(item.get("source") or "") == "check_run" for item in failures)
-        and any(
-            item.get("annotations") or item.get("summary") or item.get("text")
-            for item in failures
-            if str(item.get("source") or "") == "check_run"
-        )
-        and not infrastructure
+    # Reuse the authoritative structured classifier so a non-ignored
+    # actions_job_log keeps strong evidence while an ignored log cannot make a
+    # remaining weak failure repairable.
+    from services import velia_agent_coding_autopilot_ci_classifier as ci_classifier
+
+    classified = ci_classifier.classify_failure_payload(result)
+    result.clear()
+    result.update(classified)
+
+
+def filter_failure_payload(
+    result: Mapping[str, Any],
+    *,
+    ci_module: Any = None,
+) -> Dict[str, Any]:
+    """Apply the exact-name filter after all failure evidence enrichment."""
+
+    payload = dict(result or {})
+    if not ignored_contexts():
+        return payload
+
+    filtered_checks, ignored_checks = filter_checks(payload.get("checks") or [])
+    filtered_failures, ignored_failures = _filter_failures(payload.get("failures") or [])
+    payload["checks"] = filtered_checks[:30]
+    payload["failures"] = filtered_failures[:20]
+    payload["ignored_contexts"] = _merge_names(
+        payload.get("ignored_contexts") or [],
+        ignored_checks,
+        ignored_failures,
     )
-    result["infrastructure"] = infrastructure
-    result["repairable"] = repairable
+    _recompute_failure_classification(ci_module, payload)
+    return payload
 
 
 def install(ci_module: Any = None) -> bool:
@@ -144,12 +160,12 @@ def install(ci_module: Any = None) -> bool:
         ) -> Dict[str, Any]:
             filtered_checks, ignored_checks = filter_checks(checks)
             result = dict(original_failure_details(project, sha, filtered_checks) or {})
-            filtered_failures, ignored_failures = _filter_failures(result.get("failures") or [])
             result["checks"] = filtered_checks[:30]
-            result["failures"] = filtered_failures[:20]
-            result["ignored_contexts"] = _merge_names(ignored_checks, ignored_failures)
-            _recompute_failure_classification(ci_module, result)
-            return result
+            result["ignored_contexts"] = _merge_names(
+                result.get("ignored_contexts") or [],
+                ignored_checks,
+            )
+            return filter_failure_payload(result, ci_module=ci_module)
 
         def set_attempt_filtered(attempt: Mapping[str, Any], status: str, **kwargs: Any) -> None:
             next_kwargs = dict(kwargs)
