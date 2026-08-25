@@ -10,7 +10,7 @@ from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_software_factory_reviewer_service as reviewer
 
 TARGET_RUN_ID = "00d5c859-7150-4b6c-9259-038bbf7916a1"
-DIAG_SUFFIX = "post-gemini-20260825-2158"
+DIAG_SUFFIX = "post-gemini-8192-20260825-2202"
 
 
 def safe_result(value: Any) -> Any:
@@ -22,7 +22,7 @@ def safe_result(value: Any) -> Any:
                 continue
             if key == "text":
                 result["text_length"] = len(str(v or ""))
-                result["text_preview"] = str(v or "")[:1200]
+                result["text_preview"] = str(v or "")[:2400]
             else:
                 result[key] = safe_result(v)
         return result
@@ -81,13 +81,14 @@ print("STAGE67_PROVIDER_DIAG config=" + json.dumps({
     "gemini_enabled": str(os.getenv("GEMINI_ENABLED", "")),
     "prompt_len": len(prompt),
     "head": head,
+    "max_tokens": 8192,
 }, sort_keys=True), flush=True)
 
 request_key = TARGET_RUN_ID + ":" + DIAG_SUFFIX
 provider_result = llm_service._provider_result(
     provider,
     prompt,
-    max_tokens=1800,
+    max_tokens=8192,
     feature="software_factory_reviewer",
     user_id=user_id,
     chat_id=None,
@@ -100,6 +101,13 @@ provider_result = llm_service._provider_result(
     origin="software_factory_reviewer_diag",
 )
 print("STAGE67_PROVIDER_DIAG result=" + json.dumps(safe_result(provider_result), ensure_ascii=False, sort_keys=True, default=str), flush=True)
+if isinstance(provider_result, Mapping) and provider_result.get("text"):
+    try:
+        parsed = reviewer._extract_json_object(str(provider_result.get("text") or ""))
+        normalized = reviewer._normalize_model_report(parsed)
+        print("STAGE67_PROVIDER_DIAG parsed=" + json.dumps(normalized, ensure_ascii=False, sort_keys=True), flush=True)
+    except Exception as exc:
+        print("STAGE67_PROVIDER_DIAG parse_error=" + json.dumps({"type": exc.__class__.__name__, "message": str(exc)}, sort_keys=True), flush=True)
 print("STAGE67_PROVIDER_DIAG fallback_allowed=" + json.dumps({
     "allows_fallback": bool(llm_service._provider_failure_allows_fallback(provider_result if isinstance(provider_result, dict) else {})),
     "resolved_fallback_provider": llm_service.resolve_fallback_provider(provider),
