@@ -92,6 +92,16 @@ def test_acceptance_readiness_requires_reviewer_remediation(monkeypatch):
     assert "reviewer_remediation_not_ready" in status["blockers"]
 
 
+def test_acceptance_readiness_requires_positive_remediation_budget(monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(acceptance.remediation, "remediation_max_attempts", lambda: 0)
+    status = acceptance.public_status(7)
+    assert status["ready_now"] is False
+    assert status["remediation"]["ready"] is False
+    assert status["remediation"]["max_attempts"] == 0
+    assert "reviewer_remediation_not_ready" in status["blockers"]
+
+
 def test_arm_uses_acceptance_provenance_and_existing_control(monkeypatch):
     _ready(monkeypatch)
     seen = {}
@@ -151,6 +161,23 @@ def test_foreign_pilot_grant_cannot_become_acceptance(monkeypatch):
     with pytest.raises(SoftwareFactoryError) as exc:
         acceptance.arm_acceptance(7, RUN, REPO, f"accept:{RUN}:{REPO}")
     assert exc.value.code == "velia_factory_admin_acceptance_grant_conflict"
+
+
+def test_arm_rejects_terminal_existing_acceptance_grant(monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(
+        acceptance.control,
+        "arm_grant",
+        lambda *a, **k: {
+            "run": {"run_id": RUN},
+            "project": {"repository_full_name": REPO},
+            "grant": _grant(status="revoked"),
+        },
+    )
+    with pytest.raises(SoftwareFactoryError) as exc:
+        acceptance.arm_acceptance(7, RUN, REPO, f"accept:{RUN}:{REPO}")
+    assert exc.value.code == "velia_factory_admin_acceptance_grant_not_pending"
+    assert exc.value.detail == "revoked"
 
 
 def test_dispatch_delegates_once_and_requires_acceptance_grant(monkeypatch):
