@@ -7,6 +7,7 @@ from db.database import get_connection
 from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_lead_service as factory
 from services import velia_software_factory_live_pilot_dispatch_runtime_patch as live_pilot_dispatch
+from services import velia_software_factory_reviewer_runtime_patch as reviewer_runtime
 from services import velia_software_factory_rollout_runtime_patch as rollout_runtime
 from services import velia_software_factory_rollout_service as rollout
 from services.velia_software_factory_core_service import ProjectSpec
@@ -249,6 +250,9 @@ def install(module=autonomy) -> None:
     # Install the one-shot Lead dispatch boundary before Stage 2 captures
     # factory.advance_run. The wrapper is inert while its fail-closed flag is off.
     live_pilot_dispatch.install(factory)
+    # Install the independent read-only Senior Reviewer around Coding Autopilot.
+    # Its behavior is inert unless VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED=true.
+    reviewer_runtime.install()
     # This call is intentionally made on every install attempt. The module is
     # imported before Stage 2 is mounted, so rollout_runtime.install() initially
     # defers; setup_velia_software_factory_routes() calls us again after Stage 2.
