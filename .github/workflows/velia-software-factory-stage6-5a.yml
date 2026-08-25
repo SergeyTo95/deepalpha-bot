@@ -1,0 +1,124 @@
+name: VELIA Software Factory Stage 6.5a
+
+on:
+  pull_request:
+    paths:
+      - 'services/velia_software_factory_reviewer_*.py'
+      - 'services/velia_software_factory_stage3_hardening_patch.py'
+      - 'tests/test_velia_software_factory_reviewer_*.py'
+      - '.github/workflows/velia-software-factory-stage6-5a.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reviewer-gate-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact head checkout
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Compile reviewer boundary
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_reviewer_service.py \
+            services/velia_software_factory_reviewer_runtime_patch.py \
+            services/velia_software_factory_stage3_hardening_patch.py \
+            tests/test_velia_software_factory_reviewer_gate.py \
+            tests/test_velia_software_factory_reviewer_runtime_atomic.py
+
+      - name: Run reviewer regression tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_reviewer_gate.py \
+            tests/test_velia_software_factory_reviewer_runtime_atomic.py
+
+      - name: Verify reviewer fail-closed default
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_software_factory_reviewer_service as reviewer
+
+          os.environ.pop("VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED", None)
+          assert reviewer.reviewer_enabled() is False
+          assert reviewer.review_required({"client_request_id": "factory:run:task"}) is False
+          PY
+
+      - name: Verify reviewer is read-only and GET-only
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          forbidden = {
+              "create_branch", "open_pull_request", "merge_pull", "merge_pull_request",
+              "apply_patch", "update_file", "create_file", "delete_file",
+              "create_commit", "create_tree", "update_ref",
+          }
+          github_reads = 0
+          for filename in (
+              "services/velia_software_factory_reviewer_service.py",
+              "services/velia_software_factory_reviewer_runtime_patch.py",
+          ):
+              tree = ast.parse(Path(filename).read_text(encoding="utf-8"), filename=filename)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                      assert node.func.attr not in forbidden, (filename, node.func.attr, node.lineno)
+                      if node.func.attr == "_request":
+                          github_reads += 1
+                          assert node.args, (filename, node.lineno)
+                          method = node.args[0]
+                          assert isinstance(method, ast.Constant) and method.value == "GET", (filename, node.lineno)
+          assert github_reads == 1
+          PY
+
+      - name: Verify atomic reviewer contract
+        run: |
+          grep -q 'VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED' services/velia_software_factory_reviewer_service.py
+          grep -q 'reviewer._FAILING_CHECK_CONCLUSIONS.add("error")' services/velia_software_factory_reviewer_runtime_patch.py
+          grep -q 'atomic_transition=true' services/velia_software_factory_reviewer_runtime_patch.py
+          grep -q 'original_transition(run, "blocked"' services/velia_software_factory_reviewer_runtime_patch.py
+          grep -q 'draft_pr_created_review_blocked' services/velia_software_factory_reviewer_runtime_patch.py
+          grep -q 'reviewer_runtime.install()' services/velia_software_factory_stage3_hardening_patch.py
+
+      - name: Reject merge/deploy capabilities in reviewer modules
+        run: |
+          ! grep -nE 'merge_pull|merge_pull_request|railway (up|deploy)|kubectl|terraform apply|open_pull_request|create_branch' \
+            services/velia_software_factory_reviewer_service.py \
+            services/velia_software_factory_reviewer_runtime_patch.py
+
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '(^|/)__pycache__/|\.py[co]$'; then
+            echo "Generated Python bytecode was added by this PR."
+            exit 1
+          fi
