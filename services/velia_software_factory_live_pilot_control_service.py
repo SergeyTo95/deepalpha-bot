@@ -12,6 +12,8 @@ from services.velia_software_factory_core_service import SoftwareFactoryError
 
 _CONTROL_FLAG = "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_CONTROL_ENABLED"
 _APPROVAL_SOURCE = "control_center_stage6_3"
+_ACCEPTANCE_APPROVAL_SOURCE = "control_center_stage6_7_acceptance"
+_ALLOWED_APPROVAL_SOURCES = {_APPROVAL_SOURCE, _ACCEPTANCE_APPROVAL_SOURCE}
 _DEFAULT_TTL_SECONDS = 600
 
 
@@ -168,11 +170,14 @@ def arm_grant(
     normalized_run_id = str(run.get("run_id") or run_id)
     repository = _confirm_repository(project, repository_full_name)
     _require_confirmation("arm", normalized_run_id, repository, confirmation)
+    source = str(approval_source or _APPROVAL_SOURCE).strip()[:120] or _APPROVAL_SOURCE
+    if source not in _ALLOWED_APPROVAL_SOURCES:
+        raise SoftwareFactoryError("velia_factory_live_pilot_approval_source_invalid", status=409)
     grant = guard.issue_grant(
         actor,
         run,
         project,
-        approval_source=str(approval_source or _APPROVAL_SOURCE).strip()[:120] or _APPROVAL_SOURCE,
+        approval_source=source,
         ttl_seconds=int(ttl_seconds or _DEFAULT_TTL_SECONDS),
     )
     return {
