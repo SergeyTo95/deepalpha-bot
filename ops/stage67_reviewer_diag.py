@@ -9,7 +9,8 @@ from services import llm_service
 from services import velia_agent_coding_autopilot_service as autopilot
 from services import velia_software_factory_reviewer_service as reviewer
 
-TARGET_RUN_ID = "a59badf6-6fcf-422b-a12b-589c7aac15ec"
+TARGET_RUN_ID = "00d5c859-7150-4b6c-9259-038bbf7916a1"
+DIAG_SUFFIX = "post-gemini-20260825-2158"
 
 
 def safe_result(value: Any) -> Any:
@@ -34,7 +35,7 @@ conn = get_connection()
 cur = conn.cursor()
 try:
     cur.execute(
-        "SELECT task_id,mission_id,user_id,project_id,pull_request_number,pull_request_url,result_json "
+        "SELECT task_id,mission_id,user_id,project_id,status,error_code,pull_request_number,pull_request_url,result_json "
         "FROM velia_developer_autopilot_runs WHERE run_id=%s LIMIT 1",
         (TARGET_RUN_ID,),
     )
@@ -45,16 +46,26 @@ finally:
     cur.close()
     conn.close()
 
-result = row[6]
+result = row[8]
 if isinstance(result, str):
     result = json.loads(result or "{}")
 result = result if isinstance(result, Mapping) else {}
+print("STAGE67_PERSISTED_DIAG " + json.dumps({
+    "run_id": TARGET_RUN_ID,
+    "status": str(row[4] or ""),
+    "error_code": str(row[5] or ""),
+    "pull_request_number": int(row[6] or 0),
+    "reviewer": safe_result(result.get("reviewer") or {}),
+    "reviewer_history": safe_result(result.get("reviewer_history") or []),
+    "reviewer_remediation": safe_result(result.get("reviewer_remediation") or {}),
+}, ensure_ascii=False, sort_keys=True, default=str), flush=True)
+
 user_id = int(row[2])
 task = autopilot.get_task(user_id, str(row[0]))
 mission = autopilot.get_mission(user_id, str(row[1]))
 project = autopilot.project_service.get_project(user_id, str(row[3]))
 execution_result = dict(result)
-execution_result.setdefault("pull_request", {"number": int(row[4] or 0), "url": str(row[5] or "")})
+execution_result.setdefault("pull_request", {"number": int(row[6] or 0), "url": str(row[7] or "")})
 pr = reviewer.load_pull_request(project, execution_result)
 head = str(pr.get("head_sha") or "").lower()
 pinned = dict(execution_result)
@@ -68,12 +79,11 @@ print("STAGE67_PROVIDER_DIAG config=" + json.dumps({
     "default_model": llm_service.DEFAULT_GEMINI_MODEL,
     "fallback_models": list(llm_service.GEMINI_FALLBACK_MODELS),
     "gemini_enabled": str(os.getenv("GEMINI_ENABLED", "")),
-    "llm_text_provider": str(os.getenv("LLM_TEXT_PROVIDER", "")),
-    "llm_primary_provider": str(os.getenv("LLM_PRIMARY_PROVIDER", "")),
     "prompt_len": len(prompt),
     "head": head,
 }, sort_keys=True), flush=True)
 
+request_key = TARGET_RUN_ID + ":" + DIAG_SUFFIX
 provider_result = llm_service._provider_result(
     provider,
     prompt,
@@ -84,9 +94,9 @@ provider_result = llm_service._provider_result(
     is_background=False,
     primary_model=llm_service.DEFAULT_GEMINI_MODEL,
     fallback_models=list(llm_service.GEMINI_FALLBACK_MODELS),
-    request_id=TARGET_RUN_ID + ":diag",
-    cycle_id=TARGET_RUN_ID + ":diag",
-    job_id=TARGET_RUN_ID + ":diag",
+    request_id=request_key,
+    cycle_id=request_key,
+    job_id=request_key,
     origin="software_factory_reviewer_diag",
 )
 print("STAGE67_PROVIDER_DIAG result=" + json.dumps(safe_result(provider_result), ensure_ascii=False, sort_keys=True, default=str), flush=True)
