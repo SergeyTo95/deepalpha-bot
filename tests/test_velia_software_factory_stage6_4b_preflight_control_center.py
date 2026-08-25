@@ -216,7 +216,7 @@ def test_preflight_route_surface_is_get_only():
     assert app.router.posts == {}
 
 
-def test_parent_factory_pilot_installer_binds_preflight_without_new_post_surface(monkeypatch):
+def test_parent_factory_pilot_installer_binds_preflight_without_preflight_post_surface(monkeypatch):
     async def guard(request):
         return None
 
@@ -232,7 +232,12 @@ def test_parent_factory_pilot_installer_binds_preflight_without_new_post_surface
 
     assert "/admin/factory-pilot" in app.router.gets
     assert "/admin/factory-pilot/preflight" in app.router.gets
-    assert set(app.router.posts) == {"/admin/factory-pilot/actions/{action}"}
+    assert "/admin/factory-pilot/acceptance" in app.router.gets
+    assert set(app.router.posts) == {
+        "/admin/factory-pilot/actions/{action}",
+        "/admin/factory-pilot/acceptance/actions/{action}",
+    }
+    assert not any(path.startswith("/admin/factory-pilot/preflight/") for path in app.router.posts)
     assert app["velia_factory_pilot_preflight_admin_routes_installed"] is True
 
 
