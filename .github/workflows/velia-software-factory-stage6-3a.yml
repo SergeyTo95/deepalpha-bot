@@ -60,35 +60,27 @@ jobs:
           assert control._CONTROL_FLAG == 'VELIA_SOFTWARE_FACTORY_LIVE_PILOT_CONTROL_ENABLED'
           assert control._DEFAULT_TTL_SECONDS == 600
           PY
-      - name: Verify dormant core has no HTTP or infrastructure writer
+      - name: Verify control core has no HTTP or infrastructure writer
         run: |
           ! grep -nE 'aiohttp|requests\.|httpx|urllib|velia_developer_github|github_service|merge_pull_request|merge_exact_head|Railway|railway|create_deployment|redeploy|set-variables' \
             services/velia_software_factory_live_pilot_control_service.py
           ! grep -nE 'app\.router|add_(get|post|put|patch|delete)|web\.Route|web\.Response' \
             services/velia_software_factory_live_pilot_control_service.py
-      - name: Verify dormant core is not wired into runtime or web routes
+      - name: Verify successor wiring cannot invert the control boundary
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          needle = 'velia_software_factory_live_pilot_control_service'
-          allowed = {
-              Path('services/velia_software_factory_live_pilot_control_service.py'),
-              Path('tests/test_velia_software_factory_stage6_3_live_pilot_control.py'),
-          }
-          found = []
-          for root in (Path('services'), Path('.')):
-              paths = root.glob('*.py') if root == Path('.') else root.rglob('*.py')
-              for path in paths:
-                  if path in allowed or '__pycache__' in path.parts:
-                      continue
-                  try:
-                      text = path.read_text(encoding='utf-8')
-                  except Exception:
-                      continue
-                  if needle in text:
-                      found.append(str(path))
-          assert not found, f'Control core must remain dormant in Stage 6.3a: {found}'
+          text = Path('services/velia_software_factory_live_pilot_control_service.py').read_text(encoding='utf-8')
+          forbidden = (
+              'velia_software_factory_live_pilot_admin_routes',
+              'velia_software_factory_live_pilot_preflight_admin_routes',
+              'velia_software_factory_admin_acceptance_admin_routes',
+              'velia_software_factory_admin_acceptance_service',
+              'run_web_process',
+          )
+          for token in forbidden:
+              assert token not in text, token
           PY
       - name: Verify dispatch is explicit, bounded and single-entry
         run: |
