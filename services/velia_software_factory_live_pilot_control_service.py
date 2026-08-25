@@ -160,6 +160,7 @@ def arm_grant(
     confirmation: str,
     *,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+    approval_source: str = _APPROVAL_SOURCE,
 ) -> Dict[str, Any]:
     actor = _admin_actor(int(user_id))
     _require_live_control(actor)
@@ -171,7 +172,7 @@ def arm_grant(
         actor,
         run,
         project,
-        approval_source=_APPROVAL_SOURCE,
+        approval_source=str(approval_source or _APPROVAL_SOURCE).strip()[:120] or _APPROVAL_SOURCE,
         ttl_seconds=int(ttl_seconds or _DEFAULT_TTL_SECONDS),
     )
     return {
