@@ -9,6 +9,9 @@ from aiohttp import web
 
 from services import velia_software_factory_live_pilot_control_service as control
 from services.velia_admin_security_service import record_admin_audit
+from services.velia_software_factory_admin_acceptance_admin_routes import (
+    setup_factory_pilot_acceptance_admin_routes,
+)
 from services.velia_software_factory_core_service import SoftwareFactoryError
 from services.velia_software_factory_live_pilot_preflight_admin_routes import (
     setup_factory_pilot_preflight_admin_routes,
@@ -121,6 +124,7 @@ def _render_page(
 
   <div class='card full'><h2>Safety boundary</h2>
     <div class='muted'>Owner-only · CSRF protected · exact run/repository/grant binding · no automatic grant · no automatic dispatch · no merge or deployment controls. Production rollout flags are intentionally not editable from this screen.</div>
+    <div class='hint'><a href='/admin/factory-pilot/acceptance'>Stage 6.7 controlled acceptance</a> is a stricter one-shot envelope that requires Reviewer remediation evidence.</div>
   </div>
 
   <div class='card full'><h2>Inspect exact Factory run</h2>
@@ -338,5 +342,12 @@ def setup_factory_pilot_admin_routes(
         guard=guard,
         layout=layout,
         key=key,
+    )
+    setup_factory_pilot_acceptance_admin_routes(
+        app,
+        guard=guard,
+        layout=layout,
+        key=key,
+        request_id=request_id,
     )
     app["velia_factory_pilot_admin_routes_installed"] = True
