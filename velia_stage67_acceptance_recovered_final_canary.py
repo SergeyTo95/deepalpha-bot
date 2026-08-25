@@ -22,12 +22,26 @@ def _tokenize(text):
             tokens.append(("num", int(text[i:j])))
             i = j
             continue
-        if ch == "+":
-            tokens.append(("op", "+"))
+        if ch == "-":
+            # Unary minus (start of expression or right after an operator):
+            # fold the sign directly into the following integer literal so
+            # the sign can never be dropped by the parser (e.g. "-5" -> -5).
+            if not tokens or tokens[-1][0] == "op":
+                j = i + 1
+                while j < n and text[j].isspace():
+                    j += 1
+                if j < n and text[j].isdigit():
+                    k = j
+                    while k < n and text[k].isdigit():
+                        k += 1
+                    tokens.append(("num", -int(text[j:k])))
+                    i = k
+                    continue
+            tokens.append(("op", "-"))
             i += 1
             continue
-        if ch == "-":
-            tokens.append(("op", "-"))
+        if ch == "+":
+            tokens.append(("op", "+"))
             i += 1
             continue
         raise ValueError("invalid character: %r" % ch)
