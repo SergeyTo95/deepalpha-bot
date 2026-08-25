@@ -4,4 +4,4 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
 ENV PYTHONPATH=/app
-CMD ["python", "ops/stage67_live_acceptance_operator.py"]
+CMD ["python", "ops/stage67_resume_probe.py"]
