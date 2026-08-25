@@ -486,9 +486,15 @@ def install(
                 )
 
             def ci_process_once_with_reviewer():
-                remediation_result = remediation.process_once(
-                    autopilot_module,
-                    ci_module,
+                # Stage 6.6 is default-off. When disabled, preserve the exact
+                # Stage 6.5a CI/Reviewer call chain and do not touch the DB.
+                # A run already scheduled into reviewer remediation remains in
+                # status=executing, so generic CI cannot claim it while the
+                # feature is disabled mid-flight.
+                remediation_result = (
+                    remediation.process_once(autopilot_module, ci_module)
+                    if remediation.remediation_enabled(ci_module)
+                    else None
                 )
                 result = (
                     remediation_result
