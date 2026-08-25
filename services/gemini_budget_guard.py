@@ -8,6 +8,7 @@ FEATURE_FLAGS = {
     "dynamic_driver_agent": "DYNAMIC_DRIVERS_GEMINI_ENABLED",
     "signal_generation": "SIGNAL_GENERATION_GEMINI_ENABLED",
     "live_analyst": "GEMINI_ENABLED",
+    "software_factory_reviewer": "GEMINI_ENABLED",
 }
 
 
