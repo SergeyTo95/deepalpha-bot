@@ -1,0 +1,141 @@
+name: VELIA Software Factory Stage 6.5b
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - "services/velia_software_factory_live_pilot_reviewer_gate_patch.py"
+      - "services/velia_software_factory_stage3_hardening_patch.py"
+      - "services/velia_software_factory_reviewer_runtime_patch.py"
+      - "services/velia_software_factory_live_pilot_preflight_service.py"
+      - "services/velia_software_factory_live_pilot_control_service.py"
+      - "services/velia_software_factory_live_pilot_guard_service.py"
+      - "tests/test_velia_software_factory_stage6_5b_reviewer_pilot_gate.py"
+      - "tests/test_velia_software_factory_stage6_4a_pilot_preflight.py"
+      - "tests/test_velia_software_factory_stage6_3_live_pilot_control.py"
+      - "tests/test_velia_software_factory_stage6_2_live_pilot_guard.py"
+      - "tests/test_velia_software_factory_stage6_2_dispatch_runtime.py"
+      - ".github/workflows/velia-software-factory-stage6-5b.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reviewer-live-pilot-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile Stage 6.5b boundary
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_live_pilot_reviewer_gate_patch.py \
+            services/velia_software_factory_stage3_hardening_patch.py \
+            services/velia_software_factory_reviewer_runtime_patch.py \
+            services/velia_software_factory_live_pilot_preflight_service.py \
+            services/velia_software_factory_live_pilot_control_service.py \
+            services/velia_software_factory_live_pilot_guard_service.py
+
+      - name: Run reviewer pilot and prior safety regressions
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage6_5b_reviewer_pilot_gate.py \
+            tests/test_velia_software_factory_reviewer_gate.py \
+            tests/test_velia_software_factory_reviewer_runtime_atomic.py \
+            tests/test_velia_software_factory_stage6_4a_pilot_preflight.py \
+            tests/test_velia_software_factory_stage6_3_live_pilot_control.py \
+            tests/test_velia_software_factory_stage6_2_live_pilot_guard.py \
+            tests/test_velia_software_factory_stage6_2_dispatch_runtime.py
+
+      - name: Verify live-only fail-closed contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          gate = Path("services/velia_software_factory_live_pilot_reviewer_gate_patch.py").read_text(encoding="utf-8")
+          stage3 = Path("services/velia_software_factory_stage3_hardening_patch.py").read_text(encoding="utf-8")
+
+          assert '"required_for_live_pilot": True' in gate
+          assert '"required_for_dry_run": False' in gate
+          assert '"reviewer_runtime_not_installed"' in gate
+          assert '"velia_factory_live_pilot_reviewer_not_ready"' in gate
+          assert '"reviewer_not_ready"' in gate
+          assert "original_issue" in gate
+          assert "original_claim" in gate
+          assert gate.index("_require_reviewer_ready()", gate.index("def claim_dispatch_with_reviewer")) < gate.index("return original_claim", gate.index("def claim_dispatch_with_reviewer"))
+          assert stage3.index("reviewer_runtime.install()") < stage3.index("reviewer_pilot_gate.install()") < stage3.index("rollout_runtime.install(factory, module)")
+          PY
+
+      - name: Reject write-capability expansion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          gate = Path("services/velia_software_factory_live_pilot_reviewer_gate_patch.py").read_text(encoding="utf-8")
+          for forbidden in (
+              "merge_pull_request",
+              "merge_exact_head",
+              "create_deployment",
+              "redeploy",
+              "set-variables",
+              "os.environ[",
+              "os.putenv",
+              "advance_run(",
+              "enqueue_task(",
+          ):
+              assert forbidden not in gate, forbidden
+          PY
+
+      - name: Verify diff stays inside Stage 6.5b boundary
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          base = "${{ github.event.pull_request.base.sha }}"
+          head = "${{ github.event.pull_request.head.sha }}"
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines())
+          allowed = {
+              "services/velia_software_factory_live_pilot_reviewer_gate_patch.py",
+              "services/velia_software_factory_stage3_hardening_patch.py",
+              "tests/test_velia_software_factory_stage6_5b_reviewer_pilot_gate.py",
+              ".github/workflows/velia-software-factory-stage6-5b.yml",
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f"unexpected Stage 6.5b files: {sorted(unexpected)}"
+          PY
+
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)(__pycache__/|.*\.pyc$)'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi
