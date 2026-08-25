@@ -1,4 +1,4 @@
-"""Stage 6.7 production acceptance canary (remediated).
+"""Stage 6.7 production acceptance canary (remediated, final head for exact-head CI and fresh Senior Reviewer pass).
 
 This file is standalone and unimported. It exists only to verify that the
 independent Senior Reviewer blocks a high-severity finding and that the
