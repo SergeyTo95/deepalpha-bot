@@ -12,6 +12,7 @@ on:
       - "tests/test_velia_software_factory_stage6_6_reviewer_remediation.py"
       - "tests/test_velia_software_factory_reviewer_gate.py"
       - "tests/test_velia_software_factory_reviewer_runtime_atomic.py"
+      - ".github/workflows/velia-software-factory-stage6-5b.yml"
       - ".github/workflows/velia-software-factory-stage6-6.yml"
   workflow_dispatch:
 
@@ -139,6 +140,7 @@ jobs:
               "services/velia_software_factory_reviewer_runtime_patch.py",
               "services/velia_software_factory_reviewer_remediation_service.py",
               "tests/test_velia_software_factory_stage6_6_reviewer_remediation.py",
+              ".github/workflows/velia-software-factory-stage6-5b.yml",
               ".github/workflows/velia-software-factory-stage6-6.yml",
           }
           unexpected = changed - allowed
