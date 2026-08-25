@@ -289,6 +289,7 @@ def schedule_after_failed_review(
         "started_at": now_iso,
         "last_checked_at": None,
         "checks": [],
+        "observer_error_count": 0,
         "attempts": [*prior_attempts, attempt_record][-maximum:],
     }
     result["reviewer_remediation"] = state
@@ -386,6 +387,76 @@ def _block(
     return {**dict(run), "status": "blocked", "result": payload, "error_code": code}
 
 
+def _poll_timing(ci_module: Any, state: Mapping[str, Any]) -> tuple[float, int, int]:
+    first_seen_raw = str(state.get("started_at") or "")
+    try:
+        first_seen = datetime.fromisoformat(first_seen_raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        first_seen = ci_module._utcnow()
+    age = max(0.0, (ci_module._utcnow() - first_seen).total_seconds())
+    max_wait = _env_int(
+        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_CI_MAX_WAIT_MINUTES",
+        45,
+        5,
+        180,
+    ) * 60
+    grace = _env_int(
+        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_CI_GRACE_SECONDS",
+        90,
+        30,
+        900,
+    )
+    return age, max_wait, grace
+
+
+def _observer_retry(
+    autopilot_module: Any,
+    ci_module: Any,
+    run: Mapping[str, Any],
+    result: Mapping[str, Any],
+    exc: Exception,
+    *,
+    age: float,
+    max_wait: int,
+) -> Dict[str, Any]:
+    payload = dict(result)
+    state = _state(payload)
+    error_count = int(state.get("observer_error_count") or 0) + 1
+    max_errors = _env_int(
+        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_OBSERVER_MAX_ERRORS",
+        5,
+        1,
+        20,
+    )
+    state["observer_error_count"] = error_count
+    state["last_observer_error"] = exc.__class__.__name__[:120]
+    state["last_checked_at"] = _now_iso(ci_module)
+    payload["reviewer_remediation"] = state
+
+    if age > max_wait or error_count >= max_errors:
+        return _block(
+            autopilot_module,
+            ci_module,
+            run,
+            payload,
+            "velia_factory_reviewer_remediation_observer_unavailable",
+        )
+
+    _persist_active(ci_module, run, payload)
+    autopilot_module._record_event(
+        run,
+        "reviewer.remediation_observer_retry",
+        {
+            "head_sha": str(state.get("head_sha") or "")[:40],
+            "attempt_number": int(state.get("attempt_number") or 0),
+            "error_count": error_count,
+            "max_errors": max_errors,
+            "error": exc.__class__.__name__[:120],
+        },
+    )
+    return {**dict(run), "status": "executing", "result": payload}
+
+
 def _process_run(
     autopilot_module: Any,
     ci_module: Any,
@@ -412,11 +483,25 @@ def _process_run(
             "velia_factory_reviewer_remediation_head_missing",
         )
 
-    project, _mission = ci_module._project_and_mission(run)
-    current_head = ci_module.write_service.branch_head(
-        project,
-        str(run.get("work_branch") or ""),
-    )
+    age, max_wait, grace = _poll_timing(ci_module, state)
+
+    try:
+        project, _mission = ci_module._project_and_mission(run)
+        current_head = ci_module.write_service.branch_head(
+            project,
+            str(run.get("work_branch") or ""),
+        )
+    except Exception as exc:
+        return _observer_retry(
+            autopilot_module,
+            ci_module,
+            run,
+            result,
+            exc,
+            age=age,
+            max_wait=max_wait,
+        )
+
     if str(current_head.get("sha") or "").lower() != head_sha:
         return _block(
             autopilot_module,
@@ -426,31 +511,28 @@ def _process_run(
             "velia_factory_reviewer_remediation_head_changed",
         )
 
-    checks_payload = ci_module.write_service.commit_status(project, head_sha)
-    checks = checks_payload.get("checks") if isinstance(checks_payload, Mapping) else []
-    if not isinstance(checks, list):
-        checks = []
-    checks = [dict(item) for item in checks if isinstance(item, Mapping)][:30]
-    check_state = ci_module._checks_state(checks)
-
-    first_seen_raw = str(state.get("started_at") or "")
     try:
-        first_seen = datetime.fromisoformat(first_seen_raw.replace("Z", "+00:00")).replace(tzinfo=None)
-    except Exception:
-        first_seen = ci_module._utcnow()
-    age = max(0.0, (ci_module._utcnow() - first_seen).total_seconds())
-    max_wait = _env_int(
-        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_CI_MAX_WAIT_MINUTES",
-        45,
-        5,
-        180,
-    ) * 60
-    grace = _env_int(
-        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_CI_GRACE_SECONDS",
-        90,
-        30,
-        900,
-    )
+        checks_payload = ci_module.write_service.commit_status(project, head_sha)
+        checks = checks_payload.get("checks") if isinstance(checks_payload, Mapping) else []
+        if not isinstance(checks, list):
+            checks = []
+        checks = [dict(item) for item in checks if isinstance(item, Mapping)][:30]
+        check_state = ci_module._checks_state(checks)
+    except Exception as exc:
+        return _observer_retry(
+            autopilot_module,
+            ci_module,
+            run,
+            result,
+            exc,
+            age=age,
+            max_wait=max_wait,
+        )
+
+    if int(state.get("observer_error_count") or 0) > 0:
+        state["observer_recovered_at"] = _now_iso(ci_module)
+    state["observer_error_count"] = 0
+    state["last_observer_error"] = None
 
     if check_state in {"missing", "pending"}:
         if age > max_wait:
@@ -478,6 +560,7 @@ def _process_run(
         return {**dict(run), "status": "executing", "result": result}
 
     if check_state != "success":
+        result["reviewer_remediation"] = state
         return _block(
             autopilot_module,
             ci_module,
@@ -522,9 +605,9 @@ def process_once(
     autopilot_module: Any,
     ci_module: Any,
 ) -> Optional[Dict[str, Any]]:
-    # Always claim owned runs, even if the flag was turned off after scheduling.
-    # In that case _process_run blocks the run instead of letting generic CI
-    # mistake reviewer-remediation state for a normal CI attempt.
+    # The runtime wrapper calls this only while Stage 6.6 is enabled. Once an
+    # owned run is selected, _process_run revalidates the flag so a configuration
+    # change between the wrapper check and the DB claim still fails closed.
     conn = get_connection()
     cursor = conn.cursor()
     locked = False
