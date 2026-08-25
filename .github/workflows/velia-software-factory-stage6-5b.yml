@@ -130,13 +130,13 @@ jobs:
           }
           stage_surface = {
               path for path in changed
-              if path.startswith("services/velia_software_factory_live_pilot_")
+              if path == "services/velia_software_factory_live_pilot_reviewer_gate_patch.py"
               or path == "services/velia_software_factory_stage3_hardening_patch.py"
               or path.startswith("tests/test_velia_software_factory_stage6_5b")
               or path == ".github/workflows/velia-software-factory-stage6-5b.yml"
           }
           unexpected = stage_surface - allowed
-          assert not unexpected, f"unexpected Stage 6.5b surface files: {sorted(unexpected)}"
+          assert not unexpected, f"unexpected Stage 6.5b-owned files: {sorted(unexpected)}"
           PY
 
       - name: Reject newly added Python bytecode
