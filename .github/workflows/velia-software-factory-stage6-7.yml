@@ -82,6 +82,8 @@ jobs:
           assert '_env_bool(_ACCEPTANCE_FLAG, False)' in text
           assert 'control_center_stage6_7_acceptance' in text
           assert 'requires_reviewer_remediation_observed' in text
+          assert 'remediation_attempt_budget > 0' in text
+          assert 'velia_factory_admin_acceptance_grant_not_pending' in text
           assert 'remediation_attempts >= 1' in text
           assert 'reviewer_status == "passed"' in text
           assert 'run_status == "ready_for_review"' in text
