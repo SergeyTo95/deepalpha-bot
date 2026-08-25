@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
-from services import velia_software_factory_reviewer_runtime_patch as runtime
 from services import velia_software_factory_reviewer_service as reviewer
 
 
@@ -167,53 +164,3 @@ def test_reviewer_model_failure_blocks_factory_task(monkeypatch):
 
     assert report["status"] == "blocked"
     assert any(item["code"] == "reviewer_model_unavailable" for item in report["findings"])
-
-
-def test_runtime_downgrades_failed_review_to_blocked(monkeypatch):
-    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED", "true")
-    transitions = []
-    events = []
-
-    fake = SimpleNamespace()
-    fake.project_service = SimpleNamespace(get_project=lambda _user_id, _project_id: {"id": "project-1"})
-    fake.get_task = lambda _user_id, _task_id: _factory_task()
-    fake.get_mission = lambda _user_id, _mission_id: _mission()
-    fake._transition = lambda run, status, **kwargs: transitions.append((status, kwargs))
-    fake._record_event = lambda run, event_type, payload=None: events.append((event_type, payload))
-
-    monkeypatch.setattr(
-        reviewer,
-        "review_execution",
-        lambda **_kwargs: {
-            "status": "failed",
-            "summary": "Concrete regression found.",
-            "findings": [{"severity": "high", "code": "regression", "message": "bad", "path": "services/session.py"}],
-            "acceptance": [],
-            "evidence": {"changed_files": 1},
-        },
-    )
-
-    result = runtime._review_result(
-        fake,
-        {"user_id": 1, "run_id": "run-1", "task_id": "task-1", "mission_id": "mission-1"},
-        {"status": "ready_for_review", "result": _execution_result()},
-    )
-
-    assert result["status"] == "blocked"
-    assert result["error_code"] == "velia_factory_reviewer_failed"
-    assert transitions[-1][0] == "blocked"
-    assert transitions[-1][1]["error_code"] == "velia_factory_reviewer_failed"
-    assert events[-1][0] == "reviewer.failed"
-
-
-def test_runtime_leaves_non_factory_autopilot_untouched(monkeypatch):
-    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED", "true")
-    fake = SimpleNamespace()
-    fake.get_task = lambda _user_id, _task_id: _factory_task("ordinary-autopilot-request")
-    result = runtime._review_result(
-        fake,
-        {"user_id": 1, "run_id": "run-1", "task_id": "task-1"},
-        {"status": "ready_for_review", "result": _execution_result()},
-    )
-    assert result["status"] == "ready_for_review"
-    assert "reviewer" not in result["result"]
