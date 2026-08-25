@@ -6,6 +6,9 @@ from typing import Any, Mapping
 from db.database import get_connection
 
 
+TARGET_PR = 522
+
+
 def clean(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(k): clean(v) for k, v in value.items() if str(k) not in {"prompt", "raw_response"}}
@@ -25,9 +28,9 @@ try:
         ORDER BY updated_at DESC
         LIMIT 5
         """,
-        (521,),
+        (TARGET_PR,),
     )
-    rows = cur.fetchall() or []
+    rows = list(cur.fetchall() or [])
     for row in rows:
         result = row[7]
         if isinstance(result, str):
@@ -56,7 +59,7 @@ try:
             SELECT event_type,payload_json,created_at
             FROM velia_developer_autopilot_events
             WHERE run_id=%s AND (
-                event_type LIKE 'reviewer.%' OR event_type LIKE 'ci.%' OR event_type LIKE 'draft_pr%'
+                event_type LIKE 'reviewer.%%' OR event_type LIKE 'ci.%%' OR event_type LIKE 'draft_pr%%'
             )
             ORDER BY created_at ASC
             """,
@@ -69,7 +72,11 @@ try:
                     event_payload = json.loads(event_payload)
                 except Exception:
                     event_payload = {"unparsed_payload_type": "str"}
-            events.append({"event_type": str(event_type or ""), "payload": clean(event_payload or {}), "created_at": str(created_at or "")})
+            events.append({
+                "event_type": str(event_type or ""),
+                "payload": clean(event_payload or {}),
+                "created_at": str(created_at or ""),
+            })
         print("STAGE67_EVENTS " + json.dumps(events, ensure_ascii=False, sort_keys=True, default=str), flush=True)
 finally:
     cur.close()
