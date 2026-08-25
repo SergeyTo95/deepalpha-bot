@@ -123,6 +123,7 @@ def _scheduled_result(attempts=None):
             "started_at": "2026-08-25T10:59:30Z",
             "last_checked_at": None,
             "checks": [],
+            "observer_error_count": 0,
             "attempts": list(attempts or [{"attempt_number": 1}]),
         },
     }
@@ -188,6 +189,7 @@ def test_failed_review_schedules_bounded_exact_head_repair(monkeypatch):
     assert state["attempt_number"] == 1
     assert state["reviewed_head_sha"] == _HEAD
     assert state["head_sha"] == _NEW_HEAD
+    assert state["observer_error_count"] == 0
     assert state["attempts"][0]["from_head_sha"] == _HEAD
     assert state["attempts"][0]["to_head_sha"] == _NEW_HEAD
     assert persisted
@@ -257,6 +259,62 @@ def test_pending_remediation_ci_keeps_active_without_reviewer(monkeypatch):
     assert persisted
     assert transitions == []
     assert "reviewer.remediation_ci_success" not in [name for name, _ in events]
+
+
+def test_remediation_observer_failure_persists_bounded_retry(monkeypatch):
+    monkeypatch.setattr(remediation, "remediation_enabled", lambda _ci: True)
+    persisted = []
+    monkeypatch.setattr(
+        remediation,
+        "_persist_active",
+        lambda _ci, _run, result: persisted.append(dict(result)),
+    )
+    ci, transitions = _ci_module()
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("github unavailable")
+
+    ci.write_service.branch_head = unavailable
+    autopilot, events = _autopilot()
+    run = _run(_scheduled_result())
+
+    result = remediation._process_run(autopilot, ci, run)
+
+    assert result["status"] == "executing"
+    state = result["result"]["reviewer_remediation"]
+    assert state["observer_error_count"] == 1
+    assert state["last_observer_error"] == "RuntimeError"
+    assert persisted
+    assert transitions == []
+    assert "reviewer.remediation_observer_retry" in [name for name, _ in events]
+
+
+def test_remediation_observer_failure_blocks_at_retry_limit(monkeypatch):
+    monkeypatch.setattr(remediation, "remediation_enabled", lambda _ci: True)
+    monkeypatch.setenv(
+        "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_OBSERVER_MAX_ERRORS",
+        "2",
+    )
+    ci, transitions = _ci_module()
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("github unavailable")
+
+    ci.write_service.commit_status = unavailable
+    autopilot, events = _autopilot()
+    scheduled = _scheduled_result()
+    scheduled["reviewer_remediation"]["observer_error_count"] = 1
+    run = _run(scheduled)
+
+    result = remediation._process_run(autopilot, ci, run)
+
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "velia_factory_reviewer_remediation_observer_unavailable"
+    assert transitions[0]["status"] == "blocked"
+    assert transitions[0]["finished"] is True
+    blocked_state = transitions[0]["result"]["reviewer_remediation"]
+    assert blocked_state["observer_error_count"] == 2
+    assert "reviewer.remediation_blocked" in [name for name, _ in events]
 
 
 def test_remediation_ci_failure_blocks_without_nested_auto_repair(monkeypatch):
