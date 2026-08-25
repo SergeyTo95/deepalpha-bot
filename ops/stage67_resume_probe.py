@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# Snapshot trigger: keep this probe strictly read-only; no acceptance mutation.
+# Read-only Stage 6.7 recovery probe. Never arm, dispatch, enqueue, or mutate GitHub.
 import json
 from typing import Any
 
@@ -8,7 +8,6 @@ from db.database import get_connection
 
 TOKEN = "stage67-prod-acceptance-20260825-1629"
 REPOSITORY = "SergeyTo95/deepalpha-bot"
-BASE_BRANCH = "feature/turbo-short-term-btc"
 
 
 def emit(event: str, **values: Any) -> None:
@@ -24,6 +23,21 @@ def rows(sql: str, params=()):
     finally:
         cur.close()
         conn.close()
+
+
+def mission_view(item):
+    return {
+        "mission_id": str(item.get("mission_id") or ""),
+        "project_id": str(item.get("project_id") or ""),
+        "name": str(item.get("name") or ""),
+        "status": str(item.get("status") or ""),
+        "mode": str(item.get("mode") or ""),
+        "base_branch": str(item.get("base_branch") or ""),
+        "allowed_paths": list(item.get("allowed_paths") or []),
+        "blocked_paths": list(item.get("blocked_paths") or []),
+        "max_steps": int(item.get("max_steps") or 0),
+        "max_files": int(item.get("max_files") or 0),
+    }
 
 
 def main() -> int:
@@ -42,9 +56,14 @@ def main() -> int:
     acceptance_runtime.install()
 
     admin_id = int(configured_admin_id() or 0)
+    all_projects = [dict(item) for item in project_service.list_projects(admin_id)]
+    all_missions = [dict(item) for item in autopilot.list_missions(admin_id)]
+    missions_by_project = {}
+    for item in all_missions:
+        missions_by_project.setdefault(str(item.get("project_id") or ""), []).append(mission_view(item))
+
     projects = [
-        dict(item)
-        for item in project_service.list_projects(admin_id)
+        item for item in all_projects
         if str(item.get("repository_full_name") or "").casefold() == REPOSITORY.casefold()
     ]
     if len(projects) != 1:
@@ -69,11 +88,6 @@ def main() -> int:
     except Exception as exc:
         grant = {"observer_error": exc.__class__.__name__}
 
-    missions = [
-        dict(item)
-        for item in autopilot.list_missions(admin_id)
-        if str(item.get("project_id") or "") == project_id
-    ]
     tasks = rows(
         "SELECT task_id,mission_id,status,client_request_id,latest_run_id,error_code FROM velia_developer_autopilot_tasks WHERE user_id=%s AND mission_id IN (SELECT mission_id FROM velia_developer_autopilot_missions WHERE user_id=%s AND project_id=%s) ORDER BY created_at DESC LIMIT 20",
         (admin_id, admin_id, project_id),
@@ -88,6 +102,17 @@ def main() -> int:
         "snapshot",
         runtime_ready=bool(status.get("ready_now")),
         runtime_blockers=list(status.get("blockers") or []),
+        projects_inventory=[
+            {
+                "project_id": str(item.get("id") or ""),
+                "repository": str(item.get("repository_full_name") or ""),
+                "selected_branch": str(item.get("selected_branch") or ""),
+                "default_branch": str(item.get("default_branch") or ""),
+                "archived": bool(item.get("archived")),
+                "missions": missions_by_project.get(str(item.get("id") or ""), []),
+            }
+            for item in all_projects
+        ],
         project={
             "project_id": project_id,
             "repository": str(project.get("repository_full_name") or ""),
@@ -109,20 +134,7 @@ def main() -> int:
             "approval_source": str(grant.get("approval_source") or ""),
             "expires_at": str(grant.get("expires_at") or ""),
         },
-        missions=[
-            {
-                "mission_id": str(item.get("mission_id") or ""),
-                "name": str(item.get("name") or ""),
-                "status": str(item.get("status") or ""),
-                "mode": str(item.get("mode") or ""),
-                "base_branch": str(item.get("base_branch") or ""),
-                "allowed_paths": list(item.get("allowed_paths") or []),
-                "blocked_paths": list(item.get("blocked_paths") or []),
-                "max_steps": int(item.get("max_steps") or 0),
-                "max_files": int(item.get("max_files") or 0),
-            }
-            for item in missions
-        ],
+        missions=missions_by_project.get(project_id, []),
         tasks=[
             {
                 "task_id": str(item[0]),
