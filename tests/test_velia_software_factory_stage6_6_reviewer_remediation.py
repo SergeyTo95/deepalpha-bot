@@ -346,6 +346,65 @@ def test_remediation_ci_success_routes_back_through_reviewer_state_setter(monkey
     assert "reviewer.remediation_ci_success" in [name for name, _ in events]
 
 
+def test_remediation_filters_ignored_context_before_reviewer_persistence(monkeypatch):
+    ignored_context = "melodious-radiance - velia-android-apk-c2205e4"
+    monkeypatch.setenv(
+        "VELIA_DEVELOPER_AUTOPILOT_CI_IGNORED_CONTEXTS",
+        ignored_context,
+    )
+    monkeypatch.setattr(remediation, "remediation_enabled", lambda _ci: True)
+    ci, transitions = _ci_module(checks_state="success")
+    ci.write_service.commit_status = lambda _project, _sha: {
+        "checks": [
+            {
+                "name": ignored_context,
+                "status": "completed",
+                "conclusion": "failure",
+            },
+            {
+                "name": "backend-tests",
+                "status": "completed",
+                "conclusion": "success",
+            },
+        ]
+    }
+    ci._checks_state = lambda checks: (
+        "missing"
+        if not checks
+        else (
+            "failure"
+            if any(str(item.get("conclusion") or "") == "failure" for item in checks)
+            else "success"
+        )
+    )
+    autopilot, events = _autopilot()
+
+    result = remediation._process_run(
+        autopilot,
+        ci,
+        _run(_scheduled_result()),
+    )
+
+    assert result["status"] == "ready_for_review"
+    assert [item["status"] for item in transitions] == ["ready_for_review"]
+    persisted = transitions[0]["result"]
+    assert [item["name"] for item in persisted["checks"]["checks"]] == [
+        "backend-tests"
+    ]
+    assert persisted["checks"]["ignored_contexts"] == [ignored_context]
+    remediation_state = persisted["reviewer_remediation"]
+    assert [item["name"] for item in remediation_state["checks"]] == [
+        "backend-tests"
+    ]
+    assert remediation_state["ignored_contexts"] == [ignored_context]
+    success_events = [
+        payload
+        for name, payload in events
+        if name == "reviewer.remediation_ci_success"
+    ]
+    assert success_events[0]["ignored_contexts"] == [ignored_context]
+
+
 def test_reviewer_runtime_rewrites_failed_final_ci_to_remediating_without_block(monkeypatch):
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED", "true")
     ci, raw_transitions = _ci_module(checks_state="success", head=_HEAD)

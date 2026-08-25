@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
 from services import velia_software_factory_reviewer_service as reviewer
+from services import velia_software_factory_stage6_7_ci_context_filter_patch as ci_context_filter
 
 
 _REMEDIATION_ADVISORY_KEY = 8_618_270_433
@@ -517,6 +518,7 @@ def _process_run(
         if not isinstance(checks, list):
             checks = []
         checks = [dict(item) for item in checks if isinstance(item, Mapping)][:30]
+        checks, ignored_contexts = ci_context_filter.filter_checks(checks)
         check_state = ci_module._checks_state(checks)
     except Exception as exc:
         return _observer_retry(
@@ -533,6 +535,7 @@ def _process_run(
         state["observer_recovered_at"] = _now_iso(ci_module)
     state["observer_error_count"] = 0
     state["last_observer_error"] = None
+    state["ignored_contexts"] = ignored_contexts
 
     if check_state in {"missing", "pending"}:
         if age > max_wait:
@@ -578,6 +581,7 @@ def _process_run(
         "head_sha": head_sha,
         "total": len(checks),
         "checks": checks,
+        "ignored_contexts": ignored_contexts,
     }
     autopilot_module._record_event(
         run,
@@ -586,6 +590,7 @@ def _process_run(
             "head_sha": head_sha,
             "attempt_number": int(state.get("attempt_number") or 0),
             "check_count": len(checks),
+            "ignored_contexts": ignored_contexts,
         },
     )
     # The Senior Reviewer runtime owns this transition. Calling the wrapped
