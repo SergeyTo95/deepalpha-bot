@@ -197,7 +197,7 @@ jobs:
           assert 'acceptance_runtime.install()' in new
           PY
 
-      - name: Verify Stage 6.7 or explicit Stage 7 extension diff surface
+      - name: Verify Stage 6.7, Stage 7, or explicit Stage 8 extension diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -235,8 +235,25 @@ jobs:
               '.github/workflows/velia-software-factory-stage6-5b.yml',
               '.github/workflows/velia-software-factory-stage6-6.yml',
           }
+          stage8_extension = {
+              'services/velia_software_factory_greenfield_repository_creation_service.py',
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_stage8_full_autonomy_service.py',
+              'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
+              'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_stage8_final_hardening_patch.py',
+              'services/velia_software_factory_workspace_chat_hardening_patch.py',
+              'services/velia_software_factory_workspace_hardening_patch.py',
+              'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              'tests/test_velia_software_factory_stage8_final_hardening.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+              '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+              '.github/workflows/velia-software-factory-stage7.yml',
+          }
+          allowed |= stage8_extension
           unexpected = changed - allowed
-          assert not unexpected, f'unexpected Stage 6.7/7 files: {sorted(unexpected)}'
+          assert not unexpected, f'unexpected Stage 6.7/7/8 files: {sorted(unexpected)}'
           acceptance_core = {
               'services/velia_software_factory_admin_acceptance_service.py',
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
@@ -270,12 +287,20 @@ jobs:
               'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
               'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
           }
+          stage8_required = {
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_stage8_full_autonomy_service.py',
+              'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+          }
           assert (
               acceptance_core <= changed
               or context_filter_hardening <= changed
               or context_filter_boundary_hardening <= changed
               or stage7_extension <= changed
               or stage7_maintenance <= changed
+              or stage8_required <= changed
           ), sorted(changed)
           PY
 

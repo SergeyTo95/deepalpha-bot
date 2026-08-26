@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, Iterable, Set
+from typing import Dict, Iterable, Mapping, Set
 
 from services import velia_software_factory_live_pilot_guard_service as live_pilot_guard
 from services.velia_admin_security_service import configured_admin_id
@@ -12,7 +12,14 @@ ROLLOUT_OFF = "off"
 ROLLOUT_DRY_RUN = "dry_run"
 ROLLOUT_LIMITED_ADMIN = "limited_admin"
 ROLLOUT_LIVE = "live"
-_VALID_MODES = {ROLLOUT_OFF, ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
+ROLLOUT_FULL_AUTONOMY = "full_autonomy"
+_VALID_MODES = {
+    ROLLOUT_OFF,
+    ROLLOUT_DRY_RUN,
+    ROLLOUT_LIMITED_ADMIN,
+    ROLLOUT_LIVE,
+    ROLLOUT_FULL_AUTONOMY,
+}
 _ID_SPLIT_RE = re.compile(r"[\s,;]+")
 _ADMIN_PILOT_SOURCE_ENV = {
     "live_owner": "LIVE_OWNER_USER_IDS",
@@ -21,6 +28,7 @@ _ADMIN_PILOT_SOURCE_ENV = {
     "mobile_debug": "VELIA_MOBILE_DEBUG_USER_IDS",
 }
 _LIVE_PILOT_GUARD_FLAG = "VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED"
+_STAGE8_AUTHENTICATED_USERS_FLAG = "VELIA_SOFTWARE_FACTORY_STAGE8_AUTHENTICATED_USERS_ENABLED"
 
 _PLAN_FLAGS = (
     "VELIA_DEVELOPER_ENABLED",
@@ -80,8 +88,14 @@ def rollout_mode() -> str:
     return raw if raw in _VALID_MODES else ROLLOUT_OFF
 
 
+def stage8_authenticated_users_enabled() -> bool:
+    return bool(
+        rollout_mode() == ROLLOUT_FULL_AUTONOMY
+        and _env_bool(_STAGE8_AUTHENTICATED_USERS_FLAG, False)
+    )
+
+
 def admin_pilot_enabled() -> bool:
-    """Extra pilot eligibility source. The rollout mode still gates all behavior."""
     return _env_bool("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", False)
 
 
@@ -102,7 +116,6 @@ def admin_pilot_user_ids() -> Set[int]:
 
 
 def allowed_user_ids() -> Set[int]:
-    """Parse the Factory allowlist using the same comma-separated ID convention as VELIA chat beta rollout."""
     return _parse_ids(os.getenv("VELIA_SOFTWARE_FACTORY_USER_IDS", ""))
 
 
@@ -122,14 +135,6 @@ def admin_pilot_user_allowed(user_id: int) -> bool:
 
 
 def _limited_admin_actor_allowed(user_id: int) -> bool:
-    """Stage 7 is bound to the configured administrator, never a shared pilot list.
-
-    Alternative Stage 6 pilot identity sources remain valid in dry-run/live modes,
-    but `limited_admin` is a distinct owner-only rollout envelope. Requiring the
-    normal admin-pilot enable flag preserves an explicit server-side activation
-    gate without allowing live_owner/chat_beta/etc. members into Stage 7.
-    """
-
     if not admin_pilot_enabled():
         return False
     try:
@@ -140,9 +145,60 @@ def _limited_admin_actor_allowed(user_id: int) -> bool:
     return bool(expected > 0 and candidate == expected)
 
 
+def _stage8_connected_user_allowed(user_id: int) -> bool:
+    """Ordinary Stage 8 users require a live, write-capable GitHub App installation.
+
+    A persisted installation row is only an ownership hint. Every eligibility check
+    revalidates the installation against GitHub so uninstall/revocation, account
+    changes, permission loss, provider failures, or stale database rows fail closed.
+    """
+    try:
+        candidate = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    if candidate <= 0 or not stage8_authenticated_users_enabled():
+        return False
+    try:
+        from services import velia_developer_github_service as github_service
+        from services import velia_developer_project_service as project_service
+
+        installations = project_service.list_installations(candidate)
+    except Exception:
+        return False
+    for stored in installations or []:
+        if not isinstance(stored, Mapping):
+            continue
+        try:
+            installation_id = int(stored.get("installation_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if installation_id <= 0:
+            continue
+        try:
+            live = github_service.installation_details(installation_id)
+        except Exception:
+            continue
+        stored_login = str(stored.get("account_login") or "").strip().casefold()
+        live_login = str(live.get("account_login") or "").strip().casefold()
+        if not stored_login or live_login != stored_login:
+            continue
+        if str(live.get("contents_permission") or "").strip().lower() != "write":
+            continue
+        return True
+    return False
+
+
 def user_allowed(user_id: int) -> bool:
-    """Fail closed: neither an empty allowlist nor a disabled admin pilot means everyone."""
-    return explicit_user_allowed(int(user_id)) or admin_pilot_user_allowed(int(user_id))
+    """Fail closed outside Stage 8; Stage 8 may admit connected Developer users."""
+    try:
+        candidate = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    if candidate <= 0:
+        return False
+    if explicit_user_allowed(candidate) or admin_pilot_user_allowed(candidate):
+        return True
+    return _stage8_connected_user_allowed(candidate)
 
 
 def _mode_user_allowed(user_id: int) -> bool:
@@ -152,7 +208,12 @@ def _mode_user_allowed(user_id: int) -> bool:
 
 
 def intake_allowed(user_id: int) -> bool:
-    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE} and _mode_user_allowed(int(user_id))
+    return rollout_mode() in {
+        ROLLOUT_DRY_RUN,
+        ROLLOUT_LIMITED_ADMIN,
+        ROLLOUT_LIVE,
+        ROLLOUT_FULL_AUTONOMY,
+    } and _mode_user_allowed(int(user_id))
 
 
 def dry_run_enabled(user_id: int) -> bool:
@@ -161,14 +222,33 @@ def dry_run_enabled(user_id: int) -> bool:
 
 def _limited_admin_execution_allowed(user_id: int) -> bool:
     from services import velia_software_factory_stage7_limited_admin_rollout_service as stage7
-
     return bool(stage7.execution_allowed(int(user_id)))
 
 
 def _limited_admin_status(user_id: int, *, verify_acceptance: bool) -> Dict[str, object]:
     from services import velia_software_factory_stage7_limited_admin_rollout_service as stage7
-
     return dict(stage7.public_status(int(user_id), verify_acceptance=verify_acceptance))
+
+
+def _full_autonomy_execution_allowed(user_id: int) -> bool:
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+    eligible = user_allowed(int(user_id))
+    return bool(stage8.execution_allowed(int(user_id), user_eligible=eligible))
+
+
+def _full_autonomy_status(user_id: int) -> Dict[str, object]:
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+    return dict(stage8.public_status(int(user_id), user_eligible=user_allowed(int(user_id))))
+
+
+def _full_autonomy_runtime_ready() -> bool:
+    """System-level readiness without inventing an ordinary user identity."""
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+
+    probe_actor = configured_admin_id()
+    if probe_actor <= 0:
+        probe_actor = 1
+    return bool(stage8.execution_allowed(probe_actor, user_eligible=True))
 
 
 def live_execution_allowed(user_id: int) -> bool:
@@ -179,6 +259,10 @@ def live_execution_allowed(user_id: int) -> bool:
         if not live_pilot_guard.live_pilot_guard_enabled():
             return False
         return _limited_admin_execution_allowed(int(user_id))
+    if mode == ROLLOUT_FULL_AUTONOMY:
+        if not user_allowed(int(user_id)):
+            return False
+        return _full_autonomy_execution_allowed(int(user_id))
     if mode != ROLLOUT_LIVE:
         return False
     if explicit_user_allowed(int(user_id)):
@@ -193,7 +277,6 @@ def _admin_pilot_configured() -> bool:
 
 
 def supervisor_allowed() -> bool:
-    """Supervisor can exist only behind a live or Stage 7 limited-admin write boundary."""
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
         actor = configured_admin_id()
@@ -202,25 +285,29 @@ def supervisor_allowed() -> bool:
         if not live_pilot_guard.live_pilot_guard_enabled():
             return False
         return _limited_admin_execution_allowed(actor)
+    if mode == ROLLOUT_FULL_AUTONOMY:
+        if stage8_authenticated_users_enabled():
+            return _full_autonomy_runtime_ready()
+        actors = set(allowed_user_ids())
+        if admin_pilot_enabled():
+            actors.update(admin_pilot_user_ids())
+        return any(_full_autonomy_execution_allowed(actor) for actor in sorted(actors))
     if mode != ROLLOUT_LIVE:
         return False
-    # Preserve the existing explicit allowlist rollout path. Admin-pilot-only
-    # execution is stricter and requires the Stage 6.2 one-shot dispatch guard.
     if bool(allowed_user_ids()):
         return True
     return _admin_pilot_configured() and live_pilot_guard.live_pilot_guard_enabled()
 
 
 def eligibility_source(user_id: int) -> str:
-    # Stage 7 must preserve the admin-pilot classification even when the same
-    # administrator also happens to be present in the general Factory allowlist;
-    # the one-shot control/preflight deliberately require this source label.
     if rollout_mode() == ROLLOUT_LIMITED_ADMIN:
         return "admin_pilot" if _limited_admin_actor_allowed(int(user_id)) else "none"
     if explicit_user_allowed(int(user_id)):
         return "explicit_allowlist"
     if admin_pilot_user_allowed(int(user_id)):
         return "admin_pilot"
+    if _stage8_connected_user_allowed(int(user_id)):
+        return "authenticated_developer"
     return "none"
 
 
@@ -236,17 +323,20 @@ def _stage_readiness(
     if (
         require_live
         and eligibility_source(int(user_id)) == "admin_pilot"
+        and rollout_mode() != ROLLOUT_FULL_AUTONOMY
         and not live_pilot_guard.live_pilot_guard_enabled()
         and _LIVE_PILOT_GUARD_FLAG not in missing
     ):
         missing.append(_LIVE_PILOT_GUARD_FLAG)
     mode = rollout_mode()
     if require_live:
-        mode_ok = mode == ROLLOUT_LIVE or (allow_limited_admin and mode == ROLLOUT_LIMITED_ADMIN)
-        required_mode = "limited_admin_or_live" if allow_limited_admin else "live"
+        mode_ok = mode in {ROLLOUT_LIVE, ROLLOUT_FULL_AUTONOMY} or (
+            allow_limited_admin and mode == ROLLOUT_LIMITED_ADMIN
+        )
+        required_mode = "limited_admin_full_autonomy_or_live" if allow_limited_admin else "full_autonomy_or_live"
     else:
-        mode_ok = mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
-        required_mode = "dry_run_limited_admin_or_live"
+        mode_ok = mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE, ROLLOUT_FULL_AUTONOMY}
+        required_mode = "dry_run_limited_admin_full_autonomy_or_live"
     eligible = _mode_user_allowed(int(user_id))
     return {
         "ready": not missing and mode_ok and eligible,
@@ -260,37 +350,34 @@ def _stage_readiness(
 def pilot_readiness(user_id: int) -> Dict[str, object]:
     return {
         "plan": _stage_readiness(int(user_id), _PLAN_FLAGS, require_live=False),
-        "multi_repo_plan": _stage_readiness(
-            int(user_id), _MULTI_REPO_PLAN_FLAGS, require_live=False
-        ),
-        "build_review": _stage_readiness(
-            int(user_id), _BUILD_REVIEW_FLAGS, require_live=True, allow_limited_admin=True
-        ),
+        "multi_repo_plan": _stage_readiness(int(user_id), _MULTI_REPO_PLAN_FLAGS, require_live=False),
+        "build_review": _stage_readiness(int(user_id), _BUILD_REVIEW_FLAGS, require_live=True, allow_limited_admin=True),
         "release": _stage_readiness(int(user_id), _RELEASE_FLAGS, require_live=True),
-        "greenfield_bootstrap_enabled": _env_bool(
-            "VELIA_SOFTWARE_FACTORY_GREENFIELD_BOOTSTRAP_ENABLED", False
-        ),
-        "integration_repair_enabled": _env_bool(
-            "VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_ENABLED", False
-        ),
+        "greenfield_bootstrap_enabled": _env_bool("VELIA_SOFTWARE_FACTORY_GREENFIELD_BOOTSTRAP_ENABLED", False),
+        "integration_repair_enabled": _env_bool("VELIA_SOFTWARE_FACTORY_INTEGRATION_REPAIR_ENABLED", False),
+        "stage8_authenticated_users_enabled": stage8_authenticated_users_enabled(),
     }
 
 
 def public_status(user_id: int) -> dict:
     mode = rollout_mode()
     eligible = _mode_user_allowed(int(user_id))
-    stage7_status = _limited_admin_status(
-        int(user_id), verify_acceptance=bool(mode == ROLLOUT_LIMITED_ADMIN)
-    )
+    stage7_status = _limited_admin_status(int(user_id), verify_acceptance=bool(mode == ROLLOUT_LIMITED_ADMIN))
+    stage8_status = _full_autonomy_status(int(user_id))
     return {
         "mode": mode,
         "eligible": eligible,
         "eligibility_source": eligibility_source(int(user_id)),
+        "authenticated_user_rollout": bool(stage8_authenticated_users_enabled()),
+        "authenticated_user_requires_owned_github_installation": True,
+        "authenticated_user_installation_revalidated_live": True,
+        "authenticated_user_requires_contents_write": True,
         "admin_pilot_enabled": admin_pilot_enabled(),
         "admin_pilot_id_source": admin_pilot_id_source(),
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
         "live_pilot_guard": live_pilot_guard.public_status(),
         "limited_admin": stage7_status,
+        "full_autonomy": stage8_status,
         "dry_run": bool(mode == ROLLOUT_DRY_RUN and eligible),
         "live_execution": bool(live_execution_allowed(int(user_id))),
         "supervisor_allowed": bool(supervisor_allowed()),

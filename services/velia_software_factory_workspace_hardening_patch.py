@@ -267,22 +267,27 @@ def install(workspace_module: Any) -> None:
 
     # Mandatory ordering before the supervisor starts:
     # 1) execution safety/lifecycle hardening;
-    # 2) integration completion gate;
-    # 3) deterministic semantic-evidence hardening;
-    # 4) Stage 5 read-only delivery gate;
-    # 5) Stage 4.4 workspace chat wrapper + gate hardening;
-    # 6) only then workspace supervisor cleanup_ctx is installed by routes.
+    # 2) integration completion gate + deterministic evidence hardening;
+    # 3) bounded integration repair wrapper;
+    # 4) Stage 5 delivery/release primitives;
+    # 5) Stage 8 autonomous release wrapper (outermost supervisor wrapper);
+    # 6) Stage 4.4 workspace chat wrapper + gate hardening;
+    # 7) only then workspace supervisor cleanup_ctx is installed by routes.
     from services import velia_software_factory_delivery_gate_runtime_patch as delivery_runtime
+    from services import velia_software_factory_integration_repair_runtime_patch as integration_repair_runtime
     from services import velia_software_factory_integration_validator_hardening_patch as integration_hardening
     from services import velia_software_factory_integration_validator_runtime_patch as integration_runtime
     from services import velia_software_factory_integration_validator_service as integration_validator
+    from services import velia_software_factory_stage8_release_runtime_patch as stage8_release_runtime
     from services import velia_software_factory_workspace_execution_hardening_patch as execution_hardening
     from services import velia_software_factory_workspace_execution_service as execution_module
 
     execution_hardening.install(execution_module)
     integration_runtime.install(workspace_module, execution_module)
     integration_hardening.install(integration_validator)
+    integration_repair_runtime.install(workspace_module, execution_module, integration_runtime)
     delivery_runtime.install(execution_module)
+    stage8_release_runtime.install(execution_module)
     workspace_module._workspace_hardening_installed = True
     _INSTALLED = True
 

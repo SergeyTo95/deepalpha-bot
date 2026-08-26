@@ -138,7 +138,7 @@ jobs:
           assert 'get_connection(' not in preflight
           PY
 
-      - name: Verify bounded Stage 7 diff surface
+      - name: Verify bounded Stage 7 or explicit Stage 8 extension diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -146,7 +146,7 @@ jobs:
           base = '${{ github.event.pull_request.base.sha }}'
           head = '${{ github.event.pull_request.head.sha }}'
           changed = set(subprocess.check_output(['git','diff','--name-only',base,head], text=True).splitlines())
-          allowed = {
+          stage7_allowed = {
               'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
               'services/velia_software_factory_admin_acceptance_service.py',
               'services/velia_software_factory_rollout_service.py',
@@ -156,22 +156,37 @@ jobs:
               '.github/workflows/velia-software-factory-stage6-7.yml',
               '.github/workflows/velia-software-factory-stage7.yml',
           }
+          stage8_extension = {
+              'services/velia_software_factory_greenfield_repository_creation_service.py',
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_stage8_full_autonomy_service.py',
+              'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
+              'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_stage8_final_hardening_patch.py',
+              'services/velia_software_factory_workspace_chat_hardening_patch.py',
+              'services/velia_software_factory_workspace_hardening_patch.py',
+              'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              'tests/test_velia_software_factory_stage8_final_hardening.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+              '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+              '.github/workflows/velia-software-factory-stage7.yml',
+          }
+          allowed = stage7_allowed | stage8_extension
           unexpected = changed - allowed
-          assert not unexpected, f'unexpected Stage 7 files: {sorted(unexpected)}'
+          assert not unexpected, f'unexpected Stage 7/8 files: {sorted(unexpected)}'
           runtime = {
               'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
               'services/velia_software_factory_admin_acceptance_service.py',
-              'services/velia_software_factory_rollout_service.py',
               'services/velia_software_factory_live_pilot_preflight_service.py',
           }
           if changed & runtime:
               assert 'tests/test_velia_software_factory_stage7_limited_admin_rollout.py' in changed, sorted(changed)
-          assert changed & (runtime | {
-              'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
-              'docs/VELIA_SOFTWARE_FACTORY_STAGE7_LIMITED_ADMIN_ROLLOUT.md',
-              '.github/workflows/velia-software-factory-stage6-7.yml',
-              '.github/workflows/velia-software-factory-stage7.yml',
-          }), sorted(changed)
+          if 'services/velia_software_factory_stage8_full_autonomy_service.py' in changed:
+              assert 'tests/test_velia_software_factory_stage8_full_autonomy.py' in changed
+              assert '.github/workflows/velia-software-factory-stage8.yml' in changed
+              assert 'ROLLOUT_FULL_AUTONOMY = "full_autonomy"' in open('services/velia_software_factory_rollout_service.py').read()
+          assert changed & allowed, sorted(changed)
           PY
 
       - name: Reject newly added Python bytecode
