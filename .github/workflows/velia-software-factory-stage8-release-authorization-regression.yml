@@ -1,0 +1,54 @@
+name: VELIA Stage 8 Release Authorization Regression
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'services/velia_software_factory_stage8_final_hardening_patch.py'
+      - 'tests/test_velia_software_factory_stage8_release_authorization_regression.py'
+      - '.github/workflows/velia-software-factory-stage8-release-authorization-regression.yml'
+  push:
+    branches:
+      - feature/turbo-short-term-btc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-authorization-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Check out exact source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Verify exact checkout
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          else
+            test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          fi
+
+      - name: Run release authorization regressions
+        run: |
+          python -m py_compile services/velia_software_factory_stage8_final_hardening_patch.py
+          python -m pytest -q tests/test_velia_software_factory_stage8_release_authorization_regression.py
