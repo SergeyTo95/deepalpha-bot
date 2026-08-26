@@ -45,6 +45,7 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,30}\b(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
         r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,24}(?:have|had|will\s+have|['’]ve|['’]d|['’]ll\s+have)[^.!?\n]{0,24}\b(?:approved|confirmed|authorized|permitted)\b",
+        r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,24}(?:have|had|will\s+have|['’]ve|['’]d|['’]ll\s+have)[^.!?\n]{0,60}\b(?:(?:my|our|the)\s+)?(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:my|our)\b[^.!?\n]{0,20}\b(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
