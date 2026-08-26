@@ -1,19 +1,548 @@
 from __future__ import annotations
 
 import logging
+import re
+import threading
 from typing import Any, Dict, Mapping
 
+from db.database import get_connection
 from services import velia_developer_chat_runtime_patch as developer_chat
 from services import velia_software_factory_greenfield_repository_creation_service as repository_creation
 from services import velia_software_factory_rollout_service as rollout
+from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
+_DURABLE_STOP_SCHEMA_READY = False
+_DURABLE_STOP_SCHEMA_LOCK = threading.Lock()
+_DURABLE_STOP_SCHEMA_ADVISORY_KEY = 8_618_270_812
 _TRIGGER_REASONS = {
     "software_factory_greenfield_manifest_ready",
     "software_factory_greenfield_repositories_missing",
     "software_factory_greenfield_ready_to_attach",
 }
+_CONDITIONAL_NOUN_DEFERRED_APPROVAL = re.compile(
+    r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}"
+    r"\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}"
+    r"\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+"
+    r"(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b"
+    r"[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_STOP_BLOCKER = "velia_factory_stage8_release_stop_requested"
+_LINEAGE_TABLE = "velia_software_factory_stage8_retired_release_lineage"
+
+
+class _RetryDeferred(RuntimeError):
+    def __init__(self, state: Mapping[str, Any]):
+        super().__init__("stage8_retry_deferred")
+        self.state = dict(state)
+
+
+def _conditional_noun_deferred_approval(objective: str) -> bool:
+    return bool(_CONDITIONAL_NOUN_DEFERRED_APPROVAL.search(str(objective or "").strip()))
+
+
+def _ensure_durable_stop_schema(execution_module: Any) -> None:
+    """Install durable-stop/retired-lineage schema once and serialize it cross-process."""
+    global _DURABLE_STOP_SCHEMA_READY
+    if _DURABLE_STOP_SCHEMA_READY:
+        return
+    with _DURABLE_STOP_SCHEMA_LOCK:
+        if _DURABLE_STOP_SCHEMA_READY:
+            return
+        from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
+
+        release_runtime.ensure_stage8_release_tables(execution_module)
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_DURABLE_STOP_SCHEMA_ADVISORY_KEY,),
+            )
+            cursor.execute(
+                "ALTER TABLE velia_software_factory_stage8_releases "
+                "ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            # Keep the scalar column for backwards compatibility/backfill only. All
+            # new stop resolution uses the append-only lineage table below.
+            cursor.execute(
+                "ALTER TABLE velia_software_factory_stage8_releases "
+                "ADD COLUMN IF NOT EXISTS retired_release_execution_id TEXT NOT NULL DEFAULT ''"
+            )
+            cursor.execute(
+                f"CREATE TABLE IF NOT EXISTS {_LINEAGE_TABLE} ("
+                "user_id BIGINT NOT NULL,"
+                "release_execution_id TEXT NOT NULL,"
+                "workspace_execution_id TEXT NOT NULL,"
+                "retired_at TIMESTAMP NOT NULL DEFAULT NOW(),"
+                "PRIMARY KEY(user_id,release_execution_id)"
+                ")"
+            )
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_lineage_workspace "
+                f"ON {_LINEAGE_TABLE}(user_id,workspace_execution_id)"
+            )
+            cursor.execute(
+                f"INSERT INTO {_LINEAGE_TABLE} "
+                "(user_id,release_execution_id,workspace_execution_id,retired_at) "
+                "SELECT user_id,retired_release_execution_id,workspace_execution_id,NOW() "
+                "FROM velia_software_factory_stage8_releases "
+                "WHERE retired_release_execution_id<>'' "
+                "ON CONFLICT (user_id,release_execution_id) DO NOTHING"
+            )
+            conn.commit()
+            _DURABLE_STOP_SCHEMA_READY = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    try:
+        return row[index]
+    except (IndexError, TypeError):
+        return None
+
+
+def _workspace_for_release(cursor: Any, user_id: int, release_execution_id: str) -> str:
+    """Resolve an active or arbitrarily old retired release to its Stage 8 workspace."""
+    release_id = str(release_execution_id or "").strip()
+    if not release_id:
+        return ""
+    cursor.execute(
+        "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases "
+        "WHERE user_id=%s AND release_execution_id=%s ORDER BY updated_at DESC LIMIT 1",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    if row:
+        return str(_row_value(row, "workspace_execution_id", 0) or "")
+    cursor.execute(
+        f"SELECT workspace_execution_id FROM {_LINEAGE_TABLE} "
+        "WHERE user_id=%s AND release_execution_id=%s",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    if row:
+        return str(_row_value(row, "workspace_execution_id", 0) or "")
+    # Compatibility fallback for a row created by an older build before lineage
+    # migration completed. New rotations never depend on this scalar.
+    cursor.execute(
+        "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases "
+        "WHERE user_id=%s AND retired_release_execution_id=%s "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    return str(_row_value(row, "workspace_execution_id", 0) or "") if row else ""
+
+
+def _coordinator_stop_state(
+    execution_module: Any,
+    user_id: int,
+    *,
+    workspace_execution_id: str = "",
+    release_execution_id: str = "",
+) -> Dict[str, Any]:
+    _ensure_durable_stop_schema(execution_module)
+    workspace_id = str(workspace_execution_id or "").strip()
+    release_id = str(release_execution_id or "").strip()
+    if not workspace_id and not release_id:
+        return {}
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if not workspace_id:
+            workspace_id = _workspace_for_release(cursor, int(user_id), release_id)
+        if not workspace_id:
+            return {}
+        cursor.execute(
+            "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,"
+            "stop_requested,status FROM velia_software_factory_stage8_releases "
+            "WHERE user_id=%s AND workspace_execution_id=%s",
+            (int(user_id), workspace_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        return {
+            "workspace_execution_id": str(_row_value(row, "workspace_execution_id", 0) or ""),
+            "release_execution_id": str(_row_value(row, "release_execution_id", 1) or ""),
+            "retired_release_execution_id": str(
+                _row_value(row, "retired_release_execution_id", 2) or ""
+            ),
+            "stop_requested": bool(_row_value(row, "stop_requested", 3)),
+            "status": str(_row_value(row, "status", 4) or ""),
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _mark_coordinator_stop(
+    execution_module: Any,
+    user_id: int,
+    release_execution_id: str,
+) -> Dict[str, Any]:
+    """Linearize a durable workspace stop against the current release executor.
+
+    Lock order deliberately matches zero-merge rotation: release advisory lock first,
+    then the coordinator row. If the active release changes before the row lock is
+    acquired, the transaction rolls back and retries with the new release key. This
+    makes stop-vs-merge ordering explicit without deadlocking rotation.
+    """
+    from services import velia_software_factory_release_execution_service as release_execution
+
+    _ensure_durable_stop_schema(execution_module)
+    release_id = str(release_execution_id or "").strip()
+    if not release_id:
+        return {}
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        for _attempt in range(8):
+            workspace_execution_id = _workspace_for_release(cursor, int(user_id), release_id)
+            if not workspace_execution_id:
+                conn.commit()
+                return {}
+
+            # Snapshot the active release without a row lock so we know which
+            # executor advisory key must be acquired before touching coordinator.
+            cursor.execute(
+                "SELECT release_execution_id FROM velia_software_factory_stage8_releases "
+                "WHERE user_id=%s AND workspace_execution_id=%s",
+                (int(user_id), workspace_execution_id),
+            )
+            snapshot_row = cursor.fetchone()
+            if not snapshot_row:
+                conn.commit()
+                return {}
+            snapshot_active_release_id = str(
+                _row_value(snapshot_row, "release_execution_id", 0) or ""
+            )
+            if snapshot_active_release_id:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (release_execution._lock_key(snapshot_active_release_id),),
+                )
+
+            cursor.execute(
+                "SELECT workspace_execution_id,release_execution_id,"
+                "retired_release_execution_id,stop_requested,status "
+                "FROM velia_software_factory_stage8_releases "
+                "WHERE user_id=%s AND workspace_execution_id=%s FOR UPDATE",
+                (int(user_id), workspace_execution_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return {}
+
+            actual_active_release_id = str(
+                _row_value(row, "release_execution_id", 1) or ""
+            )
+            if actual_active_release_id != snapshot_active_release_id:
+                # Rotation/progression won the race before our release lock. Drop
+                # every xact lock and re-resolve the now-current executor key.
+                conn.rollback()
+                continue
+
+            workspace_execution_id = str(
+                _row_value(row, "workspace_execution_id", 0) or ""
+            )
+            retired_release_id = str(
+                _row_value(row, "retired_release_execution_id", 2) or ""
+            )
+            status = str(_row_value(row, "status", 4) or "")
+
+            cursor.execute(
+                "UPDATE velia_software_factory_stage8_releases SET "
+                "stop_requested=TRUE,updated_at=NOW() "
+                "WHERE user_id=%s AND workspace_execution_id=%s",
+                (int(user_id), workspace_execution_id),
+            )
+            if actual_active_release_id:
+                cursor.execute(
+                    "UPDATE velia_software_factory_release_executions SET "
+                    "stop_requested=TRUE,updated_at=NOW() "
+                    "WHERE execution_id=%s AND user_id=%s AND ("
+                    "status IN ('created','running') OR "
+                    "(status IN ('blocked','failed') AND merged_count=0))",
+                    (actual_active_release_id, int(user_id)),
+                )
+            conn.commit()
+            return {
+                "workspace_execution_id": workspace_execution_id,
+                "release_execution_id": actual_active_release_id,
+                "retired_release_execution_id": retired_release_id,
+                "stop_requested": True,
+                "status": status,
+            }
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_release_stop_binding_unstable", status=409
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _terminalize_coordinator_stop(
+    execution_module: Any,
+    user_id: int,
+    workspace_execution_id: str,
+) -> Dict[str, Any]:
+    from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
+
+    workspace_id = str(workspace_execution_id or "").strip()
+    if not workspace_id:
+        return {"status": "terminal_blocked", "blocker_code": _STOP_BLOCKER}
+    return release_runtime._save_state(
+        execution_module,
+        int(user_id),
+        workspace_id,
+        status="terminal_blocked",
+        blocker_code=_STOP_BLOCKER,
+        blocker_detail="Explicit stop intent is durably attached to this Stage 8 workspace release.",
+    )
+
+
+def _atomic_zero_merge_rotate(
+    execution_module: Any,
+    user_id: int,
+    state: Mapping[str, Any],
+    release: Mapping[str, Any],
+) -> None:
+    """Retire a zero-merge attempt while preserving the complete release lineage."""
+    from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
+
+    _ensure_durable_stop_schema(execution_module)
+    release_id = str(
+        release.get("execution_id") or state.get("release_execution_id") or ""
+    ).strip()
+    if not release_id:
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_release_recheck_unavailable", status=503
+        )
+
+    with final_hardening._release_operation_lock(release_id) as (conn, cursor):
+        current = execution_module.get_release_execution(int(user_id), release_id)
+        if not isinstance(current, Mapping) or not final_hardening._zero_merge_terminal_release(current):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_release_no_longer_retryable", status=409
+            )
+
+        cursor.execute(
+            "SELECT workspace_execution_id,plan_id,release_execution_id,stop_requested "
+            "FROM velia_software_factory_stage8_releases "
+            "WHERE user_id=%s AND release_execution_id=%s FOR UPDATE",
+            (int(user_id), release_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_binding_missing", status=409
+            )
+        workspace_execution_id = str(_row_value(row, "workspace_execution_id", 0) or "")
+        persisted_plan_id = str(_row_value(row, "plan_id", 1) or "")
+        persisted_release_id = str(_row_value(row, "release_execution_id", 2) or "")
+        stop_requested = bool(_row_value(row, "stop_requested", 3))
+        if not workspace_execution_id or persisted_release_id != release_id:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_binding_changed", status=409
+            )
+        if stop_requested:
+            raise SoftwareFactoryError(_STOP_BLOCKER, status=409)
+
+        cancel = getattr(execution_module, "cancel_release_preflight", None)
+        if not callable(cancel):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
+            )
+        plan_id = str(
+            persisted_plan_id
+            or state.get("plan_id")
+            or current.get("plan_id")
+            or release.get("plan_id")
+            or ""
+        ).strip()
+        if not plan_id:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_missing", status=409
+            )
+        rotated = cancel(int(user_id), plan_id)
+        rotated_status = (
+            str((rotated or {}).get("status") or "")
+            if isinstance(rotated, Mapping)
+            else ""
+        )
+        if rotated_status not in {"cancelled", "stale"}:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_not_rotated",
+                detail=rotated_status or plan_id,
+                status=409,
+            )
+
+        # Persist the retiring release before clearing the active binding. This is
+        # in the same transaction/row-lock critical section as coordinator rotation.
+        cursor.execute(
+            f"INSERT INTO {_LINEAGE_TABLE} "
+            "(user_id,release_execution_id,workspace_execution_id,retired_at) "
+            "VALUES (%s,%s,%s,NOW()) "
+            "ON CONFLICT (user_id,release_execution_id) DO NOTHING",
+            (int(user_id), release_id, workspace_execution_id),
+        )
+        cursor.execute(
+            f"SELECT workspace_execution_id FROM {_LINEAGE_TABLE} "
+            "WHERE user_id=%s AND release_execution_id=%s",
+            (int(user_id), release_id),
+        )
+        lineage_row = cursor.fetchone()
+        lineage_workspace_id = str(
+            _row_value(lineage_row, "workspace_execution_id", 0) or ""
+        ) if lineage_row else ""
+        if lineage_workspace_id != workspace_execution_id:
+            conn.rollback()
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_retired_release_lineage_conflict", status=409
+            )
+
+        cursor.execute(
+            "UPDATE velia_software_factory_stage8_releases SET "
+            "candidate_id='',plan_id='',retired_release_execution_id=%s,release_execution_id='',"
+            "verification_id='',observation_id='',certificate_id='',passport_id='',"
+            "status='retrying_candidate',blocker_code='',blocker_detail='',updated_at=NOW() "
+            "WHERE user_id=%s AND workspace_execution_id=%s AND release_execution_id=%s "
+            "AND stop_requested=FALSE",
+            (release_id, int(user_id), workspace_execution_id, release_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_rotation_failed", status=409
+            )
+        conn.commit()
+
+
+def _install_release_atomicity_hardening(execution_module: Any) -> None:
+    if getattr(execution_module, "_workspace_stage8_release_atomicity_installed", False):
+        return
+    from services import velia_software_factory_release_execution_service as release_execution
+    from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
+    from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
+
+    if not getattr(execution_module, "_workspace_stage8_final_hardening_installed", False):
+        raise RuntimeError("stage8_release_atomicity_requires_final_hardening")
+
+    _ensure_durable_stop_schema(execution_module)
+    original_authorizer = final_hardening._strict_release_authorized
+    original_refresh = final_hardening._refresh_retryable_evidence
+    original_progress = release_runtime._progress_release
+    original_request_stop = release_execution.request_stop
+    original_execute_release = execution_module.execute_release
+
+    def strict_release_authorized(execution: Mapping[str, Any]) -> bool:
+        plan = execution.get("plan") if isinstance(execution.get("plan"), Mapping) else {}
+        objective = str(plan.get("objective") or "").strip()
+        if _conditional_noun_deferred_approval(objective):
+            return False
+        return bool(original_authorizer(execution))
+
+    def refresh_retryable_evidence(execution_module_arg: Any, user_id: int, execution_id: str) -> None:
+        before = release_runtime._state(execution_module_arg, int(user_id), str(execution_id))
+        old_release_id = str(before.get("release_execution_id") or "")
+        original_refresh(execution_module_arg, int(user_id), str(execution_id))
+        after = release_runtime._state(execution_module_arg, int(user_id), str(execution_id))
+        if (
+            old_release_id
+            and not str(after.get("release_execution_id") or "")
+            and str(after.get("status") or "") == "retrying_candidate"
+        ):
+            raise _RetryDeferred(after)
+
+    def progress_release(execution_module_arg: Any, user_id: int, execution_id: str) -> Dict[str, Any]:
+        stop_state = _coordinator_stop_state(
+            execution_module_arg,
+            int(user_id),
+            workspace_execution_id=str(execution_id),
+        )
+        if stop_state.get("stop_requested"):
+            active_release_id = str(stop_state.get("release_execution_id") or "")
+            if active_release_id:
+                try:
+                    original_request_stop(execution_module_arg, int(user_id), active_release_id)
+                except Exception:
+                    logger.exception(
+                        "VELIA_STAGE8_DURABLE_STOP_PROPAGATION_FAILED release_execution_id=%s",
+                        active_release_id,
+                    )
+            return _terminalize_coordinator_stop(
+                execution_module_arg, int(user_id), str(execution_id)
+            )
+        try:
+            return original_progress(execution_module_arg, int(user_id), str(execution_id))
+        except _RetryDeferred as deferred:
+            return {**deferred.state, "execution_id": str(execution_id)}
+
+    def request_stop(
+        execution_module_arg: Any,
+        user_id: int,
+        release_execution_id: str,
+    ) -> Dict[str, Any]:
+        release_id = str(release_execution_id or "").strip()
+        marker = _mark_coordinator_stop(
+            execution_module_arg, int(user_id), release_id
+        )
+        result = original_request_stop(
+            execution_module_arg, int(user_id), release_id
+        )
+        if marker:
+            safe = dict(result or {})
+            safe["stage8_workspace_stop_requested"] = True
+            safe["workspace_execution_id"] = str(marker.get("workspace_execution_id") or "")
+            return safe
+        return result
+
+    def execute_release(user_id: int, release_execution_id: str) -> Dict[str, Any]:
+        release_id = str(release_execution_id or "").strip()
+        marker = _coordinator_stop_state(
+            execution_module,
+            int(user_id),
+            release_execution_id=release_id,
+        )
+        if marker.get("stop_requested"):
+            original_request_stop(execution_module, int(user_id), release_id)
+            _terminalize_coordinator_stop(
+                execution_module,
+                int(user_id),
+                str(marker.get("workspace_execution_id") or ""),
+            )
+            return execution_module.get_release_execution(int(user_id), release_id)
+        # This lookup is an early fast path. Concurrent correctness does not depend
+        # on it: _mark_coordinator_stop serializes with the base executor's exact
+        # advisory key, then commits coordinator + active execution stop together.
+        return original_execute_release(int(user_id), release_id)
+
+    final_hardening._strict_release_authorized = strict_release_authorized
+    release_runtime._explicit_release_authorized = strict_release_authorized
+    final_hardening._rotate_zero_merge_preflight = _atomic_zero_merge_rotate
+    final_hardening._refresh_retryable_evidence = refresh_retryable_evidence
+    release_runtime._progress_release = progress_release
+    release_execution.request_stop = request_stop
+    execution_module.execute_release = execute_release
+    execution_module._workspace_stage8_release_atomicity_installed = True
+    logger.info(
+        "VELIA_SOFTWARE_FACTORY_STAGE8_RELEASE_ATOMICITY_INSTALLED durable_stop=true"
+    )
 
 
 def _stage8_single_workspace_delegate(
@@ -107,6 +636,7 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
     from services import velia_software_factory_workspace_execution_service as execution_module
 
     final_hardening.install(execution_module)
+    _install_release_atomicity_hardening(execution_module)
 
     original_generate = chat_module.generate_velia_chat_result
     original_delegate_single = runtime_module._delegate_single
@@ -256,6 +786,6 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
     chat_module._velia_software_factory_stage8_greenfield_installed = True
     _INSTALLED = True
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s final_hardening=true",
+        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s final_hardening=true atomic_retry=true durable_stop=true",
         str(repository_creation.enabled()).lower(),
     )

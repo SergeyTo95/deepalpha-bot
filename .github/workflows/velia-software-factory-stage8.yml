@@ -279,7 +279,8 @@ jobs:
           }
           unexpected = changed - allowed
           assert not unexpected, f'unexpected Stage 8 files: {sorted(unexpected)}'
-          required = {
+
+          full_stage8_required = {
               'services/velia_software_factory_greenfield_repository_creation_service.py',
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
@@ -287,7 +288,27 @@ jobs:
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
               '.github/workflows/velia-software-factory-stage8.yml',
           }
-          assert required <= changed, f'missing Stage 8 evidence files: {sorted(required - changed)}'
+          maintenance_required = {
+              'services/velia_software_factory_stage8_final_hardening_patch.py',
+              'tests/test_velia_software_factory_stage8_final_hardening.py',
+          }
+          maintenance_allowed = maintenance_required | {
+              'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+              '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
+          }
+
+          if full_stage8_required <= changed:
+              mode = 'full_stage8'
+          else:
+              assert maintenance_required <= changed, (
+                  f'missing Stage 8 maintenance evidence files: {sorted(maintenance_required - changed)}'
+              )
+              assert changed <= maintenance_allowed, (
+                  f'non-maintenance files in Stage 8 hardening hotfix: {sorted(changed - maintenance_allowed)}'
+              )
+              mode = 'maintenance_hardening'
+          print(f'bounded_stage8_mode={mode}')
           PY
 
       - name: Reject newly added Python bytecode

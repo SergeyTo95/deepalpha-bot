@@ -65,6 +65,357 @@ jobs:
             tests/test_velia_software_factory_stage8_final_hardening.py \
             tests/test_velia_software_factory_stage8_full_autonomy.py \
             tests/test_velia_software_factory_stage7_limited_admin_rollout.py
+          python - <<'PY'
+          from contextlib import contextmanager
+          from types import SimpleNamespace
+
+          from services import velia_software_factory_release_execution_service as release_exec
+          from services import velia_software_factory_stage8_final_hardening_patch as hardening
+          from services import velia_software_factory_stage8_greenfield_runtime_patch as atomic
+          from services import velia_software_factory_stage8_release_runtime_patch as stage8_release_runtime
+
+          def execution(objective):
+              return {"plan": {"objective": objective}}
+
+          assert hardening._strict_release_authorized(
+              execution("Deploy this app after approval is given by me")
+          ) is False
+          assert hardening._strict_release_authorized(
+              execution("Deploy once authorization has been granted by us")
+          ) is False
+          assert atomic._conditional_noun_deferred_approval(
+              "Deploy this app if approval is given by me"
+          ) is True
+          assert atomic._conditional_noun_deferred_approval(
+              "Deploy this app provided that authorization has been granted by us"
+          ) is True
+          assert hardening._zero_merge_terminal_release(
+              {
+                  "status": "blocked",
+                  "merged_count": 0,
+                  "stop_requested": True,
+                  "items": [{"status": "failed", "merge_commit_sha": ""}],
+              }
+          ) is False
+
+          migration_events = []
+
+          class MigrationCursor:
+              def execute(self, query, params=None):
+                  migration_events.append(" ".join(str(query).split()))
+              def close(self):
+                  pass
+
+          class MigrationConnection:
+              def cursor(self):
+                  return MigrationCursor()
+              def commit(self):
+                  migration_events.append("migration_commit")
+              def rollback(self):
+                  migration_events.append("migration_rollback")
+              def close(self):
+                  pass
+
+          original_atomic_get_connection = atomic.get_connection
+          original_release_ensure = stage8_release_runtime.ensure_stage8_release_tables
+          original_schema_ready = atomic._DURABLE_STOP_SCHEMA_READY
+          try:
+              atomic._DURABLE_STOP_SCHEMA_READY = False
+              atomic.get_connection = lambda: MigrationConnection()
+              stage8_release_runtime.ensure_stage8_release_tables = lambda execution_module: None
+              atomic._ensure_durable_stop_schema(object())
+              first_event_count = len(migration_events)
+              atomic._ensure_durable_stop_schema(object())
+              assert len(migration_events) == first_event_count
+              assert sum(
+                  "ALTER TABLE velia_software_factory_stage8_releases" in event
+                  for event in migration_events
+              ) == 2
+              assert sum(
+                  "CREATE TABLE IF NOT EXISTS velia_software_factory_stage8_retired_release_lineage" in event
+                  for event in migration_events
+              ) == 1
+              assert sum(
+                  "CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_lineage_workspace" in event
+                  for event in migration_events
+              ) == 1
+              assert sum(
+                  "INSERT INTO velia_software_factory_stage8_retired_release_lineage" in event
+                  for event in migration_events
+              ) == 1
+              assert sum("pg_advisory_xact_lock" in event for event in migration_events) == 1
+              assert migration_events.count("migration_commit") == 1
+              assert "migration_rollback" not in migration_events
+          finally:
+              atomic.get_connection = original_atomic_get_connection
+              stage8_release_runtime.ensure_stage8_release_tables = original_release_ensure
+              atomic._DURABLE_STOP_SCHEMA_READY = original_schema_ready
+
+          original_ensure_durable_stop_schema = atomic._ensure_durable_stop_schema
+          atomic._ensure_durable_stop_schema = lambda execution_module: None
+          try:
+              installer_module = SimpleNamespace(
+                  _workspace_stage8_final_hardening_installed=True,
+                  execute_release=lambda user_id, release_id: {
+                      "execution_id": release_id,
+                      "status": "blocked",
+                  },
+              )
+              atomic._install_release_atomicity_hardening(installer_module)
+              assert hardening._strict_release_authorized(
+                  execution("Deploy this app if approval is given by me")
+              ) is False
+              assert hardening._strict_release_authorized(
+                  execution("Deploy this app provided that authorization has been granted by us")
+              ) is False
+
+              history = {
+                  "workspace": "workspace-1",
+                  "active": "",
+                  "plan": "",
+                  "latest_retired": "",
+                  "status": "retrying_candidate",
+                  "stop": False,
+                  "lineage": {},
+                  "replacement_stopped": False,
+              }
+              events = []
+
+              class HistoryCursor:
+                  rowcount = 0
+                  def __init__(self):
+                      self._row = None
+                  def execute(self, query, params=None):
+                      normalized = " ".join(str(query).split())
+                      self.rowcount = 0
+                      if (
+                          "FROM velia_software_factory_stage8_releases" in normalized
+                          and "plan_id" in normalized
+                          and "FOR UPDATE" in normalized
+                      ):
+                          assert params == (9, history["active"])
+                          events.append(f"coordinator_locked:{history['active']}")
+                          self._row = (
+                              history["workspace"],
+                              history["plan"],
+                              history["active"],
+                              history["stop"],
+                          )
+                      elif normalized.startswith(
+                          "INSERT INTO velia_software_factory_stage8_retired_release_lineage"
+                      ):
+                          user_id, retired_id, workspace_id = params
+                          assert user_id == 9
+                          existing = history["lineage"].get(retired_id)
+                          if existing is None:
+                              history["lineage"][retired_id] = workspace_id
+                          events.append(f"lineage_inserted:{retired_id}")
+                          self._row = None
+                      elif normalized.startswith(
+                          "SELECT workspace_execution_id FROM velia_software_factory_stage8_retired_release_lineage"
+                      ):
+                          user_id, retired_id = params
+                          assert user_id == 9
+                          workspace_id = history["lineage"].get(retired_id)
+                          self._row = (workspace_id,) if workspace_id else None
+                          events.append(f"lineage_lookup:{retired_id}")
+                      elif (
+                          normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
+                          and "candidate_id=''" in normalized
+                      ):
+                          retired_id, user_id, workspace_id, expected_active = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          assert expected_active == history["active"]
+                          assert history["stop"] is False
+                          history["latest_retired"] = retired_id
+                          history["active"] = ""
+                          history["plan"] = ""
+                          history["status"] = "retrying_candidate"
+                          self.rowcount = 1
+                          self._row = None
+                          events.append(f"binding_cleared:{retired_id}")
+                      elif normalized.startswith(
+                          "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases"
+                      ):
+                          user_id, release_id = params
+                          assert user_id == 9
+                          self._row = (
+                              (history["workspace"],)
+                              if history["active"] == release_id
+                              else None
+                          )
+                          events.append(f"active_lookup:{release_id}")
+                      elif normalized.startswith(
+                          "SELECT release_execution_id FROM velia_software_factory_stage8_releases"
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          self._row = (history["active"],)
+                          events.append(f"active_snapshot:{history['active']}")
+                      elif normalized.startswith("SELECT pg_advisory_xact_lock"):
+                          assert params == (release_exec._lock_key(history["active"]),)
+                          self._row = (None,)
+                          events.append(f"release_advisory_lock:{history['active']}")
+                      elif (
+                          normalized.startswith(
+                              "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,stop_requested,status"
+                          )
+                          and "FOR UPDATE" in normalized
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          self._row = (
+                              history["workspace"],
+                              history["active"],
+                              history["latest_retired"],
+                              history["stop"],
+                              history["status"],
+                          )
+                          events.append(f"coordinator_stop_row_locked:{history['active']}")
+                      elif (
+                          normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
+                          and "stop_requested=TRUE" in normalized
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          history["stop"] = True
+                          self.rowcount = 1
+                          self._row = None
+                          events.append("coordinator_stop_persisted")
+                      elif normalized.startswith(
+                          "UPDATE velia_software_factory_release_executions SET"
+                      ):
+                          active_release_id, user_id = params
+                          assert user_id == 9
+                          assert active_release_id == history["active"] == "release-3"
+                          history["replacement_stopped"] = True
+                          self.rowcount = 1
+                          self._row = None
+                          events.append("active_release_stop_persisted")
+                      else:
+                          raise AssertionError(f"unexpected SQL: {normalized}")
+                  def fetchone(self):
+                      return self._row
+                  def close(self):
+                      pass
+
+              class HistoryConnection:
+                  def cursor(self):
+                      return HistoryCursor()
+                  def commit(self):
+                      events.append("transaction_committed")
+                  def rollback(self):
+                      events.append("transaction_rolled_back")
+                  def close(self):
+                      pass
+
+              @contextmanager
+              def fake_history_lock(release_id):
+                  assert release_id == history["active"]
+                  events.append(f"release_lock_enter:{release_id}")
+                  yield HistoryConnection(), HistoryCursor()
+                  events.append(f"release_lock_exit:{release_id}")
+
+              def get_release_execution(user_id, release_id):
+                  assert user_id == 9
+                  return {
+                      "execution_id": release_id,
+                      "plan_id": history["plan"],
+                      "status": "blocked",
+                      "merged_count": 0,
+                      "stop_requested": False,
+                      "items": [{"status": "failed", "merge_commit_sha": ""}],
+                  }
+
+              module = SimpleNamespace(
+                  get_release_execution=get_release_execution,
+                  cancel_release_preflight=lambda user_id, plan_id: (
+                      events.append(f"preflight_retired:{plan_id}")
+                      or {"status": "cancelled"}
+                  ),
+              )
+
+              original_lock = hardening._release_operation_lock
+              hardening._release_operation_lock = fake_history_lock
+              try:
+                  for index in (1, 2):
+                      release_id = f"release-{index}"
+                      plan_id = f"plan-{index}"
+                      history["active"] = release_id
+                      history["plan"] = plan_id
+                      history["stop"] = False
+                      start = len(events)
+                      release = {
+                          "execution_id": release_id,
+                          "plan_id": plan_id,
+                          "status": "blocked",
+                          "merged_count": 0,
+                          "stop_requested": False,
+                          "items": [{"status": "failed", "merge_commit_sha": ""}],
+                      }
+                      atomic._atomic_zero_merge_rotate(
+                          module,
+                          9,
+                          {"plan_id": plan_id, "release_execution_id": release_id},
+                          release,
+                      )
+                      segment = events[start:]
+                      assert segment.index(f"preflight_retired:{plan_id}") < segment.index(
+                          f"lineage_inserted:{release_id}"
+                      )
+                      assert segment.index(f"lineage_inserted:{release_id}") < segment.index(
+                          f"binding_cleared:{release_id}"
+                      )
+                      assert segment.index(f"binding_cleared:{release_id}") < segment.index(
+                          "transaction_committed"
+                      )
+                      assert history["lineage"][release_id] == "workspace-1"
+
+                  assert history["lineage"] == {
+                      "release-1": "workspace-1",
+                      "release-2": "workspace-1",
+                  }
+                  history["active"] = "release-3"
+                  history["plan"] = "plan-3"
+                  history["status"] = "release_executing"
+                  history["stop"] = False
+                  stop_start = len(events)
+
+                  original_atomic_get_connection = atomic.get_connection
+                  atomic.get_connection = lambda: HistoryConnection()
+                  try:
+                      marker = atomic._mark_coordinator_stop(object(), 9, "release-1")
+                  finally:
+                      atomic.get_connection = original_atomic_get_connection
+              finally:
+                  hardening._release_operation_lock = original_lock
+
+              assert marker["workspace_execution_id"] == "workspace-1"
+              assert marker["release_execution_id"] == "release-3"
+              assert history["lineage"] == {
+                  "release-1": "workspace-1",
+                  "release-2": "workspace-1",
+              }
+              assert history["stop"] is True
+              assert history["replacement_stopped"] is True
+              assert events[stop_start:] == [
+                  "active_lookup:release-1",
+                  "lineage_lookup:release-1",
+                  "active_snapshot:release-3",
+                  "release_advisory_lock:release-3",
+                  "coordinator_stop_row_locked:release-3",
+                  "coordinator_stop_persisted",
+                  "active_release_stop_persisted",
+                  "transaction_committed",
+              ]
+              assert "transaction_rolled_back" not in events[stop_start:]
+          finally:
+              atomic._ensure_durable_stop_schema = original_ensure_durable_stop_schema
+          PY
 
       - name: Publish independent production acceptance status
         if: always() && github.event_name == 'push'
