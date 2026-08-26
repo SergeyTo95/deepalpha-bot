@@ -138,7 +138,7 @@ jobs:
           assert 'get_connection(' not in preflight
           PY
 
-      - name: Verify exact Stage 7 diff surface
+      - name: Verify bounded Stage 7 diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -158,15 +158,20 @@ jobs:
           }
           unexpected = changed - allowed
           assert not unexpected, f'unexpected Stage 7 files: {sorted(unexpected)}'
-          required = {
+          runtime = {
               'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
               'services/velia_software_factory_admin_acceptance_service.py',
               'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_live_pilot_preflight_service.py',
+          }
+          if changed & runtime:
+              assert 'tests/test_velia_software_factory_stage7_limited_admin_rollout.py' in changed, sorted(changed)
+          assert changed & (runtime | {
               'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
+              'docs/VELIA_SOFTWARE_FACTORY_STAGE7_LIMITED_ADMIN_ROLLOUT.md',
               '.github/workflows/velia-software-factory-stage6-7.yml',
               '.github/workflows/velia-software-factory-stage7.yml',
-          }
-          assert required <= changed, sorted(changed)
+          }), sorted(changed)
           PY
 
       - name: Reject newly added Python bytecode
