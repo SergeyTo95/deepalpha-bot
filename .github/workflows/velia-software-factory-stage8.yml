@@ -9,7 +9,6 @@ on:
       - 'services/velia_software_factory_rollout_service.py'
       - 'services/velia_software_factory_stage8_full_autonomy_service.py'
       - 'services/velia_software_factory_stage8_greenfield_runtime_patch.py'
-      - 'services/velia_software_factory_stage8_release_hardening_patch.py'
       - 'services/velia_software_factory_stage8_release_runtime_patch.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_stage8_full_autonomy.py'
@@ -56,7 +55,6 @@ jobs:
             services/velia_software_factory_rollout_service.py \
             services/velia_software_factory_stage8_full_autonomy_service.py \
             services/velia_software_factory_stage8_greenfield_runtime_patch.py \
-            services/velia_software_factory_stage8_release_hardening_patch.py \
             services/velia_software_factory_stage8_release_runtime_patch.py \
             services/velia_software_factory_workspace_hardening_patch.py
 
@@ -72,6 +70,7 @@ jobs:
           from pathlib import Path
           release = Path('services/velia_software_factory_stage8_release_runtime_patch.py').read_text()
           status = Path('services/velia_software_factory_stage8_full_autonomy_service.py').read_text()
+          rollout = Path('services/velia_software_factory_rollout_service.py').read_text()
           assert 'def _explicit_release_authorized(' in release
           assert '_RELEASE_DENY_HINTS' in release
           assert '_RELEASE_ALLOW_HINTS' in release
@@ -83,6 +82,10 @@ jobs:
           assert '"release_authorization_required": True' in status
           assert '"release_authorization_source": "immutable_user_workspace_objective"' in status
           assert '"release_authorization_negative_intent_wins": True' in status
+          assert '"user_id"' not in status
+          assert 'def _stage8_connected_user_allowed(' in rollout
+          assert 'project_service.list_installations(candidate)' in rollout
+          assert 'authenticated_user_requires_owned_github_installation' in rollout
           PY
 
       - name: Prove Stage 7 remains separate and release-closed
@@ -121,6 +124,7 @@ jobs:
               assert token in release, token
           assert release.index('_explicit_release_authorized(current)') < release.index('evaluate_delivery_candidate(')
           assert release.index('_assert_repository_scope(int(user_id), candidate)') < release.index('record_delivery_decision(')
+          assert not Path('services/velia_software_factory_stage8_release_hardening_patch.py').exists()
           PY
 
       - name: Verify bounded Stage 8 diff surface
@@ -136,7 +140,6 @@ jobs:
               'services/velia_software_factory_rollout_service.py',
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
-              'services/velia_software_factory_stage8_release_hardening_patch.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
               'services/velia_software_factory_workspace_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
