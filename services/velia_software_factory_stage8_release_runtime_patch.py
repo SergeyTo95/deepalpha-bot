@@ -228,9 +228,10 @@ def _save_state(execution_module: Any, user_id: int, execution_id: str, **fields
 def _release_candidates(execution_module: Any, limit: int) -> list[tuple[int, str]]:
     """Select fairly without letting old blocked releases monopolize a bounded tick.
 
-    Truly immutable blockers are terminal and never re-enter the queue. Other
-    blocked/retryable states remain eligible, but every attempt refreshes
-    s.updated_at, moving that item behind untouched/newer work for the next tick.
+    Truly immutable policy blockers are terminal and never re-enter the queue.
+    Missing release authorization preserves the existing public `blocked` state but
+    is explicitly excluded. Other retryable states remain eligible; every attempt
+    refreshes s.updated_at, moving that item behind untouched work for the next tick.
     """
     ensure_stage8_release_tables(execution_module)
     conn = get_connection()
@@ -244,6 +245,10 @@ def _release_candidates(execution_module: Any, limit: int) -> list[tuple[int, st
               ON s.user_id=e.user_id AND s.workspace_execution_id=e.execution_id
             WHERE e.status='review_ready'
               AND COALESCE(s.status,'ready') NOT IN ('complete','terminal_blocked')
+              AND NOT (
+                  COALESCE(s.status,'')='blocked'
+                  AND COALESCE(s.blocker_code,'')='velia_factory_stage8_release_authorization_required'
+              )
             ORDER BY COALESCE(s.updated_at,e.updated_at) ASC, e.updated_at ASC, e.execution_id ASC
             LIMIT %s
             """,
@@ -299,7 +304,7 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
             execution_module,
             int(user_id),
             str(execution_id),
-            status=_TERMINAL_RELEASE_STATUS,
+            status="blocked",
             blocker_code="velia_factory_stage8_release_authorization_required",
             blocker_detail="Explicit user deploy/release intent is absent from the immutable workspace objective.",
         )
