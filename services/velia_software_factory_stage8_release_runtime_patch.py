@@ -15,6 +15,58 @@ _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_ADVISORY_KEY = 8_618_270_811
 
+_RELEASE_DENY_HINTS = (
+    "do not deploy",
+    "don't deploy",
+    "do not release",
+    "don't release",
+    "do not publish",
+    "don't publish",
+    "no deploy",
+    "no deployment",
+    "without deploy",
+    "without deployment",
+    "не деплой",
+    "не деплоить",
+    "не выкатывай",
+    "не выкатывать",
+    "не публикуй",
+    "не публиковать",
+    "не релиз",
+    "не релизить",
+    "без деплоя",
+    "без публикации",
+    "без релиза",
+)
+_RELEASE_ALLOW_HINTS = (
+    "deploy",
+    "deployment",
+    "release",
+    "publish",
+    "ship to production",
+    "ship it to production",
+    "go live",
+    "production deploy",
+    "merge and deploy",
+    "merge & deploy",
+    "задеплой",
+    "задеплоить",
+    "деплой",
+    "деплоить",
+    "выкати",
+    "выкатить",
+    "опубликуй",
+    "опубликовать",
+    "релиз",
+    "релизить",
+    "в прод",
+    "в production",
+    "до прода",
+    "до production",
+    "смержи и задеплой",
+    "мержи и задеплой",
+)
+
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 100) -> int:
     try:
@@ -33,6 +85,21 @@ def _protected_repositories() -> set[str]:
         or ""
     )
     return {item.strip().casefold() for item in raw.replace(";", ",").split(",") if item.strip()}
+
+
+def _explicit_release_authorized(execution: Mapping[str, Any]) -> bool:
+    """Use only the immutable workspace objective captured from the user's request.
+
+    Planner/reviewer output is deliberately ignored so an agent cannot invent its
+    own permission to merge or deploy. Explicit negative intent always wins.
+    """
+    plan = execution.get("plan") if isinstance(execution.get("plan"), Mapping) else {}
+    objective = str(plan.get("objective") or "").strip().casefold()
+    if not objective:
+        return False
+    if any(hint in objective for hint in _RELEASE_DENY_HINTS):
+        return False
+    return any(hint in objective for hint in _RELEASE_ALLOW_HINTS)
 
 
 def ensure_stage8_release_tables(execution_module: Any) -> None:
@@ -217,6 +284,17 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
     if str(current.get("status") or "") != "review_ready":
         return {"status": "not_review_ready", "execution_id": str(execution_id)}
     _assert_integration_passed(current)
+
+    if not _explicit_release_authorized(current):
+        return _save_state(
+            execution_module,
+            int(user_id),
+            str(execution_id),
+            status="blocked",
+            blocker_code="velia_factory_stage8_release_authorization_required",
+            blocker_detail="Explicit user deploy/release intent is absent from the immutable workspace objective.",
+        )
+
     state = _state(execution_module, int(user_id), str(execution_id))
     if state.get("status") == "complete" and state.get("passport_id"):
         return {**state, "execution_id": str(execution_id)}
@@ -238,7 +316,7 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
 
     execution_module.record_delivery_decision(
         int(user_id), candidate_id, "approved",
-        note="stage8_full_autonomy_delegated_auto_approval_after_reviewer",
+        note="stage8_full_autonomy_user_request_authorized_after_reviewer",
     )
 
     plan = (
