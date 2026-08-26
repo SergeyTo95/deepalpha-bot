@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +59,8 @@ def test_release_authorization_requires_explicit_delivery_action():
         "Ship it provided that I eventually confirm",
         "Deploy this app after it is approved by me",
         "Deploy once it has been approved by me",
+        "Deploy this app if approval is given by me",
+        "Deploy this app provided that authorization has been granted by us",
         "Задеплой только после моего подтверждения",
         "Выкати, когда я дам разрешение",
         "Задеплой, если я подтвержу",
@@ -245,6 +248,11 @@ def test_zero_merge_terminal_release_rotates_plan_and_rebuilds_premerge_evidence
     saved = []
     cancelled = []
     monkeypatch.setattr(
+        hardening,
+        "_release_operation_lock",
+        lambda release_id: nullcontext((None, None)),
+    )
+    monkeypatch.setattr(
         hardening.release_runtime,
         "_state",
         lambda execution_module, user_id, execution_id: {
@@ -296,6 +304,11 @@ def test_zero_merge_terminal_release_rotates_plan_and_rebuilds_premerge_evidence
 
 def test_zero_merge_terminal_release_fails_closed_when_plan_cannot_rotate(monkeypatch):
     saved = []
+    monkeypatch.setattr(
+        hardening,
+        "_release_operation_lock",
+        lambda release_id: nullcontext((None, None)),
+    )
     monkeypatch.setattr(
         hardening.release_runtime,
         "_state",
@@ -483,6 +496,83 @@ def test_retryable_pending_completion_is_cleared_for_fresh_evaluation(monkeypatc
     assert saved
     assert saved[0]["certificate_id"] == ""
     assert saved[0]["passport_id"] == ""
+
+
+def test_durable_stop_runtime_preserves_retired_binding_and_preexecute_gate(monkeypatch):
+    assert greenfield_runtime._conditional_noun_deferred_approval(
+        "Deploy this app if approval is given by me"
+    )
+    assert greenfield_runtime._conditional_noun_deferred_approval(
+        "Deploy this app provided that authorization has been granted by us"
+    )
+    source = open(
+        "services/velia_software_factory_stage8_greenfield_runtime_patch.py",
+        encoding="utf-8",
+    ).read()
+    assert "retired_release_execution_id" in source
+    assert "stop_requested=TRUE" in source
+    assert "AND stop_requested=FALSE" in source
+    assert "raise _RetryDeferred(after)" in source
+    assert "release_execution.request_stop = request_stop" in source
+    assert "execution_module.execute_release = execute_release" in source
+
+
+def test_durable_stop_blocks_zero_merge_rotation_before_preflight_retirement(monkeypatch):
+    class Cursor:
+        rowcount = 0
+
+        def execute(self, query, params):
+            self.query = " ".join(str(query).split())
+
+        def fetchone(self):
+            return ("workspace-1", "plan-old", "release-old", True)
+
+        def close(self):
+            pass
+
+    class Connection:
+        def __init__(self):
+            self.cursor_obj = Cursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setattr(greenfield_runtime, "_ensure_durable_stop_schema", lambda execution_module: None)
+    monkeypatch.setattr(
+        hardening,
+        "_release_operation_lock",
+        lambda release_id: nullcontext((connection, connection.cursor_obj)),
+    )
+    cancelled = []
+    execution_module = SimpleNamespace(
+        get_release_execution=lambda user_id, release_id: {
+            "execution_id": release_id,
+            "plan_id": "plan-old",
+            "status": "blocked",
+            "merged_count": 0,
+            "items": [{"status": "failed", "merge_commit_sha": ""}],
+        },
+        cancel_release_preflight=lambda user_id, plan_id: cancelled.append((user_id, plan_id)),
+    )
+    with pytest.raises(Exception) as exc:
+        greenfield_runtime._atomic_zero_merge_rotate(
+            execution_module,
+            9,
+            {"plan_id": "plan-old", "release_execution_id": "release-old"},
+            {"execution_id": "release-old", "plan_id": "plan-old"},
+        )
+    assert getattr(exc.value, "code", "") == "velia_factory_stage8_release_stop_requested"
+    assert cancelled == []
 
 
 def test_stage8_single_greenfield_creates_workspace_execution_path():
