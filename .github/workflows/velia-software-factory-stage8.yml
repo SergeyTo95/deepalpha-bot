@@ -293,6 +293,7 @@ jobs:
               'tests/test_velia_software_factory_stage8_final_hardening.py',
           }
           maintenance_allowed = maintenance_required | {
+              'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
               '.github/workflows/velia-software-factory-stage8.yml',
               '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
           }
