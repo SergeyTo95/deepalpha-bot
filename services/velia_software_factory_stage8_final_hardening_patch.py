@@ -39,19 +39,43 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
-def _deployment_profile_fingerprint(profile: Mapping[str, Any] | None) -> str:
-    if not isinstance(profile, Mapping) or not bool(profile.get("enabled")):
+def _acceptance_profile_fingerprint(
+    project_id: str,
+    profile: Mapping[str, Any] | None,
+    deployment_profile: Mapping[str, Any] | None,
+) -> str:
+    """Recompute the exact persisted Stage 5 acceptance-profile fingerprint.
+
+    Stage 5 does not expose a separate deployment_profile_fingerprint field on the
+    acceptance profile. The relationship is embedded in profile_fingerprint, so
+    Stage 8 must rebuild that exact payload from the returned profile plus the
+    current persisted deployment profile fingerprint.
+    """
+    if (
+        not isinstance(profile, Mapping)
+        or not isinstance(deployment_profile, Mapping)
+        or not bool(profile.get("enabled"))
+        or not bool(deployment_profile.get("enabled"))
+    ):
+        return ""
+    deployment_fingerprint = str(
+        deployment_profile.get("profile_fingerprint") or ""
+    ).strip()
+    if not deployment_fingerprint:
+        return ""
+    contexts = [
+        str(item).strip()
+        for item in profile.get("expected_contexts") or []
+        if str(item).strip()
+    ]
+    if not contexts:
         return ""
     payload = {
-        "repository_full_name": str(profile.get("repository_full_name") or "").lower(),
-        "base_branch": str(profile.get("base_branch") or profile.get("branch") or ""),
-        "expected_contexts": sorted(
-            set(
-                str(item).strip()
-                for item in profile.get("expected_contexts") or []
-                if str(item).strip()
-            )
-        ),
+        "project_id": str(project_id),
+        "repository_full_name": str(profile.get("repository_full_name") or ""),
+        "branch": str(profile.get("base_branch") or profile.get("branch") or ""),
+        "expected_contexts": contexts,
+        "deployment_profile_fingerprint": deployment_fingerprint,
         "enabled": True,
     }
     return _fingerprint(payload)
@@ -203,11 +227,16 @@ def _assert_profiles_ready(execution_module: Any, user_id: int, candidate: Mappi
                 detail=repository,
                 status=409,
             )
-        expected_deployment_fingerprint = _deployment_profile_fingerprint(deployment_profile)
-        actual_deployment_fingerprint = str(
-            acceptance_profile.get("deployment_profile_fingerprint") or ""
+        expected_acceptance_fingerprint = _acceptance_profile_fingerprint(
+            project_id, acceptance_profile, deployment_profile
+        )
+        actual_acceptance_fingerprint = str(
+            acceptance_profile.get("profile_fingerprint") or ""
         ).strip()
-        if not expected_deployment_fingerprint or actual_deployment_fingerprint != expected_deployment_fingerprint:
+        if (
+            not expected_acceptance_fingerprint
+            or actual_acceptance_fingerprint != expected_acceptance_fingerprint
+        ):
             raise SoftwareFactoryError(
                 "velia_factory_acceptance_profile_stale",
                 detail=repository,
