@@ -10,6 +10,7 @@ on:
       - 'services/velia_software_factory_stage8_full_autonomy_service.py'
       - 'services/velia_software_factory_stage8_greenfield_runtime_patch.py'
       - 'services/velia_software_factory_stage8_release_runtime_patch.py'
+      - 'services/velia_software_factory_workspace_chat_hardening_patch.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_stage8_full_autonomy.py'
       - '.github/workflows/velia-software-factory-stage8.yml'
@@ -56,6 +57,7 @@ jobs:
             services/velia_software_factory_stage8_full_autonomy_service.py \
             services/velia_software_factory_stage8_greenfield_runtime_patch.py \
             services/velia_software_factory_stage8_release_runtime_patch.py \
+            services/velia_software_factory_workspace_chat_hardening_patch.py \
             services/velia_software_factory_workspace_hardening_patch.py
 
       - name: Run Stage 8 and Stage 7 boundary regressions
@@ -86,6 +88,22 @@ jobs:
           assert 'def _stage8_connected_user_allowed(' in rollout
           assert 'project_service.list_installations(candidate)' in rollout
           assert 'authenticated_user_requires_owned_github_installation' in rollout
+          PY
+
+      - name: Prove Stage 8 greenfield runtime is actually installed
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          status = Path('services/velia_software_factory_stage8_full_autonomy_service.py').read_text()
+          workspace_chat = Path('services/velia_software_factory_workspace_chat_hardening_patch.py').read_text()
+          stage45 = 'greenfield_hardening.install(chat_module, greenfield_service, greenfield_runtime)'
+          stage8 = 'stage8_greenfield_runtime.install(chat_module, greenfield_service, greenfield_runtime)'
+          assert stage45 in workspace_chat
+          assert stage8 in workspace_chat
+          assert workspace_chat.index(stage45) < workspace_chat.index(stage8)
+          assert '_velia_software_factory_greenfield_hardening_installed' in workspace_chat
+          assert 'greenfield_repository_creation_runtime' in status
+          assert 'getattr(stage8_greenfield_runtime, "_INSTALLED", False)' in status
           PY
 
       - name: Prove Stage 7 remains separate and release-closed
@@ -141,6 +159,7 @@ jobs:
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_workspace_chat_hardening_patch.py',
               'services/velia_software_factory_workspace_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
               '.github/workflows/velia-software-factory-stage8.yml',
@@ -151,6 +170,7 @@ jobs:
               'services/velia_software_factory_greenfield_repository_creation_service.py',
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_workspace_chat_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
               '.github/workflows/velia-software-factory-stage8.yml',
           }
