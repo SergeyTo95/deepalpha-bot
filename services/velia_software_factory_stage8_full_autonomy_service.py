@@ -110,6 +110,10 @@ def _runtime_readiness() -> Dict[str, Any]:
 
 
 def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any]:
+    # user_id is accepted for the internal execution API, but intentionally never
+    # returned. Rollout public status has a long-standing privacy contract that
+    # must not expose server-controlled actor IDs through nested Stage 8 status.
+    _ = int(user_id)
     runtime = _runtime_readiness()
     blockers: list[str] = []
     if not enabled():
@@ -157,7 +161,6 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         "available": True,
         "enabled": enabled(),
         "mode": "full_autonomy",
-        "user_id": int(user_id),
         "user_eligible": bool(user_eligible),
         "authenticated_users_only": True,
         "anonymous_execution_supported": False,
