@@ -11,6 +11,7 @@ from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_delivery_approval_service as approval
 from services import velia_software_factory_delivery_gate_service as delivery
 from services import velia_software_factory_deployment_observer_service as deployment_observer
+from services import velia_software_factory_greenfield_repository_creation_service as greenfield_creation
 from services import velia_software_factory_integration_repair_service as integration_repair
 from services import velia_software_factory_release_completion_service as completion
 from services import velia_software_factory_release_execution_service as release_execution
@@ -20,6 +21,7 @@ from services import velia_software_factory_release_preflight_service as preflig
 from services import velia_software_factory_reviewer_remediation_service as remediation
 from services import velia_software_factory_reviewer_runtime_patch as reviewer_runtime
 from services import velia_software_factory_reviewer_service as reviewer
+from services import velia_software_factory_workspace_execution_service as workspace_execution
 
 _STAGE8_FLAG = "VELIA_SOFTWARE_FACTORY_STAGE8_FULL_AUTONOMY_ENABLED"
 _GREENFIELD_FLAG = "VELIA_SOFTWARE_FACTORY_GREENFIELD_BOOTSTRAP_ENABLED"
@@ -62,6 +64,7 @@ def _flags_ready(names: Iterable[str]) -> tuple[bool, list[str]]:
 
 def _runtime_readiness() -> Dict[str, Any]:
     release_flags_ready, release_missing = _flags_ready(_RELEASE_FLAGS)
+    creation_status = greenfield_creation.public_status()
     return {
         "autonomy": bool(autonomy.supervisor_enabled()),
         "autopilot": bool(autopilot.autopilot_enabled()),
@@ -74,6 +77,9 @@ def _runtime_readiness() -> Dict[str, Any]:
         "integration_repair": bool(
             integration_repair.integration_repair_enabled()
             and integration_repair.integration_repair_max_attempts() > 0
+        ),
+        "integration_repair_runtime": bool(
+            getattr(workspace_execution, "_workspace_integration_repair_installed", False)
         ),
         "reviewer": bool(
             reviewer.reviewer_enabled() and getattr(reviewer_runtime, "_INSTALLED", False)
@@ -90,12 +96,16 @@ def _runtime_readiness() -> Dict[str, Any]:
         "deployment_observer": bool(deployment_observer.deployment_observer_enabled()),
         "release_completion": bool(completion.completion_enabled()),
         "release_passport": bool(passport.passport_enabled()),
+        "stage8_release_runtime": bool(
+            getattr(workspace_execution, "_workspace_stage8_release_runtime_installed", False)
+        ),
         "merge_policy": bool(merge_policy.merge_policy_enabled()),
         "github_write": bool(github_write.write_enabled()),
         "release_flags_ready": release_flags_ready,
         "release_missing_flags": release_missing,
         "greenfield_bootstrap": _env_bool(_GREENFIELD_FLAG, False),
         "greenfield_repository_creation": _env_bool(_GREENFIELD_CREATE_FLAG, False),
+        "greenfield_repository_creation_provider": bool(creation_status.get("configured")),
     }
 
 
@@ -117,6 +127,7 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         "workspace_execution",
         "integration_validator",
         "integration_repair",
+        "integration_repair_runtime",
         "reviewer",
         "reviewer_remediation",
         "delivery_gate",
@@ -127,6 +138,7 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         "deployment_observer",
         "release_completion",
         "release_passport",
+        "stage8_release_runtime",
         "merge_policy",
         "github_write",
     ):
@@ -134,7 +146,9 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
             blockers.append(f"{name}_not_ready")
 
     greenfield_ready = bool(
-        runtime.get("greenfield_bootstrap") and runtime.get("greenfield_repository_creation")
+        runtime.get("greenfield_bootstrap")
+        and runtime.get("greenfield_repository_creation")
+        and runtime.get("greenfield_repository_creation_provider")
     )
     if not greenfield_ready:
         blockers.append("greenfield_repository_creation_not_ready")
@@ -151,13 +165,18 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         "reviewer_remediation_required": True,
         "exact_head_merge_required": True,
         "integration_validation_required": True,
-        "integration_repair_supported": bool(runtime.get("integration_repair")),
+        "integration_repair_supported": bool(
+            runtime.get("integration_repair") and runtime.get("integration_repair_runtime")
+        ),
         "merge_supported": bool(
             runtime.get("release_execution")
+            and runtime.get("stage8_release_runtime")
             and runtime.get("merge_policy")
             and runtime.get("github_write")
         ),
-        "release_supported": bool(runtime.get("release_flags_ready")),
+        "release_supported": bool(
+            runtime.get("release_flags_ready") and runtime.get("stage8_release_runtime")
+        ),
         "deployment_strategy": "source_auto_deploy_observed",
         "deployment_trigger_supported": False,
         "post_deploy_verification_supported": bool(
@@ -165,6 +184,7 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         ),
         "greenfield_bootstrap_supported": bool(runtime.get("greenfield_bootstrap")),
         "greenfield_repository_creation_supported": greenfield_ready,
+        "greenfield_repository_creation_provider": greenfield_creation.public_status(),
         "runtime": runtime,
         "blockers": blockers,
         "ready_now": not blockers,
