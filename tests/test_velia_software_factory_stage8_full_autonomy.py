@@ -68,7 +68,7 @@ def test_stage8_defaults_fail_closed(monkeypatch):
     assert "stage8_disabled" in status["blockers"]
 
 
-def test_stage8_ready_requires_explicit_eligible_user(monkeypatch):
+def test_stage8_ready_requires_explicit_eligible_user_and_never_exposes_user_id(monkeypatch):
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE8_FULL_AUTONOMY_ENABLED", "true")
     monkeypatch.setattr(stage8, "_runtime_readiness", lambda: _runtime())
 
@@ -85,6 +85,8 @@ def test_stage8_ready_requires_explicit_eligible_user(monkeypatch):
     assert allowed["release_authorization_source"] == "immutable_user_workspace_objective"
     assert allowed["release_authorization_negative_intent_wins"] is True
     assert allowed["anonymous_execution_supported"] is False
+    assert "user_id" not in allowed
+    assert "user_id" not in denied
     assert denied["ready_now"] is False
     assert "user_not_eligible" in denied["blockers"]
 
@@ -136,17 +138,34 @@ def test_full_autonomy_rollout_expands_only_to_explicit_users_by_default(monkeyp
     assert rollout.eligibility_source(8) == "none"
 
 
-def test_full_autonomy_authenticated_user_expansion_requires_explicit_flag(monkeypatch):
+def test_full_autonomy_authenticated_user_expansion_requires_flag_and_owned_installation(monkeypatch):
     _clear_rollout(monkeypatch)
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "full_autonomy")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE8_AUTHENTICATED_USERS_ENABLED", "true")
-    monkeypatch.setattr(rollout, "_full_autonomy_execution_allowed", lambda user_id: int(user_id) > 0)
+    monkeypatch.setattr(rollout, "_stage8_connected_user_allowed", lambda user_id: int(user_id) == 8)
+    monkeypatch.setattr(rollout, "_full_autonomy_execution_allowed", lambda user_id: int(user_id) == 8)
 
     assert rollout.intake_allowed(8) is True
     assert rollout.live_execution_allowed(8) is True
-    assert rollout.eligibility_source(8) == "authenticated_user"
+    assert rollout.eligibility_source(8) == "authenticated_developer"
+    assert rollout.intake_allowed(9) is False
+    assert rollout.live_execution_allowed(9) is False
+    assert rollout.eligibility_source(9) == "none"
     assert rollout.intake_allowed(0) is False
     assert rollout.live_execution_allowed(0) is False
+
+
+def test_stage8_connected_user_check_fails_closed_without_owned_github_installation(monkeypatch):
+    _clear_rollout(monkeypatch)
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "full_autonomy")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE8_AUTHENTICATED_USERS_ENABLED", "true")
+
+    from services import velia_developer_project_service as project_service
+
+    monkeypatch.setattr(project_service, "list_installations", lambda user_id: [] if int(user_id) == 8 else [{"installation_id": 1}])
+
+    assert rollout._stage8_connected_user_allowed(8) is False
+    assert rollout._stage8_connected_user_allowed(9) is True
 
 
 def test_full_autonomy_is_release_capable_when_release_flags_are_ready(monkeypatch):
