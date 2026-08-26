@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -142,7 +143,7 @@ def run_build(source_dir: Path) -> Path:
 
 def serve_artifact(apk: Path, sha: str) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    output = OUT_DIR / "VELIA-debug-3cc927d.apk"
+    output = OUT_DIR / f"VELIA-debug-{sha[:7]}.apk"
     shutil.copy2(apk, output)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     metadata = {
@@ -160,9 +161,9 @@ def serve_artifact(apk: Path, sha: str) -> None:
 def main() -> None:
     app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
     private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
-    sha = os.environ.get("ANDROID_SOURCE_SHA", DEFAULT_SHA).strip()
-    if sha != DEFAULT_SHA:
-        raise RuntimeError(f"Refusing unexpected Android SHA: {sha}")
+    sha = os.environ.get("ANDROID_SOURCE_SHA", DEFAULT_SHA).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError(f"Refusing non-exact Android source ref: {sha}")
     with tempfile.TemporaryDirectory(prefix="velia-android-build-") as temp:
         work = Path(temp)
         jwt = github_app_jwt(app_id, private_key)
