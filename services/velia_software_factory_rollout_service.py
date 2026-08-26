@@ -12,7 +12,14 @@ ROLLOUT_OFF = "off"
 ROLLOUT_DRY_RUN = "dry_run"
 ROLLOUT_LIMITED_ADMIN = "limited_admin"
 ROLLOUT_LIVE = "live"
-_VALID_MODES = {ROLLOUT_OFF, ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
+ROLLOUT_FULL_AUTONOMY = "full_autonomy"
+_VALID_MODES = {
+    ROLLOUT_OFF,
+    ROLLOUT_DRY_RUN,
+    ROLLOUT_LIMITED_ADMIN,
+    ROLLOUT_LIVE,
+    ROLLOUT_FULL_AUTONOMY,
+}
 _ID_SPLIT_RE = re.compile(r"[\s,;]+")
 _ADMIN_PILOT_SOURCE_ENV = {
     "live_owner": "LIVE_OWNER_USER_IDS",
@@ -152,7 +159,12 @@ def _mode_user_allowed(user_id: int) -> bool:
 
 
 def intake_allowed(user_id: int) -> bool:
-    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE} and _mode_user_allowed(int(user_id))
+    return rollout_mode() in {
+        ROLLOUT_DRY_RUN,
+        ROLLOUT_LIMITED_ADMIN,
+        ROLLOUT_LIVE,
+        ROLLOUT_FULL_AUTONOMY,
+    } and _mode_user_allowed(int(user_id))
 
 
 def dry_run_enabled(user_id: int) -> bool:
@@ -171,6 +183,19 @@ def _limited_admin_status(user_id: int, *, verify_acceptance: bool) -> Dict[str,
     return dict(stage7.public_status(int(user_id), verify_acceptance=verify_acceptance))
 
 
+def _full_autonomy_execution_allowed(user_id: int) -> bool:
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+
+    eligible = user_allowed(int(user_id))
+    return bool(stage8.execution_allowed(int(user_id), user_eligible=eligible))
+
+
+def _full_autonomy_status(user_id: int) -> Dict[str, object]:
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+
+    return dict(stage8.public_status(int(user_id), user_eligible=user_allowed(int(user_id))))
+
+
 def live_execution_allowed(user_id: int) -> bool:
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
@@ -179,6 +204,10 @@ def live_execution_allowed(user_id: int) -> bool:
         if not live_pilot_guard.live_pilot_guard_enabled():
             return False
         return _limited_admin_execution_allowed(int(user_id))
+    if mode == ROLLOUT_FULL_AUTONOMY:
+        if not user_allowed(int(user_id)):
+            return False
+        return _full_autonomy_execution_allowed(int(user_id))
     if mode != ROLLOUT_LIVE:
         return False
     if explicit_user_allowed(int(user_id)):
@@ -193,7 +222,7 @@ def _admin_pilot_configured() -> bool:
 
 
 def supervisor_allowed() -> bool:
-    """Supervisor can exist only behind a live or Stage 7 limited-admin write boundary."""
+    """Supervisor can exist only behind a controlled write-capable rollout boundary."""
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
         actor = configured_admin_id()
@@ -202,6 +231,11 @@ def supervisor_allowed() -> bool:
         if not live_pilot_guard.live_pilot_guard_enabled():
             return False
         return _limited_admin_execution_allowed(actor)
+    if mode == ROLLOUT_FULL_AUTONOMY:
+        actors = set(allowed_user_ids())
+        if admin_pilot_enabled():
+            actors.update(admin_pilot_user_ids())
+        return any(_full_autonomy_execution_allowed(actor) for actor in sorted(actors))
     if mode != ROLLOUT_LIVE:
         return False
     # Preserve the existing explicit allowlist rollout path. Admin-pilot-only
@@ -236,17 +270,29 @@ def _stage_readiness(
     if (
         require_live
         and eligibility_source(int(user_id)) == "admin_pilot"
+        and rollout_mode() != ROLLOUT_FULL_AUTONOMY
         and not live_pilot_guard.live_pilot_guard_enabled()
         and _LIVE_PILOT_GUARD_FLAG not in missing
     ):
         missing.append(_LIVE_PILOT_GUARD_FLAG)
     mode = rollout_mode()
     if require_live:
-        mode_ok = mode == ROLLOUT_LIVE or (allow_limited_admin and mode == ROLLOUT_LIMITED_ADMIN)
-        required_mode = "limited_admin_or_live" if allow_limited_admin else "live"
+        mode_ok = mode in {ROLLOUT_LIVE, ROLLOUT_FULL_AUTONOMY} or (
+            allow_limited_admin and mode == ROLLOUT_LIMITED_ADMIN
+        )
+        required_mode = (
+            "limited_admin_full_autonomy_or_live"
+            if allow_limited_admin
+            else "full_autonomy_or_live"
+        )
     else:
-        mode_ok = mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
-        required_mode = "dry_run_limited_admin_or_live"
+        mode_ok = mode in {
+            ROLLOUT_DRY_RUN,
+            ROLLOUT_LIMITED_ADMIN,
+            ROLLOUT_LIVE,
+            ROLLOUT_FULL_AUTONOMY,
+        }
+        required_mode = "dry_run_limited_admin_full_autonomy_or_live"
     eligible = _mode_user_allowed(int(user_id))
     return {
         "ready": not missing and mode_ok and eligible,
@@ -282,6 +328,7 @@ def public_status(user_id: int) -> dict:
     stage7_status = _limited_admin_status(
         int(user_id), verify_acceptance=bool(mode == ROLLOUT_LIMITED_ADMIN)
     )
+    stage8_status = _full_autonomy_status(int(user_id))
     return {
         "mode": mode,
         "eligible": eligible,
@@ -291,6 +338,7 @@ def public_status(user_id: int) -> dict:
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
         "live_pilot_guard": live_pilot_guard.public_status(),
         "limited_admin": stage7_status,
+        "full_autonomy": stage8_status,
         "dry_run": bool(mode == ROLLOUT_DRY_RUN and eligible),
         "live_execution": bool(live_execution_allowed(int(user_id))),
         "supervisor_allowed": bool(supervisor_allowed()),
