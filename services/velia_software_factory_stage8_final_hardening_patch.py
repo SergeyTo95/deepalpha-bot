@@ -37,13 +37,25 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\b(?:only\s+)?after\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:wait\s+for|require|get|ask\s+for)\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:until|before)\s+(?:i|we)\s+(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
+        r"\b(?:if|provided(?:\s+that)?)\s+(?:i|we)\s+(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
+        r"\b(?:if|provided(?:\s+that)?|subject\s+to)\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
+        r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
         r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
         r"\bкогда\s+(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+        r"\bесли\s+(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+        r"\bпри\s+условии\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия)\b",
+        r"\bпри\s+(?:моем|моём|нашем)\s+(?:одобрении|подтверждении|разрешении|согласии)\b",
         r"\b(?:сначала\s+)?(?:спроси|получи|дождись)\b[^.!?\n]{0,50}\b(?:моего|моё|мое|нашего|наше)\s+(?:одобрения|подтверждения|разрешения|согласия)\b",
         r"\b(?:до|перед)\s+(?:тем\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
     )
 )
+
+_PREMERGE_RETRY_BLOCKERS = {
+    "velia_factory_delivery_candidate_stale",
+    "velia_factory_release_preflight_stale",
+    "velia_factory_release_preflight_not_prepared",
+}
 
 
 def _json(value: Any) -> str:
@@ -59,13 +71,7 @@ def _acceptance_profile_fingerprint(
     profile: Mapping[str, Any] | None,
     deployment_profile: Mapping[str, Any] | None,
 ) -> str:
-    """Recompute the exact persisted Stage 5 acceptance-profile fingerprint.
-
-    Stage 5 does not expose a separate deployment_profile_fingerprint field on the
-    acceptance profile. The relationship is embedded in profile_fingerprint, so
-    Stage 8 must rebuild that exact payload from the returned profile plus the
-    current persisted deployment profile fingerprint.
-    """
+    """Recompute the exact persisted Stage 5 acceptance-profile fingerprint."""
     if (
         not isinstance(profile, Mapping)
         or not isinstance(deployment_profile, Mapping)
@@ -268,8 +274,62 @@ def _assert_profiles_ready(execution_module: Any, user_id: int, candidate: Mappi
             )
 
 
+def _observation_profiles_current(
+    execution_module: Any,
+    user_id: int,
+    observation: Mapping[str, Any],
+) -> bool:
+    get_deployment = getattr(execution_module, "get_deployment_profile", None)
+    repositories = [
+        item for item in observation.get("repositories") or [] if isinstance(item, Mapping)
+    ]
+    if not callable(get_deployment) or not repositories:
+        return False
+    for item in repositories:
+        project_id = str(item.get("project_id") or "").strip()
+        branch = str(item.get("branch") or "").strip()
+        evidence_fingerprint = str(item.get("profile_fingerprint") or "").strip()
+        if not project_id or not branch or not evidence_fingerprint:
+            return False
+        try:
+            current = get_deployment(int(user_id), project_id, branch)
+        except Exception:
+            return False
+        if (
+            not isinstance(current, Mapping)
+            or not bool(current.get("enabled"))
+            or str(current.get("profile_fingerprint") or "").strip() != evidence_fingerprint
+        ):
+            return False
+    return True
+
+
 def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_id: str) -> None:
     state = release_runtime._state(execution_module, int(user_id), str(execution_id))
+
+    if not str(state.get("release_execution_id") or ""):
+        blocker_code = str(state.get("blocker_code") or "")
+        plan_id = str(state.get("plan_id") or "")
+        stale_plan = False
+        if plan_id:
+            try:
+                plan = execution_module.get_release_preflight(int(user_id), plan_id)
+                stale_plan = str(plan.get("status") or "") != "prepared"
+            except SoftwareFactoryError as exc:
+                stale_plan = str(getattr(exc, "code", "")) == "velia_factory_release_preflight_not_found"
+        if stale_plan or blocker_code in _PREMERGE_RETRY_BLOCKERS:
+            release_runtime._save_state(
+                execution_module,
+                int(user_id),
+                str(execution_id),
+                candidate_id="",
+                plan_id="",
+                status="retrying_candidate",
+                blocker_code="",
+                blocker_detail="",
+            )
+            return
+
     verification_id = str(state.get("verification_id") or "")
     if verification_id:
         try:
@@ -286,6 +346,32 @@ def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_i
                 certificate_id="",
                 passport_id="",
                 status="merged",
+                blocker_code="",
+                blocker_detail="",
+            )
+            return
+
+    observation_id = str(state.get("observation_id") or "")
+    if observation_id:
+        try:
+            observation = execution_module.get_deployment_observation(
+                int(user_id), observation_id
+            )
+        except Exception:
+            observation = {}
+        if (
+            str(observation.get("status") or "") == "success"
+            and bool(observation.get("deployment_complete"))
+            and not _observation_profiles_current(execution_module, int(user_id), observation)
+        ):
+            release_runtime._save_state(
+                execution_module,
+                int(user_id),
+                str(execution_id),
+                observation_id="",
+                certificate_id="",
+                passport_id="",
+                status="deployment_observing",
                 blocker_code="",
                 blocker_detail="",
             )

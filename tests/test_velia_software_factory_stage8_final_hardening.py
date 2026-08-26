@@ -50,8 +50,13 @@ def test_release_authorization_requires_explicit_delivery_action():
         "Deploy it after my approval",
         "Ship this project once I confirm",
         "Build it, but wait for my approval before deploying",
+        "Deploy this app if I approve the merge",
+        "Ship it provided that I confirm",
+        "Release this project subject to my approval",
         "Задеплой только после моего подтверждения",
         "Выкати, когда я дам разрешение",
+        "Задеплой, если я подтвержу",
+        "Выкати при условии моего одобрения",
     )
     for objective in allowed:
         assert hardening._strict_release_authorized(_execution(objective)) is True
@@ -171,6 +176,58 @@ def test_profiles_use_pr_base_and_reject_stale_acceptance(monkeypatch):
     assert getattr(exc.value, "code", "") == "velia_factory_acceptance_profile_stale"
 
 
+def test_retryable_stale_candidate_is_cleared_for_fresh_evaluation(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "candidate_id": "candidate-old",
+            "plan_id": "",
+            "release_execution_id": "",
+            "blocker_code": "velia_factory_delivery_candidate_stale",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    hardening._refresh_retryable_evidence(SimpleNamespace(), 9, "e-stale-candidate")
+    assert saved
+    assert saved[0]["candidate_id"] == ""
+    assert saved[0]["plan_id"] == ""
+    assert saved[0]["status"] == "retrying_candidate"
+    assert saved[0]["blocker_code"] == ""
+
+
+def test_retryable_stale_preflight_is_recreated_from_fresh_candidate(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "candidate_id": "candidate-old",
+            "plan_id": "plan-old",
+            "release_execution_id": "",
+            "blocker_code": "velia_factory_release_preflight_stale",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    execution_module = SimpleNamespace(
+        get_release_preflight=lambda user_id, plan_id: {"status": "stale"}
+    )
+    hardening._refresh_retryable_evidence(execution_module, 9, "e-stale-plan")
+    assert saved
+    assert saved[0]["candidate_id"] == ""
+    assert saved[0]["plan_id"] == ""
+    assert saved[0]["status"] == "retrying_candidate"
+
+
 def test_retryable_failed_verification_is_cleared_for_fresh_snapshot(monkeypatch):
     saved = []
     monkeypatch.setattr(
@@ -200,6 +257,56 @@ def test_retryable_failed_verification_is_cleared_for_fresh_snapshot(monkeypatch
     assert saved[0]["observation_id"] == ""
     assert saved[0]["certificate_id"] == ""
     assert saved[0]["passport_id"] == ""
+
+
+def test_successful_observation_is_reobserved_when_deployment_profile_changes(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "release_execution_id": "release-1",
+            "verification_id": "v-ok",
+            "observation_id": "o-old",
+            "certificate_id": "c-old",
+            "passport_id": "p-old",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    execution_module = SimpleNamespace(
+        get_release_verification=lambda user_id, verification_id: {
+            "verification_status": "verified"
+        },
+        get_deployment_observation=lambda user_id, observation_id: {
+            "status": "success",
+            "deployment_complete": True,
+            "repositories": [
+                {
+                    "project_id": "p1",
+                    "branch": "main",
+                    "profile_fingerprint": "old-profile",
+                }
+            ],
+        },
+        get_deployment_profile=lambda user_id, project_id, branch: {
+            "enabled": True,
+            "profile_fingerprint": "new-profile",
+        },
+        get_release_completion_certificate=lambda user_id, certificate_id: {
+            "status": "complete",
+            "release_complete": True,
+        },
+    )
+    hardening._refresh_retryable_evidence(execution_module, 9, "e-profile-change")
+    assert saved
+    assert saved[0]["observation_id"] == ""
+    assert saved[0]["certificate_id"] == ""
+    assert saved[0]["passport_id"] == ""
+    assert saved[0]["status"] == "deployment_observing"
 
 
 def test_retryable_pending_completion_is_cleared_for_fresh_evaluation(monkeypatch):
