@@ -26,6 +26,7 @@ def _clear(monkeypatch):
         "VELIA_SOFTWARE_FACTORY_REVIEWER_ENABLED",
         "VELIA_SOFTWARE_FACTORY_REVIEWER_REMEDIATION_ENABLED",
         "VELIA_DEVELOPER_AUTOPILOT_CI_REPAIR_ENABLED",
+        "VELIA_DEVELOPER_CODING_ENABLED",
         *rollout._BUILD_REVIEW_FLAGS,
         *stage7._FORBIDDEN_RELEASE_FLAGS,
         *stage7._FORBIDDEN_EXPANSION_FLAGS,
@@ -64,6 +65,7 @@ def _mock_stage7_runtime(monkeypatch, *, proof_verified: bool = True):
 
 def _configure_stage7(monkeypatch):
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE7_LIMITED_ADMIN_ROLLOUT_ENABLED", "true")
+    monkeypatch.setenv("VELIA_DEVELOPER_CODING_ENABLED", "true")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_RUN_ID", "run-accepted")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_REPOSITORY", "SergeyTo95/deepalpha-bot")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_CERTIFICATE_ID", "a" * 64)
@@ -74,8 +76,10 @@ def test_stage7_defaults_fail_closed(monkeypatch):
     monkeypatch.setattr(stage7, "configured_admin_id", lambda: 42)
     status = stage7.public_status(42, verify_acceptance=False)
     assert status["enabled"] is False
+    assert status["coding_runtime_ready"] is False
     assert status["ready_now"] is False
     assert "stage7_disabled" in status["blockers"]
+    assert "coding_runtime_disabled" in status["blockers"]
     assert status["merge_supported"] is False
     assert status["release_supported"] is False
     assert status["deployment_supported"] is False
@@ -89,6 +93,7 @@ def test_stage7_ready_requires_real_acceptance_proof_and_closed_release_surface(
     status = stage7.public_status(42)
 
     assert status["ready_now"] is True
+    assert status["coding_runtime_ready"] is True
     assert status["blockers"] == []
     assert status["acceptance_proof"]["verified"] is True
     assert status["draft_pr_only"] is True
