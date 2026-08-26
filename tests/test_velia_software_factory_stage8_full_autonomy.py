@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from services import velia_software_factory_rollout_service as rollout
@@ -37,6 +39,7 @@ def _runtime(**overrides):
         "greenfield_bootstrap": True,
         "greenfield_repository_creation": True,
         "greenfield_repository_creation_provider": True,
+        "greenfield_repository_creation_runtime": True,
     }
     data.update(overrides)
     return data
@@ -104,6 +107,7 @@ def test_stage8_fails_closed_when_any_required_surface_is_missing(monkeypatch):
             stage8_release_runtime=False,
             greenfield_repository_creation=False,
             greenfield_repository_creation_provider=False,
+            greenfield_repository_creation_runtime=False,
             release_flags_ready=False,
             release_missing_flags=["VELIA_SOFTWARE_FACTORY_RELEASE_EXECUTION_ENABLED"],
         ),
@@ -120,6 +124,29 @@ def test_stage8_fails_closed_when_any_required_surface_is_missing(monkeypatch):
     assert "greenfield_repository_creation_not_ready" in status["blockers"]
     assert status["merge_supported"] is False
     assert status["release_supported"] is False
+
+
+def test_stage8_greenfield_readiness_requires_installed_runtime(monkeypatch):
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE8_FULL_AUTONOMY_ENABLED", "true")
+    monkeypatch.setattr(
+        stage8,
+        "_runtime_readiness",
+        lambda: _runtime(greenfield_repository_creation_runtime=False),
+    )
+
+    status = stage8.public_status(7, user_eligible=True)
+
+    assert status["greenfield_repository_creation_supported"] is False
+    assert status["ready_now"] is False
+    assert "greenfield_repository_creation_not_ready" in status["blockers"]
+
+
+def test_stage8_greenfield_wrapper_is_installed_after_stage45_hardening():
+    source = Path("services/velia_software_factory_workspace_chat_hardening_patch.py").read_text(encoding="utf-8")
+    stage45 = source.index("greenfield_hardening.install(chat_module, greenfield_service, greenfield_runtime)")
+    stage8_install = source.index("stage8_greenfield_runtime.install(chat_module, greenfield_service, greenfield_runtime)")
+    assert stage45 < stage8_install
+    assert '_velia_software_factory_greenfield_hardening_installed' in source
 
 
 def test_full_autonomy_rollout_expands_only_to_explicit_users_by_default(monkeypatch):
