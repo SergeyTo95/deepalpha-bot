@@ -99,10 +99,21 @@ def test_profiles_use_pr_base_and_reject_stale_acceptance(monkeypatch):
     )
     deployment = {
         "repository_full_name": "owner/repo",
-        "base_branch": "actual-base",
+        "branch": "actual-base",
         "expected_contexts": ["railway-prod"],
+        "profile_fingerprint": "deployment-profile-current",
         "enabled": True,
     }
+    acceptance_fingerprint = hardening._fingerprint(
+        {
+            "project_id": "p1",
+            "repository_full_name": "owner/repo",
+            "branch": "actual-base",
+            "expected_contexts": ["VELIA Stage 8 Acceptance"],
+            "deployment_profile_fingerprint": "deployment-profile-current",
+            "enabled": True,
+        }
+    )
     calls = []
 
     class ExecutionModule:
@@ -116,9 +127,9 @@ def test_profiles_use_pr_base_and_reject_stale_acceptance(monkeypatch):
             calls.append(("acceptance", branch))
             return {
                 "repository_full_name": "owner/repo",
-                "base_branch": "actual-base",
+                "branch": "actual-base",
                 "expected_contexts": ["VELIA Stage 8 Acceptance"],
-                "deployment_profile_fingerprint": hardening._deployment_profile_fingerprint(deployment),
+                "profile_fingerprint": acceptance_fingerprint,
                 "enabled": True,
             }
 
@@ -142,9 +153,9 @@ def test_profiles_use_pr_base_and_reject_stale_acceptance(monkeypatch):
         def get_acceptance_profile(user_id, project_id, branch):
             return {
                 "repository_full_name": "owner/repo",
-                "base_branch": "actual-base",
+                "branch": "actual-base",
                 "expected_contexts": ["VELIA Stage 8 Acceptance"],
-                "deployment_profile_fingerprint": "stale",
+                "profile_fingerprint": "stale",
                 "enabled": True,
             }
 
