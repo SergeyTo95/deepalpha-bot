@@ -10,9 +10,12 @@ on:
       - 'services/velia_software_factory_stage8_full_autonomy_service.py'
       - 'services/velia_software_factory_stage8_greenfield_runtime_patch.py'
       - 'services/velia_software_factory_stage8_release_runtime_patch.py'
+      - 'services/velia_software_factory_stage8_final_hardening_patch.py'
       - 'services/velia_software_factory_workspace_chat_hardening_patch.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_stage8_full_autonomy.py'
+      - 'tests/test_velia_software_factory_stage8_final_hardening.py'
+      - '.github/workflows/velia-software-factory-stage8-final-hardening.yml'
       - '.github/workflows/velia-software-factory-stage6-7.yml'
       - '.github/workflows/velia-software-factory-stage7.yml'
       - '.github/workflows/velia-software-factory-stage8.yml'
@@ -187,9 +190,9 @@ jobs:
           assert 'velia_factory_stage8_release_authorization_required' in query
           assert 'ORDER BY COALESCE(s.updated_at,e.updated_at) ASC' in query
           assert captured['params'] == (5,)
-
           source = open('services/velia_software_factory_stage8_release_runtime_patch.py', encoding='utf-8').read()
-          assert 'status="terminal_blocked"' in source
+          assert '_TERMINAL_RELEASE_STATUS = "terminal_blocked"' in source
+          assert 'status=_TERMINAL_RELEASE_STATUS' in source
           assert 'velia_factory_stage8_protected_repository_forbidden' in source
           assert 'status="blocked"' in source
           assert 'velia_factory_stage8_candidate_not_eligible' in source
@@ -264,9 +267,12 @@ jobs:
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_stage8_final_hardening_patch.py',
               'services/velia_software_factory_workspace_chat_hardening_patch.py',
               'services/velia_software_factory_workspace_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              'tests/test_velia_software_factory_stage8_final_hardening.py',
+              '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
               '.github/workflows/velia-software-factory-stage6-7.yml',
               '.github/workflows/velia-software-factory-stage7.yml',
               '.github/workflows/velia-software-factory-stage8.yml',
