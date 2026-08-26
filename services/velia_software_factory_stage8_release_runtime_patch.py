@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from typing import Any, Dict, Mapping
 
@@ -52,6 +53,16 @@ _RELEASE_DENY_HINTS = (
     "без публикации",
     "без релиза",
 )
+_NEGATIVE_RELEASE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.UNICODE)
+    for pattern in (
+        r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|not\s+to|cannot|can't)\b[^.!?\n]{0,80}\b(?:merge|deploy|release|publish)\b",
+        r"\bnot\b[^.!?\n]{0,50}\b(?:merge|deploy|release|publish)\b",
+        r"\bwithout\b[^.!?\n]{0,80}\b(?:merge|merging|deployment|deploying|release|publishing)\b",
+        r"\b(?:не|никогда\s+не|нельзя|не\s+надо|не\s+нужно)\b[^.!?\n]{0,80}\b(?:мерж\w*|слива\w*|объедин\w*|депло\w*|релиз\w*|публик\w*|выкат\w*)",
+        r"\bбез\b[^.!?\n]{0,80}\b(?:мержа|слияния|деплоя|релиза|публикации|выкатки)\b",
+    )
+)
 _RELEASE_ALLOW_HINTS = (
     "deploy",
     "deployment",
@@ -101,6 +112,16 @@ def _protected_repositories() -> set[str]:
     return {item.strip().casefold() for item in raw.replace(";", ",").split(",") if item.strip()}
 
 
+def _negative_release_intent(objective: str) -> bool:
+    text = str(objective or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if any(hint in folded for hint in _RELEASE_DENY_HINTS):
+        return True
+    return any(pattern.search(text) for pattern in _NEGATIVE_RELEASE_PATTERNS)
+
+
 def _explicit_release_authorized(execution: Mapping[str, Any]) -> bool:
     """Use only the immutable workspace objective captured from the user's request.
 
@@ -108,12 +129,11 @@ def _explicit_release_authorized(execution: Mapping[str, Any]) -> bool:
     own permission to merge or deploy. Explicit negative intent always wins.
     """
     plan = execution.get("plan") if isinstance(execution.get("plan"), Mapping) else {}
-    objective = str(plan.get("objective") or "").strip().casefold()
-    if not objective:
+    objective = str(plan.get("objective") or "").strip()
+    if not objective or _negative_release_intent(objective):
         return False
-    if any(hint in objective for hint in _RELEASE_DENY_HINTS):
-        return False
-    return any(hint in objective for hint in _RELEASE_ALLOW_HINTS)
+    folded = objective.casefold()
+    return any(hint in folded for hint in _RELEASE_ALLOW_HINTS)
 
 
 def ensure_stage8_release_tables(execution_module: Any) -> None:
@@ -296,6 +316,14 @@ def _assert_repository_scope(user_id: int, candidate: Mapping[str, Any]) -> None
             )
 
 
+def _candidate_requires_reevaluation(state: Mapping[str, Any]) -> bool:
+    return bool(
+        str(state.get("blocker_code") or "") == "velia_factory_stage8_candidate_not_eligible"
+        and not str(state.get("plan_id") or "")
+        and not str(state.get("release_execution_id") or "")
+    )
+
+
 def _progress_release(execution_module: Any, user_id: int, execution_id: str) -> Dict[str, Any]:
     from services import velia_software_factory_rollout_service as rollout
     from services import velia_software_factory_stage8_full_autonomy_service as stage8
@@ -335,9 +363,10 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
         )
         release_id = str(release.get("execution_id") or state["release_execution_id"])
     else:
+        reuse_candidate = bool(state.get("candidate_id")) and not _candidate_requires_reevaluation(state)
         candidate = (
             execution_module.get_delivery_candidate(int(user_id), state["candidate_id"])
-            if state.get("candidate_id")
+            if reuse_candidate
             else execution_module.evaluate_delivery_candidate(int(user_id), str(execution_id))
         )
         if str(candidate.get("status") or "") != "eligible" or not bool(candidate.get("release_eligible")):
@@ -348,6 +377,7 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
                 candidate_id=str(candidate.get("candidate_id") or ""),
                 status="blocked",
                 blocker_code="velia_factory_stage8_candidate_not_eligible",
+                blocker_detail="Delivery candidate is not currently eligible; retry will re-evaluate current evidence.",
             )
         try:
             _assert_repository_scope(int(user_id), candidate)
@@ -536,6 +566,17 @@ def install(execution_module: Any) -> None:
         limit = _env_int("VELIA_SOFTWARE_FACTORY_STAGE8_RELEASE_MAX_RUNS_PER_TICK", 5, 1, 20)
         for user_id, execution_id in _release_candidates(execution_module, limit):
             if not rollout.user_allowed(int(user_id)):
+                try:
+                    _save_state(
+                        execution_module,
+                        int(user_id),
+                        str(execution_id),
+                        status="blocked",
+                        blocker_code="velia_factory_stage8_user_no_longer_eligible",
+                        blocker_detail="User eligibility was revoked or could not be revalidated; retry remains possible after access is restored.",
+                    )
+                except Exception:
+                    logger.exception("VELIA_STAGE8_RELEASE_INELIGIBLE_ROTATION_FAILED execution_id=%s", execution_id)
                 continue
             try:
                 results.append(_progress_release(execution_module, int(user_id), str(execution_id)))
