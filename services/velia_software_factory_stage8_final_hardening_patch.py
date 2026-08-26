@@ -4,10 +4,13 @@ import hashlib
 import json
 import logging
 import re
+from contextlib import contextmanager
 from typing import Any, Dict, Mapping
 
+from db.database import get_connection
 from services import velia_agent_coding_autopilot_merge_policy_service as merge_policy
 from services import velia_software_factory_delivery_gate_service as delivery
+from services import velia_software_factory_release_execution_service as release_execution
 from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
@@ -42,7 +45,7 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,30}\b(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
-        r"\b(?:after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+        r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:my|our)\b[^.!?\n]{0,20}\b(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
@@ -71,6 +74,31 @@ def _json(value: Any) -> str:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _release_operation_lock(release_execution_id: str):
+    """Serialize Stage 8 retry rotation with merge execution and explicit stop requests."""
+    release_id = str(release_execution_id or "").strip()
+    if not release_id:
+        raise SoftwareFactoryError("velia_factory_stage8_release_lock_id_missing", status=409)
+    conn = get_connection()
+    cursor = conn.cursor()
+    locked = False
+    key = release_execution._lock_key(release_id)
+    try:
+        cursor.execute("SELECT pg_advisory_lock(%s)", (key,))
+        locked = True
+        yield conn, cursor
+    finally:
+        if locked:
+            try:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (key,))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        cursor.close()
+        conn.close()
 
 
 def _acceptance_profile_fingerprint(
@@ -328,43 +356,74 @@ def _zero_merge_terminal_release(release: Mapping[str, Any]) -> bool:
     return True
 
 
+def _hardened_request_stop(
+    original_request_stop: Any,
+    execution_module: Any,
+    user_id: int,
+    release_execution_id: str,
+) -> Dict[str, Any]:
+    """Serialize stop with execute/retry and preserve stops that arrive as a zero-merge failure terminalizes."""
+    release_id = str(release_execution_id)
+    with _release_operation_lock(release_id) as (conn, cursor):
+        current = release_execution.get_execution(execution_module, int(user_id), release_id)
+        if _zero_merge_terminal_release(current):
+            cursor.execute(
+                "UPDATE velia_software_factory_release_executions "
+                "SET stop_requested=TRUE,updated_at=%s "
+                "WHERE execution_id=%s AND user_id=%s AND status IN ('blocked','failed') "
+                "AND merged_count=0 AND stop_requested=FALSE RETURNING execution_id",
+                (release_execution._utcnow(), release_id, int(user_id)),
+            )
+            marked = cursor.fetchone()
+            conn.commit()
+            if marked:
+                release_execution._event(
+                    release_id,
+                    int(user_id),
+                    "release_execution.stop_requested",
+                    {"terminal_zero_merge": True},
+                )
+            return release_execution.get_execution(execution_module, int(user_id), release_id)
+        return original_request_stop(execution_module, int(user_id), release_id)
+
+
 def _rotate_zero_merge_preflight(
     execution_module: Any,
     user_id: int,
     state: Mapping[str, Any],
     release: Mapping[str, Any],
 ) -> None:
-    """Retire the old prepared plan only after a final live zero-merge/stop recheck."""
-    get_release = getattr(execution_module, "get_release_execution", None)
+    """Retire zero-merge state while holding the same advisory lock used by stop and merge execution."""
     release_id = str(release.get("execution_id") or state.get("release_execution_id") or "").strip()
-    if not callable(get_release) or not release_id:
-        raise SoftwareFactoryError(
-            "velia_factory_stage8_zero_merge_release_recheck_unavailable", status=503
-        )
-    current = get_release(int(user_id), release_id)
-    if not isinstance(current, Mapping) or not _zero_merge_terminal_release(current):
-        raise SoftwareFactoryError(
-            "velia_factory_stage8_zero_merge_release_no_longer_retryable", status=409
-        )
-
-    cancel = getattr(execution_module, "cancel_release_preflight", None)
-    if not callable(cancel):
-        raise SoftwareFactoryError(
-            "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
-        )
-    plan_id = str(state.get("plan_id") or current.get("plan_id") or release.get("plan_id") or "").strip()
-    if not plan_id:
-        raise SoftwareFactoryError(
-            "velia_factory_stage8_zero_merge_preflight_missing", status=409
-        )
-    rotated = cancel(int(user_id), plan_id)
-    status = str((rotated or {}).get("status") or "") if isinstance(rotated, Mapping) else ""
-    if status not in {"cancelled", "stale"}:
-        raise SoftwareFactoryError(
-            "velia_factory_stage8_zero_merge_preflight_not_rotated",
-            detail=status or plan_id,
-            status=409,
-        )
+    if not release_id:
+        raise SoftwareFactoryError("velia_factory_stage8_zero_merge_release_recheck_unavailable", status=503)
+    with _release_operation_lock(release_id):
+        current = execution_module.get_release_execution(int(user_id), release_id)
+        if not isinstance(current, Mapping) or not _zero_merge_terminal_release(current):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_release_no_longer_retryable", status=409
+            )
+        cancel = getattr(execution_module, "cancel_release_preflight", None)
+        if not callable(cancel):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
+            )
+        plan_id = str(state.get("plan_id") or current.get("plan_id") or release.get("plan_id") or "").strip()
+        if not plan_id:
+            raise SoftwareFactoryError("velia_factory_stage8_zero_merge_preflight_missing", status=409)
+        rotated = cancel(int(user_id), plan_id)
+        status = str((rotated or {}).get("status") or "") if isinstance(rotated, Mapping) else ""
+        if status not in {"cancelled", "stale"}:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_not_rotated",
+                detail=status or plan_id,
+                status=409,
+            )
+        release_runtime._save_state(
+            execution_module,
+            int(user_id),
+            str(state.get("workspace_execution_id") or ""),
+        ) if False else None
 
 
 def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_id: str) -> None:
@@ -498,6 +557,7 @@ def install(execution_module: Any) -> None:
 
     original_build = delivery.build_workspace_candidate_snapshot
     original_progress = release_runtime._progress_release
+    original_request_stop = release_execution.request_stop
 
     def build_workspace_candidate_snapshot(
         execution_module_arg: Any, user_id: int, execution_id: str
@@ -517,10 +577,19 @@ def install(execution_module: Any) -> None:
             execution_module_arg, int(user_id), str(execution_id)
         )
 
+    def request_stop(execution_module_arg: Any, user_id: int, release_execution_id: str) -> Dict[str, Any]:
+        return _hardened_request_stop(
+            original_request_stop,
+            execution_module_arg,
+            int(user_id),
+            str(release_execution_id),
+        )
+
     delivery.build_workspace_candidate_snapshot = build_workspace_candidate_snapshot
     release_runtime._explicit_release_authorized = _strict_release_authorized
     release_runtime._assert_release_profiles_ready = _assert_profiles_ready
     release_runtime._progress_release = progress_release
+    release_execution.request_stop = request_stop
     execution_module._workspace_stage8_final_hardening_installed = True
     _INSTALLED = True
     logger.info("VELIA_SOFTWARE_FACTORY_STAGE8_FINAL_HARDENING_INSTALLED")
