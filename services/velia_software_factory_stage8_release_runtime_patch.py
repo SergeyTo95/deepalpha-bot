@@ -59,7 +59,9 @@ _NEGATIVE_RELEASE_PATTERNS = tuple(
         r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|not\s+to|cannot|can't)\b[^.!?\n]{0,80}\b(?:merge|deploy|release|publish)\b",
         r"\bnot\b[^.!?\n]{0,50}\b(?:merge|deploy|release|publish)\b",
         r"\bwithout\b[^.!?\n]{0,80}\b(?:merge|merging|deployment|deploying|release|publishing)\b",
+        r"\b(?:merge|deploy|release|publish)\w*\b[^.!?\n]{0,80}\b(?:forbidden|prohibited|disallowed|not\s+allowed)\b",
         r"\b(?:не|никогда\s+не|нельзя|не\s+надо|не\s+нужно)\b[^.!?\n]{0,80}\b(?:мерж\w*|слива\w*|объедин\w*|депло\w*|релиз\w*|публик\w*|выкат\w*)",
+        r"\b(?:мерж\w*|слива\w*|объедин\w*|депло\w*|релиз\w*|публик\w*|выкат\w*)\b[^.!?\n]{0,80}\b(?:нельзя|запрещ\w*|не\s+надо|не\s+нужно)\b",
         r"\bбез\b[^.!?\n]{0,80}\b(?:мержа|слияния|деплоя|релиза|публикации|выкатки)\b",
     )
 )
