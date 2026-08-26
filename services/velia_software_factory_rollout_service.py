@@ -10,8 +10,9 @@ from services.velia_admin_security_service import configured_admin_id
 
 ROLLOUT_OFF = "off"
 ROLLOUT_DRY_RUN = "dry_run"
+ROLLOUT_LIMITED_ADMIN = "limited_admin"
 ROLLOUT_LIVE = "live"
-_VALID_MODES = {ROLLOUT_OFF, ROLLOUT_DRY_RUN, ROLLOUT_LIVE}
+_VALID_MODES = {ROLLOUT_OFF, ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
 _ID_SPLIT_RE = re.compile(r"[\s,;]+")
 _ADMIN_PILOT_SOURCE_ENV = {
     "live_owner": "LIVE_OWNER_USER_IDS",
@@ -126,15 +127,34 @@ def user_allowed(user_id: int) -> bool:
 
 
 def intake_allowed(user_id: int) -> bool:
-    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIVE} and user_allowed(int(user_id))
+    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE} and user_allowed(int(user_id))
 
 
 def dry_run_enabled(user_id: int) -> bool:
     return rollout_mode() == ROLLOUT_DRY_RUN and user_allowed(int(user_id))
 
 
+def _limited_admin_execution_allowed(user_id: int) -> bool:
+    from services import velia_software_factory_stage7_limited_admin_rollout_service as stage7
+
+    return bool(stage7.execution_allowed(int(user_id)))
+
+
+def _limited_admin_status(user_id: int, *, verify_acceptance: bool) -> Dict[str, object]:
+    from services import velia_software_factory_stage7_limited_admin_rollout_service as stage7
+
+    return dict(stage7.public_status(int(user_id), verify_acceptance=verify_acceptance))
+
+
 def live_execution_allowed(user_id: int) -> bool:
-    if rollout_mode() != ROLLOUT_LIVE:
+    mode = rollout_mode()
+    if mode == ROLLOUT_LIMITED_ADMIN:
+        if not admin_pilot_user_allowed(int(user_id)):
+            return False
+        if not live_pilot_guard.live_pilot_guard_enabled():
+            return False
+        return _limited_admin_execution_allowed(int(user_id))
+    if mode != ROLLOUT_LIVE:
         return False
     if explicit_user_allowed(int(user_id)):
         return True
@@ -148,8 +168,14 @@ def _admin_pilot_configured() -> bool:
 
 
 def supervisor_allowed() -> bool:
-    """Supervisor can exist only in live mode and only behind the right write boundary."""
-    if rollout_mode() != ROLLOUT_LIVE:
+    """Supervisor can exist only behind a live or Stage 7 limited-admin write boundary."""
+    mode = rollout_mode()
+    if mode == ROLLOUT_LIMITED_ADMIN:
+        if not _admin_pilot_configured() or not live_pilot_guard.live_pilot_guard_enabled():
+            return False
+        actor_ids = admin_pilot_user_ids()
+        return len(actor_ids) == 1 and _limited_admin_execution_allowed(next(iter(actor_ids)))
+    if mode != ROLLOUT_LIVE:
         return False
     # Preserve the existing explicit allowlist rollout path. Admin-pilot-only
     # execution is stricter and requires the Stage 6.2 one-shot dispatch guard.
@@ -171,6 +197,7 @@ def _stage_readiness(
     required_flags: Iterable[str],
     *,
     require_live: bool,
+    allow_limited_admin: bool = False,
 ) -> Dict[str, object]:
     flags = tuple(dict.fromkeys(str(name) for name in required_flags if str(name)))
     missing = [name for name in flags if not _env_bool(name, False)]
@@ -182,12 +209,17 @@ def _stage_readiness(
     ):
         missing.append(_LIVE_PILOT_GUARD_FLAG)
     mode = rollout_mode()
-    mode_ok = mode == ROLLOUT_LIVE if require_live else mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIVE}
+    if require_live:
+        mode_ok = mode == ROLLOUT_LIVE or (allow_limited_admin and mode == ROLLOUT_LIMITED_ADMIN)
+        required_mode = "limited_admin_or_live" if allow_limited_admin else "live"
+    else:
+        mode_ok = mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
+        required_mode = "dry_run_limited_admin_or_live"
     eligible = user_allowed(int(user_id))
     return {
         "ready": not missing and mode_ok and eligible,
         "missing_flags": missing,
-        "required_rollout_mode": "live" if require_live else "dry_run_or_live",
+        "required_rollout_mode": required_mode,
         "rollout_mode_ok": mode_ok,
         "user_eligible": eligible,
     }
@@ -200,7 +232,7 @@ def pilot_readiness(user_id: int) -> Dict[str, object]:
             int(user_id), _MULTI_REPO_PLAN_FLAGS, require_live=False
         ),
         "build_review": _stage_readiness(
-            int(user_id), _BUILD_REVIEW_FLAGS, require_live=True
+            int(user_id), _BUILD_REVIEW_FLAGS, require_live=True, allow_limited_admin=True
         ),
         "release": _stage_readiness(int(user_id), _RELEASE_FLAGS, require_live=True),
         "greenfield_bootstrap_enabled": _env_bool(
@@ -215,6 +247,9 @@ def pilot_readiness(user_id: int) -> Dict[str, object]:
 def public_status(user_id: int) -> dict:
     mode = rollout_mode()
     eligible = user_allowed(int(user_id))
+    stage7_status = _limited_admin_status(
+        int(user_id), verify_acceptance=bool(mode == ROLLOUT_LIMITED_ADMIN)
+    )
     return {
         "mode": mode,
         "eligible": eligible,
@@ -223,6 +258,7 @@ def public_status(user_id: int) -> dict:
         "admin_pilot_id_source": admin_pilot_id_source(),
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
         "live_pilot_guard": live_pilot_guard.public_status(),
+        "limited_admin": stage7_status,
         "dry_run": bool(mode == ROLLOUT_DRY_RUN and eligible),
         "live_execution": bool(live_execution_allowed(int(user_id))),
         "supervisor_allowed": bool(supervisor_allowed()),
