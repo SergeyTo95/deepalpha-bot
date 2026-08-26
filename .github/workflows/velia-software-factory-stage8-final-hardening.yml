@@ -66,9 +66,11 @@ jobs:
             tests/test_velia_software_factory_stage8_full_autonomy.py \
             tests/test_velia_software_factory_stage7_limited_admin_rollout.py
           python - <<'PY'
+          from contextlib import contextmanager
           from types import SimpleNamespace
 
           from services import velia_software_factory_stage8_final_hardening_patch as hardening
+          from services import velia_software_factory_stage8_greenfield_runtime_patch as atomic
 
           def execution(objective):
               return {"plan": {"objective": objective}}
@@ -79,6 +81,12 @@ jobs:
           assert hardening._strict_release_authorized(
               execution("Deploy once authorization has been granted by us")
           ) is False
+          assert atomic._conditional_noun_deferred_approval(
+              "Deploy this app if approval is given by me"
+          ) is True
+          assert atomic._conditional_noun_deferred_approval(
+              "Deploy this app provided that authorization has been granted by us"
+          ) is True
           assert hardening._zero_merge_terminal_release(
               {
                   "status": "blocked",
@@ -88,43 +96,77 @@ jobs:
               }
           ) is False
 
-          saved = []
-          cancelled = []
-          reads = {"count": 0}
-
-          hardening.release_runtime._state = lambda execution_module, user_id, execution_id: {
-              "plan_id": "plan-old",
-              "release_execution_id": "release-old",
-          }
-          hardening.release_runtime._save_state = (
-              lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields
+          installer_module = SimpleNamespace(
+              _workspace_stage8_final_hardening_installed=True,
           )
+          atomic._install_release_atomicity_hardening(installer_module)
+          assert hardening._strict_release_authorized(
+              execution("Deploy this app if approval is given by me")
+          ) is False
+          assert hardening._strict_release_authorized(
+              execution("Deploy this app provided that authorization has been granted by us")
+          ) is False
 
-          def get_release(user_id, release_id):
-              reads["count"] += 1
-              return {
-                  "execution_id": release_id,
+          events = []
+
+          class Cursor:
+              rowcount = 0
+              def __init__(self):
+                  self._row = None
+              def execute(self, query, params):
+                  normalized = " ".join(str(query).split())
+                  if "FROM velia_software_factory_stage8_releases" in normalized and "FOR UPDATE" in normalized:
+                      events.append("coordinator_row_locked")
+                      self._row = ("workspace-1", "plan-old", "release-old")
+                  elif normalized.startswith("UPDATE velia_software_factory_stage8_releases SET"):
+                      events.append("coordinator_binding_cleared")
+                      self.rowcount = 1
+                  else:
+                      raise AssertionError(f"unexpected SQL: {normalized}")
+              def fetchone(self):
+                  return self._row
+
+          class Connection:
+              def commit(self):
+                  events.append("coordinator_state_committed")
+
+          @contextmanager
+          def fake_release_lock(release_id):
+              assert release_id == "release-old"
+              events.append("release_lock_enter")
+              yield Connection(), Cursor()
+              events.append("release_lock_exit")
+
+          original_lock = hardening._release_operation_lock
+          hardening._release_operation_lock = fake_release_lock
+          try:
+              release = {
+                  "execution_id": "release-old",
                   "plan_id": "plan-old",
                   "status": "blocked",
                   "merged_count": 0,
-                  "stop_requested": reads["count"] >= 2,
+                  "stop_requested": False,
                   "items": [{"status": "failed", "merge_commit_sha": ""}],
               }
+              module = SimpleNamespace(
+                  get_release_execution=lambda user_id, release_id: dict(release),
+                  cancel_release_preflight=lambda user_id, plan_id: (
+                      events.append("preflight_retired") or {"status": "cancelled"}
+                  ),
+              )
+              atomic._atomic_zero_merge_rotate(
+                  module,
+                  9,
+                  {"plan_id": "plan-old", "release_execution_id": "release-old"},
+                  release,
+              )
+          finally:
+              hardening._release_operation_lock = original_lock
 
-          module = SimpleNamespace(
-              get_release_execution=get_release,
-              cancel_release_preflight=lambda user_id, plan_id: cancelled.append((user_id, plan_id)),
-          )
-          try:
-              hardening._refresh_retryable_evidence(module, 9, "exec-stop-race")
-          except Exception as exc:
-              assert getattr(exc, "code", "") == "velia_factory_stage8_zero_merge_release_no_longer_retryable"
-          else:
-              raise AssertionError("stop-race rotation unexpectedly proceeded")
-
-          assert reads["count"] >= 2
-          assert cancelled == []
-          assert saved == []
+          assert events.index("release_lock_enter") < events.index("preflight_retired")
+          assert events.index("preflight_retired") < events.index("coordinator_binding_cleared")
+          assert events.index("coordinator_binding_cleared") < events.index("coordinator_state_committed")
+          assert events.index("coordinator_state_committed") < events.index("release_lock_exit")
           PY
 
       - name: Publish independent production acceptance status
