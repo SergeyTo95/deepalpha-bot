@@ -1,0 +1,161 @@
+name: VELIA Software Factory Stage 8
+
+on:
+  pull_request:
+    branches:
+      - feature/turbo-short-term-btc
+    paths:
+      - 'bot.py'
+      - 'services/velia_software_factory_rollout_service.py'
+      - 'services/velia_software_factory_stage8_full_autonomy_service.py'
+      - 'services/velia_software_factory_stage8_greenfield_runtime_patch.py'
+      - 'services/velia_software_factory_stage8_release_hardening_patch.py'
+      - 'services/velia_software_factory_stage8_release_runtime_patch.py'
+      - 'services/velia_software_factory_workspace_hardening_patch.py'
+      - 'tests/test_velia_software_factory_stage8_full_autonomy.py'
+      - '.github/workflows/velia-software-factory-stage8.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-autonomy-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Prove checked out SHA
+        run: |
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Compile Stage 8 boundary
+        run: |
+          python -m py_compile \
+            services/velia_software_factory_rollout_service.py \
+            services/velia_software_factory_stage8_full_autonomy_service.py \
+            services/velia_software_factory_stage8_greenfield_runtime_patch.py \
+            services/velia_software_factory_stage8_release_hardening_patch.py \
+            services/velia_software_factory_stage8_release_runtime_patch.py \
+            services/velia_software_factory_workspace_hardening_patch.py
+
+      - name: Run Stage 8 and Stage 7 boundary regressions
+        run: |
+          python -m pytest -q \
+            tests/test_velia_software_factory_stage8_full_autonomy.py \
+            tests/test_velia_software_factory_stage7_limited_admin_rollout.py
+
+      - name: Prove explicit release authorization and protected repositories
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          release = Path('services/velia_software_factory_stage8_release_runtime_patch.py').read_text()
+          status = Path('services/velia_software_factory_stage8_full_autonomy_service.py').read_text()
+          assert 'def _explicit_release_authorized(' in release
+          assert '_RELEASE_DENY_HINTS' in release
+          assert '_RELEASE_ALLOW_HINTS' in release
+          assert 'velia_factory_stage8_release_authorization_required' in release
+          assert 'Explicit user deploy/release intent is absent' in release
+          assert 'stage8_full_autonomy_user_request_authorized_after_reviewer' in release
+          assert 'SergeyTo95/deepalpha-bot' in release
+          assert 'velia_factory_stage8_protected_repository_forbidden' in release
+          assert '"release_authorization_required": True' in status
+          assert '"release_authorization_source": "immutable_user_workspace_objective"' in status
+          assert '"release_authorization_negative_intent_wins": True' in status
+          PY
+
+      - name: Prove Stage 7 remains separate and release-closed
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          rollout = Path('services/velia_software_factory_rollout_service.py').read_text()
+          stage7 = Path('services/velia_software_factory_stage7_limited_admin_rollout_service.py').read_text()
+          assert 'ROLLOUT_LIMITED_ADMIN = "limited_admin"' in rollout
+          assert 'ROLLOUT_FULL_AUTONOMY = "full_autonomy"' in rollout
+          assert 'mode == ROLLOUT_LIMITED_ADMIN' in rollout
+          assert 'mode == ROLLOUT_FULL_AUTONOMY' in rollout
+          assert '"release": _stage_readiness(int(user_id), _RELEASE_FLAGS, require_live=True)' in rollout
+          assert '"merge_supported": False' in stage7
+          assert '"release_supported": False' in stage7
+          assert '"deployment_supported": False' in stage7
+          PY
+
+      - name: Prove Stage 8 exact-head release chain remains bounded
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          release = Path('services/velia_software_factory_stage8_release_runtime_patch.py').read_text()
+          for token in (
+              'evaluate_delivery_candidate(',
+              'record_delivery_decision(',
+              'prepare_release_preflight(',
+              'validate_release_preflight(',
+              'create_release_execution(',
+              'execute_release(',
+              'verify_release_execution(',
+              'observe_release_deployment(',
+              'evaluate_release_completion(',
+              'create_release_passport(',
+          ):
+              assert token in release, token
+          assert release.index('_explicit_release_authorized(current)') < release.index('evaluate_delivery_candidate(')
+          assert release.index('_assert_repository_scope(int(user_id), candidate)') < release.index('record_delivery_decision(')
+          PY
+
+      - name: Verify bounded Stage 8 diff surface
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import subprocess
+          base = '${{ github.event.pull_request.base.sha }}'
+          head = '${{ github.event.pull_request.head.sha }}'
+          changed = set(subprocess.check_output(['git','diff','--name-only',base,head], text=True).splitlines())
+          allowed = {
+              'bot.py',
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_stage8_full_autonomy_service.py',
+              'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
+              'services/velia_software_factory_stage8_release_hardening_patch.py',
+              'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_workspace_hardening_patch.py',
+              'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+          }
+          unexpected = changed - allowed
+          assert not unexpected, f'unexpected Stage 8 files: {sorted(unexpected)}'
+          required = {
+              'services/velia_software_factory_stage8_full_autonomy_service.py',
+              'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              '.github/workflows/velia-software-factory-stage8.yml',
+          }
+          assert required <= changed, f'missing Stage 8 evidence files: {sorted(required - changed)}'
+          PY
+
+      - name: Reject newly added Python bytecode
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only --diff-filter=A "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -E '(^|/)__pycache__/|.*\.py[co]$'; then
+            echo "Python bytecode must not be committed"
+            exit 1
+          fi
