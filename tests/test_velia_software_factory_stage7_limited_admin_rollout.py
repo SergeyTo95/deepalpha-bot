@@ -8,6 +8,10 @@ from services import velia_software_factory_stage7_limited_admin_rollout_service
 def _clear(monkeypatch):
     names = {
         "ADMIN_ID",
+        "LIVE_OWNER_USER_IDS",
+        "JARVIS_FOUNDER_IDS",
+        "VELIA_CHAT_BETA_USER_IDS",
+        "VELIA_MOBILE_DEBUG_USER_IDS",
         "VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE",
         "VELIA_SOFTWARE_FACTORY_USER_IDS",
         "VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED",
@@ -159,6 +163,44 @@ def test_limited_admin_mode_is_admin_only_and_never_release_ready(monkeypatch):
     assert admin_readiness["release"]["ready"] is False
     assert admin_readiness["release"]["rollout_mode_ok"] is False
     assert outsider_readiness["build_review"]["ready"] is False
+
+
+def test_limited_admin_ignores_shared_pilot_source_members(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setattr(rollout, "configured_admin_id", lambda: 42)
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "limited_admin")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", "true")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE", "live_owner")
+    monkeypatch.setenv("LIVE_OWNER_USER_IDS", "7,8")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED", "true")
+    monkeypatch.setattr(rollout, "_limited_admin_execution_allowed", lambda user_id: user_id == 42)
+
+    # The configured owner remains the sole Stage 7 actor even when the older
+    # Stage 6 pilot source is a broader server-managed group.
+    assert rollout.admin_pilot_user_allowed(7) is True
+    assert rollout.intake_allowed(42) is True
+    assert rollout.live_execution_allowed(42) is True
+    assert rollout.eligibility_source(42) == "admin_pilot"
+    assert rollout.intake_allowed(7) is False
+    assert rollout.live_execution_allowed(7) is False
+    assert rollout.eligibility_source(7) == "none"
+
+
+def test_limited_admin_overlap_keeps_admin_pilot_classification(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setattr(rollout, "configured_admin_id", lambda: 42)
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "limited_admin")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ENABLED", "true")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ADMIN_PILOT_ID_SOURCE", "admin_id")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_USER_IDS", "42,7")
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_LIVE_PILOT_GUARD_ENABLED", "true")
+    monkeypatch.setattr(rollout, "_limited_admin_execution_allowed", lambda user_id: user_id == 42)
+
+    assert rollout.explicit_user_allowed(42) is True
+    assert rollout.intake_allowed(42) is True
+    assert rollout.live_execution_allowed(42) is True
+    assert rollout.eligibility_source(42) == "admin_pilot"
+    assert rollout.eligibility_source(7) == "none"
 
 
 def test_live_mode_backward_compatibility_is_preserved(monkeypatch):
