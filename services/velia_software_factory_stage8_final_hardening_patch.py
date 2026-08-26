@@ -42,6 +42,7 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,30}\b(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+        r"\b(?:after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:my|our)\b[^.!?\n]{0,20}\b(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
@@ -309,8 +310,10 @@ def _observation_profiles_current(
 
 
 def _zero_merge_terminal_release(release: Mapping[str, Any]) -> bool:
-    """Only reset terminal release attempts when GitHub merge side effects are provably absent."""
+    """Only reset terminal release attempts when merge side effects and stop intent are absent."""
     if str(release.get("status") or "") not in _ZERO_MERGE_RETRYABLE_STATUSES:
+        return False
+    if bool(release.get("stop_requested")):
         return False
     if int(release.get("merged_count") or 0) != 0:
         return False
@@ -331,13 +334,25 @@ def _rotate_zero_merge_preflight(
     state: Mapping[str, Any],
     release: Mapping[str, Any],
 ) -> None:
-    """Retire the old prepared plan so a new plan_id and release execution can be persisted."""
+    """Retire the old prepared plan only after a final live zero-merge/stop recheck."""
+    get_release = getattr(execution_module, "get_release_execution", None)
+    release_id = str(release.get("execution_id") or state.get("release_execution_id") or "").strip()
+    if not callable(get_release) or not release_id:
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_release_recheck_unavailable", status=503
+        )
+    current = get_release(int(user_id), release_id)
+    if not isinstance(current, Mapping) or not _zero_merge_terminal_release(current):
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_release_no_longer_retryable", status=409
+        )
+
     cancel = getattr(execution_module, "cancel_release_preflight", None)
     if not callable(cancel):
         raise SoftwareFactoryError(
             "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
         )
-    plan_id = str(state.get("plan_id") or release.get("plan_id") or "").strip()
+    plan_id = str(state.get("plan_id") or current.get("plan_id") or release.get("plan_id") or "").strip()
     if not plan_id:
         raise SoftwareFactoryError(
             "velia_factory_stage8_zero_merge_preflight_missing", status=409
