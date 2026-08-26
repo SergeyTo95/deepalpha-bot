@@ -65,6 +65,67 @@ jobs:
             tests/test_velia_software_factory_stage8_final_hardening.py \
             tests/test_velia_software_factory_stage8_full_autonomy.py \
             tests/test_velia_software_factory_stage7_limited_admin_rollout.py
+          python - <<'PY'
+          from types import SimpleNamespace
+
+          from services import velia_software_factory_stage8_final_hardening_patch as hardening
+
+          def execution(objective):
+              return {"plan": {"objective": objective}}
+
+          assert hardening._strict_release_authorized(
+              execution("Deploy this app after approval is given by me")
+          ) is False
+          assert hardening._strict_release_authorized(
+              execution("Deploy once authorization has been granted by us")
+          ) is False
+          assert hardening._zero_merge_terminal_release(
+              {
+                  "status": "blocked",
+                  "merged_count": 0,
+                  "stop_requested": True,
+                  "items": [{"status": "failed", "merge_commit_sha": ""}],
+              }
+          ) is False
+
+          saved = []
+          cancelled = []
+          reads = {"count": 0}
+
+          hardening.release_runtime._state = lambda execution_module, user_id, execution_id: {
+              "plan_id": "plan-old",
+              "release_execution_id": "release-old",
+          }
+          hardening.release_runtime._save_state = (
+              lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields
+          )
+
+          def get_release(user_id, release_id):
+              reads["count"] += 1
+              return {
+                  "execution_id": release_id,
+                  "plan_id": "plan-old",
+                  "status": "blocked",
+                  "merged_count": 0,
+                  "stop_requested": reads["count"] >= 2,
+                  "items": [{"status": "failed", "merge_commit_sha": ""}],
+              }
+
+          module = SimpleNamespace(
+              get_release_execution=get_release,
+              cancel_release_preflight=lambda user_id, plan_id: cancelled.append((user_id, plan_id)),
+          )
+          try:
+              hardening._refresh_retryable_evidence(module, 9, "exec-stop-race")
+          except Exception as exc:
+              assert getattr(exc, "code", "") == "velia_factory_stage8_zero_merge_release_no_longer_retryable"
+          else:
+              raise AssertionError("stop-race rotation unexpectedly proceeded")
+
+          assert reads["count"] >= 2
+          assert cancelled == []
+          assert saved == []
+          PY
 
       - name: Publish independent production acceptance status
         if: always() && github.event_name == 'push'
