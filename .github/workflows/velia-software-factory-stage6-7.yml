@@ -266,11 +266,16 @@ jobs:
               '.github/workflows/velia-software-factory-stage6-7.yml',
               '.github/workflows/velia-software-factory-stage7.yml',
           }
+          stage7_maintenance = {
+              'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
+              'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
+          }
           assert (
               acceptance_core <= changed
               or context_filter_hardening <= changed
               or context_filter_boundary_hardening <= changed
               or stage7_extension <= changed
+              or stage7_maintenance <= changed
           ), sorted(changed)
           PY
 
