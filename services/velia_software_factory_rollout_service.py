@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, Iterable, Set
+from typing import Dict, Iterable, Mapping, Set
 
 from services import velia_software_factory_live_pilot_guard_service as live_pilot_guard
 from services.velia_admin_security_service import configured_admin_id
@@ -146,11 +146,11 @@ def _limited_admin_actor_allowed(user_id: int) -> bool:
 
 
 def _stage8_connected_user_allowed(user_id: int) -> bool:
-    """Ordinary Stage 8 users must own an active Developer GitHub installation.
+    """Ordinary Stage 8 users require a live, write-capable GitHub App installation.
 
-    This is intentionally stricter than "any authenticated app user": it binds
-    autonomous write/greenfield authority to a GitHub App installation that is
-    persisted against the same user_id. Database or provider failures fail closed.
+    A persisted installation row is only an ownership hint. Every eligibility check
+    revalidates the installation against GitHub so uninstall/revocation, account
+    changes, permission loss, provider failures, or stale database rows fail closed.
     """
     try:
         candidate = int(user_id)
@@ -159,11 +159,33 @@ def _stage8_connected_user_allowed(user_id: int) -> bool:
     if candidate <= 0 or not stage8_authenticated_users_enabled():
         return False
     try:
+        from services import velia_developer_github_service as github_service
         from services import velia_developer_project_service as project_service
 
-        return bool(project_service.list_installations(candidate))
+        installations = project_service.list_installations(candidate)
     except Exception:
         return False
+    for stored in installations or []:
+        if not isinstance(stored, Mapping):
+            continue
+        try:
+            installation_id = int(stored.get("installation_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if installation_id <= 0:
+            continue
+        try:
+            live = github_service.installation_details(installation_id)
+        except Exception:
+            continue
+        stored_login = str(stored.get("account_login") or "").strip().casefold()
+        live_login = str(live.get("account_login") or "").strip().casefold()
+        if not stored_login or live_login != stored_login:
+            continue
+        if str(live.get("contents_permission") or "").strip().lower() != "write":
+            continue
+        return True
+    return False
 
 
 def user_allowed(user_id: int) -> bool:
@@ -348,6 +370,8 @@ def public_status(user_id: int) -> dict:
         "eligibility_source": eligibility_source(int(user_id)),
         "authenticated_user_rollout": bool(stage8_authenticated_users_enabled()),
         "authenticated_user_requires_owned_github_installation": True,
+        "authenticated_user_installation_revalidated_live": True,
+        "authenticated_user_requires_contents_write": True,
         "admin_pilot_enabled": admin_pilot_enabled(),
         "admin_pilot_id_source": admin_pilot_id_source(),
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
