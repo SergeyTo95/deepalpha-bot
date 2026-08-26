@@ -21,6 +21,7 @@ from services import velia_software_factory_release_preflight_service as preflig
 from services import velia_software_factory_reviewer_remediation_service as remediation
 from services import velia_software_factory_reviewer_runtime_patch as reviewer_runtime
 from services import velia_software_factory_reviewer_service as reviewer
+from services import velia_software_factory_stage8_greenfield_runtime_patch as stage8_greenfield_runtime
 from services import velia_software_factory_workspace_execution_service as workspace_execution
 
 _STAGE8_FLAG = "VELIA_SOFTWARE_FACTORY_STAGE8_FULL_AUTONOMY_ENABLED"
@@ -106,6 +107,9 @@ def _runtime_readiness() -> Dict[str, Any]:
         "greenfield_bootstrap": _env_bool(_GREENFIELD_FLAG, False),
         "greenfield_repository_creation": _env_bool(_GREENFIELD_CREATE_FLAG, False),
         "greenfield_repository_creation_provider": bool(creation_status.get("configured")),
+        "greenfield_repository_creation_runtime": bool(
+            getattr(stage8_greenfield_runtime, "_INSTALLED", False)
+        ),
     }
 
 
@@ -153,6 +157,7 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         runtime.get("greenfield_bootstrap")
         and runtime.get("greenfield_repository_creation")
         and runtime.get("greenfield_repository_creation_provider")
+        and runtime.get("greenfield_repository_creation_runtime")
     )
     if not greenfield_ready:
         blockers.append("greenfield_repository_creation_not_ready")
