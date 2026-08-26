@@ -16,11 +16,127 @@ _TRIGGER_REASONS = {
 }
 
 
+def _stage8_single_workspace_delegate(
+    runtime_module: Any,
+    *,
+    objective: str,
+    user_id: int,
+    conversation_id: str,
+    request_id: str,
+    project: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Create a one-project workspace only for Stage 8 greenfield delivery.
+
+    Stage 4.4 remains multi-repository by default. This explicit Stage 8 path is
+    needed so a one-repository greenfield project reaches workspace review_ready
+    and therefore the Stage 8 release/deployment/passport coordinator.
+    """
+    workspace_runtime = runtime_module.workspace_runtime
+    project_dict = dict(project)
+    project_id = str(project_dict.get("id") or "")
+    if not project_id:
+        raise runtime_module.SoftwareFactoryError(
+            "velia_factory_greenfield_projects_missing", status=409
+        )
+    payload = {
+        "title": str(objective or "VELIA greenfield product")[:200],
+        "objective": str(objective or "")[:12000],
+        "primary_project_id": project_id,
+        "repositories": [
+            {
+                "project_id": project_id,
+                "role": workspace_runtime.workspace_service.infer_repository_role(
+                    project_dict, primary=False
+                ),
+            }
+        ],
+        "metadata": {
+            "source": "stage8_greenfield_single_workspace",
+            "conversation_id": str(conversation_id)[:200],
+        },
+    }
+    workspace = workspace_runtime.workspace_service.create_workspace(int(user_id), payload)
+    plan = workspace_runtime.workspace_chat.build_workspace_plan(
+        str(objective),
+        workspace,
+        user_id=int(user_id),
+        request_id=str(request_id or conversation_id),
+    )
+    context = workspace_runtime._save_context(
+        int(user_id),
+        str(conversation_id),
+        status="collecting_scopes",
+        workspace_id=str(workspace.get("workspace_id") or ""),
+        objective=str(objective),
+        plan=plan,
+        selection={"project_ids": [project_id], "stage8_single_project": True},
+    )
+    pending = workspace_runtime._next_scope(workspace, plan)
+    if pending is None:
+        return workspace_runtime._execute_or_plan(
+            message=str(objective),
+            request_id=str(request_id),
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            context=context,
+            workspace=workspace,
+        )
+    selected_project = runtime_module.project_service.get_project(
+        int(user_id), str(pending.get("project_id") or "")
+    )
+    recommended = runtime_module.autonomy.recommend_write_scope(selected_project)
+    if not recommended:
+        raise runtime_module.SoftwareFactoryError(
+            "velia_factory_greenfield_safe_scope_unavailable", status=409
+        )
+    return runtime_module._result(
+        workspace_runtime._scope_question(str(objective), pending, recommended),
+        request_id,
+        reason="software_factory_greenfield_delegated_workspace",
+    )
+
+
 def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> None:
     global _INSTALLED
     if getattr(chat_module, "_velia_software_factory_stage8_greenfield_installed", False):
         return
+
+    # Stage 8 release hardening must be installed after the base release runtime
+    # and before full-autonomy readiness can become true.
+    from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
+    from services import velia_software_factory_workspace_execution_service as execution_module
+
+    final_hardening.install(execution_module)
+
     original_generate = chat_module.generate_velia_chat_result
+    original_delegate_single = runtime_module._delegate_single
+
+    def delegate_single_stage8(
+        *,
+        objective: str,
+        user_id: int,
+        conversation_id: str,
+        request_id: str,
+        project: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        if rollout.rollout_mode() != rollout.ROLLOUT_FULL_AUTONOMY:
+            return original_delegate_single(
+                objective=str(objective),
+                user_id=int(user_id),
+                conversation_id=str(conversation_id),
+                request_id=str(request_id),
+                project=project,
+            )
+        return _stage8_single_workspace_delegate(
+            runtime_module,
+            objective=str(objective),
+            user_id=int(user_id),
+            conversation_id=str(conversation_id),
+            request_id=str(request_id),
+            project=project,
+        )
+
+    runtime_module._delegate_single = delegate_single_stage8
 
     def generate_stage8_greenfield(
         prompt: str,
@@ -103,6 +219,7 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
                             enriched["repository_creation_performed"]
                         ),
                         "repository_creation_provider": "github_app_organization",
+                        "workspace_release_path": True,
                     }
                 )
             return delegated
@@ -139,6 +256,6 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
     chat_module._velia_software_factory_stage8_greenfield_installed = True
     _INSTALLED = True
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s",
+        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s final_hardening=true",
         str(repository_creation.enabled()).lower(),
     )
