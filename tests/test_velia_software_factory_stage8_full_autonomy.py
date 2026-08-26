@@ -187,9 +187,23 @@ def test_stage8_connected_user_check_fails_closed_without_owned_github_installat
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "full_autonomy")
     monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_STAGE8_AUTHENTICATED_USERS_ENABLED", "true")
 
+    from services import velia_developer_github_service as github_service
     from services import velia_developer_project_service as project_service
 
-    monkeypatch.setattr(project_service, "list_installations", lambda user_id: [] if int(user_id) == 8 else [{"installation_id": 1}])
+    monkeypatch.setattr(
+        project_service,
+        "list_installations",
+        lambda user_id: [] if int(user_id) == 8 else [{"installation_id": 1, "account_login": "ExampleOrg"}],
+    )
+    monkeypatch.setattr(
+        github_service,
+        "installation_details",
+        lambda installation_id: {
+            "installation_id": int(installation_id),
+            "account_login": "ExampleOrg",
+            "contents_permission": "write",
+        },
+    )
 
     assert rollout._stage8_connected_user_allowed(8) is False
     assert rollout._stage8_connected_user_allowed(9) is True
@@ -245,12 +259,38 @@ def test_release_authorization_requires_explicit_user_deploy_or_release_intent()
 
 
 def test_release_authorization_negative_intent_always_wins():
-    assert release_runtime._explicit_release_authorized(
-        _review_ready_execution("Prepare a deployable release but do not deploy")
-    ) is False
-    assert release_runtime._explicit_release_authorized(
-        _review_ready_execution("Подготовь релиз, но без деплоя и без публикации")
-    ) is False
+    for objective in (
+        "Prepare a deployable release but do not deploy",
+        "Prepare the release candidate, but never merge or deploy",
+        "Release notes only; must not merge",
+        "Prepare release but not to merge",
+        "Подготовь релиз, но без деплоя и без публикации",
+        "Подготовь релиз, но никогда не мержи",
+        "Подготовь релиз, мержить нельзя",
+    ):
+        assert release_runtime._explicit_release_authorized(_review_ready_execution(objective)) is False
+
+
+def test_retryable_candidate_blocker_requires_fresh_evaluation():
+    retryable = {
+        "candidate_id": "candidate-old",
+        "plan_id": "",
+        "release_execution_id": "",
+        "blocker_code": "velia_factory_stage8_candidate_not_eligible",
+    }
+    approved = {**retryable, "plan_id": "plan-1"}
+    other = {**retryable, "blocker_code": "temporary_provider_error"}
+
+    assert release_runtime._candidate_requires_reevaluation(retryable) is True
+    assert release_runtime._candidate_requires_reevaluation(approved) is False
+    assert release_runtime._candidate_requires_reevaluation(other) is False
+
+
+def test_ineligible_release_user_is_rotated_instead_of_silently_skipped():
+    source = Path("services/velia_software_factory_stage8_release_runtime_patch.py").read_text(encoding="utf-8")
+    assert 'blocker_code="velia_factory_stage8_user_no_longer_eligible"' in source
+    assert "Live rollout eligibility" not in source
+    assert "retry remains possible after access is restored" in source
 
 
 def test_release_coordinator_blocks_before_candidate_without_authorization(monkeypatch):
