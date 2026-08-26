@@ -13,6 +13,8 @@ on:
       - 'services/velia_software_factory_workspace_chat_hardening_patch.py'
       - 'services/velia_software_factory_workspace_hardening_patch.py'
       - 'tests/test_velia_software_factory_stage8_full_autonomy.py'
+      - '.github/workflows/velia-software-factory-stage6-7.yml'
+      - '.github/workflows/velia-software-factory-stage7.yml'
       - '.github/workflows/velia-software-factory-stage8.yml'
   workflow_dispatch:
 
@@ -162,6 +164,8 @@ jobs:
               'services/velia_software_factory_workspace_chat_hardening_patch.py',
               'services/velia_software_factory_workspace_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+              '.github/workflows/velia-software-factory-stage7.yml',
               '.github/workflows/velia-software-factory-stage8.yml',
           }
           unexpected = changed - allowed
