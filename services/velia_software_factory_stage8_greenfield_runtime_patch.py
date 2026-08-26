@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any, Dict, Mapping
 
 from db.database import get_connection
@@ -12,6 +13,9 @@ from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
+_DURABLE_STOP_SCHEMA_READY = False
+_DURABLE_STOP_SCHEMA_LOCK = threading.Lock()
+_DURABLE_STOP_SCHEMA_ADVISORY_KEY = 8_618_270_812
 _TRIGGER_REASONS = {
     "software_factory_greenfield_manifest_ready",
     "software_factory_greenfield_repositories_missing",
@@ -39,31 +43,43 @@ def _conditional_noun_deferred_approval(objective: str) -> bool:
 
 
 def _ensure_durable_stop_schema(execution_module: Any) -> None:
-    from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
+    """Install durable-stop columns once per process and serialize migration cross-process."""
+    global _DURABLE_STOP_SCHEMA_READY
+    if _DURABLE_STOP_SCHEMA_READY:
+        return
+    with _DURABLE_STOP_SCHEMA_LOCK:
+        if _DURABLE_STOP_SCHEMA_READY:
+            return
+        from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
 
-    release_runtime.ensure_stage8_release_tables(execution_module)
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "ALTER TABLE velia_software_factory_stage8_releases "
-            "ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE"
-        )
-        cursor.execute(
-            "ALTER TABLE velia_software_factory_stage8_releases "
-            "ADD COLUMN IF NOT EXISTS retired_release_execution_id TEXT NOT NULL DEFAULT ''"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_release "
-            "ON velia_software_factory_stage8_releases(user_id,retired_release_execution_id)"
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+        release_runtime.ensure_stage8_release_tables(execution_module)
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_DURABLE_STOP_SCHEMA_ADVISORY_KEY,),
+            )
+            cursor.execute(
+                "ALTER TABLE velia_software_factory_stage8_releases "
+                "ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            cursor.execute(
+                "ALTER TABLE velia_software_factory_stage8_releases "
+                "ADD COLUMN IF NOT EXISTS retired_release_execution_id TEXT NOT NULL DEFAULT ''"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_release "
+                "ON velia_software_factory_stage8_releases(user_id,retired_release_execution_id)"
+            )
+            conn.commit()
+            _DURABLE_STOP_SCHEMA_READY = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
 
 
 def _coordinator_stop_state(
@@ -124,10 +140,14 @@ def _mark_coordinator_stop(
     user_id: int,
     release_execution_id: str,
 ) -> Dict[str, Any]:
-    """Persist workspace stop intent before waiting on the release advisory lock.
+    """Atomically persist workspace stop and propagate it to the current release.
 
-    PostgreSQL re-checks UPDATE predicates after a conflicting row update commits,
-    so a stop racing a rotation still matches the newly persisted retired release id.
+    The coordinator row is updated first. If a rotation is concurrently holding that
+    row lock, PostgreSQL re-evaluates the predicate after rotation commits and can
+    match the retired release id. Before this transaction commits, the currently
+    active replacement (if any) is marked stop_requested too. Therefore a release
+    executor that acquires its advisory lock after this durable-stop commit observes
+    stop_requested=True inside its own critical section.
     """
     _ensure_durable_stop_schema(execution_module)
     release_id = str(release_execution_id or "").strip()
@@ -144,23 +164,36 @@ def _mark_coordinator_stop(
             (int(user_id), release_id, release_id),
         )
         row = cursor.fetchone()
-        conn.commit()
         if not row:
+            conn.commit()
             return {}
         if isinstance(row, Mapping):
-            return {
-                "workspace_execution_id": str(row.get("workspace_execution_id") or ""),
-                "release_execution_id": str(row.get("release_execution_id") or ""),
-                "retired_release_execution_id": str(row.get("retired_release_execution_id") or ""),
-                "stop_requested": True,
-                "status": str(row.get("status") or ""),
-            }
+            workspace_execution_id = str(row.get("workspace_execution_id") or "")
+            active_release_id = str(row.get("release_execution_id") or "")
+            retired_release_id = str(row.get("retired_release_execution_id") or "")
+            status = str(row.get("status") or "")
+        else:
+            workspace_execution_id = str(row[0] or "")
+            active_release_id = str(row[1] or "")
+            retired_release_id = str(row[2] or "")
+            status = str(row[3] or "")
+
+        if active_release_id:
+            cursor.execute(
+                "UPDATE velia_software_factory_release_executions SET "
+                "stop_requested=TRUE,updated_at=NOW() "
+                "WHERE execution_id=%s AND user_id=%s AND ("
+                "status IN ('created','running') OR "
+                "(status IN ('blocked','failed') AND merged_count=0))",
+                (active_release_id, int(user_id)),
+            )
+        conn.commit()
         return {
-            "workspace_execution_id": str(row[0] or ""),
-            "release_execution_id": str(row[1] or ""),
-            "retired_release_execution_id": str(row[2] or ""),
+            "workspace_execution_id": workspace_execution_id,
+            "release_execution_id": active_release_id,
+            "retired_release_execution_id": retired_release_id,
             "stop_requested": True,
-            "status": str(row[3] or ""),
+            "status": status,
         }
     except Exception:
         conn.rollback()
@@ -382,6 +415,10 @@ def _install_release_atomicity_hardening(execution_module: Any) -> None:
                 str(marker.get("workspace_execution_id") or ""),
             )
             return execution_module.get_release_execution(int(user_id), release_id)
+        # This lookup is an early fast path. Concurrent correctness does not depend
+        # on it: _mark_coordinator_stop commits coordinator stop and the active
+        # release-execution stop flag atomically, and the base executor re-reads
+        # release stop_requested only after acquiring its own advisory lock.
         return original_execute_release(int(user_id), release_id)
 
     final_hardening._strict_release_authorized = strict_release_authorized
