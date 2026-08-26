@@ -5,7 +5,7 @@ on:
     branches:
       - feature/turbo-short-term-btc
     paths:
-      - 'bot.py'
+      - 'services/velia_software_factory_greenfield_repository_creation_service.py'
       - 'services/velia_software_factory_rollout_service.py'
       - 'services/velia_software_factory_stage8_full_autonomy_service.py'
       - 'services/velia_software_factory_stage8_greenfield_runtime_patch.py'
@@ -52,6 +52,7 @@ jobs:
       - name: Compile Stage 8 boundary
         run: |
           python -m py_compile \
+            services/velia_software_factory_greenfield_repository_creation_service.py \
             services/velia_software_factory_rollout_service.py \
             services/velia_software_factory_stage8_full_autonomy_service.py \
             services/velia_software_factory_stage8_greenfield_runtime_patch.py \
@@ -131,7 +132,7 @@ jobs:
           head = '${{ github.event.pull_request.head.sha }}'
           changed = set(subprocess.check_output(['git','diff','--name-only',base,head], text=True).splitlines())
           allowed = {
-              'bot.py',
+              'services/velia_software_factory_greenfield_repository_creation_service.py',
               'services/velia_software_factory_rollout_service.py',
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
@@ -144,6 +145,7 @@ jobs:
           unexpected = changed - allowed
           assert not unexpected, f'unexpected Stage 8 files: {sorted(unexpected)}'
           required = {
+              'services/velia_software_factory_greenfield_repository_creation_service.py',
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
