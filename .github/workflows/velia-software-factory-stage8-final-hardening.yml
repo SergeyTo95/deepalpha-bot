@@ -69,6 +69,7 @@ jobs:
           from contextlib import contextmanager
           from types import SimpleNamespace
 
+          from services import velia_software_factory_release_execution_service as release_exec
           from services import velia_software_factory_stage8_final_hardening_patch as hardening
           from services import velia_software_factory_stage8_greenfield_runtime_patch as atomic
           from services import velia_software_factory_stage8_release_runtime_patch as stage8_release_runtime
@@ -189,6 +190,7 @@ jobs:
                       self.rowcount = 0
                       if (
                           "FROM velia_software_factory_stage8_releases" in normalized
+                          and "plan_id" in normalized
                           and "FOR UPDATE" in normalized
                       ):
                           assert params == (9, history["active"])
@@ -244,6 +246,35 @@ jobs:
                               else None
                           )
                           events.append(f"active_lookup:{release_id}")
+                      elif normalized.startswith(
+                          "SELECT release_execution_id FROM velia_software_factory_stage8_releases"
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          self._row = (history["active"],)
+                          events.append(f"active_snapshot:{history['active']}")
+                      elif normalized.startswith("SELECT pg_advisory_xact_lock"):
+                          assert params == (release_exec._lock_key(history["active"]),)
+                          self._row = (None,)
+                          events.append(f"release_advisory_lock:{history['active']}")
+                      elif (
+                          normalized.startswith(
+                              "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,stop_requested,status"
+                          )
+                          and "FOR UPDATE" in normalized
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          self._row = (
+                              history["workspace"],
+                              history["active"],
+                              history["latest_retired"],
+                              history["stop"],
+                              history["status"],
+                          )
+                          events.append(f"coordinator_stop_row_locked:{history['active']}")
                       elif (
                           normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
                           and "stop_requested=TRUE" in normalized
@@ -252,12 +283,8 @@ jobs:
                           assert user_id == 9
                           assert workspace_id == history["workspace"]
                           history["stop"] = True
-                          self._row = (
-                              history["workspace"],
-                              history["active"],
-                              history["latest_retired"],
-                              history["status"],
-                          )
+                          self.rowcount = 1
+                          self._row = None
                           events.append("coordinator_stop_persisted")
                       elif normalized.startswith(
                           "UPDATE velia_software_factory_release_executions SET"
@@ -266,6 +293,7 @@ jobs:
                           assert user_id == 9
                           assert active_release_id == history["active"] == "release-3"
                           history["replacement_stopped"] = True
+                          self.rowcount = 1
                           self._row = None
                           events.append("active_release_stop_persisted")
                       else:
@@ -377,11 +405,14 @@ jobs:
               assert events[stop_start:] == [
                   "active_lookup:release-1",
                   "lineage_lookup:release-1",
+                  "active_snapshot:release-3",
+                  "release_advisory_lock:release-3",
+                  "coordinator_stop_row_locked:release-3",
                   "coordinator_stop_persisted",
                   "active_release_stop_persisted",
                   "transaction_committed",
               ]
-              assert "transaction_rolled_back" not in events
+              assert "transaction_rolled_back" not in events[stop_start:]
           finally:
               atomic._ensure_durable_stop_schema = original_ensure_durable_stop_schema
           PY
