@@ -191,13 +191,15 @@ def _mark_coordinator_stop(
     user_id: int,
     release_execution_id: str,
 ) -> Dict[str, Any]:
-    """Atomically stop a workspace and its current release from any lineage member.
+    """Linearize a durable workspace stop against the current release executor.
 
-    Resolution is by workspace identity, not a single retired scalar. A stop that
-    starts while rotation owns the coordinator row either resolves the still-active
-    old binding or the committed lineage entry. The UPDATE then waits on the same
-    coordinator row and, before commit, marks the current replacement execution too.
+    Lock order deliberately matches zero-merge rotation: release advisory lock first,
+    then the coordinator row. If the active release changes before the row lock is
+    acquired, the transaction rolls back and retries with the new release key. This
+    makes stop-vs-merge ordering explicit without deadlocking rotation.
     """
+    from services import velia_software_factory_release_execution_service as release_execution
+
     _ensure_durable_stop_schema(execution_module)
     release_id = str(release_execution_id or "").strip()
     if not release_id:
@@ -205,43 +207,87 @@ def _mark_coordinator_stop(
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        workspace_execution_id = _workspace_for_release(cursor, int(user_id), release_id)
-        if not workspace_execution_id:
-            conn.commit()
-            return {}
-        cursor.execute(
-            "UPDATE velia_software_factory_stage8_releases SET "
-            "stop_requested=TRUE,updated_at=NOW() "
-            "WHERE user_id=%s AND workspace_execution_id=%s "
-            "RETURNING workspace_execution_id,release_execution_id,retired_release_execution_id,status",
-            (int(user_id), workspace_execution_id),
-        )
-        row = cursor.fetchone()
-        if not row:
-            conn.commit()
-            return {}
-        workspace_execution_id = str(_row_value(row, "workspace_execution_id", 0) or "")
-        active_release_id = str(_row_value(row, "release_execution_id", 1) or "")
-        retired_release_id = str(_row_value(row, "retired_release_execution_id", 2) or "")
-        status = str(_row_value(row, "status", 3) or "")
+        for _attempt in range(8):
+            workspace_execution_id = _workspace_for_release(cursor, int(user_id), release_id)
+            if not workspace_execution_id:
+                conn.commit()
+                return {}
 
-        if active_release_id:
+            # Snapshot the active release without a row lock so we know which
+            # executor advisory key must be acquired before touching coordinator.
             cursor.execute(
-                "UPDATE velia_software_factory_release_executions SET "
-                "stop_requested=TRUE,updated_at=NOW() "
-                "WHERE execution_id=%s AND user_id=%s AND ("
-                "status IN ('created','running') OR "
-                "(status IN ('blocked','failed') AND merged_count=0))",
-                (active_release_id, int(user_id)),
+                "SELECT release_execution_id FROM velia_software_factory_stage8_releases "
+                "WHERE user_id=%s AND workspace_execution_id=%s",
+                (int(user_id), workspace_execution_id),
             )
-        conn.commit()
-        return {
-            "workspace_execution_id": workspace_execution_id,
-            "release_execution_id": active_release_id,
-            "retired_release_execution_id": retired_release_id,
-            "stop_requested": True,
-            "status": status,
-        }
+            snapshot_row = cursor.fetchone()
+            if not snapshot_row:
+                conn.commit()
+                return {}
+            snapshot_active_release_id = str(
+                _row_value(snapshot_row, "release_execution_id", 0) or ""
+            )
+            if snapshot_active_release_id:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (release_execution._lock_key(snapshot_active_release_id),),
+                )
+
+            cursor.execute(
+                "SELECT workspace_execution_id,release_execution_id,"
+                "retired_release_execution_id,stop_requested,status "
+                "FROM velia_software_factory_stage8_releases "
+                "WHERE user_id=%s AND workspace_execution_id=%s FOR UPDATE",
+                (int(user_id), workspace_execution_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return {}
+
+            actual_active_release_id = str(
+                _row_value(row, "release_execution_id", 1) or ""
+            )
+            if actual_active_release_id != snapshot_active_release_id:
+                # Rotation/progression won the race before our release lock. Drop
+                # every xact lock and re-resolve the now-current executor key.
+                conn.rollback()
+                continue
+
+            workspace_execution_id = str(
+                _row_value(row, "workspace_execution_id", 0) or ""
+            )
+            retired_release_id = str(
+                _row_value(row, "retired_release_execution_id", 2) or ""
+            )
+            status = str(_row_value(row, "status", 4) or "")
+
+            cursor.execute(
+                "UPDATE velia_software_factory_stage8_releases SET "
+                "stop_requested=TRUE,updated_at=NOW() "
+                "WHERE user_id=%s AND workspace_execution_id=%s",
+                (int(user_id), workspace_execution_id),
+            )
+            if actual_active_release_id:
+                cursor.execute(
+                    "UPDATE velia_software_factory_release_executions SET "
+                    "stop_requested=TRUE,updated_at=NOW() "
+                    "WHERE execution_id=%s AND user_id=%s AND ("
+                    "status IN ('created','running') OR "
+                    "(status IN ('blocked','failed') AND merged_count=0))",
+                    (actual_active_release_id, int(user_id)),
+                )
+            conn.commit()
+            return {
+                "workspace_execution_id": workspace_execution_id,
+                "release_execution_id": actual_active_release_id,
+                "retired_release_execution_id": retired_release_id,
+                "stop_requested": True,
+                "status": status,
+            }
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_release_stop_binding_unstable", status=409
+        )
     except Exception:
         conn.rollback()
         raise
@@ -482,9 +528,8 @@ def _install_release_atomicity_hardening(execution_module: Any) -> None:
             )
             return execution_module.get_release_execution(int(user_id), release_id)
         # This lookup is an early fast path. Concurrent correctness does not depend
-        # on it: _mark_coordinator_stop commits coordinator stop and the active
-        # release-execution stop flag atomically, and the base executor re-reads
-        # release stop_requested only after acquiring its own advisory lock.
+        # on it: _mark_coordinator_stop serializes with the base executor's exact
+        # advisory key, then commits coordinator + active execution stop together.
         return original_execute_release(int(user_id), release_id)
 
     final_hardening._strict_release_authorized = strict_release_authorized
