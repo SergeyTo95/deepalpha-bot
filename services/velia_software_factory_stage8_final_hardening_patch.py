@@ -41,7 +41,7 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,30}\b(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
-        r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+        r"\b(?:if|provided(?:\s+that)?|subject\s+to|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:my|our)\b[^.!?\n]{0,20}\b(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
@@ -52,7 +52,7 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\b(?:сначала\s+)?(?:спроси|получи|дождись)\b[^.!?\n]{0,50}\b(?:моего|моё|мое|нашего|наше)\s+(?:одобрения|подтверждения|разрешения|согласия)\b",
         r"\b(?:до|перед)\s+(?:тем\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:если|когда|после|до|перед)\b[^.!?\n]{0,80}\b(?:я|мы)\b[^.!?\n]{0,30}(?:одобр|подтверд|подтверж|разреш|соглас)\w*",
-        r"\b(?:если|при\s+условии|после)\b[^.!?\n]{0,80}(?:одобрено|подтверждено|разрешено)[^.!?\n]{0,30}\b(?:мной|нами)\b",
+        r"\b(?:если|когда|после|до|перед|при\s+условии)\b[^.!?\n]{0,80}(?:одобрено|подтверждено|разрешено)[^.!?\n]{0,30}\b(?:мной|нами)\b",
     )
 )
 
@@ -325,6 +325,33 @@ def _zero_merge_terminal_release(release: Mapping[str, Any]) -> bool:
     return True
 
 
+def _rotate_zero_merge_preflight(
+    execution_module: Any,
+    user_id: int,
+    state: Mapping[str, Any],
+    release: Mapping[str, Any],
+) -> None:
+    """Retire the old prepared plan so a new plan_id and release execution can be persisted."""
+    cancel = getattr(execution_module, "cancel_release_preflight", None)
+    if not callable(cancel):
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
+        )
+    plan_id = str(state.get("plan_id") or release.get("plan_id") or "").strip()
+    if not plan_id:
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_preflight_missing", status=409
+        )
+    rotated = cancel(int(user_id), plan_id)
+    status = str((rotated or {}).get("status") or "") if isinstance(rotated, Mapping) else ""
+    if status not in {"cancelled", "stale"}:
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_preflight_not_rotated",
+            detail=status or plan_id,
+            status=409,
+        )
+
+
 def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_id: str) -> None:
     state = release_runtime._state(execution_module, int(user_id), str(execution_id))
 
@@ -335,6 +362,7 @@ def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_i
         except Exception:
             release = {}
         if isinstance(release, Mapping) and _zero_merge_terminal_release(release):
+            _rotate_zero_merge_preflight(execution_module, int(user_id), state, release)
             release_runtime._save_state(
                 execution_module,
                 int(user_id),
