@@ -121,6 +121,25 @@ def admin_pilot_user_allowed(user_id: int) -> bool:
     return candidate > 0 and candidate in admin_pilot_user_ids()
 
 
+def _limited_admin_actor_allowed(user_id: int) -> bool:
+    """Stage 7 is bound to the configured administrator, never a shared pilot list.
+
+    Alternative Stage 6 pilot identity sources remain valid in dry-run/live modes,
+    but `limited_admin` is a distinct owner-only rollout envelope. Requiring the
+    normal admin-pilot enable flag preserves an explicit server-side activation
+    gate without allowing live_owner/chat_beta/etc. members into Stage 7.
+    """
+
+    if not admin_pilot_enabled():
+        return False
+    try:
+        candidate = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    expected = configured_admin_id()
+    return bool(expected > 0 and candidate == expected)
+
+
 def user_allowed(user_id: int) -> bool:
     """Fail closed: neither an empty allowlist nor a disabled admin pilot means everyone."""
     return explicit_user_allowed(int(user_id)) or admin_pilot_user_allowed(int(user_id))
@@ -128,7 +147,7 @@ def user_allowed(user_id: int) -> bool:
 
 def _mode_user_allowed(user_id: int) -> bool:
     if rollout_mode() == ROLLOUT_LIMITED_ADMIN:
-        return admin_pilot_user_allowed(int(user_id))
+        return _limited_admin_actor_allowed(int(user_id))
     return user_allowed(int(user_id))
 
 
@@ -155,7 +174,7 @@ def _limited_admin_status(user_id: int, *, verify_acceptance: bool) -> Dict[str,
 def live_execution_allowed(user_id: int) -> bool:
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
-        if not admin_pilot_user_allowed(int(user_id)):
+        if not _limited_admin_actor_allowed(int(user_id)):
             return False
         if not live_pilot_guard.live_pilot_guard_enabled():
             return False
@@ -177,10 +196,12 @@ def supervisor_allowed() -> bool:
     """Supervisor can exist only behind a live or Stage 7 limited-admin write boundary."""
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
-        if not _admin_pilot_configured() or not live_pilot_guard.live_pilot_guard_enabled():
+        actor = configured_admin_id()
+        if actor <= 0 or not _limited_admin_actor_allowed(actor):
             return False
-        actor_ids = admin_pilot_user_ids()
-        return len(actor_ids) == 1 and _limited_admin_execution_allowed(next(iter(actor_ids)))
+        if not live_pilot_guard.live_pilot_guard_enabled():
+            return False
+        return _limited_admin_execution_allowed(actor)
     if mode != ROLLOUT_LIVE:
         return False
     # Preserve the existing explicit allowlist rollout path. Admin-pilot-only
@@ -191,6 +212,11 @@ def supervisor_allowed() -> bool:
 
 
 def eligibility_source(user_id: int) -> str:
+    # Stage 7 must preserve the admin-pilot classification even when the same
+    # administrator also happens to be present in the general Factory allowlist;
+    # the one-shot control/preflight deliberately require this source label.
+    if rollout_mode() == ROLLOUT_LIMITED_ADMIN:
+        return "admin_pilot" if _limited_admin_actor_allowed(int(user_id)) else "none"
     if explicit_user_allowed(int(user_id)):
         return "explicit_allowlist"
     if admin_pilot_user_allowed(int(user_id)):
