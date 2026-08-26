@@ -7,6 +7,7 @@ import threading
 from typing import Any, Dict, Mapping
 
 from db.database import get_connection
+from services import velia_developer_project_service as project_service
 from services.velia_admin_security_service import configured_admin_id
 from services.velia_software_factory_core_service import SoftwareFactoryError
 
@@ -318,9 +319,97 @@ def _assert_repository_scope(user_id: int, candidate: Mapping[str, Any]) -> None
             )
 
 
+def _assert_release_profiles_ready(execution_module: Any, user_id: int, candidate: Mapping[str, Any]) -> None:
+    """Fail closed before approval/merge when post-merge evidence cannot complete.
+
+    A new repository may be created automatically, but VELIA must not invent hosting
+    authority or acceptance criteria. Each release repository therefore needs an
+    enabled deployment profile and an independent enabled acceptance profile first.
+    """
+    get_deployment = getattr(execution_module, "get_deployment_profile", None)
+    get_acceptance = getattr(execution_module, "get_acceptance_profile", None)
+    if not callable(get_deployment) or not callable(get_acceptance):
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_release_profiles_runtime_missing", status=503
+        )
+
+    repositories = [item for item in candidate.get("repositories") or [] if isinstance(item, Mapping)]
+    if not repositories:
+        raise SoftwareFactoryError("velia_factory_stage8_release_profiles_required", status=409)
+
+    for item in repositories:
+        project_id = str(item.get("project_id") or "").strip()
+        if not project_id:
+            raise SoftwareFactoryError("velia_factory_stage8_release_profiles_required", status=409)
+        project = project_service.get_project(int(user_id), project_id)
+        branch = str(project.get("selected_branch") or "").strip()
+        repository = str(project.get("repository_full_name") or item.get("repository_full_name") or "").strip()
+        if not branch or not repository:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_release_profiles_required",
+                detail=repository or project_id,
+                status=409,
+            )
+        try:
+            deployment_profile = get_deployment(int(user_id), project_id, branch)
+            acceptance_profile = get_acceptance(int(user_id), project_id, branch)
+        except Exception as exc:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_release_profiles_required",
+                detail=repository,
+                status=409,
+            ) from exc
+
+        expected_repo = repository.casefold()
+        for kind, profile in (
+            ("deployment", deployment_profile),
+            ("acceptance", acceptance_profile),
+        ):
+            if not isinstance(profile, Mapping):
+                raise SoftwareFactoryError(
+                    "velia_factory_stage8_release_profiles_required",
+                    detail=f"{repository}:{kind}",
+                    status=409,
+                )
+            profile_repo = str(profile.get("repository_full_name") or "").strip().casefold()
+            profile_branch = str(profile.get("branch") or "").strip()
+            contexts = [str(value).strip() for value in profile.get("expected_contexts") or [] if str(value).strip()]
+            if (
+                not bool(profile.get("enabled"))
+                or profile_repo != expected_repo
+                or profile_branch != branch
+                or not contexts
+            ):
+                raise SoftwareFactoryError(
+                    "velia_factory_stage8_release_profiles_required",
+                    detail=f"{repository}:{kind}",
+                    status=409,
+                )
+
+        deployment_contexts = {
+            str(value).strip().casefold()
+            for value in deployment_profile.get("expected_contexts") or []
+            if str(value).strip()
+        }
+        acceptance_contexts = {
+            str(value).strip().casefold()
+            for value in acceptance_profile.get("expected_contexts") or []
+            if str(value).strip()
+        }
+        if deployment_contexts & acceptance_contexts:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_release_profiles_required",
+                detail=f"{repository}:context_overlap",
+                status=409,
+            )
+
+
 def _candidate_requires_reevaluation(state: Mapping[str, Any]) -> bool:
     return bool(
-        str(state.get("blocker_code") or "") == "velia_factory_stage8_candidate_not_eligible"
+        str(state.get("blocker_code") or "") in {
+            "velia_factory_stage8_candidate_not_eligible",
+            "velia_factory_stage8_release_profiles_required",
+        }
         and not str(state.get("plan_id") or "")
         and not str(state.get("release_execution_id") or "")
     )
@@ -392,6 +481,18 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
                 str(execution_id),
                 candidate_id=str(candidate.get("candidate_id") or ""),
                 status=_TERMINAL_RELEASE_STATUS,
+                blocker_code=str(exc.code),
+                blocker_detail=str(getattr(exc, "detail", "") or "")[:1000],
+            )
+        try:
+            _assert_release_profiles_ready(execution_module, int(user_id), candidate)
+        except SoftwareFactoryError as exc:
+            return _save_state(
+                execution_module,
+                int(user_id),
+                str(execution_id),
+                candidate_id=str(candidate.get("candidate_id") or ""),
+                status="blocked",
                 blocker_code=str(exc.code),
                 blocker_detail=str(getattr(exc, "detail", "") or "")[:1000],
             )
