@@ -145,17 +145,38 @@ def _limited_admin_actor_allowed(user_id: int) -> bool:
     return bool(expected > 0 and candidate == expected)
 
 
+def _stage8_connected_user_allowed(user_id: int) -> bool:
+    """Ordinary Stage 8 users must own an active Developer GitHub installation.
+
+    This is intentionally stricter than "any authenticated app user": it binds
+    autonomous write/greenfield authority to a GitHub App installation that is
+    persisted against the same user_id. Database or provider failures fail closed.
+    """
+    try:
+        candidate = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    if candidate <= 0 or not stage8_authenticated_users_enabled():
+        return False
+    try:
+        from services import velia_developer_project_service as project_service
+
+        return bool(project_service.list_installations(candidate))
+    except Exception:
+        return False
+
+
 def user_allowed(user_id: int) -> bool:
-    """Fail closed outside Stage 8; Stage 8 may explicitly admit authenticated app users."""
+    """Fail closed outside Stage 8; Stage 8 may admit connected Developer users."""
     try:
         candidate = int(user_id)
     except (TypeError, ValueError):
         return False
     if candidate <= 0:
         return False
-    if stage8_authenticated_users_enabled():
+    if explicit_user_allowed(candidate) or admin_pilot_user_allowed(candidate):
         return True
-    return explicit_user_allowed(candidate) or admin_pilot_user_allowed(candidate)
+    return _stage8_connected_user_allowed(candidate)
 
 
 def _mode_user_allowed(user_id: int) -> bool:
@@ -198,6 +219,16 @@ def _full_autonomy_status(user_id: int) -> Dict[str, object]:
     return dict(stage8.public_status(int(user_id), user_eligible=user_allowed(int(user_id))))
 
 
+def _full_autonomy_runtime_ready() -> bool:
+    """System-level readiness without inventing an ordinary user identity."""
+    from services import velia_software_factory_stage8_full_autonomy_service as stage8
+
+    probe_actor = configured_admin_id()
+    if probe_actor <= 0:
+        probe_actor = 1
+    return bool(stage8.execution_allowed(probe_actor, user_eligible=True))
+
+
 def live_execution_allowed(user_id: int) -> bool:
     mode = rollout_mode()
     if mode == ROLLOUT_LIMITED_ADMIN:
@@ -234,10 +265,7 @@ def supervisor_allowed() -> bool:
         return _limited_admin_execution_allowed(actor)
     if mode == ROLLOUT_FULL_AUTONOMY:
         if stage8_authenticated_users_enabled():
-            probe_actor = configured_admin_id()
-            if probe_actor <= 0:
-                probe_actor = 1
-            return _full_autonomy_execution_allowed(probe_actor)
+            return _full_autonomy_runtime_ready()
         actors = set(allowed_user_ids())
         if admin_pilot_enabled():
             actors.update(admin_pilot_user_ids())
@@ -252,12 +280,12 @@ def supervisor_allowed() -> bool:
 def eligibility_source(user_id: int) -> str:
     if rollout_mode() == ROLLOUT_LIMITED_ADMIN:
         return "admin_pilot" if _limited_admin_actor_allowed(int(user_id)) else "none"
-    if stage8_authenticated_users_enabled() and int(user_id) > 0:
-        return "authenticated_user"
     if explicit_user_allowed(int(user_id)):
         return "explicit_allowlist"
     if admin_pilot_user_allowed(int(user_id)):
         return "admin_pilot"
+    if _stage8_connected_user_allowed(int(user_id)):
+        return "authenticated_developer"
     return "none"
 
 
@@ -319,6 +347,7 @@ def public_status(user_id: int) -> dict:
         "eligible": eligible,
         "eligibility_source": eligibility_source(int(user_id)),
         "authenticated_user_rollout": bool(stage8_authenticated_users_enabled()),
+        "authenticated_user_requires_owned_github_installation": True,
         "admin_pilot_enabled": admin_pilot_enabled(),
         "admin_pilot_id_source": admin_pilot_id_source(),
         "admin_pilot_actor_count": len(admin_pilot_user_ids()) if admin_pilot_enabled() else 0,
