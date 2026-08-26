@@ -162,10 +162,13 @@ jobs:
               'services/velia_software_factory_stage8_full_autonomy_service.py',
               'services/velia_software_factory_stage8_greenfield_runtime_patch.py',
               'services/velia_software_factory_stage8_release_runtime_patch.py',
+              'services/velia_software_factory_stage8_final_hardening_patch.py',
               'services/velia_software_factory_workspace_chat_hardening_patch.py',
               'services/velia_software_factory_workspace_hardening_patch.py',
               'tests/test_velia_software_factory_stage8_full_autonomy.py',
+              'tests/test_velia_software_factory_stage8_final_hardening.py',
               '.github/workflows/velia-software-factory-stage8.yml',
+              '.github/workflows/velia-software-factory-stage8-final-hardening.yml',
               '.github/workflows/velia-software-factory-stage6-7.yml',
               '.github/workflows/velia-software-factory-stage7.yml',
           }
