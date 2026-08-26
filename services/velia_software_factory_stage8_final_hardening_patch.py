@@ -40,6 +40,9 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\b(?:if|provided(?:\s+that)?)\s+(?:i|we)\s+(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
         r"\b(?:if|provided(?:\s+that)?|subject\s+to)\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\bsubject\s+to\s+(?:approval|confirmation|authorization|permission)\s+(?:from|by)\s+(?:me|us)\b",
+        r"\b(?:if|provided(?:\s+that)?|after|once|when|until|before)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,30}\b(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
+        r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:approved|confirmed|authorized|permitted)\b[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+        r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}\b(?:my|our)\b[^.!?\n]{0,20}\b(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
         r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
         r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
         r"\bкогда\s+(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
@@ -48,6 +51,8 @@ _DEFERRED_USER_APPROVAL_PATTERNS = tuple(
         r"\bпри\s+(?:моем|моём|нашем)\s+(?:одобрении|подтверждении|разрешении|согласии)\b",
         r"\b(?:сначала\s+)?(?:спроси|получи|дождись)\b[^.!?\n]{0,50}\b(?:моего|моё|мое|нашего|наше)\s+(?:одобрения|подтверждения|разрешения|согласия)\b",
         r"\b(?:до|перед)\s+(?:тем\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+        r"\b(?:если|когда|после|до|перед)\b[^.!?\n]{0,80}\b(?:я|мы)\b[^.!?\n]{0,30}\b(?:одобр\w*|подтверд\w*|разреш\w*|соглас\w*)\b",
+        r"\b(?:если|при\s+условии|после)\b[^.!?\n]{0,80}\b(?:одобрено|подтверждено|разрешено)\b[^.!?\n]{0,30}\b(?:мной|нами)\b",
     )
 )
 
@@ -56,6 +61,7 @@ _PREMERGE_RETRY_BLOCKERS = {
     "velia_factory_release_preflight_stale",
     "velia_factory_release_preflight_not_prepared",
 }
+_ZERO_MERGE_RETRYABLE_STATUSES = {"blocked", "failed"}
 
 
 def _json(value: Any) -> str:
@@ -79,9 +85,7 @@ def _acceptance_profile_fingerprint(
         or not bool(deployment_profile.get("enabled"))
     ):
         return ""
-    deployment_fingerprint = str(
-        deployment_profile.get("profile_fingerprint") or ""
-    ).strip()
+    deployment_fingerprint = str(deployment_profile.get("profile_fingerprint") or "").strip()
     if not deployment_fingerprint:
         return ""
     contexts = [
@@ -304,10 +308,51 @@ def _observation_profiles_current(
     return True
 
 
+def _zero_merge_terminal_release(release: Mapping[str, Any]) -> bool:
+    """Only reset terminal release attempts when GitHub merge side effects are provably absent."""
+    if str(release.get("status") or "") not in _ZERO_MERGE_RETRYABLE_STATUSES:
+        return False
+    if int(release.get("merged_count") or 0) != 0:
+        return False
+    items = [item for item in release.get("items") or [] if isinstance(item, Mapping)]
+    if not items:
+        return False
+    for item in items:
+        if str(item.get("status") or "") == "merged":
+            return False
+        if str(item.get("merge_commit_sha") or "").strip():
+            return False
+    return True
+
+
 def _refresh_retryable_evidence(execution_module: Any, user_id: int, execution_id: str) -> None:
     state = release_runtime._state(execution_module, int(user_id), str(execution_id))
 
-    if not str(state.get("release_execution_id") or ""):
+    release_execution_id = str(state.get("release_execution_id") or "")
+    if release_execution_id:
+        try:
+            release = execution_module.get_release_execution(int(user_id), release_execution_id)
+        except Exception:
+            release = {}
+        if isinstance(release, Mapping) and _zero_merge_terminal_release(release):
+            release_runtime._save_state(
+                execution_module,
+                int(user_id),
+                str(execution_id),
+                candidate_id="",
+                plan_id="",
+                release_execution_id="",
+                verification_id="",
+                observation_id="",
+                certificate_id="",
+                passport_id="",
+                status="retrying_candidate",
+                blocker_code="",
+                blocker_detail="",
+            )
+            return
+
+    if not release_execution_id:
         blocker_code = str(state.get("blocker_code") or "")
         plan_id = str(state.get("plan_id") or "")
         stale_plan = False
