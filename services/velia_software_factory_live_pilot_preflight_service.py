@@ -134,7 +134,7 @@ def preflight_candidate(
         _append_once(runtime_blockers, "guard_disabled")
     if eligibility_source != "admin_pilot":
         _append_once(runtime_blockers, "admin_eligibility_required")
-    if rollout_mode != "live":
+    if rollout_mode not in {"live", "limited_admin"}:
         _append_once(runtime_blockers, "live_rollout_required")
     if not build_review_ready:
         _append_once(runtime_blockers, "build_review_not_ready")

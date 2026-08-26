@@ -14,12 +14,17 @@ on:
       - 'services/velia_software_factory_reviewer_remediation_service.py'
       - 'services/velia_software_factory_live_pilot_control_service.py'
       - 'services/velia_software_factory_live_pilot_admin_routes.py'
+      - 'services/velia_software_factory_live_pilot_preflight_service.py'
+      - 'services/velia_software_factory_rollout_service.py'
+      - 'services/velia_software_factory_stage7_limited_admin_rollout_service.py'
       - 'tests/test_velia_software_factory_stage6_7_admin_acceptance.py'
       - 'tests/test_velia_software_factory_stage6_7_ci_context_filter.py'
       - 'tests/test_velia_agent_coding_autopilot_ci_logs.py'
       - 'tests/test_velia_agent_coding_autopilot_ci_service.py'
       - 'tests/test_velia_software_factory_stage6_6_reviewer_remediation.py'
+      - 'tests/test_velia_software_factory_stage7_limited_admin_rollout.py'
       - '.github/workflows/velia-software-factory-stage6-7.yml'
+      - '.github/workflows/velia-software-factory-stage7.yml'
   workflow_dispatch:
 
 permissions:
@@ -192,7 +197,7 @@ jobs:
           assert 'acceptance_runtime.install()' in new
           PY
 
-      - name: Verify Stage 6.7-owned diff surface
+      - name: Verify Stage 6.7 or explicit Stage 7 extension diff surface
         if: github.event_name == 'pull_request'
         run: |
           python - <<'PY'
@@ -210,12 +215,18 @@ jobs:
               'services/velia_software_factory_reviewer_remediation_service.py',
               'services/velia_software_factory_live_pilot_control_service.py',
               'services/velia_software_factory_live_pilot_admin_routes.py',
+              'services/velia_software_factory_live_pilot_preflight_service.py',
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
               'tests/test_velia_software_factory_stage6_7_ci_context_filter.py',
               'tests/test_velia_agent_coding_autopilot_ci_logs.py',
               'tests/test_velia_agent_coding_autopilot_ci_service.py',
               'tests/test_velia_software_factory_stage6_6_reviewer_remediation.py',
+              'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
+              'docs/VELIA_SOFTWARE_FACTORY_STAGE7_LIMITED_ADMIN_ROLLOUT.md',
               '.github/workflows/velia-software-factory-stage6-7.yml',
+              '.github/workflows/velia-software-factory-stage7.yml',
               'tests/test_velia_software_factory_stage6_3b_control_center.py',
               'tests/test_velia_software_factory_stage6_4b_preflight_control_center.py',
               '.github/workflows/velia-software-factory-stage6-3a.yml',
@@ -225,7 +236,7 @@ jobs:
               '.github/workflows/velia-software-factory-stage6-6.yml',
           }
           unexpected = changed - allowed
-          assert not unexpected, f'unexpected Stage 6.7 files: {sorted(unexpected)}'
+          assert not unexpected, f'unexpected Stage 6.7/7 files: {sorted(unexpected)}'
           acceptance_core = {
               'services/velia_software_factory_admin_acceptance_service.py',
               'tests/test_velia_software_factory_stage6_7_admin_acceptance.py',
@@ -246,10 +257,20 @@ jobs:
               'tests/test_velia_software_factory_stage6_6_reviewer_remediation.py',
               '.github/workflows/velia-software-factory-stage6-7.yml',
           }
+          stage7_extension = {
+              'services/velia_software_factory_stage7_limited_admin_rollout_service.py',
+              'services/velia_software_factory_admin_acceptance_service.py',
+              'services/velia_software_factory_rollout_service.py',
+              'services/velia_software_factory_live_pilot_preflight_service.py',
+              'tests/test_velia_software_factory_stage7_limited_admin_rollout.py',
+              '.github/workflows/velia-software-factory-stage6-7.yml',
+              '.github/workflows/velia-software-factory-stage7.yml',
+          }
           assert (
               acceptance_core <= changed
               or context_filter_hardening <= changed
               or context_filter_boundary_hardening <= changed
+              or stage7_extension <= changed
           ), sorted(changed)
           PY
 
