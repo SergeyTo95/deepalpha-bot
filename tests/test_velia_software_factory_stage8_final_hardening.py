@@ -53,10 +53,15 @@ def test_release_authorization_requires_explicit_delivery_action():
         "Deploy this app if I approve the merge",
         "Ship it provided that I confirm",
         "Release this project subject to my approval",
+        "Deploy this app if I later approve the merge",
+        "Deploy this app if approved by me",
+        "Ship it provided that I eventually confirm",
         "Задеплой только после моего подтверждения",
         "Выкати, когда я дам разрешение",
         "Задеплой, если я подтвержу",
         "Выкати при условии моего одобрения",
+        "Задеплой, если я позже подтвержу",
+        "Выкати, если будет одобрено мной",
     )
     for objective in allowed:
         assert hardening._strict_release_authorized(_execution(objective)) is True
@@ -228,6 +233,88 @@ def test_retryable_stale_preflight_is_recreated_from_fresh_candidate(monkeypatch
     assert saved[0]["status"] == "retrying_candidate"
 
 
+def test_zero_merge_terminal_release_is_rebuilt_from_fresh_premerge_evidence(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "candidate_id": "candidate-old",
+            "plan_id": "plan-old",
+            "release_execution_id": "release-old",
+            "verification_id": "verify-old",
+            "observation_id": "observe-old",
+            "certificate_id": "certificate-old",
+            "passport_id": "passport-old",
+            "blocker_code": "github_provider_failure",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    execution_module = SimpleNamespace(
+        get_release_execution=lambda user_id, release_id: {
+            "execution_id": release_id,
+            "status": "blocked",
+            "merged_count": 0,
+            "items": [
+                {
+                    "status": "failed",
+                    "merge_commit_sha": "",
+                    "error_code": "github_provider_failure",
+                }
+            ],
+        }
+    )
+    hardening._refresh_retryable_evidence(execution_module, 9, "e-zero-merge")
+    assert len(saved) == 1
+    assert saved[0]["candidate_id"] == ""
+    assert saved[0]["plan_id"] == ""
+    assert saved[0]["release_execution_id"] == ""
+    assert saved[0]["verification_id"] == ""
+    assert saved[0]["observation_id"] == ""
+    assert saved[0]["certificate_id"] == ""
+    assert saved[0]["passport_id"] == ""
+    assert saved[0]["status"] == "retrying_candidate"
+
+
+def test_terminal_release_with_any_merge_evidence_is_never_reset(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "release_execution_id": "release-partial",
+            "verification_id": "",
+            "observation_id": "",
+            "certificate_id": "",
+            "passport_id": "",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    execution_module = SimpleNamespace(
+        get_release_execution=lambda user_id, release_id: {
+            "execution_id": release_id,
+            "status": "blocked",
+            "merged_count": 1,
+            "items": [
+                {
+                    "status": "merged",
+                    "merge_commit_sha": "merge-sha-1",
+                }
+            ],
+        }
+    )
+    hardening._refresh_retryable_evidence(execution_module, 9, "e-partial")
+    assert saved == []
+
+
 def test_retryable_failed_verification_is_cleared_for_fresh_snapshot(monkeypatch):
     saved = []
     monkeypatch.setattr(
@@ -278,6 +365,12 @@ def test_successful_observation_is_reobserved_when_deployment_profile_changes(mo
         lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
     )
     execution_module = SimpleNamespace(
+        get_release_execution=lambda user_id, release_id: {
+            "execution_id": release_id,
+            "status": "completed",
+            "merged_count": 1,
+            "items": [{"status": "merged", "merge_commit_sha": "merge-sha"}],
+        },
         get_release_verification=lambda user_id, verification_id: {
             "verification_status": "verified"
         },
