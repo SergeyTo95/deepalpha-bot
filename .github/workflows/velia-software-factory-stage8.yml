@@ -89,7 +89,65 @@ jobs:
           assert '"user_id"' not in status
           assert 'def _stage8_connected_user_allowed(' in rollout
           assert 'project_service.list_installations(candidate)' in rollout
-          assert 'authenticated_user_requires_owned_github_installation' in rollout
+          assert 'github_service.installation_details(installation_id)' in rollout
+          assert 'contents_permission' in rollout
+          assert 'authenticated_user_installation_revalidated_live' in rollout
+          PY
+
+      - name: Prove negative merge intent always wins
+        run: |
+          python - <<'PY'
+          from services import velia_software_factory_stage8_release_runtime_patch as release
+
+          def execution(objective):
+              return {'plan': {'objective': objective}}
+
+          assert release._explicit_release_authorized(execution('Build and deploy to production')) is True
+          assert release._explicit_release_authorized(execution('Prepare the release, but do not merge')) is False
+          assert release._explicit_release_authorized(execution("Prepare release but don't merge it")) is False
+          assert release._explicit_release_authorized(execution('Подготовь релиз, но не мержи')) is False
+          assert release._explicit_release_authorized(execution('Подготовь релиз без мержа')) is False
+          PY
+
+      - name: Prove ordinary users require live write-capable GitHub installation
+        run: |
+          python - <<'PY'
+          import os
+          from services import velia_developer_github_service as github_service
+          from services import velia_developer_project_service as project_service
+          from services import velia_software_factory_rollout_service as rollout
+
+          os.environ['VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE'] = 'full_autonomy'
+          os.environ['VELIA_SOFTWARE_FACTORY_STAGE8_AUTHENTICATED_USERS_ENABLED'] = 'true'
+          project_service.list_installations = lambda user_id: [
+              {'installation_id': 123, 'account_login': 'ExampleOrg'}
+          ]
+
+          github_service.installation_details = lambda installation_id: {
+              'installation_id': installation_id,
+              'account_login': 'ExampleOrg',
+              'contents_permission': 'write',
+          }
+          assert rollout._stage8_connected_user_allowed(7) is True
+
+          github_service.installation_details = lambda installation_id: {
+              'installation_id': installation_id,
+              'account_login': 'ExampleOrg',
+              'contents_permission': 'read',
+          }
+          assert rollout._stage8_connected_user_allowed(7) is False
+
+          github_service.installation_details = lambda installation_id: {
+              'installation_id': installation_id,
+              'account_login': 'OtherOrg',
+              'contents_permission': 'write',
+          }
+          assert rollout._stage8_connected_user_allowed(7) is False
+
+          def revoked(_installation_id):
+              raise RuntimeError('revoked')
+          github_service.installation_details = revoked
+          assert rollout._stage8_connected_user_allowed(7) is False
           PY
 
       - name: Prove release queue fairness and terminal blockers
