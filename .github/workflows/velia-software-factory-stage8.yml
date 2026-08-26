@@ -92,6 +92,51 @@ jobs:
           assert 'authenticated_user_requires_owned_github_installation' in rollout
           PY
 
+      - name: Prove release queue fairness and terminal blockers
+        run: |
+          python - <<'PY'
+          from services import velia_software_factory_stage8_release_runtime_patch as release
+
+          captured = {}
+
+          class Cursor:
+              def execute(self, query, params):
+                  captured['query'] = ' '.join(str(query).split())
+                  captured['params'] = params
+              def fetchall(self):
+                  return [(7, 'exec-new')]
+              def close(self):
+                  pass
+
+          class Connection:
+              def cursor(self):
+                  return Cursor()
+              def close(self):
+                  pass
+
+          old_ensure = release.ensure_stage8_release_tables
+          old_get_connection = release.get_connection
+          try:
+              release.ensure_stage8_release_tables = lambda execution_module: None
+              release.get_connection = lambda: Connection()
+              assert release._release_candidates(object(), 5) == [(7, 'exec-new')]
+          finally:
+              release.ensure_stage8_release_tables = old_ensure
+              release.get_connection = old_get_connection
+
+          query = captured['query']
+          assert "NOT IN ('complete','terminal_blocked')" in query
+          assert 'velia_factory_stage8_release_authorization_required' in query
+          assert 'ORDER BY COALESCE(s.updated_at,e.updated_at) ASC' in query
+          assert captured['params'] == (5,)
+
+          source = open('services/velia_software_factory_stage8_release_runtime_patch.py', encoding='utf-8').read()
+          assert 'status="terminal_blocked"' in source
+          assert 'velia_factory_stage8_protected_repository_forbidden' in source
+          assert 'status="blocked"' in source
+          assert 'velia_factory_stage8_candidate_not_eligible' in source
+          PY
+
       - name: Prove Stage 8 greenfield runtime is actually installed
         run: |
           python - <<'PY'
