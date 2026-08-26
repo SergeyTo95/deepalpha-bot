@@ -14,6 +14,7 @@ _INSTALLED = False
 _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_ADVISORY_KEY = 8_618_270_811
+_TERMINAL_RELEASE_STATUS = "terminal_blocked"
 
 _RELEASE_DENY_HINTS = (
     "do not deploy",
@@ -225,6 +226,12 @@ def _save_state(execution_module: Any, user_id: int, execution_id: str, **fields
 
 
 def _release_candidates(execution_module: Any, limit: int) -> list[tuple[int, str]]:
+    """Select fairly without letting old blocked releases monopolize a bounded tick.
+
+    Truly immutable blockers are terminal and never re-enter the queue. Other
+    blocked/retryable states remain eligible, but every attempt refreshes
+    s.updated_at, moving that item behind untouched/newer work for the next tick.
+    """
     ensure_stage8_release_tables(execution_module)
     conn = get_connection()
     cursor = conn.cursor()
@@ -236,12 +243,9 @@ def _release_candidates(execution_module: Any, limit: int) -> list[tuple[int, st
             LEFT JOIN velia_software_factory_stage8_releases s
               ON s.user_id=e.user_id AND s.workspace_execution_id=e.execution_id
             WHERE e.status='review_ready'
-              AND COALESCE(s.status,'ready') <> 'complete'
-              AND NOT (
-                  COALESCE(s.status,'')='blocked'
-                  AND COALESCE(s.blocker_code,'')='velia_factory_stage8_release_authorization_required'
-              )
-            ORDER BY e.updated_at ASC LIMIT %s
+              AND COALESCE(s.status,'ready') NOT IN ('complete','terminal_blocked')
+            ORDER BY COALESCE(s.updated_at,e.updated_at) ASC, e.updated_at ASC, e.execution_id ASC
+            LIMIT %s
             """,
             (min(100, max(1, int(limit))),),
         )
@@ -295,7 +299,7 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
             execution_module,
             int(user_id),
             str(execution_id),
-            status="blocked",
+            status=_TERMINAL_RELEASE_STATUS,
             blocker_code="velia_factory_stage8_release_authorization_required",
             blocker_detail="Explicit user deploy/release intent is absent from the immutable workspace objective.",
         )
@@ -327,7 +331,20 @@ def _progress_release(execution_module: Any, user_id: int, execution_id: str) ->
                 status="blocked",
                 blocker_code="velia_factory_stage8_candidate_not_eligible",
             )
-        _assert_repository_scope(int(user_id), candidate)
+        try:
+            _assert_repository_scope(int(user_id), candidate)
+        except SoftwareFactoryError as exc:
+            if str(getattr(exc, "code", "")) != "velia_factory_stage8_protected_repository_forbidden":
+                raise
+            return _save_state(
+                execution_module,
+                int(user_id),
+                str(execution_id),
+                candidate_id=str(candidate.get("candidate_id") or ""),
+                status=_TERMINAL_RELEASE_STATUS,
+                blocker_code=str(exc.code),
+                blocker_detail=str(getattr(exc, "detail", "") or "")[:1000],
+            )
         candidate_id = str(candidate.get("candidate_id") or "")
         state = _save_state(
             execution_module,
