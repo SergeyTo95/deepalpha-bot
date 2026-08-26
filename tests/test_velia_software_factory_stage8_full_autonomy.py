@@ -251,6 +251,98 @@ def test_release_coordinator_blocks_before_candidate_without_authorization(monke
     assert result["blocker_code"] == "velia_factory_stage8_release_authorization_required"
 
 
+def test_release_coordinator_resumes_after_merge_without_reapproval(monkeypatch):
+    persisted = {
+        "candidate_id": "candidate-old",
+        "plan_id": "plan-old",
+        "release_execution_id": "release-1",
+        "verification_id": "",
+        "observation_id": "",
+        "certificate_id": "",
+        "passport_id": "",
+        "status": "merging",
+        "blocker_code": "",
+        "blocker_detail": "",
+    }
+
+    def fake_state(execution_module, user_id, execution_id):
+        return dict(persisted)
+
+    def fake_save(execution_module, user_id, execution_id, **fields):
+        persisted.update({key: str(value or "") for key, value in fields.items()})
+        return dict(persisted)
+
+    class FakeExecutionModule:
+        @staticmethod
+        def get_execution(user_id, execution_id):
+            return _review_ready_execution("Build it and deploy to production")
+
+        @staticmethod
+        def get_release_execution(user_id, release_execution_id):
+            assert release_execution_id == "release-1"
+            return {"execution_id": "release-1", "status": "completed"}
+
+        @staticmethod
+        def evaluate_delivery_candidate(user_id, execution_id):
+            raise AssertionError("candidate must not be re-evaluated after release execution exists")
+
+        @staticmethod
+        def record_delivery_decision(*args, **kwargs):
+            raise AssertionError("approval must not be recorded twice")
+
+        @staticmethod
+        def prepare_release_preflight(*args, **kwargs):
+            raise AssertionError("preflight must not be recreated after release execution exists")
+
+        @staticmethod
+        def validate_release_preflight(*args, **kwargs):
+            raise AssertionError("preflight must not be revalidated after merge")
+
+        @staticmethod
+        def create_release_execution(*args, **kwargs):
+            raise AssertionError("release execution must not be recreated")
+
+        @staticmethod
+        def execute_release(*args, **kwargs):
+            raise AssertionError("completed release must not merge twice")
+
+        @staticmethod
+        def verify_release_execution(user_id, release_execution_id):
+            assert release_execution_id == "release-1"
+            return {"verification_id": "verification-1", "verification_status": "verified"}
+
+        @staticmethod
+        def observe_release_deployment(user_id, verification_id):
+            assert verification_id == "verification-1"
+            return {"observation_id": "observation-1", "status": "success", "deployment_complete": True}
+
+        @staticmethod
+        def evaluate_release_completion(user_id, verification_id, observation_id):
+            assert verification_id == "verification-1"
+            assert observation_id == "observation-1"
+            return {"certificate_id": "certificate-1", "status": "complete", "release_complete": True}
+
+        @staticmethod
+        def create_release_passport(user_id, certificate_id):
+            assert certificate_id == "certificate-1"
+            return {"passport_id": "passport-1"}
+
+    monkeypatch.setenv("VELIA_SOFTWARE_FACTORY_ROLLOUT_MODE", "full_autonomy")
+    monkeypatch.setattr(rollout, "user_allowed", lambda user_id: True)
+    monkeypatch.setattr(stage8, "execution_allowed", lambda user_id, user_eligible: True)
+    monkeypatch.setattr(release_runtime, "_state", fake_state)
+    monkeypatch.setattr(release_runtime, "_save_state", fake_save)
+
+    result = release_runtime._progress_release(FakeExecutionModule(), 7, "exec-1")
+
+    assert result["status"] == "complete"
+    assert result["release_execution_id"] == "release-1"
+    assert result["verification_id"] == "verification-1"
+    assert result["observation_id"] == "observation-1"
+    assert result["certificate_id"] == "certificate-1"
+    assert result["passport_id"] == "passport-1"
+
+
 def test_non_admin_cannot_release_protected_core_repository(monkeypatch):
     monkeypatch.setattr(release_runtime, "configured_admin_id", lambda: 42)
 
