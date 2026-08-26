@@ -97,8 +97,6 @@ jobs:
               }
           ) is False
 
-          # Prove the durable-stop + full-lineage migration is once-per-process.
-          # Exact-head Railway preview separately proves the real PostgreSQL path.
           migration_events = []
 
           class MigrationCursor:
@@ -152,8 +150,6 @@ jobs:
               stage8_release_runtime.ensure_stage8_release_tables = original_release_ensure
               atomic._DURABLE_STOP_SCHEMA_READY = original_schema_ready
 
-          # Exercise wrapper installation without a live PostgreSQL connection.
-          # Production schema migration remains covered by the real Railway preview.
           original_ensure_durable_stop_schema = atomic._ensure_durable_stop_schema
           atomic._ensure_durable_stop_schema = lambda execution_module: None
           try:
@@ -172,10 +168,6 @@ jobs:
                   execution("Deploy this app provided that authorization has been granted by us")
               ) is False
 
-              # Full retired lineage regression: rotate two zero-merge executions,
-              # then issue a delayed stop against the FIRST retired execution after
-              # a third replacement exists. Both retired IDs must remain resolvable,
-              # and the current replacement must be stopped before commit.
               history = {
                   "workspace": "workspace-1",
                   "active": "",
@@ -246,10 +238,11 @@ jobs:
                       ):
                           user_id, release_id = params
                           assert user_id == 9
-                          if history["active"] == release_id:
-                              self._row = (history["workspace"],)
-                          else:
-                              self._row = None
+                          self._row = (
+                              (history["workspace"],)
+                              if history["active"] == release_id
+                              else None
+                          )
                           events.append(f"active_lookup:{release_id}")
                       elif (
                           normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
@@ -358,12 +351,11 @@ jobs:
                       "release-1": "workspace-1",
                       "release-2": "workspace-1",
                   }
-
-                  # Simulate the next progression creating a third active release.
                   history["active"] = "release-3"
                   history["plan"] = "plan-3"
                   history["status"] = "release_executing"
                   history["stop"] = False
+                  stop_start = len(events)
 
                   original_atomic_get_connection = atomic.get_connection
                   atomic.get_connection = lambda: HistoryConnection()
@@ -376,20 +368,19 @@ jobs:
 
               assert marker["workspace_execution_id"] == "workspace-1"
               assert marker["release_execution_id"] == "release-3"
-              assert history["lineage"]["release-1"] == "workspace-1"
-              assert history["lineage"]["release-2"] == "workspace-1"
+              assert history["lineage"] == {
+                  "release-1": "workspace-1",
+                  "release-2": "workspace-1",
+              }
               assert history["stop"] is True
               assert history["replacement_stopped"] is True
-              assert events.index("active_lookup:release-1") < events.index(
-                  "lineage_lookup:release-1"
-              )
-              assert events.index("lineage_lookup:release-1") < events.index(
-                  "coordinator_stop_persisted"
-              )
-              assert events.index("coordinator_stop_persisted") < events.index(
-                  "active_release_stop_persisted"
-              )
-              assert events.index("active_release_stop_persisted") < len(events) - 1
+              assert events[stop_start:] == [
+                  "active_lookup:release-1",
+                  "lineage_lookup:release-1",
+                  "coordinator_stop_persisted",
+                  "active_release_stop_persisted",
+                  "transaction_committed",
+              ]
               assert "transaction_rolled_back" not in events
           finally:
               atomic._ensure_durable_stop_schema = original_ensure_durable_stop_schema
