@@ -163,6 +163,9 @@ def public_status(user_id: int, *, user_eligible: bool = False) -> Dict[str, Any
         "anonymous_execution_supported": False,
         "reviewer_required": True,
         "reviewer_remediation_required": True,
+        "release_authorization_required": True,
+        "release_authorization_source": "immutable_user_workspace_objective",
+        "release_authorization_negative_intent_wins": True,
         "exact_head_merge_required": True,
         "integration_validation_required": True,
         "integration_repair_supported": bool(
