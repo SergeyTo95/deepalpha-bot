@@ -28,6 +28,7 @@ def _policy(*, base: str = "main", head: str = "abc", number: int = 7):
 def test_release_authorization_requires_explicit_delivery_action():
     allowed = (
         "Build the flower store and then deploy it",
+        "Deploy this app after tests pass",
         "Merge and deploy this release",
         "Ship this project to production",
         "Go live",
@@ -45,6 +46,12 @@ def test_release_authorization_requires_explicit_delivery_action():
         "Добавь кнопку опубликовать",
         "Build the store but never merge or deploy",
         "Сделай магазин, мержить нельзя",
+        "Deploy this app only after I approve the merge",
+        "Deploy it after my approval",
+        "Ship this project once I confirm",
+        "Build it, but wait for my approval before deploying",
+        "Задеплой только после моего подтверждения",
+        "Выкати, когда я дам разрешение",
     )
     for objective in allowed:
         assert hardening._strict_release_authorized(_execution(objective)) is True

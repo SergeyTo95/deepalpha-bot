@@ -30,6 +30,21 @@ _RELEASE_ACTION_PATTERNS = tuple(
     )
 )
 
+_DEFERRED_USER_APPROVAL_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.UNICODE)
+    for pattern in (
+        r"\b(?:only\s+)?(?:after|once|when)\s+(?:i|we)\s+(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
+        r"\b(?:only\s+)?after\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
+        r"\b(?:wait\s+for|require|get|ask\s+for)\s+(?:my|our)\s+(?:approval|confirmation|authorization|permission|go(?:-ahead)?)\b",
+        r"\b(?:until|before)\s+(?:i|we)\s+(?:approve|confirm|authorize|permit|say\s+go|give\s+(?:the\s+)?go(?:-ahead)?)\b",
+        r"\b(?:только\s+)?после\s+(?:того\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+        r"\b(?:только\s+)?после\s+(?:моего|нашего)\s+(?:одобрения|подтверждения|разрешения|согласия|гоу?|go)\b",
+        r"\bкогда\s+(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+        r"\b(?:сначала\s+)?(?:спроси|получи|дождись)\b[^.!?\n]{0,50}\b(?:моего|моё|мое|нашего|наше)\s+(?:одобрения|подтверждения|разрешения|согласия)\b",
+        r"\b(?:до|перед)\s+(?:тем\s+как\s+)?(?:я|мы)\s+(?:одобрю|одобрим|подтвержу|подтвердим|разрешу|разрешим|скажу|скажем|дам|дадим)\b",
+    )
+)
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -81,10 +96,19 @@ def _acceptance_profile_fingerprint(
     return _fingerprint(payload)
 
 
+def _deferred_user_approval(objective: str) -> bool:
+    text = str(objective or "").strip()
+    return bool(text) and any(pattern.search(text) for pattern in _DEFERRED_USER_APPROVAL_PATTERNS)
+
+
 def _strict_release_authorized(execution: Mapping[str, Any]) -> bool:
     plan = execution.get("plan") if isinstance(execution.get("plan"), Mapping) else {}
     objective = str(plan.get("objective") or "").strip()
-    if not objective or release_runtime._negative_release_intent(objective):
+    if (
+        not objective
+        or release_runtime._negative_release_intent(objective)
+        or _deferred_user_approval(objective)
+    ):
         return False
     return any(pattern.search(objective) for pattern in _RELEASE_ACTION_PATTERNS)
 
