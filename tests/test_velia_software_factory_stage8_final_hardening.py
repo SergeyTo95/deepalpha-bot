@@ -56,12 +56,15 @@ def test_release_authorization_requires_explicit_delivery_action():
         "Deploy this app if I later approve the merge",
         "Deploy this app if approved by me",
         "Ship it provided that I eventually confirm",
+        "Deploy this app after it is approved by me",
+        "Deploy once it has been approved by me",
         "Задеплой только после моего подтверждения",
         "Выкати, когда я дам разрешение",
         "Задеплой, если я подтвержу",
         "Выкати при условии моего одобрения",
         "Задеплой, если я позже подтвержу",
         "Выкати, если будет одобрено мной",
+        "Задеплой после того, как будет одобрено мной",
     )
     for objective in allowed:
         assert hardening._strict_release_authorized(_execution(objective)) is True
@@ -233,8 +236,9 @@ def test_retryable_stale_preflight_is_recreated_from_fresh_candidate(monkeypatch
     assert saved[0]["status"] == "retrying_candidate"
 
 
-def test_zero_merge_terminal_release_is_rebuilt_from_fresh_premerge_evidence(monkeypatch):
+def test_zero_merge_terminal_release_rotates_plan_and_rebuilds_premerge_evidence(monkeypatch):
     saved = []
+    cancelled = []
     monkeypatch.setattr(
         hardening.release_runtime,
         "_state",
@@ -257,6 +261,7 @@ def test_zero_merge_terminal_release_is_rebuilt_from_fresh_premerge_evidence(mon
     execution_module = SimpleNamespace(
         get_release_execution=lambda user_id, release_id: {
             "execution_id": release_id,
+            "plan_id": "plan-old",
             "status": "blocked",
             "merged_count": 0,
             "items": [
@@ -266,9 +271,13 @@ def test_zero_merge_terminal_release_is_rebuilt_from_fresh_premerge_evidence(mon
                     "error_code": "github_provider_failure",
                 }
             ],
-        }
+        },
+        cancel_release_preflight=lambda user_id, plan_id: (
+            cancelled.append((user_id, plan_id)) or {"plan_id": plan_id, "status": "cancelled"}
+        ),
     )
     hardening._refresh_retryable_evidence(execution_module, 9, "e-zero-merge")
+    assert cancelled == [(9, "plan-old")]
     assert len(saved) == 1
     assert saved[0]["candidate_id"] == ""
     assert saved[0]["plan_id"] == ""
@@ -280,8 +289,43 @@ def test_zero_merge_terminal_release_is_rebuilt_from_fresh_premerge_evidence(mon
     assert saved[0]["status"] == "retrying_candidate"
 
 
+def test_zero_merge_terminal_release_fails_closed_when_plan_cannot_rotate(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_state",
+        lambda execution_module, user_id, execution_id: {
+            "plan_id": "plan-old",
+            "release_execution_id": "release-old",
+        },
+    )
+    monkeypatch.setattr(
+        hardening.release_runtime,
+        "_save_state",
+        lambda execution_module, user_id, execution_id, **fields: saved.append(fields) or fields,
+    )
+    execution_module = SimpleNamespace(
+        get_release_execution=lambda user_id, release_id: {
+            "execution_id": release_id,
+            "plan_id": "plan-old",
+            "status": "blocked",
+            "merged_count": 0,
+            "items": [{"status": "failed", "merge_commit_sha": ""}],
+        },
+        cancel_release_preflight=lambda user_id, plan_id: {
+            "plan_id": plan_id,
+            "status": "prepared",
+        },
+    )
+    with pytest.raises(Exception) as exc:
+        hardening._refresh_retryable_evidence(execution_module, 9, "e-zero-merge")
+    assert getattr(exc.value, "code", "") == "velia_factory_stage8_zero_merge_preflight_not_rotated"
+    assert saved == []
+
+
 def test_terminal_release_with_any_merge_evidence_is_never_reset(monkeypatch):
     saved = []
+    cancelled = []
     monkeypatch.setattr(
         hardening.release_runtime,
         "_state",
@@ -301,6 +345,7 @@ def test_terminal_release_with_any_merge_evidence_is_never_reset(monkeypatch):
     execution_module = SimpleNamespace(
         get_release_execution=lambda user_id, release_id: {
             "execution_id": release_id,
+            "plan_id": "plan-partial",
             "status": "blocked",
             "merged_count": 1,
             "items": [
@@ -309,10 +354,12 @@ def test_terminal_release_with_any_merge_evidence_is_never_reset(monkeypatch):
                     "merge_commit_sha": "merge-sha-1",
                 }
             ],
-        }
+        },
+        cancel_release_preflight=lambda user_id, plan_id: cancelled.append((user_id, plan_id)),
     )
     hardening._refresh_retryable_evidence(execution_module, 9, "e-partial")
     assert saved == []
+    assert cancelled == []
 
 
 def test_retryable_failed_verification_is_cleared_for_fresh_snapshot(monkeypatch):
