@@ -126,8 +126,14 @@ def user_allowed(user_id: int) -> bool:
     return explicit_user_allowed(int(user_id)) or admin_pilot_user_allowed(int(user_id))
 
 
+def _mode_user_allowed(user_id: int) -> bool:
+    if rollout_mode() == ROLLOUT_LIMITED_ADMIN:
+        return admin_pilot_user_allowed(int(user_id))
+    return user_allowed(int(user_id))
+
+
 def intake_allowed(user_id: int) -> bool:
-    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE} and user_allowed(int(user_id))
+    return rollout_mode() in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE} and _mode_user_allowed(int(user_id))
 
 
 def dry_run_enabled(user_id: int) -> bool:
@@ -215,7 +221,7 @@ def _stage_readiness(
     else:
         mode_ok = mode in {ROLLOUT_DRY_RUN, ROLLOUT_LIMITED_ADMIN, ROLLOUT_LIVE}
         required_mode = "dry_run_limited_admin_or_live"
-    eligible = user_allowed(int(user_id))
+    eligible = _mode_user_allowed(int(user_id))
     return {
         "ready": not missing and mode_ok and eligible,
         "missing_flags": missing,
@@ -246,7 +252,7 @@ def pilot_readiness(user_id: int) -> Dict[str, object]:
 
 def public_status(user_id: int) -> dict:
     mode = rollout_mode()
-    eligible = user_allowed(int(user_id))
+    eligible = _mode_user_allowed(int(user_id))
     stage7_status = _limited_admin_status(
         int(user_id), verify_acceptance=bool(mode == ROLLOUT_LIMITED_ADMIN)
     )
