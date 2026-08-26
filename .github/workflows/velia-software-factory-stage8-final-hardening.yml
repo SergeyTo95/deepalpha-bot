@@ -97,9 +97,8 @@ jobs:
               }
           ) is False
 
-          # Prove the durable-stop DDL is once-per-process. A fake connection is
-          # sufficient here; the exact-head Railway preview separately proves the
-          # real PostgreSQL migration/startup path.
+          # Prove the durable-stop + full-lineage migration is once-per-process.
+          # Exact-head Railway preview separately proves the real PostgreSQL path.
           migration_events = []
 
           class MigrationCursor:
@@ -129,18 +128,32 @@ jobs:
               first_event_count = len(migration_events)
               atomic._ensure_durable_stop_schema(object())
               assert len(migration_events) == first_event_count
-              assert sum("ALTER TABLE velia_software_factory_stage8_releases" in event for event in migration_events) == 2
-              assert sum("CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_release" in event for event in migration_events) == 1
+              assert sum(
+                  "ALTER TABLE velia_software_factory_stage8_releases" in event
+                  for event in migration_events
+              ) == 2
+              assert sum(
+                  "CREATE TABLE IF NOT EXISTS velia_software_factory_stage8_retired_release_lineage" in event
+                  for event in migration_events
+              ) == 1
+              assert sum(
+                  "CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_lineage_workspace" in event
+                  for event in migration_events
+              ) == 1
+              assert sum(
+                  "INSERT INTO velia_software_factory_stage8_retired_release_lineage" in event
+                  for event in migration_events
+              ) == 1
               assert sum("pg_advisory_xact_lock" in event for event in migration_events) == 1
               assert migration_events.count("migration_commit") == 1
+              assert "migration_rollback" not in migration_events
           finally:
               atomic.get_connection = original_atomic_get_connection
               stage8_release_runtime.ensure_stage8_release_tables = original_release_ensure
               atomic._DURABLE_STOP_SCHEMA_READY = original_schema_ready
 
-          # This acceptance fixture deliberately exercises wrapper installation
-          # without a live PostgreSQL connection. Production schema migration is
-          # covered by the real Railway preview; never add a production test-mode bypass.
+          # Exercise wrapper installation without a live PostgreSQL connection.
+          # Production schema migration remains covered by the real Railway preview.
           original_ensure_durable_stop_schema = atomic._ensure_durable_stop_schema
           atomic._ensure_durable_stop_schema = lambda execution_module: None
           try:
@@ -159,116 +172,225 @@ jobs:
                   execution("Deploy this app provided that authorization has been granted by us")
               ) is False
 
+              # Full retired lineage regression: rotate two zero-merge executions,
+              # then issue a delayed stop against the FIRST retired execution after
+              # a third replacement exists. Both retired IDs must remain resolvable,
+              # and the current replacement must be stopped before commit.
+              history = {
+                  "workspace": "workspace-1",
+                  "active": "",
+                  "plan": "",
+                  "latest_retired": "",
+                  "status": "retrying_candidate",
+                  "stop": False,
+                  "lineage": {},
+                  "replacement_stopped": False,
+              }
               events = []
 
-              class Cursor:
+              class HistoryCursor:
                   rowcount = 0
                   def __init__(self):
                       self._row = None
-                  def execute(self, query, params):
+                  def execute(self, query, params=None):
                       normalized = " ".join(str(query).split())
-                      if "FROM velia_software_factory_stage8_releases" in normalized and "FOR UPDATE" in normalized:
-                          events.append("coordinator_row_locked")
-                          self._row = ("workspace-1", "plan-old", "release-old", False)
-                      elif normalized.startswith("UPDATE velia_software_factory_stage8_releases SET"):
-                          assert "retired_release_execution_id" in normalized
-                          assert "stop_requested=FALSE" in normalized
-                          events.append("coordinator_binding_cleared")
+                      self.rowcount = 0
+                      if (
+                          "FROM velia_software_factory_stage8_releases" in normalized
+                          and "FOR UPDATE" in normalized
+                      ):
+                          assert params == (9, history["active"])
+                          events.append(f"coordinator_locked:{history['active']}")
+                          self._row = (
+                              history["workspace"],
+                              history["plan"],
+                              history["active"],
+                              history["stop"],
+                          )
+                      elif normalized.startswith(
+                          "INSERT INTO velia_software_factory_stage8_retired_release_lineage"
+                      ):
+                          user_id, retired_id, workspace_id = params
+                          assert user_id == 9
+                          existing = history["lineage"].get(retired_id)
+                          if existing is None:
+                              history["lineage"][retired_id] = workspace_id
+                          events.append(f"lineage_inserted:{retired_id}")
+                          self._row = None
+                      elif normalized.startswith(
+                          "SELECT workspace_execution_id FROM velia_software_factory_stage8_retired_release_lineage"
+                      ):
+                          user_id, retired_id = params
+                          assert user_id == 9
+                          workspace_id = history["lineage"].get(retired_id)
+                          self._row = (workspace_id,) if workspace_id else None
+                          events.append(f"lineage_lookup:{retired_id}")
+                      elif (
+                          normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
+                          and "candidate_id=''" in normalized
+                      ):
+                          retired_id, user_id, workspace_id, expected_active = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          assert expected_active == history["active"]
+                          assert history["stop"] is False
+                          history["latest_retired"] = retired_id
+                          history["active"] = ""
+                          history["plan"] = ""
+                          history["status"] = "retrying_candidate"
                           self.rowcount = 1
+                          self._row = None
+                          events.append(f"binding_cleared:{retired_id}")
+                      elif normalized.startswith(
+                          "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases"
+                      ):
+                          user_id, release_id = params
+                          assert user_id == 9
+                          if history["active"] == release_id:
+                              self._row = (history["workspace"],)
+                          else:
+                              self._row = None
+                          events.append(f"active_lookup:{release_id}")
+                      elif (
+                          normalized.startswith("UPDATE velia_software_factory_stage8_releases SET")
+                          and "stop_requested=TRUE" in normalized
+                      ):
+                          user_id, workspace_id = params
+                          assert user_id == 9
+                          assert workspace_id == history["workspace"]
+                          history["stop"] = True
+                          self._row = (
+                              history["workspace"],
+                              history["active"],
+                              history["latest_retired"],
+                              history["status"],
+                          )
+                          events.append("coordinator_stop_persisted")
+                      elif normalized.startswith(
+                          "UPDATE velia_software_factory_release_executions SET"
+                      ):
+                          active_release_id, user_id = params
+                          assert user_id == 9
+                          assert active_release_id == history["active"] == "release-3"
+                          history["replacement_stopped"] = True
+                          self._row = None
+                          events.append("active_release_stop_persisted")
                       else:
                           raise AssertionError(f"unexpected SQL: {normalized}")
                   def fetchone(self):
                       return self._row
+                  def close(self):
+                      pass
 
-              class Connection:
+              class HistoryConnection:
+                  def cursor(self):
+                      return HistoryCursor()
                   def commit(self):
-                      events.append("coordinator_state_committed")
+                      events.append("transaction_committed")
+                  def rollback(self):
+                      events.append("transaction_rolled_back")
+                  def close(self):
+                      pass
 
               @contextmanager
-              def fake_release_lock(release_id):
-                  assert release_id == "release-old"
-                  events.append("release_lock_enter")
-                  yield Connection(), Cursor()
-                  events.append("release_lock_exit")
+              def fake_history_lock(release_id):
+                  assert release_id == history["active"]
+                  events.append(f"release_lock_enter:{release_id}")
+                  yield HistoryConnection(), HistoryCursor()
+                  events.append(f"release_lock_exit:{release_id}")
 
-              original_lock = hardening._release_operation_lock
-              hardening._release_operation_lock = fake_release_lock
-              try:
-                  release = {
-                      "execution_id": "release-old",
-                      "plan_id": "plan-old",
+              def get_release_execution(user_id, release_id):
+                  assert user_id == 9
+                  return {
+                      "execution_id": release_id,
+                      "plan_id": history["plan"],
                       "status": "blocked",
                       "merged_count": 0,
                       "stop_requested": False,
                       "items": [{"status": "failed", "merge_commit_sha": ""}],
                   }
-                  module = SimpleNamespace(
-                      get_release_execution=lambda user_id, release_id: dict(release),
-                      cancel_release_preflight=lambda user_id, plan_id: (
-                          events.append("preflight_retired") or {"status": "cancelled"}
-                      ),
-                  )
-                  atomic._atomic_zero_merge_rotate(
-                      module,
-                      9,
-                      {"plan_id": "plan-old", "release_execution_id": "release-old"},
-                      release,
-                  )
+
+              module = SimpleNamespace(
+                  get_release_execution=get_release_execution,
+                  cancel_release_preflight=lambda user_id, plan_id: (
+                      events.append(f"preflight_retired:{plan_id}")
+                      or {"status": "cancelled"}
+                  ),
+              )
+
+              original_lock = hardening._release_operation_lock
+              hardening._release_operation_lock = fake_history_lock
+              try:
+                  for index in (1, 2):
+                      release_id = f"release-{index}"
+                      plan_id = f"plan-{index}"
+                      history["active"] = release_id
+                      history["plan"] = plan_id
+                      history["stop"] = False
+                      start = len(events)
+                      release = {
+                          "execution_id": release_id,
+                          "plan_id": plan_id,
+                          "status": "blocked",
+                          "merged_count": 0,
+                          "stop_requested": False,
+                          "items": [{"status": "failed", "merge_commit_sha": ""}],
+                      }
+                      atomic._atomic_zero_merge_rotate(
+                          module,
+                          9,
+                          {"plan_id": plan_id, "release_execution_id": release_id},
+                          release,
+                      )
+                      segment = events[start:]
+                      assert segment.index(f"preflight_retired:{plan_id}") < segment.index(
+                          f"lineage_inserted:{release_id}"
+                      )
+                      assert segment.index(f"lineage_inserted:{release_id}") < segment.index(
+                          f"binding_cleared:{release_id}"
+                      )
+                      assert segment.index(f"binding_cleared:{release_id}") < segment.index(
+                          "transaction_committed"
+                      )
+                      assert history["lineage"][release_id] == "workspace-1"
+
+                  assert history["lineage"] == {
+                      "release-1": "workspace-1",
+                      "release-2": "workspace-1",
+                  }
+
+                  # Simulate the next progression creating a third active release.
+                  history["active"] = "release-3"
+                  history["plan"] = "plan-3"
+                  history["status"] = "release_executing"
+                  history["stop"] = False
+
+                  original_atomic_get_connection = atomic.get_connection
+                  atomic.get_connection = lambda: HistoryConnection()
+                  try:
+                      marker = atomic._mark_coordinator_stop(object(), 9, "release-1")
+                  finally:
+                      atomic.get_connection = original_atomic_get_connection
               finally:
                   hardening._release_operation_lock = original_lock
 
-              assert events.index("release_lock_enter") < events.index("preflight_retired")
-              assert events.index("preflight_retired") < events.index("coordinator_binding_cleared")
-              assert events.index("coordinator_binding_cleared") < events.index("coordinator_state_committed")
-              assert events.index("coordinator_state_committed") < events.index("release_lock_exit")
-
-              # A stop addressed to a retired release must mark the coordinator and
-              # the currently active replacement execution before the transaction commits.
-              stop_events = []
-
-              class StopCursor:
-                  def __init__(self):
-                      self._row = None
-                  def execute(self, query, params):
-                      normalized = " ".join(str(query).split())
-                      if normalized.startswith("UPDATE velia_software_factory_stage8_releases SET"):
-                          stop_events.append("coordinator_stop_persisted")
-                          self._row = ("workspace-1", "release-new", "release-old", "retrying_candidate")
-                      elif normalized.startswith("UPDATE velia_software_factory_release_executions SET"):
-                          assert params == ("release-new", 9)
-                          stop_events.append("active_release_stop_persisted")
-                      else:
-                          raise AssertionError(f"unexpected stop SQL: {normalized}")
-                  def fetchone(self):
-                      return self._row
-                  def close(self):
-                      pass
-
-              class StopConnection:
-                  def __init__(self):
-                      self.cursor_obj = StopCursor()
-                  def cursor(self):
-                      return self.cursor_obj
-                  def commit(self):
-                      stop_events.append("stop_transaction_committed")
-                  def rollback(self):
-                      stop_events.append("stop_transaction_rolled_back")
-                  def close(self):
-                      pass
-
-              original_atomic_get_connection = atomic.get_connection
-              atomic.get_connection = lambda: StopConnection()
-              try:
-                  marker = atomic._mark_coordinator_stop(object(), 9, "release-old")
-              finally:
-                  atomic.get_connection = original_atomic_get_connection
               assert marker["workspace_execution_id"] == "workspace-1"
-              assert marker["release_execution_id"] == "release-new"
-              assert stop_events == [
-                  "coordinator_stop_persisted",
-                  "active_release_stop_persisted",
-                  "stop_transaction_committed",
-              ]
+              assert marker["release_execution_id"] == "release-3"
+              assert history["lineage"]["release-1"] == "workspace-1"
+              assert history["lineage"]["release-2"] == "workspace-1"
+              assert history["stop"] is True
+              assert history["replacement_stopped"] is True
+              assert events.index("active_lookup:release-1") < events.index(
+                  "lineage_lookup:release-1"
+              )
+              assert events.index("lineage_lookup:release-1") < events.index(
+                  "coordinator_stop_persisted"
+              )
+              assert events.index("coordinator_stop_persisted") < events.index(
+                  "active_release_stop_persisted"
+              )
+              assert events.index("active_release_stop_persisted") < len(events) - 1
+              assert "transaction_rolled_back" not in events
           finally:
               atomic._ensure_durable_stop_schema = original_ensure_durable_stop_schema
           PY
