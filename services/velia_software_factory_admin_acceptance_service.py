@@ -336,6 +336,91 @@ def _autopilot_evidence(actor: int, grant: Mapping[str, Any]) -> Dict[str, Any]:
     return evidence
 
 
+def verify_passed_certificate(
+    user_id: int,
+    run_id: str,
+    repository_full_name: str,
+    certificate_id: str,
+) -> Dict[str, Any]:
+    """Revalidate an already issued Stage 6.7 pass without reopening acceptance.
+
+    The certificate payload deliberately excludes wall-clock age. Once a Stage
+    6.7 certificate was issued as passed, Stage 7 can reproduce its immutable
+    fingerprint from the persisted one-shot grant and exact Autopilot reviewer
+    evidence even after the acceptance session itself has been closed.
+    """
+
+    actor = _admin_actor(user_id)
+    normalized_run_id = str(run_id or "").strip()
+    repository = str(repository_full_name or "").strip()
+    supplied_certificate = str(certificate_id or "").strip().lower()
+    if not normalized_run_id or not repository or len(supplied_certificate) != 64:
+        return {"verified": False, "error": "acceptance_certificate_identity_invalid"}
+
+    try:
+        grant = guard.get_grant(actor, normalized_run_id)
+    except SoftwareFactoryError as exc:
+        return {
+            "verified": False,
+            "error": str(exc.code or "acceptance_grant_unavailable"),
+        }
+
+    if str(grant.get("approval_source") or "") != _ACCEPTANCE_SOURCE:
+        return {"verified": False, "error": "acceptance_grant_source_mismatch"}
+    if str(grant.get("repository_full_name") or "").casefold() != repository.casefold():
+        return {"verified": False, "error": "acceptance_repository_mismatch"}
+    if str(grant.get("run_id") or "") != normalized_run_id:
+        return {"verified": False, "error": "acceptance_run_mismatch"}
+
+    evidence = _autopilot_evidence(actor, grant)
+    grant_status = str(grant.get("status") or "")
+    run_status = str(evidence.get("run_status") or "")
+    reviewer_status = str(evidence.get("reviewer_status") or "")
+    remediation_phase = str(evidence.get("remediation_phase") or "")
+    remediation_attempts = int(evidence.get("remediation_attempt_count") or 0)
+    passed = bool(
+        grant_status == "consumed"
+        and run_status == "ready_for_review"
+        and reviewer_status == "passed"
+        and remediation_phase == "completed"
+        and remediation_attempts >= 1
+        and str(evidence.get("reviewed_head_sha") or "")
+    )
+    if not passed:
+        return {
+            "verified": False,
+            "error": "acceptance_evidence_not_passed",
+            "run_status": run_status,
+            "reviewer_status": reviewer_status,
+            "remediation_attempt_count": remediation_attempts,
+            "reviewed_head_sha": str(evidence.get("reviewed_head_sha") or "")[:40],
+        }
+
+    certificate_payload = {
+        "acceptance_id": str(grant.get("grant_id") or ""),
+        "factory_run_id": str(grant.get("run_id") or normalized_run_id),
+        "project_id": str(grant.get("project_id") or ""),
+        "repository_full_name": str(grant.get("repository_full_name") or repository),
+        "spec_fingerprint": str(grant.get("spec_fingerprint") or ""),
+        "grant_status": grant_status,
+        "outcome": "passed",
+        "terminal": True,
+        "acceptance_passed": True,
+        "evidence": evidence,
+    }
+    expected_certificate = _fingerprint(certificate_payload)
+    matched = bool(supplied_certificate == expected_certificate)
+    return {
+        "verified": matched,
+        "error": "" if matched else "acceptance_certificate_fingerprint_mismatch",
+        "run_status": run_status,
+        "reviewer_status": reviewer_status,
+        "remediation_phase": remediation_phase,
+        "remediation_attempt_count": remediation_attempts,
+        "reviewed_head_sha": str(evidence.get("reviewed_head_sha") or "")[:40],
+    }
+
+
 def inspect_acceptance(user_id: int, run_id: str, repository_full_name: str) -> Dict[str, Any]:
     actor = _admin_actor(user_id)
     status = public_status(actor)
