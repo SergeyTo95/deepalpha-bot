@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Mapping
 
 from services import velia_developer_chat_runtime_patch as developer_chat
 from services import velia_software_factory_greenfield_repository_creation_service as repository_creation
 from services import velia_software_factory_rollout_service as rollout
+from services.velia_software_factory_core_service import SoftwareFactoryError
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
@@ -14,6 +16,141 @@ _TRIGGER_REASONS = {
     "software_factory_greenfield_repositories_missing",
     "software_factory_greenfield_ready_to_attach",
 }
+_CONDITIONAL_NOUN_DEFERRED_APPROVAL = re.compile(
+    r"\b(?:if|provided(?:\s+that)?|subject\s+to)\b[^.!?\n]{0,80}"
+    r"\b(?:approval|confirmation|authorization|permission)\b[^.!?\n]{0,40}"
+    r"\b(?:is|was|has\s+been|had\s+been|will\s+be)\s+"
+    r"(?:given|granted|provided|issued|approved|confirmed|authorized|permitted)\b"
+    r"[^.!?\n]{0,30}\bby\s+(?:me|us)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _conditional_noun_deferred_approval(objective: str) -> bool:
+    return bool(_CONDITIONAL_NOUN_DEFERRED_APPROVAL.search(str(objective or "").strip()))
+
+
+def _atomic_zero_merge_rotate(
+    execution_module: Any,
+    user_id: int,
+    state: Mapping[str, Any],
+    release: Mapping[str, Any],
+) -> None:
+    """Retire preflight and coordinator binding before releasing the shared release lock.
+
+    Final Hardening serializes explicit stop requests, release execution and retry
+    rotation on the release execution advisory key. This helper keeps the same lock
+    held until both the old preflight and Stage 8 coordinator binding are retired,
+    so a persisted stop cannot be lost between those two operations.
+    """
+    from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
+
+    release_id = str(
+        release.get("execution_id") or state.get("release_execution_id") or ""
+    ).strip()
+    if not release_id:
+        raise SoftwareFactoryError(
+            "velia_factory_stage8_zero_merge_release_recheck_unavailable", status=503
+        )
+
+    with final_hardening._release_operation_lock(release_id) as (conn, cursor):
+        current = execution_module.get_release_execution(int(user_id), release_id)
+        if not isinstance(current, Mapping) or not final_hardening._zero_merge_terminal_release(current):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_release_no_longer_retryable", status=409
+            )
+
+        cursor.execute(
+            "SELECT workspace_execution_id,plan_id,release_execution_id "
+            "FROM velia_software_factory_stage8_releases "
+            "WHERE user_id=%s AND release_execution_id=%s FOR UPDATE",
+            (int(user_id), release_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_binding_missing", status=409
+            )
+        if isinstance(row, Mapping):
+            workspace_execution_id = str(row.get("workspace_execution_id") or "")
+            persisted_plan_id = str(row.get("plan_id") or "")
+            persisted_release_id = str(row.get("release_execution_id") or "")
+        else:
+            workspace_execution_id = str(row[0] or "")
+            persisted_plan_id = str(row[1] or "")
+            persisted_release_id = str(row[2] or "")
+        if not workspace_execution_id or persisted_release_id != release_id:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_binding_changed", status=409
+            )
+
+        cancel = getattr(execution_module, "cancel_release_preflight", None)
+        if not callable(cancel):
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_rotation_unavailable", status=503
+            )
+        plan_id = str(
+            persisted_plan_id
+            or state.get("plan_id")
+            or current.get("plan_id")
+            or release.get("plan_id")
+            or ""
+        ).strip()
+        if not plan_id:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_missing", status=409
+            )
+        rotated = cancel(int(user_id), plan_id)
+        rotated_status = (
+            str((rotated or {}).get("status") or "")
+            if isinstance(rotated, Mapping)
+            else ""
+        )
+        if rotated_status not in {"cancelled", "stale"}:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_preflight_not_rotated",
+                detail=rotated_status or plan_id,
+                status=409,
+            )
+
+        cursor.execute(
+            "UPDATE velia_software_factory_stage8_releases SET "
+            "candidate_id='',plan_id='',release_execution_id='',verification_id='',"
+            "observation_id='',certificate_id='',passport_id='',status='retrying_candidate',"
+            "blocker_code='',blocker_detail='',updated_at=NOW() "
+            "WHERE user_id=%s AND workspace_execution_id=%s AND release_execution_id=%s",
+            (int(user_id), workspace_execution_id, release_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_zero_merge_coordinator_rotation_failed", status=409
+            )
+        conn.commit()
+
+
+def _install_release_atomicity_hardening(execution_module: Any) -> None:
+    if getattr(execution_module, "_workspace_stage8_release_atomicity_installed", False):
+        return
+    from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
+    from services import velia_software_factory_stage8_release_runtime_patch as release_runtime
+
+    if not getattr(execution_module, "_workspace_stage8_final_hardening_installed", False):
+        raise RuntimeError("stage8_release_atomicity_requires_final_hardening")
+
+    original_authorizer = final_hardening._strict_release_authorized
+
+    def strict_release_authorized(execution: Mapping[str, Any]) -> bool:
+        plan = execution.get("plan") if isinstance(execution.get("plan"), Mapping) else {}
+        objective = str(plan.get("objective") or "").strip()
+        if _conditional_noun_deferred_approval(objective):
+            return False
+        return bool(original_authorizer(execution))
+
+    final_hardening._strict_release_authorized = strict_release_authorized
+    release_runtime._explicit_release_authorized = strict_release_authorized
+    final_hardening._rotate_zero_merge_preflight = _atomic_zero_merge_rotate
+    execution_module._workspace_stage8_release_atomicity_installed = True
+    logger.info("VELIA_SOFTWARE_FACTORY_STAGE8_RELEASE_ATOMICITY_INSTALLED")
 
 
 def _stage8_single_workspace_delegate(
@@ -107,6 +244,7 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
     from services import velia_software_factory_workspace_execution_service as execution_module
 
     final_hardening.install(execution_module)
+    _install_release_atomicity_hardening(execution_module)
 
     original_generate = chat_module.generate_velia_chat_result
     original_delegate_single = runtime_module._delegate_single
@@ -256,6 +394,6 @@ def install(chat_module: Any, greenfield_service: Any, runtime_module: Any) -> N
     chat_module._velia_software_factory_stage8_greenfield_installed = True
     _INSTALLED = True
     logger.info(
-        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s final_hardening=true",
+        "VELIA_SOFTWARE_FACTORY_STAGE8_GREENFIELD_RUNTIME_INSTALLED enabled=%s final_hardening=true atomic_retry=true",
         str(repository_creation.enabled()).lower(),
     )
