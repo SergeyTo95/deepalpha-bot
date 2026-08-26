@@ -15,6 +15,7 @@ from services.velia_admin_security_service import configured_admin_id
 
 
 _STAGE7_FLAG = "VELIA_SOFTWARE_FACTORY_STAGE7_LIMITED_ADMIN_ROLLOUT_ENABLED"
+_CODING_FLAG = "VELIA_DEVELOPER_CODING_ENABLED"
 _ACCEPTANCE_RUN_ENV = "VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_RUN_ID"
 _ACCEPTANCE_REPOSITORY_ENV = "VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_REPOSITORY"
 _ACCEPTANCE_CERTIFICATE_ENV = "VELIA_SOFTWARE_FACTORY_STAGE7_ACCEPTANCE_CERTIFICATE_ID"
@@ -102,6 +103,7 @@ def public_status(user_id: int, *, verify_acceptance: bool = True) -> Dict[str, 
     expected_admin = configured_admin_id()
     admin_ok = bool(expected_admin > 0 and actor == expected_admin)
     enabled = limited_admin_rollout_enabled()
+    coding_ready = _env_bool(_CODING_FLAG, False)
     control_ready = bool(control.live_pilot_control_enabled())
     guard_ready = bool(guard.live_pilot_guard_enabled())
     reviewer_ready = bool(reviewer.reviewer_enabled() and getattr(reviewer_runtime, "_INSTALLED", False))
@@ -135,6 +137,8 @@ def public_status(user_id: int, *, verify_acceptance: bool = True) -> Dict[str, 
         blockers.append("stage7_disabled")
     if not admin_ok:
         blockers.append("admin_required")
+    if not coding_ready:
+        blockers.append("coding_runtime_disabled")
     if not control_ready:
         blockers.append("control_disabled")
     if not guard_ready:
@@ -159,6 +163,7 @@ def public_status(user_id: int, *, verify_acceptance: bool = True) -> Dict[str, 
         "draft_pr_only": True,
         "requires_stage67_passed_certificate": True,
         "acceptance_harness_must_be_closed": True,
+        "coding_runtime_ready": coding_ready,
         "reviewer_required": True,
         "reviewer_remediation_required": True,
         "merge_supported": False,
