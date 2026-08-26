@@ -30,6 +30,7 @@ _CONDITIONAL_NOUN_DEFERRED_APPROVAL = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 _STOP_BLOCKER = "velia_factory_stage8_release_stop_requested"
+_LINEAGE_TABLE = "velia_software_factory_stage8_retired_release_lineage"
 
 
 class _RetryDeferred(RuntimeError):
@@ -43,7 +44,7 @@ def _conditional_noun_deferred_approval(objective: str) -> bool:
 
 
 def _ensure_durable_stop_schema(execution_module: Any) -> None:
-    """Install durable-stop columns once per process and serialize migration cross-process."""
+    """Install durable-stop/retired-lineage schema once and serialize it cross-process."""
     global _DURABLE_STOP_SCHEMA_READY
     if _DURABLE_STOP_SCHEMA_READY:
         return
@@ -64,13 +65,32 @@ def _ensure_durable_stop_schema(execution_module: Any) -> None:
                 "ALTER TABLE velia_software_factory_stage8_releases "
                 "ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT FALSE"
             )
+            # Keep the scalar column for backwards compatibility/backfill only. All
+            # new stop resolution uses the append-only lineage table below.
             cursor.execute(
                 "ALTER TABLE velia_software_factory_stage8_releases "
                 "ADD COLUMN IF NOT EXISTS retired_release_execution_id TEXT NOT NULL DEFAULT ''"
             )
             cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_release "
-                "ON velia_software_factory_stage8_releases(user_id,retired_release_execution_id)"
+                f"CREATE TABLE IF NOT EXISTS {_LINEAGE_TABLE} ("
+                "user_id BIGINT NOT NULL,"
+                "release_execution_id TEXT NOT NULL,"
+                "workspace_execution_id TEXT NOT NULL,"
+                "retired_at TIMESTAMP NOT NULL DEFAULT NOW(),"
+                "PRIMARY KEY(user_id,release_execution_id)"
+                ")"
+            )
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_velia_factory_stage8_retired_lineage_workspace "
+                f"ON {_LINEAGE_TABLE}(user_id,workspace_execution_id)"
+            )
+            cursor.execute(
+                f"INSERT INTO {_LINEAGE_TABLE} "
+                "(user_id,release_execution_id,workspace_execution_id,retired_at) "
+                "SELECT user_id,retired_release_execution_id,workspace_execution_id,NOW() "
+                "FROM velia_software_factory_stage8_releases "
+                "WHERE retired_release_execution_id<>'' "
+                "ON CONFLICT (user_id,release_execution_id) DO NOTHING"
             )
             conn.commit()
             _DURABLE_STOP_SCHEMA_READY = True
@@ -80,6 +100,48 @@ def _ensure_durable_stop_schema(execution_module: Any) -> None:
         finally:
             cursor.close()
             conn.close()
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    try:
+        return row[index]
+    except (IndexError, TypeError):
+        return None
+
+
+def _workspace_for_release(cursor: Any, user_id: int, release_execution_id: str) -> str:
+    """Resolve an active or arbitrarily old retired release to its Stage 8 workspace."""
+    release_id = str(release_execution_id or "").strip()
+    if not release_id:
+        return ""
+    cursor.execute(
+        "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases "
+        "WHERE user_id=%s AND release_execution_id=%s ORDER BY updated_at DESC LIMIT 1",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    if row:
+        return str(_row_value(row, "workspace_execution_id", 0) or "")
+    cursor.execute(
+        f"SELECT workspace_execution_id FROM {_LINEAGE_TABLE} "
+        "WHERE user_id=%s AND release_execution_id=%s",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    if row:
+        return str(_row_value(row, "workspace_execution_id", 0) or "")
+    # Compatibility fallback for a row created by an older build before lineage
+    # migration completed. New rotations never depend on this scalar.
+    cursor.execute(
+        "SELECT workspace_execution_id FROM velia_software_factory_stage8_releases "
+        "WHERE user_id=%s AND retired_release_execution_id=%s "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (int(user_id), release_id),
+    )
+    row = cursor.fetchone()
+    return str(_row_value(row, "workspace_execution_id", 0) or "") if row else ""
 
 
 def _coordinator_stop_state(
@@ -97,38 +159,27 @@ def _coordinator_stop_state(
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        if workspace_id:
-            cursor.execute(
-                "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,"
-                "stop_requested,status FROM velia_software_factory_stage8_releases "
-                "WHERE user_id=%s AND workspace_execution_id=%s",
-                (int(user_id), workspace_id),
-            )
-        else:
-            cursor.execute(
-                "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,"
-                "stop_requested,status FROM velia_software_factory_stage8_releases "
-                "WHERE user_id=%s AND (release_execution_id=%s OR retired_release_execution_id=%s) "
-                "ORDER BY updated_at DESC LIMIT 1",
-                (int(user_id), release_id, release_id),
-            )
+        if not workspace_id:
+            workspace_id = _workspace_for_release(cursor, int(user_id), release_id)
+        if not workspace_id:
+            return {}
+        cursor.execute(
+            "SELECT workspace_execution_id,release_execution_id,retired_release_execution_id,"
+            "stop_requested,status FROM velia_software_factory_stage8_releases "
+            "WHERE user_id=%s AND workspace_execution_id=%s",
+            (int(user_id), workspace_id),
+        )
         row = cursor.fetchone()
         if not row:
             return {}
-        if isinstance(row, Mapping):
-            return {
-                "workspace_execution_id": str(row.get("workspace_execution_id") or ""),
-                "release_execution_id": str(row.get("release_execution_id") or ""),
-                "retired_release_execution_id": str(row.get("retired_release_execution_id") or ""),
-                "stop_requested": bool(row.get("stop_requested")),
-                "status": str(row.get("status") or ""),
-            }
         return {
-            "workspace_execution_id": str(row[0] or ""),
-            "release_execution_id": str(row[1] or ""),
-            "retired_release_execution_id": str(row[2] or ""),
-            "stop_requested": bool(row[3]),
-            "status": str(row[4] or ""),
+            "workspace_execution_id": str(_row_value(row, "workspace_execution_id", 0) or ""),
+            "release_execution_id": str(_row_value(row, "release_execution_id", 1) or ""),
+            "retired_release_execution_id": str(
+                _row_value(row, "retired_release_execution_id", 2) or ""
+            ),
+            "stop_requested": bool(_row_value(row, "stop_requested", 3)),
+            "status": str(_row_value(row, "status", 4) or ""),
         }
     finally:
         cursor.close()
@@ -140,14 +191,12 @@ def _mark_coordinator_stop(
     user_id: int,
     release_execution_id: str,
 ) -> Dict[str, Any]:
-    """Atomically persist workspace stop and propagate it to the current release.
+    """Atomically stop a workspace and its current release from any lineage member.
 
-    The coordinator row is updated first. If a rotation is concurrently holding that
-    row lock, PostgreSQL re-evaluates the predicate after rotation commits and can
-    match the retired release id. Before this transaction commits, the currently
-    active replacement (if any) is marked stop_requested too. Therefore a release
-    executor that acquires its advisory lock after this durable-stop commit observes
-    stop_requested=True inside its own critical section.
+    Resolution is by workspace identity, not a single retired scalar. A stop that
+    starts while rotation owns the coordinator row either resolves the still-active
+    old binding or the committed lineage entry. The UPDATE then waits on the same
+    coordinator row and, before commit, marks the current replacement execution too.
     """
     _ensure_durable_stop_schema(execution_module)
     release_id = str(release_execution_id or "").strip()
@@ -156,27 +205,25 @@ def _mark_coordinator_stop(
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        workspace_execution_id = _workspace_for_release(cursor, int(user_id), release_id)
+        if not workspace_execution_id:
+            conn.commit()
+            return {}
         cursor.execute(
             "UPDATE velia_software_factory_stage8_releases SET "
             "stop_requested=TRUE,updated_at=NOW() "
-            "WHERE user_id=%s AND (release_execution_id=%s OR retired_release_execution_id=%s) "
+            "WHERE user_id=%s AND workspace_execution_id=%s "
             "RETURNING workspace_execution_id,release_execution_id,retired_release_execution_id,status",
-            (int(user_id), release_id, release_id),
+            (int(user_id), workspace_execution_id),
         )
         row = cursor.fetchone()
         if not row:
             conn.commit()
             return {}
-        if isinstance(row, Mapping):
-            workspace_execution_id = str(row.get("workspace_execution_id") or "")
-            active_release_id = str(row.get("release_execution_id") or "")
-            retired_release_id = str(row.get("retired_release_execution_id") or "")
-            status = str(row.get("status") or "")
-        else:
-            workspace_execution_id = str(row[0] or "")
-            active_release_id = str(row[1] or "")
-            retired_release_id = str(row[2] or "")
-            status = str(row[3] or "")
+        workspace_execution_id = str(_row_value(row, "workspace_execution_id", 0) or "")
+        active_release_id = str(_row_value(row, "release_execution_id", 1) or "")
+        retired_release_id = str(_row_value(row, "retired_release_execution_id", 2) or "")
+        status = str(_row_value(row, "status", 3) or "")
 
         if active_release_id:
             cursor.execute(
@@ -229,7 +276,7 @@ def _atomic_zero_merge_rotate(
     state: Mapping[str, Any],
     release: Mapping[str, Any],
 ) -> None:
-    """Retire a zero-merge attempt while preserving late stop intent durably."""
+    """Retire a zero-merge attempt while preserving the complete release lineage."""
     from services import velia_software_factory_stage8_final_hardening_patch as final_hardening
 
     _ensure_durable_stop_schema(execution_module)
@@ -259,16 +306,10 @@ def _atomic_zero_merge_rotate(
             raise SoftwareFactoryError(
                 "velia_factory_stage8_zero_merge_coordinator_binding_missing", status=409
             )
-        if isinstance(row, Mapping):
-            workspace_execution_id = str(row.get("workspace_execution_id") or "")
-            persisted_plan_id = str(row.get("plan_id") or "")
-            persisted_release_id = str(row.get("release_execution_id") or "")
-            stop_requested = bool(row.get("stop_requested"))
-        else:
-            workspace_execution_id = str(row[0] or "")
-            persisted_plan_id = str(row[1] or "")
-            persisted_release_id = str(row[2] or "")
-            stop_requested = bool(row[3])
+        workspace_execution_id = str(_row_value(row, "workspace_execution_id", 0) or "")
+        persisted_plan_id = str(_row_value(row, "plan_id", 1) or "")
+        persisted_release_id = str(_row_value(row, "release_execution_id", 2) or "")
+        stop_requested = bool(_row_value(row, "stop_requested", 3))
         if not workspace_execution_id or persisted_release_id != release_id:
             raise SoftwareFactoryError(
                 "velia_factory_stage8_zero_merge_coordinator_binding_changed", status=409
@@ -305,6 +346,30 @@ def _atomic_zero_merge_rotate(
                 status=409,
             )
 
+        # Persist the retiring release before clearing the active binding. This is
+        # in the same transaction/row-lock critical section as coordinator rotation.
+        cursor.execute(
+            f"INSERT INTO {_LINEAGE_TABLE} "
+            "(user_id,release_execution_id,workspace_execution_id,retired_at) "
+            "VALUES (%s,%s,%s,NOW()) "
+            "ON CONFLICT (user_id,release_execution_id) DO NOTHING",
+            (int(user_id), release_id, workspace_execution_id),
+        )
+        cursor.execute(
+            f"SELECT workspace_execution_id FROM {_LINEAGE_TABLE} "
+            "WHERE user_id=%s AND release_execution_id=%s",
+            (int(user_id), release_id),
+        )
+        lineage_row = cursor.fetchone()
+        lineage_workspace_id = str(
+            _row_value(lineage_row, "workspace_execution_id", 0) or ""
+        ) if lineage_row else ""
+        if lineage_workspace_id != workspace_execution_id:
+            conn.rollback()
+            raise SoftwareFactoryError(
+                "velia_factory_stage8_retired_release_lineage_conflict", status=409
+            )
+
         cursor.execute(
             "UPDATE velia_software_factory_stage8_releases SET "
             "candidate_id='',plan_id='',retired_release_execution_id=%s,release_execution_id='',"
@@ -315,6 +380,7 @@ def _atomic_zero_merge_rotate(
             (release_id, int(user_id), workspace_execution_id, release_id),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
             raise SoftwareFactoryError(
                 "velia_factory_stage8_zero_merge_coordinator_rotation_failed", status=409
             )
