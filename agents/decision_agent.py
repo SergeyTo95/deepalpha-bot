@@ -13,6 +13,10 @@ class DecisionAgent:
         market_data: Dict[str, Any],
         news_data: Dict[str, Any],
         lang: str = "en",
+        is_background: bool = False,
+        request_id: str = None,
+        cycle_id: str = None,
+        job_id: str = None,
     ) -> Dict[str, Any]:
         print(f"DecisionAgent.run: called, lang={lang}")
         question = market_data.get("question", "Unknown market")
@@ -58,7 +62,7 @@ class DecisionAgent:
         )
 
         print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
-        raw_response = generate_decision_text(prompt)
+        raw_response = generate_decision_text(prompt, is_background=is_background, request_id=request_id, cycle_id=cycle_id, job_id=job_id)
         print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
 
         if raw_response:
@@ -87,6 +91,10 @@ class DecisionAgent:
                     confidence=wrapped.get("confidence", ""),
                     reasoning=wrapped.get("reasoning", ""),
                     lang=lang,
+                    is_background=is_background,
+                    request_id=request_id,
+                    cycle_id=cycle_id,
+                    job_id=job_id,
                 )
                 wrapped["main_scenario"] = (
                     summary.get("main_scenario") or wrapped.get("main_scenario", "")

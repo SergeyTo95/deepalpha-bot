@@ -233,7 +233,7 @@ class NewsAgent:
     def _detect_category(self, text: str) -> str:
         return detect_category_from_text(text)
 
-    def run(self, market_data: Dict[str, Any], lang: str = "en") -> Dict[str, Any]:
+    def run(self, market_data: Dict[str, Any], lang: str = "en", **kwargs) -> Dict[str, Any]:
         question = market_data.get("question", "Unknown market")
         category = market_data.get("category", "Unknown")
         date_context = market_data.get("date_context", "Unknown")
@@ -270,7 +270,7 @@ class NewsAgent:
             lang=lang,
         )
 
-        llm_result = generate_news_text(prompt)
+        llm_result = generate_news_text(prompt, is_background=kwargs.get("is_background", False) if "kwargs" in locals() else False, request_id=kwargs.get("request_id") if "kwargs" in locals() else None, cycle_id=kwargs.get("cycle_id") if "kwargs" in locals() else None, job_id=kwargs.get("job_id") if "kwargs" in locals() else None)
         has_twitter = bool(unique_twitter)
 
         if llm_result and not llm_result.lower().startswith("llm service is not configured"):
