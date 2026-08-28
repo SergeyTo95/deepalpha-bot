@@ -318,8 +318,20 @@ def test_backend_restart_resumes_pending_worker_jobs(monkeypatch) -> None:
     assert monitored == ["generation-1", "generation-2"]
 
 
-def test_self_hosted_reference_video_fails_closed_before_worker(monkeypatch) -> None:
+def test_self_hosted_reference_video_fails_closed_when_reference_not_owned(monkeypatch) -> None:
     monkeypatch.setenv("VELIA_MEDIA_PROVIDER", "self_hosted")
+
+    def missing_reference(*args, **kwargs):
+        raise studio_service.StudioError("studio_reference_not_found", status=404)
+
+    monkeypatch.setattr(studio_service, "_load_refs", missing_reference)
+    monkeypatch.setattr(
+        studio_service,
+        "_insert_turn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unowned/missing reference must fail before generation insert")
+        ),
+    )
 
     with pytest.raises(studio_service.StudioError) as captured:
         worker_service.generate_self_hosted_studio_video_turn(
@@ -331,8 +343,8 @@ def test_self_hosted_reference_video_fails_closed_before_worker(monkeypatch) -> 
             duration_seconds=5,
         )
 
-    assert captured.value.code == "video_mode_not_supported"
-    assert captured.value.status == 409
+    assert captured.value.code == "studio_reference_not_found"
+    assert captured.value.status == 404
 
 
 def test_video_provider_can_roll_back_without_disabling_other_self_hosted_media(monkeypatch) -> None:
