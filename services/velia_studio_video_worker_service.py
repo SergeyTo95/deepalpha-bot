@@ -604,17 +604,17 @@ def generate_self_hosted_studio_video_turn(
     duration = int(duration_seconds or 5)
     if duration not in studio_video_duration_options():
         raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
+    if len(reference_ids) > 1:
+        raise studio_service.StudioError(
+            "studio_video_requires_zero_or_one_reference",
+            status=400,
+        )
 
     references = studio_service._load_refs(
         int(user_id),
         str(session_id),
         reference_ids,
     )
-    if len(references) > 1:
-        raise studio_service.StudioError(
-            "studio_video_requires_zero_or_one_reference",
-            status=400,
-        )
     attachment = references[0] if references else None
     mode = "i2v" if attachment is not None else "t2v"
 
