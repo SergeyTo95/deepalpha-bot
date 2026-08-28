@@ -1,0 +1,43 @@
+name: Referral stats hotfix
+
+on:
+  pull_request:
+    paths:
+      - "services/airdrop_referral_service.py"
+      - "tests/test_airdrop_referral_service.py"
+      - "tests/test_referral_stats_display_hotfix.py"
+      - ".github/workflows/referral-stats-hotfix.yml"
+  workflow_dispatch:
+
+jobs:
+  referral-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile referral service
+        run: python -m py_compile services/airdrop_referral_service.py
+      - name: Run referral regression tests
+        id: referral_tests
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=. pytest -q tests/test_airdrop_referral_service.py tests/test_referral_stats_display_hotfix.py > referral-test.log 2>&1
+          code=$?
+          cat referral-test.log
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload referral test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: referral-test-output
+          path: referral-test.log
+      - name: Fail when referral tests failed
+        run: test "${{ steps.referral_tests.outputs.exit_code }}" = "0"
