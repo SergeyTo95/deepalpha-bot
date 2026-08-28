@@ -509,6 +509,12 @@ def build_chunks(user_id: int, chunks: List[Tuple[int, int]]):
     logger.info("polywar_chunks_request_started user_id=%s chunk_count=%s", int(user_id), len(chunks))
     conn = polywar.get_connection()
     try:
+        from services.polywar_world_service import init_world_schema
+        from services.polywar_rebellion_service import init_rebellion_schema
+        init_world_schema(conn); init_rebellion_schema(conn)
+    except Exception:
+        pass
+    try:
         _set_read_timeouts(conn)
         t = time.monotonic(); season = get_active_season_readonly(conn, include_secret_seed=True); sid, seed = int(season["id"]), season["secret_seed"]; config = load_map_config(conn, season=season); logger.info("polywar_chunks_stage user_id=%s chunk_count=%s stage=config duration_ms=%.2f", int(user_id), len(chunks), (time.monotonic()-t)*1000)
         if len(chunks) > config.max_chunks_per_request:

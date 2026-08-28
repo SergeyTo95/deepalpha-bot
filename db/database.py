@@ -1219,6 +1219,9 @@ def _init_db_inner(conn, cursor):
         ("polywar_commander_min_members_for_election", "2"),
         ("polywar_commander_max_statement_length", "280"),
         ("polywar_commander_order_limit", "5"),
+        ("polywar_leadership_mode", "contribution"),
+        ("polywar_leader_inactivity_hours", "168"),
+        ("polywar_leader_refresh_seconds", "30"),
     ]
     for key, value in polywar_defaults:
         cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
