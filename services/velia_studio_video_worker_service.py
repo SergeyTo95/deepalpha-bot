@@ -94,9 +94,13 @@ def _store_generated_video(
     session_id: str,
     generation_id: str,
     prompt: str,
+    mode: str,
     generated: Dict[str, Any],
     reservation_id: str,
 ) -> None:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in {"t2v", "i2v"}:
+        raise ValueError("studio_video_mode_invalid")
     raw = bytes(generated["video_bytes"])
     conn = get_connection()
     cur = conn.cursor()
@@ -115,12 +119,12 @@ def _store_generated_video(
                 f"studio:{session_id}",
                 str(generation_id),
                 str(prompt),
-                "t2v",
+                normalized_mode,
                 str(generated["mime_type"]),
                 len(raw),
                 int(generated["duration_seconds"]),
                 str(generated["resolution"]),
-                str(generated["aspect_ratio"]),
+                "auto" if normalized_mode == "i2v" else str(generated["aspect_ratio"]),
                 bool(generated["has_audio"]),
                 raw,
                 str(generated.get("external_request_id") or "")[:200],
@@ -246,7 +250,7 @@ def _load_monitor_context(generation_id: str) -> Optional[Dict[str, Any]]:
             """
             SELECT generation_id,user_id,session_id,prompt,duration_seconds,
                    worker_job_id,worker_reservation_id,status,
-                   estimated_completion_at
+                   estimated_completion_at,reference_asset_ids_json
             FROM velia_studio_generations
             WHERE generation_id=%s
             LIMIT 1
@@ -262,6 +266,10 @@ def _load_monitor_context(generation_id: str) -> Optional[Dict[str, Any]]:
     job_id = str(_row_value(row, "worker_job_id", 5, "") or "")
     if not job_id:
         return None
+    raw_reference_ids = str(
+        _row_value(row, "reference_asset_ids_json", 9, "[]") or "[]"
+    ).strip()
+    mode = "t2v" if raw_reference_ids in {"", "[]", "null", "None"} else "i2v"
     return {
         "generation_id": str(_row_value(row, "generation_id", 0, "")),
         "user_id": int(_row_value(row, "user_id", 1, 0) or 0),
@@ -271,6 +279,7 @@ def _load_monitor_context(generation_id: str) -> Optional[Dict[str, Any]]:
         "job_id": job_id,
         "reservation_id": str(_row_value(row, "worker_reservation_id", 6, "") or ""),
         "estimated_completion_at": _row_value(row, "estimated_completion_at", 8),
+        "mode": mode,
     }
 
 
@@ -364,6 +373,7 @@ def _finalize_success(context: Dict[str, Any], generated: Dict[str, Any]) -> boo
             session_id=str(context["session_id"]),
             generation_id=generation_id,
             prompt=str(context["prompt"]),
+            mode=str(context.get("mode") or "t2v"),
             generated=generated,
             reservation_id=str(context["reservation_id"]),
         )
@@ -497,8 +507,9 @@ def _monitor_generation(generation_id: str) -> None:
             if status == "succeeded" and isinstance(result.get("generated"), dict):
                 if _finalize_success(context, dict(result["generated"])):
                     logger.info(
-                        "VELIA_STUDIO_MEDIA_WORKER_VIDEO_COMPLETED generation_id=%s duration_seconds=%s artifact_id=%s sha256=%s",
+                        "VELIA_STUDIO_MEDIA_WORKER_VIDEO_COMPLETED generation_id=%s mode=%s duration_seconds=%s artifact_id=%s sha256=%s",
                         generation_id,
+                        str(context.get("mode") or "t2v"),
                         context["duration_seconds"],
                         str(result["generated"].get("artifact_id") or "")[:80],
                         str(result["generated"].get("sha256") or "")[:16],
@@ -586,15 +597,26 @@ def generate_self_hosted_studio_video_turn(
     reference_ids: List[str],
     duration_seconds: int = 5,
 ) -> Dict[str, Any]:
-    """Submit a Studio T2V job and return immediately with durable progress."""
+    """Submit a Studio T2V/I2V job and return immediately with durable progress."""
     if not self_hosted_media_active():
         raise studio_service.StudioError("studio_self_hosted_video_not_active", status=409)
-    if reference_ids:
-        raise studio_service.StudioError("video_mode_not_supported", status=409)
 
     duration = int(duration_seconds or 5)
     if duration not in studio_video_duration_options():
         raise studio_service.StudioError("studio_video_duration_not_supported", status=400)
+    if len(reference_ids) > 1:
+        raise studio_service.StudioError(
+            "studio_video_requires_zero_or_one_reference",
+            status=400,
+        )
+
+    references = studio_service._load_refs(
+        int(user_id),
+        str(session_id),
+        reference_ids,
+    )
+    attachment = references[0] if references else None
+    mode = "i2v" if attachment is not None else "t2v"
 
     generation_id = studio_service._insert_turn(
         int(user_id),
@@ -602,7 +624,8 @@ def generate_self_hosted_studio_video_turn(
         "video",
         str(prompt),
         str(client_request_id),
-        [],
+        reference_ids,
+        duration_seconds=duration,
     )
 
     reservation_id: Optional[str] = None
@@ -627,8 +650,9 @@ def generate_self_hosted_studio_video_turn(
             }
 
         logger.info(
-            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT generation_id=%s mode=t2v duration_seconds=%s",
+            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT generation_id=%s mode=%s duration_seconds=%s",
             generation_id,
+            mode,
             duration,
         )
         worker_prompt = rewrite_studio_video_prompt(
@@ -637,11 +661,17 @@ def generate_self_hosted_studio_video_turn(
             generation_id=str(generation_id),
             session_id=str(session_id),
         )
-        submitted = submit_studio_video_job(
-            prompt=worker_prompt,
-            request_id=str(generation_id),
-            duration_seconds=duration,
-        )
+        submit_kwargs: Dict[str, Any] = {
+            "prompt": worker_prompt,
+            "request_id": str(generation_id),
+            "duration_seconds": duration,
+        }
+        if attachment is not None:
+            submit_kwargs.update(
+                reference_bytes=bytes(attachment["content_bytes"]),
+                reference_mime_type=str(attachment["mime_type"]),
+            )
+        submitted = submit_studio_video_job(**submit_kwargs)
         _persist_submission(
             generation_id=generation_id,
             user_id=int(user_id),
@@ -664,8 +694,9 @@ def generate_self_hosted_studio_video_turn(
             text="Не удалось запустить видео.",
         )
         logger.error(
-            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT_FAILED generation_id=%s duration_seconds=%s code=%s http_status=%s",
+            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT_FAILED generation_id=%s mode=%s duration_seconds=%s code=%s http_status=%s",
             generation_id,
+            mode,
             duration,
             exc.code,
             exc.http_status if exc.http_status is not None else "",
@@ -683,8 +714,9 @@ def generate_self_hosted_studio_video_turn(
             text="Не удалось запустить видео.",
         )
         logger.exception(
-            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT_FAILED_UNEXPECTED generation_id=%s duration_seconds=%s error_type=%s",
+            "VELIA_STUDIO_MEDIA_WORKER_VIDEO_SUBMIT_FAILED_UNEXPECTED generation_id=%s mode=%s duration_seconds=%s error_type=%s",
             generation_id,
+            mode,
             duration,
             type(exc).__name__,
         )
