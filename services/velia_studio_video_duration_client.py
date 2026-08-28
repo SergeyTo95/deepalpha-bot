@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import base64
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from services.velia_media_worker_client import (
     MediaWorkerError,
@@ -10,6 +11,10 @@ from services.velia_media_worker_client import (
     get_job_status,
     submit_job,
 )
+
+
+_ALLOWED_REFERENCE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_MAX_REFERENCE_BYTES = 15 * 1024 * 1024
 
 
 def studio_video_duration_options() -> tuple[int, ...]:
@@ -33,6 +38,26 @@ def _validate_request(prompt: str, duration_seconds: int) -> tuple[str, int]:
     return normalized_prompt, duration
 
 
+def _reference_payload(
+    reference_bytes: Optional[bytes],
+    reference_mime_type: str,
+) -> list[Dict[str, str]]:
+    raw = bytes(reference_bytes or b"")
+    if not raw:
+        return []
+    mime_type = str(reference_mime_type or "").split(";", 1)[0].strip().lower()
+    if mime_type not in _ALLOWED_REFERENCE_MIME_TYPES:
+        raise MediaWorkerError("media_worker_video_reference_type_not_supported")
+    if len(raw) > _MAX_REFERENCE_BYTES:
+        raise MediaWorkerError("media_worker_video_reference_too_large")
+    return [
+        {
+            "media_type": mime_type,
+            "content_base64": base64.b64encode(raw).decode("ascii"),
+        }
+    ]
+
+
 def _job_progress(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         progress = max(0, min(100, int(payload.get("progress_percent") or 0)))
@@ -54,6 +79,8 @@ def submit_studio_video_job(
     prompt: str,
     request_id: str,
     duration_seconds: int,
+    reference_bytes: Optional[bytes] = None,
+    reference_mime_type: str = "",
 ) -> Dict[str, Any]:
     normalized_prompt, duration = _validate_request(prompt, duration_seconds)
     submitted = submit_job(
@@ -62,7 +89,7 @@ def submit_studio_video_job(
         payload={
             "prompt": normalized_prompt,
             "duration_seconds": duration,
-            "references": [],
+            "references": _reference_payload(reference_bytes, reference_mime_type),
         },
     )
     return {
@@ -130,14 +157,17 @@ def generate_studio_video(
     prompt: str,
     request_id: str,
     duration_seconds: int,
+    reference_bytes: Optional[bytes] = None,
+    reference_mime_type: str = "",
 ) -> Dict[str, Any]:
-    """Run an accepted Studio T2V duration synchronously for rollback callers.
+    """Run an accepted Studio video duration synchronously for rollback callers.
 
     New Studio video requests use submit_studio_video_job/poll_studio_video_job.
     Fifteen seconds is enabled by default. Set
     VELIA_STUDIO_VIDEO_15S_ENABLED=false for an emergency rollback.
     """
     normalized_prompt, duration = _validate_request(prompt, duration_seconds)
+    references = _reference_payload(reference_bytes, reference_mime_type)
 
     artifact = _run_job(
         kind="videos",
@@ -145,7 +175,7 @@ def generate_studio_video(
         payload={
             "prompt": normalized_prompt,
             "duration_seconds": duration,
-            "references": [],
+            "references": references,
         },
         expected_media_type="video/mp4",
     )
@@ -162,6 +192,6 @@ def generate_studio_video(
         "sha256": artifact.sha256,
         "duration_seconds": duration,
         "resolution": "hd",
-        "aspect_ratio": "16:9",
+        "aspect_ratio": "auto" if references else "16:9",
         "has_audio": False,
     }
