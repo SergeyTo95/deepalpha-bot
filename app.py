@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import telegram_bot
 from bot.admin import register_admin
 from services.ton_service import get_transactions, parse_payment
+from services.watchlist_ai_summary_service import (
+    build_watchlist_ai_summary,
+    format_watchlist_ai_summary,
+)
 from services.polymarket_service import (
     list_markets, list_events, normalize_market_data,
     normalize_event_for_channel, build_market_url,
@@ -495,6 +499,64 @@ def _get_current_probability(market_data: dict) -> float:
         return None
 
 
+def _charge_watchlist_alert(user_id: int) -> dict:
+    """Charge tokens for a Watchlist Autopilot alert before AI work."""
+    if get_setting("paid_mode", "off") != "on":
+        return {"allowed": True, "status": "billing_disabled"}
+
+    user = get_user(user_id)
+    if user and (user.get("is_vip") or is_subscribed(user_id)):
+        return {"allowed": True, "status": "vip"}
+
+    price = int(get_setting("watchlist_price_tokens", "5"))
+    balance = int(user.get("token_balance", 0)) if user else 0
+    if balance < price:
+        return {"allowed": False, "status": "insufficient_tokens", "price": price, "balance": balance}
+
+    add_tokens(user_id, -price)
+    return {"allowed": True, "status": "charged", "price": price, "balance": balance - price}
+
+
+def _watchlist_charge_footer(charge: dict, lang: str = "ru") -> str:
+    status = charge.get("status")
+    if status == "charged":
+        if lang == "ru":
+            return f"🪙 Списано: {charge.get('price', 0)} ток. Баланс: {charge.get('balance', 0)}"
+        return f"🪙 Charged: {charge.get('price', 0)} tokens. Balance: {charge.get('balance', 0)}"
+    if status == "vip":
+        return "👑 Watchlist Autopilot: included"
+    if status == "billing_disabled":
+        return "Watchlist Autopilot: billing disabled"
+    return ""
+
+
+def _append_watchlist_ai_summary(text: str, *, event_type: str, question: str, market_slug: str = "",
+                                 market_url: str = "", initial_probability: float | None = None,
+                                 current_probability: float | None = None, probability_change: float | None = None,
+                                 actual_outcome: str | None = None, closing_hours: int | None = None,
+                                 lang: str = "ru") -> str:
+    if get_setting("watchlist_ai_summary_enabled", "on") != "on":
+        return text
+    summary = build_watchlist_ai_summary(
+        event_type=event_type,
+        question=question,
+        market_slug=market_slug,
+        market_url=market_url,
+        initial_probability=initial_probability,
+        current_probability=current_probability,
+        probability_change=probability_change,
+        actual_outcome=actual_outcome,
+        closing_hours=closing_hours,
+        lang=lang,
+    )
+    try:
+        max_bullets = int(get_setting("watchlist_ai_summary_max_bullets", "3"))
+    except Exception:
+        max_bullets = 3
+    summary["watch_next"] = (summary.get("watch_next") or [])[:max(0, max_bullets)]
+    return f"{text}\n\n{format_watchlist_ai_summary(summary, lang=lang)}"
+
+
 async def _check_subscriber_notifications(
     sub: dict, item: dict, current_prob: float,
     threshold: float, closing_hours: int
@@ -511,25 +573,43 @@ async def _check_subscriber_notifications(
 
     question = item.get("question", "")
     url = item.get("market_url", "")
+    slug = item.get("market_slug", "")
 
     change = current_prob - initial_prob
     abs_change = abs(change)
 
     if abs_change >= threshold and not sub.get("notified_change"):
-        direction = "📈" if change > 0 else "📉"
-        text = (
-            f"{direction} Watchlist — изменение рынка!\n\n"
-            f"📌 {question}\n\n"
-            f"Было: {initial_prob:.1f}%\n"
-            f"Стало: {current_prob:.1f}%\n"
-            f"Изменение: {'+' if change > 0 else ''}{change:.1f}%\n\n"
-            f"🔗 {url}"
-        )
-        try:
-            await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
-            reset_watchlist_change_notification(watchlist_id, current_prob)
-        except Exception as e:
-            print(f"⭐ Failed to notify {user_id} about change: {e}")
+        charge = _charge_watchlist_alert(user_id)
+        if not charge.get("allowed"):
+            print(f"⭐ Watchlist change skipped for {user_id}: {charge.get('status')}")
+        else:
+            direction = "📈" if change > 0 else "📉"
+            text = (
+                f"{direction} Watchlist — изменение рынка!\n\n"
+                f"📌 {question}\n\n"
+                f"Было: {initial_prob:.1f}%\n"
+                f"Стало: {current_prob:.1f}%\n"
+                f"Изменение: {'+' if change > 0 else ''}{change:.1f}%\n\n"
+                f"🔗 {url}"
+            )
+            text = _append_watchlist_ai_summary(
+                text,
+                event_type="probability_change",
+                question=question,
+                market_slug=slug,
+                market_url=url,
+                initial_probability=initial_prob,
+                current_probability=current_prob,
+                probability_change=change,
+            )
+            footer = _watchlist_charge_footer(charge)
+            if footer:
+                text = f"{text}\n\n{footer}"
+            try:
+                await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
+                reset_watchlist_change_notification(watchlist_id, current_prob)
+            except Exception as e:
+                print(f"⭐ Failed to notify {user_id} about change: {e}")
 
     end_date = sub.get("market_end_date") or item.get("market_end_date")
     if end_date and not sub.get("notified_closing_soon"):
@@ -539,6 +619,10 @@ async def _check_subscriber_notifications(
             hours_left = (end_dt - now).total_seconds() / 3600
 
             if 0 < hours_left <= closing_hours:
+                charge = _charge_watchlist_alert(user_id)
+                if not charge.get("allowed"):
+                    print(f"⭐ Watchlist closing skipped for {user_id}: {charge.get('status')}")
+                    return
                 text = (
                     f"⏰ Watchlist — рынок скоро закроется!\n\n"
                     f"📌 {question}\n\n"
@@ -546,11 +630,22 @@ async def _check_subscriber_notifications(
                     f"Текущая вероятность: {current_prob:.1f}%\n\n"
                     f"🔗 {url}"
                 )
+                text = _append_watchlist_ai_summary(
+                    text,
+                    event_type="closing_soon",
+                    question=question,
+                    market_slug=slug,
+                    market_url=url,
+                    current_probability=current_prob,
+                    closing_hours=int(hours_left),
+                )
+                footer = _watchlist_charge_footer(charge)
+                if footer:
+                    text = f"{text}\n\n{footer}"
                 await telegram_bot.bot.send_message(user_id, text, disable_web_page_preview=True)
                 mark_watchlist_notified(watchlist_id, "closing_soon")
         except Exception as e:
             print(f"⭐ Failed to check closing date for {user_id}: {e}")
-
 
 async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> None:
     """Обрабатывает закрытие рынка — уведомляет всех подписчиков."""
@@ -573,6 +668,10 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
                 continue
 
             try:
+                charge = _charge_watchlist_alert(sub["user_id"])
+                if not charge.get("allowed"):
+                    print(f"⭐ Watchlist resolved skipped for {sub.get('user_id')}: {charge.get('status')}")
+                    continue
                 text = (
                     f"🎯 Watchlist — рынок закрылся!\n\n"
                     f"📌 {question}\n\n"
@@ -580,6 +679,19 @@ async def _handle_resolved_market(slug: str, item: dict, market_data: dict) -> N
                     f"🔗 {url}\n\n"
                     f"Рынок удалён из watchlist."
                 )
+                text = _append_watchlist_ai_summary(
+                    text,
+                    event_type="resolved_recap",
+                    question=question,
+                    market_slug=slug,
+                    market_url=url,
+                    initial_probability=sub.get("initial_probability"),
+                    current_probability=sub.get("last_checked_probability"),
+                    actual_outcome=actual_outcome,
+                )
+                footer = _watchlist_charge_footer(charge)
+                if footer:
+                    text = f"{text}\n\n{footer}"
                 await telegram_bot.bot.send_message(
                     sub["user_id"], text, disable_web_page_preview=True
                 )
