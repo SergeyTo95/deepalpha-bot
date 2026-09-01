@@ -1,6 +1,7 @@
 import os
 import json
 from aiohttp import web
+from services.ton_service import resolve_ton_purchase_project_wallet
 from db.database import (
     get_user, get_setting, is_subscribed,
     get_subscription_until, get_token_packages,
@@ -132,6 +133,7 @@ async def handle_user_api(request):
             "watchlist_extra_slots_count": get_setting("watchlist_extra_slots_count", "5"),
             "watchlist_limit_regular": get_setting("watchlist_limit_regular", "10"),
             "watchlist_limit_vip": get_setting("watchlist_limit_vip", "50"),
+            "ton_purchase_wallet": resolve_ton_purchase_project_wallet(),
         }
 
         return _json_response(data)

@@ -144,6 +144,27 @@ def init_db():
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cashier_payment_wallets (
+        id SERIAL PRIMARY KEY,
+        wallet_address TEXT NOT NULL,
+        seed_encrypted TEXT NOT NULL,
+        network TEXT NOT NULL DEFAULT 'MAINNET',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        seed_revealed_at TIMESTAMP
+    )
+    """)
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_cashier_payment_wallets_address ON cashier_payment_wallets(wallet_address)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cashier_payment_wallets_status ON cashier_payment_wallets(status)"
+    )
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS predictions_tracking (
         id SERIAL PRIMARY KEY,
         user_id BIGINT DEFAULT 0,
@@ -414,6 +435,27 @@ def set_setting(key: str, value: str) -> None:
         conn.commit()
     except Exception as e:
         print(f"set_setting error: {e}")
+    finally:
+        conn.close()
+
+
+def get_active_cashier_payment_wallet() -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            """
+            SELECT * FROM cashier_payment_wallets
+            WHERE status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"get_active_cashier_payment_wallet error: {e}")
+        return None
     finally:
         conn.close()
 
