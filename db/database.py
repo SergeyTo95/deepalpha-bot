@@ -293,6 +293,23 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_author ON withdrawal_requests(author_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawal_requests(status)")
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cashier_payment_wallets (
+        id SERIAL PRIMARY KEY,
+        wallet_address TEXT NOT NULL,
+        seed_encrypted TEXT NOT NULL,
+        network TEXT NOT NULL DEFAULT 'MAINNET',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        seed_reveal_used BOOLEAN DEFAULT FALSE,
+        seed_revealed_at TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cashier_wallets_status ON cashier_payment_wallets(status)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_cashier_wallets_addr_uniq ON cashier_payment_wallets(wallet_address)")
+
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings_ton REAL DEFAULT 0",
