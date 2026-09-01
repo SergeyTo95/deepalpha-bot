@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from services.llm_service import generate_decision_text
+from services.llm_service import generate_decision_text, get_gemini_provider_cooldown_error
 
 
 class DecisionAgent:
@@ -57,8 +57,13 @@ class DecisionAgent:
             lang=lang,
         )
 
-        print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
-        raw_response = generate_decision_text(prompt)
+        provider_error = get_gemini_provider_cooldown_error()
+        if provider_error:
+            print(f"signal_cache_skipped_llm_provider_unavailable error_type={provider_error}")
+            raw_response = ""
+        else:
+            print(f"DecisionAgent.run: calling LLM, prompt length={len(prompt)}")
+            raw_response = generate_decision_text(prompt)
         print(f"DecisionAgent.run: LLM response length={len(raw_response)}")
 
         if raw_response:
