@@ -629,7 +629,8 @@ async def check_ton_payments():
     await asyncio.sleep(15)
     while True:
         try:
-            transactions = get_transactions(limit=20)
+            from db.database import resolve_ton_purchase_project_wallet
+            transactions = get_transactions(limit=20, address=resolve_ton_purchase_project_wallet())
             pending = get_all_pending()
 
             for tx in transactions:

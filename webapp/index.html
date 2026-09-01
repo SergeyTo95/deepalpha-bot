@@ -236,7 +236,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box">{{TON_PAYMENT_WALLET}}</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -273,7 +273,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box">{{TON_PAYMENT_WALLET}}</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -319,7 +319,7 @@
 
             <div class="manual-pay">
                 <div class="manual-title">Отправь TON напрямую</div>
-                <div class="address-box">UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv</div>
+                <div class="address-box">{{TON_PAYMENT_WALLET}}</div>
                 <button class="copy-btn" onclick="copyAddress()">📋 Скопировать адрес</button>
                 <div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.4);text-align:center;">
                     В комментарии укажи свой ID:
@@ -445,7 +445,7 @@
         </div>
     </div>
     <script>
-        const OWNER_ADDRESS = "UQB7mMWEGE4reqMvHG5zPcHl9fQUy6L91UJhiXgyx772kuUv";
+        let OWNER_ADDRESS = "";
         const API_BASE = window.location.origin;
 
         let tg = window.Telegram.WebApp;
@@ -688,6 +688,8 @@
                     if (data.min_donation_ton) minDonation = parseFloat(data.min_donation_ton);
                     if (data.watchlist_extra_slots_price) slotsPrice = parseInt(data.watchlist_extra_slots_price);
                     if (data.watchlist_extra_slots_count) slotsCount = parseInt(data.watchlist_extra_slots_count);
+                    if (data.ton_payment_wallet) OWNER_ADDRESS = data.ton_payment_wallet;
+                    document.querySelectorAll('.address-box').forEach(el => el.textContent = OWNER_ADDRESS || '—');
 
                     // Обновляем UI вкладок
                     updateAuthorStatusUI();
@@ -1262,7 +1264,7 @@
         }
 
         function copyAddress() {
-            navigator.clipboard.writeText(OWNER_ADDRESS).then(() => {
+            navigator.clipboard.writeText(OWNER_ADDRESS || '').then(() => {
                 try { tg.HapticFeedback.impactOccurred('light'); } catch(e) {}
                 showStatus('✅ Адрес скопирован!', 'success');
             });

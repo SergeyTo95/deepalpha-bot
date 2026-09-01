@@ -5,7 +5,7 @@ from db.database import (
     get_user, get_setting, is_subscribed,
     get_subscription_until, get_token_packages,
     get_all_authors, get_author_profile, get_author_post,
-    is_author, create_donation, add_pending,
+    is_author, create_donation, add_pending, resolve_ton_purchase_project_wallet,
 )
 
 PORT = int(os.getenv("PORT", 3000))
@@ -132,6 +132,7 @@ async def handle_user_api(request):
             "watchlist_extra_slots_count": get_setting("watchlist_extra_slots_count", "5"),
             "watchlist_limit_regular": get_setting("watchlist_limit_regular", "10"),
             "watchlist_limit_vip": get_setting("watchlist_limit_vip", "50"),
+            "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
         }
 
         return _json_response(data)
@@ -349,6 +350,7 @@ async def handle_public_settings(request):
             "watchlist_extra_slots_price": get_setting("watchlist_extra_slots_price", "20"),
             "watchlist_extra_slots_count": get_setting("watchlist_extra_slots_count", "5"),
             "token_price_ton": get_setting("token_price_ton", "0.1"),
+            "ton_payment_wallet": resolve_ton_purchase_project_wallet(),
         }
         return _json_response(data)
     except Exception as e:

@@ -20,6 +20,8 @@ from db.database import (
     get_top_authors_by_donations, get_donation_stats,
     get_pending_withdrawals, approve_withdrawal, reject_withdrawal,
     get_author_posts,
+    get_active_cashier_payment_wallet, create_cashier_payment_wallet,
+    reveal_cashier_payment_wallet_seed_once, get_cashier_payment_wallet_balance,
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -847,6 +849,7 @@ def authors_admin_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton("❌ Забрать статус", callback_data="auth_admin_revoke"),
         InlineKeyboardButton("💰 Заявки на вывод", callback_data="auth_admin_withdrawals"),
         InlineKeyboardButton("📊 Статистика донатов", callback_data="auth_admin_stats"),
+        InlineKeyboardButton("💼 Cashier payment wallet", callback_data="auth_admin_cashier_wallet"),
         InlineKeyboardButton("⬅️ Back", callback_data="admin_back"),
     )
     return kb
@@ -927,6 +930,44 @@ def donation_stats_text() -> str:
     return text
 
 
+
+
+def cashier_wallet_admin_text(lang: str = "ru") -> str:
+    wallet = get_active_cashier_payment_wallet()
+    status = "active" if wallet else "not created"
+    address = wallet.get("wallet_address", "—") if wallet else "—"
+    try:
+        balance = get_cashier_payment_wallet_balance() if wallet else 0.0
+    except Exception:
+        balance = 0.0
+
+    if lang == "ru":
+        return (
+            f"💼 Кошелёк кассы\n\n"
+            f"Статус: {status}\n"
+            f"Адрес:\n{address}\n\n"
+            f"Баланс: {balance:.4f} TON\n\n"
+            f"Этот кошелёк используется для приёма оплат за покупку токенов."
+        )
+    return (
+        f"💼 Cashier payment wallet\n\n"
+        f"Status: {status}\n"
+        f"Address:\n{address}\n\n"
+        f"Balance: {balance:.4f} TON\n\n"
+        f"This wallet is used to receive token purchase payments."
+    )
+
+
+def cashier_wallet_admin_kb(lang: str = "ru") -> InlineKeyboardMarkup:
+    ru = lang == "ru"
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("➕ Создать кошелёк кассы" if ru else "➕ Create cashier wallet", callback_data="auth_admin_cashier_create"),
+        InlineKeyboardButton("🔄 Обновить баланс" if ru else "🔄 Refresh balance", callback_data="auth_admin_cashier_refresh"),
+        InlineKeyboardButton("🔐 Показать seed phrase" if ru else "🔐 Reveal seed phrase", callback_data="auth_admin_cashier_reveal_warn"),
+        InlineKeyboardButton("⬅️ Назад" if ru else "⬅️ Back", callback_data="admin_authors"),
+    )
+    return kb
 def withdrawals_list_text() -> str:
     pending = get_pending_withdrawals(limit=20)
     if not pending:
@@ -2088,6 +2129,54 @@ def register_admin(dp: Dispatcher):
             await message.answer(f"✅ Лимит: {val} постов/день")
         except ValueError:
             await message.answer("❌ Целое")
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_cashier_wallet")
+    async def auth_admin_cashier_wallet(callback: types.CallbackQuery):
+        if not is_admin(callback.from_user.id):
+            return
+        lang = "ru"
+        await callback.message.edit_text(cashier_wallet_admin_text(lang), reply_markup=cashier_wallet_admin_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_cashier_refresh")
+    async def auth_admin_cashier_refresh(callback: types.CallbackQuery):
+        lang = "ru"
+        await callback.message.edit_text(cashier_wallet_admin_text(lang), reply_markup=cashier_wallet_admin_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_cashier_create")
+    async def auth_admin_cashier_create(callback: types.CallbackQuery):
+        lang = "ru"
+        try:
+            create_cashier_payment_wallet(callback.from_user.id)
+            await callback.answer("✅")
+        except Exception as e:
+            await callback.answer(f"❌ {e}", show_alert=True)
+        await callback.message.edit_text(cashier_wallet_admin_text(lang), reply_markup=cashier_wallet_admin_kb(lang))
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_cashier_reveal_warn")
+    async def auth_admin_cashier_reveal_warn(callback: types.CallbackQuery):
+        lang = "ru"
+        ru = lang == "ru"
+        kb = InlineKeyboardMarkup(row_width=1)
+        kb.add(InlineKeyboardButton("🔐 Подтвердить" if ru else "🔐 Confirm reveal", callback_data="auth_admin_cashier_reveal"))
+        kb.add(InlineKeyboardButton("⬅️ Назад" if ru else "⬅️ Back", callback_data="auth_admin_cashier_wallet"))
+        await callback.message.edit_text(("⚠️ Seed phrase будет показана только ОДИН раз." if ru else "⚠️ Seed phrase will be shown only ONCE."), reply_markup=kb)
+
+    @dp.callback_query_handler(lambda c: c.data == "auth_admin_cashier_reveal")
+    async def auth_admin_cashier_reveal(callback: types.CallbackQuery):
+        lang = "ru"
+        ru = lang == "ru"
+        if callback.message.chat.type != types.ChatType.PRIVATE:
+            txt = "Для безопасности откройте это в личном чате с ботом." if ru else "For security, open this in a private chat with the bot."
+            await callback.answer(txt, show_alert=True)
+            return
+        try:
+            data = reveal_cashier_payment_wallet_seed_once(callback.from_user.id)
+            seed = data.get('seed_phrase', '')
+            await callback.message.answer(("🔐 Seed phrase (показывается один раз):\n\n" if ru else "🔐 Seed phrase (shown once):\n\n") + f"`{seed}`", parse_mode='Markdown')
+            await callback.answer("✅")
+        except Exception as e:
+            await callback.answer(f"❌ {e}", show_alert=True)
+        await callback.message.edit_text(cashier_wallet_admin_text(lang), reply_markup=cashier_wallet_admin_kb(lang))
 
     @dp.callback_query_handler(lambda c: c.data == "auth_admin_list")
     async def auth_admin_list(callback: types.CallbackQuery):
