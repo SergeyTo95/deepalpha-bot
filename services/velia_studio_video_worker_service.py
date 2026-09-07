@@ -660,6 +660,7 @@ def generate_self_hosted_studio_video_turn(
             user_id=int(user_id),
             generation_id=str(generation_id),
             session_id=str(session_id),
+            duration_seconds=duration,
         )
         submit_kwargs: Dict[str, Any] = {
             "prompt": worker_prompt,

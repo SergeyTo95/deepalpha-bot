@@ -10,6 +10,7 @@ from services.velia_media_worker_client import (
     artifact_from_job,
     get_job_status,
     submit_job,
+    video_artifact_metadata,
 )
 
 
@@ -129,8 +130,7 @@ def poll_studio_video_job(
         expected_media_type="video/mp4",
         request_id=request_id,
     )
-    if len(artifact.content) < 12 or b"ftyp" not in artifact.content[:64]:
-        raise MediaWorkerError("media_worker_video_invalid_mp4")
+    metadata = video_artifact_metadata(artifact.content, duration_seconds=duration)
     result.update(
         progress_percent=100,
         estimated_seconds_remaining=0,
@@ -146,7 +146,7 @@ def poll_studio_video_job(
             # the separate 480p/SD metadata migration is deployed.
             "resolution": "hd",
             "aspect_ratio": "16:9",
-            "has_audio": False,
+            **metadata,
         },
     )
     return result
@@ -179,8 +179,7 @@ def generate_studio_video(
         },
         expected_media_type="video/mp4",
     )
-    if len(artifact.content) < 12 or b"ftyp" not in artifact.content[:64]:
-        raise MediaWorkerError("media_worker_video_invalid_mp4")
+    metadata = video_artifact_metadata(artifact.content, duration_seconds=duration)
 
     # Keep the existing production DB/storage metadata contract until the
     # separate 480p schema migration is accepted and deployed.
@@ -193,5 +192,5 @@ def generate_studio_video(
         "duration_seconds": duration,
         "resolution": "hd",
         "aspect_ratio": "auto" if references else "16:9",
-        "has_audio": False,
+        **metadata,
     }

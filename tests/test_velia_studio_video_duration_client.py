@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 import services.velia_studio_video_duration_client as duration_client
 from services.velia_media_worker_client import MediaWorkerArtifact, MediaWorkerError
@@ -23,7 +24,7 @@ def test_studio_duration_client_submits_ten_seconds_as_structured_worker_field(m
             media_type="video/mp4",
             size_bytes=16,
             sha256="a" * 64,
-            content=b"0000ftyp00000000",
+            content=(Path(__file__).parent / "fixtures/video/silent-10s.mp4").read_bytes(),
         )
 
     monkeypatch.setattr(duration_client, "_run_job", fake_run_job)
@@ -41,7 +42,7 @@ def test_studio_duration_client_submits_ten_seconds_as_structured_worker_field(m
         "references": [],
     }
     assert result["duration_seconds"] == 10
-    assert result["video_bytes"] == b"0000ftyp00000000"
+    assert result["video_bytes"] == (Path(__file__).parent / "fixtures/video/silent-10s.mp4").read_bytes()
 
 
 def test_async_submit_preserves_duration_and_worker_eta(monkeypatch) -> None:
@@ -128,7 +129,7 @@ def test_async_poll_preserves_production_storage_resolution_contract(monkeypatch
             media_type="video/mp4",
             size_bytes=16,
             sha256="a" * 64,
-            content=b"0000ftyp00000000",
+            content=(Path(__file__).parent / "fixtures/video/silent-15s.mp4").read_bytes(),
         ),
     )
 

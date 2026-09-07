@@ -24,7 +24,8 @@ def _env_enabled(name: str, default: bool = True) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-def _rewrite_instruction(prompt: str) -> str:
+def _rewrite_instruction(prompt: str, duration_seconds: int = 5) -> str:
+    duration = duration_seconds if duration_seconds in (5, 10, 15) else 5
     return (
         "Rewrite the user request as one production-ready English prompt for a "
         "text-to-video model. Return only the final English prompt, without a label, "
@@ -32,8 +33,9 @@ def _rewrite_instruction(prompt: str) -> str:
         "count, action, location, era, and visual style. Do not replace animals with "
         "people; when people are explicitly requested as a separate group, preserve "
         "both groups and their distinct roles. Make the main subjects immediately "
-        "recognizable and visible in a well-lit medium-wide or wide shot. Describe one "
-        "coherent five-second shot with clear foreground action, natural motion, stable "
+        "recognizable and visible while preserving the requested lighting, time of day "
+        "and camera framing. Describe one "
+        f"coherent {duration}-second sequence with clear foreground action, natural motion, stable "
         "anatomy, sharp detail, balanced exposure, and no text or logos. Whenever "
         "subjects interact, establish simple, readable spatial roles and keep the same "
         "screen direction throughout the shot. For conflict, pursuit, weapons, or "
@@ -43,8 +45,12 @@ def _rewrite_instruction(prompt: str) -> str:
         "clear cause and effect. Never make a character act, aim, or fire into empty "
         "space or off-screen. Prefer one legible interaction over many unrelated "
         "simultaneous actions, and do not invent extra principal subjects or change "
-        "their requested roles. If the request is not English, translate it accurately "
-        "into English first.\n\n"
+        "their requested roles. Describe synchronized diegetic sound that matches "
+        "visible actions and the environment. Preserve requested music, silence, "
+        "sound effects, voice identity and dialogue. Keep every quoted spoken line "
+        "verbatim in its original language; translate only scene directions into "
+        "English. Do not invent dialogue or add music unless requested. Let the "
+        "action and sound develop across the selected duration with a natural ending.\n\n"
         f"User request:\n{prompt.strip()}"
     )
 
@@ -79,6 +85,7 @@ def rewrite_studio_video_prompt(
     user_id: int,
     generation_id: str,
     session_id: Optional[str] = None,
+    duration_seconds: int = 5,
 ) -> str:
     """Translate/expand a Studio prompt for the English-first GPU model.
 
@@ -94,7 +101,7 @@ def rewrite_studio_video_prompt(
         from services import llm_service
 
         rewritten = llm_service.generate_text(
-            _rewrite_instruction(source),
+            _rewrite_instruction(source, duration_seconds),
             feature="studio_video_prompt",
             user_id=int(user_id),
             is_background=False,

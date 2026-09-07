@@ -99,7 +99,8 @@ def test_image_job_uses_async_contract_and_verifies_artifact(monkeypatch):
 
 def test_video_job_returns_verified_mp4(monkeypatch):
     _configure(monkeypatch)
-    raw = b"\x00\x00\x00\x18ftypmp42" + (b"v" * 2048)
+    from pathlib import Path
+    raw = (Path(__file__).parent / "fixtures/video/silent-5s.mp4").read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
 
     def fake_request(method, url, **kwargs):
