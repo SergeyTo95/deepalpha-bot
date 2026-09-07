@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 import requests
 from PIL import Image
 
+from services.velia_media_worker_video_metadata import inspect_mp4
+
 
 class MediaWorkerError(RuntimeError):
     def __init__(self, code: str, *, http_status: Optional[int] = None):
@@ -29,6 +31,20 @@ class MediaWorkerArtifact:
     size_bytes: int
     sha256: str
     content: bytes
+
+
+def video_artifact_metadata(content: bytes, *, duration_seconds: int) -> Dict[str, Any]:
+    try:
+        metadata = inspect_mp4(content, expected_duration=duration_seconds)
+    except (ValueError, OverflowError) as exc:
+        raise MediaWorkerError("media_worker_video_invalid_mp4") from exc
+    return {
+        "has_audio": metadata.has_audio,
+        "actual_duration_seconds": round(metadata.duration_seconds, 3),
+        "width": metadata.width,
+        "height": metadata.height,
+        "fps": round(metadata.fps, 3),
+    }
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -381,8 +397,7 @@ def generate_video(*, prompt: str, request_id: str) -> Dict[str, Any]:
         payload=payload,
         expected_media_type="video/mp4",
     )
-    if len(artifact.content) < 12 or b"ftyp" not in artifact.content[:64]:
-        raise MediaWorkerError("media_worker_video_invalid_mp4")
+    metadata = video_artifact_metadata(artifact.content, duration_seconds=5)
     return {
         "video_bytes": artifact.content,
         "mime_type": "video/mp4",
@@ -392,5 +407,5 @@ def generate_video(*, prompt: str, request_id: str) -> Dict[str, Any]:
         "duration_seconds": 5,
         "resolution": "hd",
         "aspect_ratio": "16:9",
-        "has_audio": False,
+        **metadata,
     }

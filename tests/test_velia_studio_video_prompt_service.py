@@ -8,8 +8,19 @@ import services
 
 from services.velia_studio_video_prompt_service import (
     _clean_rewrite,
+    _rewrite_instruction,
     rewrite_studio_video_prompt,
 )
+
+
+def test_rewrite_instruction_preserves_duration_language_and_sound():
+    instruction = _rewrite_instruction('Ночь. Девушка говорит: «Привет, Сергей!» Звук дождя.', 15)
+    assert "coherent 15-second sequence" in instruction
+    assert "five-second" not in instruction
+    assert "verbatim in its original language" in instruction
+    assert "Do not invent dialogue or add music unless requested" in instruction
+    assert "preserving the requested lighting" in instruction
+    assert "Привет, Сергей!" in instruction
 
 
 def test_clean_rewrite_removes_markdown_and_label():
