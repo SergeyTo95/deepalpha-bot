@@ -9,6 +9,8 @@ import requests
 
 from services import velia_developer_github_service as github_service
 
+from services.velia_repository_context_security import redact_source, sensitive_context_path
+
 
 HTTP = requests
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -111,7 +113,7 @@ def _candidate_paths(values: Iterable[Any], limit: int = 20) -> list[str]:
             path = github_service.validate_path(str(value or ""))
         except Exception:
             continue
-        if path in seen:
+        if sensitive_context_path(path) or path in seen:
             continue
         seen.add(path)
         paths.append(path)
@@ -130,7 +132,7 @@ def _fallback(
     return {
         "used": False,
         "source": "github",
-        "evidence": str(evidence or ""),
+        "evidence": redact_source(str(evidence or "")),
         "requested_sha": requested_sha,
         "indexed_sha": indexed_sha,
         "error_code": str(error_code or "")[:120],
@@ -251,7 +253,7 @@ def fetch_planning_context(
             indexed_sha=indexed_sha,
         )
 
-    context = str(data.get("context") or "").strip()
+    context = redact_source(str(data.get("context") or "")).strip()
     if not context:
         return _fallback(
             fallback_evidence,

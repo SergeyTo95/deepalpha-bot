@@ -6,6 +6,8 @@ import os
 import re
 from typing import Optional
 
+from services.velia_media_prompt_cache import reuse_media_text
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,8 @@ def _rewrite_instruction(prompt: str, duration_seconds: int = 5) -> str:
         "recognizable and visible while preserving the requested lighting, time of day "
         "and camera framing. Describe one "
         f"coherent {duration}-second sequence with clear foreground action, natural motion, stable "
-        "anatomy, sharp detail, balanced exposure, and no text or logos. Whenever "
+        "anatomy, sharp detail and balanced exposure. Preserve requested on-screen text "
+        "and logos verbatim; do not add unrequested lettering. Whenever "
         "subjects interact, establish simple, readable spatial roles and keep the same "
         "screen direction throughout the shot. For conflict, pursuit, weapons, or "
         "reciprocal action, explicitly place the opposing sides in the frame, keep each "
@@ -100,14 +103,20 @@ def rewrite_studio_video_prompt(
     try:
         from services import llm_service
 
-        rewritten = llm_service.generate_text(
-            _rewrite_instruction(source, duration_seconds),
-            feature="studio_video_prompt",
+        instruction = _rewrite_instruction(source, duration_seconds)
+        rewritten = reuse_media_text(
             user_id=int(user_id),
-            is_background=False,
-            request_id=str(generation_id),
-            cycle_id=str(session_id or generation_id),
-            job_id=str(generation_id),
+            instruction=instruction,
+            minimum_chars=12,
+            producer=lambda: _clean_rewrite(llm_service.generate_text(
+                instruction,
+                feature="studio_video_prompt",
+                user_id=int(user_id),
+                is_background=False,
+                request_id=str(generation_id),
+                cycle_id=str(session_id or generation_id),
+                job_id=str(generation_id),
+            )),
         )
     except Exception as exc:
         logger.warning(

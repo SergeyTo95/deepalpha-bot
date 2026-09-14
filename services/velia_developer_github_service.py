@@ -12,6 +12,8 @@ import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from services.velia_repository_context_security import redact_source, sensitive_context_path
+
 
 _GITHUB_API = "https://api.github.com"
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
@@ -489,6 +491,8 @@ def read_file(
     owner, name = _validate_full_name(full_name)
     selected_branch = validate_branch(branch)
     selected_path = validate_path(path)
+    if sensitive_context_path(selected_path):
+        raise DeveloperGithubError("github_sensitive_path", status=403)
     start = max(1, int(start_line or 1))
     maximum_lines = _env_int("VELIA_DEVELOPER_MAX_READ_LINES", 400, 20, 1000)
     end = max(start, min(int(end_line or start + maximum_lines - 1), start + maximum_lines - 1))
@@ -515,7 +519,7 @@ def read_file(
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise DeveloperGithubError("github_non_utf8_file", status=415) from exc
-    lines = text.splitlines()
+    lines = redact_source(text).splitlines()
     selected = lines[start - 1 : end]
     numbered = "\n".join(f"{index}: {value}" for index, value in enumerate(selected, start=start))
     return {
@@ -544,7 +548,7 @@ _SEARCH_SKIP_PARTS = {
 def _searchable_branch_path(path: str, size: int, max_bytes: int) -> bool:
     normalized = str(path or "").replace("\\", "/")
     parts = {part.lower() for part in normalized.split("/")}
-    if parts & _SEARCH_SKIP_PARTS or size <= 0 or size > max_bytes:
+    if sensitive_context_path(normalized) or parts & _SEARCH_SKIP_PARTS or size <= 0 or size > max_bytes:
         return False
     lowered = normalized.lower()
     if lowered.endswith((".lock", ".min.js", ".min.css", ".map")):
@@ -565,7 +569,7 @@ def _decode_search_blob(data: Any, max_bytes: int) -> Optional[str]:
     if not raw or len(raw) > max_bytes or b"\x00" in raw[:8192]:
         return None
     try:
-        return raw.decode("utf-8-sig")
+        return redact_source(raw.decode("utf-8-sig"))
     except UnicodeDecodeError:
         return None
 
@@ -814,7 +818,7 @@ def read_relevant_windows(
         if not isinstance(candidate, dict):
             continue
         path = validate_path(str(candidate.get("path") or ""))
-        if path in seen_paths:
+        if sensitive_context_path(path) or path in seen_paths:
             continue
         seen_paths.add(path)
         sha = str(candidate.get("sha") or "").strip()
@@ -892,10 +896,12 @@ def search_code(
     for item in data.get("items", []) if isinstance(data, dict) else []:
         if not isinstance(item, dict):
             continue
+        if sensitive_context_path(str(item.get("path") or "")):
+            continue
         fragments = []
         for match in item.get("text_matches", []) or []:
             if isinstance(match, dict) and str(match.get("fragment") or "").strip():
-                fragments.append(str(match.get("fragment") or "")[:1200])
+                fragments.append(redact_source(str(match.get("fragment") or ""))[:1200])
         results.append(
             {
                 "path": str(item.get("path") or ""),

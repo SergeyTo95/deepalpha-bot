@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -13,6 +14,10 @@ class FakeResponse:
         self._payload = payload
         self._content = bytes(content)
         self.headers = dict(headers or {})
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def json(self):
         if self._payload is None:
@@ -27,8 +32,9 @@ class FakeResponse:
             raise error
 
     def iter_content(self, chunk_size=1):
-        for start in range(0, len(self._content), max(1, int(chunk_size))):
-            yield self._content[start : start + chunk_size]
+        content = json.dumps(self._payload).encode("utf-8") if self._payload is not None else self._content
+        for start in range(0, len(content), max(1, int(chunk_size))):
+            yield content[start : start + chunk_size]
 
 
 def _configure(monkeypatch):

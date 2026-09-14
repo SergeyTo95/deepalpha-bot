@@ -111,35 +111,46 @@ def _json_request(
     timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     timeout = int(timeout_seconds or _env_int("VELIA_MEDIA_WORKER_HTTP_TIMEOUT_SECONDS", 45, 5, 120))
+    response = None
     try:
         response = requests.request(
-            method,
-            f"{_base_url()}{path}",
-            headers=headers,
-            json=payload,
-            timeout=(10, timeout),
+            method, f"{_base_url()}{path}", headers=headers, json=payload,
+            timeout=(10, timeout), stream=True, allow_redirects=False,
         )
+        status = int(response.status_code)
+        if 300 <= status < 400:
+            raise MediaWorkerError("media_worker_redirect_rejected", http_status=status)
+        with io.BytesIO() as buffer:
+            total = 0
+            for chunk in response.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > 256 * 1024:
+                    raise MediaWorkerError("media_worker_response_too_large")
+                buffer.write(chunk)
+            raw = buffer.getvalue()
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as exc:
+            if status >= 400:
+                raise MediaWorkerError(f"media_worker_http_{status}", http_status=status) from exc
+            raise MediaWorkerError("media_worker_invalid_json") from exc
+        if status >= 400:
+            worker_code = ""
+            if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                candidate = str(body["error"].get("code") or "")
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", candidate):
+                    worker_code = candidate
+            raise MediaWorkerError(worker_code or f"media_worker_http_{status}", http_status=status)
+        if not isinstance(body, dict):
+            raise MediaWorkerError("media_worker_invalid_response")
+        return body
     except requests.RequestException as exc:
         raise MediaWorkerError("media_worker_transport_error") from exc
-
-    if response.status_code >= 400:
-        worker_code = ""
-        try:
-            body = response.json()
-            if isinstance(body, dict) and isinstance(body.get("error"), dict):
-                worker_code = str(body["error"].get("code") or "")[:80]
-        except ValueError:
-            pass
-        code = worker_code or f"media_worker_http_{int(response.status_code)}"
-        raise MediaWorkerError(code, http_status=int(response.status_code))
-
-    try:
-        body = response.json()
-    except ValueError as exc:
-        raise MediaWorkerError("media_worker_invalid_json") from exc
-    if not isinstance(body, dict):
-        raise MediaWorkerError("media_worker_invalid_response")
-    return body
+    finally:
+        if response is not None:
+            response.close()
 
 
 def _artifact_descriptor(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -154,7 +165,7 @@ def _artifact_descriptor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise MediaWorkerError("media_worker_artifact_invalid") from exc
     if (
-        not artifact_id
+        not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", artifact_id)
         or not media_type
         or size_bytes <= 0
         or len(sha256) != 64
@@ -176,58 +187,63 @@ def _download_artifact(
     request_id: str,
 ) -> MediaWorkerArtifact:
     artifact_id = str(descriptor["id"])
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", artifact_id):
+        raise MediaWorkerError("media_worker_artifact_invalid")
     expected_size = int(descriptor["size_bytes"])
     expected_sha = str(descriptor["sha256"])
     max_bytes = _env_int(
         "VELIA_MEDIA_WORKER_MAX_ARTIFACT_BYTES",
-        250 * 1024 * 1024,
-        1 * 1024 * 1024,
-        512 * 1024 * 1024,
+        250 * 1024 * 1024, 1 * 1024 * 1024, 512 * 1024 * 1024,
     )
+    if expected_size <= 0:
+        raise MediaWorkerError("media_worker_artifact_invalid")
     if expected_size > max_bytes:
         raise MediaWorkerError("media_worker_artifact_too_large")
-
     headers = {
         "Authorization": f"Bearer {_auth_token()}",
         "X-Request-ID": request_id,
         "Accept": "application/octet-stream",
     }
+    response = None
     try:
         response = requests.get(
             f"{_base_url()}/v1/artifacts/{artifact_id}",
-            headers=headers,
-            stream=True,
+            headers=headers, stream=True, allow_redirects=False,
             timeout=(10, _env_int("VELIA_MEDIA_WORKER_ARTIFACT_TIMEOUT_SECONDS", 180, 30, 600)),
         )
+        if 300 <= int(response.status_code) < 400:
+            raise MediaWorkerError("media_worker_redirect_rejected", http_status=response.status_code)
         response.raise_for_status()
+        digest = hashlib.sha256()
+        with io.BytesIO() as buffer:
+            total = 0
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > min(max_bytes, expected_size):
+                    raise MediaWorkerError("media_worker_artifact_too_large")
+                digest.update(chunk)
+                buffer.write(chunk)
+            content = buffer.getvalue()
+        actual_sha = digest.hexdigest()
+        header_sha = str(response.headers.get("X-Content-SHA256") or "").strip().lower()
+        if len(content) != expected_size:
+            raise MediaWorkerError("media_worker_artifact_size_mismatch")
+        if actual_sha != expected_sha:
+            raise MediaWorkerError("media_worker_artifact_sha256_mismatch")
+        if header_sha and header_sha != expected_sha:
+            raise MediaWorkerError("media_worker_artifact_header_sha256_mismatch")
+        return MediaWorkerArtifact(
+            job_id=str(job_id), artifact_id=artifact_id,
+            media_type=str(descriptor["media_type"]), size_bytes=expected_size,
+            sha256=expected_sha, content=content,
+        )
     except requests.RequestException as exc:
         raise MediaWorkerError("media_worker_artifact_download_failed") from exc
-
-    buffer = bytearray()
-    for chunk in response.iter_content(chunk_size=256 * 1024):
-        if not chunk:
-            continue
-        buffer.extend(chunk)
-        if len(buffer) > max_bytes:
-            raise MediaWorkerError("media_worker_artifact_too_large")
-    content = bytes(buffer)
-    actual_sha = hashlib.sha256(content).hexdigest()
-    header_sha = str(response.headers.get("X-Content-SHA256") or "").strip().lower()
-    if len(content) != expected_size:
-        raise MediaWorkerError("media_worker_artifact_size_mismatch")
-    if actual_sha != expected_sha:
-        raise MediaWorkerError("media_worker_artifact_sha256_mismatch")
-    if header_sha and header_sha != expected_sha:
-        raise MediaWorkerError("media_worker_artifact_header_sha256_mismatch")
-
-    return MediaWorkerArtifact(
-        job_id=str(job_id),
-        artifact_id=artifact_id,
-        media_type=str(descriptor["media_type"]),
-        size_bytes=expected_size,
-        sha256=expected_sha,
-        content=content,
-    )
+    finally:
+        if response is not None:
+            response.close()
 
 
 def _run_job(

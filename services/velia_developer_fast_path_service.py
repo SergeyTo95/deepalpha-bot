@@ -11,6 +11,8 @@ from services import velia_developer_agent_service as legacy_agent
 from services import velia_developer_github_service as github_service
 from services import velia_developer_project_service as project_service
 
+from services.velia_repository_context_security import redact_source, sensitive_context_path
+
 
 DeveloperAgentError = legacy_agent.DeveloperAgentError
 
@@ -307,13 +309,24 @@ def _pack_evidence(
     visible_items: List[Dict[str, Any]] = []
     ranges: Dict[str, List[Tuple[int, int]]] = {}
     used = 0
-    valid_count = max(1, sum(1 for item in items if str(item.get("path") or "") and str(item.get("content") or "").strip()))
+    unique_items = []
+    seen = set()
+    for item in items:
+        path = str(item.get("path") or "")
+        if not path or sensitive_context_path(path) or not str(item.get("content") or "").strip():
+            continue
+        identity = (path, str(item.get("sha") or ""), item.get("start_line"), item.get("end_line"), str(item.get("content") or ""))
+        if identity not in seen:
+            seen.add(identity)
+            unique_items.append(item)
+    items = unique_items
+    valid_count = max(1, len(items))
     configured_cap = _env_int("VELIA_DEVELOPER_FAST_EVIDENCE_CHARS_PER_WINDOW", 7000, 800, 20000)
     fair_cap = max(800, min(configured_cap, limit // valid_count))
     for source in items:
         path = str(source.get("path") or "")
         start_line = int(source.get("start_line") or 1)
-        raw_lines = str(source.get("content") or "").splitlines()
+        raw_lines = redact_source(str(source.get("content") or "")).splitlines()
         if not path or not raw_lines:
             continue
         header_reserve = len(f"FILE {path} [L{start_line}-L999999]\n") + len("\nEND FILE\n")

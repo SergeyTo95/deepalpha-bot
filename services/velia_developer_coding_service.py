@@ -19,6 +19,8 @@ from services import velia_developer_github_service as github_service
 from services import velia_developer_github_write_service as write_service
 from services import velia_developer_taste_skill_service as taste_skill
 
+from services.velia_repository_context_security import redact_source, sensitive_context_path
+
 
 class DeveloperCodingError(RuntimeError):
     def __init__(self, code: str, *, status: int = 400, detail: str = "") -> None:
@@ -764,7 +766,7 @@ def _step_context(
             item = write_service.read_utf8_file(project, branch, path)
             content = str(item.get("content") or "")
             states[path] = content
-            chunks.append(_compact_source(path, content, f"{goal}\n{step.get('objective')}", per_file))
+            chunks.append(_compact_source(path, redact_source(content), f"{goal}\n{step.get('objective')}", per_file))
         except write_service.DeveloperWriteError as exc:
             if exc.code == "github_not_found":
                 states[path] = None
@@ -818,6 +820,7 @@ Rules:
 - Use only allowed files.
 - Prefer small exact replacements over rewriting complete existing files.
 - Every `old` value must be an exact unique substring from the current file.
+- Credential redactions are unavailable source: never copy or replace a [REDACTED] marker.
 - `create` is only for a file that does not exist.
 - Do not modify secrets, credentials, .env files, GitHub workflows, generated dependencies, or production configuration.
 - Do not merge, deploy, or claim tests passed.
