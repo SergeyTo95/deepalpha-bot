@@ -38,7 +38,8 @@ def test_call_kimi_sends_multimodal_content_to_chat_completions(monkeypatch):
     _enable_test_kimi(monkeypatch)
     captured = {}
 
-    def fake_post(url, *, headers, json, timeout):
+    def fake_post(url, *, headers, json, timeout, allow_redirects):
+        assert allow_redirects is False
         captured.update(url=url, headers=headers, json=json, timeout=timeout)
         return _Response()
 
@@ -71,7 +72,8 @@ def test_non_k3_vision_model_omits_k3_reasoning_effort(monkeypatch):
     _enable_test_kimi(monkeypatch)
     captured = {}
 
-    def fake_post(url, *, headers, json, timeout):
+    def fake_post(url, *, headers, json, timeout, allow_redirects):
+        assert allow_redirects is False
         captured.update(url=url, headers=headers, json=json, timeout=timeout)
         return _Response()
 
