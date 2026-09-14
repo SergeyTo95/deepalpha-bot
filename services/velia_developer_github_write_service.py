@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 from services import velia_developer_github_service as github_service
 
+from services.velia_repository_context_security import redact_source, sensitive_context_path
+
 
 class DeveloperWriteError(RuntimeError):
     def __init__(self, code: str, *, status: int = 400, detail: str = "") -> None:
@@ -102,6 +104,8 @@ def _validate_work_branch(branch: str, base_branch: str) -> str:
 def _protected_path(path: str) -> bool:
     normalized = github_service.validate_path(path)
     lowered = normalized.casefold()
+    if sensitive_context_path(normalized):
+        return True
     blocked_names = {
         ".env", ".env.local", ".env.production", "id_rsa", "id_ed25519",
         "credentials.json", "service-account.json", "secrets.json",
@@ -157,6 +161,8 @@ def create_work_branch(project: Dict[str, Any], branch: str) -> Dict[str, str]:
 
 
 def read_utf8_file(project: Dict[str, Any], branch: str, path: str) -> Dict[str, Any]:
+    if sensitive_context_path(path):
+        raise DeveloperWriteError("github_sensitive_path", status=403)
     _, _, full_name, base_branch = _project_values(project)
     selected = _validate_work_branch(branch, base_branch)
     selected_path = github_service.validate_path(path)

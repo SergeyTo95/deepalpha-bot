@@ -1,0 +1,57 @@
+name: VELIA dependency audit
+
+on:
+  pull_request:
+    branches: [feature/turbo-short-term-btc]
+    paths:
+      - requirements.txt
+      - .github/workflows/velia-dependency-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install pip-audit==2.10.1
+      - name: Audit resolved application dependencies
+        id: audit
+        continue-on-error: true
+        run: python -m pip_audit -r requirements.txt --format json --output dependency-audit.json
+      - name: Summarize all findings
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = Path("dependency-audit.json")
+          if not report.exists():
+              raise SystemExit("Dependency audit did not produce a report")
+          data = json.loads(report.read_text())
+          lines = ["## Resolved dependency audit", ""]
+          findings = 0
+          for dependency in data.get("dependencies", []):
+              for vulnerability in dependency.get("vulns", []):
+                  findings += 1
+                  lines.append(f"- {dependency['name']} {dependency['version']}: {vulnerability['id']}; fixes: {', '.join(vulnerability.get('fix_versions', [])) or 'none published'}")
+          lines.append(f"\nReported advisories: {findings}. See the artifact for aliases and details.")
+          if findings:
+              lines.append("This report is advisory while the legacy aiogram 2 dependency migration is being assessed. Findings are not suppressed.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: velia-dependency-audit
+          path: dependency-audit.json
+          if-no-files-found: error

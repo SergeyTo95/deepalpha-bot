@@ -86,8 +86,14 @@ def _feature_default_completion_tokens(feature: str) -> int:
     return 8192 if feature in _HIGH_REASONING_FEATURES else 4096
 
 
+_MEDIA_PROMPT_FEATURES = {"studio_video_prompt", "studio_music_prompt"}
+
+
 def _initial_completion_limit(feature: str, requested_tokens: Optional[int]) -> int:
     requested = max(1, int(requested_tokens or 0))
+    if feature in _MEDIA_PROMPT_FEATURES:
+        configured = env_int("KIMI_MEDIA_PROMPT_MAX_COMPLETION_TOKENS", 3072) or 3072
+        return min(8192, max(2048, configured, requested))
     if feature == "velia_developer_fast":
         fast_cap = max(2048, env_int("VELIA_DEVELOPER_FAST_MAX_COMPLETION_TOKENS", 2048) or 2048)
         return min(fast_cap, max(2048, requested))
@@ -255,12 +261,14 @@ def call_kimi(
     request_id = request_id or str(uuid.uuid4())
     selected_model = (model or kimi_model()).strip()
     selected_reasoning_effort = str(
-        reasoning_effort or kimi_reasoning_effort()
+        reasoning_effort or ("low" if feature in _MEDIA_PROMPT_FEATURES else kimi_reasoning_effort())
     ).strip().lower()
     if selected_reasoning_effort not in _ALLOWED_REASONING_EFFORTS:
         selected_reasoning_effort = kimi_reasoning_effort()
     completion_limit = _initial_completion_limit(feature, max_tokens)
     completion_cap = max(completion_limit, env_int("KIMI_MAX_COMPLETION_TOKENS_CAP", 32768) or 32768)
+    if feature in _MEDIA_PROMPT_FEATURES:
+        completion_cap = max(completion_limit, min(completion_cap, 8192))
     timeout_seconds = max(1, int(timeout or env_int("KIMI_TIMEOUT_SECONDS", 120) or 120))
     if max_attempts is None:
         max_attempts = 1 + env_int("KIMI_MAX_RETRIES", 1)
@@ -342,7 +350,7 @@ def call_kimi(
         )
 
         try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds, allow_redirects=False)
             status_code = int(response.status_code)
             response_headers = getattr(response, "headers", {}) or {}
             provider_request_id = response_headers.get("x-request-id") or response_headers.get("request-id")

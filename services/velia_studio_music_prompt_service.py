@@ -4,6 +4,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from services.velia_media_prompt_cache import reuse_media_text
+
 
 logger = logging.getLogger(__name__)
 _LYRICS_MODES = {"auto", "custom", "instrumental"}
@@ -32,24 +34,35 @@ def _clean_generated_lyrics(value: str) -> str:
     return text[:20000].strip()
 
 
-def _rewrite_prompt(source: str, *, user_id: int, generation_id: str, session_id: str) -> str:
+def _rewrite_prompt(
+    source: str, *, user_id: int, generation_id: str, session_id: str,
+    duration_seconds: int = 30, instrumental: bool = False,
+) -> str:
     instruction = (
         "Rewrite the request as a concise production prompt for MiniMax-Music3. "
         "Return only the final English music-description prompt. Preserve the requested "
         "genre, mood, era, language of vocals, instruments, tempo, vocal type and theme. "
-        "Specify a coherent arrangement, clean studio-quality mix and natural vocals. "
-        "Do not write lyrics and do not add commentary. Request:\n" + source
+        f"Fit the arrangement to {int(duration_seconds)} seconds with a natural ending. "
+        "Specify a coherent arrangement and clean studio-quality mix. "
+        + ("Strictly instrumental: no singing, speech or vocal layers. " if instrumental else
+           "Preserve natural vocals and the requested vocal language. ")
+        + "Do not write lyrics and do not add commentary. Request:\n" + source
     )
     try:
         from services import llm_service
 
-        rewritten = llm_service.generate_music_text(
-            instruction,
-            feature="studio_music_prompt",
+        rewritten = reuse_media_text(
             user_id=int(user_id),
-            request_id=generation_id,
-            cycle_id=session_id,
-            job_id=generation_id,
+            instruction=instruction,
+            minimum_chars=8,
+            producer=lambda: _clean_prompt(llm_service.generate_music_text(
+                instruction,
+                feature="studio_music_prompt",
+                user_id=int(user_id),
+                request_id=generation_id,
+                cycle_id=session_id,
+                job_id=generation_id,
+            )),
         )
     except Exception as exc:
         logger.warning(
@@ -146,6 +159,8 @@ def normalize_music_request(
     return NormalizedMusicRequest(
         prompt=_rewrite_prompt(
             source,
+            duration_seconds=duration_seconds,
+            instrumental=instrumental,
             user_id=user_id,
             generation_id=generation_id,
             session_id=session_id,

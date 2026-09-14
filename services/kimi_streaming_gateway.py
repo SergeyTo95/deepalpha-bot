@@ -221,6 +221,7 @@ def call_kimi_stream(
                 json=payload,
                 timeout=timeout_seconds,
                 stream=True,
+                allow_redirects=False,
             )
             status_code = int(response.status_code)
             response_headers = getattr(response, "headers", {}) or {}
