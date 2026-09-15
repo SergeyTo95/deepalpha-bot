@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from typing import List
 
+from aiogram import types
+
 
 def _load_splitter():
     src = Path("telegram_bot.py").read_text()
@@ -30,7 +32,7 @@ def _load_live_sender():
     src = Path("telegram_bot.py").read_text()
     start = src.index("def split_telegram_text")
     end = src.index("def _escape", start)
-    ns = {"List": List, "LIVE_UNAVAILABLE_MESSAGE": "unavailable"}
+    ns = {"List": List, "types": types, "LIVE_UNAVAILABLE_MESSAGE": "unavailable"}
     exec(src[start:end], ns)
     return ns["_send_live_final_chunks"]
 
