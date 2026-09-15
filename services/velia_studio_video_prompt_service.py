@@ -97,6 +97,9 @@ def rewrite_studio_video_prompt(
     media worker.
     """
     source = str(prompt or "").strip()
+    if source and session_id:
+        from services.velia_project_service import media_prompt
+        source = media_prompt(user_id, session_id, source)
     if not source or not _env_enabled("VELIA_STUDIO_VIDEO_PROMPT_REWRITE_ENABLED", True):
         return source
 

@@ -256,7 +256,8 @@ def generate_and_store_reference_image(
         }
 
     try:
-        generated = _submit_and_wait(prompt=prompt, references=references)
+        from services.velia_project_service import media_prompt
+        generated = _submit_and_wait(prompt=media_prompt(user_id, session_id, prompt), references=references)
     except StudioImageReferenceError as exc:
         image_service._release_capacity_reservation(reservation_id)
         return {

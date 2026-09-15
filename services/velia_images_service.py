@@ -468,7 +468,8 @@ def generate_and_store_image(
         }
 
     try:
-        generated = _submit_and_wait(prompt)
+        from services.velia_project_service import media_prompt
+        generated = _submit_and_wait(media_prompt(user_id, conversation_id, prompt))
     except Exception as exc:
         _release_capacity_reservation(reservation_id)
         return {

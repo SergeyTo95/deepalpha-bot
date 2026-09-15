@@ -408,3 +408,5 @@ def setup_velia_mobile_routes(
         handle_messages_send,
     )
     app.router.add_get("/mobile-api/v1/usage", handle_usage)
+    from velia_project_routes import setup_velia_project_routes
+    setup_velia_project_routes(app)

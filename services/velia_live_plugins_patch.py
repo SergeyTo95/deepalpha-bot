@@ -95,9 +95,10 @@ def install(velia_chat_service_module: Any) -> None:
     original_build_prompt = velia_chat_service_module._build_prompt
 
     def build_prompt_with_identity_and_plugins(user_id: int, conversation_id: str) -> str:
+        from services.velia_project_runtime import IN_DEEPALPHA
         base_prompt = original_build_prompt(user_id, conversation_id)
         plugin_prompt = ""
-        if _env_bool("VELIA_LIVE_PLUGINS_ENABLED", True):
+        if _env_bool("VELIA_LIVE_PLUGINS_ENABLED", True) and not IN_DEEPALPHA.get():
             try:
                 latest_message = _latest_user_message(user_id, conversation_id)
                 if latest_message:
