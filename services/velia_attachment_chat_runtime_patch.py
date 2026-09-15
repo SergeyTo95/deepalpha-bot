@@ -73,7 +73,8 @@ def _build_prompt_with_attachments(
             WHERE m.conversation_id=%s AND m.user_id=%s
               AND m.status='completed' AND m.deleted_at IS NULL
               AND m.role IN ('user', 'assistant')
-            ORDER BY m.created_at DESC
+            ORDER BY m.created_at DESC,
+                     CASE WHEN m.role='user' THEN 0 ELSE 1 END DESC, m.message_id DESC
             LIMIT %s
             """,
             (str(conversation_id), int(user_id), max_messages),

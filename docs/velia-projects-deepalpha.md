@@ -57,6 +57,10 @@ unsafe links, malformed and stale quotes, bounded responses, duplicate coalescin
 anonymous requests and oversized chunked JSON. Android integration is delivered
 in the companion PR in `deepalpha-android`.
 
+Message history and both text/attachment prompt builders break timestamp ties
+consistently: a question precedes its answer, including after answer completion
+updates the row. PostgreSQL integration verifies this in the research replay.
+
 This change does not enable trading, Software Factory rollout flags or additional
 GPU duration/provider capabilities. GPU video acceptance remains a separate task.
 

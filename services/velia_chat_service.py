@@ -415,7 +415,8 @@ def list_messages(
                    latency_ms, error_code, created_at, updated_at
             FROM velia_messages
             WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
-            ORDER BY created_at ASC
+            ORDER BY created_at ASC,
+                     CASE WHEN role='user' THEN 0 ELSE 1 END ASC, message_id ASC
             LIMIT %s
             """,
             (str(conversation_id), int(user_id), limit),
@@ -507,7 +508,8 @@ def _build_prompt(user_id: int, conversation_id: str) -> str:
             WHERE conversation_id=%s AND user_id=%s
               AND status='completed' AND deleted_at IS NULL
               AND role IN ('user', 'assistant')
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC,
+                     CASE WHEN role='user' THEN 0 ELSE 1 END DESC, message_id DESC
             LIMIT %s
             """,
             (str(conversation_id), int(user_id), max_messages),

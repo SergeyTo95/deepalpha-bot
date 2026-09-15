@@ -384,7 +384,16 @@ def test_postgres_research_sender_persists_one_answer_for_replayed_request(postg
     assert first["ok"] and replay["ok"] and replay["duplicate"]
     assert calls == {"search": 1, "model": 1}
     messages = chat.list_messages(1, resource["id"])
-    assert len(messages) == 2
+    # Both rows are inserted with the same creation timestamp. A completed
+    # answer must stay after its question even when PostgreSQL rewrites its row.
+    assert [message["role"] for message in messages] == ["user", "assistant"]
     assert "https://example.com/report" in messages[-1]["content"]
     assert len(projects.research_evidence(1, resource["id"])) == 1
     assert chat.list_messages(2, resource["id"]) is None
+    context = chat._build_prompt(1, resource["id"])
+    assert context.index("USER: BTC tomorrow") < context.index("ASSISTANT: Evidence-based answer")
+    from services import velia_attachment_chat_runtime_patch as attachments
+    monkeypatch.setattr(attachments, "get_connection", postgres)
+    monkeypatch.setattr(attachments, "attachment_context_sql", lambda: "NULL::text AS attachment_context")
+    context = attachments._build_prompt_with_attachments(chat, 1, resource["id"])
+    assert context.index("USER: BTC tomorrow") < context.index("ASSISTANT: Evidence-based answer")
