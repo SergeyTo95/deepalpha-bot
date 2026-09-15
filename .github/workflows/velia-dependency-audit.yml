@@ -5,6 +5,9 @@ on:
     branches: [feature/turbo-short-term-btc]
     paths:
       - requirements.txt
+      - Dockerfile
+      - vendor/aiogram_compat/**
+      - tests/test_aiogram_aiohttp_compat.py
       - .github/workflows/velia-dependency-audit.yml
   workflow_dispatch:
 
@@ -20,11 +23,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Verify upstream runtime provenance
+        run: python vendor/aiogram_compat/verify_upstream.py
+      - name: Install actual application dependencies
+        run: |
+          python -m venv .audit-runtime
+          .audit-runtime/bin/python -m pip install --upgrade pip setuptools
+          .audit-runtime/bin/python -m pip install -r requirements.txt
+          .audit-runtime/bin/python -m pip check
+      - name: Export installed dependencies with verified upstream identity
+        run: |
+          .audit-runtime/bin/python - <<'PY' > runtime-dependencies.txt
+          from importlib.metadata import distributions
+          packages = {}
+          for package in distributions():
+              name, version = package.metadata["Name"], package.version
+              if name.lower() == "aiogram":
+                  assert version == "2.25.1+velia.1", version
+                  # Runtime files were verified against upstream in the first step.
+                  version = "2.25.1"
+              packages[name.lower()] = version
+          for name, version in sorted(packages.items()):
+              print(f"{name}=={version}")
+          PY
       - run: python -m pip install pip-audit==2.10.1
-      - name: Audit resolved application dependencies
-        id: audit
-        continue-on-error: true
-        run: python -m pip_audit -r requirements.txt --format json --output dependency-audit.json
+      - name: Audit every installed application dependency
+        run: python -m pip_audit -r runtime-dependencies.txt --no-deps --disable-pip --format json --output dependency-audit.json
       - name: Summarize all findings
         if: always()
         run: |
@@ -37,21 +61,61 @@ jobs:
               raise SystemExit("Dependency audit did not produce a report")
           data = json.loads(report.read_text())
           lines = ["## Resolved dependency audit", ""]
-          findings = 0
+          findings = set()
+          skipped = []
           for dependency in data.get("dependencies", []):
+              if dependency.get("skip_reason"):
+                  skipped.append(dependency["name"])
               for vulnerability in dependency.get("vulns", []):
-                  findings += 1
-                  lines.append(f"- {dependency['name']} {dependency['version']}: {vulnerability['id']}; fixes: {', '.join(vulnerability.get('fix_versions', [])) or 'none published'}")
-          lines.append(f"\nReported advisories: {findings}. See the artifact for aliases and details.")
-          if findings:
-              lines.append("This report is advisory while the legacy aiogram 2 dependency migration is being assessed. Findings are not suppressed.")
+                  identifier = vulnerability["id"]
+                  identity = (dependency["name"], identifier)
+                  if identity not in findings:
+                      findings.add(identity)
+                      lines.append(f"- {dependency['name']} {dependency['version']}: {identifier}; fixes: {', '.join(vulnerability.get('fix_versions', [])) or 'none published'}")
+          lines.append(f"\nDependencies: {len(data.get('dependencies', []))}; distinct reported IDs: {len(findings)}; skipped: {len(skipped)}.")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
               handle.write("\n".join(lines) + "\n")
           print("\n".join(lines))
+          if skipped:
+              raise SystemExit(f"Dependency audit skipped packages: {', '.join(skipped)}")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: velia-dependency-audit
-          path: dependency-audit.json
+          path: |
+            dependency-audit.json
+            runtime-dependencies.txt
           if-no-files-found: error
+
+  http-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pip check
+      - name: Exercise real HTTP and bot compatibility
+        run: |
+          python -m pytest -q \
+            tests/test_aiogram_aiohttp_compat.py \
+            tests/test_velia_attachment_aiohttp_handler_cancellation.py \
+            tests/test_telegram_live_routing.py \
+            tests/test_telegram_live_splitting.py \
+            tests/test_telegram_share_keyboard.py \
+            tests/test_velia_telegram_pairing.py
+
+  application-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production dependency layout
+        run: docker build --tag velia-http-compat:${{ github.sha }} .
+      - name: Verify installed HTTP runtime
+        run: docker run --rm velia-http-compat:${{ github.sha }} python -c "import aiogram, aiohttp; from importlib.metadata import version; assert version('aiogram') == '2.25.1+velia.1'; assert aiohttp.__version__ == '3.14.3'; print('HTTP runtime imports and versions verified')"
