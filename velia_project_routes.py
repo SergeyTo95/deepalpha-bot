@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 from aiohttp import web
 
@@ -26,6 +27,21 @@ async def _body(request):
 
 
 def setup_velia_project_routes(app):
+    async def startup(_app):
+        if not _mobile_api_available():
+            return
+        try:
+            await asyncio.to_thread(projects.ensure_tables)
+        except Exception:
+            logging.getLogger(__name__).exception("VELIA_PROJECT_STORAGE_UNAVAILABLE")
+            return
+        # Startup runs after all existing chat extensions have been installed.
+        from services import velia_chat_service
+        from services.velia_project_runtime import install
+        install(velia_chat_service)
+
+    app.on_startup.append(startup)
+
     def guarded(handler):
         async def wrapped(request):
             if not _mobile_api_available():
@@ -33,6 +49,9 @@ def setup_velia_project_routes(app):
             auth = await asyncio.to_thread(_require_mobile_auth, request)
             if not auth:
                 return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+            expected_account = request.headers.get("X-Velia-Account")
+            if expected_account is not None and expected_account != str(auth["user_id"]):
+                return _json_response({"ok": False, "error": "account_changed"}, status=409)
             if not projects.ready():
                 return _json_response({"ok": False, "error": "projects_unavailable"}, status=503)
             try:
@@ -82,11 +101,20 @@ def setup_velia_project_routes(app):
         values = await asyncio.to_thread(projects.research_evidence, uid, request.match_info["resource_id"])
         return _json_response({"ok": True, "evidence": values})
 
+    async def resource_assign(request, uid):
+        data = await _body(request)
+        if "project_id" not in data or "expected_project_id" not in data:
+            raise projects.ProjectError("invalid_request")
+        resource = await asyncio.to_thread(projects.assign_resource, uid, request.match_info["resource_id"],
+                    data["project_id"], data["expected_project_id"])
+        return _json_response({"ok": True, "resource": resource})
+
     prefix = "/mobile-api/v1"
     for method, path, handler in [
         ("GET", "/projects", project_list), ("POST", "/projects", project_create),
         ("GET", "/projects/{project_id}", project_get), ("PATCH", "/projects/{project_id}", project_update),
         ("GET", "/project-resources", resources_list), ("POST", "/project-resources", resources_create),
+        ("PATCH", "/project-resources/{resource_id}", resource_assign),
         ("GET", "/deepalpha/{resource_id}/evidence", evidence),
     ]:
         app.router.add_route(method, prefix + path, guarded(handler))

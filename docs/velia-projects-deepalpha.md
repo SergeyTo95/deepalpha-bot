@@ -21,19 +21,27 @@ Passport versions do not represent deterministic media editing or media rollback
 
 DeepAlpha uses the ordinary hardened chat sender for ownership, budget checks,
 idempotency, storage and disconnect recovery. Research bypasses action, code and
-media planners. Evidence collection uses at most one search and one unambiguous
-crypto quote. Search uses the configured Brave provider or the existing optional
+media planners. Evidence collection uses at most one search and one explicit
+market lookup: a crypto quote or a Polymarket event/market. Nested market links
+select the exact child. Event snapshots cover at most three markets and record
+truncation, outcome prices and closed/active state. Market prices are not treated
+as independent forecast probabilities. Search uses the configured Brave provider or the existing optional
 news RSS fallback. Headlines are marked as partial coverage. Arbitrary URLs in
 prompts are never fetched. Provider responses reject redirects and are bounded.
 Quotes require a matching symbol, positive finite price and recent timestamp.
 When no verifiable evidence is available, no model call runs.
 
 Evidence is stored per research request with retrieval time, source links,
-coverage gaps and passport revision. The final answer includes a deterministic
+coverage gaps, project ID and passport revision. The final answer includes a deterministic
 source footer. Opening history does not repeat generation. A tenant-scoped,
 bounded 60-second evidence cache coalesces identical in-process requests; the
 original retrieval time is retained. The existing daily plugin quota bounds
 uncached research. `VELIA_LIVE_PLUGINS_ENABLED=false` disables new research.
+
+Saved research can be moved into a project without regenerating it. The update
+checks the previous project assignment and owner before changing the link; old
+evidence retains its original project provenance. Mobile calls include an
+expected-account header to prevent a request crossing an account switch.
 
 The PostgreSQL workflow tests ownership, payload-bound idempotency, concurrent
 passport updates and revision history. Unit/HTTP tests cover unavailable evidence,

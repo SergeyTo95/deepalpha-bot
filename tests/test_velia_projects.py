@@ -137,6 +137,9 @@ def test_routes_authenticate_before_body_and_bound_chunked_json(monkeypatch):
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
     import velia_project_routes as routes
+    from services import velia_project_runtime
+    monkeypatch.setattr(projects, "ensure_tables", lambda: None)
+    monkeypatch.setattr(velia_project_runtime, "install", lambda chat: None)
     monkeypatch.setattr(routes, "_mobile_api_available", lambda: True)
     monkeypatch.setattr(projects, "ready", lambda: True)
     monkeypatch.setattr(routes, "_require_mobile_auth", lambda request: {"user_id": 1} if request.headers.get("Authorization") else None)
@@ -146,6 +149,9 @@ def test_routes_authenticate_before_body_and_bound_chunked_json(monkeypatch):
         async with TestClient(TestServer(app)) as client:
             r = await client.post("/mobile-api/v1/projects", data=b"not json")
             assert r.status == 401
+            r = await client.post("/mobile-api/v1/projects", data=b"not json", headers={
+                "Authorization": "Bearer test", "X-Velia-Account": "2"})
+            assert r.status == 409 and (await r.json())["error"] == "account_changed"
             async def oversized():
                 yield b"x" * (routes.MAX_BODY + 1)
             r = await client.post("/mobile-api/v1/projects", data=oversized(), headers={"Authorization": "Bearer test"})
@@ -239,3 +245,38 @@ def test_media_brief_preserves_request_and_prompt_budget(monkeypatch):
     assert result.startswith("Create a landscape") and "violet" in result
     original = "x" * 3999
     assert projects.media_prompt(1, "studio", original) == original
+
+
+def test_polymarket_selects_exact_child_and_preserves_closed_state(monkeypatch):
+    target = research.polymarket_target("Разбери https://polymarket.com/ru/event/election/candidate-a")
+    assert target == ("event", "election", "candidate-a")
+    market = {"slug": "candidate-a", "question": "Will A win?", "outcomes": '["Yes","No"]',
+              "outcomePrices": '["0.2","0.8"]', "active": True, "closed": True}
+    monkeypatch.setattr(research, "_fetch", lambda *a, **k: json.dumps([{"slug": "election", "markets": [
+        {**market, "slug": "candidate-b", "question": "Wrong candidate"}, market]}]).encode())
+    result = research._prediction_market(target)
+    assert len(result["markets"]) == 1
+    assert result["markets"][0]["question"] == "Will A win?"
+    assert result["markets"][0]["closed"] is True
+    assert result["markets"][0]["outcome_prices"][0]["price"] == 0.2
+
+
+def test_polymarket_rejects_lookalike_and_unmatched_market(monkeypatch):
+    assert research.polymarket_target("https://polymarket.com.evil.test/event/secret") is None
+    assert research.polymarket_target("https://user:password@polymarket.com/event/secret") is None
+    monkeypatch.setattr(research, "_fetch", lambda *a, **k: b'[{"slug":"other"}]')
+    with pytest.raises(ValueError, match="market_not_found"):
+        research._prediction_market(("event", "asked-for", None))
+
+
+def test_postgres_research_can_be_attached_without_regenerating(postgres):
+    project = projects.create_project(1, {"title": "Research"}, "research-project")
+    resource = projects.create_resource(1, {"kind": "deepalpha", "query": "BTC"}, "independent-research")
+    projects.save_evidence(1, resource["id"], "initial", {"project_id": None, "status": "partial"})
+    with pytest.raises(projects.ProjectError, match="project_not_found"):
+        projects.assign_resource(2, resource["id"], project["id"], None)
+    linked = projects.assign_resource(1, resource["id"], project["id"], None)
+    assert linked["project_id"] == project["id"]
+    assert projects.research_evidence(1, resource["id"])[0]["project_id"] is None
+    with pytest.raises(projects.ProjectError, match="resource_conflict"):
+        projects.assign_resource(1, resource["id"], None, None)

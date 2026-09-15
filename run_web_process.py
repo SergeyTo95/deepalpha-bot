@@ -226,10 +226,6 @@ def main() -> None:
     setup_velia_code_archive_routes(deepalpha_web.app)
     setup_velia_video_routes(deepalpha_web.app)
     setup_velia_plugin_routes(deepalpha_web.app)
-    from velia_project_routes import setup_velia_project_routes
-    from services.velia_project_service import ensure_tables as ensure_velia_project_tables
-    from services.velia_project_runtime import install as install_velia_projects
-    setup_velia_project_routes(deepalpha_web.app)
     setup_velia_profile_routes(deepalpha_web.app)
     install_velia_mobile_hardening(
         deepalpha_web.app,
@@ -293,7 +289,6 @@ def main() -> None:
         ensure_commercial_runtime_tables()
         ensure_payment_tables()
         ensure_velia_chat_tables()
-        ensure_velia_project_tables()
         ensure_velia_developer_chat_tables()
         ensure_velia_agent_tables()
         ensure_velia_agent_chat_tables()
@@ -316,8 +311,6 @@ def main() -> None:
         # until their storage is ready.
         logger.exception("DEVELOPER_API_TABLE_INIT_FAILED")
 
-    # Final wrapper keeps research separate from action/media planners.
-    install_velia_projects(velia_chat_service_module)
     port = int(os.getenv("PORT", 3000))
     # aiohttp 3.9+ supports native handler cancellation. The production stack
     # currently resolves aiohttp 3.8 through aiogram 2.x, where a focused

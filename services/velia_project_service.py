@@ -282,6 +282,25 @@ def resource_context(user_id, resource_id):
                 "revision": row["revision"]}
 
 
+def assign_resource(user_id, resource_id, project_id, expected_project_id):
+    for value in (project_id, expected_project_id):
+        if value is not None and (not isinstance(value, str) or not value or len(value) > 128):
+            raise ProjectError("invalid_project_id")
+    with transaction(user_id) as cur:
+        if project_id:
+            _owned(cur, user_id, project_id)
+        cur.execute("SELECT * FROM velia_project_resources WHERE resource_id=%s AND user_id=%s",
+                    (str(resource_id), int(user_id)))
+        row = cur.fetchone()
+        if not row:
+            raise ProjectError("resource_not_found", 404)
+        if row["project_id"] != expected_project_id:
+            raise ProjectError("resource_conflict", 409)
+        cur.execute("""UPDATE velia_project_resources SET project_id=%s
+            WHERE resource_id=%s AND user_id=%s RETURNING *""", (project_id, str(resource_id), int(user_id)))
+        return _resource(cur.fetchone())
+
+
 def passport_prompt(resource):
     if not resource or not resource.get("passport"):
         return ""
