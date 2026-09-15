@@ -25,8 +25,15 @@ media planners. Evidence collection uses at most one search and one explicit
 market lookup: a crypto quote or a Polymarket event/market. Nested market links
 select the exact child. Event snapshots cover at most three markets and record
 truncation, outcome prices and closed/active state. Market prices are not treated
-as independent forecast probabilities. Search uses the configured Brave provider or the existing optional
-news RSS fallback. Headlines are marked as partial coverage. Arbitrary URLs in
+as independent forecast probabilities. Search reuses Velia's configured
+`WEB_SEARCH_PROVIDER` and `WEB_SEARCH_API_KEY` (Tavily, Serper or legacy Bing),
+with at most five results and a capped timeout. Tavily uses basic search with
+automatic parameter upgrades, generated answers and raw page content disabled.
+If no shared provider is selected, it uses Brave or the existing optional news
+RSS fallback. A failed selected provider never triggers a second search.
+`LIVE_WEB_RESEARCH_ENABLED=false` or `WEB_SEARCH_PROVIDER=disabled` disables web
+search; explicit market lookups remain governed by the live plugin gate.
+Headlines are marked as partial coverage. Arbitrary URLs in
 prompts are never fetched. Provider responses reject redirects and are bounded.
 Quotes require a matching symbol, positive finite price and recent timestamp.
 When no verifiable evidence is available, no model call runs.
@@ -44,10 +51,14 @@ evidence retains its original project provenance. Mobile calls include an
 expected-account header to prevent a request crossing an account switch.
 
 The PostgreSQL workflow tests ownership, payload-bound idempotency, concurrent
-passport updates and revision history. Unit/HTTP tests cover unavailable evidence,
+passport updates, revision history and replay through the real hardened sender
+without a second search/model call. Unit/HTTP tests cover unavailable evidence,
 unsafe links, malformed and stale quotes, bounded responses, duplicate coalescing,
 anonymous requests and oversized chunked JSON. Android integration is delivered
 in the companion PR in `deepalpha-android`.
 
 This change does not enable trading, Software Factory rollout flags or additional
 GPU duration/provider capabilities. GPU video acceptance remains a separate task.
+
+Search request options follow the [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)
+and [Serper response format](https://serper.dev/).

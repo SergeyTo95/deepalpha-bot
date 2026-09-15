@@ -56,16 +56,18 @@ def safe_source_url(value):
         return ""
 
 
-def _fetch(url, *, params=None, headers=None):
+def _fetch(url, *, params=None, headers=None, json_body=None, timeout=15):
     started = time.monotonic()
-    with requests.get(url, params=params, headers=headers, timeout=(4, 10),
-                      allow_redirects=False, stream=True) as response:
+    request = requests.get if json_body is None else requests.post
+    payload = {"params": params} if json_body is None else {"json": json_body}
+    with request(url, **payload, headers=headers, timeout=(min(4, timeout), min(10, timeout)),
+                 allow_redirects=False, stream=True) as response:
         if response.status_code != 200:
             raise ValueError("research_provider_unavailable")
         chunks, size = [], 0
         for chunk in response.iter_content(32768):
             size += len(chunk)
-            if size > MAX_HTTP_BYTES or time.monotonic() - started > 15:
+            if size > MAX_HTTP_BYTES or time.monotonic() - started > timeout:
                 raise ValueError("research_response_too_large")
             chunks.append(chunk)
         return b"".join(chunks)
@@ -76,6 +78,42 @@ def _text(value, limit):
 
 
 def _search(query):
+    if not plugins._env_bool("LIVE_WEB_RESEARCH_ENABLED", True):
+        return []
+    provider = os.getenv("WEB_SEARCH_PROVIDER", "").strip().lower()
+    if provider == "disabled":
+        return []
+    if provider:
+        # Reuse Velia's configured search account. A failed selected provider
+        # does not fan out to another billable search or silently switch sources.
+        key = os.getenv("WEB_SEARCH_API_KEY", "").strip()
+        if not key or provider not in {"tavily", "serper", "bing"}:
+            raise ValueError("research_search_configuration_unavailable")
+        from services.web_search_service import _env_int
+        limit = max(1, min(5, _env_int("WEB_SEARCH_MAX_RESULTS", 5)))
+        timeout = max(1, min(15, _env_int("WEB_SEARCH_TIMEOUT", 15)))
+        if provider == "tavily":
+            body = json.loads(_fetch("https://api.tavily.com/search",
+                headers={"Authorization": "Bearer " + key}, timeout=timeout,
+                json_body={"query": query, "max_results": limit, "search_depth": "basic",
+                           "auto_parameters": False, "include_answer": False, "include_raw_content": False}))
+            rows = body.get("results", []) if isinstance(body, dict) else []
+        elif provider == "serper":
+            body = json.loads(_fetch("https://google.serper.dev/search",
+                headers={"X-API-KEY": key}, json_body={"q": query, "num": limit}, timeout=timeout))
+            rows = body.get("organic", []) if isinstance(body, dict) else []
+        else:
+            body = json.loads(_fetch("https://api.bing.microsoft.com/v7.0/search",
+                headers={"Ocp-Apim-Subscription-Key": key}, params={"q": query, "count": limit}, timeout=timeout))
+            pages = body.get("webPages", {}) if isinstance(body, dict) else {}
+            rows = pages.get("value", []) if isinstance(pages, dict) else []
+        if not isinstance(rows, list):
+            raise ValueError("research_search_invalid_response")
+        return [{"title": r.get("title") or r.get("name"), "url": r.get("url") or r.get("link"),
+                 "excerpt": r.get("content") or r.get("snippet"),
+                 "published_at": r.get("published_date") or r.get("date") or "",
+                 "coverage": "search_excerpt"}
+                for r in rows[:limit] if isinstance(r, dict)]
     key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
     if key:
         body = json.loads(_fetch("https://api.search.brave.com/res/v1/web/search",
@@ -223,7 +261,9 @@ def _prediction_market(target):
 
 def collect_evidence(user_id, query):
     query = _text(query, 400)
-    config = [os.getenv("BRAVE_SEARCH_API_KEY", ""), os.getenv("VELIA_NEWS_RSS_ENABLED", "true")]
+    config = [os.getenv(name, "") for name in (
+        "BRAVE_SEARCH_API_KEY", "VELIA_NEWS_RSS_ENABLED", "LIVE_WEB_RESEARCH_ENABLED",
+        "WEB_SEARCH_PROVIDER", "WEB_SEARCH_API_KEY", "WEB_SEARCH_MAX_RESULTS", "WEB_SEARCH_TIMEOUT")]
     key = hashlib.sha256(json.dumps([int(user_id), query, config]).encode()).hexdigest()
     with _LOCK:
         now = time.monotonic()

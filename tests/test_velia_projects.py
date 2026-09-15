@@ -42,7 +42,8 @@ def test_quote_rejects_bad_price_and_stale_clock(monkeypatch, price, age):
         research._quote("BTCUSDT")
 
 
-def test_provider_responses_are_bounded_and_closed(monkeypatch):
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_provider_responses_are_bounded_and_closed(monkeypatch, method):
     closed = []
     class Response:
         status_code = 200
@@ -54,10 +55,76 @@ def test_provider_responses_are_bounded_and_closed(monkeypatch):
         assert kwargs["allow_redirects"] is False
         assert kwargs["stream"] is True
         return Response()
-    monkeypatch.setattr(research.requests, "get", get)
+    monkeypatch.setattr(research.requests, method, get)
     with pytest.raises(ValueError):
-        research._fetch("https://api.binance.com")
+        research._fetch("https://api.binance.com", json_body={} if method == "post" else None)
     assert closed == [True]
+
+
+@pytest.mark.parametrize("provider,payload", [
+    ("tavily", {"results": [{"title": "Report", "content": "Evidence", "url": "https://example.com/report"}] * 6}),
+    ("serper", {"organic": [{"title": "Report", "snippet": "Evidence", "link": "https://example.com/report"}] * 6}),
+    ("bing", {"webPages": {"value": [{"name": "Report", "snippet": "Evidence", "url": "https://example.com/report"}] * 6}}),
+])
+def test_research_reuses_configured_search_once_with_bounded_results(monkeypatch, provider, payload):
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", provider)
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "unused-key")
+    monkeypatch.setenv("WEB_SEARCH_MAX_RESULTS", "2")
+    monkeypatch.setenv("WEB_SEARCH_TIMEOUT", "9999")
+    calls = []
+    def fetch(url, **kwargs):
+        calls.append((url, kwargs))
+        return json.dumps(payload).encode()
+    monkeypatch.setattr(research, "_fetch", fetch)
+    rows = research._search("Question")
+    assert len(calls) == 1 and len(rows) == 2
+    assert rows[0]["title"] == "Report" and rows[0]["excerpt"] == "Evidence"
+    assert rows[0]["url"] == "https://example.com/report" and rows[0]["coverage"] == "search_excerpt"
+    assert calls[0][1]["timeout"] <= 15
+    if provider == "tavily":
+        request = calls[0][1]["json_body"]
+        assert request["search_depth"] == "basic"
+        assert request["auto_parameters"] is False and request["include_raw_content"] is False
+
+
+def test_failed_configured_search_does_not_start_fallback(monkeypatch):
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "unused-key")
+    monkeypatch.setattr(research.plugins, "_reserve_plugin_call", lambda *a: True)
+    calls = []
+    def fetch(url, **kwargs):
+        calls.append(url)
+        raise ValueError("unavailable")
+    monkeypatch.setattr(research, "_fetch", fetch)
+    result = research._collect(1, "Company outlook")
+    assert len(calls) == 1
+    assert result["status"] == "unavailable" and result["gaps"] == ["search_unavailable"]
+
+
+@pytest.mark.parametrize("setting,value", [("LIVE_WEB_RESEARCH_ENABLED", "false"), ("WEB_SEARCH_PROVIDER", "disabled")])
+def test_search_disable_settings_stop_all_search_providers(monkeypatch, setting, value):
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv(setting, value)
+    monkeypatch.setattr(research, "_fetch", lambda *a, **k: pytest.fail("Search is disabled"))
+    assert research._search("Company outlook") == []
+
+
+def test_search_configuration_change_invalidates_evidence_cache(monkeypatch):
+    research._CACHE.clear()
+    calls = []
+    monkeypatch.setattr(research, "_collect", lambda *a: calls.append(True) or {"status": "available"})
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
+    research.collect_evidence(1, "question")
+    monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "false")
+    research.collect_evidence(1, "question")
+    assert len(calls) == 2
 
 
 def test_cache_is_tenant_scoped_bounded_and_returns_copies(monkeypatch):
@@ -280,3 +347,44 @@ def test_postgres_research_can_be_attached_without_regenerating(postgres):
     assert projects.research_evidence(1, resource["id"])[0]["project_id"] is None
     with pytest.raises(projects.ProjectError, match="resource_conflict"):
         projects.assign_resource(1, resource["id"], None, None)
+
+
+def test_postgres_research_sender_persists_one_answer_for_replayed_request(postgres, monkeypatch):
+    from services import velia_chat_service as chat, velia_project_runtime as runtime
+    from services import velia_live_plugins_patch as live, velia_llm_service as llm
+    from services.velia_mobile_hardening_service import build_hardened_send_message
+    monkeypatch.setenv("VELIA_CHAT_ENABLED", "true")
+    monkeypatch.setenv("VELIA_LIVE_PLUGINS_ENABLED", "true")
+    monkeypatch.delenv("VELIA_CHAT_BETA_USER_IDS", raising=False)
+    monkeypatch.setattr(live, "get_connection", postgres)
+    monkeypatch.setattr(chat, "_budget_error", lambda uid: None)
+    # Record originals so the real sender's global hooks are restored afterwards.
+    monkeypatch.setattr(chat, "_build_prompt", chat._build_prompt)
+    monkeypatch.setattr(chat, "generate_velia_chat_result", chat.generate_velia_chat_result)
+    monkeypatch.setattr(chat, "_velia_projects_installed", False, raising=False)
+    calls = {"search": 0, "model": 0}
+    def collect(uid, query):
+        calls["search"] += 1
+        return {"status": "available", "query": query, "retrieved_at": "2026-09-15T10:00:00Z",
+                "sources": [{"title": "Evidence", "url": "https://example.com/report"}]}
+    def model(prompt, **kwargs):
+        calls["model"] += 1
+        assert "violet" in prompt
+        assert "DEEPALPHA RESEARCH MODE" in prompt
+        return {"ok": True, "text": "Evidence-based answer", "estimated_cost_usd": 0.01,
+                "usage": {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130}}
+    monkeypatch.setattr(research, "collect_evidence", collect)
+    monkeypatch.setattr(llm, "generate_velia_chat_result", model)
+    runtime.install(chat)
+    project = projects.create_project(1, {"title": "Markets", "style": "violet"}, "sender-project")
+    resource = projects.create_resource(1, {"kind": "deepalpha", "query": "BTC tomorrow", "project_id": project["id"]}, "sender-resource")
+    send = build_hardened_send_message(chat, chat.send_message)
+    first = send(1, resource["id"], "BTC tomorrow", idempotency_key="research-initial-request")
+    replay = send(1, resource["id"], "BTC tomorrow", idempotency_key="research-initial-request")
+    assert first["ok"] and replay["ok"] and replay["duplicate"]
+    assert calls == {"search": 1, "model": 1}
+    messages = chat.list_messages(1, resource["id"])
+    assert len(messages) == 2
+    assert "https://example.com/report" in messages[-1]["content"]
+    assert len(projects.research_evidence(1, resource["id"])) == 1
+    assert chat.list_messages(2, resource["id"]) is None
