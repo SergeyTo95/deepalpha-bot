@@ -38,6 +38,8 @@ def _rewrite_prompt(
     source: str, *, user_id: int, generation_id: str, session_id: str,
     duration_seconds: int = 30, instrumental: bool = False,
 ) -> str:
+    from services.velia_project_service import media_prompt
+    source = media_prompt(user_id, session_id, source)
     instruction = (
         "Rewrite the request as a concise production prompt for MiniMax-Music3. "
         "Return only the final English music-description prompt. Preserve the requested "

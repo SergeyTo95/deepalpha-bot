@@ -317,9 +317,9 @@ def install(chat_module: Any) -> None:
             cursor.close()
             conn.close()
 
-        prompt = chat_module._build_prompt(user_id, conversation_id)
         started = time.monotonic()
         try:
+            prompt = chat_module._build_prompt(user_id, conversation_id)
             generation = chat_module.generate_velia_chat_result(
                 prompt,
                 user_id=int(user_id),

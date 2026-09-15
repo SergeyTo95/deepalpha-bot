@@ -740,9 +740,9 @@ def send_message(
         cursor.close()
         conn.close()
 
-    prompt = _build_prompt(user_id, conversation_id)
     started = time.monotonic()
     try:
+        prompt = _build_prompt(user_id, conversation_id)
         generation = generate_velia_chat_result(
             prompt,
             user_id=int(user_id),
