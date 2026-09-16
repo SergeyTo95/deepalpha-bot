@@ -37,5 +37,6 @@ jobs:
           tests/test_treasury_admin_command.py tests/test_gram_admin_treasury_panel.py
           tests/test_gram_treasury_diagnostics.py tests/test_treasury_financial_security.py
           tests/test_ton_security_hotfix.py tests/test_ton_purchase_summary_fail_safe.py
+          tests/test_gram_wallet_copy_button.py
       - run: python -m compileall -q services bot db telegram_bot.py web.py app.py
       - run: node --check webapp/app.js
