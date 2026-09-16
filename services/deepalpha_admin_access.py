@@ -20,6 +20,8 @@ def ensure_tables(cursor):
         action TEXT NOT NULL CHECK(action IN ('grant','revoke')),
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )""")
+    from services.deepalpha_manager_payout_service import ensure_tables as ensure_manager_payout_tables
+    ensure_manager_payout_tables(cursor)
 
 
 @contextmanager
@@ -70,9 +72,22 @@ def viewer_candidate(actor_id, user_id):
 def list_viewers(actor_id):
     _require_owner(actor_id)
     with _transaction() as cur:
-        cur.execute("""SELECT v.user_id,u.username,u.first_name FROM deepalpha_project_viewers v
-            JOIN users u ON u.user_id=v.user_id WHERE v.active=TRUE ORDER BY v.user_id""")
-        return [{"user_id": r[0], "username": r[1] or "", "first_name": r[2] or ""} for r in cur.fetchall()]
+        cur.execute("""SELECT v.user_id,u.username,u.first_name,v.share_bps,v.payout_enabled
+            FROM deepalpha_project_viewers v JOIN users u ON u.user_id=v.user_id
+            WHERE v.active=TRUE ORDER BY v.user_id""")
+        return [{"user_id": r[0], "username": r[1] or "", "first_name": r[2] or "",
+                 "share_bps": int(r[3] or 0), "payout_enabled": bool(r[4])} for r in cur.fetchall()]
+
+
+def viewer_profile(user_id):
+    with _transaction() as cur:
+        cur.execute("""SELECT v.user_id,u.username,u.first_name,v.share_bps,v.payout_enabled,v.active
+            FROM deepalpha_project_viewers v JOIN users u ON u.user_id=v.user_id WHERE v.user_id=%s""", (int(user_id),))
+        row = cur.fetchone()
+    if not row or not row[5]:
+        raise PermissionError("project_access_denied")
+    return {"user_id": row[0], "username": row[1] or "", "first_name": row[2] or "",
+            "share_bps": int(row[3] or 0), "payout_enabled": bool(row[4])}
 
 
 def set_viewer(actor_id, user_id, *, active):
@@ -81,7 +96,6 @@ def set_viewer(actor_id, user_id, *, active):
     if not isinstance(active, bool):
         raise ValueError("invalid_role_action")
     with _transaction() as cur:
-        # One owner-scoped transaction serializes grants and enforces the two-seat limit.
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (configured_admin_id(),))
         cur.execute("SELECT active FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
         existing = cur.fetchone()
@@ -100,10 +114,30 @@ def set_viewer(actor_id, user_id, *, active):
     return candidate
 
 
+def set_share_bps(actor_id, user_id, share_bps):
+    _require_owner(actor_id)
+    if isinstance(share_bps, bool) or not str(share_bps).isdigit():
+        raise ValueError("invalid_share")
+    share_bps = int(share_bps)
+    if not 0 <= share_bps <= 10000:
+        raise ValueError("invalid_share")
+    with _transaction() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (configured_admin_id(),))
+        cur.execute("SELECT active FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
+        row = cur.fetchone()
+        if not row or not row[0]:
+            raise ValueError("viewer_not_active")
+        cur.execute("SELECT COALESCE(SUM(share_bps),0) FROM deepalpha_project_viewers WHERE active=TRUE AND user_id<>%s", (int(user_id),))
+        other = int((cur.fetchone() or [0])[0] or 0)
+        if other + share_bps > 10000:
+            raise ValueError("total_share_exceeds_100")
+        cur.execute("UPDATE deepalpha_project_viewers SET share_bps=%s,updated_at=NOW() WHERE user_id=%s", (share_bps, int(user_id)))
+    return share_bps
+
+
 def project_snapshot(user_id):
     if not can_view_project(user_id):
         raise PermissionError("project_access_denied")
-    # Aggregate SQL only: no conversations, wallet secrets or individual balances.
     with _transaction() as cur:
         cur.execute("SET TRANSACTION READ ONLY")
         cur.execute("SET LOCAL statement_timeout = '5s'")
