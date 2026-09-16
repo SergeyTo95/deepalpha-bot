@@ -97,7 +97,7 @@ def set_viewer(actor_id, user_id, *, active):
         raise ValueError("invalid_role_action")
     with _transaction() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (configured_admin_id(),))
-        cur.execute("SELECT active FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
+        cur.execute("SELECT active,share_bps FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
         existing = cur.fetchone()
         if bool(existing and existing[0]) == active:
             return candidate
@@ -109,6 +109,8 @@ def set_viewer(actor_id, user_id, *, active):
             VALUES (%s,%s,%s) ON CONFLICT(user_id) DO UPDATE
             SET active=EXCLUDED.active,granted_by=EXCLUDED.granted_by,updated_at=NOW()""",
             (int(user_id), active, int(actor_id)))
+        if active and existing and not bool(existing[0]) and int(existing[1] or 0) > 0:
+            cur.execute("UPDATE deepalpha_project_viewers SET share_effective_at=NOW() WHERE user_id=%s", (int(user_id),))
         cur.execute("INSERT INTO deepalpha_viewer_audit(actor_id,user_id,action) VALUES (%s,%s,%s)",
                     (int(actor_id), int(user_id), "grant" if active else "revoke"))
     return candidate
@@ -123,7 +125,7 @@ def set_share_bps(actor_id, user_id, share_bps):
         raise ValueError("invalid_share")
     with _transaction() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (configured_admin_id(),))
-        cur.execute("SELECT active FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
+        cur.execute("SELECT active,share_bps,share_effective_at FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (int(user_id),))
         row = cur.fetchone()
         if not row or not row[0]:
             raise ValueError("viewer_not_active")
@@ -131,7 +133,10 @@ def set_share_bps(actor_id, user_id, share_bps):
         other = int((cur.fetchone() or [0])[0] or 0)
         if other + share_bps > 10000:
             raise ValueError("total_share_exceeds_100")
-        cur.execute("UPDATE deepalpha_project_viewers SET share_bps=%s,updated_at=NOW() WHERE user_id=%s", (share_bps, int(user_id)))
+        if share_bps > 0 and (int(row[1] or 0) <= 0 or row[2] is None):
+            cur.execute("UPDATE deepalpha_project_viewers SET share_bps=%s,share_effective_at=NOW(),updated_at=NOW() WHERE user_id=%s", (share_bps, int(user_id)))
+        else:
+            cur.execute("UPDATE deepalpha_project_viewers SET share_bps=%s,updated_at=NOW() WHERE user_id=%s", (share_bps, int(user_id)))
     return share_bps
 
 
