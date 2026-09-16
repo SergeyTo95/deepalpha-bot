@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import logging
 import zlib
 import random
 from datetime import datetime, timezone, timedelta
@@ -861,8 +862,19 @@ async def check_ton_payments():
     await asyncio.sleep(15)
     while True:
         try:
+            from services.gram_purchase_service import reconcile_pending_purchases
+            completed_purchases = await asyncio.to_thread(reconcile_pending_purchases)
+            for purchase in completed_purchases:
+                try:
+                    await telegram_bot.bot.send_message(int(purchase['user_id']),
+                        f"✅ Покупка №{purchase['id']} подтверждена. Зачислено токенов: {int(purchase['total_tokens'])}")
+                except Exception:
+                    logging.getLogger(__name__).warning("GRAM_PURCHASE_NOTIFICATION_UNAVAILABLE intent_id=%s", purchase['id'])
+        except Exception:
+            logging.getLogger(__name__).warning("GRAM_PURCHASE_WORKER_UNAVAILABLE")
+        try:
             from services.ton_service import get_transactions_since_treasury_cursor, mark_treasury_transactions_cursor
-            scan_result = get_transactions_since_treasury_cursor(page_limit=100, max_pages=10)
+            scan_result = await asyncio.to_thread(get_transactions_since_treasury_cursor, page_limit=100, max_pages=10)
             transactions = scan_result.get("transactions", [])
             intents = get_pending_payment_intents(limit=1000)
             terminal_verification_errors = {"intent_expired", "amount_too_low", "destination_mismatch", "source_mismatch", "reference_missing", "intent_already_fulfilled", "invalid_reference"}

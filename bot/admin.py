@@ -155,7 +155,7 @@ class GramTreasuryWithdrawStates(StatesGroup):
 
 
 def is_admin(user_id):
-    return user_id == ADMIN_ID
+    return ADMIN_ID > 0 and user_id == ADMIN_ID
 
 
 def _users_page_kb(shown_limit: int, total: int, users: list, session_id: str, lang: str = "ru") -> InlineKeyboardMarkup:
@@ -190,6 +190,7 @@ def _users_page_kb(shown_limit: int, total: int, users: list, session_id: str, l
 def admin_main_kb():
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
+        InlineKeyboardButton("👥 Управляющие · просмотр", callback_data="deepalpha_team"),
         InlineKeyboardButton("🤖 AI Settings", callback_data="admin_ai"),
         InlineKeyboardButton("💰 Pricing", callback_data="admin_pricing"),
         InlineKeyboardButton("📦 Пакеты токенов", callback_data="admin_packages"),
@@ -717,6 +718,7 @@ def admin_gram_wallets_text(search_user_id: int | None = None) -> str:
 
 def admin_gram_wallets_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("💎 Главный кошелёк · баланс и приём", callback_data="admin_gram_payment_health"))
     web_enabled = str(get_setting("web_ton_enabled", "off") or "off").lower() == "on"
     admin_wallet = _get_admin_gram_wallet_summary()
     cashier = get_active_cashier_payment_wallet() or {}
@@ -1905,6 +1907,10 @@ def referral_rewards_admin_kb(lang: str = "en") -> InlineKeyboardMarkup:
 # ═══════════════════════════════════════════
 
 def register_admin(dp: Dispatcher):
+    from bot.admin_guard import OwnerDispatcher
+    from bot.admin_viewers import register_viewers
+    register_viewers(dp)
+    dp = OwnerDispatcher(dp, is_admin)
 
     @dp.message_handler(commands=["treasury"])
     async def treasury_admin_command(message: types.Message):

@@ -1,31 +1,12 @@
-import os
 import requests
 from typing import List, Dict, Any, Optional
 from services.treasury_service import get_public_treasury_address
 
-TONCENTER_API = "https://testnet.toncenter.com/api/v2" if "test" in os.getenv("TON_NETWORK", "mainnet").lower() else "https://toncenter.com/api/v2"
-TONCENTER_KEY = os.getenv("TONCENTER_API_KEY", "")
+from services import ton_chain_service as chain
 
 
 def get_transactions(limit: int = 20) -> List[Dict[str, Any]]:
-    """Получает последние входящие транзакции на адрес владельца."""
-    try:
-        response = requests.get(
-            f"{TONCENTER_API}/getTransactions",
-            params={
-                "address": (get_public_treasury_address().get("address") or ""),
-                "limit": limit,
-                "api_key": TONCENTER_KEY,
-            },
-            timeout=15,
-        )
-        if response.status_code != 200:
-            return []
-        data = response.json()
-        return data.get("result", [])
-    except Exception as e:
-        print(f"TON API ERROR: {e}")
-        return []
+    return _get_transactions_page(limit)
 
 
 def _tx_lt_hash(tx: Dict[str, Any]) -> tuple[str, str]:
@@ -34,24 +15,38 @@ def _tx_lt_hash(tx: Dict[str, Any]) -> tuple[str, str]:
 
 
 def _get_transactions_page(limit: int = 100, lt: str = "", tx_hash: str = "") -> List[Dict[str, Any]]:
+    import json
+    import time
+    treasury = get_public_treasury_address()
+    if not treasury.get("ok") or not treasury.get("address"):
+        raise RuntimeError("treasury_not_configured")
+    network = str(treasury.get("network") or "").strip().lower()
+    network = {"-239": "mainnet", "-3": "testnet"}.get(network, network)
+    if network != chain._network() or network not in {"mainnet", "testnet"}:
+        raise RuntimeError("treasury_network_mismatch")
+    params = {"address": treasury["address"], "limit": max(1, min(100, int(limit))), "archival": "true"}
+    if lt and tx_hash:
+        params.update(lt=lt, hash=tx_hash)
+    started = time.monotonic()
     try:
-        params = {
-            "address": (get_public_treasury_address().get("address") or ""),
-            "limit": int(limit),
-            "api_key": TONCENTER_KEY,
-            "archival": "true",
-        }
-        if lt and tx_hash:
-            params["lt"] = lt
-            params["hash"] = tx_hash
-        response = requests.get(f"{TONCENTER_API}/getTransactions", params=params, timeout=20)
-        if response.status_code != 200:
-            return []
-        data = response.json()
-        return data.get("result", []) or []
-    except Exception as e:
-        print(f"TON API PAGE ERROR: {e}")
-        return []
+        with requests.get(chain._base_url().rstrip("/") + "/getTransactions", params=params,
+                          headers={"X-API-Key": chain._params().get("api_key", "")},
+                          timeout=(4, 10), stream=True, allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise RuntimeError("treasury_provider_unavailable")
+            body = bytearray()
+            for chunk in response.iter_content(32768):
+                body.extend(chunk)
+                if len(body) > 2 * 1024 * 1024 or time.monotonic() - started > 15:
+                    raise RuntimeError("treasury_response_limit")
+            payload = json.loads(body)
+        if not isinstance(payload, dict) or payload.get("ok") is not True or not isinstance(payload.get("result"), list):
+            raise RuntimeError("treasury_response_invalid")
+        return payload["result"]
+    except Exception:
+        # Do not turn a provider failure into an empty successful scan or log
+        # request URLs/keys. The worker must retain its reconciliation cursor.
+        raise RuntimeError("treasury_scan_unavailable") from None
 
 
 def get_transactions_since_treasury_cursor(page_limit: int = 100, max_pages: int = 20) -> Dict[str, Any]:

@@ -271,6 +271,10 @@ async def handle_pending(request):
             return _json_response({"error": "Unauthorized"}, status=401)
         if not incoming_enabled():
             return _json_response({"error": "treasury_incoming_disabled"}, status=503)
+        from services.gram_payment_health import payment_health
+        readiness = await asyncio.to_thread(payment_health)
+        if not readiness.get("ready"):
+            return _json_response({"error": readiness.get("reason") or "treasury_not_configured"}, status=503)
         data = await request.json()
         payment_type = str(data.get("payment_type", "tokens") or "tokens")
         if payment_type not in ("tokens", "subscription", "author_status"):
@@ -1708,74 +1712,17 @@ async def handle_wallet_ton_buy_tokens(request):
         payload = await request.json()
     except Exception:
         payload = {}
-    amount_tokens_raw = str(payload.get("amount_tokens", "")).strip()
-    if not amount_tokens_raw.isdigit():
-        return _json_response({"ok": False, "error": "invalid_amount_tokens"}, status=400)
-    amount_tokens = int(amount_tokens_raw)
-    min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
-    if amount_tokens < min_tokens:
-        return _json_response({"ok": False, "error": "amount_tokens_too_small", "min_tokens": min_tokens}, status=400)
-    project_wallet = resolve_ton_purchase_project_wallet()
-    if not validate_ton_address(project_wallet):
-        return _json_response({"ok": False, "error": "ton_platform_wallet_not_configured"}, status=400)
-    price_per_token = get_ton_token_price_per_internal_token_nano()
-    if price_per_token <= 0:
-        return _json_response({"ok": False, "error": "invalid_ton_token_price"}, status=400)
-    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
-    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
-    total_tokens = amount_tokens + bonus_tokens
-    purchase_amount_nano = amount_tokens * price_per_token
-    wallet = get_or_create_user_ton_wallet(user_id)
-    intent = create_ton_purchase_intent(user_id, 'token_purchase', str(wallet.get('wallet_address') or ''), project_wallet, purchase_amount_nano, {
-        'requested_tokens': amount_tokens, 'bonus_tokens': bonus_tokens, 'total_tokens': total_tokens, 'price_per_token_nano': str(price_per_token)
-    })
-    if not intent:
-        return _json_response({"ok": False, "error": "intent_create_failed"}, status=500)
-    sent = send_ton_from_user_wallet(
-        user_id=user_id,
-        destination_address=project_wallet,
-        amount_nano=purchase_amount_nano,
-        comment=f"DeepAlpha token purchase:{intent.get('id')}",
-    )
-    if not sent.get("ok"):
-        fail_ton_purchase_intent(int(intent.get("id")), str(sent.get("error") or "send_failed"))
-        return _json_response(sent, status=400)
-    tx_hash = str(sent.get('tx_hash') or '').strip()
-    if not tx_hash:
-        submit_ton_purchase_intent(int(intent.get('id')), "")
-        return _json_response({
-            "ok": True,
-            "intent_id": intent.get('id'),
-            "status": "submitted",
-            "tokens_credited": 0,
-            "message": "payment_submitted_waiting_tx_hash",
-        })
-    submitted = submit_ton_purchase_intent(int(intent.get('id')), tx_hash)
-    if not submitted:
-        return _json_response({"ok": False, "error": "intent_submit_failed"}, status=409)
-    verification = verify_ton_purchase_onchain(int(intent.get("id")))
-    verify_ok = bool(verification.get("ok"))
-    if verify_ok:
-        fulfill_ton_purchase_intent(int(intent.get('id')))
-        try:
-            process_token_purchase_referral_reward(
-                buyer_user_id=int(user_id),
-                purchase_amount_nano=int(purchase_amount_nano),
-                purchase_ref=str(intent.get("id") or ""),
-            )
-        except Exception as e:
-            print(f"web referral reward hook error: {e}")
-    return _json_response({
-        "ok": True,
-        "intent_id": intent.get('id'),
-        "status": "fulfilled" if verify_ok else "submitted",
-        "tx_hash": str(verification.get("tx_hash") or tx_hash),
-        "ton_paid_display": nano_to_ton_display(purchase_amount_nano),
-        "tokens_credited": total_tokens if verify_ok else 0,
-        "bonus_tokens": bonus_tokens if verify_ok else 0,
-        "total_tokens": total_tokens if verify_ok else 0,
-        "message": "" if verify_ok else str(verification.get("error") or "payment_submitted_waiting_confirmation"),
-    })
+    if not isinstance(payload, dict):
+        return _json_response({"ok": False, "error": "invalid_payload"}, status=400)
+    from services.gram_purchase_service import purchase
+    try:
+        result = await asyncio.to_thread(purchase, user_id, payload.get("amount_tokens"),
+            payload.get("idempotency_key") or request.headers.get("Idempotency-Key"))
+    except Exception:
+        logging.getLogger(__name__).warning("GRAM_PURCHASE_REQUEST_UNAVAILABLE")
+        return _json_response({"ok": False, "error": "purchase_status_unavailable"}, status=503)
+    status = 200 if result.get("ok") else 409 if result.get("error") in {"idempotency_conflict", "purchase_pending"} else 400
+    return _json_response(result, status=status)
 
 
 async def handle_auth_logout(request):

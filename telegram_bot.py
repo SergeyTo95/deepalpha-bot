@@ -378,6 +378,9 @@ class ModerationGuardMiddleware(BaseMiddleware):
         user = message.from_user
         if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
             return
+        from bot.admin_guard import can_open_view_during_moderation
+        if await asyncio.to_thread(can_open_view_during_moderation, message):
+            return
         lang = get_user_lang(user.id) if user else "en"
         now = time.time()
         last_at = _moderation_last_notice_at.get(user.id, 0)
@@ -389,6 +392,9 @@ class ModerationGuardMiddleware(BaseMiddleware):
     async def on_pre_process_callback_query(self, callback_query: types.CallbackQuery, data: dict):
         user = callback_query.from_user
         if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
+            return
+        from bot.admin_guard import can_open_view_during_moderation
+        if await asyncio.to_thread(can_open_view_during_moderation, callback_query, callback=True):
             return
         lang = get_user_lang(user.id) if user else "en"
         await callback_query.answer(moderation_alert_text(lang), show_alert=True)
@@ -5908,10 +5914,8 @@ async def start_handler_any_state(message: types.Message, state: FSMContext):
 @dp.message_handler(commands=["admin"], state="*")
 async def admin_handler_any_state(message: types.Message, state: FSMContext):
     await state.finish()
-    from bot.admin import is_admin, admin_main_kb
-    if not is_admin(message.from_user.id):
-        return
-    await message.answer("⚙️ DeepAlpha Admin Panel", reply_markup=admin_main_kb())
+    from bot.admin_viewers import open_admin_panel
+    await open_admin_panel(message)
 
 
 @dp.message_handler(commands=["chatid"], state="*")
@@ -11828,6 +11832,10 @@ def _ton_project_wallet() -> str:
 
 @dp.callback_query_handler(lambda c: c.data == "buy_tokens_ton_wallet", state="*")
 async def buy_tokens_ton_wallet_start(c: types.CallbackQuery, state: FSMContext):
+    from bot.admin_guard import private_actor
+    if private_actor(c, callback=True) is None:
+        await c.answer("Откройте личный чат с ботом.", show_alert=True)
+        return
     uid = c.from_user.id
     lang = get_user_lang(uid)
     if not is_ton_wallet_token_purchase_enabled():
@@ -11848,159 +11856,97 @@ async def buy_tokens_ton_wallet_start(c: types.CallbackQuery, state: FSMContext)
 
 @dp.message_handler(state=TonWalletTokenPurchaseStates.waiting_ton_wallet_token_amount)
 async def buy_tokens_ton_wallet_amount(message: types.Message, state: FSMContext):
-    uid = message.from_user.id
+    from bot.admin_guard import private_actor
+    from services.gram_purchase_service import quote as purchase_quote
+    uid = private_actor(message)
+    if uid is None:
+        return
     lang = get_user_lang(uid)
-    amount_raw = str(message.text or "").strip()
-    if not amount_raw.isdigit():
-        await message.answer("Нужно целое число токенов." if lang == "ru" else "Token amount must be an integer.")
+    terms = await asyncio.to_thread(purchase_quote, uid, str(message.text or "").strip())
+    if not terms.get("ok"):
+        await message.answer(_gram_purchase_error(uid, terms.get("error")))
         return
-    amount_tokens = int(amount_raw)
-    min_tokens = int(str(get_setting("ton_token_purchase_min_tokens", "1") or "1"))
-    if amount_tokens < min_tokens:
-        await message.answer(f"Минимум: {min_tokens}." if lang == "ru" else f"Minimum is {min_tokens}.")
-        return
-    price_per_token = get_ton_token_price_per_internal_token_nano()
-    if price_per_token <= 0:
-        await state.finish()
-        await message.answer("Некорректная Gram цена токена." if lang == "ru" else "Invalid Gram token price.")
-        return
-    bonus_percent = int(str(get_setting("ton_token_purchase_bonus_percent", "0") or "0"))
-    bonus_tokens = int((amount_tokens * bonus_percent) / 100) if bonus_percent > 0 else 0
-    total_tokens = amount_tokens + bonus_tokens
-    purchase_amount_nano = amount_tokens * price_per_token
-    balance_data = get_user_ton_balance(uid, refresh=True)
-    if not balance_data.get("ok"):
-        await state.finish()
-        await message.answer(_ton_send_error(uid, "balance_unavailable"))
-        return
-    balance_nano = int(balance_data.get("balance_nano") or 0)
-    reserve_nano = int(get_ton_send_fee_reserve_nano())
-    required_nano = purchase_amount_nano + reserve_nano
-    if balance_nano < required_nano:
-        await message.answer(
-            (f"Недостаточно Gram.\nБаланс: {balance_data.get('balance_display')} Gram\nНужно: {nano_to_ton_display(required_nano)} Gram")
-            if lang == "ru"
-            else (f"Insufficient Gram.\nBalance: {balance_data.get('balance_display')} Gram\nNeeded: {nano_to_ton_display(required_nano)} Gram")
-        )
-        return
-    project_wallet = _ton_project_wallet()
-    short_wallet = _short_ton_value(project_wallet)
-    ton_amount_display = nano_to_ton_display(purchase_amount_nano)
-    text = (
-        "💎 Покупка токенов с Gram кошелька\n\n"
-        f"Токены: {amount_tokens}\n"
-        f"Бонус: {bonus_tokens}\n"
-        f"Итого будет зачислено: {total_tokens}\n\n"
-        f"К оплате: {ton_amount_display} Gram\n"
-        f"Ваш Gram баланс: {balance_data.get('balance_display')} Gram\n"
-        f"Резерв на комиссию: {nano_to_ton_display(reserve_nano)} Gram\n\n"
-        f"Кошелёк проекта:\n{short_wallet}\n\n"
-        "Подтвердить покупку?"
-        if lang == "ru"
-        else
-        "💎 Buy tokens with Gram wallet\n\n"
-        f"Tokens: {amount_tokens}\n"
-        f"Bonus: {bonus_tokens}\n"
-        f"Total to credit: {total_tokens}\n\n"
-        f"To pay: {ton_amount_display} Gram\n"
-        f"Your Gram balance: {balance_data.get('balance_display')} Gram\n"
-        f"Fee reserve: {nano_to_ton_display(reserve_nano)} Gram\n\n"
-        f"Project wallet:\n{short_wallet}\n\n"
-        "Confirm purchase?"
-    )
+    key = secrets.token_urlsafe(24).replace("-", "_")
+    await state.update_data(gram_quote=terms, gram_request_key=key)
+    await TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase.set()
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("✅ Подтвердить" if lang == "ru" else "✅ Confirm", callback_data="buy_tokens_ton_wallet_confirm"),
-        InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data="buy_tokens_ton_wallet_cancel"),
+        InlineKeyboardButton("✅ Подтвердить" if lang == "ru" else "✅ Confirm", callback_data=f"buy_tokens_ton_wallet_confirm:{key}"),
+        InlineKeyboardButton("❌ Отмена" if lang == "ru" else "❌ Cancel", callback_data=f"buy_tokens_ton_wallet_cancel:{key}"),
     )
-    await state.update_data(amount_tokens=amount_tokens, bonus_tokens=bonus_tokens, total_tokens=total_tokens, purchase_amount_nano=purchase_amount_nano, project_wallet=project_wallet)
-    await TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase.set()
+    price = nano_to_ton_display(terms["amount_nano"])
+    reserve = nano_to_ton_display(get_ton_send_fee_reserve_nano())
+    text = (f"💎 Покупка токенов\nТокены: {terms['requested_tokens']}\nБонус: {terms['bonus_tokens']}\n"
+            f"Итого: {terms['total_tokens']}\nК оплате: {price} Gram\nРезерв на комиссию: {reserve} Gram\n"
+            f"Кошелёк проекта: {terms['project_wallet']}\n\nПодтвердить покупку?" if lang == "ru" else
+            f"💎 Buy tokens\nTokens: {terms['requested_tokens']}\nBonus: {terms['bonus_tokens']}\n"
+            f"Total: {terms['total_tokens']}\nTo pay: {price} Gram\nFee reserve: {reserve} Gram\n"
+            f"Project wallet: {terms['project_wallet']}\n\nConfirm purchase?")
     await message.answer(text, reply_markup=kb)
 
 
-@dp.callback_query_handler(lambda c: c.data in ["buy_tokens_ton_wallet_cancel", "buy_tokens_ton_wallet_confirm"], state=TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase)
+@dp.callback_query_handler(lambda c: str(c.data or "").startswith(("buy_tokens_ton_wallet_cancel", "buy_tokens_ton_wallet_confirm")), state=TonWalletTokenPurchaseStates.confirm_ton_wallet_token_purchase)
 async def buy_tokens_ton_wallet_confirm_cb(c: types.CallbackQuery, state: FSMContext):
-    uid = c.from_user.id
+    from bot.admin_guard import private_actor
+    from services.gram_purchase_service import purchase
+    uid = private_actor(c, callback=True)
+    if uid is None:
+        await c.answer("Откройте личный чат с ботом.", show_alert=True)
+        return
     lang = get_user_lang(uid)
-    if c.data == "buy_tokens_ton_wallet_cancel":
-        await state.finish()
-        await c.message.answer("Покупка отменена." if lang == "ru" else "Purchase cancelled.")
-        await c.answer()
-        return
     data = await state.get_data()
-    amount_tokens = int(data.get("amount_tokens") or 0)
-    bonus_tokens = int(data.get("bonus_tokens") or 0)
-    total_tokens = int(data.get("total_tokens") or 0)
-    purchase_amount_nano = int(data.get("purchase_amount_nano") or 0)
-    project_wallet = str(data.get("project_wallet") or "").strip()
-    wallet = get_or_create_user_ton_wallet(uid)
-    intent = create_ton_purchase_intent(uid, "token_purchase", str(wallet.get("wallet_address") or ""), project_wallet, purchase_amount_nano, {
-        "requested_tokens": amount_tokens, "bonus_tokens": bonus_tokens, "total_tokens": total_tokens,
-        "price_per_token_nano": str(get_ton_token_price_per_internal_token_nano()),
-    })
-    if not intent:
-        await state.finish()
-        await c.message.answer("Не удалось создать покупку." if lang == "ru" else "Failed to create purchase intent.")
-        await c.answer()
+    key = data.get("gram_request_key")
+    if not key or c.data.rsplit(":", 1)[-1] != key:
+        await c.answer("Эта кнопка устарела. Откройте текущую покупку." if lang == "ru" else "This button has expired. Open your current purchase.", show_alert=True)
         return
-    sent = send_ton_from_user_wallet(uid, project_wallet, purchase_amount_nano, f"DeepAlpha token purchase:{intent.get('id')}")
-    if not sent.get("ok"):
-        fail_ton_purchase_intent(int(intent.get("id")), str(sent.get("error") or "send_failed"))
+    if c.data.startswith("buy_tokens_ton_wallet_cancel:"):
         await state.finish()
-        await c.message.answer(_ton_send_error(uid, str(sent.get("error") or "send_failed")))
-        await c.answer()
+        await c.answer("Покупка отменена." if lang == "ru" else "Purchase cancelled.")
         return
-    tx_hash = str(sent.get("tx_hash") or "").strip()
-    if not tx_hash:
-        submit_ton_purchase_intent(int(intent.get("id")), "")
+    terms = data.get("gram_quote") or {}
+    await c.answer("Проверяю покупку…" if lang == "ru" else "Checking purchase…")
+    try:
+        result = await asyncio.to_thread(purchase, uid, terms.get("requested_tokens"), key, expected_quote=terms)
+    except Exception:
+        # Retain the same key after an uncertain response. A retry cannot resend.
+        await c.message.answer("Статус временно недоступен. Повторная проверка этой покупки безопасна."
+                               if lang == "ru" else "Status temporarily unavailable. Checking this purchase again is safe.")
+        return
+    if not result.get("ok"):
+        await c.message.answer(_gram_purchase_error(uid, result.get("error")))
         await state.finish()
-        await c.message.answer(
-            "✅ Gram отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции."
-            if lang == "ru" else
-            "✅ Gram sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification."
-        )
-        await c.answer()
         return
-    submit_ton_purchase_intent(int(intent.get("id")), tx_hash)
-    link_ton_wallet_tx_to_intent(
-        tx_hash=tx_hash,
-        intent_id=int(intent.get("id")),
-        product_type="token_purchase",
-        purchase_status="submitted",
-    )
-    verification = verify_ton_purchase_onchain(int(intent.get("id")))
-    verify_ok = bool(verification.get("ok"))
-    if verify_ok:
-        fulfill_ton_purchase_intent(int(intent.get("id")))
-        try:
-            reward = process_token_purchase_referral_reward(buyer_user_id=uid, purchase_amount_nano=purchase_amount_nano, purchase_ref=str(intent.get("id")))
-            if reward and int(reward.get("user_id") or 0) > 0:
-                rid = int(reward.get("user_id"))
-                amount = nano_to_ton_display(int(reward.get("reward_nano") or 0))
-                rlang = get_user_lang(rid)
-                msg = (f"🔥 Вы получили referral reward: +{amount} Gram\nНаграда станет доступна после проверки." if rlang == "ru" else f"🔥 You earned a referral reward: +{amount} Gram\nIt will become available after the pending period.")
-                await bot.send_message(rid, msg)
-        except Exception as e:
-            print(f"referral reward hook error: {e}")
-        link_ton_wallet_tx_to_intent(
-            tx_hash=tx_hash,
-            intent_id=int(intent.get("id")),
-            product_type="token_purchase",
-            purchase_status="fulfilled",
-        )
     await state.finish()
-    ton_amount = nano_to_ton_display(purchase_amount_nano)
-    final_hash = str(verification.get("tx_hash") or tx_hash)
-    if verify_ok:
-        text = (f"✅ Покупка выполнена.\nЗачислено: {total_tokens} токенов\nОплачено: {ton_amount} Gram\nTx: {final_hash}"
-                if lang == "ru" else
-                f"✅ Purchase completed.\nCredited: {total_tokens} tokens\nPaid: {ton_amount} Gram\nTx: {final_hash}")
+    if result.get("status") == "fulfilled":
+        text = (f"✅ Зачислено: {result['tokens_credited']} токенов." if lang == "ru" else
+                f"✅ Credited: {result['tokens_credited']} tokens.")
     else:
-        text = (f"✅ Gram отправлен.\nПокупка ожидает подтверждения.\nТокены будут зачислены после проверки транзакции.\nTx: {final_hash}"
+        text = (f"⏳ Покупка №{result['intent_id']} ожидает подтверждения поступления Gram.\n"
+                "Повторно отправлять оплату не нужно. Бот автоматически проверит платёж и сообщит о зачислении."
                 if lang == "ru" else
-                f"✅ Gram sent.\nPurchase is waiting for confirmation.\nTokens will be credited after transaction verification.\nTx: {final_hash}")
+                f"⏳ Purchase #{result['intent_id']} is awaiting receipt confirmation.\n"
+                "Do not pay again. The bot will check the payment and notify you when tokens are credited.")
     await c.message.answer(text)
-    await c.answer()
+
+
+def _gram_purchase_error(uid, code):
+    ru = {"invalid_amount_tokens": "Введите целое количество токенов в разрешённом диапазоне.",
+          "purchase_pending": "Предыдущая покупка ещё проверяется. Повторная оплата заблокирована до её завершения.",
+          "quote_changed": "Условия покупки изменились. Откройте покупку заново и проверьте сумму.",
+          "treasury_network_mismatch": "Сеть главного кошелька настроена неверно. Обратитесь к администратору.",
+          "treasury_incoming_disabled": "Приём Gram временно отключён.",
+          "ton_token_purchase_disabled": "Покупка токенов за Gram временно отключена.",
+          "wallet_sending_disabled": "Отправка из встроенного кошелька временно недоступна.",
+          "invalid_ton_token_price": "Цена покупки не настроена. Обратитесь к администратору."}
+    en = {"invalid_amount_tokens": "Enter an integer token amount within the allowed range.",
+          "purchase_pending": "A previous purchase is still being checked. Please do not pay again.",
+          "quote_changed": "Purchase terms changed. Start again and review the price.",
+          "treasury_network_mismatch": "The Treasury network is misconfigured. Contact the administrator.",
+          "treasury_incoming_disabled": "Gram payments are temporarily disabled.",
+          "ton_token_purchase_disabled": "Gram token purchases are temporarily disabled.",
+          "wallet_sending_disabled": "Sending from the built-in wallet is temporarily unavailable.",
+          "invalid_ton_token_price": "The purchase price is not configured. Contact the administrator."}
+    return (ru if get_user_lang(uid) == "ru" else en).get(code, _ton_send_error(uid, str(code)))
 
 
 def _ton_unavailable(uid: int) -> str:
