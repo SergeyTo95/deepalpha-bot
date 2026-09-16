@@ -57,6 +57,13 @@ def _add_august_revenue(connect, gram=100):
                  '2026-08-15T10:02:00+00:00', '2026-08-15T10:02:00+00:00'))
 
 
+def _backdate_shares(connect, *user_ids, timestamp='2026-08-01T00:00:00+00:00'):
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE deepalpha_project_viewers SET share_effective_at=%s WHERE user_id=ANY(%s)",
+                        (timestamp, list(user_ids)))
+
+
 def test_bootstrap_applies_requested_roles_once(postgres, monkeypatch):
     monkeypatch.setenv('DEEPALPHA_MANAGER_BOOTSTRAP', '11:2000,12:1000')
     assert set(payouts.bootstrap_configured_managers()) == {11, 12}
@@ -69,12 +76,41 @@ def test_bootstrap_applies_requested_roles_once(postgres, monkeypatch):
     assert viewers[11]['share_bps'] == 1500
 
 
+def test_new_share_does_not_create_retroactive_closed_month_payout(postgres):
+    connect = postgres
+    access.set_viewer(OWNER, 11, active=True)
+    access.set_share_bps(OWNER, 11, 2000)
+    _add_august_revenue(connect, 100)
+    assert payouts.ensure_previous_month_proposals(datetime(2026, 9, 16, tzinfo=timezone.utc)) == []
+    assert payouts.list_pending(OWNER) == []
+
+
+def test_retroactive_pending_created_before_migration_is_cancelled(postgres):
+    connect = postgres
+    access.set_viewer(OWNER, 11, active=True)
+    access.set_share_bps(OWNER, 11, 2000)
+    _add_august_revenue(connect, 100)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO deepalpha_manager_payouts(
+                period_start,period_end,manager_user_id,share_bps,gross_revenue_nano,suggested_amount_nano,amount_nano,status)
+                VALUES ('2026-08-01','2026-09-01',11,2000,%s,%s,%s,'pending')""",
+                (100 * payouts.NANO, 20 * payouts.NANO, 20 * payouts.NANO))
+    payouts.ensure_previous_month_proposals(datetime(2026, 9, 16, tzinfo=timezone.utc))
+    assert payouts.list_pending(OWNER) == []
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM deepalpha_manager_payouts WHERE manager_user_id=11")
+            assert cur.fetchone()[0] == 'cancelled'
+
+
 def test_monthly_proposals_are_gross_revenue_snapshot_and_idempotent(postgres):
     connect = postgres
     access.set_viewer(OWNER, 11, active=True)
     access.set_viewer(OWNER, 12, active=True)
     access.set_share_bps(OWNER, 11, 2000)
     access.set_share_bps(OWNER, 12, 1000)
+    _backdate_shares(connect, 11, 12)
     _add_august_revenue(connect, 100)
 
     now = datetime(2026, 9, 16, tzinfo=timezone.utc)
@@ -96,6 +132,7 @@ def test_monthly_proposals_are_gross_revenue_snapshot_and_idempotent(postgres):
 def test_owner_can_edit_before_confirmation_and_viewer_cannot(postgres):
     access.set_viewer(OWNER, 11, active=True)
     access.set_share_bps(OWNER, 11, 2000)
+    _backdate_shares(postgres, 11)
     _add_august_revenue(postgres, 100)
     row = payouts.ensure_previous_month_proposals(datetime(2026, 9, 16, tzinfo=timezone.utc))[0]
     updated = payouts.set_amount(OWNER, row['id'], '15.5')
@@ -111,6 +148,7 @@ def test_owner_can_edit_before_confirmation_and_viewer_cannot(postgres):
 def test_approval_is_required_and_submission_is_idempotent(postgres, monkeypatch):
     access.set_viewer(OWNER, 11, active=True)
     access.set_share_bps(OWNER, 11, 2000)
+    _backdate_shares(postgres, 11)
     _add_august_revenue(postgres, 100)
     row = payouts.ensure_previous_month_proposals(datetime(2026, 9, 16, tzinfo=timezone.utc))[0]
 
