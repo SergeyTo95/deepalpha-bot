@@ -76,6 +76,7 @@ def bootstrap_configured_managers():
         return []
     conn = get_connection()
     applied = []
+    waiting = 0
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("deepalpha:manager-bootstrap",))
@@ -85,6 +86,7 @@ def bootstrap_configured_managers():
                     continue
                 cur.execute("SELECT 1 FROM users WHERE user_id=%s", (uid,))
                 if not cur.fetchone():
+                    waiting += 1
                     continue
                 cur.execute("SELECT active,share_bps FROM deepalpha_project_viewers WHERE user_id=%s FOR UPDATE", (uid,))
                 existing = cur.fetchone()
@@ -102,6 +104,7 @@ def bootstrap_configured_managers():
                 cur.execute("INSERT INTO deepalpha_manager_bootstrap_applied(user_id) VALUES (%s) ON CONFLICT DO NOTHING", (uid,))
                 applied.append(uid)
         conn.commit()
+        logger.info("DEEPALPHA_MANAGER_BOOTSTRAP configured=%s applied=%s waiting_for_start=%s", len(pairs), len(applied), waiting)
         return applied
     except Exception:
         conn.rollback()
@@ -123,13 +126,15 @@ def previous_month_period(now=None):
 
 def _gross_revenue(cur, start, end):
     # Gross revenue is confirmed/fulfilled incoming Gram only. Payouts are not revenue.
-    cur.execute("""SELECT COALESCE(SUM(expected_amount_nano),0) FROM payment_intents
+    cur.execute("""SELECT COALESCE(SUM(expected_amount_nano),0) AS gross_nano FROM payment_intents
         WHERE status='fulfilled' AND fulfilled_at IS NOT NULL AND fulfilled_at >= %s AND fulfilled_at < %s""", (start, end))
-    modern = int((cur.fetchone() or [0])[0] or 0)
-    cur.execute("""SELECT COALESCE(SUM(NULLIF(expected_amount_nano,'')::numeric),0) FROM ton_purchase_intents
+    modern_row = cur.fetchone() or {}
+    modern = int(modern_row.get("gross_nano") or 0)
+    cur.execute("""SELECT COALESCE(SUM(NULLIF(expected_amount_nano,'')::numeric),0) AS gross_nano FROM ton_purchase_intents
         WHERE status='fulfilled' AND NULLIF(fulfilled_at,'') IS NOT NULL
           AND NULLIF(fulfilled_at,'')::timestamptz >= %s AND NULLIF(fulfilled_at,'')::timestamptz < %s""", (start, end))
-    custodial = int((cur.fetchone() or [0])[0] or 0)
+    custodial_row = cur.fetchone() or {}
+    custodial = int(custodial_row.get("gross_nano") or 0)
     return modern + custodial
 
 
@@ -305,9 +310,9 @@ def approve_and_send(actor_id, payout_id):
                 treasury_wallet_id=EXCLUDED.treasury_wallet_id,
                 treasury_address=EXCLUDED.treasury_address,
                 amount_nano=EXCLUDED.amount_nano,status='approved',fail_reason=NULL,approved_at=NOW()
-            RETURNING id""", (int(row["id"]), int(row["manager_user_id"]), int(resolved["wallet_id"]), resolved["wallet_address"],
+            RETURNING id AS treasury_payout_id""", (int(row["id"]), int(row["manager_user_id"]), int(resolved["wallet_id"]), resolved["wallet_address"],
                                int(treas["wallet_id"]), treas["address"], int(row["amount_nano"]), idem))
-        treasury_payout_id = int(cur.fetchone()[0])
+        treasury_payout_id = int(cur.fetchone()["treasury_payout_id"])
         cur.execute("""UPDATE deepalpha_manager_payouts SET status='approved',treasury_payout_id=%s,
             approved_by=%s,approved_at=NOW(),updated_at=NOW() WHERE id=%s""",
             (treasury_payout_id, int(actor_id), int(row["id"])))
