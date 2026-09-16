@@ -22,6 +22,11 @@ _worker_guard = threading.Lock()
 def ensure_tables(cursor):
     cursor.execute("ALTER TABLE deepalpha_project_viewers ADD COLUMN IF NOT EXISTS share_bps INTEGER NOT NULL DEFAULT 0")
     cursor.execute("ALTER TABLE deepalpha_project_viewers ADD COLUMN IF NOT EXISTS payout_enabled BOOLEAN NOT NULL DEFAULT TRUE")
+    cursor.execute("ALTER TABLE deepalpha_project_viewers ADD COLUMN IF NOT EXISTS share_effective_at TIMESTAMPTZ")
+    # Existing positive shares were created before this column existed. Their
+    # latest viewer update is the safest non-retroactive activation boundary.
+    cursor.execute("""UPDATE deepalpha_project_viewers SET share_effective_at=updated_at
+        WHERE share_bps > 0 AND share_effective_at IS NULL""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS deepalpha_manager_bootstrap_applied (
         user_id BIGINT PRIMARY KEY,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -92,13 +97,15 @@ def bootstrap_configured_managers():
                 existing = cur.fetchone()
                 if existing:
                     if bool(existing[0]) and int(existing[1] or 0) == 0:
-                        cur.execute("UPDATE deepalpha_project_viewers SET share_bps=%s,updated_at=NOW() WHERE user_id=%s", (bps, uid))
+                        cur.execute("""UPDATE deepalpha_project_viewers
+                            SET share_bps=%s,share_effective_at=NOW(),updated_at=NOW() WHERE user_id=%s""", (bps, uid))
                 else:
                     cur.execute("SELECT COUNT(*) FROM deepalpha_project_viewers WHERE active=TRUE")
                     if int((cur.fetchone() or [0])[0] or 0) >= 2:
                         continue
-                    cur.execute("""INSERT INTO deepalpha_project_viewers(user_id,active,granted_by,share_bps,payout_enabled)
-                        VALUES (%s,TRUE,%s,%s,TRUE)""", (uid, configured_admin_id(), bps))
+                    cur.execute("""INSERT INTO deepalpha_project_viewers(
+                        user_id,active,granted_by,share_bps,payout_enabled,share_effective_at)
+                        VALUES (%s,TRUE,%s,%s,TRUE,NOW())""", (uid, configured_admin_id(), bps))
                     cur.execute("INSERT INTO deepalpha_viewer_audit(actor_id,user_id,action) VALUES (%s,%s,'grant')",
                                 (configured_admin_id(), uid))
                 cur.execute("INSERT INTO deepalpha_manager_bootstrap_applied(user_id) VALUES (%s) ON CONFLICT DO NOTHING", (uid,))
@@ -138,6 +145,20 @@ def _gross_revenue(cur, start, end):
     return modern + custodial
 
 
+def _cancel_retroactive_pending(cur):
+    """Cancel only unapproved proposals that predate the share activation boundary."""
+    cur.execute("""UPDATE deepalpha_manager_payouts p
+        SET status='cancelled',updated_at=NOW()
+        FROM deepalpha_project_viewers v
+        WHERE p.manager_user_id=v.user_id AND p.status='pending'
+          AND v.share_effective_at IS NOT NULL
+          AND p.period_end <= v.share_effective_at::date""")
+    cancelled = int(cur.rowcount or 0)
+    if cancelled:
+        logger.info("DEEPALPHA_MANAGER_RETROACTIVE_PAYOUTS_CANCELLED count=%s", cancelled)
+    return cancelled
+
+
 def ensure_previous_month_proposals(now=None):
     start, end = previous_month_period(now)
     conn = get_connection()
@@ -145,9 +166,12 @@ def ensure_previous_month_proposals(now=None):
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"deepalpha:manager-payout:{start.date()}",))
+        _cancel_retroactive_pending(cur)
         gross = _gross_revenue(cur, start, end)
-        cur.execute("""SELECT user_id,share_bps FROM deepalpha_project_viewers
-            WHERE active=TRUE AND payout_enabled=TRUE AND share_bps > 0 ORDER BY user_id""")
+        cur.execute("""SELECT user_id,share_bps,share_effective_at FROM deepalpha_project_viewers
+            WHERE active=TRUE AND payout_enabled=TRUE AND share_bps > 0
+              AND share_effective_at IS NOT NULL AND share_effective_at < %s
+            ORDER BY user_id""", (end,))
         managers = cur.fetchall() or []
         for row in managers:
             suggested = gross * int(row["share_bps"]) // 10000
