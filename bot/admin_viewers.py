@@ -68,6 +68,30 @@ def _pct(bps):
     return format(value.normalize(), "f") + "%"
 
 
+def _health_html(status):
+    """Render diagnostics with the public address as an isolated Telegram code entity."""
+    rendered = escape(format_health(status))
+    address = str(status.get("address") or "").strip()
+    if address:
+        safe_address = escape(address)
+        rendered = rendered.replace(safe_address, f"<code>{safe_address}</code>", 1)
+    return rendered
+
+
+def _health_keyboard(status, *buttons):
+    """Use Bot API copy_text so one tap copies only the public wallet address."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    address = str(status.get("address") or "").strip()
+    if address:
+        kb.add(types.InlineKeyboardButton(
+            "📋 Скопировать адрес",
+            copy_text={"text": address},
+        ))
+    for title, data in buttons:
+        kb.add(types.InlineKeyboardButton(title, callback_data=data))
+    return kb
+
+
 async def _team_panel(message, actor_id):
     viewers = await asyncio.to_thread(access.list_viewers, actor_id)
     text = ["👥 Управляющие DeepAlpha", "", "Вы — суперадминистратор. Управляющие видят проект и свои выплаты, но не могут переводить средства или менять доли."]
@@ -137,7 +161,20 @@ def register_viewers(dp):
         await callback.answer()
         try:
             if callback.data == "deepalpha_view:wallet":
-                text = await asyncio.to_thread(lambda: format_health(payment_health(with_balance=True)))
+                status = await asyncio.to_thread(lambda: payment_health(with_balance=True))
+                if not await asyncio.to_thread(access.can_view_project, uid):
+                    return
+                await callback.message.answer(
+                    _health_html(status),
+                    parse_mode="HTML",
+                    reply_markup=_health_keyboard(
+                        status,
+                        ("🔄 Обновить", "deepalpha_view:wallet"),
+                        ("📊 Обзор проекта", "deepalpha_view:overview"),
+                        ("💸 Моя доля и выплаты", "deepalpha_view:payouts"),
+                    ),
+                )
+                return
             elif callback.data == "deepalpha_view:overview":
                 data = await asyncio.to_thread(access.project_snapshot, uid)
                 text = ("📊 DeepAlpha · сводка\n\n"
@@ -269,6 +306,13 @@ def register_viewers(dp):
     @owner.callback_query_handler(lambda c: c.data == "admin_gram_payment_health", state="*")
     async def health(callback):
         await callback.answer()
-        text = await asyncio.to_thread(lambda: format_health(payment_health(with_balance=True)))
-        await callback.message.answer(escape(text), parse_mode="HTML", reply_markup=_keyboard(
-            ("🔄 Обновить", "admin_gram_payment_health"), ("⬅️ Gram Wallets", "admin_gram_wallets")))
+        status = await asyncio.to_thread(lambda: payment_health(with_balance=True))
+        await callback.message.answer(
+            _health_html(status),
+            parse_mode="HTML",
+            reply_markup=_health_keyboard(
+                status,
+                ("🔄 Обновить", "admin_gram_payment_health"),
+                ("⬅️ Gram Wallets", "admin_gram_wallets"),
+            ),
+        )
