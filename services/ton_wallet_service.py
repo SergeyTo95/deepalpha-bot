@@ -659,7 +659,7 @@ def send_ton_from_encrypted_wallet(wallet_address: str, seed_encrypted: str, des
             seqno = get_wallet_seqno(source)
         logger.warning("TON treasury seqno fetched network=%s wallet=%s seqno=%s", get_ton_runtime_network(), source, seqno)
         if seqno is None:
-            return {"ok": False, "error": "send_failed", "error_detail": "seqno_or_account_state"}
+            return {"ok": False, "error": "seqno_unavailable", "error_detail": "seqno_or_account_state"}
         transfer = _build_signed_transfer_message(wallet=wallet, private_key=private_key, destination_address=destination, amount_nano=amount_nano, seqno=seqno, comment=comment)
         boc_base64 = _extract_boc_from_transfer(transfer)
         if not boc_base64:
@@ -689,7 +689,7 @@ def send_ton_from_encrypted_wallet(wallet_address: str, seed_encrypted: str, des
     return {"ok": True, "tx_hash": tx_hash, "amount_nano": str(amount_nano), "destination_address": destination, "source_address": source, "status": "submitted"}
 
 
-def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nano: int, comment: str = "") -> dict:
+def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nano: int, comment: str = "", *, allow_seqno_retry: bool = True) -> dict:
     status = get_ton_wallet_runtime_status()
     if not status.get("enabled"):
         return {"ok": False, "error": "disabled", "wallet_status": get_public_ton_wallet_runtime_status()}
@@ -766,7 +766,7 @@ def send_ton_from_user_wallet(user_id: int, destination_address: str, amount_nan
     if not result.get("ok"):
         error_detail = str(result.get("error_detail") or "unknown")
         error_message = str(result.get("error_message") or "")
-        if "too old seqno" in error_message.lower() and "wallet_seqno=" in error_message and "msg_seqno=" in error_message:
+        if allow_seqno_retry and "too old seqno" in error_message.lower() and "wallet_seqno=" in error_message and "msg_seqno=" in error_message:
             m = re.search(r"wallet_seqno=(\d+)", error_message)
             retry_seqno = int(m.group(1)) if m else None
             if retry_seqno is not None:

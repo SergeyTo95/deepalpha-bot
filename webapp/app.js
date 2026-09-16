@@ -714,12 +714,44 @@ function renderAuthed(summary, lang) {
     };
   
     const tonBuyBtn = document.getElementById("tonBuyBtn");
+    const purchaseStorageKey = `deepalpha:gram-purchase:${user.user_id}`;
     if (tonBuyBtn) tonBuyBtn.onclick = async () => {
+      if (tonBuyBtn.disabled) return;
       const amount_tokens = String(document.getElementById("tonBuyTokensInput").value || "").trim();
-      const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount_tokens }) });
-      const d = await r.json();
-      tonStatusLine.textContent = d.ok ? `✅ TX: ${d.tx_hash || ""}` : mapTonPurchaseError(d.error || "buy_failed");
-      if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
+      tonBuyBtn.disabled = true;
+      try {
+        // Persist before sending: reloads and uncertain HTTP replies reuse the
+        // same purchase. A changed input cannot silently submit another transfer.
+        let pending = JSON.parse(localStorage.getItem(purchaseStorageKey) || "null");
+        if (!pending) {
+          if (!/^[0-9]{1,7}$/.test(amount_tokens) || Number(amount_tokens) < 1) {
+            tonStatusLine.textContent = mapTonPurchaseError("invalid_amount_tokens");
+            return;
+          }
+          pending = { amount_tokens, idempotency_key: crypto.randomUUID() };
+          localStorage.setItem(purchaseStorageKey, JSON.stringify(pending));
+        }
+        const r = await fetch("/api/wallets/ton/buy-tokens", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pending) });
+        const d = await r.json();
+        if (d.ok && d.status === "fulfilled") {
+          localStorage.removeItem(purchaseStorageKey);
+          tonStatusLine.textContent = lang === "ru" ? `✅ Зачислено: ${d.tokens_credited} токенов` : `✅ Credited: ${d.tokens_credited} tokens`;
+        } else if (d.ok || d.error === "purchase_pending") {
+          tonStatusLine.textContent = lang === "ru"
+            ? "⏳ Покупка ожидает подтверждения. Повторное нажатие проверит её статус. Не отправляйте оплату снова."
+            : "⏳ Awaiting confirmation. Click again to check this purchase. Do not pay again.";
+        } else {
+          if (r.status === 400 && d.error !== "purchase_status_unavailable") localStorage.removeItem(purchaseStorageKey);
+          tonStatusLine.textContent = mapTonPurchaseError(d.error || "buy_failed");
+        }
+        if (d.ok) { await loadTonWallet(true); await loadTonHistory(); }
+      } catch (_) {
+        tonStatusLine.textContent = lang === "ru"
+          ? "Статус не получен. Нажмите ещё раз для проверки той же покупки."
+          : "Status unavailable. Click again to check the same purchase.";
+      } finally {
+        tonBuyBtn.disabled = false;
+      }
     };
     loadTonWallet(false).then(() => { if (tonCanRefresh) return loadTonWallet(true); });
     loadTonHistory();

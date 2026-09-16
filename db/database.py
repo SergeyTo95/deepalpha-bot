@@ -440,6 +440,9 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_wallet_address ON cashier_payment_wallets(wallet_address)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cashier_payment_wallets_single_active ON cashier_payment_wallets((status)) WHERE status='active'")
 
+    from services.deepalpha_admin_access import ensure_tables as ensure_project_viewer_tables
+    ensure_project_viewer_tables(cursor)
+
     _init_live_analyst_tables(cursor)
     ensure_gemini_lockdown_tables(cursor)
     _live_analyst_tables_ready = True
@@ -962,6 +965,8 @@ def _init_db_inner(conn, cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_user ON ton_purchase_intents(user_id, created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ton_purchase_intents_status ON ton_purchase_intents(status)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ton_purchase_intents_tx_hash_unique ON ton_purchase_intents(tx_hash) WHERE tx_hash IS NOT NULL AND tx_hash <> ''")
+    from services.gram_purchase_service import ensure_columns as ensure_gram_purchase_columns
+    ensure_gram_purchase_columns(cursor)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS referral_rewards (
         id SERIAL PRIMARY KEY,
@@ -1987,13 +1992,16 @@ def fulfill_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
             return None
         if row['status'] == 'fulfilled':
             conn.commit()
-            return dict(row)
-        if row['status']!='submitted':
+            return {**dict(row), 'already_fulfilled': True}
+        if row['status']!='submitted' or not row.get('verified_at') or not row.get('verified_tx_hash'):
             conn.rollback()
             return None
         product_type = str(row.get('product_type') or '').strip()
         if product_type == 'token_purchase':
             credit = int(row.get('total_tokens') or row.get('requested_tokens') or 0)
+            if credit <= 0:
+                conn.rollback()
+                return None
             cur.execute(
                 "UPDATE users SET token_balance = COALESCE(token_balance, 0) + %s, updated_at = %s WHERE user_id = %s",
                 (credit, now, int(row['user_id']))
@@ -2013,6 +2021,12 @@ def fulfill_ton_purchase_intent(intent_id: int) -> Optional[Dict[str, Any]]:
                     pass
             until = (base + timedelta(days=days)).isoformat()
             cur.execute("UPDATE users SET subscription_until=%s, updated_at=%s WHERE user_id=%s", (until, now, int(row['user_id'])))
+        else:
+            conn.rollback()
+            return None
+        if cur.rowcount != 1:
+            conn.rollback()
+            return None
         cur.execute("UPDATE ton_purchase_intents SET status='fulfilled', fulfilled_at=%s, updated_at=%s WHERE id=%s RETURNING *", (now, now, intent_id))
         out=cur.fetchone();
         cur.execute("UPDATE ton_wallet_transactions SET purchase_status='fulfilled',updated_at=%s WHERE payment_intent_id=%s", (now, intent_id))
